@@ -629,4 +629,4 @@ In real use, users edit text incrementally (char-by-char, Enter, Tab, delete, mo
 - **Codebase parser**: `parseCodebaseBlock` requires a line starting with `codebase:`; partial `| ` lines are still attached to the current file. Use `buildCodebaseSnapshotFromSource` to build the same snapshot format from real source files (AST/regex) instead of markdown.
 - **Operation parser**: Missing `op:` yields `null`; partial `target` or `params` still return a best-effort operation with empty or default fields.
 
-Automated tests for these behaviors live in `src/parser/*.test.ts` (tree, codebase, operation).
+Automated tests live in `test/parser/*.test.ts` (tree, codebase, operation). Test case examples are extracted from this doc into `test/fixtures/cases/*.md` via `npm run test:extract-fixtures`.

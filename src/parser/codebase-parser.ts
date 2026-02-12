@@ -9,7 +9,7 @@
  */
 
 import type { FileEntry, CodebaseSnapshot } from '../types.js';
-import { readdirSync, statSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 /** File path + content for AST-based snapshot building */
@@ -124,6 +124,105 @@ export function discoverCodebase(rootDir: string, maxDepth = 6): CodebaseSnapsho
   };
 }
 
+/**
+ * Find the index of the closing ')' that matches the first '(' after start.
+ */
+function findMatchingParen(s: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Extract full signature from a def/class line (single or multi-line).
+ * Returns normalized signature with full args and return type: "def name(args) -> ret:" or "class Name(bases):".
+ */
+function extractPythonSignature(lines: string[], startIndex: number): { sig: string; nextIndex: number } {
+  let buf = lines[startIndex]!.trim();
+  let i = startIndex;
+  let parens = 0;
+  for (const c of buf) {
+    if (c === '(') parens++;
+    else if (c === ')') parens--;
+  }
+  const completeNoParens = /^class\s+\w+\s*:?\s*$/.test(buf.trim()) || /^def\s+\w+\s*\(\s*\)\s*:?\s*$/.test(buf.trim());
+  while (!completeNoParens && (parens !== 0 || (!buf.includes('):') && !/\)\s*->\s*[^:]+:/.test(buf)))) {
+    i++;
+    if (i >= lines.length) break;
+    const next = lines[i]!;
+    if (next.trim() === '') { i++; continue; }
+    const nextTrim = next.trim();
+    if (parens === 0 && (nextTrim.startsWith('"""') || nextTrim.startsWith("'''") || nextTrim.startsWith('#'))) break;
+    buf += ' ' + nextTrim;
+    for (const c of next) {
+      if (c === '(') parens++;
+      else if (c === ')') parens--;
+    }
+  }
+  buf = buf.replace(/\s+/g, ' ').trim();
+
+  if (buf.startsWith('def ')) {
+    const open = buf.indexOf('(', 4);
+    if (open === -1) return { sig: buf.split(':')[0] + ': ...', nextIndex: i };
+    const close = findMatchingParen(buf, open);
+    const name = buf.slice(4, open).trim();
+    const args = close > open ? buf.slice(open + 1, close).trim() : '';
+    const after = close >= 0 ? buf.slice(close + 1).trim() : '';
+    const retMatch = after.match(/^\-\>\s*(.+?)\s*:?$/);
+    const ret = retMatch ? retMatch[1].trim() : '';
+    const sig = ret ? `def ${name}(${args}) -> ${ret}: ...` : `def ${name}(${args}): ...`;
+    return { sig, nextIndex: i };
+  }
+  if (buf.startsWith('class ')) {
+    const open = buf.indexOf('(', 6);
+    if (open === -1) {
+      const nameMatch = buf.match(/^class\s+(\w+)\s*:?/);
+      const name = nameMatch ? nameMatch[1] : buf.slice(6).split(/[(:]/)[0].trim();
+      return { sig: `class ${name}: ...`, nextIndex: i };
+    }
+    const close = findMatchingParen(buf, open);
+    const name = buf.slice(6, open).trim();
+    const bases = close > open ? buf.slice(open + 1, close).trim() : '';
+    const sig = bases ? `class ${name}(${bases}): ...` : `class ${name}: ...`;
+    return { sig, nextIndex: i };
+  }
+  return { sig: buf.split(':')[0] + ': ...', nextIndex: i };
+}
+
+/**
+ * Extract all def/class declarations from Python source with full args, types, and nesting.
+ * Returns lines with leading spaces for hierarchy (2 spaces per indent level).
+ */
+function extractPythonDeclarationsGranular(content: string): string[] {
+  const lines = content.split(/\r?\n/);
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const indent = line.length - line.trimStart().length;
+    const t = line.trim();
+    if (t === '') { i++; continue; }
+    const isDef = /^def\s+\w+\s*\(/.test(t) || (t.startsWith('def ') && t.includes('('));
+    const isClass = /^class\s+\w+/.test(t);
+    if (isDef || isClass) {
+      const { sig, nextIndex } = extractPythonSignature(lines, i);
+      const level = Math.floor(indent / 4);
+      const prefix = '  '.repeat(level);
+      out.push(prefix + sig);
+      i = nextIndex + 1;
+      continue;
+    }
+    i++;
+  }
+  return out;
+}
+
 /** Extract code sketch lines from source (e.g. "def foo(...):" or "class Bar:") for snapshot. */
 function declarationLinesFromSource(path: string, content: string): string[] {
   const ext = path.replace(/^.*\./, '').toLowerCase();
@@ -131,14 +230,7 @@ function declarationLinesFromSource(path: string, content: string): string[] {
   const out: string[] = [];
 
   if (ext === 'py') {
-    for (const line of lines) {
-      const t = line.trim();
-      const defMatch = t.match(/^def\s+(\w+)\s*\([^)]*\)\s*(?:->\s*[\w\[\],\s]+)?\s*:/);
-      const classMatch = t.match(/^class\s+(\w+)\s*(?:\([^)]*\))?\s*:/);
-      if (defMatch) out.push(`def ${defMatch[1]}(...): ...`);
-      else if (classMatch) out.push(`class ${classMatch[1]}: ...`);
-    }
-    return out;
+    return extractPythonDeclarationsGranular(content);
   }
 
   if (['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs'].includes(ext)) {
@@ -221,4 +313,76 @@ export function buildCodebaseSnapshotFromSource(files: SourceFile[]): CodebaseSn
   }
 
   return { root };
+}
+
+/**
+ * Build codebase snapshot from a directory on disk (e.g. test/requests).
+ * Reads all files under rootDir, extracts declaration lines (Python def/class
+ * at top level, etc.), and returns the same CodebaseSnapshot format.
+ */
+export function buildCodebaseSnapshotFromDirectory(
+  rootDir: string,
+  options?: { maxDepth?: number; extensions?: string[] }
+): CodebaseSnapshot {
+  const maxDepth = options?.maxDepth ?? 6;
+  const extensions = options?.extensions ?? ['.py', '.js', '.ts', '.jsx', '.tsx'];
+  const normalizedRoot = rootDir.replace(/\/+$/, '');
+  const files: SourceFile[] = [];
+
+  function walk(dir: string, depth: number): void {
+    if (depth > maxDepth) return;
+    try {
+      const names = readdirSync(dir);
+      for (const name of names) {
+        if (name.startsWith('.') && name !== '.') continue;
+        const full = join(dir, name);
+        let stat;
+        try {
+          stat = statSync(full);
+        } catch {
+          continue;
+        }
+        const rel = full.slice(normalizedRoot.length).replace(/^\/+/, '');
+        if (stat.isDirectory()) {
+          walk(full, depth + 1);
+        } else {
+          const ext = name.includes('.') ? '.' + name.split('.').pop()!.toLowerCase() : '';
+          if (extensions.includes(ext)) {
+            try {
+              const content = readFileSync(full, 'utf-8');
+              files.push({ path: rel, content });
+            } catch {
+              // skip unreadable
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  walk(normalizedRoot, 0);
+  return buildCodebaseSnapshotFromSource(files);
+}
+
+/**
+ * Serialize a CodebaseSnapshot to the "codebase:" block text format (test_cases §3).
+ * Use this to inspect the output of buildCodebaseSnapshotFromDirectory or to round-trip.
+ */
+export function codebaseSnapshotToBlock(snap: CodebaseSnapshot): string {
+  const lines: string[] = ['codebase:'];
+  function visit(entry: FileEntry, depth: number): void {
+    const indent = '  '.repeat(depth);
+    const name = entry.path ? entry.path.split('/').pop()! : '';
+    if (!name) return;
+    const display = entry.kind === 'directory' ? name + '/' : name;
+    lines.push(indent + display);
+    if (entry.lines?.length) {
+      for (const line of entry.lines) lines.push(indent + '  ' + '| ' + line);
+    }
+    for (const child of entry.children ?? []) visit(child, depth + 1);
+  }
+  for (const child of snap.root.children ?? []) visit(child, 1);
+  return lines.join('\n');
 }

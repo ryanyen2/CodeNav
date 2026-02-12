@@ -32,6 +32,8 @@ export {
   parseCodebaseBlock,
   discoverCodebase,
   buildCodebaseSnapshotFromSource,
+  buildCodebaseSnapshotFromDirectory,
+  codebaseSnapshotToBlock,
 } from './parser/codebase-parser.js';
 export type { SourceFile } from './parser/codebase-parser.js';
 

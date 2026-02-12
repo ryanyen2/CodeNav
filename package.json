@@ -6,9 +6,11 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "node --experimental-vm-modules node_modules/ts-node/esm.mjs node_modules/tape/bin/tape 'src/**/*.test.ts' 2>/dev/null || npx tsx src/**/*.test.ts 2>/dev/null || node --loader ts-node/esm run-tests.mjs",
+    "test": "npx tsx node_modules/tape/bin/tape 'test/**/*.test.ts'",
+    "test:extract-fixtures": "node scripts/extract-test-cases.mjs",
     "parse:tree": "npx tsx src/cli/parse-tree.ts",
-    "parse:test": "npx tsx src/cli/parse-test-case.ts"
+    "parse:test": "npx tsx src/cli/parse-test-case.ts",
+    "parse:codebase": "npx tsx src/cli/parse-codebase.ts"
   },
   "dependencies": {},
   "devDependencies": {

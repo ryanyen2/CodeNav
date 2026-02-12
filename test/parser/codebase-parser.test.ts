@@ -1,20 +1,45 @@
 /**
  * Tests for codebase parser: parseCodebaseBlock (markdown), discoverCodebase (fs),
- * buildCodebaseSnapshotFromSource (AST/regex from real source), and incremental/invalid input.
+ * buildCodebaseSnapshotFromSource, buildCodebaseSnapshotFromDirectory (e.g. test/requests),
+ * and incremental/invalid input. Fixtures from test/fixtures/cases/.
  */
 
 import * as t from 'tape';
+import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
   parseCodebaseBlock,
   discoverCodebase,
   buildCodebaseSnapshotFromSource,
-} from './codebase-parser.js';
+  buildCodebaseSnapshotFromDirectory,
+} from '../../src/parser/codebase-parser.js';
+
+const FIXTURES_DIR = join(process.cwd(), 'test', 'fixtures', 'cases');
+const REQUESTS_DIR = join(process.cwd(), 'test', 'requests');
 
 function countEntries(e: { children?: unknown[] }): number {
   if (!e.children?.length) return 1;
   return 1 + e.children.reduce((s, c) => s + countEntries(c as { children?: unknown[] }), 0);
 }
+
+t.test('codebase-parser: parseCodebaseBlock from fixture add_patch_endpoint', (t) => {
+  const content = readFileSync(join(FIXTURES_DIR, 'add_patch_endpoint.md'), 'utf-8');
+  const codebaseStart = content.indexOf('--- CODEBASE (BEFORE) ---');
+  const codebaseEnd = content.indexOf('--- TREE (BEFORE) ---');
+  const codebaseBlock = codebaseStart >= 0 && codebaseEnd > codebaseStart
+    ? content.slice(codebaseStart, codebaseEnd)
+    : '';
+  const snap = parseCodebaseBlock(codebaseBlock);
+  t.ok(snap);
+  const requests = snap!.root.children!.find(c => c.path === 'requests')!;
+  t.ok(requests);
+  const api = requests.children!.find(c => c.path === 'requests/api.py')!;
+  t.ok(api);
+  t.ok(api.lines!.some(l => l.includes('request(')));
+  t.ok(api.lines!.some(l => l.includes('get(')));
+  t.ok(api.lines!.some(l => l.includes('post(')));
+  t.end();
+});
 
 t.test('codebase-parser: parseCodebaseBlock basic', (t) => {
   const text = `
@@ -149,6 +174,20 @@ t.test('codebase-parser: buildCodebaseSnapshotFromSource JS regex fallback', (t)
   t.ok(index);
   t.ok(index.lines!.length >= 1);
   t.ok(index.lines!.some(l => l.includes('main') || l.includes('App')));
+  t.end();
+});
+
+t.test('codebase-parser: buildCodebaseSnapshotFromDirectory parses test/requests', (t) => {
+  const snap = buildCodebaseSnapshotFromDirectory(REQUESTS_DIR, { extensions: ['.py'] });
+  t.ok(snap.root.kind === 'directory');
+  t.ok(snap.root.children!.length >= 1);
+  const api = snap.root.children!.find((c: { path: string }) => c.path === 'api.py');
+  t.ok(api, 'has api.py (paths are relative to test/requests)');
+  t.ok(api!.lines && api!.lines.length >= 1, 'api.py has declaration lines');
+  const hasRequest = api!.lines!.some((l: string) => l.startsWith('def request('));
+  const hasGet = api!.lines!.some((l: string) => l.startsWith('def get('));
+  t.ok(hasRequest, 'api.py has request()');
+  t.ok(hasGet, 'api.py has get()');
   t.end();
 });
 

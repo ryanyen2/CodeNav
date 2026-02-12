@@ -1,15 +1,20 @@
 /**
  * Tests for tree parser: node classification, sigils, metadata, contracts,
  * deps, full block parse, and incremental/invalid input (char-by-char editing).
+ * Fixtures are read from test/fixtures/cases/ (extracted from test_cases.md).
  */
 
 import * as t from 'tape';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
   parseTreeBlock,
   extractTreeBlockFromTestCase,
   findNodeByPath,
-} from './tree-parser.js';
-import type { SemanticNode, DepEdge } from '../types.js';
+} from '../../src/parser/tree-parser.js';
+import type { SemanticNode, DepEdge } from '../../src/types.js';
+
+const FIXTURES_DIR = join(process.cwd(), 'test', 'fixtures', 'cases');
 
 function nodeCount(root: SemanticNode): number {
   return 1 + root.children.reduce((s, c) => s + nodeCount(c), 0);
@@ -198,34 +203,18 @@ t.test('tree-parser: findNodeByPath', (t) => {
   t.end();
 });
 
-t.test('tree-parser: extractTreeBlockFromTestCase BEFORE/AFTER', (t) => {
-  const content = `
-=== TEST: foo ===
-
---- TREE (BEFORE) ---
-- ~ A
-  - $ b [x.py] (b) #resolved
-
---- OPERATION ---
-op: AddNode
-
---- EXPECTED TREE (AFTER) ---
-- ~ A
-  - $ b [x.py] (b) #resolved
-  - $ c [x.py] (c) #draft
-`;
+t.test('tree-parser: extractTreeBlockFromTestCase from fixture', (t) => {
+  const content = readFileSync(join(FIXTURES_DIR, 'add_patch_endpoint.md'), 'utf-8');
   const before = extractTreeBlockFromTestCase(content, 'BEFORE');
   const after = extractTreeBlockFromTestCase(content, 'AFTER');
-  t.ok(before.includes('- ~ A'), 'before has tree');
-  t.ok(after.includes('- $ c'), 'after has new node');
+  t.ok(before.includes('- ~ API'), 'before has tree');
+  t.ok(after.includes('send PATCH request'), 'after has new node');
   const treeBefore = parseTreeBlock(before);
   const treeAfter = parseTreeBlock(after);
-  t.ok(nodeCount(treeBefore.root) >= 2, 'before: at least A and b');
-  t.ok(nodeCount(treeAfter.root) >= 3, 'after: at least A, b, c');
+  t.ok(nodeCount(treeBefore.root) >= 2, 'before: at least 2 nodes');
+  t.ok(nodeCount(treeAfter.root) >= 3, 'after: at least 3 nodes');
   t.end();
 });
-
-// --- Incremental / invalid input (user typing char-by-char, tab, incomplete lines) ---
 
 t.test('tree-parser: odd indent rejected', (t) => {
   const block = `
@@ -233,7 +222,6 @@ t.test('tree-parser: odd indent rejected', (t) => {
    - $ bad indent
 `;
   const tree = parseTreeBlock(block);
-  // Only the first line is valid (2 spaces); the "   " (3 spaces) line is skipped
   t.equal(nodeCount(tree.root), 1, 'only OK node parsed');
   t.end();
 });
@@ -297,7 +285,6 @@ deps:
 });
 
 t.test('tree-parser: unclosed [ path does not consume rest', (t) => {
-  // Parser uses [^\]]+ so unclosed [ may leave tail; node still created, child may attach to virtual
   const block = `
 - % file [unclosed
   - $ fn [f.py] (fn) #resolved

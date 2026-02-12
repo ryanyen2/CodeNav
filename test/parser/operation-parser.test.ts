@@ -1,13 +1,17 @@
 /**
  * Tests for operation parser: all operation types, params, extract block,
- * and incremental/malformed input.
+ * and incremental/malformed input. Fixtures from test/fixtures/cases/.
  */
 
 import * as t from 'tape';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
   extractOperationBlock,
   parseOperationBlock,
-} from './operation-parser.js';
+} from '../../src/parser/operation-parser.js';
+
+const FIXTURES_DIR = join(process.cwd(), 'test', 'fixtures', 'cases');
 
 t.test('operation-parser: extractOperationBlock', (t) => {
   const content = `
@@ -27,6 +31,18 @@ params:
   t.ok(block.includes('target: API/request handling'));
   t.ok(block.includes('feature: "send PATCH request"'));
   t.notOk(block.includes('--- EXPECTED TREE'));
+  t.end();
+});
+
+t.test('operation-parser: parse from fixture add_patch_endpoint', (t) => {
+  const content = readFileSync(join(FIXTURES_DIR, 'add_patch_endpoint.md'), 'utf-8');
+  const block = extractOperationBlock(content);
+  t.ok(block.length > 0, 'operation block extracted');
+  const op = parseOperationBlock(block);
+  t.ok(op);
+  t.equal(op!.op, 'AddNode');
+  t.equal(op!.target, 'API/request handling/core request module');
+  t.equal(op!.params.feature, 'send PATCH request');
   t.end();
 });
 
