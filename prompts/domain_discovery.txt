@@ -1,0 +1,27 @@
+## Instructions
+You are an expert software architect and repository analyst.
+Your goal is to analyze the repository holistically and identify its main functional areas -coherent, high-level modules or subsystems that reflect the repository's architecture and purpose
+.
+### Guidelines
+- Think from a software architecture perspective; group code into major, distinct
+responsibilities (e.g., data loading/processing, training/inference, evaluation/metrics,
+visualization/reporting, APIs/interfaces, configuration/utilities/infrastructure).
+- Avoid listing individual files or small helpers, third-party/vendor code, and build/test/docs
+directories.
+- Ensure each area is meaningful and represents a clear responsibility in the codebase.
+### Naming Principles
+- Single Responsibility: Each area should cover one logical concern (e.g., "DataProcessing", "
+ModelTraining").
+- High-Level Abstraction: Group related submodules; separate distinct layers.
+- Consistency: Use PascalCase for names (e.g., "FeatureExtraction", "EvaluationMetrics").
+- Meaningful Scope:
+- Merge closely related components (e.g., "data_loader", "dataset" -> "DataProcessing")
+- Avoid vague terms like "core", "misc", "other"
+- Use domain-specific names when appropriate (e.g., "TextPreprocessing", "ImageSegmentation")
+### Output Format
+Return only the result in this exact format:
+<solution>
+[
+"functional_area1", "functional_area2", "functional_area3", ...
+]
+</solution>

@@ -1,0 +1,21 @@
+{
+  "name": "codenav-semantic-tree",
+  "version": "0.1.0",
+  "description": "Parser and tree-diff for prescriptive semantic tree (codebase intent)",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-vm-modules node_modules/ts-node/esm.mjs node_modules/tape/bin/tape 'src/**/*.test.ts' 2>/dev/null || npx tsx src/**/*.test.ts 2>/dev/null || node --loader ts-node/esm run-tests.mjs",
+    "parse:tree": "npx tsx src/cli/parse-tree.ts",
+    "parse:test": "npx tsx src/cli/parse-test-case.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tape": "^5.6.6",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
