@@ -16,6 +16,11 @@ export function extractOperationBlock(content: string): string {
   return rest.slice(0, end).trim();
 }
 
+function unquote(s: string): string {
+  if (typeof s !== 'string') return s;
+  return s.replace(/^["']|["']$/g, '').trim();
+}
+
 /** Parse YAML-like params: key: value, and contract block with sig:/inv: etc. */
 function parseParamsBlock(lines: string[]): Record<string, unknown> {
   const params: Record<string, unknown> = {};
@@ -33,18 +38,25 @@ function parseParamsBlock(lines: string[]): Record<string, unknown> {
       const feat = featMatch ? featMatch[1].replace(/^["']|["']$/g, '').trim() : '';
       let cont: Contract = {};
       if (i + 1 < lines.length && lines[i + 1].trim().startsWith('contract:')) {
-        const next = lines[i + 1].trim().replace(/^contract:\s*/, '');
-        cont = parseContractInline(next);
-        i++;
-      } else if (i + 2 < lines.length && lines[i + 1].trim().startsWith('contract:')) {
-        const subLines: string[] = [];
-        let j = i + 2;
-        while (j < lines.length && (lines[j].length - lines[j].trimStart().length) > indent) {
-          subLines.push(lines[j].trim());
-          j++;
+        const contractLine = lines[i + 1]!;
+        const next = contractLine.trim().replace(/^contract:\s*/, '');
+        const contractIndent = contractLine.length - contractLine.trimStart().length;
+        if (next && (next.startsWith('sig:') || next.startsWith('inv:') || next.startsWith('cls:') || next.startsWith('exp:'))) {
+          cont = parseContractInline(contractLine.trim());
+          i++;
+        } else if (i + 2 < lines.length && (lines[i + 2]!.length - lines[i + 2]!.trimStart().length) > contractIndent) {
+          const subLines: string[] = [];
+          let j = i + 2;
+          while (j < lines.length && (lines[j]!.length - lines[j]!.trimStart().length) > contractIndent) {
+            subLines.push(lines[j]!.trim());
+            j++;
+          }
+          cont = parseContractBlock(subLines);
+          i = j - 1;
+        } else {
+          cont = parseContractInline(next);
+          i++;
         }
-        cont = parseContractBlock(subLines);
-        i = j - 1;
       }
       if (!params.specs) params.specs = [];
       (params.specs as unknown[]).push({ feature: feat, contract: cont });
@@ -129,7 +141,17 @@ export function parseOperationBlock(block: string): Operation | null {
     }
     if (trimmed.startsWith('target:')) {
       const val = trimmed.slice(7).trim();
-      if (val) target = val;
+      if (val) {
+        target = val;
+      } else {
+        const list: string[] = [];
+        let j = i + 1;
+        while (j < lines.length && /^\s+-\s+/.test(lines[j]!)) {
+          list.push(lines[j]!.trim().replace(/^\s*-\s*/, '').trim());
+          j++;
+        }
+        if (list.length > 0) target = list;
+      }
       continue;
     }
     if (trimmed.startsWith('params:')) {
@@ -146,7 +168,13 @@ export function parseOperationBlock(block: string): Operation | null {
 
   if (!op) return null;
 
-  const targetList = Array.isArray(params.target) ? params.target as string[] : target ? [target] : [];
+  const targetList = Array.isArray(params.target)
+    ? (params.target as string[])
+    : Array.isArray(target)
+      ? target
+      : target
+        ? [target as string]
+        : [];
   const resolvedTarget = targetList.length > 1 ? targetList : targetList[0] ?? target;
 
   switch (op) {
@@ -155,9 +183,9 @@ export function parseOperationBlock(block: string): Operation | null {
         op: 'AddNode',
         target: resolvedTarget as string,
         params: {
-          feature: (params.feature as string) ?? '',
+          feature: unquote((params.feature as string) ?? ''),
           contract: (params.contract as Contract) ?? undefined,
-          group_name: params.group_name as string | undefined,
+          group_name: params.group_name != null ? unquote(String(params.group_name)) : undefined,
         },
       };
     case 'DeleteNode':
@@ -166,8 +194,8 @@ export function parseOperationBlock(block: string): Operation | null {
         target: resolvedTarget as string,
         params: {
           strategy: params.strategy as 'cascade' | 'sever' | 'redirect' | 'abort' | undefined,
-          redirect_to: params.redirect_to as string | undefined,
-          redirect_import: params.redirect_import as string | undefined,
+          redirect_to: params.redirect_to != null ? unquote(String(params.redirect_to)) : undefined,
+          redirect_import: params.redirect_import != null ? unquote(String(params.redirect_import)) : undefined,
         },
       };
     case 'MoveNode':
@@ -180,7 +208,7 @@ export function parseOperationBlock(block: string): Operation | null {
       return {
         op: 'EditFeature',
         target: resolvedTarget as string,
-        params: { new_feature: (params.new_feature as string) ?? '' },
+        params: { new_feature: unquote((params.new_feature as string) ?? '') },
       };
     case 'EditContract':
       return {
@@ -197,10 +225,10 @@ export function parseOperationBlock(block: string): Operation | null {
     case 'ExtractAndGroup':
       return {
         op: 'ExtractAndGroup',
-        target: (params.target as string[]) ?? [],
+        target: (targetList.length > 0 ? targetList : (params.target as string[]) ?? []) as string[],
         params: {
-          group_feature: (params.group_feature as string) ?? '',
-          group_name: (params.group_name as string) ?? '',
+          group_feature: unquote((params.group_feature as string) ?? ''),
+          group_name: unquote((params.group_name as string) ?? ''),
         },
       };
     case 'SplitFunction':
@@ -212,8 +240,8 @@ export function parseOperationBlock(block: string): Operation | null {
     case 'MergeNodes':
       return {
         op: 'MergeNodes',
-        target: (params.target as string[]) ?? [],
-        params: { merged_feature: (params.merged_feature as string) ?? '' },
+        target: (targetList.length > 0 ? targetList : (params.target as string[]) ?? []) as string[],
+        params: { merged_feature: unquote((params.merged_feature as string) ?? '') },
       };
     default:
       return null;

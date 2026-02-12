@@ -620,3 +620,13 @@ dep_line      := "  " entity " --" rel_type "--> " entity
 rel_type      := "imports" | "invokes" | "inherits" | "type-refs"
 entity        := "(" identifier ")" | "(ext:" identifier ")"
 ```
+
+### 8.1 Incremental editing and partial input
+
+In real use, users edit text incrementally (char-by-char, Enter, Tab, delete, move lines). Parsers should tolerate partial or invalid input:
+
+- **Tree parser**: Lines with odd indent, missing/invalid sigil, or half-written annotations are skipped; valid lines still produce nodes. Invalid lines do not advance the depth stack, so the next valid line at the same indent may attach to the wrong parent — callers that need strict hierarchy under incremental edit may re-parse on idle or on section blur.
+- **Codebase parser**: `parseCodebaseBlock` requires a line starting with `codebase:`; partial `| ` lines are still attached to the current file. Use `buildCodebaseSnapshotFromSource` to build the same snapshot format from real source files (AST/regex) instead of markdown.
+- **Operation parser**: Missing `op:` yields `null`; partial `target` or `params` still return a best-effort operation with empty or default fields.
+
+Automated tests for these behaviors live in `src/parser/*.test.ts` (tree, codebase, operation).

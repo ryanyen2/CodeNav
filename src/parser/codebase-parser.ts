@@ -1,10 +1,22 @@
 /**
- * Parser for codebase snapshot (test_cases §3) and codebase discovery from filesystem.
+ * Parser for codebase snapshot (test_cases §3) and codebase discovery.
+ *
+ * Two input modes:
+ * 1. parseCodebaseBlock(text) — parse the markdown "codebase:" block from test cases.
+ * 2. buildCodebaseSnapshotFromSource(files) — analyze real source files (path + content),
+ *    use AST (Babel for JS/TS) or declaration regex (Python, etc.) to produce the same
+ *    codebase snapshot syntax (file tree + "| def fn(...)" style lines).
  */
 
 import type { FileEntry, CodebaseSnapshot } from '../types.js';
 import { readdirSync, statSync } from 'fs';
 import { join } from 'path';
+
+/** File path + content for AST-based snapshot building */
+export interface SourceFile {
+  path: string;
+  content: string;
+}
 
 /** Parse codebase block from test case text. Format: "codebase:\n  src/\n    api.py\n      | def get..." */
 export function parseCodebaseBlock(text: string): CodebaseSnapshot | null {
@@ -61,12 +73,12 @@ export function parseCodebaseBlock(text: string): CodebaseSnapshot | null {
       } else {
         root.children!.push(entry);
       }
-      if (entry.kind === 'directory') stack.push({ entry, indent });
+      stack.push({ entry, indent });
     } else {
       const parent = stack[stack.length - 1].entry;
       if (!parent.children) parent.children = [];
       parent.children.push(entry);
-      if (entry.kind === 'directory') stack.push({ entry, indent });
+      stack.push({ entry, indent });
     }
   }
 
@@ -110,4 +122,103 @@ export function discoverCodebase(rootDir: string, maxDepth = 6): CodebaseSnapsho
   return {
     root: { path: '', kind: 'directory', children },
   };
+}
+
+/** Extract code sketch lines from source (e.g. "def foo(...):" or "class Bar:") for snapshot. */
+function declarationLinesFromSource(path: string, content: string): string[] {
+  const ext = path.replace(/^.*\./, '').toLowerCase();
+  const lines = content.split(/\r?\n/);
+  const out: string[] = [];
+
+  if (ext === 'py') {
+    for (const line of lines) {
+      const t = line.trim();
+      const defMatch = t.match(/^def\s+(\w+)\s*\([^)]*\)\s*(?:->\s*[\w\[\],\s]+)?\s*:/);
+      const classMatch = t.match(/^class\s+(\w+)\s*(?:\([^)]*\))?\s*:/);
+      if (defMatch) out.push(`def ${defMatch[1]}(...): ...`);
+      else if (classMatch) out.push(`class ${classMatch[1]}: ...`);
+    }
+    return out;
+  }
+
+  if (['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs'].includes(ext)) {
+    try {
+      const parse = (globalThis as unknown as { __babelParse?: (code: string) => unknown }).__babelParse;
+      if (typeof parse === 'function') {
+        type ASTNode = { type: string; id?: { name: string }; declaration?: { type: string; id?: { name: string } } };
+        const ast = parse(content) as { body?: ASTNode[] };
+        if (ast?.body) {
+          for (const node of ast.body) {
+            if (node.type === 'FunctionDeclaration' && node.id)
+              out.push(`function ${node.id.name}(...): ...`);
+            else if (node.type === 'ClassDeclaration' && node.id)
+              out.push(`class ${node.id.name}: ...`);
+            else if (node.type === 'ExportNamedDeclaration' && node.declaration) {
+              const d = node.declaration as { type: string; id?: { name: string } };
+              if (d.type === 'FunctionDeclaration' && d.id) out.push(`function ${d.id.name}(...): ...`);
+              else if (d.type === 'ClassDeclaration' && d.id) out.push(`class ${d.id.name}: ...`);
+            }
+          }
+        }
+        return out;
+      }
+    } catch {
+      // fallback to regex
+    }
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^\s*\/\*\*?|\s*\/\//.test(t)) continue;
+      const fnMatch = t.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/);
+      const classMatch = t.match(/^(?:export\s+)?class\s+(\w+)\s*[\{\(]/);
+      const arrowStart = t.match(/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(/);
+      if (fnMatch) out.push(`function ${fnMatch[1]}(...): ...`);
+      else if (classMatch) out.push(`class ${classMatch[1]}: ...`);
+      else if (arrowStart) out.push(`function ${arrowStart[1]}(...): ...`);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Build codebase snapshot from real source files by analyzing structure and AST.
+ * Uses path hierarchy for structure; for each file, extracts declaration lines
+ * (Python: def/class via regex; JS/TS: function/class via optional Babel or regex).
+ * Use this to produce the same "codebase snapshot syntax" as in test_cases §3.
+ */
+export function buildCodebaseSnapshotFromSource(files: SourceFile[]): CodebaseSnapshot {
+  const root: FileEntry = { path: '', kind: 'directory', children: [] };
+  const pathToEntry = new Map<string, FileEntry>();
+  pathToEntry.set('', root);
+
+  for (const { path: filePath, content } of files) {
+    const parts = filePath.split('/').filter(Boolean);
+    let currentPath = '';
+    for (let i = 0; i < parts.length; i++) {
+      const isLast = i === parts.length - 1;
+      const name = parts[i]!;
+      const nextPath = currentPath ? `${currentPath}/${name}` : name;
+      if (pathToEntry.has(nextPath)) {
+        currentPath = nextPath;
+        continue;
+      }
+      const parent = pathToEntry.get(currentPath) ?? root;
+      const isDir = !isLast || !name.includes('.');
+      const entry: FileEntry = {
+        path: nextPath,
+        kind: isDir ? 'directory' : 'file',
+        children: isDir ? [] : undefined,
+        lines: undefined,
+      };
+      if (!parent.children) parent.children = [];
+      parent.children.push(entry);
+      pathToEntry.set(nextPath, entry);
+      currentPath = nextPath;
+      if (!isDir) {
+        entry.lines = declarationLinesFromSource(filePath, content);
+      }
+    }
+  }
+
+  return { root };
 }

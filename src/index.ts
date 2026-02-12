@@ -27,8 +27,13 @@ export type {
 // Tree parser: markdown list → SemanticTree + deps
 export { parseTreeBlock, extractTreeBlockFromTestCase, findNodeByPath } from './parser/tree-parser.js';
 
-// Codebase parser: codebase block or filesystem
-export { parseCodebaseBlock, discoverCodebase } from './parser/codebase-parser.js';
+// Codebase parser: codebase block, filesystem, or AST-from-source
+export {
+  parseCodebaseBlock,
+  discoverCodebase,
+  buildCodebaseSnapshotFromSource,
+} from './parser/codebase-parser.js';
+export type { SourceFile } from './parser/codebase-parser.js';
 
 // Operation parser: OPERATION block → Operation
 export { extractOperationBlock, parseOperationBlock } from './parser/operation-parser.js';
