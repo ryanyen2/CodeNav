@@ -11,10 +11,14 @@ First version: **parser + tree diff + action dispatch** (no code generation). Pa
 
 ## Setup
 
+**TypeScript (parser, diff, dispatch):**
+
 ```bash
 npm install
 npm run build
 ```
+
+**Server (semantic tree pipeline, optional):** See [server/api/README.md](server/api/README.md) for environment setup, config (OpenAI/Ollama via adalflow), and running the API. From `server/api`: `python -m venv .venv && source .venv/bin/activate`, set `OPENAI_API_KEY` or `CODENAV_EMBEDDER_TYPE=ollama`, then `pip install -e .` and `python -m api.main`.
 
 ## Usage
 

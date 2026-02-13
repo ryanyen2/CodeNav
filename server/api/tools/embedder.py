@@ -3,42 +3,16 @@ import adalflow as adal
 from api.config import configs, get_embedder_type
 
 
-def get_embedder(is_local_ollama: bool = False, use_google_embedder: bool = False, embedder_type: str = None) -> adal.Embedder:
-    """Get embedder based on configuration or parameters.
-    
-    Args:
-        is_local_ollama: Legacy parameter for Ollama embedder
-        use_google_embedder: Legacy parameter for Google embedder  
-        embedder_type: Direct specification of embedder type ('ollama', 'google', 'bedrock', 'openai')
-    
-    Returns:
-        adal.Embedder: Configured embedder instance
-    """
-    # Determine which embedder config to use
-    if embedder_type:
-        if embedder_type == 'ollama':
-            embedder_config = configs["embedder_ollama"]
-        elif embedder_type == 'google':
-            embedder_config = configs["embedder_google"]
-        elif embedder_type == 'bedrock':
-            embedder_config = configs["embedder_bedrock"]
-        else:  # default to openai
-            embedder_config = configs["embedder"]
-    elif is_local_ollama:
-        embedder_config = configs["embedder_ollama"]
-    elif use_google_embedder:
-        embedder_config = configs["embedder_google"]
+def get_embedder(
+    embedder_type: str | None = None,
+) -> adal.Embedder:
+    """Get embedder from config. embedder_type: 'ollama' or 'openai' (default from CODENAV_EMBEDDER_TYPE)."""
+    if embedder_type is None:
+        embedder_type = get_embedder_type()
+    if embedder_type == "ollama":
+        embedder_config = configs.get("embedder_ollama") or {}
     else:
-        # Auto-detect based on current configuration
-        current_type = get_embedder_type()
-        if current_type == 'bedrock':
-            embedder_config = configs["embedder_bedrock"]
-        elif current_type == 'ollama':
-            embedder_config = configs["embedder_ollama"]
-        elif current_type == 'google':
-            embedder_config = configs["embedder_google"]
-        else:
-            embedder_config = configs["embedder"]
+        embedder_config = configs.get("embedder") or {}
 
     # --- Initialize Embedder ---
     model_client_class = embedder_config["model_client"]

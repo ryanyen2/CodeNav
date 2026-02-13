@@ -1,0 +1,20 @@
+[project]
+name = "codenav-semantic-tree"
+version = "0.1.0"
+description = "CodeNav semantic tree pipeline: extraction, indexing, LLM analysis, tree assembly (used by codenav-api)."
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "adalflow>=0.1.0",
+    "numpy>=1.24.0",
+    "faiss-cpu>=1.7.4",
+    "pydantic>=2.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
