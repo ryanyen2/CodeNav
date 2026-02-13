@@ -30,3 +30,6 @@ build/
 .mypy_cache/
 
 test/
+
+# Semantic tree pipeline index/cache
+.codenav/
