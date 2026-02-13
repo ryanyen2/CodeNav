@@ -12,10 +12,13 @@ import {
   discoverCodebase,
   buildCodebaseSnapshotFromSource,
   buildCodebaseSnapshotFromDirectory,
+  codebaseSnapshotToBlock,
 } from '../../src/parser/codebase-parser.js';
 
 const FIXTURES_DIR = join(process.cwd(), 'test', 'fixtures', 'cases');
 const REQUESTS_DIR = join(process.cwd(), 'test', 'requests');
+const MOSAIC_DIR = join(process.cwd(), 'test', 'mosaic');
+const DRACO_DIR = join(process.cwd(), 'test', 'draco');
 
 function countEntries(e: { children?: unknown[] }): number {
   if (!e.children?.length) return 1;
@@ -241,5 +244,37 @@ codebase:
   const lib = snap!.root.children![0]!.children!.find(c => c.path === 'src/lib')!;
   t.ok(lib);
   t.equal(lib.kind, 'directory');
+  t.end();
+});
+
+t.test('codebase-parser: buildCodebaseSnapshotFromDirectory test/mosaic (TS) → block → parseCodebaseBlock', (t) => {
+  const snap = buildCodebaseSnapshotFromDirectory(MOSAIC_DIR);
+  t.ok(snap.root.kind === 'directory');
+  t.ok(snap.root.children!.length >= 1);
+  const block = codebaseSnapshotToBlock(snap);
+  t.ok(block.startsWith('codebase:\n'), 'block starts with codebase:');
+  const roundTrip = parseCodebaseBlock(block);
+  t.ok(roundTrip, 'round-trip parse succeeds');
+  const src = roundTrip!.root.children!.find((c: { path: string }) => c.path === 'src');
+  t.ok(src, 'has src/');
+  const coordinator = src?.children?.find((c: { path: string }) => c.path === 'src/Coordinator.ts');
+  t.ok(coordinator?.lines?.length, 'Coordinator.ts has declaration lines');
+  t.ok(coordinator?.lines?.some((l: string) => l.includes('Coordinator') || l.includes('coordinator')), 'has Coordinator/coordinator');
+  t.end();
+});
+
+t.test('codebase-parser: buildCodebaseSnapshotFromDirectory test/draco (Python) → block → parseCodebaseBlock', (t) => {
+  const snap = buildCodebaseSnapshotFromDirectory(DRACO_DIR);
+  t.ok(snap.root.kind === 'directory');
+  t.ok(snap.root.children!.length >= 1);
+  const block = codebaseSnapshotToBlock(snap);
+  t.ok(block.startsWith('codebase:\n'), 'block starts with codebase:');
+  const roundTrip = parseCodebaseBlock(block);
+  t.ok(roundTrip, 'round-trip parse succeeds');
+  const runPy = roundTrip!.root.children!.find((c: { path: string }) => c.path === 'run.py');
+  t.ok(runPy, 'has run.py');
+  t.ok(runPy!.lines?.length, 'run.py has declaration lines');
+  t.ok(runPy!.lines?.some((l: string) => l.startsWith('def run(')), 'run.py has def run(');
+  t.ok(runPy!.lines?.some((l: string) => l.startsWith('class Result')), 'run.py has class Result');
   t.end();
 });

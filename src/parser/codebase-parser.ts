@@ -9,8 +9,24 @@
  */
 
 import type { FileEntry, CodebaseSnapshot } from '../types.js';
+import { createRequire } from 'module';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
+
+const require = createRequire(import.meta.url);
+
+// Lazy-load @babel/parser for deep TS/JS extraction with full signatures
+let babelParse: ((code: string, options?: object) => { body?: unknown[]; program?: { body?: unknown[] } }) | null | undefined = undefined;
+function getBabelParser(): typeof babelParse {
+  if (babelParse !== undefined) return babelParse;
+  try {
+    const parser = require('@babel/parser');
+    babelParse = parser.parse.bind(parser);
+  } catch {
+    babelParse = null;
+  }
+  return babelParse;
+}
 
 /** File path + content for AST-based snapshot building */
 export interface SourceFile {
@@ -223,6 +239,132 @@ function extractPythonDeclarationsGranular(content: string): string[] {
   return out;
 }
 
+/** Minimal AST node shape for signature extraction (Babel) */
+type BabelNode = {
+  type: string;
+  start: number;
+  end: number;
+  body?: BabelNode & { start: number; end: number };
+  id?: { name: string };
+  declaration?: BabelNode;
+  params?: BabelNode[];
+  returnType?: { typeAnnotation: BabelNode & { start: number; end: number } };
+  key?: BabelNode & { name?: string };
+  kind?: string;
+};
+
+type ProgramNode = BabelNode & { body?: BabelNode[] };
+
+/**
+ * Extract full signature string from a function/method node (start up to body).
+ * Includes params and return type from source. Normalized to one line for snapshot.
+ */
+function signatureSlice(source: string, node: BabelNode): string {
+  const body = node.body as { start?: number } | undefined;
+  const end = body?.start ?? node.end;
+  const raw = source.slice(node.start, end).trim();
+  return raw.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Deep extraction for TS/JS: recurse into classes (methods, nested classes) and
+ * emit full signatures (params + types). Each line may have leading spaces for
+ * nesting (2 spaces per level).
+ */
+function extractTSDeclarationsDeep(content: string, path: string): string[] {
+  const parse = getBabelParser();
+  if (!parse) return [];
+  const ext = path.replace(/^.*\./, '').toLowerCase();
+  const isTS = ['ts', 'tsx'].includes(ext);
+  const plugins = isTS ? ['typescript', 'jsx'] as const : ['jsx'] as const;
+  let ast: { body?: BabelNode[]; program?: ProgramNode };
+  try {
+    ast = parse(content, {
+      sourceType: 'module',
+      plugins: [...plugins],
+      allowAwaitOutsideFunction: true,
+    }) as { body?: BabelNode[]; program?: ProgramNode };
+  } catch {
+    return [];
+  }
+  const body = ast.body ?? ast.program?.body ?? [];
+  const out: string[] = [];
+  const indent = (level: number) => '  '.repeat(level);
+
+  function addLine(level: number, sig: string): void {
+    out.push(indent(level) + sig);
+  }
+
+  function walkClass(cls: BabelNode, level: number): void {
+    const sig = signatureSlice(content, cls) + ': ...';
+    addLine(level, sig);
+    const classBodyNode = (cls as BabelNode & { body?: { body?: BabelNode[] } }).body;
+    const classBody = classBodyNode?.body ?? [];
+    for (const member of classBody) {
+      const m = member as BabelNode;
+      if (m.type === 'ClassMethod' || m.type === 'ClassPrivateMethod' || m.type === 'TSDeclareMethod') {
+        const methodSig = signatureSlice(content, m);
+        addLine(level + 1, methodSig);
+      } else if (m.type === 'ClassDeclaration') {
+        walkClass(m, level + 1);
+      }
+    }
+  }
+
+  function walkFunction(fn: BabelNode, level: number): void {
+    const sig = signatureSlice(content, fn);
+    addLine(level, sig);
+  }
+
+  function walkNode(node: BabelNode, level: number): void {
+    if (node.type === 'FunctionDeclaration') {
+      if (node.id) walkFunction(node, level);
+      return;
+    }
+    if (node.type === 'ClassDeclaration') {
+      walkClass(node, level);
+      return;
+    }
+    if (node.type === 'ExportDefaultDeclaration' && node.declaration) {
+      const d = node.declaration as BabelNode;
+      if (d.type === 'FunctionDeclaration' && d.id) walkFunction(d, level);
+      else if (d.type === 'ClassDeclaration') walkClass(d, level);
+      return;
+    }
+    if (node.type === 'ExportNamedDeclaration' && node.declaration) {
+      const d = node.declaration as BabelNode;
+      if (d.type === 'FunctionDeclaration' && d.id) walkFunction(d, level);
+      else if (d.type === 'ClassDeclaration') walkClass(d, level);
+      else if (d.type === 'VariableDeclaration') walkNode(d, level);
+      return;
+    }
+    if (node.type === 'VariableDeclaration') {
+      const decl = node as BabelNode & { declarations?: { id: BabelNode; init?: BabelNode }[] };
+      for (const declItem of decl.declarations ?? []) {
+        const init = declItem.init as BabelNode | undefined;
+        if (!init) continue;
+        const name = (declItem.id as { name?: string })?.name;
+        if (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression') {
+          const arrow = init as BabelNode & { params: BabelNode[] };
+          const arrowStart = init.start;
+          const arrowIdx = content.indexOf('=>', arrowStart);
+          const paramPart = arrowIdx >= 0 ? content.slice(arrowStart, arrowIdx).trim() : '()';
+          const retPart = init.returnType?.typeAnnotation
+            ? content.slice(init.returnType.typeAnnotation.start, init.returnType.typeAnnotation.end)
+            : '...';
+          addLine(level, `function ${name ?? 'anonymous'}${paramPart}: ${retPart}`);
+        }
+      }
+      return;
+    }
+  }
+
+  for (const node of body) {
+    walkNode(node as BabelNode, 0);
+  }
+  return out;
+}
+
 /** Extract code sketch lines from source (e.g. "def foo(...):" or "class Bar:") for snapshot. */
 function declarationLinesFromSource(path: string, content: string): string[] {
   const ext = path.replace(/^.*\./, '').toLowerCase();
@@ -234,29 +376,9 @@ function declarationLinesFromSource(path: string, content: string): string[] {
   }
 
   if (['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs'].includes(ext)) {
-    try {
-      const parse = (globalThis as unknown as { __babelParse?: (code: string) => unknown }).__babelParse;
-      if (typeof parse === 'function') {
-        type ASTNode = { type: string; id?: { name: string }; declaration?: { type: string; id?: { name: string } } };
-        const ast = parse(content) as { body?: ASTNode[] };
-        if (ast?.body) {
-          for (const node of ast.body) {
-            if (node.type === 'FunctionDeclaration' && node.id)
-              out.push(`function ${node.id.name}(...): ...`);
-            else if (node.type === 'ClassDeclaration' && node.id)
-              out.push(`class ${node.id.name}: ...`);
-            else if (node.type === 'ExportNamedDeclaration' && node.declaration) {
-              const d = node.declaration as { type: string; id?: { name: string } };
-              if (d.type === 'FunctionDeclaration' && d.id) out.push(`function ${d.id.name}(...): ...`);
-              else if (d.type === 'ClassDeclaration' && d.id) out.push(`class ${d.id.name}: ...`);
-            }
-          }
-        }
-        return out;
-      }
-    } catch {
-      // fallback to regex
-    }
+    const deep = extractTSDeclarationsDeep(content, path);
+    if (deep.length > 0) return deep;
+    // Fallback: no Babel or parse error
     for (const line of lines) {
       const t = line.trim();
       if (/^\s*\/\*\*?|\s*\/\//.test(t)) continue;
