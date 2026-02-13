@@ -3,6 +3,7 @@
 import os
 import logging
 from pathlib import Path
+from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException
 
@@ -36,7 +37,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/semantic_tree", tags=["semantic_tree"])
 
 
-def _build_snapshot(path: str, excluded_dirs=None, excluded_files=None) -> CodebaseSnapshot:
+def _build_snapshot(
+    path: str,
+    excluded_dirs: Optional[List[str]] = None,
+    excluded_files: Optional[List[str]] = None,
+) -> CodebaseSnapshot:
     """Extract codebase snapshot from local path (Python only)."""
     path_resolved = Path(path).resolve()
     if not path_resolved.is_dir():

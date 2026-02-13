@@ -140,7 +140,7 @@ function parseDepLine(line: string): DepEdge | null {
 /** Parse a full tree block (list lines) and optional deps block. Returns SemanticTree. */
 export function parseTreeBlock(text: string): SemanticTree {
   const lines = text.split(/\r?\n/);
-  const treeLines: { line: string; index: number }[] = [];
+  const treeLines: string[] = [];
   let depsStart = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -148,7 +148,7 @@ export function parseTreeBlock(text: string): SemanticTree {
       depsStart = i;
       break;
     }
-    if (line.match(/^\s*-\s+[\/\%\$\^\~]/)) treeLines.push({ line, index: i });
+    if (line.match(/^\s*-\s+[\/\%\$\^\~]/)) treeLines.push(line);
   }
 
   const virtualRoot: SemanticNode = {
@@ -163,7 +163,7 @@ export function parseTreeBlock(text: string): SemanticTree {
   };
   const stack: { node: SemanticNode; depth: number; path: string }[] = [{ node: virtualRoot, depth: -1, path: '' }];
 
-  for (const { line } of treeLines) {
+  for (const line of treeLines) {
     const parsed = parseTreeLine(line);
     if (!parsed) continue;
     const { depth, sigil, feature, metadata, contract, status } = parsed;
