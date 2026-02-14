@@ -1,5 +1,7 @@
 # CodeNav — Prescriptive Semantic Tree
 
+**Status:** v0.1.0 — tree construction (Python) + parsing/diffing (TypeScript). Code generation not yet implemented.
+
 Parser and tree-diff engine for **prescriptive semantic trees**: parse trees from markdown, compare before/after to infer operations, and dispatch to action stubs. The **TypeScript layer** does parsing, diffing, and dispatch; the **Python server** builds semantic trees from a codebase via an integrated RAG + LLM pipeline (analyze → tree markdown/JSON parseable by the frontend).
 
 ## Concepts (from plan + test_cases)
@@ -18,7 +20,7 @@ npm install
 npm run build
 ```
 
-**Server (semantic tree pipeline):** See [server/README.md](server/README.md). From `server/`: `uv sync`, set `.env` (e.g. `OPENAI_API_KEY`), then `uv run python main.py`. The API exposes `POST /semantic_tree/analyze` (extract + index + RAG + LLM → tree); returns 422 `intervention_required` when a step needs your fix.
+**Server (semantic tree pipeline):** See [server/README.md](server/README.md). From `server/`: `uv sync`, set `.env` (e.g. `OPENAI_API_KEY`), then `uv run python main.py`. The API exposes `POST /semantic_tree/analyze`: send either **path** (local directory) or **files** + **root_dir** (in-memory codebase: `[{ path, content }, ...]`). Response includes `tree_md` (parseable by `parseTreeBlock()` and matching test fixture format) and linkage to the codebase via `[path]` and `(entity)` in the tree. Returns 422 `intervention_required` when a step needs your fix.
 
 ## Usage
 
@@ -76,7 +78,7 @@ The tree format is **custom** (sigils + inline annotations), so we use a **custo
 - `src/types.ts` — Node (f, m, c), edges, operations, codebase snapshot.
 - `src/parser/tree-parser.ts` — Tree block + deps parsing; `findNodeByPath`.
 - `src/parser/operation-parser.ts` — OPERATION block → `Operation`.
-- `src/parser/codebase-parser.ts` — Codebase snapshot from test block or `discoverCodebase(rootDir)`.
+- `src/parser/codebase-parser.ts` — Codebase snapshot from test block or `discoverCodebase(rootDir)`. Standalone tool for fixtures/CLI; not connected to the Python analyze pipeline.
 - `src/diff/tree-diff.ts` — `diffTrees(before, after)` → `TreeDiffResult[]`; `diffResultToOperation`.
 - `src/actions/dispatcher.ts` — `dispatch(operation, tree)` → `ActionResult` (stub plans only).
 - `server/` — Python API: integrated analyze pipeline (extract → index → RAG → tree), search, status. See [server/README.md](server/README.md).
@@ -91,8 +93,9 @@ npm run test:semantic-tree-api
 
 Uses `test/requests/` as the codebase, calls `POST /semantic_tree/analyze`, and verifies the response is parseable with `parseTreeBlock()`. On 422, the script prints `intervention_required` step and message.
 
-## Next steps (when you add generation)
+## Roadmap
 
-- Implement real handlers in the dispatcher (call LLM, write files, run AST).
-- Run post-check (invariants) and surface drift.
-- Resolve conflicts (name collision, broken deps, grounding) and prompt user when needed.
+1. Real dispatcher handlers (code generation via LLM).
+2. JS/TS extraction support in the Python backend.
+3. Post-check invariants and conflict resolution.
+4. Tree persistence/caching.

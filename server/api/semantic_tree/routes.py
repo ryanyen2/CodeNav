@@ -2,6 +2,7 @@
 
 import os
 import logging
+import tempfile
 from pathlib import Path
 from typing import Optional, List
 
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from api.semantic_tree.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    FileInput,
     InterventionResponse,
     SearchRequest,
     SearchResponse,
@@ -66,6 +68,18 @@ def _build_snapshot(
     return CodebaseSnapshot(root_dir=root_dir, files=files)
 
 
+def _build_snapshot_from_files(file_inputs: List[FileInput], root_dir: str) -> CodebaseSnapshot:
+    """Build codebase snapshot from in-memory file list (Python only). Paths in file_inputs are relative to root_dir."""
+    files: list[FileInfo] = []
+    for fi in file_inputs:
+        path = (fi.path if not fi.path.startswith("/") else fi.path.lstrip("/")).replace("\\", "/")
+        if not path.endswith(".py"):
+            continue
+        file_info = extract_python_file(path, fi.content, root_dir, include_imports=True)
+        files.append(file_info)
+    return CodebaseSnapshot(root_dir=root_dir, files=files)
+
+
 def _intervention(step: str, message: str) -> JSONResponse:
     """Return 422 with intervention_required body; agent should stop for user fix."""
     body = InterventionResponse(status="intervention_required", step=step, message=message)
@@ -76,24 +90,37 @@ def _intervention(step: str, message: str) -> JSONResponse:
 async def analyze(request: AnalyzeRequest):
     """
     Integrated pipeline: extract → index (RAG) → domain discovery → semantic parsing (RAG) → hierarchy → tree.
+    Provide either path (local directory) or files + root_dir (in-memory codebase). Output tree_md is in the
+    format required by test fixtures (sigils, [path], (entity), deps:) and parseable by parseTreeBlock().
     Requires LLM and embedder configured. Stops with 422 intervention_required on parse/LLM issues.
     """
-    try:
-        snapshot = _build_snapshot(
-            request.path,
-            excluded_dirs=request.excluded_dirs,
-            excluded_files=request.excluded_files,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Extract failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    use_files = request.files and len(request.files) > 0
+    if use_files:
+        root_dir = (request.root_dir or "").strip() or ""
+        try:
+            snapshot = _build_snapshot_from_files(request.files, root_dir)
+        except Exception as e:
+            logger.exception("Extract from files failed")
+            raise HTTPException(status_code=500, detail=str(e))
+        index_path = request.index_path or os.path.join(tempfile.gettempdir(), "codenav_index")
+    else:
+        if not request.path:
+            raise HTTPException(status_code=400, detail="Either path or files must be provided")
+        try:
+            snapshot = _build_snapshot(
+                request.path,
+                excluded_dirs=request.excluded_dirs,
+                excluded_files=request.excluded_files,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Extract failed")
+            raise HTTPException(status_code=500, detail=str(e))
+        index_path = request.index_path or os.path.join(request.path, ".codenav", "index")
 
     if not snapshot.all_entities:
         return _intervention("extract", "No entities extracted; check path and filters.")
-
-    index_path = request.index_path or os.path.join(request.path, ".codenav", "index")
     embedder_type = get_embedder_type()
     try:
         embedder = get_embedder(embedder_type=embedder_type)
