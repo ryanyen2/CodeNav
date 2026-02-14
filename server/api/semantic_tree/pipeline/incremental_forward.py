@@ -61,6 +61,7 @@ def incremental_forward(
 
     if old_state is None or old_state.root_dir != root_dir:
         # Cold start: full pipeline (caller does extraction, we do rest; state built at end)
+        logger.info("[SYNC] full pipeline (no state or root_dir mismatch) | entities=%s", len(snapshot.all_entities))
         from api.semantic_tree.pipeline.semantic_parsing import run_semantic_parsing_rag
         store = SemanticVectorStore()
         store.add_entities(all_chunks, embedder)
@@ -106,6 +107,15 @@ def incremental_forward(
         "renamed": len(delta.renamed),
         "unchanged": len(delta.unchanged),
     }
+    target_count = len(delta.added) + len(delta.modified)
+    logger.info(
+        "[SYNC] incremental | delta added=%s removed=%s modified=%s unchanged=%s | index_only=%s entities (no full reindex)",
+        len(delta.added),
+        len(delta.removed),
+        len(delta.modified),
+        len(delta.unchanged),
+        target_count,
+    )
     store = SemanticVectorStore()
     store.load(index_path)
 

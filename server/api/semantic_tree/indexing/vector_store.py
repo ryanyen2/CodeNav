@@ -95,6 +95,7 @@ class SemanticVectorStore:
         embedder: Any,
     ) -> None:
         """Append new or updated entities without rebuilding. Same as add_entities when index exists."""
+        logger.info("Incremental index: adding %s entities (delta only, not full codebase)", len(entities_with_chunks))
         self.add_entities(entities_with_chunks, embedder)
 
     def mark_tombstones(self, entity_keys: List[str]) -> None:

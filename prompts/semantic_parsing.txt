@@ -7,7 +7,7 @@ Your goal is to analyze all functions in the current input and return their key 
 Do not skip any function.
 - Batch perspective: Analyze all functions in the chunk together, considering their roles within
 the overall system.15- High-level behavior: Focus on the purpose and role of each function, not on low-level
-implementation details.
+implementation details. Prefer user- or system-capability wording (e.g. "execute constraint solver" or "convert spec to program") over implementation wording (e.g. "run clingo process" or "call subprocess") when the meaning is the same.
 - If multiple definitions share the same method name (e.g., property getter and setter for the
 same attribute), you may output that method name only once and merge their semantic features; you
 do not need to distinguish decorator variants.

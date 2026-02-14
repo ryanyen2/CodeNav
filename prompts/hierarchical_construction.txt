@@ -26,11 +26,11 @@ label.
 8. Avoid mentioning specific libraries, frameworks, or formats; prefer `serialize data` over `pickle object` or `save to json`.
 9. Prefer domain or system semantics over low-level actions; use `manage session` rather than `update dict`.
 ## Scope Constraints
-- Only assign top-level groups (keys of <parsed_folder_tree>).
+- Only assign top-level groups (keys of <parsed_folder_tree>). The keys are file paths used for grounding; your category and subcategory labels should describe purpose and user-facing behavior, not repeat file or module names.
 - Exclude docs/examples/tests/vendor code unless essential to core functionality.
 - Do not invent new functional areas; use only those in <functional_areas>.
 - You may define new categories/subcategories as needed, but they must remain meaningful and
-consistent.
+consistent. Prefer intent-focused labels (e.g. "query execution", "format conversion") over structure-focused ones (e.g. "run job", "file processing") when both apply.
 ## Output Format (STRICT)
 Return only the JSON object wrapped exactly as:
 <solution>
