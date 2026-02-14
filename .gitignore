@@ -63,3 +63,17 @@ __pycache__/
 
 *.log
 *.egg-info/
+
+
+.agents/
+.claude/
+.cursor/
+.copilot/
+.planning/
+.projects/
+.research/
+.skills/
+.tools/
+.utils/
+.workspaces/
+.workspaces/

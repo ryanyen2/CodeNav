@@ -60,7 +60,11 @@ OPENAI_API_KEY=sk-...
 ```
 
 - **OpenAI**: Set `OPENAI_API_KEY` in `.env`. Use `provider=openai` in `/semantic_tree/analyze`.
-- **Ollama (local)**: If Ollama/LLaMA is installed locally, set `CODENAV_EMBEDDER_TYPE=ollama` and optionally `OLLAMA_HOST`. Pull an embed model (e.g. `nomic-embed-text`) and an LLM (e.g. `llama3.2:3b`). Use `provider=ollama` in analyze.
+- **Ollama (local)**: If Ollama is installed locally, set `CODENAV_EMBEDDER_TYPE=ollama` and optionally `OLLAMA_HOST`. You **must** pull the embed model before running analyze:
+  ```bash
+  ollama pull nomic-embed-text
+  ```
+  Also pull an LLM for domain/hierarchy/semantic steps (e.g. `ollama pull llama3.2:3b`). Use `provider=ollama` in the analyze request.
 
 ### 4. Config files (optional)
 
@@ -90,6 +94,21 @@ API base: `http://localhost:8001` (or `PORT`).
 - **Routes**: `GET /`
 - **Semantic tree**: `POST /semantic_tree/analyze`, `POST /semantic_tree/search`, `GET /semantic_tree/status`
 
+### Quick test (see the semantic tree)
+
+1. Start the server in one terminal: `uv run python main.py`
+2. In another terminal, from **server**: `uv run python scripts/call_analyze_and_show.py`
+
+This calls analyze with the small test codebase (`test/small_python_repo`) and prints the returned semantic tree. Server logs (embedder, LLM calls) appear in the first terminal. For a larger codebase set `CODENAV_ANALYZE_PATH` (e.g. to `../test/requests`); it will take longer.
+
+## Troubleshooting
+
+- **`model "nomic-embed-text" not found, try pulling it first (404)`** — Ollama is running but the embedding model isn’t installed. Run:
+  ```bash
+  ollama pull nomic-embed-text
+  ```
+  Then retry the analyze request.
+
 ## Layout
 
 | Path           | Purpose                                   |
@@ -106,3 +125,7 @@ API base: `http://localhost:8001` (or `PORT`).
 | `.env` in server | Loaded on startup (OPENAI_API_KEY, etc.)    |
 | `adalflow`      | Embeddings and LLM client abstraction       |
 | `CODENAV_*`     | CodeNav-specific env (embedder type, config) |
+
+## Future: incremental embedding cache
+
+Today each analyze run re-embeds the full codebase. A possible optimization is to cache embeddings by file path (or content hash), and on the next run only embed new or changed files, then merge with the existing FAISS index. That would speed up repeated analyzes on the same repo with small changes.

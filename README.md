@@ -85,17 +85,14 @@ The tree format is **custom** (sigils + inline annotations), so we use a **custo
 
 ## Testing the pipeline
 
-With the server running (`cd server && uv run python main.py`), from the repo root:
+With the server running (`cd server && uv run python main.py`):
 
-```bash
-npm run test:semantic-tree-api
-```
-
-Uses `test/requests/` as the codebase, calls `POST /semantic_tree/analyze`, and verifies the response is parseable with `parseTreeBlock()`. On 422, the script prints `intervention_required` step and message.
+- **From repo root:** `npm run test:semantic-tree-api` — calls analyze and prints the semantic tree. Defaults to the **small codebase** (`test/small_python_repo`) for fast runs (~1–2 min). Set `CODENAV_ANALYZE_PATH=test/requests` for the full requests repo (longer; may need higher timeout).
+- **From server:** `uv run python scripts/call_analyze_and_show.py` — same idea; prints the full `tree_md` result. Server logs (embedder, LLM) appear in the terminal where the server is running.
 
 ## Roadmap
 
 1. Real dispatcher handlers (code generation via LLM).
 2. JS/TS extraction support in the Python backend.
 3. Post-check invariants and conflict resolution.
-4. Tree persistence/caching.
+4. Tree persistence and incremental embedding cache (re-embed only changed files).
