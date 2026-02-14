@@ -20,7 +20,12 @@ npm install
 npm run build
 ```
 
-**Server (semantic tree pipeline):** See [server/README.md](server/README.md). From `server/`: `uv sync`, set `.env` (e.g. `OPENAI_API_KEY`), then `uv run python main.py`. The API exposes `POST /semantic_tree/analyze`: send either **path** (local directory) or **files** + **root_dir** (in-memory codebase: `[{ path, content }, ...]`). Response includes `tree_md` (parseable by `parseTreeBlock()` and matching test fixture format) and linkage to the codebase via `[path]` and `(entity)` in the tree. Returns 422 `intervention_required` when a step needs your fix.
+**Server (semantic tree pipeline):** See [server/README.md](server/README.md). From `server/`: `uv sync`, set `.env` (e.g. `OPENAI_API_KEY`), then `uv run python main.py`. The API exposes:
+- **`POST /semantic_tree/sync`** — Forward sync (code → tree). Use **path** for persistent state; when state exists at `path/.codenav/sync_state.json`, runs incrementally. Use **`POST /semantic_tree/analyze`** for the same pipeline without state (legacy).
+- **`GET /semantic_tree/tree?path=`** — Return last synced tree markdown for a codebase.
+- **`POST /semantic_tree/tree_edit`** — Given **path** (or **base_tree_md**) and **edited_tree_md**, returns operations and target code locations (fpath, entity_name, line_range) for each change; no code generation.
+
+Response includes `tree_md` parseable by `parseTreeBlock()` and linkage via `[path]` and `(entity)`. Returns 422 `intervention_required` when a step needs your fix.
 
 ## Usage
 
@@ -87,12 +92,13 @@ The tree format is **custom** (sigils + inline annotations), so we use a **custo
 
 With the server running (`cd server && uv run python main.py`):
 
-- **From repo root:** `npm run test:semantic-tree-api` — calls analyze and prints the semantic tree. Defaults to the **small codebase** (`test/small_python_repo`) for fast runs (~1–2 min). Set `CODENAV_ANALYZE_PATH=test/requests` for the full requests repo (longer; may need higher timeout).
-- **From server:** `uv run python scripts/call_analyze_and_show.py` — same idea; prints the full `tree_md` result. Server logs (embedder, LLM) appear in the terminal where the server is running.
+- **From repo root:** `npm run test:semantic-tree-api` — calls sync and prints the semantic tree. Set `CODENAV_USE_SYNC=1` to use `POST /sync`. Set `CODENAV_ANALYZE_PATH` for another codebase (e.g. `test/requests`).
+- **From server:** `uv run python scripts/call_analyze_and_show.py` — calls sync (force_full) and prints `tree_md`.
+- **Bidirectional flow (test/draco):** From `server/`, run `uv run python ../test/draco/test_semantic_tree_flow.py`. Syncs test/draco, saves tree, edits tree and verifies `tree_edit` returns operations and targets, then edits code and re-syncs to verify incremental update. Requires `.env` in server/.
 
 ## Roadmap
 
 1. Real dispatcher handlers (code generation via LLM).
 2. JS/TS extraction support in the Python backend.
 3. Post-check invariants and conflict resolution.
-4. Tree persistence and incremental embedding cache (re-embed only changed files).
+4. Tree persistence and incremental sync are implemented (state at `path/.codenav/sync_state.json`; re-embed only changed entities).

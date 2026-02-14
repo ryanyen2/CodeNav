@@ -31,8 +31,11 @@ npx tsx src/cli/parse-codebase.ts <directory>
 # Extract test fixtures from test_cases.md
 npm run test:extract-fixtures
 
-# Integration test: call analyze API, parse tree_md with parseTreeBlock (requires server running)
+# Integration test: call sync API, parse tree_md (requires server running)
 npm run test:semantic-tree-api
+
+# Bidirectional flow test (sync → save tree → edit tree → tree_edit → edit code → sync); from server/
+uv run python ../test/draco/test_semantic_tree_flow.py
 ```
 
 ## Architecture
@@ -81,13 +84,13 @@ The backend builds semantic trees from a live codebase. It uses `api.config`, `a
   - **`llm/`** — Prompt loader (`prompts/`), `<solution>` parsing, completion via `api.config.get_model_config()`.
   - **`pipeline/`** — Domain discovery, semantic parsing (RAG: one call per area + remaining), hierarchical construction, tree assembly.
   - **`output/tree_serializer.py`** — Tree → markdown (parseable by `parseTreeBlock()`) or JSON.
-  - **`routes.py`** — FastAPI router: `POST /semantic_tree/analyze` (extract + index + RAG pipeline), `POST /semantic_tree/search`, `GET /semantic_tree/status`. On step failure (e.g. invalid LLM output), returns **422** with `intervention_required` (step + message); agent should stop for user fix. Analyze accepts either **path** (local directory) or **files** + **root_dir** (in-memory codebase: list of `{ path, content }`); the returned semantic tree is linked to the codebase via `[fpath]` and `(entity_name)` in the markdown and in tree_json metadata.
+  - **`routes.py`** — FastAPI router: `POST /semantic_tree/sync` (forward code → tree; incremental when state at `path/.codenav/sync_state.json` exists), `POST /semantic_tree/analyze` (legacy full pipeline), `GET /semantic_tree/tree?path=` (last tree markdown), `POST /semantic_tree/tree_edit` (base + edited tree → operations and code targets: fpath, entity_name, line_range), `POST /semantic_tree/search`, `GET /semantic_tree/status`. On step failure, returns **422** with `intervention_required`.
 
 Output markdown from the backend is designed to be consumed by TS `parseTreeBlock()` and matches the format required by `test/fixtures/cases/` and `test_cases.md` (sigils, path grounding, entity names, `deps:` block).
 
 ### Test Structure
 
-Tests use **tape** (TAP). Fixtures in `test/fixtures/cases/` are markdown test cases with BEFORE/AFTER trees and OPERATION blocks. Codebase snapshot tests use `test/requests/` (Python) and `test/mosaic/` (TypeScript).
+Tests use **tape** (TAP). Fixtures in `test/fixtures/cases/` are markdown test cases with BEFORE/AFTER trees and OPERATION blocks. Codebase snapshot tests use `test/requests/` (Python) and `test/mosaic/` (TypeScript). **test/draco/** contains a small Python codebase (Draco) and `test_semantic_tree_flow.py`: integration test that syncs the codebase, saves the tree, edits the tree and verifies `tree_edit` returns operations and targets, then edits code and re-syncs to verify incremental update.
 
 ### Design Documents
 

@@ -92,14 +92,18 @@ API base: `http://localhost:8001` (or `PORT`).
 
 - **Health**: `GET /health`
 - **Routes**: `GET /`
-- **Semantic tree**: `POST /semantic_tree/analyze`, `POST /semantic_tree/search`, `GET /semantic_tree/status`
+- **Semantic tree**: `POST /semantic_tree/sync` (forward: code → tree; incremental when state exists), `POST /semantic_tree/analyze` (legacy, full run), `GET /semantic_tree/tree?path=` (last tree), `POST /semantic_tree/tree_edit` (edited tree → operations + code targets), `POST /semantic_tree/search`, `GET /semantic_tree/status`
 
 ### Quick test (see the semantic tree)
 
 1. Start the server in one terminal: `uv run python main.py`
 2. In another terminal, from **server**: `uv run python scripts/call_analyze_and_show.py`
 
-This calls analyze with the small test codebase (`test/small_python_repo`) and prints the returned semantic tree. Server logs (embedder, LLM calls) appear in the first terminal. For a larger codebase set `CODENAV_ANALYZE_PATH` (e.g. to `../test/requests`); it will take longer.
+This calls sync (force_full) with the small test codebase (`test/small_python_repo`) and prints the tree. Set `CODENAV_ANALYZE_PATH` (e.g. `../test/requests`) for a larger codebase.
+
+### Bidirectional flow test (test/draco)
+
+From **server**: `uv run python ../test/draco/test_semantic_tree_flow.py`. Syncs `test/draco`, saves `semantic_tree.md`, edits the tree and checks `tree_edit` returns operations and targets (fpath, entity_name), then edits code and re-syncs to verify incremental update. Ensures sync state and target identification align with the formalized loop.
 
 ## Troubleshooting
 
@@ -115,7 +119,7 @@ This calls analyze with the small test codebase (`test/small_python_repo`) and p
 |----------------|-------------------------------------------|
 | `server/`      | Project root; `main.py`, `.env`, `uv`    |
 | `server/api/`  | Package: app, config, embedder, routes    |
-| `server/api/semantic_tree/` | Analyze (extract + index + RAG pipeline), search, status |
+| `server/api/semantic_tree/` | Sync/analyze (extract + index + RAG pipeline), tree, tree_edit, search, status |
 
 ## Summary
 
@@ -126,6 +130,4 @@ This calls analyze with the small test codebase (`test/small_python_repo`) and p
 | `adalflow`      | Embeddings and LLM client abstraction       |
 | `CODENAV_*`     | CodeNav-specific env (embedder type, config) |
 
-## Future: incremental embedding cache
-
-Today each analyze run re-embeds the full codebase. A possible optimization is to cache embeddings by file path (or content hash), and on the next run only embed new or changed files, then merge with the existing FAISS index. That would speed up repeated analyzes on the same repo with small changes.
+Incremental sync is implemented: state at `path/.codenav/sync_state.json` stores fingerprints and semantic cache; re-sync only re-embeds and re-parses added/modified entities.
