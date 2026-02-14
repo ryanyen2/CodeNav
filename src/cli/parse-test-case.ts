@@ -102,7 +102,7 @@ function main() {
 }
 
 function countNodes(n: { children: unknown[] }): number {
-  return 1 + n.children.reduce((s, c) => s + countNodes(c as { children: unknown[] }), 0);
+  return 1 + n.children.reduce((s: number, c) => s + countNodes(c as { children: unknown[] }), 0);
 }
 
 main();

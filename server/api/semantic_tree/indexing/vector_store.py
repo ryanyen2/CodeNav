@@ -3,13 +3,17 @@
 import logging
 import pickle
 from pathlib import Path
-from typing import List, Optional, Tuple, Any
+from typing import List, Optional, Set, Tuple, Any
 
 import numpy as np
 
 from api.semantic_tree.models import CodeEntity
 
 logger = logging.getLogger(__name__)
+
+
+def _entity_key(e: CodeEntity) -> str:
+    return f"{e.fpath}::{e.name}"
 
 try:
     import faiss
@@ -40,7 +44,9 @@ class SemanticVectorStore:
     def __init__(self) -> None:
         self._index: Optional[Any] = None
         self._entities: List[CodeEntity] = []
+        self._entity_keys: List[str] = []  # parallel to _entities for tombstone lookup
         self._dim: Optional[int] = None
+        self._tombstones: Set[str] = set()  # entity keys removed from codebase
 
     def add_entities(
         self,
@@ -77,9 +83,45 @@ class SemanticVectorStore:
         if self._index is None:
             self._index = faiss.IndexFlatL2(self._dim)
             self._entities = []
+            self._entity_keys = []
         self._index.add(matrix)
         self._entities.extend(entities)
+        self._entity_keys.extend(_entity_key(e) for e in entities)
         logger.info("Added %s entities to semantic vector store", len(entities))
+
+    def add_entities_incremental(
+        self,
+        entities_with_chunks: List[Tuple[CodeEntity, str]],
+        embedder: Any,
+    ) -> None:
+        """Append new or updated entities without rebuilding. Same as add_entities when index exists."""
+        self.add_entities(entities_with_chunks, embedder)
+
+    def mark_tombstones(self, entity_keys: List[str]) -> None:
+        """Mark these entity keys as removed (excluded from search). Rebuild when tombstone ratio > 30%."""
+        self._tombstones.update(entity_keys)
+        logger.info("Marked %s tombstones (total %s)", len(entity_keys), len(self._tombstones))
+
+    @property
+    def needs_rebuild(self) -> bool:
+        """True when tombstone ratio > 30% so full rebuild is cheaper."""
+        n = len(self._entities)
+        if n == 0:
+            return False
+        return len(self._tombstones) / n > 0.3
+
+    def rebuild(
+        self,
+        all_chunks: List[Tuple[CodeEntity, str]],
+        embedder: Any,
+    ) -> None:
+        """Full rebuild: new index from all_chunks, clear tombstones."""
+        self._index = None
+        self._entities = []
+        self._entity_keys = []
+        self._tombstones = set()
+        self.add_entities(all_chunks, embedder)
+        logger.info("Rebuilt semantic vector store (%s entities)", self.size)
 
     def search(
         self,
@@ -96,12 +138,18 @@ class SemanticVectorStore:
             return []
 
         q = np.array([emb], dtype=np.float32)
-        distances, indices = self._index.search(q, min(top_k, len(self._entities)))
+        # Request extra to allow for skipping tombstoned
+        k_request = min(top_k * 3, len(self._entities)) if self._tombstones else min(top_k, len(self._entities))
+        distances, indices = self._index.search(q, k_request)
         result: List[Tuple[CodeEntity, float]] = []
         for i, idx in enumerate(indices[0]):
             if idx < 0 or idx >= len(self._entities):
                 continue
+            if self._entity_keys and idx < len(self._entity_keys) and self._entity_keys[idx] in self._tombstones:
+                continue
             result.append((self._entities[idx], float(distances[0][i])))
+            if len(result) >= top_k:
+                break
         return result
 
     def save(self, path: str) -> None:
@@ -124,6 +172,8 @@ class SemanticVectorStore:
         self._index = faiss.read_index(str(p / "index.faiss"))
         with open(p / "entities.pkl", "rb") as f:
             self._entities = pickle.load(f)
+        self._entity_keys = [_entity_key(e) for e in self._entities]
+        self._tombstones = set()
         with open(p / "dim.txt") as f:
             self._dim = int(f.read().strip())
 

@@ -12,13 +12,16 @@
  * - CODENAV_API_BASE — default http://localhost:8001
  * - CODENAV_ANALYZE_PATH — codebase path (default: test/small_python_repo for quick runs)
  * - CODENAV_ANALYZE_TIMEOUT_MS — request timeout in ms (default 300_000 = 5 min)
+ * - CODENAV_USE_SYNC — if set, call POST /semantic_tree/sync instead of /analyze
  */
 
 import { resolve } from "path";
 import { parseTreeBlock } from "../src/parser/tree-parser.js";
 
 const BASE_URL = process.env.CODENAV_API_BASE ?? "http://localhost:8001";
+const USE_SYNC = Boolean(process.env.CODENAV_USE_SYNC);
 const ANALYZE_URL = `${BASE_URL}/semantic_tree/analyze`;
+const SYNC_URL = `${BASE_URL}/semantic_tree/sync`;
 
 // const DEFAULT_PATH = resolve(process.cwd(), "test", "small_python_repo");
 // const DEFAULT_REPO = "small_python_repo";
@@ -44,17 +47,20 @@ async function main(): Promise<void> {
     provider: "openai",
     model: "gpt-5-mini",
     format: "md",
+    ...(USE_SYNC ? { force_full: false } : {}),
   };
 
-  console.log("POST", ANALYZE_URL);
+  const url = USE_SYNC ? SYNC_URL : ANALYZE_URL;
+  console.log("POST", url);
   console.log("body.path:", body.path);
+  if (USE_SYNC) console.log("(sync: incremental when state exists)");
   console.log("(set CODENAV_ANALYZE_PATH=test/requests for full repo; can take several minutes)\n");
 
   const controller = new AbortController();
   const timeoutMs = Number(process.env.CODENAV_ANALYZE_TIMEOUT_MS) || 300_000;
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  const res = await fetch(ANALYZE_URL, {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -82,6 +88,8 @@ async function main(): Promise<void> {
     root_dir: string;
     file_count: number;
     entity_count: number;
+    is_incremental?: boolean;
+    delta_summary?: { added?: number; removed?: number; modified?: number; renamed?: number; unchanged?: number };
   };
 
   if (!data.tree_md) {
@@ -95,6 +103,10 @@ async function main(): Promise<void> {
   console.log("root_dir:", data.root_dir);
   console.log("file_count:", data.file_count);
   console.log("entity_count:", data.entity_count);
+  if (USE_SYNC && data.is_incremental !== undefined) {
+    console.log("is_incremental:", data.is_incremental);
+    if (data.delta_summary) console.log("delta_summary:", data.delta_summary);
+  }
   console.log("tree nodes:", nodeCount);
   console.log("deps:", tree.deps.length);
   console.log("\n--- Semantic tree (tree_md) ---");

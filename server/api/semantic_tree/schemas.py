@@ -66,3 +66,75 @@ class StatusResponse(BaseModel):
     """Index/cache status."""
     index_path: Optional[str] = None
     index_size: int = 0
+
+
+# --- Sync (incremental forward) ---
+
+
+class DeltaSummary(BaseModel):
+    """Summary of entity delta for incremental sync."""
+    added: int = 0
+    removed: int = 0
+    modified: int = 0
+    renamed: int = 0
+    unchanged: int = 0
+
+
+class SyncRequest(BaseModel):
+    """Request for sync (forward: code → tree). Same as AnalyzeRequest plus force_full.
+    When force_full=False and state exists, runs incremental forward."""
+    path: Optional[str] = Field(None, description="Local directory path (ignored if files is set)")
+    files: Optional[List[FileInput]] = Field(None, description="Inline file list; root_dir used as virtual root")
+    root_dir: Optional[str] = Field(None, description="Virtual root when using files")
+    repo_name: str = Field("", description="Repository name for prompts")
+    provider: str = Field("openai", description="LLM provider")
+    model: Optional[str] = Field(None, description="Model name")
+    format: str = Field("md", description="Output format: 'md' or 'json'")
+    force_full: bool = Field(False, description="If True, run full pipeline and ignore existing state")
+    excluded_dirs: Optional[List[str]] = None
+    excluded_files: Optional[List[str]] = None
+    index_path: Optional[str] = Field(None, description="Where to save/load FAISS index")
+
+
+class SyncResponse(BaseModel):
+    """Sync result: tree + incremental metadata."""
+    tree_md: Optional[str] = None
+    tree_json: Optional[dict] = None
+    root_dir: str
+    file_count: int
+    entity_count: int
+    is_incremental: bool = Field(False, description="True when incremental forward was used")
+    delta_summary: Optional[DeltaSummary] = None
+    timing: Optional[dict] = None
+
+
+# --- Tree edit → target identification ---
+
+
+class TreeEditRequest(BaseModel):
+    """Request for tree edit target identification (no code generation)."""
+    path: Optional[str] = Field(None, description="Codebase path; if set, base_tree_md is loaded from state")
+    base_tree_md: Optional[str] = Field(None, description="Base tree markdown (required if path not provided)")
+    edited_tree_md: str = Field(..., description="User-edited tree markdown")
+
+
+class TargetModificationArea(BaseModel):
+    """One codebase region affected by an operation."""
+    fpath: Optional[str] = None
+    entity_name: Optional[str] = None
+    line_range: Optional[tuple[int, int]] = None
+    node_path: str = ""
+
+
+class TreeEditOperationItem(BaseModel):
+    """One inferred operation with its code targets."""
+    op: str = Field(..., description="Operation type: AddNode, DeleteNode, MoveNode, EditFeature, EditContract, ReorderChildren")
+    target: str = Field("", description="Target node path(s)")
+    params: dict = Field(default_factory=dict)
+    targets: List[TargetModificationArea] = Field(default_factory=list, description="Affected code locations")
+
+
+class TreeEditResponse(BaseModel):
+    """Operations and code targets from tree edit (for Phase 4 code generation)."""
+    operations: List[TreeEditOperationItem] = Field(default_factory=list)
+    error: Optional[str] = None

@@ -47,3 +47,13 @@ export type { TreeDiffOptions } from './diff/tree-diff.js';
 // Action dispatch: Operation → ActionResult (stub plans)
 export { dispatch } from './actions/dispatcher.js';
 export type { ActionResult } from './actions/dispatcher.js';
+
+// Tree edit → target modification areas (semantic tree edit → code locations)
+export {
+  computeTreeEditTargets,
+} from './sync/tree-edit-targets.js';
+export type {
+  TreeEditTargetsResult,
+  TreeEditOperationItem,
+  TargetModificationArea,
+} from './sync/tree-edit-targets.js';

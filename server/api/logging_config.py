@@ -76,6 +76,19 @@ def setup_logging(format: str = None):
     # Apply logging configuration
     logging.basicConfig(level=log_level, handlers=[file_handler, console_handler], force=True)
 
+    # Suppress noisy third-party loggers (adalflow, httpx, openai)
+    for noisy in (
+        "adalflow",
+        "adalflow.core",
+        "adalflow.components",
+        "httpcore",
+        "httpx",
+        "openai",
+        "openai._base_client",
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    logging.getLogger("codenav.pipeline").setLevel(logging.INFO)
+
     # Log configuration info
     logger = logging.getLogger(__name__)
     logger.debug(
