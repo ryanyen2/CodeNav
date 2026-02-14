@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CodeNav is a parser and tree-diff engine for prescriptive semantic trees. It parses semantic trees from markdown notation, compares before/after states to infer operations, and dispatches to action stubs. The **TypeScript layer** (`src/`) handles parsing, diffing, and dispatch; the **Python backend** (`server/api/`) provides a semantic tree construction pipeline (codebase → extraction → LLM → tree). Currently v0.1.0 — parsing and diffing in TS; tree construction and indexing in Python, no code generation.
+CodeNav is a parser and tree-diff engine for prescriptive semantic trees. It parses semantic trees from markdown notation, compares before/after states to infer operations, and dispatches to action stubs. The **TypeScript layer** (`src/`) handles parsing, diffing, and dispatch; the **Python backend** (`server/api/`) provides an integrated semantic tree pipeline: **analyze** (extract → FAISS index/RAG → domain discovery → semantic parsing via RAG → hierarchy → tree assembly). The API returns 422 `intervention_required` when a step needs user fix. Currently v0.1.0 — parsing and diffing in TS; tree construction in Python, no code generation.
 
 ## Commands
 
@@ -23,6 +23,9 @@ npx tsx src/cli/parse-codebase.ts <directory>
 
 # Extract test fixtures from test_cases.md
 npm run test:extract-fixtures
+
+# Integration test: call analyze API, parse tree_md with parseTreeBlock (requires server running)
+npm run test:semantic-tree-api
 ```
 
 ## Architecture
@@ -55,16 +58,16 @@ Markdown tree notation → parseTreeBlock() → SemanticTree
 
 ### Backend (Python — `server/api/`)
 
-The backend builds semantic trees from a live codebase and uses the same LLM/config patterns as the rest of the API (`api.config`, `api.openai_client`, `api.rag`, `api.ollama_patch`).
+The backend builds semantic trees from a live codebase. It uses `api.config`, `api.openai_client`, and `api.tools.embedder` (adalflow).
 
-- **`server/api/semantic_tree/`** — Semantic tree construction pipeline:
+- **`server/api/semantic_tree/`** — Integrated pipeline and routes:
   - **`models.py`** — Pydantic models aligned with `src/types.ts`.
   - **`extraction/`** — Discovery (directory walk), Python AST extraction, import edges.
-  - **`indexing/`** — Entity-level chunking and FAISS vector store (embedder from `api.tools.embedder`).
+  - **`indexing/`** — Entity-level chunking and FAISS vector store (embedder from `api.tools.embedder`); used as RAG inside analyze.
   - **`llm/`** — Prompt loader (`prompts/`), `<solution>` parsing, completion via `api.config.get_model_config()`.
-  - **`pipeline/`** — Domain discovery, semantic parsing, hierarchical construction, tree assembly.
+  - **`pipeline/`** — Domain discovery, semantic parsing (RAG: one call per area + remaining), hierarchical construction, tree assembly.
   - **`output/tree_serializer.py`** — Tree → markdown (parseable by `parseTreeBlock()`) or JSON.
-  - **`routes.py`** — FastAPI router: `POST /semantic_tree/extract`, `/index`, `/analyze`, `/search`; `GET /semantic_tree/status`.
+  - **`routes.py`** — FastAPI router: `POST /semantic_tree/analyze` (extract + index + RAG pipeline), `POST /semantic_tree/search`, `GET /semantic_tree/status`. On step failure (e.g. invalid LLM output), returns **422** with `intervention_required` (step + message); agent should stop for user fix.
 
 Output markdown from the backend is designed to be consumed by TS `parseTreeBlock()` (same grammar as test fixtures).
 

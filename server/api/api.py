@@ -1,5 +1,5 @@
 """
-CodeNav API — semantic tree pipeline (extract, index, analyze, search).
+CodeNav API — semantic tree pipeline: analyze (extract + index + RAG), search, status.
 Uses adalflow for embeddings and LLM completion.
 """
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="CodeNav API",
-    description="API for semantic tree extraction, indexing, analysis, and search.",
+    description="API for semantic tree: analyze (extract + RAG index + LLM pipeline), search, status.",
 )
 
 app.add_middleware(

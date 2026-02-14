@@ -47,6 +47,13 @@ def complete(
         return response.raw_response
     if hasattr(response, "data") and response.data is not None:
         return str(response.data)
+    # OpenAIClient.call() returns a ChatCompletion when stream=False (via internal stream accumulation)
+    if hasattr(response, "choices") and response.choices:
+        msg = getattr(response.choices[0], "message", None)
+        if msg is not None:
+            content = getattr(msg, "content", None)
+            if content is not None:
+                return content if isinstance(content, str) else str(content)
     if hasattr(response, "error") and response.error:
         raise RuntimeError(f"LLM call failed: {response.error}")
     raise RuntimeError("LLM call returned no content")

@@ -3,12 +3,10 @@
   "providers": {
     "openai": {
       "client_class": "OpenAIClient",
-      "default_model": "gpt-4o-mini",
+      "default_model": "gpt-5-mini",
       "supportsCustomModel": true,
       "models": {
-        "gpt-4o-mini": { "temperature": 0.7, "top_p": 0.8 },
-        "gpt-4o": { "temperature": 0.7, "top_p": 0.8 },
-        "gpt-4": { "temperature": 0.7, "top_p": 0.8 }
+        "gpt-5-mini": { "temperature": 1 }
       }
     },
     "ollama": {

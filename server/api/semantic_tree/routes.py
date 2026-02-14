@@ -1,4 +1,4 @@
-"""API routes for semantic tree pipeline (extract, index, analyze, search)."""
+"""API routes for semantic tree pipeline: analyze (extract + index + RAG pipeline), search, status."""
 
 import os
 import logging
@@ -6,14 +6,12 @@ from pathlib import Path
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from api.semantic_tree.schemas import (
-    ExtractRequest,
-    ExtractResponse,
-    IndexRequest,
-    IndexResponse,
     AnalyzeRequest,
     AnalyzeResponse,
+    InterventionResponse,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
@@ -25,7 +23,7 @@ from api.semantic_tree.models import CodebaseSnapshot, FileInfo
 from api.semantic_tree.indexing.chunker import entity_chunks
 from api.semantic_tree.indexing.vector_store import SemanticVectorStore
 from api.semantic_tree.pipeline.domain_discovery import run_domain_discovery
-from api.semantic_tree.pipeline.semantic_parsing import run_semantic_parsing
+from api.semantic_tree.pipeline.semantic_parsing import run_semantic_parsing_rag
 from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchical_construction
 from api.semantic_tree.pipeline.tree_assembly import assemble_tree
 from api.semantic_tree.output.tree_serializer import tree_to_markdown, tree_to_json
@@ -68,62 +66,17 @@ def _build_snapshot(
     return CodebaseSnapshot(root_dir=root_dir, files=files)
 
 
-@router.post("/extract", response_model=ExtractResponse)
-async def extract(request: ExtractRequest):
-    """Extract codebase snapshot (entities + imports) from a local directory."""
-    try:
-        snapshot = _build_snapshot(
-            request.path,
-            excluded_dirs=request.excluded_dirs,
-            excluded_files=request.excluded_files,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Extract failed")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return ExtractResponse(
-        root_dir=snapshot.root_dir,
-        file_count=len(snapshot.files),
-        entity_count=len(snapshot.all_entities),
-        import_count=len(snapshot.all_imports),
-    )
-
-
-@router.post("/index", response_model=IndexResponse)
-async def index(request: IndexRequest):
-    """Extract, embed, and build FAISS index. Requires embedder configured (e.g. OPENAI_API_KEY or Ollama)."""
-    try:
-        snapshot = _build_snapshot(
-            request.path,
-            excluded_dirs=request.excluded_dirs,
-            excluded_files=request.excluded_files,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Extract failed")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    embedder_type = get_embedder_type()
-    embedder = get_embedder(embedder_type=embedder_type)
-
-    store = SemanticVectorStore()
-    chunks = entity_chunks(snapshot)
-    store.add_entities(chunks, embedder)
-
-    index_path = request.index_path or os.path.join(request.path, ".codenav", "index")
-    store.save(index_path)
-
-    return IndexResponse(entity_count=store.size, index_path=index_path)
+def _intervention(step: str, message: str) -> JSONResponse:
+    """Return 422 with intervention_required body; agent should stop for user fix."""
+    body = InterventionResponse(status="intervention_required", step=step, message=message)
+    return JSONResponse(status_code=422, content=body.model_dump())
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest):
     """
-    Full pipeline: extract → domain discovery → semantic parsing → hierarchy → tree assembly.
-    Requires LLM provider/model configured (e.g. OPENAI_API_KEY and provider openai).
+    Integrated pipeline: extract → index (RAG) → domain discovery → semantic parsing (RAG) → hierarchy → tree.
+    Requires LLM and embedder configured. Stops with 422 intervention_required on parse/LLM issues.
     """
     try:
         snapshot = _build_snapshot(
@@ -138,7 +91,27 @@ async def analyze(request: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     if not snapshot.all_entities:
-        raise HTTPException(status_code=400, detail="No entities extracted; check path and filters.")
+        return _intervention("extract", "No entities extracted; check path and filters.")
+
+    index_path = request.index_path or os.path.join(request.path, ".codenav", "index")
+    embedder_type = get_embedder_type()
+    try:
+        embedder = get_embedder(embedder_type=embedder_type)
+    except Exception as e:
+        return _intervention("index", f"Embedder not available: {e}")
+
+    store = SemanticVectorStore()
+    chunks = entity_chunks(snapshot)
+    try:
+        store.add_entities(chunks, embedder)
+    except Exception as e:
+        return _intervention("index", f"Failed to build index: {e}")
+    if store.size == 0:
+        return _intervention("index", "No embeddings produced; check embedder config.")
+    try:
+        store.save(index_path)
+    except Exception as e:
+        logger.warning("Could not save index to %s: %s", index_path, e)
 
     try:
         areas = run_domain_discovery(
@@ -151,22 +124,30 @@ async def analyze(request: AnalyzeRequest):
     except ValueError as e:
         if "not configured" in str(e).lower() or "environment" in str(e).lower():
             raise HTTPException(status_code=503, detail="LLM not configured or keys missing.")
-        raise HTTPException(status_code=400, detail=str(e))
+        return _intervention("domain_discovery", str(e))
     except Exception as e:
         logger.exception("Domain discovery failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        return _intervention("domain_discovery", str(e))
+
+    if not areas:
+        return _intervention("domain_discovery", "LLM returned no functional areas; check prompt/response.")
 
     try:
-        features = run_semantic_parsing(
+        features = run_semantic_parsing_rag(
             snapshot,
+            store=store,
+            embedder=embedder,
+            areas=areas,
             repo_name=request.repo_name,
             repo_info="",
             provider=request.provider,
             model=request.model,
         )
+    except ValueError as e:
+        return _intervention("semantic_parsing", str(e))
     except Exception as e:
         logger.exception("Semantic parsing failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        return _intervention("semantic_parsing", str(e))
 
     group_to_entities: dict[str, list[str]] = {}
     for f in snapshot.files:
@@ -179,9 +160,11 @@ async def analyze(request: AnalyzeRequest):
             provider=request.provider,
             model=request.model,
         )
+    except ValueError as e:
+        return _intervention("hierarchical_construction", str(e))
     except Exception as e:
         logger.exception("Hierarchy construction failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        return _intervention("hierarchical_construction", str(e))
 
     tree = assemble_tree(snapshot, features, hierarchy, include_deps=True)
 
@@ -202,7 +185,7 @@ async def analyze(request: AnalyzeRequest):
 
 @router.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
-    """Semantic search over an existing index. Requires embedder configured."""
+    """Semantic search over an existing index (e.g. after analyze). Requires embedder configured."""
     if not Path(request.index_path).is_dir():
         raise HTTPException(status_code=404, detail="Index path not found")
 
@@ -230,7 +213,7 @@ async def search(request: SearchRequest):
 
 @router.get("/status", response_model=StatusResponse)
 async def status(index_path: str | None = None):
-    """Return index status if index_path given."""
+    """Index status if index_path given (e.g. path/.codenav/index after analyze)."""
     if not index_path:
         return StatusResponse()
     p = Path(index_path)

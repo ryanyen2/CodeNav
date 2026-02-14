@@ -4,12 +4,21 @@ Backend for **CodeNav**: semantic tree extraction, indexing, analysis, and searc
 
 ## Features
 
-- **Extract**: Discover files and extract Python entities + imports from a local codebase.
-- **Index**: Build a FAISS vector index over entities (embeddings via OpenAI or Ollama).
-- **Analyze**: Full pipeline (domain discovery → semantic parsing → hierarchy → tree assembly) with configurable LLM (OpenAI or Ollama).
-- **Search**: Semantic search over an existing index.
+- **Analyze**: Single integrated pipeline — extract → build FAISS index (RAG) → domain discovery (1 LLM call) → semantic parsing via RAG (one call per functional area + one for remaining) → hierarchy (1 call) → tree assembly. Uses both embedder and LLM; index is built automatically and saved to `path/.codenav/index`.
+- **Search**: Semantic search over the index produced by analyze (pass `index_path`, e.g. `path/.codenav/index`).
+- **Status**: Index size for a given `index_path`.
 
 Output trees are markdown/JSON compatible with the TypeScript `parseTreeBlock()` grammar.
+
+### Intervention (422)
+
+When a pipeline step fails in a way that needs your fix (e.g. no `<solution>` block, invalid JSON, no functional areas), the API **stops** and returns **422** with:
+
+```json
+{"status": "intervention_required", "step": "<step_name>", "message": "<reason>"}
+```
+
+Steps: `extract`, `index`, `domain_discovery`, `semantic_parsing`, `hierarchical_construction`. Fix the cause (prompt, LLM, or input) and retry.
 
 ## Environment setup
 
@@ -79,7 +88,7 @@ API base: `http://localhost:8001` (or `PORT`).
 
 - **Health**: `GET /health`
 - **Routes**: `GET /`
-- **Semantic tree**: `POST /semantic_tree/extract`, `/semantic_tree/index`, `/semantic_tree/analyze`, `POST /semantic_tree/search`, `GET /semantic_tree/status`
+- **Semantic tree**: `POST /semantic_tree/analyze`, `POST /semantic_tree/search`, `GET /semantic_tree/status`
 
 ## Layout
 
@@ -87,7 +96,7 @@ API base: `http://localhost:8001` (or `PORT`).
 |----------------|-------------------------------------------|
 | `server/`      | Project root; `main.py`, `.env`, `uv`    |
 | `server/api/`  | Package: app, config, embedder, routes    |
-| `server/api/semantic_tree/` | Extract → index → analyze → search pipeline |
+| `server/api/semantic_tree/` | Analyze (extract + index + RAG pipeline), search, status |
 
 ## Summary
 

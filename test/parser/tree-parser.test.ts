@@ -327,3 +327,30 @@ t.test('tree-parser: feature with brackets in text', (t) => {
   t.ok(n.contract?.sig?.includes('Optional') ?? false, 'contract sig contains Optional');
   t.end();
 });
+
+t.test('tree-parser: backend tree_serializer format (API output)', (t) => {
+  // Format produced by server api/semantic_tree/output/tree_serializer.tree_to_markdown()
+  const block = `- ~   #resolved
+  - ~ requests #resolved
+    - ~ utils #resolved
+      - % adapters [requests/adapters.py] #resolved
+        - $ get [requests/adapters.py] (get) {sig: (url) -> Response} #resolved
+deps:
+  (get) --invokes--> (request)
+`;
+  const tree = parseTreeBlock(block);
+  t.ok(tree.root, 'has root');
+  t.equal(tree.root.sigil, '~', 'root sigil');
+  t.ok(tree.root.children.length >= 1, 'has children');
+  const area = tree.root.children[0]!;
+  t.equal(area.feature, 'requests', 'area feature');
+  const fileNode = area.children[0]?.children[0];
+  t.ok(fileNode, 'has file node');
+  t.equal(fileNode!.metadata.fpath, 'requests/adapters.py', 'file fpath');
+  const leaf = fileNode!.children[0];
+  t.ok(leaf, 'has leaf');
+  t.equal(leaf!.metadata.entity_name, 'get', 'entity_name');
+  t.equal(tree.deps.length, 1, 'one dep');
+  t.equal(tree.deps[0]!.relation, 'invokes', 'dep relation');
+  t.end();
+});

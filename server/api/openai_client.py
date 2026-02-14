@@ -132,7 +132,7 @@ class OpenAIClient(ModelClient):
         - Use :ref:`OutputParser<components-output_parsers>` for response parsing and formatting.
 
         For multimodal inputs, provide images in `model_kwargs["images"]` as a path, URL, or list of them.
-        The model must support vision capabilities (e.g., `gpt-4o`, `gpt-4o-mini`, `o1`, `o1-mini`).
+        The model must support vision capabilities (e.g., `gpt-5-mini`, `o1`, `o1-mini`).
 
         For image generation, use `model_type=ModelType.IMAGE_GENERATION` and provide:
         - model: `"dall-e-3"` or `"dall-e-2"`
@@ -599,7 +599,7 @@ if __name__ == "__main__":
 
     gen = Generator(
         model_client=OpenAIClient(),
-        model_kwargs={"model": "gpt-4o", "stream": False},
+        model_kwargs={"model": "gpt-5-mini", "stream": False},
     )
     gen_response = gen(prompt_kwargs)
     print(f"gen_response: {gen_response}")
@@ -623,7 +623,7 @@ if __name__ == "__main__":
     setup_env()
 
     openai_llm = adal.Generator(
-        model_client=OpenAIClient(), model_kwargs={"model": "gpt-4o"}
+        model_client=OpenAIClient(), model_kwargs={"model": "gpt-5-mini"}
     )
     resopnse = openai_llm(prompt_kwargs={"input_str": "What is LLM?"})
     print(resopnse)

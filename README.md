@@ -1,13 +1,13 @@
 # CodeNav — Prescriptive Semantic Tree
 
-First version: **parser + tree diff + action dispatch** (no code generation). Parse the semantic tree from markdown, compare before/after to infer operations, and dispatch to the correct action stub.
+Parser and tree-diff engine for **prescriptive semantic trees**: parse trees from markdown, compare before/after to infer operations, and dispatch to action stubs. The **TypeScript layer** does parsing, diffing, and dispatch; the **Python server** builds semantic trees from a codebase via an integrated RAG + LLM pipeline (analyze → tree markdown/JSON parseable by the frontend).
 
 ## Concepts (from plan + test_cases)
 
 - **Semantic tree**: Markdown nested list with sigils (`/` dir, `%` file, `$`/`^` leaf, `~` abstract), grounding `[path]`, entity `(name)`, contract `{sig: ...}`, and `deps:` block.
 - **Operations**: AddNode, DeleteNode, MoveNode, EditFeature, EditContract, ReorderChildren (plus ExtractAndGroup, SplitFunction, MergeNodes).
 - **Tree diff**: Compare tree before vs after → infer which operation(s) occurred → convert to `Operation` for dispatch.
-- **Dispatch**: Map each operation to an action result (stub plan only; no LLM or file writes yet).
+- **Dispatch**: Map each operation to an action result (stub plan only; no code generation yet).
 
 ## Setup
 
@@ -18,7 +18,7 @@ npm install
 npm run build
 ```
 
-**Server (semantic tree pipeline, optional):** See [server/api/README.md](server/api/README.md) for environment setup, config (OpenAI/Ollama via adalflow), and running the API. From `server/api`: `python -m venv .venv && source .venv/bin/activate`, set `OPENAI_API_KEY` or `CODENAV_EMBEDDER_TYPE=ollama`, then `pip install -e .` and `python -m api.main`.
+**Server (semantic tree pipeline):** See [server/README.md](server/README.md). From `server/`: `uv sync`, set `.env` (e.g. `OPENAI_API_KEY`), then `uv run python main.py`. The API exposes `POST /semantic_tree/analyze` (extract + index + RAG + LLM → tree); returns 422 `intervention_required` when a step needs your fix.
 
 ## Usage
 
@@ -79,6 +79,17 @@ The tree format is **custom** (sigils + inline annotations), so we use a **custo
 - `src/parser/codebase-parser.ts` — Codebase snapshot from test block or `discoverCodebase(rootDir)`.
 - `src/diff/tree-diff.ts` — `diffTrees(before, after)` → `TreeDiffResult[]`; `diffResultToOperation`.
 - `src/actions/dispatcher.ts` — `dispatch(operation, tree)` → `ActionResult` (stub plans only).
+- `server/` — Python API: integrated analyze pipeline (extract → index → RAG → tree), search, status. See [server/README.md](server/README.md).
+
+## Testing the pipeline
+
+With the server running (`cd server && uv run python main.py`), from the repo root:
+
+```bash
+npm run test:semantic-tree-api
+```
+
+Uses `test/requests/` as the codebase, calls `POST /semantic_tree/analyze`, and verifies the response is parseable with `parseTreeBlock()`. On 422, the script prints `intervention_required` step and message.
 
 ## Next steps (when you add generation)
 
