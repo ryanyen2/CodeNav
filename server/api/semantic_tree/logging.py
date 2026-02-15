@@ -49,7 +49,7 @@ class PipelineLogger:
 
 
 def log_sync(mode: str, entities: int, delta: dict | None, index_action: str, semantic_action: str) -> None:
-    """One-line [CODENAV] SYNC summary for testers."""
+    """One-line [CODENAV] SYNC summary for testers. Use force_full=false for fast incremental (no full reindex)."""
     if mode == "full":
         codenav_log.info(
             "[CODENAV] SYNC | mode=full | entities=%s | index=%s | semantic=%s",
@@ -58,7 +58,7 @@ def log_sync(mode: str, entities: int, delta: dict | None, index_action: str, se
     else:
         d = delta or {}
         codenav_log.info(
-            "[CODENAV] SYNC | mode=incremental | delta +%s -%s ~%s | index=%s | semantic=%s",
+            "[CODENAV] SYNC | mode=incremental | delta +%s -%s ~%s | index=%s | semantic=%s (fast: no full reindex)",
             d.get("added", 0), d.get("removed", 0), d.get("unchanged", 0),
             index_action, semantic_action,
         )

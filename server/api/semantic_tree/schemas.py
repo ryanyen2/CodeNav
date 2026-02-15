@@ -90,7 +90,10 @@ class SyncRequest(BaseModel):
     provider: str = Field("openai", description="LLM provider")
     model: Optional[str] = Field(None, description="Model name")
     format: str = Field("md", description="Output format: 'md' or 'json'")
-    force_full: bool = Field(False, description="If True, run full pipeline and ignore existing state")
+    force_full: bool = Field(
+        False,
+        description="If True, run full pipeline (slow, re-index all). Use False (default) after first sync for fast incremental (index only changed entities).",
+    )
     excluded_dirs: Optional[List[str]] = None
     excluded_files: Optional[List[str]] = None
     index_path: Optional[str] = Field(None, description="Where to save/load FAISS index")

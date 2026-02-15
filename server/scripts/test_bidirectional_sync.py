@@ -105,6 +105,9 @@ def main() -> int:
         "Return a greeting string (user-facing).",
         1,
     )
+
+    print(f"   edited_md:\n{edited_md}")
+    print(f"   base_md:\n{base_md}")
     if edited_md == base_md:
         # Fallback: any small edit to force one EditFeature op
         edited_md = base_md.replace("#resolved", "#draft", 1)

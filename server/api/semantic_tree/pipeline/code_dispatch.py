@@ -3,9 +3,11 @@ LLM-based code generation for inverse sync: map tree edit operations to concrete
 
 Each operation type (AddNode, DeleteNode, EditFeature, etc.) is dispatched to produce
 a list of CodeChange edits. AddNode and EditFeature use the LLM; DeleteNode is deterministic.
+EditFeature uses a line-based diff so only changed regions are written (partial edit, not whole-file).
 """
 
 import logging
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +16,54 @@ from api.semantic_tree.pipeline.code_applicator import CodeChange
 from api.semantic_tree.llm.completion import complete
 
 logger = logging.getLogger(__name__)
+
+
+def _full_replacement_to_partial_changes(
+    fpath: str,
+    line_start: int,
+    line_end: int,
+    old_lines: List[str],
+    new_lines: List[str],
+) -> List[CodeChange]:
+    """
+    Convert a full-block replacement into minimal line-range edits (search-replace / diff style).
+    Uses SequenceMatcher on lines so only changed hunks become CodeChanges; rest of file untouched.
+    line_start/line_end are 1-based inclusive file line numbers for the block.
+    """
+    if not old_lines and not new_lines:
+        return []
+    if old_lines == new_lines:
+        return []
+    matcher = SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    changes: List[CodeChange] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        # 1-based file lines: old block was line_start + i1 .. line_start + i2 - 1
+        file_start = line_start + i1
+        file_end = line_start + i2 - 1
+        replacement = "\n".join(new_lines[j1:j2]) if j2 > j1 else ""
+        if tag == "replace" or tag == "delete":
+            # Replace or delete: set line_end so we replace that range (empty for delete)
+            changes.append(
+                CodeChange(
+                    fpath=fpath,
+                    line_start=file_start,
+                    line_end=max(file_end, file_start),
+                    new_content=replacement,
+                )
+            )
+        else:
+            # insert: new lines go before file_start + i1 (current line)
+            changes.append(
+                CodeChange(
+                    fpath=fpath,
+                    line_start=file_start,
+                    line_end=None,
+                    new_content=replacement,
+                )
+            )
+    return changes
 
 
 def _file_content(root_dir: str, fpath: str) -> str:
@@ -26,6 +76,20 @@ def _file_content(root_dir: str, fpath: str) -> str:
 def _targets_list(op: Dict[str, Any]) -> List[Dict[str, Any]]:
     t = op.get("targets") or []
     return t if isinstance(t, list) else [t]
+
+
+def _resolve_line_range(
+    snapshot: CodebaseSnapshot,
+    fpath: Optional[str],
+    entity_name: Optional[str],
+) -> Optional[tuple[int, int]]:
+    """Resolve line_range from snapshot when tree markdown did not include it (fpath+entity_name only)."""
+    if not fpath or not entity_name:
+        return None
+    for e in snapshot.all_entities:
+        if e.fpath == fpath and e.name == entity_name and e.line_range:
+            return e.line_range
+    return None
 
 
 def _strip_code_fence(raw: str) -> str:
@@ -120,7 +184,10 @@ def dispatch_delete_node(
         if not isinstance(t, dict):
             continue
         fpath = t.get("fpath")
+        entity_name = t.get("entity_name")
         lr = t.get("line_range")
+        if not lr or len(lr) < 2:
+            lr = _resolve_line_range(_snapshot, fpath, entity_name)
         if not fpath or not lr or len(lr) < 2:
             continue
         start, end = int(lr[0]), int(lr[1])
@@ -151,6 +218,8 @@ def dispatch_edit_feature(
     fpath = t.get("fpath")
     entity_name = t.get("entity_name")
     lr = t.get("line_range")
+    if not lr or len(lr) < 2:
+        lr = _resolve_line_range(snapshot, fpath, entity_name)
     if not fpath or not lr or len(lr) < 2:
         return []
     params = op.get("params") or {}
@@ -182,6 +251,14 @@ Output only the modified function (no explanation, no markdown)."""
         logger.exception("EditFeature LLM failed: %s", e)
         return []
 
+    old_lines = lines[start - 1 : end]
+    new_lines = code.splitlines()
+    partial = _full_replacement_to_partial_changes(
+        fpath, start, end, old_lines, new_lines
+    )
+    if partial:
+        return partial
+    # Fallback: single full-block replace if diff produced nothing (e.g. empty new)
     return [
         CodeChange(fpath=fpath, line_start=start, line_end=end, new_content=code)
     ]
