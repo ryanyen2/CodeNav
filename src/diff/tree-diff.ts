@@ -164,7 +164,7 @@ export function diffTrees(
     const alreadyMoved = results.some(
       r => r.operation === 'MoveNode' && (r.details as { moved: SemanticNode; toPath: string }).toPath === path
     );
-    if (!oldEntry && !alreadyMoved) {
+    if (!oldEntry && !alreadyMoved && node.status !== 'surfaced') {
       const parent = parentPath(path);
       results.push({
         operation: 'AddNode',

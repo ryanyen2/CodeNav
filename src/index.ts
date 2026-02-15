@@ -47,3 +47,7 @@ export type { TreeDiffOptions } from './diff/tree-diff.js';
 // Action dispatch: Operation → ActionResult (stub plans)
 export { dispatch } from './actions/dispatcher.js';
 export type { ActionResult } from './actions/dispatcher.js';
+
+// Sync: Surface-Absorb Protocol
+export { classifyNodes, findNaturalParent, absorbAndSettle } from './sync/absorb.js';
+export type { ClassificationResult } from './sync/absorb.js';
