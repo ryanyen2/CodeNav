@@ -16,6 +16,7 @@ from api.semantic_tree.state.delta import (
     compute_entity_delta,
     EntityDelta,
 )
+from api.semantic_tree.state.sync_guard import can_run_forward, can_run_inverse
 
 __all__ = [
     "SyncState",
@@ -29,4 +30,6 @@ __all__ = [
     "save_sync_state",
     "compute_entity_delta",
     "EntityDelta",
+    "can_run_forward",
+    "can_run_inverse",
 ]

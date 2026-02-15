@@ -29,6 +29,9 @@ from api.semantic_tree.schemas import (
     TargetModificationArea,
     ApplyTreeEditRequest,
     ApplyTreeEditResponse,
+    ApplyRequest,
+    ApplyResponse,
+    PlannedChangeItem,
 )
 from api.semantic_tree.extraction.discovery import discover_files
 from api.semantic_tree.extraction.python_extractor import extract_python_file
@@ -40,9 +43,13 @@ from api.semantic_tree.pipeline.semantic_parsing import run_semantic_parsing_rag
 from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchical_construction
 from api.semantic_tree.pipeline.tree_assembly import assemble_tree
 from api.semantic_tree.pipeline.incremental_forward import incremental_forward
+from api.semantic_tree.pipeline.incremental_inverse import apply_inverse_and_update_state
+from api.semantic_tree.pipeline.code_applicator import CodeChange
 from api.semantic_tree.output.tree_serializer import tree_to_markdown, tree_to_json
 from api.semantic_tree.logging import PipelineLogger, log_tree_edit, log_apply_tree_edit
 from api.semantic_tree.state.persistence import load_sync_state, save_sync_state
+from api.semantic_tree.state.delta import compute_entity_delta
+from api.semantic_tree.state.sync_guard import can_run_forward, can_run_inverse
 from api.tools.embedder import get_embedder
 from api.config import get_embedder_type
 
@@ -267,6 +274,12 @@ async def sync(request: SyncRequest):
         root_dir = snapshot.root_dir
         index_path = request.index_path or os.path.join(request.path, ".codenav", "index")
         old_state = None if request.force_full else load_sync_state(root_dir)
+        # Anti-loop guard: if last sync was inverse, only allow forward when code actually changed
+        if old_state is not None:
+            delta = compute_entity_delta(old_state.entity_fingerprints, snapshot.all_entities)
+            allowed, msg = can_run_forward(old_state, delta)
+            if not allowed:
+                raise HTTPException(status_code=409, detail=msg)
 
     if not snapshot.all_entities:
         return _intervention("extract", "No entities extracted; check path and filters.")
@@ -362,6 +375,34 @@ def _tree_edit_targets_ts(base_md: str, edited_md: str) -> dict:
         Path(base_path).unlink(missing_ok=True)
 
 
+def _tree_edit_data_to_items(data: dict) -> tuple[list[TreeEditOperationItem], list[dict]]:
+    """
+    Convert TS tree-edit result to response items and raw ops. Single place for parsing
+    so tree_edit, apply_tree_edit, and apply stay in sync.
+    """
+    raw_ops = data.get("operations", [])
+    items = []
+    for op in raw_ops:
+        targets = [
+            TargetModificationArea(
+                node_path=t.get("node_path", ""),
+                fpath=t.get("fpath"),
+                entity_name=t.get("entity_name"),
+                line_range=tuple(t["line_range"]) if t.get("line_range") else None,
+            )
+            for t in op.get("targets", [])
+        ]
+        items.append(
+            TreeEditOperationItem(
+                op=op.get("op", ""),
+                target=op.get("target", ""),
+                params=op.get("params") or {},
+                targets=targets,
+            )
+        )
+    return items, raw_ops
+
+
 @router.post("/tree_edit", response_model=TreeEditResponse)
 async def tree_edit(request: TreeEditRequest):
     """
@@ -385,26 +426,7 @@ async def tree_edit(request: TreeEditRequest):
     data = _tree_edit_targets_ts(base_md, request.edited_tree_md)
     if data.get("error"):
         return TreeEditResponse(operations=[], error=data["error"])
-
-    items = []
-    for op in data.get("operations", []):
-        targets = [
-            TargetModificationArea(
-                node_path=t.get("node_path", ""),
-                fpath=t.get("fpath"),
-                entity_name=t.get("entity_name"),
-                line_range=tuple(t["line_range"]) if t.get("line_range") else None,
-            )
-            for t in op.get("targets", [])
-        ]
-        items.append(
-            TreeEditOperationItem(
-                op=op.get("op", ""),
-                target=op.get("target", ""),
-                params=op.get("params") or {},
-                targets=targets,
-            )
-        )
+    items, _ = _tree_edit_data_to_items(data)
     log_tree_edit(items)
     return TreeEditResponse(operations=items)
 
@@ -419,37 +441,16 @@ async def apply_tree_edit(request: ApplyTreeEditRequest):
     if not request.path:
         raise HTTPException(status_code=400, detail="path is required to apply tree edit (persist state).")
     state = load_sync_state(request.path)
-    if not state or not state.last_tree_md or not state.root_dir:
-        raise HTTPException(
-            status_code=400,
-            detail="No sync state for path; run /sync first.",
-        )
+    allowed, msg = can_run_inverse(state)
+    if not allowed:
+        raise HTTPException(status_code=400, detail=msg)
     base_md = state.last_tree_md
     root_dir = state.root_dir
 
     data = _tree_edit_targets_ts(base_md, request.edited_tree_md)
     if data.get("error"):
         return ApplyTreeEditResponse(operations=[], applied=False, tree_version=state.tree_version, error=data["error"])
-
-    items = []
-    for op in data.get("operations", []):
-        targets = [
-            TargetModificationArea(
-                node_path=t.get("node_path", ""),
-                fpath=t.get("fpath"),
-                entity_name=t.get("entity_name"),
-                line_range=tuple(t["line_range"]) if t.get("line_range") else None,
-            )
-            for t in op.get("targets", [])
-        ]
-        items.append(
-            TreeEditOperationItem(
-                op=op.get("op", ""),
-                target=op.get("target", ""),
-                params=op.get("params") or {},
-                targets=targets,
-            )
-        )
+    items, _ = _tree_edit_data_to_items(data)
 
     new_tree_version = state.tree_version + 1
     new_state = state.model_copy(update={
@@ -461,6 +462,73 @@ async def apply_tree_edit(request: ApplyTreeEditRequest):
     log_apply_tree_edit(True, new_tree_version)
 
     return ApplyTreeEditResponse(operations=items, applied=True, tree_version=new_tree_version)
+
+
+@router.post("/apply", response_model=ApplyResponse)
+async def apply(request: ApplyRequest):
+    """
+    Apply tree edit with LLM code generation (inverse sync). Computes operations from
+    base tree (state) vs edited_tree_md, dispatches to code generation, applies to files,
+    runs post-check, and updates state. Use dry_run=true to get planned changes only.
+    """
+    if not request.path:
+        raise HTTPException(status_code=400, detail="path is required.")
+    state = load_sync_state(request.path)
+    allowed, msg = can_run_inverse(state)
+    if not allowed:
+        raise HTTPException(status_code=400, detail=msg)
+    root_dir = state.root_dir or request.path
+    base_md = state.last_tree_md
+
+    data = _tree_edit_targets_ts(base_md, request.edited_tree_md)
+    if data.get("error"):
+        return ApplyResponse(
+            operations=[],
+            applied=False,
+            tree_version=state.tree_version,
+            error=data["error"],
+        )
+    items, raw_ops = _tree_edit_data_to_items(data)
+
+    try:
+        snapshot = _build_snapshot(root_dir)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Build snapshot for apply failed: %s", e)
+        return ApplyResponse(
+            operations=items,
+            applied=False,
+            tree_version=state.tree_version,
+            error=f"Failed to build codebase snapshot: {e}",
+        )
+
+    modified, changes, drift_report, new_state = apply_inverse_and_update_state(
+        raw_ops,
+        snapshot,
+        state,
+        request.edited_tree_md,
+        provider=request.provider,
+        model=request.model,
+        dry_run=request.dry_run,
+    )
+    planned = [
+        PlannedChangeItem(
+            fpath=c.fpath,
+            line_start=c.line_start,
+            line_end=c.line_end,
+            new_content=c.new_content,
+        )
+        for c in changes
+    ]
+    return ApplyResponse(
+        operations=items,
+        applied=not request.dry_run and (len(modified) > 0 or new_state is not None),
+        modified_fpaths=modified,
+        planned_changes=planned,
+        drift_report=drift_report,
+        tree_version=new_state.tree_version if new_state else state.tree_version,
+    )
 
 
 @router.post("/search", response_model=SearchResponse)

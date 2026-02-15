@@ -156,3 +156,34 @@ class ApplyTreeEditResponse(BaseModel):
     applied: bool = Field(True, description="True when edited tree was persisted to state")
     tree_version: int = Field(0, description="New tree_version after apply")
     error: Optional[str] = None
+
+
+# --- Apply with code generation (Phase 4 inverse pipeline) ---
+
+
+class ApplyRequest(BaseModel):
+    """Request to apply tree edit with LLM code generation and file modification."""
+    path: str = Field(..., description="Codebase path; base tree and state loaded from here")
+    edited_tree_md: str = Field(..., description="User-edited tree markdown")
+    dry_run: bool = Field(False, description="If true, return planned changes without writing files or updating state")
+    provider: str = Field("openai", description="LLM provider for code generation")
+    model: Optional[str] = Field(None, description="LLM model (default from provider)")
+
+
+class PlannedChangeItem(BaseModel):
+    """One planned or applied code edit (for dry_run or response)."""
+    fpath: str = ""
+    line_start: int = 0
+    line_end: Optional[int] = None
+    new_content: str = ""
+
+
+class ApplyResponse(BaseModel):
+    """Result of apply: operations, modified files, planned/applied changes, drift report."""
+    operations: List[TreeEditOperationItem] = Field(default_factory=list)
+    applied: bool = Field(False, description="True when code was written and state updated")
+    modified_fpaths: List[str] = Field(default_factory=list)
+    planned_changes: List[PlannedChangeItem] = Field(default_factory=list, description="Code changes (dry_run or applied)")
+    drift_report: List[dict] = Field(default_factory=list, description="Re-extracted entities per modified file (observational)")
+    tree_version: int = Field(0, description="New tree_version after apply (0 if dry_run)")
+    error: Optional[str] = None

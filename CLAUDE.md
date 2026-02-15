@@ -19,16 +19,17 @@ CodeNav is a parser and tree-diff engine for prescriptive semantic trees. It par
 npm install              # Install dependencies
 npm run build            # Compile TypeScript (tsc → dist/)
 
-# CLI tools
-npx tsx src/cli/parse-tree.ts [path-to-test_cases.md]
-npx tsx src/cli/parse-test-case.ts test_cases.md [test-name]
-npx tsx src/cli/parse-codebase.ts <directory>
+# CLI tools (npm run or npx tsx)
+npm run parse:tree       # or: npx tsx src/cli/parse-tree.ts [path-to-test_cases.md]
+npm run parse:test      # or: npx tsx src/cli/parse-test-case.ts test_cases.md [test-name]
+npm run parse:codebase  # or: npx tsx src/cli/parse-codebase.ts <directory>
+npx tsx src/cli/tree-edit-targets.ts <base.md> <edited.md>   # Tree edit → operations + code targets (JSON)
 ```
 
 **Server (from `server/`):**
 
 ```bash
-uv run python main.py    # Start API (e.g. port 8001)
+uv run python main.py    # Start API; port from PORT (default 8001)
 ```
 
 No automated test suite; validate via CLI and API.
@@ -71,28 +72,31 @@ Markdown tree notation → parseTreeBlock() → SemanticTree
 
 ### Backend (Python — `server/api/`)
 
-The backend builds semantic trees from a live codebase. It uses `api.config`, `api.openai_client`, and `api.tools.embedder` (adalflow).
+The backend builds semantic trees from a live codebase. It uses `api.config` (e.g. `get_model_config(provider, model)`, `get_embedder_type`), and `api.tools.embedder` (adalflow) for embeddings.
 
 - **`server/api/semantic_tree/`** — Integrated pipeline and routes:
-  - **`models.py`** — Pydantic models aligned with `src/types.ts`.
+  - **`models.py`** — Domain models aligned with `src/types.ts` (CodeEntity, FileInfo, CodebaseSnapshot, tree nodes, etc.).
+  - **`schemas.py`** — Request/response Pydantic models (AnalyzeRequest, SyncRequest, TreeEditRequest, InterventionResponse, etc.).
   - **`extraction/`** — Discovery (directory walk), Python AST extraction, import edges.
   - **`indexing/`** — Entity-level chunking and FAISS vector store (embedder from `api.tools.embedder`); used as RAG inside analyze.
-  - **`llm/`** — Prompt loader (`prompts/`), `<solution>` parsing, completion via `api.config.get_model_config()`.
-  - **`pipeline/`** — Domain discovery, semantic parsing (RAG), hierarchical construction, tree assembly; **incremental_forward** for code→tree with delta and cached semantic/index.
+  - **`llm/`** — Prompt loader (repo-root `prompts/`), `<solution>` parsing, completion via `api.config.get_model_config(provider, model)`.
+  - **`pipeline/`** — Domain discovery, semantic parsing (RAG), hierarchical construction, tree assembly; **incremental_forward** (uses **semantic_parsing_incremental**) for code→tree with delta and cached semantic/index.
+  - **`state/`** — Sync state: delta, persistence, fingerprint; used by `/sync` and `/apply_tree_edit`.
   - **`output/tree_serializer.py`** — Tree → markdown (parseable by `parseTreeBlock()`) or JSON.
-  - **`routes.py`** — FastAPI router: `POST /semantic_tree/sync` (forward code → tree; incremental when state exists; empty delta reuses `last_tree_md`), `POST /semantic_tree/apply_tree_edit` (inverse: persist edited tree, bump `tree_version`), `POST /semantic_tree/analyze` (legacy full pipeline), `GET /semantic_tree/tree?path=`, `POST /semantic_tree/tree_edit` (base + edited tree → operations and code targets), `POST /semantic_tree/search`, `GET /semantic_tree/status`. On step failure, returns **422** with `intervention_required`.
+  - **`routes.py`** — FastAPI router (prefix `/semantic_tree`): `POST /sync`, `POST /apply_tree_edit`, `POST /analyze`, `GET /tree?path=`, `POST /tree_edit`, `POST /search`, `GET /status`. `POST /tree_edit` invokes TS `src/cli/tree-edit-targets.ts` for operations and code targets. On step failure, returns **422** with `intervention_required`.
   - **`logging.py`** — Pipeline stage logger and one-line `[CODENAV]` logs (SYNC mode/delta/index/semantic, TREE_EDIT ops/targets, APPLY_TREE_EDIT).
 
 Output markdown from the backend is designed to be consumed by TS `parseTreeBlock()` and matches the format in `test_cases.md` (sigils, path grounding, entity names, `deps:` block).
 
 ### Fixtures and Sample Data
 
-- **`test/fixtures/`** — Markdown tree and codebase snapshot examples; used by CLI and as format reference.
+- **`test/fixtures/`** — Markdown tree and codebase snapshot examples (including `cases/`); used by CLI and as format reference.
 - **`test/draco/`** — Small Python codebase (Draco) for trying sync/tree_edit/apply_tree_edit manually.
 - **`test/requests/`**, **`test/small_python_repo/`** — Sample Python codebases for extraction/indexing.
+- **`test/mosaic/`** — Sample codebase (TypeScript); not used by Python analyze pipeline (Python-only).
 
 ### Design Documents
 
 - **`prescriptive-semantic-tree-plan.md`** — Algorithm design: node schema, invariants, operation taxonomy.
 - **`test_cases.md`** — Test spec: tree notation, operation syntax, codebase snapshot format.
-- **`prompts/`** — LLM prompts for domain discovery, semantic parsing, hierarchical construction (used by `server/api/semantic_tree`).
+- **`prompts/`** — LLM prompts at repo root (e.g. `domain_discovery.txt`, `semantic_parsing.txt`, `hierarchical_construction.txt`); loaded by `server/api/semantic_tree/llm/prompt_loader.py` (uses `CODENAV_PROMPTS_DIR` or walks up from package to find `prompts/`).
