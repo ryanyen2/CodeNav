@@ -138,3 +138,21 @@ class TreeEditResponse(BaseModel):
     """Operations and code targets from tree edit (for Phase 4 code generation)."""
     operations: List[TreeEditOperationItem] = Field(default_factory=list)
     error: Optional[str] = None
+
+
+# --- Apply tree edit (inverse sync: close the loop) ---
+
+
+class ApplyTreeEditRequest(BaseModel):
+    """Request to apply a tree edit: persist edited tree as canonical and update state (no code generation yet)."""
+    path: Optional[str] = Field(None, description="Codebase path; base tree loaded from state")
+    base_tree_md: Optional[str] = Field(None, description="Base tree markdown (required if path not provided)")
+    edited_tree_md: str = Field(..., description="User-edited tree markdown to persist as canonical")
+
+
+class ApplyTreeEditResponse(BaseModel):
+    """Result of applying tree edit: operations/targets plus state-updated confirmation."""
+    operations: List[TreeEditOperationItem] = Field(default_factory=list)
+    applied: bool = Field(True, description="True when edited tree was persisted to state")
+    tree_version: int = Field(0, description="New tree_version after apply")
+    error: Optional[str] = None

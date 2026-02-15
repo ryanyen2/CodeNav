@@ -6,12 +6,9 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "npx tsx node_modules/tape/bin/tape 'test/**/*.test.ts'",
-    "test:extract-fixtures": "node scripts/extract-test-cases.mjs",
     "parse:tree": "npx tsx src/cli/parse-tree.ts",
     "parse:test": "npx tsx src/cli/parse-test-case.ts",
-    "parse:codebase": "npx tsx src/cli/parse-codebase.ts",
-    "test:semantic-tree-api": "npx tsx scripts/test-semantic-tree-api.ts"
+    "parse:codebase": "npx tsx src/cli/parse-codebase.ts"
   },
   "devDependencies": {
     "@babel/parser": "^7.29.0",

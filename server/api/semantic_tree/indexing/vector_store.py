@@ -1,5 +1,6 @@
 """FAISS index for entity-level semantic search (references api.tools.embedder)."""
 
+import json
 import logging
 import pickle
 from pathlib import Path
@@ -154,7 +155,7 @@ class SemanticVectorStore:
         return result
 
     def save(self, path: str) -> None:
-        """Persist index and entity list to directory path."""
+        """Persist index, entity list, and tombstones to directory path."""
         if self._index is None:
             raise ValueError("No index to save")
         p = Path(path)
@@ -164,9 +165,15 @@ class SemanticVectorStore:
             pickle.dump(self._entities, f)
         with open(p / "dim.txt", "w") as f:
             f.write(str(self._dim))
+        tomb_file = p / "tombstones.json"
+        if self._tombstones:
+            with open(tomb_file, "w", encoding="utf-8") as f:
+                json.dump(list(self._tombstones), f)
+        elif tomb_file.is_file():
+            tomb_file.unlink()
 
     def load(self, path: str) -> None:
-        """Load index and entity list from directory."""
+        """Load index, entity list, and tombstones from directory."""
         if faiss is None:
             raise RuntimeError("faiss-cpu is not installed")
         p = Path(path)
@@ -174,9 +181,18 @@ class SemanticVectorStore:
         with open(p / "entities.pkl", "rb") as f:
             self._entities = pickle.load(f)
         self._entity_keys = [_entity_key(e) for e in self._entities]
-        self._tombstones = set()
         with open(p / "dim.txt") as f:
             self._dim = int(f.read().strip())
+        tomb_file = p / "tombstones.json"
+        if tomb_file.is_file():
+            try:
+                with open(tomb_file, encoding="utf-8") as f:
+                    self._tombstones = set(json.load(f))
+            except Exception as e:
+                logger.warning("Could not load tombstones: %s", e)
+                self._tombstones = set()
+        else:
+            self._tombstones = set()
 
     @property
     def size(self) -> int:

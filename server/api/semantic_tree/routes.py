@@ -27,6 +27,8 @@ from api.semantic_tree.schemas import (
     TreeEditResponse,
     TreeEditOperationItem,
     TargetModificationArea,
+    ApplyTreeEditRequest,
+    ApplyTreeEditResponse,
 )
 from api.semantic_tree.extraction.discovery import discover_files
 from api.semantic_tree.extraction.python_extractor import extract_python_file
@@ -39,8 +41,8 @@ from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchica
 from api.semantic_tree.pipeline.tree_assembly import assemble_tree
 from api.semantic_tree.pipeline.incremental_forward import incremental_forward
 from api.semantic_tree.output.tree_serializer import tree_to_markdown, tree_to_json
-from api.semantic_tree.logging import PipelineLogger
-from api.semantic_tree.state.persistence import load_sync_state
+from api.semantic_tree.logging import PipelineLogger, log_tree_edit, log_apply_tree_edit
+from api.semantic_tree.state.persistence import load_sync_state, save_sync_state
 from api.tools.embedder import get_embedder
 from api.config import get_embedder_type
 
@@ -290,10 +292,18 @@ async def sync(request: SyncRequest):
         logger.exception("Sync failed")
         raise HTTPException(status_code=500, detail=str(e))
 
+    # When delta was empty, tree is None; use persisted last_tree_md (e.g. from apply_tree_edit)
+    tree_md_out = new_state.last_tree_md if tree is None else tree_to_markdown(tree)
+    tree_json_out = None
+    if request.format == "json":
+        if tree is not None:
+            tree_json_out = tree_to_json(tree)
+        # When tree is None we don't have a SemanticTree in Python; client can parse tree_md if needed
+
     ds = DeltaSummary(**(delta_summary or {})) if delta_summary else None
     if request.format == "json":
         return SyncResponse(
-            tree_json=tree_to_json(tree),
+            tree_json=tree_json_out,
             root_dir=snapshot.root_dir,
             file_count=len(snapshot.files),
             entity_count=len(snapshot.all_entities),
@@ -302,7 +312,7 @@ async def sync(request: SyncRequest):
             timing=timing or None,
         )
     return SyncResponse(
-        tree_md=tree_to_markdown(tree),
+        tree_md=tree_md_out,
         root_dir=snapshot.root_dir,
         file_count=len(snapshot.files),
         entity_count=len(snapshot.all_entities),
@@ -395,7 +405,62 @@ async def tree_edit(request: TreeEditRequest):
                 targets=targets,
             )
         )
+    log_tree_edit(items)
     return TreeEditResponse(operations=items)
+
+
+@router.post("/apply_tree_edit", response_model=ApplyTreeEditResponse)
+async def apply_tree_edit(request: ApplyTreeEditRequest):
+    """
+    Apply a tree edit (inverse sync): persist the edited tree as canonical and update state.
+    No code generation yet — only state update so the next sync does not overwrite the user's tree.
+    When code is unchanged, next sync will skip full pipeline and keep this tree (incremental).
+    """
+    if not request.path:
+        raise HTTPException(status_code=400, detail="path is required to apply tree edit (persist state).")
+    state = load_sync_state(request.path)
+    if not state or not state.last_tree_md or not state.root_dir:
+        raise HTTPException(
+            status_code=400,
+            detail="No sync state for path; run /sync first.",
+        )
+    base_md = state.last_tree_md
+    root_dir = state.root_dir
+
+    data = _tree_edit_targets_ts(base_md, request.edited_tree_md)
+    if data.get("error"):
+        return ApplyTreeEditResponse(operations=[], applied=False, tree_version=state.tree_version, error=data["error"])
+
+    items = []
+    for op in data.get("operations", []):
+        targets = [
+            TargetModificationArea(
+                node_path=t.get("node_path", ""),
+                fpath=t.get("fpath"),
+                entity_name=t.get("entity_name"),
+                line_range=tuple(t["line_range"]) if t.get("line_range") else None,
+            )
+            for t in op.get("targets", [])
+        ]
+        items.append(
+            TreeEditOperationItem(
+                op=op.get("op", ""),
+                target=op.get("target", ""),
+                params=op.get("params") or {},
+                targets=targets,
+            )
+        )
+
+    new_tree_version = state.tree_version + 1
+    new_state = state.model_copy(update={
+        "last_tree_md": request.edited_tree_md,
+        "last_sync_direction": "inverse",
+        "tree_version": new_tree_version,
+    })
+    save_sync_state(new_state, root_dir)
+    log_apply_tree_edit(True, new_tree_version)
+
+    return ApplyTreeEditResponse(operations=items, applied=True, tree_version=new_tree_version)
 
 
 @router.post("/search", response_model=SearchResponse)

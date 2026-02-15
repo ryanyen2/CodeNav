@@ -22,6 +22,7 @@ from api.semantic_tree.pipeline.semantic_parsing_incremental import run_semantic
 from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchical_construction
 from api.semantic_tree.pipeline.tree_assembly import assemble_tree
 from api.semantic_tree.output.tree_serializer import tree_to_markdown
+from api.semantic_tree.logging import log_sync
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,13 @@ def incremental_forward(
     repo_name: str = "",
     provider: str = "openai",
     model: Optional[str] = None,
-) -> Tuple[SemanticTree, SyncState, dict, Optional[dict]]:
+) -> Tuple[Optional[SemanticTree], SyncState, dict, Optional[dict]]:
     """
     Run forward sync (code → tree). If old_state exists and matches root_dir, use
     incremental path (delta, cached semantic, incremental index). Otherwise full pipeline.
-    Returns (tree, new_state, timing_dict, delta_summary or None).
+    When delta is empty (no code change), skips LLM/index and returns (None, new_state, ...);
+    caller should use new_state.last_tree_md as the tree output (avoids redundant pipeline).
+    Returns (tree or None, new_state, timing_dict, delta_summary or None).
     """
     root_dir = snapshot.root_dir
     all_chunks = entity_chunks(snapshot)
@@ -96,6 +99,7 @@ def incremental_forward(
             index_path=index_path,
         )
         save_sync_state(new_state, root_dir)
+        log_sync("full", len(snapshot.all_entities), None, "full", "full")
         return tree, new_state, {}, None
 
     # Incremental path
@@ -108,6 +112,30 @@ def incremental_forward(
         "unchanged": len(delta.unchanged),
     }
     target_count = len(delta.added) + len(delta.modified)
+
+    # No code change: keep existing tree (e.g. from apply_tree_edit), skip LLM and index
+    if not delta.added and not delta.removed and not delta.modified:
+        logger.info(
+            "[SYNC] incremental | delta empty (unchanged=%s) | reusing last_tree_md (no LLM/index)",
+            len(delta.unchanged),
+        )
+        new_state = SyncState(
+            entity_fingerprints=new_entity_fps,
+            file_fingerprints=new_file_fps,
+            semantic_cache=old_state.semantic_cache,
+            domain_areas=old_state.domain_areas,
+            hierarchy_cache=old_state.hierarchy_cache,
+            tree_version=old_state.tree_version,
+            code_version=old_state.code_version,
+            last_sync_direction=old_state.last_sync_direction,
+            last_tree_md=old_state.last_tree_md,
+            root_dir=root_dir,
+            index_path=index_path,
+        )
+        save_sync_state(new_state, root_dir)
+        log_sync("incremental", len(snapshot.all_entities), delta_summary, "reuse", "reuse")
+        return None, new_state, {}, delta_summary
+
     logger.info(
         "[SYNC] incremental | delta added=%s removed=%s modified=%s unchanged=%s | index_only=%s entities (no full reindex)",
         len(delta.added),
@@ -123,6 +151,7 @@ def incremental_forward(
     if delta.removed:
         removed_keys = [ek for ek, _ in delta.removed]
         store.mark_tombstones(removed_keys)
+    did_rebuild = False
     if delta.added or delta.modified:
         target_keys = {_entity_key(e) for e in (delta.added + delta.modified)}
         to_add_chunks = [(e, ct) for e, ct in all_chunks if _entity_key(e) in target_keys]
@@ -132,6 +161,7 @@ def incremental_forward(
     if store.needs_rebuild:
         store.rebuild(all_chunks, embedder)
         store.save(index_path)
+        did_rebuild = True
 
     # Domain: reuse if file set unchanged
     old_fpaths = set(old_state.file_fingerprints.keys())
@@ -176,6 +206,9 @@ def incremental_forward(
         index_path=index_path,
     )
     save_sync_state(new_state, root_dir)
+
+    index_action = "rebuild" if did_rebuild else f"incremental({target_count})"
+    log_sync("incremental", len(snapshot.all_entities), delta_summary, index_action, f"incremental({target_count})")
 
     timing = {}
     return tree, new_state, timing, delta_summary

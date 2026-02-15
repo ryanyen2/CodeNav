@@ -412,8 +412,16 @@ class OpenAIClient(ModelClient):
         """
         kwargs is the combined input and model_kwargs.  Support streaming call.
         """
-        log.info(f"api_kwargs: {api_kwargs}")
         self._api_kwargs = api_kwargs
+        model = api_kwargs.get("model", "")
+        if model_type == ModelType.LLM and "messages" in api_kwargs:
+            msgs = api_kwargs["messages"] or []
+            total_len = sum(len((m.get("content") or "")) for m in msgs)
+            log.debug("LLM call model=%s messages=%s prompt_len=%s", model, len(msgs), total_len)
+        elif model_type == ModelType.EMBEDDER and "input" in api_kwargs:
+            inp = api_kwargs["input"]
+            n = len(inp) if isinstance(inp, (list, tuple)) else 1
+            log.debug("Embedder call model=%s inputs=%s", model, n)
         if model_type == ModelType.EMBEDDER:
             return self.sync_client.embeddings.create(**api_kwargs)
         elif model_type == ModelType.LLM:
