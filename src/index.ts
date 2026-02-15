@@ -57,3 +57,7 @@ export type {
   TreeEditOperationItem,
   TargetModificationArea,
 } from './sync/tree-edit-targets.js';
+
+// Sync: Surface-Absorb Protocol
+export { classifyNodes, findNaturalParent, absorbAndSettle } from './sync/absorb.js';
+export type { ClassificationResult } from './sync/absorb.js';

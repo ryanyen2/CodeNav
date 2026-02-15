@@ -12,7 +12,7 @@ export type ArtifactClass =
   | 'concrete-leaf'  // $ function, ^ class
   | 'abstract';      // ~
 
-export type NodeStatus = 'resolved' | 'draft' | 'unresolved' | 'planned';
+export type NodeStatus = 'resolved' | 'draft' | 'unresolved' | 'planned' | 'surfaced';
 
 /** Contract keys (test_cases §1.3, §8) */
 export type ContractKey = 'sig' | 'inv' | 'cls' | 'exp';
@@ -43,6 +43,8 @@ export interface SemanticNode {
   status: NodeStatus;
   children: SemanticNode[];
   parent?: SemanticNode;
+  provenance?: 'user' | 'generation_artifact' | 'forward_encode';
+  drift?: { expected: string; actual: string };
 }
 
 /** E_dep: dependency edge (plan §2.2, test_cases §1.4) */
