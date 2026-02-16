@@ -12,6 +12,44 @@
 
 import type { SemanticNode } from '../types.js';
 
+/** Reason a node is considered underspecified (for inverse best-effort and merge policy). */
+export type UnderspecReason = 'status' | 'missing_anchor' | 'both';
+
+/**
+ * Whether a node is underspecified per policy: #planned or #unresolved, or missing fpath/entity_name.
+ * Used for: forward merge (user wins for underspec), inverse (best-effort completion with tracing).
+ */
+export function isUnderspecifiedNode(node: SemanticNode): boolean {
+  const byStatus = node.status === 'planned' || node.status === 'unresolved';
+  const missingAnchor = !node.metadata.fpath || !node.metadata.entity_name;
+  return byStatus || missingAnchor;
+}
+
+/**
+ * Classify underspec reason for a node: status-only, missing-anchor-only, or both.
+ */
+export function underspecReason(node: SemanticNode): UnderspecReason | null {
+  if (!isUnderspecifiedNode(node)) return null;
+  const byStatus = node.status === 'planned' || node.status === 'unresolved';
+  const missingAnchor = !node.metadata.fpath || !node.metadata.entity_name;
+  if (byStatus && missingAnchor) return 'both';
+  if (byStatus) return 'status';
+  return 'missing_anchor';
+}
+
+/** True when node has both fpath and entity_name (grounded in code). */
+export function isGroundedNode(node: SemanticNode): boolean {
+  return Boolean(node.metadata?.fpath && node.metadata?.entity_name);
+}
+
+/** Summary of a policy merge for SyncResponse.merge_summary. */
+export interface MergeSummary {
+  preserved_user_nodes: number;
+  overwritten_grounded_nodes: number;
+  surfaced_added: number;
+  drifted_nodes: number;
+}
+
 /** Result of classifying nodes between T₁ and T₁'. */
 export interface ClassificationResult {
   /** Pairs of (T₁ node, T₁' node) matched by stableId. */
@@ -185,4 +223,61 @@ export function absorbAndSettle(t1Root: SemanticNode, t1PrimeRoot: SemanticNode)
   }
 
   return t2Root;
+}
+
+/**
+ * Forward merge with policy: code wins for grounded nodes, user wins for abstract/underspecified.
+ * Returns merged root (T₂) and merge summary counts.
+ * Use when re-encoding from code then merging with prior canonical tree.
+ */
+export function forwardMerge(
+  priorRoot: SemanticNode,
+  reencodedRoot: SemanticNode
+): { mergedRoot: SemanticNode; mergeSummary: MergeSummary } {
+  const { matched, surfaced, drifted } = classifyNodes(priorRoot, reencodedRoot);
+  const t2Root = deepCloneNode(priorRoot);
+  const t2ById = new Map<string, SemanticNode>();
+  for (const [path, node] of collectNodesWithPath(t2Root, '')) {
+    t2ById.set(stableId(node, path), node);
+  }
+
+  let preserved_user_nodes = 0;
+  let overwritten_grounded_nodes = 0;
+
+  for (const [id, entry] of matched) {
+    const { original, reencoded } = entry;
+    const t2Node = t2ById.get(id);
+    if (!t2Node) continue;
+
+    if (isGroundedNode(reencoded)) {
+      // Code wins: overwrite feature and contract from reencoded
+      t2Node.feature = reencoded.feature;
+      t2Node.contract = { ...reencoded.contract };
+      overwritten_grounded_nodes++;
+    } else {
+      // User wins: preserve; annotate drift if feature diverged
+      preserved_user_nodes++;
+      if (drifted.has(id)) {
+        t2Node.drift = { expected: original.feature, actual: reencoded.feature };
+        t2Node.status = 'draft';
+      }
+    }
+  }
+
+  for (const surfacedNode of surfaced) {
+    const clone = deepCloneNode(surfacedNode);
+    clone.status = 'surfaced';
+    clone.provenance = 'generation_artifact';
+    const parent = findNaturalParent(surfacedNode, t2Root);
+    clone.parent = parent;
+    parent.children.push(clone);
+  }
+
+  const mergeSummary: MergeSummary = {
+    preserved_user_nodes,
+    overwritten_grounded_nodes,
+    surfaced_added: surfaced.size,
+    drifted_nodes: drifted.size,
+  };
+  return { mergedRoot: t2Root, mergeSummary };
 }

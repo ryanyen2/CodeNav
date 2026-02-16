@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 Sigil = Literal["/", "%", "$", "^", "~"]
 ArtifactClass = Literal["concrete-dir", "concrete-file", "concrete-leaf", "abstract"]
-NodeStatus = Literal["resolved", "draft", "unresolved", "planned"]
+NodeStatus = Literal["resolved", "draft", "unresolved", "planned", "surfaced"]
 DepRelationType = Literal["imports", "invokes", "inherits", "type-refs"]
 
 

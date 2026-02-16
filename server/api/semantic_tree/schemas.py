@@ -1,6 +1,6 @@
 """Request/response schemas for semantic tree API."""
 
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, Field
 
 
@@ -99,6 +99,14 @@ class SyncRequest(BaseModel):
     index_path: Optional[str] = Field(None, description="Where to save/load FAISS index")
 
 
+class MergeSummary(BaseModel):
+    """Summary of forward merge (code wins grounded, user wins underspec)."""
+    preserved_user_nodes: int = 0
+    overwritten_grounded_nodes: int = 0
+    surfaced_added: int = 0
+    drifted_nodes: int = 0
+
+
 class SyncResponse(BaseModel):
     """Sync result: tree + incremental metadata."""
     tree_md: Optional[str] = None
@@ -109,6 +117,7 @@ class SyncResponse(BaseModel):
     is_incremental: bool = Field(False, description="True when incremental forward was used")
     delta_summary: Optional[DeltaSummary] = None
     timing: Optional[dict] = None
+    merge_summary: Optional[MergeSummary] = Field(None, description="Present when forward merge was applied (prior tree + re-encode)")
 
 
 # --- Tree edit → target identification ---
@@ -135,6 +144,8 @@ class TreeEditOperationItem(BaseModel):
     target: str = Field("", description="Target node path(s)")
     params: dict = Field(default_factory=dict)
     targets: List[TargetModificationArea] = Field(default_factory=list, description="Affected code locations")
+    underspecified: Optional[bool] = Field(None, description="True when operation involves an underspecified node (best-effort completion)")
+    underspec_reason: Optional[Literal["status", "missing_anchor", "both"]] = Field(None, description="Reason: status (#planned/#unresolved), missing_anchor, or both")
 
 
 class TreeEditResponse(BaseModel):
@@ -190,3 +201,5 @@ class ApplyResponse(BaseModel):
     drift_report: List[dict] = Field(default_factory=list, description="Re-extracted entities per modified file (observational)")
     tree_version: int = Field(0, description="New tree_version after apply (0 if dry_run)")
     error: Optional[str] = None
+    completion_mode: Optional[Literal["best_effort"]] = Field(None, description="Present when underspecified operations were completed best-effort")
+    generated_artifact_count: Optional[int] = Field(None, description="Count of generated/surfaced artifacts from best-effort completion")

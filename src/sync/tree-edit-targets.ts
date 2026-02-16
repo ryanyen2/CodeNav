@@ -4,9 +4,11 @@
  * for each affected node so the system can identify which codebase sections to change.
  */
 
-import type { SemanticNode, SemanticTree, NodePath, Operation } from '../types.js';
+import type { SemanticNode, SemanticTree, Operation } from '../types.js';
 import { parseTreeBlock } from '../parser/tree-parser.js';
 import { diffTrees, diffResultToOperation } from '../diff/tree-diff.js';
+import { isUnderspecifiedNode, underspecReason } from './absorb.js';
+import type { UnderspecReason } from './absorb.js';
 
 export interface TargetModificationArea {
   node_path: string;
@@ -20,6 +22,10 @@ export interface TreeEditOperationItem {
   target: string;
   params: Record<string, unknown>;
   targets: TargetModificationArea[];
+  /** True when the operation involves an underspecified node (best-effort completion). */
+  underspecified?: boolean;
+  /** Reason for underspec: status (#planned/#unresolved), missing_anchor, or both. */
+  underspec_reason?: UnderspecReason;
 }
 
 export interface TreeEditTargetsResult {
@@ -54,6 +60,22 @@ function findPathForNode(root: SemanticNode, target: SemanticNode, pathPrefix = 
     const found = findPathForNode(c, target, path);
     if (found) return found;
   }
+  return null;
+}
+
+/** Primary node for a diff result (used for underspec classification). */
+function primaryNodeForResult(
+  result: { operation: string; details: Record<string, unknown> },
+  _before: SemanticTree,
+  after: SemanticTree
+): SemanticNode | null {
+  const details = result.details;
+  if (result.operation === 'AddNode' && details.added) return details.added as SemanticNode;
+  if (result.operation === 'DeleteNode' && details.removed) return details.removed as SemanticNode;
+  if (result.operation === 'MoveNode' && details.moved) return details.moved as SemanticNode;
+  if (result.operation === 'EditFeature' && details.featureEdited) return details.featureEdited as SemanticNode;
+  if (result.operation === 'EditContract' && details.contractEdited) return details.contractEdited as SemanticNode;
+  if (result.operation === 'ReorderChildren' && details.reordered) return details.reordered as SemanticNode;
   return null;
 }
 
@@ -115,11 +137,15 @@ export function computeTreeEditTargets(beforeMd: string, afterMd: string): TreeE
       const op = diffResultToOperation(result, before, after);
       const targets = targetsForDiffResult(result, before, after);
       if (op) {
+        const primary = primaryNodeForResult(result, before, after);
+        const underspecified = primary ? isUnderspecifiedNode(primary) : false;
+        const underspec_reason = primary ? underspecReason(primary) ?? undefined : undefined;
         operations.push({
           op: op.op,
           target: Array.isArray(op.target) ? op.target[0] ?? '' : op.target,
           params: (op.params || {}) as Record<string, unknown>,
           targets,
+          ...(underspecified && { underspecified: true, underspec_reason }),
         });
       }
     }

@@ -16,6 +16,7 @@ from api.semantic_tree.schemas import (
     AnalyzeResponse,
     FileInput,
     InterventionResponse,
+    MergeSummary,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
@@ -307,6 +308,27 @@ async def sync(request: SyncRequest):
 
     # When delta was empty, tree is None; use persisted last_tree_md (e.g. from apply_tree_edit)
     tree_md_out = new_state.last_tree_md if tree is None else tree_to_markdown(tree)
+    merge_summary_out = None
+    # Forward merge: prior tree + re-encoded tree (code wins grounded, user wins underspec)
+    if (
+        tree is not None
+        and old_state is not None
+        and old_state.last_tree_md
+    ):
+        merge_data = _merge_trees_ts(old_state.last_tree_md, tree_to_markdown(tree))
+        if not merge_data.get("error") and merge_data.get("merged_md"):
+            tree_md_out = merge_data["merged_md"]
+            new_state = new_state.model_copy(update={"last_tree_md": tree_md_out})
+            save_sync_state(new_state, snapshot.root_dir)
+            ms = merge_data.get("merge_summary")
+            if ms and isinstance(ms, dict):
+                merge_summary_out = MergeSummary(
+                    preserved_user_nodes=ms.get("preserved_user_nodes", 0),
+                    overwritten_grounded_nodes=ms.get("overwritten_grounded_nodes", 0),
+                    surfaced_added=ms.get("surfaced_added", 0),
+                    drifted_nodes=ms.get("drifted_nodes", 0),
+                )
+
     tree_json_out = None
     if request.format == "json":
         if tree is not None:
@@ -323,6 +345,7 @@ async def sync(request: SyncRequest):
             is_incremental=old_state is not None,
             delta_summary=ds,
             timing=timing or None,
+            merge_summary=merge_summary_out,
         )
     return SyncResponse(
         tree_md=tree_md_out,
@@ -332,6 +355,7 @@ async def sync(request: SyncRequest):
         is_incremental=old_state is not None,
         delta_summary=ds,
         timing=timing or None,
+        merge_summary=merge_summary_out,
     )
 
 
@@ -375,6 +399,41 @@ def _tree_edit_targets_ts(base_md: str, edited_md: str) -> dict:
         Path(base_path).unlink(missing_ok=True)
 
 
+def _merge_trees_ts(prior_md: str, reencoded_md: str) -> dict:
+    """Call TypeScript merge-trees CLI; returns { merged_md, merge_summary, error? }."""
+    root = Path(__file__).resolve().parent.parent.parent.parent
+    script = root / "src" / "cli" / "merge-trees.ts"
+    if not script.is_file():
+        return {"merged_md": "", "merge_summary": None, "error": "merge-trees script not found."}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f1:
+        f1.write(prior_md)
+        prior_path = f1.name
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f2:
+            f2.write(reencoded_md)
+            reencoded_path = f2.name
+        try:
+            out = subprocess.run(
+                ["npx", "tsx", str(script), prior_path, reencoded_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=str(root),
+            )
+            if out.returncode != 0:
+                return {
+                    "merged_md": "",
+                    "merge_summary": None,
+                    "error": (out.stderr or out.stdout or "merge failed").strip()[:500],
+                }
+            data = json.loads(out.stdout or "{}")
+            return data
+        finally:
+            Path(reencoded_path).unlink(missing_ok=True)
+    finally:
+        Path(prior_path).unlink(missing_ok=True)
+
+
 def _tree_edit_data_to_items(data: dict) -> tuple[list[TreeEditOperationItem], list[dict]]:
     """
     Convert TS tree-edit result to response items and raw ops. Single place for parsing
@@ -398,6 +457,8 @@ def _tree_edit_data_to_items(data: dict) -> tuple[list[TreeEditOperationItem], l
                 target=op.get("target", ""),
                 params=op.get("params") or {},
                 targets=targets,
+                underspecified=op.get("underspecified"),
+                underspec_reason=op.get("underspec_reason"),
             )
         )
     return items, raw_ops
@@ -521,6 +582,8 @@ async def apply(request: ApplyRequest):
         )
         for c in changes
     ]
+    any_underspec = any(getattr(i, "underspecified", False) for i in items)
+    generated_artifact_count = sum(1 for i in items if getattr(i, "underspecified", False)) if any_underspec else None
     return ApplyResponse(
         operations=items,
         applied=not request.dry_run and (len(modified) > 0 or new_state is not None),
@@ -528,6 +591,8 @@ async def apply(request: ApplyRequest):
         planned_changes=planned,
         drift_report=drift_report,
         tree_version=new_state.tree_version if new_state else state.tree_version,
+        completion_mode="best_effort" if any_underspec else None,
+        generated_artifact_count=generated_artifact_count,
     )
 
 

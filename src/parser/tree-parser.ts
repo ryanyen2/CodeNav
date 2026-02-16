@@ -26,7 +26,7 @@ const ARTIFACT_CLASS: Record<Sigil, ArtifactClass> = {
   '~': 'abstract',
 };
 const CONTRACT_KEYS: ContractKey[] = ['sig', 'inv', 'cls', 'exp'];
-const STATUSES: NodeStatus[] = ['resolved', 'draft', 'unresolved', 'planned'];
+const STATUSES: NodeStatus[] = ['resolved', 'draft', 'unresolved', 'planned', 'surfaced'];
 
 function parseSigil(char: string): Sigil | null {
   return SIGILS.includes(char as Sigil) ? (char as Sigil) : null;
