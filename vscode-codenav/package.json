@@ -1,0 +1,66 @@
+{
+  "name": "vscode-codenav",
+  "displayName": "CodeNav",
+  "description": "Semantic tree editing: .codoc files with sync to codebase and backend",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:codoc",
+    "onCommand:codenav.analyze",
+    "onCommand:codenav.sync",
+    "onCommand:codenav.apply",
+    "onCommand:codenav.preview",
+    "onCommand:codenav.toggleStatus"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "codoc",
+      "extensions": [".codoc"],
+      "aliases": ["CodeNav Tree", "codoc"],
+      "configuration": "./language-configuration.json"
+    }],
+    "commands": [
+      { "command": "codenav.analyze", "title": "CodeNav: Analyze Codebase" },
+      { "command": "codenav.sync", "title": "CodeNav: Sync (Code → Tree)" },
+      { "command": "codenav.apply", "title": "CodeNav: Apply to Code" },
+      { "command": "codenav.preview", "title": "CodeNav: Preview Apply" },
+      { "command": "codenav.toggleStatus", "title": "CodeNav: Toggle Status" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "codenav.toggleStatus", "when": "editorLangId == codoc" }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "codenavTreeView",
+          "name": "CodeNav Tree"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CodeNav",
+      "properties": {
+        "codenav.serverUrl": { "type": "string", "default": "http://localhost:8001", "description": "Backend API base URL" },
+        "codenav.serverPath": { "type": "string", "default": "", "description": "Optional: path to run server (e.g. server/); if set, can auto-start" }
+      }
+    }
+  },
+  "dependencies": {
+    "codenav-semantic-tree": "file:../"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.3.0"
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "compile": "npm run build",
+    "watch": "node esbuild.config.mjs --watch"
+  }
+}

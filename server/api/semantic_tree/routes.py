@@ -48,6 +48,10 @@ from api.semantic_tree.pipeline.incremental_inverse import apply_inverse_and_upd
 from api.semantic_tree.pipeline.code_applicator import CodeChange
 from api.semantic_tree.output.tree_serializer import tree_to_markdown, tree_to_json
 from api.semantic_tree.logging import PipelineLogger, log_tree_edit, log_apply_tree_edit
+from api.semantic_tree.observation_report import (
+    build_apply_observations,
+    log_observations,
+)
 from api.semantic_tree.state.persistence import load_sync_state, save_sync_state
 from api.semantic_tree.state.delta import compute_entity_delta
 from api.semantic_tree.state.sync_guard import can_run_forward, can_run_inverse
@@ -368,70 +372,49 @@ async def get_tree(path: str):
     return {"tree_md": state.last_tree_md, "root_dir": state.root_dir or path}
 
 
+def _run_ts_cli(script_basename: str, *md_contents: str) -> dict:
+    """Run a TS CLI script with N markdown inputs (temp files). Returns parsed JSON; sets 'error' on failure."""
+    root = Path(__file__).resolve().parent.parent.parent.parent
+    script = root / "src" / "cli" / script_basename
+    if not script.is_file():
+        return {"error": f"Script not found: {script_basename}"}
+    paths: list[Path] = []
+    try:
+        for content in md_contents:
+            f = tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8")
+            f.write(content)
+            f.close()
+            paths.append(Path(f.name))
+        out = subprocess.run(
+            ["npx", "tsx", str(script)] + [str(p) for p in paths],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(root),
+        )
+        if out.returncode != 0:
+            err = (out.stderr or out.stdout or "script failed").strip()[:500]
+            return {"error": err}
+        return json.loads(out.stdout or "{}")
+    finally:
+        for p in paths:
+            p.unlink(missing_ok=True)
+
+
 def _tree_edit_targets_ts(base_md: str, edited_md: str) -> dict:
     """Call TypeScript tree-edit-targets CLI; returns { operations: [...], error?: str }."""
-    root = Path(__file__).resolve().parent.parent.parent.parent
-    script = root / "src" / "cli" / "tree-edit-targets.ts"
-    if not script.is_file():
-        return {"operations": [], "error": "Tree edit targets script not found; ensure CodeNav src is available."}
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f1:
-        f1.write(base_md)
-        base_path = f1.name
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f2:
-            f2.write(edited_md)
-            edited_path = f2.name
-        try:
-            out = subprocess.run(
-                ["npx", "tsx", str(script), base_path, edited_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=str(root),
-            )
-            if out.returncode != 0 and out.stderr:
-                return {"operations": [], "error": out.stderr.strip()[:500]}
-            data = json.loads(out.stdout or "{}")
-            return data
-        finally:
-            Path(edited_path).unlink(missing_ok=True)
-    finally:
-        Path(base_path).unlink(missing_ok=True)
+    data = _run_ts_cli("tree-edit-targets.ts", base_md, edited_md)
+    if data.get("error") and "operations" not in data:
+        return {"operations": [], "error": data["error"]}
+    return data
 
 
 def _merge_trees_ts(prior_md: str, reencoded_md: str) -> dict:
     """Call TypeScript merge-trees CLI; returns { merged_md, merge_summary, error? }."""
-    root = Path(__file__).resolve().parent.parent.parent.parent
-    script = root / "src" / "cli" / "merge-trees.ts"
-    if not script.is_file():
-        return {"merged_md": "", "merge_summary": None, "error": "merge-trees script not found."}
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f1:
-        f1.write(prior_md)
-        prior_path = f1.name
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f2:
-            f2.write(reencoded_md)
-            reencoded_path = f2.name
-        try:
-            out = subprocess.run(
-                ["npx", "tsx", str(script), prior_path, reencoded_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=str(root),
-            )
-            if out.returncode != 0:
-                return {
-                    "merged_md": "",
-                    "merge_summary": None,
-                    "error": (out.stderr or out.stdout or "merge failed").strip()[:500],
-                }
-            data = json.loads(out.stdout or "{}")
-            return data
-        finally:
-            Path(reencoded_path).unlink(missing_ok=True)
-    finally:
-        Path(prior_path).unlink(missing_ok=True)
+    data = _run_ts_cli("merge-trees.ts", prior_md, reencoded_md)
+    if data.get("error"):
+        return {"merged_md": "", "merge_summary": None, "error": data["error"]}
+    return data
 
 
 def _tree_edit_data_to_items(data: dict) -> tuple[list[TreeEditOperationItem], list[dict]]:
@@ -584,6 +567,13 @@ async def apply(request: ApplyRequest):
     ]
     any_underspec = any(getattr(i, "underspecified", False) for i in items)
     generated_artifact_count = sum(1 for i in items if getattr(i, "underspecified", False)) if any_underspec else None
+    completion_mode = "best_effort" if any_underspec else None
+
+    apply_obs = build_apply_observations(
+        modified, drift_report, items, completion_mode, generated_artifact_count
+    )
+    log_observations("apply", apply_obs=apply_obs)
+
     return ApplyResponse(
         operations=items,
         applied=not request.dry_run and (len(modified) > 0 or new_state is not None),
@@ -591,7 +581,7 @@ async def apply(request: ApplyRequest):
         planned_changes=planned,
         drift_report=drift_report,
         tree_version=new_state.tree_version if new_state else state.tree_version,
-        completion_mode="best_effort" if any_underspec else None,
+        completion_mode=completion_mode,
         generated_artifact_count=generated_artifact_count,
     )
 

@@ -38,7 +38,7 @@ function parseStatus(s: string): NodeStatus {
 }
 
 /** Parse one tree line: "- / feature [path] (entity) {sig: ...} #resolved" */
-function parseTreeLine(line: string): { depth: number; sigil: Sigil; feature: string; metadata: NodeMetadata; contract: Contract; status: NodeStatus } | null {
+export function parseTreeLine(line: string): { depth: number; sigil: Sigil; feature: string; metadata: NodeMetadata; contract: Contract; status: NodeStatus } | null {
   const trimmed = line.trimStart();
   const indent = line.length - trimmed.length;
   if (indent % 2 !== 0) return null;
@@ -193,6 +193,24 @@ export function parseTreeBlock(text: string): SemanticTree {
   if (root.id === '__virtual') {
     root.id = '__empty';
   }
+
+  // Path inheritance: % nodes use feature as fpath if missing; $/^ inherit from nearest % ancestor
+  function applyPathInheritance(node: SemanticNode, ancestorFpath: string | undefined): void {
+    if (node.sigil === '%' && !node.metadata.fpath) {
+      node.metadata.fpath = node.feature.trim() || ancestorFpath;
+    }
+    const fpath = node.metadata.fpath ?? ancestorFpath;
+    if ((node.sigil === '$' || node.sigil === '^') && !node.metadata.fpath && ancestorFpath) {
+      node.metadata.fpath = ancestorFpath;
+    }
+    if (node.metadata.fpath && !node.id.includes('::')) {
+      node.id = node.metadata.entity_name
+        ? `${node.metadata.fpath}::${node.metadata.entity_name}`
+        : node.metadata.fpath;
+    }
+    for (const child of node.children) applyPathInheritance(child, node.metadata.fpath ?? fpath);
+  }
+  applyPathInheritance(root, undefined);
 
   const deps: DepEdge[] = [];
   if (depsStart >= 0) {

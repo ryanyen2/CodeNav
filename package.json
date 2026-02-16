@@ -4,6 +4,10 @@
   "description": "Parser and tree-diff for prescriptive semantic tree (codebase intent)",
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./extension-api": "./dist/extension-api.js"
+  },
   "scripts": {
     "build": "tsc",
     "parse:tree": "npx tsx src/cli/parse-tree.ts",

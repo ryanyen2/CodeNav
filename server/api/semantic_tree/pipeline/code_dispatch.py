@@ -144,7 +144,7 @@ def dispatch_add_node(
     if insert_after_line is None or insert_after_line < 1:
         insert_after_line = len(lines) + 1
 
-    prompt = f"""Generate a single Python function that implements this semantic feature:
+    prompt = f"""Generate exactly one Python function that implements this semantic feature.
 
 Feature: {feature}
 """
@@ -152,7 +152,8 @@ Feature: {feature}
         prompt += f"Signature (prefer this): {sig}\n"
     prompt += """
 Rules:
-- Output only the function definition and body (no explanation, no markdown).
+- Output only one function definition and its body. Do not output multiple functions or duplicate definitions.
+- No explanation, no markdown, no code fence.
 - Use a clear docstring that reflects the feature.
 - Preserve the requested signature if given.
 """

@@ -25,7 +25,7 @@ export type {
 } from './types.js';
 
 // Tree parser: markdown list → SemanticTree + deps
-export { parseTreeBlock, extractTreeBlockFromTestCase, findNodeByPath } from './parser/tree-parser.js';
+export { parseTreeBlock, parseTreeLine, extractTreeBlockFromTestCase, findNodeByPath } from './parser/tree-parser.js';
 
 // Codebase parser: codebase block, filesystem, or AST-from-source
 export {
@@ -75,4 +75,8 @@ export type {
 } from './sync/absorb.js';
 
 // Sync: tree serialization (parseTreeBlock-compatible markdown)
-export { treeToMarkdown } from './sync/tree-serializer.js';
+export { treeToMarkdown, treeToCleanMarkdown, treeToLineMap } from './sync/tree-serializer.js';
+
+// Sync: metadata for .codoc.meta.json (extension)
+export { extractMetadata } from './sync/metadata-extractor.js';
+export type { CodocMetaJson, NodeMetaEntry } from './sync/metadata-extractor.js';
