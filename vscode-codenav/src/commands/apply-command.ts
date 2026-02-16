@@ -45,6 +45,10 @@ export function registerApplyCommand(
           }
           if (result.applied && result.modified_fpaths?.length) {
             vscode.window.showInformationMessage(`CodeNav: Applied to ${result.modified_fpaths.length} file(s).`);
+          } else if ((result.operations?.length ?? 0) > 0 && !result.applied) {
+            vscode.window.showWarningMessage(
+              `CodeNav: ${result.operations!.length} operation(s) identified but no files modified (dry run or best-effort).`
+            );
           } else {
             vscode.window.showInformationMessage('CodeNav: No changes applied.');
           }

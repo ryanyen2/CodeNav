@@ -22,6 +22,11 @@
       "aliases": ["CodeNav Tree", "codoc"],
       "configuration": "./language-configuration.json"
     }],
+    "grammars": [{
+      "language": "codoc",
+      "scopeName": "source.codoc",
+      "path": "./syntaxes/codoc.tmLanguage.json"
+    }],
     "commands": [
       { "command": "codenav.analyze", "title": "CodeNav: Analyze Codebase" },
       { "command": "codenav.sync", "title": "CodeNav: Sync (Code → Tree)" },

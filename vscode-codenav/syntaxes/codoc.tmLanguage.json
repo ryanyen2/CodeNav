@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "CodeNav Tree",
+  "scopeName": "source.codoc",
+  "patterns": [
+    { "include": "#deps-block" },
+    { "include": "#tree-line" }
+  ],
+  "repository": {
+    "deps-block": {
+      "match": "^deps:\\s*$",
+      "name": "keyword.control.codoc"
+    },
+    "dep-line": {
+      "match": "^\s*\\(([^)]+)\\)\\s*--(imports|invokes|inherits|type-refs)-->\s*\\(([^)]+)\\)",
+      "captures": {
+        "1": { "name": "entity.ref.codoc" },
+        "2": { "name": "keyword.relation.codoc" },
+        "3": { "name": "entity.ref.codoc" }
+      }
+    },
+    "tree-line": {
+      "patterns": [
+        {
+          "match": "^(\\s*)(-\\s)([/%$^~])(\\s+)([^\\[(]*?)(\\s+\\(([^)]+)\\))?",
+          "captures": {
+            "1": { "name": "punctuation.whitespace.codoc" },
+            "2": { "name": "punctuation.list.codoc" },
+            "3": { "name": "keyword.sigil.codoc" },
+            "4": { "name": "punctuation.whitespace.codoc" },
+            "5": { "name": "entity.name.feature.codoc" },
+            "6": { "name": "meta.entity.codoc" },
+            "7": { "name": "entity.name.function.codoc" }
+          }
+        }
+      ]
+    }
+  }
+}

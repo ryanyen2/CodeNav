@@ -66,6 +66,19 @@ def _full_replacement_to_partial_changes(
     return changes
 
 
+def _resolve_fpath(snapshot: CodebaseSnapshot, fpath: Optional[str]) -> Optional[str]:
+    """Resolve fpath (e.g. 'main' from tree feature) to actual file path (e.g. 'main.py')."""
+    if not fpath:
+        return None
+    path = Path(fpath)
+    if path.suffix == ".py":
+        return fpath
+    for f in snapshot.files:
+        if f.fpath == fpath or f.fpath.endswith(fpath) or Path(f.fpath).stem == fpath:
+            return f.fpath
+    return fpath
+
+
 def _file_content(root_dir: str, fpath: str) -> str:
     path = Path(root_dir) / fpath
     if not path.is_file():
@@ -129,7 +142,7 @@ def dispatch_add_node(
     if targets:
         t = targets[0]
         if isinstance(t, dict) and t.get("fpath"):
-            fpath = t["fpath"]
+            fpath = _resolve_fpath(snapshot, t["fpath"]) or t["fpath"]
             lr = t.get("line_range")
             if lr and len(lr) >= 2:
                 insert_after_line = int(lr[1])
@@ -184,7 +197,7 @@ def dispatch_delete_node(
     for t in _targets_list(op):
         if not isinstance(t, dict):
             continue
-        fpath = t.get("fpath")
+        fpath = _resolve_fpath(_snapshot, t.get("fpath")) or t.get("fpath")
         entity_name = t.get("entity_name")
         lr = t.get("line_range")
         if not lr or len(lr) < 2:
@@ -216,7 +229,7 @@ def dispatch_edit_feature(
     t = targets[0]
     if not isinstance(t, dict):
         return []
-    fpath = t.get("fpath")
+    fpath = _resolve_fpath(snapshot, t.get("fpath")) or t.get("fpath")
     entity_name = t.get("entity_name")
     lr = t.get("line_range")
     if not lr or len(lr) < 2:

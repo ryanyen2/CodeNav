@@ -79,6 +79,11 @@ def apply_changes(root_dir: str, changes: List[CodeChange]) -> List[str]:
 
     for fpath, file_changes in by_file.items():
         path = root / fpath
+        if not path.is_file() and not fpath.endswith(".py"):
+            candidate = root / (fpath + ".py")
+            if candidate.is_file():
+                fpath = fpath + ".py"
+                path = candidate
         if not path.is_file():
             logger.warning("Skip apply (not a file): %s", fpath)
             continue

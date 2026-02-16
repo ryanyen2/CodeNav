@@ -54,6 +54,8 @@ from api.semantic_tree.observation_report import (
 )
 from api.semantic_tree.state.persistence import load_sync_state, save_sync_state
 from api.semantic_tree.state.delta import compute_entity_delta
+from api.semantic_tree.state.fingerprint import compute_entity_fingerprint, compute_file_fingerprint
+from api.semantic_tree.state.models import SyncState, EntityFingerprint, SemanticCacheEntry
 from api.semantic_tree.state.sync_guard import can_run_forward, can_run_inverse
 from api.tools.embedder import get_embedder
 from api.config import get_embedder_type
@@ -230,6 +232,47 @@ async def analyze(request: AnalyzeRequest):
         tree = assemble_tree(snapshot, features, hierarchy, include_deps=True)
     pipeline_log.summary()
 
+    tree_md = tree_to_markdown(tree)
+    # Persist sync state after analyze (path-based only) so Apply and incremental Sync work
+    if not use_files and request.path:
+        root_dir = snapshot.root_dir
+        new_entity_fps: dict[str, EntityFingerprint] = {}
+        for e in snapshot.all_entities:
+            ch, sh = compute_entity_fingerprint(e)
+            new_entity_fps[f"{e.fpath}::{e.name}"] = EntityFingerprint(content_hash=ch, signature_hash=sh)
+        new_file_fps: dict[str, str] = {}
+        for f in snapshot.files:
+            full_path = Path(root_dir) / f.fpath
+            if full_path.is_file():
+                try:
+                    new_file_fps[f.fpath] = compute_file_fingerprint(
+                        full_path.read_text(encoding="utf-8", errors="replace")
+                    )
+                except Exception:
+                    pass
+        cache_entries: dict[str, SemanticCacheEntry] = {}
+        for e in snapshot.all_entities:
+            ch, _ = compute_entity_fingerprint(e)
+            sf = next((x for x in features if x.entity_name == e.name), None)
+            if sf:
+                cache_entries[ch] = SemanticCacheEntry(
+                    content_hash=ch, entity_name=e.name, features=list(sf.features)
+                )
+        initial_state = SyncState(
+            entity_fingerprints=new_entity_fps,
+            file_fingerprints=new_file_fps,
+            semantic_cache=cache_entries,
+            domain_areas=[{"name": a.name} for a in areas],
+            hierarchy_cache=[h.model_dump() for h in hierarchy],
+            tree_version=0,
+            code_version=1,
+            last_sync_direction="forward",
+            last_tree_md=tree_md,
+            root_dir=root_dir,
+            index_path=index_path,
+        )
+        save_sync_state(initial_state, root_dir)
+
     if request.format == "json":
         return AnalyzeResponse(
             tree_json=tree_to_json(tree),
@@ -238,7 +281,7 @@ async def analyze(request: AnalyzeRequest):
             entity_count=len(snapshot.all_entities),
         )
     return AnalyzeResponse(
-        tree_md=tree_to_markdown(tree),
+        tree_md=tree_md,
         root_dir=snapshot.root_dir,
         file_count=len(snapshot.files),
         entity_count=len(snapshot.all_entities),
@@ -306,6 +349,11 @@ async def sync(request: SyncRequest):
                 model=request.model,
             )
         pipeline_log.summary()
+    except ValueError as e:
+        if "No index to save" in str(e) or "No valid embeddings" in str(e).lower():
+            return _intervention("index", "No valid embeddings produced; check embedder (e.g. Ollama) is running.")
+        logger.exception("Sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.exception("Sync failed")
         raise HTTPException(status_code=500, detail=str(e))

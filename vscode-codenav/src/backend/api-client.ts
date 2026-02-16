@@ -19,6 +19,7 @@ export interface SyncResult {
   file_count: number;
   entity_count: number;
   is_incremental?: boolean;
+  error?: string;
 }
 
 export interface TreeEditOperation {
@@ -53,15 +54,29 @@ export class ApiClient {
     method: string,
     path: string,
     body?: unknown
-  ): Promise<{ ok: boolean; status: number; data?: T }> {
+  ): Promise<{ ok: boolean; status: number; data?: T; errorDetail?: string }> {
     const url = `${this.baseUrl}/semantic_tree${path}`;
     const res = await fetch(url, {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
-    const data = res.ok ? await res.json().catch(() => ({})) : undefined;
-    return { ok: res.ok, status: res.status, data: data as T };
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+    const errorDetail =
+      !res.ok && data && typeof data === 'object' && 'detail' in data
+        ? String((data as { detail?: string }).detail)
+        : undefined;
+    return {
+      ok: res.ok,
+      status: res.status,
+      data: res.ok ? (data as T) : undefined,
+      errorDetail,
+    };
   }
 
   async health(): Promise<boolean> {
@@ -84,11 +99,12 @@ export class ApiClient {
   }
 
   async sync(path: string, options?: { force_full?: boolean }): Promise<SyncResult | null> {
-    const { ok, data } = await this.request<SyncResult>('POST', '/sync', {
+    const { ok, data, errorDetail } = await this.request<SyncResult>('POST', '/sync', {
       path,
       force_full: options?.force_full ?? false,
     });
-    return ok && data ? data : null;
+    if (!ok) return { tree_md: '', root_dir: '', file_count: 0, entity_count: 0, error: errorDetail ?? 'Sync failed' };
+    return data ?? null;
   }
 
   async getTree(path: string): Promise<{ tree_md: string; root_dir: string } | null> {
@@ -116,11 +132,13 @@ export class ApiClient {
   }
 
   async apply(path: string, editedTreeMd: string, dryRun: boolean): Promise<ApplyResult> {
-    const { data } = await this.request<ApplyResult>('POST', '/apply', {
+    const { ok, data, errorDetail } = await this.request<ApplyResult>('POST', '/apply', {
       path,
       edited_tree_md: editedTreeMd,
       dry_run: dryRun,
     });
-    return data ?? { operations: [], applied: false };
+    const result = data ?? { operations: [], applied: false };
+    if (!ok && errorDetail) result.error = errorDetail;
+    return result;
   }
 }

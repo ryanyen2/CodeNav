@@ -27,11 +27,15 @@ function lineForNode(node: SemanticNode): string {
   return out;
 }
 
-/** Line for clean .codoc format: no [path] on leaf, no contracts, no #status. */
+/** Line for clean .codoc format: no [path] on leaf, no contracts, no #status.
+ * For % file nodes, use metadata.fpath (e.g. main.py) so parsed tree has correct fpath. */
 function lineForCleanNode(node: SemanticNode, _parentFpath: string | undefined): string {
-  const feature = (node.feature ?? '').trim() || ' ';
-  let out = `${node.sigil} ${feature}`;
+  const isFile = node.sigil === '%';
   const isLeaf = node.sigil === '$' || node.sigil === '^';
+  const display = isFile && node.metadata?.fpath
+    ? node.metadata.fpath
+    : (node.feature ?? '').trim() || ' ';
+  let out = `${node.sigil} ${display}`;
   if (isLeaf && node.metadata?.entity_name) out += ` (${node.metadata.entity_name})`;
   return out;
 }
@@ -43,7 +47,7 @@ function dumpNode(node: SemanticNode, depth: number, lines: string[]): void {
 
 function dumpCleanNode(node: SemanticNode, depth: number, lines: string[], parentFpath: string | undefined): void {
   lines.push('  '.repeat(depth) + '- ' + lineForCleanNode(node, parentFpath));
-  const nextFpath = node.sigil === '%' ? (node.feature?.trim() || node.metadata?.fpath) : (node.metadata?.fpath ?? parentFpath);
+  const nextFpath = node.sigil === '%' ? (node.metadata?.fpath ?? node.feature?.trim()) : (node.metadata?.fpath ?? parentFpath);
   for (const child of node.children) dumpCleanNode(child, depth + 1, lines, nextFpath);
 }
 
@@ -96,7 +100,7 @@ export function treeToLineMap(tree: SemanticTree): Map<string, number> {
       map.set(node.id, line);
     }
     line += 1;
-    const nextFpath = node.sigil === '%' ? (node.feature?.trim() || node.metadata?.fpath) : (node.metadata?.fpath ?? parentFpath);
+    const nextFpath = node.sigil === '%' ? (node.metadata?.fpath ?? node.feature?.trim()) : (node.metadata?.fpath ?? parentFpath);
     for (const child of node.children) walk(child, depth + 1, nextFpath);
   }
   walk(tree.root, 0, undefined);

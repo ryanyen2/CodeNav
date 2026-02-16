@@ -22,9 +22,13 @@ export function registerSyncCommand(
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'CodeNav: Syncing…' },
         async () => {
-          const result = await backend.api.sync(folder.uri.fsPath);
-          if (!result) {
-            vscode.window.showErrorMessage('Sync failed.');
+          const result = await backend.api.sync(folder.uri.fsPath, { force_full: false });
+          if (!result || result.error) {
+            vscode.window.showErrorMessage(result?.error ?? 'Sync failed.');
+            return;
+          }
+          if (!result.tree_md) {
+            vscode.window.showErrorMessage('Sync returned no tree.');
             return;
           }
           const tree = parseTreeBlock(result.tree_md);
@@ -38,7 +42,9 @@ export function registerSyncCommand(
           );
           writeMeta(codocUri, meta);
           backend.setStatus('synced');
-          vscode.window.showInformationMessage('CodeNav: Synced.');
+          vscode.window.showInformationMessage(
+            result.is_incremental ? 'CodeNav: Synced (incremental).' : 'CodeNav: Synced.'
+          );
         }
       );
     })
