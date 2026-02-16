@@ -14,14 +14,14 @@ def _prompts_dir() -> Path:
     env_dir = os.environ.get("CODENAV_PROMPTS_DIR")
     if env_dir:
         return Path(env_dir).resolve()
-    # Assume repo layout: .../CodeNav/prompts, CodeNav/server/api/semantic_tree/llm/...
+    # Assume repo layout: .../CodeNav/server/prompts, CodeNav/server/api/semantic_tree/llm/...
     current = Path(__file__).resolve().parent
     for _ in range(6):
         current = current.parent
         prompts = current / "prompts"
         if prompts.is_dir():
             return prompts
-    return Path(__file__).resolve().parent.parent.parent.parent.parent / "prompts"
+    return Path(__file__).resolve().parent.parent.parent.parent / "prompts"
 
 
 def load_prompt(name: str) -> str:
