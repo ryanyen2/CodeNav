@@ -66,7 +66,7 @@ def run_semantic_parsing_rag(
     then one call for remaining entities. Uses prompts/semantic_parsing.txt.
     """
     template = load_prompt("semantic_parsing")
-    all_features: List[SemanticFeature] = []
+    feature_by_key: Dict[Tuple[str, str], SemanticFeature] = {}
     covered: Set[Tuple[str, str]] = set()
     entity_by_key = {_entity_key(e): e for e in snapshot.all_entities}
 
@@ -79,6 +79,7 @@ def run_semantic_parsing_rag(
         entities = [e for e, _ in hits]
         for e in entities:
             covered.add(_entity_key(e))
+        current_area_keys = {_entity_key(e) for e in entities}
         file_slices = _entities_to_file_slices(entities)
         context_parts = [_format_file_context(fs) for fs in file_slices]
         context = "\n\n".join(context_parts)
@@ -90,12 +91,19 @@ def run_semantic_parsing_rag(
             logger.warning("semantic_parsing_rag response not a dict for area %s: %s", area.name, type(data))
             continue
         for entity_name, features in data.items():
+            name = entity_name.strip()
             feat_list = [str(f) for f in features] if isinstance(features, list) else []
-            all_features.append(SemanticFeature(entity_name=entity_name.strip(), features=feat_list))
+            # Match back to actual entity from this area's RAG hit list (by name); store by (fpath, name)
+            for ek in current_area_keys:
+                if entity_by_key[ek].name == name:
+                    if ek not in feature_by_key:
+                        feature_by_key[ek] = SemanticFeature(entity_name=name, features=feat_list)
+                    break
 
     remaining = [e for e in snapshot.all_entities if _entity_key(e) not in covered]
     if remaining:
         batch = remaining[:REMAINING_BATCH]
+        batch_keys = {_entity_key(e) for e in batch}
         file_slices = _entities_to_file_slices(batch)
         context = "\n\n".join(_format_file_context(fs) for fs in file_slices)
         prompt = format_prompt(template, repo_name=repo_name, repo_info=repo_info)
@@ -104,10 +112,21 @@ def run_semantic_parsing_rag(
         data = parse_solution_json(response)
         if isinstance(data, dict):
             for entity_name, features in data.items():
+                name = entity_name.strip()
                 feat_list = [str(f) for f in features] if isinstance(features, list) else []
-                all_features.append(SemanticFeature(entity_name=entity_name.strip(), features=feat_list))
+                for ek in batch_keys:
+                    if entity_by_key[ek].name == name and ek not in feature_by_key:
+                        feature_by_key[ek] = SemanticFeature(entity_name=name, features=feat_list)
+                        break
         else:
             for e in batch:
-                all_features.append(SemanticFeature(entity_name=e.name, features=[e.name.replace("_", " ")]))
+                ek = _entity_key(e)
+                if ek not in feature_by_key:
+                    feature_by_key[ek] = SemanticFeature(entity_name=e.name, features=[e.name.replace("_", " ")])
 
-    return all_features
+    # Ensure every snapshot entity has a feature entry
+    for e in snapshot.all_entities:
+        ek = _entity_key(e)
+        if ek not in feature_by_key:
+            feature_by_key[ek] = SemanticFeature(entity_name=e.name, features=[e.name.replace("_", " ")])
+    return list(feature_by_key.values())

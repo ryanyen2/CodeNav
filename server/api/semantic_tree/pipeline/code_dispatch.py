@@ -6,16 +6,23 @@ a list of CodeChange edits. AddNode and EditFeature use the LLM; DeleteNode is d
 EditFeature uses a line-based diff so only changed regions are written (partial edit, not whole-file).
 """
 
+import ast
 import logging
+import os
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from api.semantic_tree.models import CodebaseSnapshot
 from api.semantic_tree.pipeline.code_applicator import CodeChange
+from api.semantic_tree.pipeline.diff_format import (
+    SearchReplaceBlock,
+    parse_search_replace_blocks,
+)
 from api.semantic_tree.llm.completion import complete
 
 logger = logging.getLogger(__name__)
+LOG_PROMPTS = os.environ.get("CODENAV_LOG_PROMPTS", "").strip() in ("1", "true", "yes")
 
 
 def _full_replacement_to_partial_changes(
@@ -67,16 +74,32 @@ def _full_replacement_to_partial_changes(
 
 
 def _resolve_fpath(snapshot: CodebaseSnapshot, fpath: Optional[str]) -> Optional[str]:
-    """Resolve fpath (e.g. 'main' from tree feature) to actual file path (e.g. 'main.py')."""
+    """
+    Resolve fpath to actual file path (robust for tree → code). Prefer exact match, then
+    stem match, then path suffix; ensure we return a path that exists in snapshot.
+    """
     if not fpath:
         return None
     path = Path(fpath)
     if path.suffix == ".py":
+        if any(f.fpath == fpath for f in snapshot.files):
+            return fpath
+        if any(Path(f.fpath).stem == path.stem for f in snapshot.files):
+            return next(f.fpath for f in snapshot.files if Path(f.fpath).stem == path.stem)
         return fpath
-    for f in snapshot.files:
-        if f.fpath == fpath or f.fpath.endswith(fpath) or Path(f.fpath).stem == fpath:
-            return f.fpath
-    return fpath
+    # No .py: match by stem or path suffix
+    stem = path.stem or fpath.strip("/")
+    candidates = [
+        f.fpath for f in snapshot.files
+        if f.fpath == fpath or Path(f.fpath).stem == stem or f.fpath.endswith("/" + fpath) or f.fpath == fpath + ".py"
+    ]
+    if not candidates:
+        return fpath + ".py" if not fpath.endswith(".py") else fpath
+    if len(candidates) == 1:
+        return candidates[0]
+    # Prefer exact stem match (e.g. main.py for "main")
+    exact = next((c for c in candidates if Path(c).stem == stem), None)
+    return exact or candidates[0]
 
 
 def _file_content(root_dir: str, fpath: str) -> str:
@@ -103,6 +126,74 @@ def _resolve_line_range(
         if e.fpath == fpath and e.name == entity_name and e.line_range:
             return e.line_range
     return None
+
+
+def _parse_search_replace_response(
+    raw: str,
+    fpath: str,
+    old_content: str,
+) -> List[CodeChange]:
+    """
+    Parse LLM response containing SEARCH/REPLACE blocks; convert to CodeChange list.
+    Finds each search string in old_content and builds line-based edits.
+    """
+    blocks = parse_search_replace_blocks(raw)
+    if not blocks:
+        return []
+    lines = old_content.splitlines()
+    changes: List[CodeChange] = []
+    content = old_content
+    for b in blocks:
+        if not b.search:
+            continue
+        pos = content.find(b.search)
+        if pos < 0:
+            logger.warning("Search block not found in content (fpath=%s, %d chars)", fpath, len(b.search))
+            continue
+        # Line numbers 1-based
+        before = content[:pos]
+        line_start = before.count("\n") + 1
+        end_pos = pos + len(b.search)
+        line_end = content[:end_pos].count("\n") + 1
+        changes.append(
+            CodeChange(
+                fpath=fpath,
+                line_start=line_start,
+                line_end=line_end,
+                new_content=b.replace,
+            )
+        )
+        content = content[:pos] + b.replace + content[end_pos:]
+    return changes
+
+
+def _validate_python_syntax(code: str) -> Tuple[bool, str]:
+    """Return (True, '') if code parses as valid Python; else (False, error_message)."""
+    try:
+        ast.parse(code)
+        return True, ""
+    except SyntaxError as e:
+        return False, f"{e.msg} at line {e.lineno}"
+
+def _generate_with_retry(
+    prompt: str,
+    provider: str,
+    model: Optional[str],
+    max_retries: int = 1,
+    validate_fn: Optional[Any] = None,
+) -> str:
+    """
+    Call LLM; if validate_fn is given and output fails it, retry once with error appended to prompt.
+    """
+    raw = complete(prompt, provider=provider, model=model)
+    if validate_fn is None:
+        return raw
+    code = _strip_code_fence(raw)
+    ok, err = validate_fn(code)
+    if ok or max_retries < 1:
+        return raw
+    retry_prompt = prompt + f"\n\nPrevious output had a syntax error: {err}\nPlease fix and output valid Python only."
+    return complete(retry_prompt, provider=provider, model=model)
 
 
 def _strip_code_fence(raw: str) -> str:
@@ -157,6 +248,12 @@ def dispatch_add_node(
     if insert_after_line is None or insert_after_line < 1:
         insert_after_line = len(lines) + 1
 
+    if LOG_PROMPTS:
+        logger.info(
+            "[CODENAV] AddNode context: fpath=%s insert_after_line=%s feature=%r",
+            fpath, insert_after_line, (feature or "")[:80],
+        )
+
     prompt = f"""Generate exactly one Python function that implements this semantic feature.
 
 Feature: {feature}
@@ -169,9 +266,16 @@ Rules:
 - No explanation, no markdown, no code fence.
 - Use a clear docstring that reflects the feature.
 - Preserve the requested signature if given.
+- Do not generate helper functions or imports; aim for 15 lines or fewer.
 """
     try:
-        raw = complete(prompt, provider=provider, model=model)
+        raw = _generate_with_retry(
+            prompt,
+            provider=provider,
+            model=model,
+            max_retries=1,
+            validate_fn=lambda c: _validate_python_syntax(c),
+        )
         code = _strip_code_fence(raw)
     except Exception as e:
         logger.exception("AddNode LLM failed: %s", e)
@@ -213,6 +317,9 @@ def dispatch_delete_node(
     return changes
 
 
+EDIT_FEATURE_SEARCH_REPLACE_THRESHOLD = 10  # Use search-replace format for functions larger than this
+
+
 def dispatch_edit_feature(
     op: Dict[str, Any],
     snapshot: CodebaseSnapshot,
@@ -221,7 +328,9 @@ def dispatch_edit_feature(
     model: Optional[str],
 ) -> List[CodeChange]:
     """
-    Modify an existing function to match a new semantic feature (LLM rewrites the implementation).
+    Modify an existing function to match a new semantic feature.
+    For functions > 10 lines: prompt for SEARCH/REPLACE blocks (minimal edits).
+    For small functions: full rewrite with concise constraint.
     """
     targets = _targets_list(op)
     if not targets:
@@ -245,9 +354,38 @@ def dispatch_edit_feature(
     if start < 1 or end > len(lines):
         return []
     current_code = "\n".join(lines[start - 1 : end])
+    line_count = end - start + 1
+    use_search_replace = line_count > EDIT_FEATURE_SEARCH_REPLACE_THRESHOLD
 
-    prompt = f"""Modify this Python function so its behavior matches this new semantic feature.
-Keep the same function name and preserve the signature unless the feature requires a change.
+    if LOG_PROMPTS:
+        logger.info(
+            "[CODENAV] EditFeature context: fpath=%s entity_name=%s lines=%s-%s (%s lines) use_search_replace=%s new_feature=%r",
+            fpath, entity_name, start, end, line_count, use_search_replace, (new_feature or "")[:80],
+        )
+
+    if use_search_replace:
+        prompt = f"""Modify this Python function so its behavior matches this new semantic feature.
+Make MINIMAL changes only. Keep the same function name and signature unless the feature requires a change.
+
+New feature: {new_feature}
+
+Current function (lines {start}-{end}):
+
+```
+{current_code}
+```
+
+Output your change using exactly one SEARCH/REPLACE block. Copy the exact lines you want to change into SEARCH, and put the new lines in REPLACE. Do not rewrite the entire function.
+
+Format:
+<<<<<<< SEARCH
+<exact lines to replace>
+=======
+<new lines>
+>>>>>>> REPLACE"""
+    else:
+        prompt = f"""Modify this Python function so its behavior matches this new semantic feature.
+Keep the same function name and preserve the signature unless the feature requires a change. Keep it concise.
 
 New feature: {new_feature}
 
@@ -258,21 +396,40 @@ Current function (lines {start}-{end}):
 ```
 
 Output only the modified function (no explanation, no markdown)."""
+
     try:
-        raw = complete(prompt, provider=provider, model=model)
-        code = _strip_code_fence(raw)
+        if use_search_replace:
+            raw = complete(prompt, provider=provider, model=model)
+        else:
+            raw = _generate_with_retry(
+                prompt,
+                provider=provider,
+                model=model,
+                max_retries=1,
+                validate_fn=lambda c: _validate_python_syntax(c),
+            )
     except Exception as e:
         logger.exception("EditFeature LLM failed: %s", e)
         return []
 
+    if use_search_replace:
+        partial = _parse_search_replace_response(raw, fpath, content)
+        if partial:
+            return partial
+        # Fallback: treat as full function and use line-based diff
+        code = _strip_code_fence(raw)
+        new_lines = code.splitlines()
+        old_lines = lines[start - 1 : end]
+        return _full_replacement_to_partial_changes(fpath, start, end, old_lines, new_lines) or [
+            CodeChange(fpath=fpath, line_start=start, line_end=end, new_content=code)
+        ]
+
+    code = _strip_code_fence(raw)
     old_lines = lines[start - 1 : end]
     new_lines = code.splitlines()
-    partial = _full_replacement_to_partial_changes(
-        fpath, start, end, old_lines, new_lines
-    )
+    partial = _full_replacement_to_partial_changes(fpath, start, end, old_lines, new_lines)
     if partial:
         return partial
-    # Fallback: single full-block replace if diff produced nothing (e.g. empty new)
     return [
         CodeChange(fpath=fpath, line_start=start, line_end=end, new_content=code)
     ]

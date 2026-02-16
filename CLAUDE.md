@@ -8,9 +8,9 @@ CodeNav is a parser and tree-diff engine for prescriptive semantic trees. It par
 
 ## Current Status & Limitations
 
-- **v0.1.0**: Parsing and diffing in TypeScript; tree construction pipeline in Python. No code generation yet.
+- **v0.1.0**: Parsing and diffing in TypeScript; tree construction pipeline in Python. Code generation (AddNode, EditFeature, DeleteNode) runs in Python; tree→ops still uses TS.
+- **`src/` is required**: The server **cannot** run without the TypeScript `src/` tree. It invokes `src/cli/tree-edit-targets.ts` (base vs edited tree → operations) and `src/cli/merge-trees.ts` (forward merge). Do not remove `src/` unless tree-diff and merge are reimplemented in Python.
 - **Python backend** only extracts `.py` files — JS/TS are not supported in the analyze pipeline.
-- **Dispatcher** is stubs only — no actual code generation; operations map to plan arrays only.
 - **`src/parser/codebase-parser.ts`** is a standalone tool for CLI inspection; it is **not** connected to the Python analyze pipeline. Use it to parse codebase blocks from markdown or to snapshot a directory from the CLI.
 
 ## Commands

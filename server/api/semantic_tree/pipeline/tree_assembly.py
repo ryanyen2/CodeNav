@@ -1,7 +1,7 @@
 """Step 6: Tree assembly — merge hierarchy, grounding metadata, and import edges into SemanticTree."""
 
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Set
 
 from api.semantic_tree.models import (
     CodebaseSnapshot,
@@ -27,6 +27,43 @@ SIGIL_ABSTRACT = "~"
 
 def _entity_key(e: CodeEntity) -> Tuple[str, str]:
     return (e.fpath, e.name)
+
+
+def _ensure_abstract_chain(
+    root: SemanticNode,
+    parts: List[str],
+    path: str,
+) -> SemanticNode:
+    """
+    Walk or create abstract nodes for the given path parts (any depth).
+    Returns the leaf abstract node under which to attach file nodes.
+    """
+    if not parts:
+        return root
+    parent = root
+    prefix = ""
+    for i, segment in enumerate(parts):
+        prefix = f"{prefix}/{segment}" if prefix else segment
+        node_id = path if i == len(parts) - 1 and prefix == path else f"{path}/_level_{i}"
+        feature = segment.replace("-", " ").replace("_", " ")
+        existing = next((c for c in parent.children if c.sigil == SIGIL_ABSTRACT and c.feature == feature), None)
+        if existing is not None:
+            parent = existing
+        else:
+            child = SemanticNode(
+                id=node_id,
+                sigil=SIGIL_ABSTRACT,
+                artifact_class="abstract",
+                feature=feature,
+                metadata=NodeMetadata(),
+                contract=Contract(),
+                status="resolved",
+                children=[],
+            )
+            parent.children.append(child)
+            child.parent = parent
+            parent = child
+    return parent
 
 
 def _feature_by_entity(
@@ -91,92 +128,51 @@ def assemble_tree(
         children=[],
     )
 
+    placed_entities: Set[Tuple[str, str]] = set()
+    # Per parent node id: set of fpaths already placed under it (avoid duplicate file nodes)
+    placed_files_by_parent: Dict[str, Set[str]] = {}
+
     for path, file_paths in path_to_files.items():
         parts = [p.strip() for p in path.split("/") if p.strip()]
-        if len(parts) < 3:
-            parts.extend(["other", "general"] * (3 - len(parts)))
-        area, category, subcategory = parts[0], parts[1], parts[2]
-
-        # Abstract chain: area -> category -> subcategory
-        area_feature = area.replace("-", " ").replace("_", " ")
-        category_feature = category.replace("-", " ").replace("_", " ")
-        sub_feature = subcategory.replace("-", " ").replace("_", " ")
-
-        area_node = SemanticNode(
-            id=path,
-            sigil=SIGIL_ABSTRACT,
-            artifact_class="abstract",
-            feature=area_feature,
-            metadata=NodeMetadata(),
-            contract=Contract(),
-            status="resolved",
-            children=[],
-        )
-        category_node = SemanticNode(
-            id=f"{path}/_cat",
-            sigil=SIGIL_ABSTRACT,
-            artifact_class="abstract",
-            feature=category_feature,
-            metadata=NodeMetadata(),
-            contract=Contract(),
-            status="resolved",
-            children=[],
-        )
-        sub_node = SemanticNode(
-            id=f"{path}/_sub",
-            sigil=SIGIL_ABSTRACT,
-            artifact_class="abstract",
-            feature=sub_feature,
-            metadata=NodeMetadata(),
-            contract=Contract(),
-            status="resolved",
-            children=[],
-        )
-
-        # Attach area under root if not already present
-        existing = next((c for c in root.children if c.feature == area_feature), None)
-        if existing is None:
-            root.children.append(area_node)
-            area_node.parent = root
-            parent_for_cat = area_node
-        else:
-            parent_for_cat = existing
-
-        existing_cat = next((c for c in parent_for_cat.children if c.feature == category_feature), None)
-        if existing_cat is None:
-            parent_for_cat.children.append(category_node)
-            category_node.parent = parent_for_cat
-            parent_for_sub = category_node
-        else:
-            parent_for_sub = existing_cat
-
-        existing_sub = next((c for c in parent_for_sub.children if c.feature == sub_feature), None)
-        if existing_sub is None:
-            parent_for_sub.children.append(sub_node)
-            sub_node.parent = parent_for_sub
-            parent_for_files = sub_node
-        else:
-            parent_for_files = existing_sub
+        if not parts:
+            parts = ["uncategorized"]
+        parent_for_files = _ensure_abstract_chain(root, parts, path)
 
         for fpath in file_paths:
+            parent_id = parent_for_files.id or ""
+            placed_files = placed_files_by_parent.setdefault(parent_id, set())
+            if fpath in placed_files:
+                file_node = next(
+                    (c for c in parent_for_files.children if c.sigil == SIGIL_FILE and getattr(c.metadata, "fpath", None) == fpath),
+                    None,
+                )
+                if not file_node:
+                    continue
+            else:
+                placed_files.add(fpath)
+                entities = file_entities.get(fpath, [])
+                exp_list = [e.name for e in entities]
+                exp_str = ", ".join(exp_list) if exp_list else ""
+
+                file_node = SemanticNode(
+                    id=fpath,
+                    sigil=SIGIL_FILE,
+                    artifact_class="concrete-file",
+                    feature=fpath.split("/")[-1].replace(".py", "").replace("_", " "),
+                    metadata=NodeMetadata(type="file", fpath=fpath),
+                    contract=Contract(exp=exp_str) if exp_str else Contract(),
+                    status="resolved",
+                    children=[],
+                )
+                parent_for_files.children.append(file_node)
+                file_node.parent = parent_for_files
+
             entities = file_entities.get(fpath, [])
-            exp_list = [e.name for e in entities]
-            exp_str = ", ".join(exp_list) if exp_list else ""
-
-            file_node = SemanticNode(
-                id=fpath,
-                sigil=SIGIL_FILE,
-                artifact_class="concrete-file",
-                feature=fpath.split("/")[-1].replace(".py", "").replace("_", " "),
-                metadata=NodeMetadata(type="file", fpath=fpath),
-                contract=Contract(exp=exp_str) if exp_str else Contract(),
-                status="resolved",
-                children=[],
-            )
-            parent_for_files.children.append(file_node)
-            file_node.parent = parent_for_files
-
             for e in entities:
+                key = _entity_key(e)
+                if key in placed_entities:
+                    continue
+                placed_entities.add(key)
                 primary_feature = _feature_by_entity(semantic_features, e.name)
                 sigil = SIGIL_CLASS if e.entity_type == "class" else SIGIL_FUNC
                 meta = NodeMetadata(

@@ -41,6 +41,8 @@ export interface ApplyResult {
   error?: string;
   modified_fpaths?: string[];
   planned_changes?: Array<{ fpath: string; line_start: number; line_end: number; new_content: string }>;
+  /** Unified diff of planned/applied changes (for diff view) */
+  unified_diff?: string;
 }
 
 export class ApiClient {
@@ -131,12 +133,26 @@ export class ApiClient {
     return data ?? { operations: [], applied: false };
   }
 
-  async apply(path: string, editedTreeMd: string, dryRun: boolean): Promise<ApplyResult> {
-    const { ok, data, errorDetail } = await this.request<ApplyResult>('POST', '/apply', {
+  async apply(
+    path: string,
+    editedTreeMd: string,
+    dryRun: boolean,
+    options?: {
+      diffFormat?: 'line_replace' | 'unified_diff' | 'search_replace';
+      /** Tree before this edit; when set, diff is base vs edited so only actual edits produce ops */
+      baseTreeMd?: string;
+    }
+  ): Promise<ApplyResult> {
+    const body: Record<string, unknown> = {
       path,
       edited_tree_md: editedTreeMd,
       dry_run: dryRun,
-    });
+      diff_format: options?.diffFormat ?? 'unified_diff',
+    };
+    if (options?.baseTreeMd !== undefined && options.baseTreeMd !== '') {
+      body.base_tree_md = options.baseTreeMd;
+    }
+    const { ok, data, errorDetail } = await this.request<ApplyResult>('POST', '/apply', body);
     const result = data ?? { operations: [], applied: false };
     if (!ok && errorDetail) result.error = errorDetail;
     return result;

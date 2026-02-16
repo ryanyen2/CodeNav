@@ -23,6 +23,8 @@ REPO_ROOT = SERVER_DIR.parent
 BASE_URL = os.environ.get("CODENAV_API_BASE", "http://127.0.0.1:8001").rstrip("/")
 TEST_PATH = os.environ.get("CODENAV_TEST_PATH", str(REPO_ROOT / "test" / "draco"))
 TIMEOUT = 30
+# Tree edit can be slow first time (npx/tsx cold start); allow up to 60s
+TREE_EDIT_TIMEOUT = 60
 
 # Minimal tree markdown for tree_edit (no embedder needed)
 BASE_TREE_MD = """- ~ root
@@ -127,7 +129,7 @@ def test_tree_edit():
             "base_tree_md": BASE_TREE_MD,
             "edited_tree_md": EDITED_TREE_MD,
         },
-        timeout=TIMEOUT,
+        timeout=TREE_EDIT_TIMEOUT,
     )
     if not ok("POST /semantic_tree/tree_edit", r):
         return False
@@ -261,7 +263,8 @@ def test_search_no_index():
 
 
 def main():
-    print(f"CodeNav API tests — BASE_URL={BASE_URL} TEST_PATH={TEST_PATH}\n")
+    fast_only = os.environ.get("CODENAV_FAST_TESTS", "").strip() in ("1", "true", "yes")
+    print(f"CodeNav API tests — BASE_URL={BASE_URL} TEST_PATH={TEST_PATH}" + (" [fast only]" if fast_only else "") + "\n")
     try:
         requests.get(f"{BASE_URL}/health", timeout=3)
     except requests.RequestException as e:
@@ -277,12 +280,17 @@ def main():
         test_tree_no_state,
         test_tree_edit,
         test_tree_edit_missing_body,
-        test_analyze,
-        test_sync,
+    ]
+    if not fast_only:
+        tests.extend([
+            test_analyze,
+            test_sync,
+        ])
+    tests.extend([
         test_apply_tree_edit_no_state,
         test_apply_no_state,
         test_search_no_index,
-    ]
+    ])
     passed = 0
     for t in tests:
         try:

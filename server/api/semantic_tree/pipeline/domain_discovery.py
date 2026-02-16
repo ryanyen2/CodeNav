@@ -42,8 +42,21 @@ def run_domain_discovery(
     response = complete(prompt=prompt, provider=provider, model=model)
     data = parse_solution_json(response)
 
+    raw_names: List[str] = []
     if isinstance(data, list):
-        return [FunctionalArea(name=str(x).strip()) for x in data]
-    if isinstance(data, dict):
-        return [FunctionalArea(name=str(k).strip()) for k in data]
-    raise ValueError(f"Unexpected domain_discovery response type: {type(data)}")
+        raw_names = [str(x).strip() for x in data]
+    elif isinstance(data, dict):
+        raw_names = [str(k).strip() for k in data]
+    else:
+        raise ValueError(f"Unexpected domain_discovery response type: {type(data)}")
+
+    # Normalize: lowercase, strip, collapse whitespace; dedup (keep first occurrence)
+    seen: set[str] = set()
+    result: List[FunctionalArea] = []
+    for n in raw_names:
+        normalized = " ".join(n.lower().split()).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(FunctionalArea(name=normalized))
+    return result

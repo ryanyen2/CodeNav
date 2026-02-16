@@ -179,9 +179,17 @@ class ApplyRequest(BaseModel):
     """Request to apply tree edit with LLM code generation and file modification."""
     path: str = Field(..., description="Codebase path; base tree and state loaded from here")
     edited_tree_md: str = Field(..., description="User-edited tree markdown")
+    base_tree_md: Optional[str] = Field(
+        None,
+        description="Tree markdown *before* this edit. When provided, diff is base_tree_md vs edited_tree_md so only actual user edits produce operations. When omitted, server uses state.last_tree_md (backend tree); if that differs in phrasing from the user's doc, every node can be reported as changed.",
+    )
     dry_run: bool = Field(False, description="If true, return planned changes without writing files or updating state")
     provider: str = Field("openai", description="LLM provider for code generation")
     model: Optional[str] = Field(None, description="LLM model (default from provider)")
+    diff_format: Literal["line_replace", "unified_diff", "search_replace"] = Field(
+        "line_replace",
+        description="Include unified_diff and/or search_replace_blocks in response when set",
+    )
 
 
 class PlannedChangeItem(BaseModel):
@@ -203,3 +211,5 @@ class ApplyResponse(BaseModel):
     error: Optional[str] = None
     completion_mode: Optional[Literal["best_effort"]] = Field(None, description="Present when underspecified operations were completed best-effort")
     generated_artifact_count: Optional[int] = Field(None, description="Count of generated/surfaced artifacts from best-effort completion")
+    unified_diff: Optional[str] = Field(None, description="Unified diff of all planned/applied changes (for diff view)")
+    search_replace_blocks: Optional[List[dict]] = Field(None, description="Search/replace blocks per file when diff_format requested")

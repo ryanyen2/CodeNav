@@ -107,6 +107,7 @@ def run_semantic_parsing_rag_incremental(
             continue
         for e in entities:
             covered.add(_entity_key(e))
+        current_area_keys = {_entity_key(e) for e in entities}
         file_slices = _entities_to_file_slices(entities)
         context = "\n\n".join(_format_file_context(fs) for fs in file_slices)
         prompt = format_prompt(template, repo_name=repo_name, repo_info=repo_info)
@@ -119,16 +120,17 @@ def run_semantic_parsing_rag_incremental(
         for entity_name, features in data.items():
             name = entity_name.strip()
             feat_list = [str(f) for f in features] if isinstance(features, list) else []
-            for ek, ent in entity_by_key.items():
-                if ent.name == name:
-                    feature_by_entity_key[ek] = SemanticFeature(entity_name=ent.name, features=feat_list)
-                    ch, _ = compute_entity_fingerprint(ent)
-                    new_cache[ch] = SemanticCacheEntry(content_hash=ch, entity_name=ent.name, features=feat_list)
+            for ek in current_area_keys:
+                if entity_by_key[ek].name == name:
+                    feature_by_entity_key[ek] = SemanticFeature(entity_name=entity_by_key[ek].name, features=feat_list)
+                    ch, _ = compute_entity_fingerprint(entity_by_key[ek])
+                    new_cache[ch] = SemanticCacheEntry(content_hash=ch, entity_name=entity_by_key[ek].name, features=feat_list)
                     break
 
     remaining_targets = [e for e in target_entities if _entity_key(e) not in covered]
     if remaining_targets:
         batch = remaining_targets[:REMAINING_BATCH]
+        batch_keys = {_entity_key(e) for e in batch}
         file_slices = _entities_to_file_slices(batch)
         context = "\n\n".join(_format_file_context(fs) for fs in file_slices)
         prompt = format_prompt(template, repo_name=repo_name, repo_info=repo_info)
@@ -139,16 +141,18 @@ def run_semantic_parsing_rag_incremental(
             for entity_name, features in data.items():
                 name = entity_name.strip()
                 feat_list = [str(f) for f in features] if isinstance(features, list) else []
-                for ek, ent in entity_by_key.items():
-                    if ent.name == name:
-                        feature_by_entity_key[ek] = SemanticFeature(entity_name=ent.name, features=feat_list)
-                        ch, _ = compute_entity_fingerprint(ent)
-                        new_cache[ch] = SemanticCacheEntry(content_hash=ch, entity_name=ent.name, features=feat_list)
+                for ek in batch_keys:
+                    if entity_by_key[ek].name == name and ek not in feature_by_entity_key:
+                        feature_by_entity_key[ek] = SemanticFeature(entity_name=entity_by_key[ek].name, features=feat_list)
+                        ch, _ = compute_entity_fingerprint(entity_by_key[ek])
+                        new_cache[ch] = SemanticCacheEntry(content_hash=ch, entity_name=entity_by_key[ek].name, features=feat_list)
                         break
         else:
             for e in batch:
-                feature_by_entity_key[_entity_key(e)] = SemanticFeature(
-                    entity_name=e.name, features=[e.name.replace("_", " ")]
-                )
+                ek = _entity_key(e)
+                if ek not in feature_by_entity_key:
+                    feature_by_entity_key[ek] = SemanticFeature(
+                        entity_name=e.name, features=[e.name.replace("_", " ")]
+                    )
 
     return list(feature_by_entity_key.values()), new_cache

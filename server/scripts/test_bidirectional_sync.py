@@ -73,12 +73,11 @@ def apply_tree_edit(path: str, edited_md: str) -> dict:
     return r.json()
 
 
-def apply(path: str, edited_md: str, dry_run: bool = False) -> dict:
-    r = requests.post(
-        APPLY_URL,
-        json={"path": path, "edited_tree_md": edited_md, "dry_run": dry_run},
-        timeout=TIMEOUT,
-    )
+def apply(path: str, edited_md: str, dry_run: bool = False, base_tree_md: str | None = None) -> dict:
+    body: dict = {"path": path, "edited_tree_md": edited_md, "dry_run": dry_run}
+    if base_tree_md is not None:
+        body["base_tree_md"] = base_tree_md
+    r = requests.post(APPLY_URL, json=body, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
@@ -118,8 +117,8 @@ def main() -> int:
         for i, op in enumerate(ops):
             print(f"     op[{i}] {op.get('op')} target={op.get('target', '')[:50]}")
 
-    print("4. Apply dry_run...")
-    dry = apply(PATH, edited_md, dry_run=True)
+    print("4. Apply dry_run (with base_tree_md so only our one edit produces ops)...")
+    dry = apply(PATH, edited_md, dry_run=True, base_tree_md=base_md)
     assert dry.get("applied") is False, "dry_run should not apply"
     planned = dry.get("planned_changes", [])
     print(f"   planned_changes count: {len(planned)}")

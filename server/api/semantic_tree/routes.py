@@ -43,9 +43,11 @@ from api.semantic_tree.pipeline.domain_discovery import run_domain_discovery
 from api.semantic_tree.pipeline.semantic_parsing import run_semantic_parsing_rag
 from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchical_construction
 from api.semantic_tree.pipeline.tree_assembly import assemble_tree
+from api.semantic_tree.pipeline.tree_validation import validate_tree
 from api.semantic_tree.pipeline.incremental_forward import incremental_forward
 from api.semantic_tree.pipeline.incremental_inverse import apply_inverse_and_update_state
 from api.semantic_tree.pipeline.code_applicator import CodeChange
+from api.semantic_tree.pipeline.diff_format import changes_to_unified_diff_for_files
 from api.semantic_tree.output.tree_serializer import tree_to_markdown, tree_to_json
 from api.semantic_tree.logging import PipelineLogger, log_tree_edit, log_apply_tree_edit
 from api.semantic_tree.observation_report import (
@@ -230,6 +232,8 @@ async def analyze(request: AnalyzeRequest):
 
     with pipeline_log.stage("tree_assembly"):
         tree = assemble_tree(snapshot, features, hierarchy, include_deps=True)
+        for w in validate_tree(tree, snapshot):
+            logger.warning("[CODENAV] tree validation: %s", w)
     pipeline_log.summary()
 
     tree_md = tree_to_markdown(tree)
@@ -556,12 +560,17 @@ async def apply_tree_edit(request: ApplyTreeEditRequest):
     return ApplyTreeEditResponse(operations=items, applied=True, tree_version=new_tree_version)
 
 
+# When diff is done against state (no base_tree_md), refuse if too many EditFeature ops
+# to avoid "edit every file" when backend tree phrasing differs from user's .codoc
+_MAX_EDIT_FEATURE_OPS_WITHOUT_BASE = 2
+
 @router.post("/apply", response_model=ApplyResponse)
 async def apply(request: ApplyRequest):
     """
     Apply tree edit with LLM code generation (inverse sync). Computes operations from
-    base tree (state) vs edited_tree_md, dispatches to code generation, applies to files,
-    runs post-check, and updates state. Use dry_run=true to get planned changes only.
+    base tree vs edited_tree_md. Prefer base_tree_md (tree before this edit) so the diff
+    reflects only the user's actual edits; otherwise state.last_tree_md is used and may
+    produce many operations if the user's doc phrasing differs from the backend tree.
     """
     if not request.path:
         raise HTTPException(status_code=400, detail="path is required.")
@@ -570,7 +579,7 @@ async def apply(request: ApplyRequest):
     if not allowed:
         raise HTTPException(status_code=400, detail=msg)
     root_dir = state.root_dir or request.path
-    base_md = state.last_tree_md
+    base_md = request.base_tree_md if request.base_tree_md else state.last_tree_md
 
     data = _tree_edit_targets_ts(base_md, request.edited_tree_md)
     if data.get("error"):
@@ -581,6 +590,20 @@ async def apply(request: ApplyRequest):
             error=data["error"],
         )
     items, raw_ops = _tree_edit_data_to_items(data)
+
+    # Safeguard: if client did not send base_tree_md and we got many EditFeature ops,
+    # we are likely diffing backend tree vs user doc (different phrasing → every node "changed")
+    if not request.base_tree_md and raw_ops:
+        edit_feature_count = sum(1 for op in raw_ops if (op.get("op") or "") == "EditFeature")
+        if edit_feature_count > _MAX_EDIT_FEATURE_OPS_WITHOUT_BASE:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Diff produced {edit_feature_count} EditFeature operations (max {_MAX_EDIT_FEATURE_OPS_WITHOUT_BASE} without base_tree_md). "
+                    "Send base_tree_md (the tree content before this edit) so only your actual edits are applied. "
+                    "Otherwise the server compares the backend tree to your doc and may treat every node as changed."
+                ),
+            )
 
     try:
         snapshot = _build_snapshot(root_dir)
@@ -617,6 +640,10 @@ async def apply(request: ApplyRequest):
     generated_artifact_count = sum(1 for i in items if getattr(i, "underspecified", False)) if any_underspec else None
     completion_mode = "best_effort" if any_underspec else None
 
+    unified_diff: Optional[str] = None
+    if changes and request.diff_format in ("unified_diff", "search_replace"):
+        unified_diff = changes_to_unified_diff_for_files(root_dir, changes, context_lines=3)
+
     apply_obs = build_apply_observations(
         modified, drift_report, items, completion_mode, generated_artifact_count
     )
@@ -631,6 +658,7 @@ async def apply(request: ApplyRequest):
         tree_version=new_state.tree_version if new_state else state.tree_version,
         completion_mode=completion_mode,
         generated_artifact_count=generated_artifact_count,
+        unified_diff=unified_diff,
     )
 
 

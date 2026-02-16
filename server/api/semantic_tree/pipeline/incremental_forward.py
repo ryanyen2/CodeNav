@@ -21,6 +21,7 @@ from api.semantic_tree.pipeline.domain_discovery import run_domain_discovery
 from api.semantic_tree.pipeline.semantic_parsing_incremental import run_semantic_parsing_rag_incremental
 from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchical_construction
 from api.semantic_tree.pipeline.tree_assembly import assemble_tree
+from api.semantic_tree.pipeline.tree_validation import validate_tree
 from api.semantic_tree.output.tree_serializer import tree_to_markdown
 from api.semantic_tree.logging import log_sync
 
@@ -77,6 +78,8 @@ def incremental_forward(
         group_to_entities = {f.fpath: [e.name for e in f.entities] for f in snapshot.files}
         hierarchy = run_hierarchical_construction(areas, group_to_entities, provider=provider, model=model)
         tree = assemble_tree(snapshot, features, hierarchy, include_deps=True)
+        for w in validate_tree(tree, snapshot):
+            logger.warning("[CODENAV] tree validation: %s", w)
         tree_md = tree_to_markdown(tree)
         from api.semantic_tree.state.models import SemanticCacheEntry
         cache_entries = {}
@@ -190,6 +193,8 @@ def incremental_forward(
     hierarchy = run_hierarchical_construction(areas, group_to_entities, provider=provider, model=model)
 
     tree = assemble_tree(snapshot, features, hierarchy, include_deps=True)
+    for w in validate_tree(tree, snapshot):
+        logger.warning("[CODENAV] tree validation: %s", w)
     tree_md = tree_to_markdown(tree)
 
     new_state = SyncState(
