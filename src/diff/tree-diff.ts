@@ -7,6 +7,7 @@ import type {
   SemanticNode,
   SemanticTree,
   NodePath,
+  Contract,
   OperationType,
   Operation,
   TreeDiffResult,
@@ -136,6 +137,9 @@ export function diffTrees(
   }
 
   // 3) EditFeature / EditContract: same path (or same id), content changed
+  const newByNode = new Map<SemanticNode, string>();
+  for (const [p, n] of newByPath) newByNode.set(n, p);
+
   for (const [path, newNode] of newByPath) {
     const id = stableId(newNode, path);
     const oldEntry = oldById.get(id);
@@ -150,10 +154,20 @@ export function diffTrees(
       }
     }
     if (!contractEqual(oldNode.contract as Record<string, string>, newNode.contract as Record<string, string>)) {
-      results.push({
-        operation: 'EditContract',
-        details: { contractEdited: newNode, oldContract: oldNode.contract, newContract: newNode.contract },
+      const ancestorHasSameContractChange = results.some((r) => {
+        if (r.operation !== 'EditContract') return false;
+        const d = r.details as { contractEdited: SemanticNode; newContract: Contract };
+        const ancestorPath = newByNode.get(d.contractEdited);
+        if (!ancestorPath || ancestorPath === path) return false;
+        if (!path.startsWith(ancestorPath + '/')) return false;
+        return contractEqual(d.newContract as Record<string, string>, newNode.contract as Record<string, string>);
       });
+      if (!ancestorHasSameContractChange) {
+        results.push({
+          operation: 'EditContract',
+          details: { contractEdited: newNode, oldContract: oldNode.contract, newContract: newNode.contract },
+        });
+      }
     }
   }
 

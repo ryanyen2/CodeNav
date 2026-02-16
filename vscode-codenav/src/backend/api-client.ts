@@ -4,6 +4,7 @@
 
 import type { CodocMetaJson } from 'codenav-semantic-tree/extension-api';
 
+
 const defaultBase = 'http://localhost:8001';
 
 export interface AnalyzeResult {

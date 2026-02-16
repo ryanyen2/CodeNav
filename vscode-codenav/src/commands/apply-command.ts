@@ -14,17 +14,23 @@ export function registerApplyCommand(
   context: vscode.ExtensionContext,
   backend: BackendManager
 ): void {
-  // Store .codoc content as "base" on open and save so Apply diffs base vs current (only actual edits)
+  // Store normalized tree markdown as base only on open (and after Apply success). Do NOT update base on save,
+  // or base would become the current doc and the next Apply would see base === edited → 0 ops.
   function storeBaseIfCodoc(doc: vscode.TextDocument): void {
     if (!doc.uri.fsPath.endsWith('.codoc')) return;
     const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
     if (!folder) return;
-    context.globalState.update(baseTreeKey(folder.uri.fsPath), doc.getText());
+    try {
+      const tree = parseTreeBlock(doc.getText());
+      const meta = readMeta(doc.uri);
+      if (meta) enrichTreeFromMeta(tree, meta);
+      const normalized = treeToMarkdown(tree);
+      context.globalState.update(baseTreeKey(folder.uri.fsPath), normalized);
+    } catch {
+      context.globalState.update(baseTreeKey(folder.uri.fsPath), doc.getText());
+    }
   }
-  context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(storeBaseIfCodoc),
-    vscode.workspace.onDidSaveTextDocument(storeBaseIfCodoc)
-  );
+  context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(storeBaseIfCodoc));
 
   context.subscriptions.push(
     vscode.commands.registerCommand('codenav.apply', async () => {

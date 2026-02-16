@@ -70,6 +70,16 @@ export function parseTreeLine(line: string): { depth: number; sigil: Sigil; feat
   feature = feature.trim();
   tail = tail.slice(i).trimStart();
 
+  // For leaves ($/^), if feature ends with " (name)" and we don't have entity from tail, extract so stableId = fpath::name
+  if ((sigil === '$' || sigil === '^') && !metadata.entity_name) {
+    const endEntity = feature.match(/^(.+?)\s+\(([^)]+)\)$/);
+    if (endEntity) {
+      feature = endEntity[1].trim();
+      metadata.entity_name = endEntity[2].trim();
+      if (metadata.type !== 'directory') metadata.type = 'function';
+    }
+  }
+
   // Grounding [path]
   const pathMatch = tail.match(/^\[([^\]]+)\]\s*/);
   if (pathMatch) {

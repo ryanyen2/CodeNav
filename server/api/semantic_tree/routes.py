@@ -582,6 +582,7 @@ async def apply(request: ApplyRequest):
     base_md = request.base_tree_md if request.base_tree_md else state.last_tree_md
 
     data = _tree_edit_targets_ts(base_md, request.edited_tree_md)
+
     if data.get("error"):
         return ApplyResponse(
             operations=[],
@@ -590,7 +591,16 @@ async def apply(request: ApplyRequest):
             error=data["error"],
         )
     items, raw_ops = _tree_edit_data_to_items(data)
-
+    op_counts: dict[str, int] = {}
+    for op in raw_ops:
+        k = op.get("op") or "unknown"
+        op_counts[k] = op_counts.get(k, 0) + 1
+    logger.info(
+        "[CODENAV] tree_edit produced %s ops: %s; first target=%s",
+        len(raw_ops),
+        op_counts,
+        (raw_ops[0].get("target") if raw_ops else "")[:80],
+    )
     # Safeguard: if client did not send base_tree_md and we got many EditFeature ops,
     # we are likely diffing backend tree vs user doc (different phrasing → every node "changed")
     if not request.base_tree_md and raw_ops:
