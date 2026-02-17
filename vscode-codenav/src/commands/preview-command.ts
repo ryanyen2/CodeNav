@@ -4,6 +4,12 @@ import type { BackendManager } from '../backend/backend-manager';
 import { readMeta } from '../format/meta-store';
 import { enrichTreeFromMeta } from '../format/clean-parser';
 
+const BASE_TREE_KEY = 'codenav:baseTree';
+
+function baseTreeKey(folderFsPath: string): string {
+  return `${BASE_TREE_KEY}:${folderFsPath}`;
+}
+
 export function registerPreviewCommand(
   context: vscode.ExtensionContext,
   backend: BackendManager
@@ -35,7 +41,11 @@ export function registerPreviewCommand(
       if (meta) enrichTreeFromMeta(tree, meta);
       const fullMd = treeToMarkdown(tree);
 
-      const result = await backend.api.apply(folder.uri.fsPath, fullMd, true);
+      const storedBase = context.globalState.get<string>(baseTreeKey(folder.uri.fsPath));
+      const result = await backend.api.apply(folder.uri.fsPath, fullMd, true, {
+        diffFormat: 'unified_diff',
+        baseTreeMd: storedBase ?? undefined,
+      });
       if (result.error) {
         vscode.window.showErrorMessage(`Preview failed: ${result.error}`);
         return;
@@ -48,7 +58,7 @@ export function registerPreviewCommand(
       const content = changes
         .map(
           c =>
-            `**${c.fpath}** (${c.line_start}-${c.line_end}):\n\`\`\`\n${c.new_content}\n\`\`\``
+            `**${c.fpath}** (${c.line_start}-${c.line_end ?? '?'}):\n\`\`\`\n${c.new_content}\n\`\`\``
         )
         .join('\n\n');
       const md = await vscode.workspace.openTextDocument({

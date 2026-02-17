@@ -72,21 +72,30 @@ Markdown tree notation → parseTreeBlock() → SemanticTree
 
 ### Backend (Python — `server/api/`)
 
-The backend builds semantic trees from a live codebase. It uses `api.config` (e.g. `get_model_config(provider, model)`, `get_embedder_type`), and `api.tools.embedder` (adalflow) for embeddings.
+The backend builds semantic trees from a live codebase. **Embeddings**: CocoIndex (SentenceTransformer `all-MiniLM-L6-v2`) + PostgreSQL/pgvector; no external embedder. **LLM**: `api.config.get_model_config(provider, model)` for completion.
 
 - **`server/api/semantic_tree/`** — Integrated pipeline and routes:
   - **`models.py`** — Domain models aligned with `src/types.ts` (CodeEntity, FileInfo, CodebaseSnapshot, tree nodes, etc.).
-  - **`schemas.py`** — Request/response Pydantic models (AnalyzeRequest, SyncRequest, TreeEditRequest, InterventionResponse, etc.).
+  - **`schemas.py`** — Request/response Pydantic models (AnalyzeRequest, SyncRequest, TreeEditRequest, ApplyRequest/ApplyResponse, InterventionResponse, etc.).
   - **`extraction/`** — Discovery (directory walk), Python AST extraction, import edges.
-  - **`indexing/`** — Entity-level chunking and FAISS vector store (embedder from `api.tools.embedder`); used as RAG inside analyze.
-  - **`llm/`** — Prompt loader (repo-root `prompts/`), `<solution>` parsing, completion via `api.config.get_model_config(provider, model)`.
-  - **`pipeline/`** — Domain discovery, semantic parsing (RAG), hierarchical construction, tree assembly; **incremental_forward** (uses **semantic_parsing_incremental**) for code→tree with delta and cached semantic/index.
-  - **`state/`** — Sync state: delta, persistence, fingerprint; used by `/sync` and `/apply_tree_edit`.
+  - **`indexing/`** — Entity-level chunking; **CocoIndex** (cocoindex_store) for embeddings and RAG; scope_id = index_path (e.g. path/.codenav/index).
+  - **`llm/`** — Prompt loader (`server/prompts/*.txt`), `<solution>` parsing, completion via api.config.
+  - **`pipeline/`** — **Forward**: domain_discovery → semantic_parsing (RAG) → hierarchical_construction → tree_assembly; **incremental_forward** reuses cache/delta; **inverse**: code_dispatch (AddNode/EditFeature/DeleteNode) → code_applicator → post_check; **diff_format** for unified diff / search-replace.
+  - **`state/`** — Sync state (fingerprints, semantic cache, last_tree_md, direction); **sync_guard** prevents forward after inverse when code unchanged (loop prevention); delta, persistence, fingerprint.
   - **`output/tree_serializer.py`** — Tree → markdown (parseable by `parseTreeBlock()`) or JSON.
-  - **`routes.py`** — FastAPI router (prefix `/semantic_tree`): `POST /sync`, `POST /apply_tree_edit`, `POST /analyze`, `GET /tree?path=`, `POST /tree_edit`, `POST /search`, `GET /status`. `POST /tree_edit` invokes TS `src/cli/tree-edit-targets.ts` for operations and code targets. On step failure, returns **422** with `intervention_required`.
-  - **`logging.py`** — Pipeline stage logger and one-line `[CODENAV]` logs (SYNC mode/delta/index/semantic, TREE_EDIT ops/targets, APPLY_TREE_EDIT).
+  - **`routes.py`** — FastAPI router (prefix `/semantic_tree`): `POST /sync`, `POST /apply_tree_edit`, `POST /apply`, `POST /analyze`, `GET /tree?path=`, `POST /tree_edit`, `POST /search`, `GET /status`. Tree edit and merge invoke TS `src/cli/tree-edit-targets.ts` and `merge-trees.ts`. On step failure, returns **422** with `intervention_required`.
+  - **`logging.py`** — Pipeline stage logger and one-line `[CODENAV]` logs.
+  - **`observation_report.py`** — Build/log apply and merge observations (over_generation, surfaced_added).
 
-Output markdown from the backend is designed to be consumed by TS `parseTreeBlock()` and matches the format in `test_cases.md` (sigils, path grounding, entity names, `deps:` block).
+**Forward pipeline (code → tree):** Extract → index (CocoIndex+pgvector) → domain_discovery (1 LLM, `domain_discovery.txt`) → semantic_parsing RAG (per-area search + `semantic_parsing.txt`) → hierarchical_construction (1 LLM, `hierarchical_construction.txt`) → tree_assembly → markdown/JSON. Incremental: entity delta; only added/modified re-embedded and re-parsed.
+
+**Inverse pipeline (tree → code):** Tree edit (TS) → operations → code_dispatch (LLM for AddNode/EditFeature; inline prompts) → code_applicator → post_check → state update + re-fingerprint.
+
+**Loop prevention:** After inverse, forward is allowed only if entity delta is non-empty (`can_run_forward`); otherwise 409. Inverse always allowed when state has tree.
+
+**Codoc / tree schema:** `.codoc` = semantic tree markdown. Format: nested list, sigils (`/`, `%`, `$`, `^`, `~`), `[path]`, `(entity)`, optional `{contract}`, `deps:` with `(a) --rel--> (b)`. Matches `test_cases.md` and TS `parseTreeBlock()`.
+
+**Prompts (server/prompts/):** `domain_discovery.txt` (functional areas), `semantic_parsing.txt` (per-entity features), `hierarchical_construction.txt` (path → entity groups). Code gen uses inline prompts in `code_dispatch.py`.
 
 ### Fixtures and Sample Data
 
@@ -99,4 +108,4 @@ Output markdown from the backend is designed to be consumed by TS `parseTreeBloc
 
 - **`prescriptive-semantic-tree-plan.md`** — Algorithm design: node schema, invariants, operation taxonomy.
 - **`test_cases.md`** — Test spec: tree notation, operation syntax, codebase snapshot format.
-- **`prompts/`** — LLM prompts at repo root (e.g. `domain_discovery.txt`, `semantic_parsing.txt`, `hierarchical_construction.txt`); loaded by `server/api/semantic_tree/llm/prompt_loader.py` (uses `CODENAV_PROMPTS_DIR` or walks up from package to find `prompts/`).
+- **`server/prompts/`** — LLM prompts: `domain_discovery.txt`, `semantic_parsing.txt`, `hierarchical_construction.txt`; loaded by `server/api/semantic_tree/llm/prompt_loader.py` (uses `CODENAV_PROMPTS_DIR` or walks up to find `prompts/`).

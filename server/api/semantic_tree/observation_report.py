@@ -6,7 +6,6 @@ sync response (merge_summary). Logs observations for tests and debugging.
 """
 
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -66,22 +65,6 @@ def build_apply_observations(
     return observations
 
 
-def build_merge_observations(merge_summary: Optional[Any]) -> Dict[str, Any]:
-    """Interpret merge_summary from forward sync: surfaced (mergeable) vs overwritten (code wins)."""
-    if not merge_summary:
-        return {}
-    ms = merge_summary.model_dump() if hasattr(merge_summary, "model_dump") else merge_summary
-    return {
-        "surfaced_added": ms.get("surfaced_added", 0),
-        "overwritten_grounded_nodes": ms.get("overwritten_grounded_nodes", 0),
-        "preserved_user_nodes": ms.get("preserved_user_nodes", 0),
-        "drifted_nodes": ms.get("drifted_nodes", 0),
-        "interpretation": (
-            "mergeable" if ms.get("surfaced_added") else "no_new_surfaced"
-        ),
-    }
-
-
 def log_observations(
     step: str,
     apply_obs: Optional[Dict[str, Any]] = None,
@@ -103,43 +86,3 @@ def log_observations(
         )
 
 
-def format_report_section(title: str, data: Dict[str, Any]) -> str:
-    """Format a section for the markdown report."""
-    lines = [f"## {title}", ""]
-    for k, v in data.items():
-        if isinstance(v, (list, dict)) and v:
-            lines.append(f"- **{k}**: {v}")
-        elif v is not None:
-            lines.append(f"- **{k}**: {v}")
-    return "\n".join(lines) + "\n"
-
-
-def write_observation_report(
-    path: str,
-    steps: List[Dict[str, Any]],
-    apply_observations: Optional[Dict[str, Any]] = None,
-    merge_observations: Optional[Dict[str, Any]] = None,
-) -> None:
-    """
-    Write a markdown report of semantic tree changes and observations.
-    steps: list of { "name": str, "tree_md_snippet": str or None, "response_summary": dict }
-    """
-    report = ["# Semantic Tree Observation Report", ""]
-    report.append("## Steps")
-    for s in steps:
-        report.append(f"### {s.get('name', 'Step')}")
-        if s.get("tree_md_snippet"):
-            report.append("```")
-            report.append(s["tree_md_snippet"][:2000] + ("..." if len(s.get("tree_md_snippet", "")) > 2000 else ""))
-            report.append("```")
-        if s.get("response_summary"):
-            for k, v in s["response_summary"].items():
-                report.append(f"- {k}: {v}")
-        report.append("")
-    if apply_observations:
-        report.append(format_report_section("Apply observations (code-gen vs tree)", apply_observations))
-    if merge_observations:
-        report.append(format_report_section("Merge observations (forward after apply)", merge_observations))
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text("\n".join(report), encoding="utf-8")
-    logger.info("Observation report written to %s", path)

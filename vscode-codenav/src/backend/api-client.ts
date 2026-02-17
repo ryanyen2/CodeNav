@@ -43,9 +43,14 @@ export interface ApplyResult {
   tree_version?: number;
   error?: string;
   modified_fpaths?: string[];
-  planned_changes?: Array<{ fpath: string; line_start: number; line_end: number; new_content: string }>;
+  planned_changes?: Array<{ fpath: string; line_start: number; line_end: number | null; new_content: string }>;
   /** Unified diff of planned/applied changes (for diff view) */
   unified_diff?: string;
+  /** Re-extracted entities per modified file (observational) */
+  drift_report?: unknown[];
+  completion_mode?: 'best_effort';
+  generated_artifact_count?: number;
+  search_replace_blocks?: unknown[];
 }
 
 export class ApiClient {

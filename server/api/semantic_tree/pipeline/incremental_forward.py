@@ -11,7 +11,7 @@ from api.semantic_tree.models import (
     SemanticFeature,
     HierarchyMapping,
 )
-from api.semantic_tree.state.models import SyncState, EntityFingerprint
+from api.semantic_tree.state.models import SyncState, EntityFingerprint, SemanticCacheEntry
 from api.semantic_tree.state.fingerprint import compute_entity_fingerprint, compute_file_fingerprint
 from api.semantic_tree.state.persistence import load_sync_state, save_sync_state
 from api.semantic_tree.state.delta import compute_entity_delta
@@ -86,7 +86,6 @@ def incremental_forward(
         for w in validate_tree(tree, snapshot):
             logger.warning("[CODENAV] tree validation: %s", w)
         tree_md = tree_to_markdown(tree)
-        from api.semantic_tree.state.models import SemanticCacheEntry
         cache_entries = {}
         for e in snapshot.all_entities:
             ch, _ = compute_entity_fingerprint(e)

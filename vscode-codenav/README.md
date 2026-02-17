@@ -27,7 +27,7 @@ If commands don’t appear or you see errors, open **Help → Toggle Developer T
 - **CodeNav: Analyze Codebase** — Create `.codoc` and `.codoc.meta.json` from the workspace
 - **CodeNav: Sync** — Code → tree (refresh after editing Python)
 - **CodeNav: Apply to Code** — Tree → code (apply edits)
-- **CodeNav: Preview** — Dry-run apply (show planned changes)
+- **CodeNav: Preview** — Dry-run apply (show planned changes; uses same base tree as Apply when .codoc was opened)
 - **CodeNav: Toggle Status** — Cycle status on the current line (context menu)
 
 ## Configuration
