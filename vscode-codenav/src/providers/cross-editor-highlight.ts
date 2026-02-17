@@ -23,23 +23,23 @@ export interface CodeLocationFromMeta {
 }
 
 /**
- * Resolve code location only from server-provided meta (no regex, no inferred ranges).
- * Key must match server: fpath::entity_name for concrete leaves, fpath for file nodes.
- * Returns null if meta has no line_range for this node (server is source of truth).
+ * Resolve code location from server-provided meta when available; otherwise fallback so
+ * we still open the file (tab open/switch works). Key matches server: fpath::entity_name or fpath.
  */
 function codeLocationFromMeta(
   info: { entityId: string | null; fpath: string | null },
   meta: { nodes: Record<string, { line_range?: [number, number] }> } | null
 ): CodeLocationFromMeta | null {
-  if (!info.fpath || !meta?.nodes) return null;
+  if (!info.fpath) return null;
   const nodeKey = info.entityId ?? info.fpath;
-  const entry = meta.nodes[nodeKey];
+  const entry = meta?.nodes?.[nodeKey];
   const lineRange = entry?.line_range;
-  if (!lineRange || lineRange.length < 2) return null;
+  const startLine = lineRange && lineRange.length >= 2 ? lineRange[0] : 1;
+  const endLine = lineRange && lineRange.length >= 2 ? lineRange[1] : 1;
   return {
     fpath: info.fpath,
-    startLine: lineRange[0],
-    endLine: lineRange[1],
+    startLine,
+    endLine,
   };
 }
 

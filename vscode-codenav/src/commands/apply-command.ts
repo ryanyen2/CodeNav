@@ -5,6 +5,7 @@ import { readMeta } from '../format/meta-store';
 import { enrichTreeFromMeta } from '../format/clean-parser';
 
 const BASE_TREE_KEY = 'codenav:baseTree';
+const OUTPUT_CHANNEL_NAME = 'CodeNav Apply';
 
 function baseTreeKey(folderFsPath: string): string {
   return `${BASE_TREE_KEY}:${folderFsPath}`;
@@ -79,11 +80,12 @@ export function registerApplyCommand(
           }
           context.globalState.update(baseTreeKey(folder.uri.fsPath), fullMd);
           if (result.unified_diff) {
-            const diffDoc = await vscode.workspace.openTextDocument({
-              content: result.unified_diff,
-              language: 'diff',
-            });
-            await vscode.window.showTextDocument(diffDoc, { viewColumn: vscode.ViewColumn.Beside });
+            const channel =
+              vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+            channel.clear();
+            channel.appendLine('--- Apply diff (unified) ---');
+            channel.append(result.unified_diff);
+            channel.show(true);
           }
           if (result.applied && result.modified_fpaths?.length) {
             vscode.window.showInformationMessage(`CodeNav: Applied to ${result.modified_fpaths.length} file(s).`);
