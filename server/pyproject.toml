@@ -17,6 +17,7 @@ dependencies = [
     "openai>=1.76.2",
     "ollama>=0.4.8",
     "aiohttp>=3.8.4",
+    "ipykernel>=7.2.0",
 ]
 
 [project.optional-dependencies]

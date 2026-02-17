@@ -40,9 +40,7 @@ def complete(
         input_str = prompt
 
     if LOG_PROMPTS:
-        logger.info("[CODENAV] LLM prompt (first 2000 chars):\n%s", (input_str or "")[:2000])
-        if len(input_str or "") > 2000:
-            logger.info("[CODENAV] ... prompt truncated (total %d chars)", len(input_str))
+        logger.info("\n\n===================[CODENAV] LLM prompt:\n%s", (input_str or ""))
 
     api_kwargs = client.convert_inputs_to_api_kwargs(
         input=input_str,
@@ -67,7 +65,5 @@ def complete(
             raise RuntimeError(f"LLM call failed: {response.error}")
         raise RuntimeError("LLM call returned no content")
     if LOG_PROMPTS:
-        logger.info("[CODENAV] LLM response (first 1500 chars):\n%s", text[:1500])
-        if len(text) > 1500:
-            logger.info("[CODENAV] ... response truncated (total %d chars)", len(text))
+        logger.info("\n\n===================[CODENAV] LLM response:\n%s", text)
     return text

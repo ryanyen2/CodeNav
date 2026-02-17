@@ -3,10 +3,19 @@
   "providers": {
     "openai": {
       "client_class": "OpenAIClient",
-      "default_model": "gpt-5-mini",
+      "default_model": "gpt-5.2",
       "supportsCustomModel": true,
       "models": {
-        "gpt-5-mini": { "temperature": 1 }
+        "gpt-5-mini": { 
+          "reasoning_effort": "minimal"
+        },
+        "gpt-5.2": { 
+          "response_format": {
+            "type": "text"
+          },
+          "verbosity": "low",
+          "reasoning_effort": "none"
+        }
       }
     },
     "ollama": {

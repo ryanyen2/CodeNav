@@ -156,10 +156,15 @@ def incremental_forward(
             old_state.hierarchy_cache,
             old_state.semantic_cache,
         )
-        if patch_result.needs_feature_update:
+        # Refresh feature text for new entities (no cache hit) and for modified entities (so codoc reflects current behavior)
+        entity_keys_to_refresh = list(patch_result.needs_feature_update) + [
+            nid for nid in patch_result.modified_nodes
+            if "::" in nid
+        ]  # only leaf nodes have fpath::entity_name
+        if entity_keys_to_refresh:
             by_id, _ = build_node_index(tree)
             updated_cache = update_features_for_new_entities(
-                patch_result.needs_feature_update,
+                entity_keys_to_refresh,
                 snapshot,
                 tree,
                 by_id,
@@ -191,7 +196,7 @@ def incremental_forward(
             "removed": len(patch_result.removed_nodes),
             "needs_feature_update": len(patch_result.needs_feature_update),
         }
-        log_sync("patch", len(snapshot.all_entities), delta_summary, "none", "targeted" if patch_result.needs_feature_update else "none")
+        log_sync("patch", len(snapshot.all_entities), delta_summary, "none", "targeted" if entity_keys_to_refresh else "none")
         return tree, new_state, {}, delta_summary, True, patch_summary
 
     # Full incremental rebuild path (embedding + RAG + hierarchy)

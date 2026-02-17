@@ -53,8 +53,8 @@ def update_features_for_new_entities(
     model: Optional[str] = None,
 ) -> Dict[str, SemanticCacheEntry]:
     """
-    Single LLM call for truly new entities (no semantic_cache hit). Uses file context only (no RAG/embedder).
-    Updates SemanticNode.feature in the tree and returns updated cache.
+    Single LLM call to refresh feature text for new or modified entities. Uses file context only (no RAG/embedder).
+    Updates SemanticNode.feature in the tree and returns updated cache. Keeps codoc in sync with current code behavior.
     """
     entity_by_key = {_entity_key(e): e for e in snapshot.all_entities}
     entities = [entity_by_key[k] for k in new_entity_keys if k in entity_by_key]
@@ -66,7 +66,7 @@ def update_features_for_new_entities(
     file_slices = _entities_to_file_slices(entities)
     context = "\n\n".join(_format_file_context(fs) for fs in file_slices)
     prompt = format_prompt(template, repo_name=repo_name, repo_info="")
-    prompt += "\n\n### New entities (describe purpose in one short phrase)\n" + context
+    prompt += "\n\n### Entities to describe (new or modified; give one short purpose phrase per entity)\n" + context
 
     try:
         response = complete(prompt=prompt, provider=provider, model=model)
