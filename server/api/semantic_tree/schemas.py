@@ -118,6 +118,8 @@ class SyncResponse(BaseModel):
     delta_summary: Optional[DeltaSummary] = None
     timing: Optional[dict] = None
     merge_summary: Optional[MergeSummary] = Field(None, description="Present when forward merge was applied (prior tree + re-encode)")
+    is_patch_based: bool = Field(False, description="True when patch path was used (no embedding/FAISS)")
+    patch_summary: Optional[dict] = Field(None, description="When is_patch_based: modified/added/removed/needs_feature_update counts")
 
 
 # --- Tree edit → target identification ---

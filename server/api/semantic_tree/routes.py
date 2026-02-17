@@ -344,7 +344,7 @@ async def sync(request: SyncRequest):
 
     try:
         with pipeline_log.stage("sync", is_incremental=old_state is not None):
-            tree, new_state, timing, delta_summary = incremental_forward(
+            tree, new_state, timing, delta_summary, is_patch_based, patch_summary = incremental_forward(
                 snapshot,
                 index_path,
                 old_state,
@@ -366,11 +366,12 @@ async def sync(request: SyncRequest):
     # When delta was empty, tree is None; use persisted last_tree_md (e.g. from apply_tree_edit)
     tree_md_out = new_state.last_tree_md if tree is None else tree_to_markdown(tree)
     merge_summary_out = None
-    # Forward merge: prior tree + re-encoded tree (code wins grounded, user wins underspec)
+    # Forward merge only for full-rebuild path (not patch); patch path already has merged tree
     if (
         tree is not None
         and old_state is not None
         and old_state.last_tree_md
+        and not is_patch_based
     ):
         merge_data = _merge_trees_ts(old_state.last_tree_md, tree_to_markdown(tree))
         if not merge_data.get("error") and merge_data.get("merged_md"):
@@ -401,6 +402,8 @@ async def sync(request: SyncRequest):
             delta_summary=ds,
             timing=timing or None,
             merge_summary=merge_summary_out,
+            is_patch_based=is_patch_based,
+            patch_summary=patch_summary,
         )
     return SyncResponse(
         tree_md=tree_md_out,
@@ -412,6 +415,8 @@ async def sync(request: SyncRequest):
         delta_summary=ds,
         timing=timing or None,
         merge_summary=merge_summary_out,
+        is_patch_based=is_patch_based,
+        patch_summary=patch_summary,
     )
 
 

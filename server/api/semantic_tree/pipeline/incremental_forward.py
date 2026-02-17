@@ -36,13 +36,14 @@ def incremental_forward(
     repo_name: str = "",
     provider: str = "openai",
     model: Optional[str] = None,
-) -> Tuple[Optional[SemanticTree], SyncState, dict, Optional[dict]]:
+) -> Tuple[Optional[SemanticTree], SyncState, dict, Optional[dict], bool, Optional[dict]]:
     """
     Run forward sync (code → tree). If old_state exists and matches root_dir, use
-    incremental path (delta, cached semantic, incremental index). Otherwise full pipeline.
+    incremental path (delta, cached semantic, incremental index) or patch path when possible.
     When delta is empty (no code change), skips LLM/index and returns (None, new_state, ...);
     caller should use new_state.last_tree_md as the tree output (avoids redundant pipeline).
-    Returns (tree or None, new_state, timing_dict, delta_summary or None).
+    Returns (tree or None, new_state, timing_dict, delta_summary or None, is_patch_based, patch_summary or None).
+    Patch path: no embeddings, no FAISS, no domain/hierarchy LLM; in-place tree patch only.
     """
     root_dir = snapshot.root_dir
     all_chunks = entity_chunks(snapshot)
@@ -103,7 +104,7 @@ def incremental_forward(
         )
         save_sync_state(new_state, root_dir)
         log_sync("full", len(snapshot.all_entities), None, "full", "full")
-        return tree, new_state, {}, None
+        return tree, new_state, {}, None, False, None
 
     # Incremental path
     delta = compute_entity_delta(old_state.entity_fingerprints, snapshot.all_entities)
@@ -137,8 +138,63 @@ def incremental_forward(
         )
         save_sync_state(new_state, root_dir)
         log_sync("incremental", len(snapshot.all_entities), delta_summary, "reuse", "reuse")
-        return None, new_state, {}, delta_summary
+        return None, new_state, {}, delta_summary, False, None
 
+    # Patch path: in-place tree update, no embeddings/FAISS/domain/hierarchy LLM
+    if old_state.last_tree_md and old_state.hierarchy_cache:
+        from api.semantic_tree.output.tree_parser import parse_tree_markdown
+        from api.semantic_tree.pipeline.tree_patcher import patch_tree, build_node_index
+        from api.semantic_tree.pipeline.targeted_semantic_update import update_features_for_new_entities
+
+        logger.info(
+            "[SYNC] patch path | delta added=%s removed=%s modified=%s renamed=%s (no index/embedding)",
+            len(delta.added), len(delta.removed), len(delta.modified), len(delta.renamed),
+        )
+        tree = parse_tree_markdown(old_state.last_tree_md)
+        patch_result = patch_tree(
+            tree, delta, snapshot,
+            old_state.hierarchy_cache,
+            old_state.semantic_cache,
+        )
+        if patch_result.needs_feature_update:
+            by_id, _ = build_node_index(tree)
+            updated_cache = update_features_for_new_entities(
+                patch_result.needs_feature_update,
+                snapshot,
+                tree,
+                by_id,
+                old_state.semantic_cache,
+                repo_name=repo_name,
+                provider=provider,
+                model=model,
+            )
+        else:
+            updated_cache = old_state.semantic_cache
+        tree_md = tree_to_markdown(tree)
+        new_state = SyncState(
+            entity_fingerprints=new_entity_fps,
+            file_fingerprints=new_file_fps,
+            semantic_cache=updated_cache,
+            domain_areas=old_state.domain_areas,
+            hierarchy_cache=old_state.hierarchy_cache,
+            tree_version=old_state.tree_version,
+            code_version=old_state.code_version + 1,
+            last_sync_direction="forward",
+            last_tree_md=tree_md,
+            root_dir=root_dir,
+            index_path=index_path,
+        )
+        save_sync_state(new_state, root_dir)
+        patch_summary = {
+            "modified": len(patch_result.modified_nodes),
+            "added": len(patch_result.added_nodes),
+            "removed": len(patch_result.removed_nodes),
+            "needs_feature_update": len(patch_result.needs_feature_update),
+        }
+        log_sync("patch", len(snapshot.all_entities), delta_summary, "none", "targeted" if patch_result.needs_feature_update else "none")
+        return tree, new_state, {}, delta_summary, True, patch_summary
+
+    # Full incremental rebuild path (embedding + RAG + hierarchy)
     logger.info(
         "[SYNC] incremental | delta added=%s removed=%s modified=%s unchanged=%s | index_only=%s entities (no full reindex)",
         len(delta.added),
@@ -216,4 +272,4 @@ def incremental_forward(
     log_sync("incremental", len(snapshot.all_entities), delta_summary, index_action, f"incremental({target_count})")
 
     timing = {}
-    return tree, new_state, timing, delta_summary
+    return tree, new_state, timing, delta_summary, False, None

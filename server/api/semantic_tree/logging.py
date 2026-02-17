@@ -55,6 +55,13 @@ def log_sync(mode: str, entities: int, delta: dict | None, index_action: str, se
             "[CODENAV] SYNC | mode=full | entities=%s | index=%s | semantic=%s",
             entities, index_action, semantic_action,
         )
+    elif mode == "patch":
+        d = delta or {}
+        codenav_log.info(
+            "[CODENAV] SYNC | mode=patch | delta +%s -%s ~%s | index=%s | semantic=%s (no embedding)",
+            d.get("added", 0), d.get("removed", 0), d.get("unchanged", 0),
+            index_action, semantic_action,
+        )
     else:
         d = delta or {}
         codenav_log.info(
