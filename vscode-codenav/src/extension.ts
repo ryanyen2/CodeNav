@@ -7,6 +7,7 @@ import { registerPreviewCommand } from './commands/preview-command';
 import { registerToggleStatusCommand } from './commands/toggle-status-command';
 import { BackendManager } from './backend/backend-manager';
 import { registerDecorationProvider } from './providers/decoration-provider';
+import { registerCrossEditorHighlight } from './providers/cross-editor-highlight';
 import { registerHoverProvider } from './providers/hover-provider';
 import { registerDefinitionProvider } from './providers/definition-provider';
 import { registerDocumentSymbolProvider } from './providers/document-symbol-provider';
@@ -26,6 +27,7 @@ export function activate(context: vscode.ExtensionContext): void {
     registerToggleStatusCommand(context, backend);
 
     registerDecorationProvider(context);
+    registerCrossEditorHighlight(context);
     registerHoverProvider(context);
     registerDefinitionProvider(context);
     registerDocumentSymbolProvider(context);
