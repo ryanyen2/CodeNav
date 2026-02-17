@@ -9,6 +9,7 @@ const defaultBase = 'http://localhost:8001';
 
 export interface AnalyzeResult {
   tree_md: string;
+  tree_json?: { root: { metadata?: { fpath?: string; entity_name?: string; line_range?: [number, number] }; children?: unknown[]; [key: string]: unknown } };
   root_dir: string;
   file_count: number;
   entity_count: number;
@@ -16,6 +17,7 @@ export interface AnalyzeResult {
 
 export interface SyncResult {
   tree_md: string;
+  tree_json?: { root: { metadata?: { fpath?: string; entity_name?: string; line_range?: [number, number] }; children?: unknown[]; [key: string]: unknown } };
   root_dir: string;
   file_count: number;
   entity_count: number;

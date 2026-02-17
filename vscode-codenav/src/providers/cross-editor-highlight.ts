@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { parseCodocDocument, getCodeLocationRef } from '../codoc-document/codoc-document';
+import { parseCodocDocument } from '../codoc-document/codoc-document';
 import { readMeta } from '../format/meta-store';
 
 const CODE_HIGHLIGHT_DECORATION = vscode.window.createTextEditorDecorationType({
@@ -13,8 +13,41 @@ function isCodocDoc(doc: vscode.TextDocument): boolean {
 }
 
 /**
- * When the user's caret is on a .codoc node that has a code location (fpath + optional line_range),
- * open that file in the split editor and show a lightweight highlight on the corresponding range.
+ * Code location from server-only data (.codoc.meta.json). No regex or inferred ranges.
+ * Node key must match server: fpath::entity_name for leaves, fpath for file nodes.
+ */
+export interface CodeLocationFromMeta {
+  fpath: string;
+  startLine: number;
+  endLine: number;
+}
+
+/**
+ * Resolve code location only from server-provided meta (no regex, no inferred ranges).
+ * Key must match server: fpath::entity_name for concrete leaves, fpath for file nodes.
+ * Returns null if meta has no line_range for this node (server is source of truth).
+ */
+function codeLocationFromMeta(
+  info: { entityId: string | null; fpath: string | null },
+  meta: { nodes: Record<string, { line_range?: [number, number] }> } | null
+): CodeLocationFromMeta | null {
+  if (!info.fpath || !meta?.nodes) return null;
+  const nodeKey = info.entityId ?? info.fpath;
+  const entry = meta.nodes[nodeKey];
+  const lineRange = entry?.line_range;
+  if (!lineRange || lineRange.length < 2) return null;
+  return {
+    fpath: info.fpath,
+    startLine: lineRange[0],
+    endLine: lineRange[1],
+  };
+}
+
+/**
+ * When the user's caret is on a .codoc node:
+ * - Use only server-provided line_range from .codoc.meta.json (no regex).
+ * - Reuse existing tab if file is open; else show in split with preserveFocus.
+ * - Highlight only the starting line of the corresponding section in the code file.
  */
 export function registerCrossEditorHighlight(context: vscode.ExtensionContext): void {
   let lastCodeEditor: vscode.TextEditor | undefined;
@@ -32,11 +65,25 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
     lastHighlightUri = null;
   }
 
+  function applyHighlightToEditor(
+    codeEditor: vscode.TextEditor,
+    loc: CodeLocationFromMeta
+  ): void {
+    const doc = codeEditor.document;
+    const line0 = Math.max(0, loc.startLine - 1);
+    if (line0 >= doc.lineCount) return;
+    const lineObj = doc.lineAt(line0);
+    const range = new vscode.Range(line0, 0, line0, Math.max(0, lineObj.text.length));
+    codeEditor.setDecorations(CODE_HIGHLIGHT_DECORATION, [{ range }]);
+  }
+
   function updateHighlight(codocEditor: vscode.TextEditor, lineIndex: number): void {
     const doc = codocEditor.document;
     if (!isCodocDoc(doc)) return;
 
-    const enabled = vscode.workspace.getConfiguration('codenav').get<boolean>('crossEditorHighlight', true);
+    const enabled = vscode.workspace
+      .getConfiguration('codenav')
+      .get<boolean>('crossEditorHighlight', true);
     if (!enabled) {
       clearCodeHighlight();
       return;
@@ -50,13 +97,8 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
     }
 
     const meta = readMeta(doc.uri);
-    const nodeKey =
-      info.entityId ?? (info.fpath ? info.fpath : null);
-    const metaEntry = nodeKey ? meta?.nodes[nodeKey] : undefined;
-    const lineRange = metaEntry?.line_range;
-
-    const ref = getCodeLocationRef(info, lineRange);
-    if (!ref) {
+    const loc = codeLocationFromMeta(info, meta);
+    if (!loc) {
       clearCodeHighlight();
       return;
     }
@@ -64,26 +106,13 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
     const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
     if (!folder) return;
 
-    const codeUri = vscode.Uri.joinPath(folder.uri, ref.fpath);
+    const codeUri = vscode.Uri.joinPath(folder.uri, loc.fpath);
     const uriStr = codeUri.toString();
-    const startLine = Math.max(0, ref.startLine - 1);
-    const endLine = Math.max(0, ref.endLine - 1);
 
-    const showInSplit = () => {
-      vscode.commands
-        .executeCommand('vscode.open', codeUri, vscode.ViewColumn.Beside)
-        .then(() => {
-          const codeEditor = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uriStr);
-          if (!codeEditor) return;
+    const existing = vscode.window.visibleTextEditors.find(
+      (e) => e.document.uri.toString() === uriStr
+    );
 
-          lastCodeEditor = codeEditor;
-          lastHighlightUri = uriStr;
-          const range = new vscode.Range(startLine, 0, endLine, 0);
-          codeEditor.setDecorations(CODE_HIGHLIGHT_DECORATION, [{ range }]);
-        });
-    };
-
-    const existing = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uriStr);
     if (lastCodeEditor && lastCodeEditor.document.uri.toString() !== uriStr) {
       try {
         lastCodeEditor.setDecorations(CODE_HIGHLIGHT_DECORATION, []);
@@ -91,14 +120,27 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
         /* editor may be closed */
       }
     }
+
     if (existing) {
       lastCodeEditor = existing;
       lastHighlightUri = uriStr;
-      const range = new vscode.Range(startLine, 0, endLine, 0);
-      existing.setDecorations(CODE_HIGHLIGHT_DECORATION, [{ range }]);
-    } else {
-      showInSplit();
+      applyHighlightToEditor(existing, loc);
+      return;
     }
+
+    vscode.workspace.openTextDocument(codeUri).then((codeDoc) => {
+      vscode.window
+        .showTextDocument(codeDoc, {
+          viewColumn: vscode.ViewColumn.Beside,
+          preserveFocus: true,
+          preview: false,
+        })
+        .then((codeEditor) => {
+          lastCodeEditor = codeEditor;
+          lastHighlightUri = uriStr;
+          applyHighlightToEditor(codeEditor, loc);
+        });
+    });
   }
 
   function onCodocCursorChange(editor: vscode.TextEditor | undefined): void {

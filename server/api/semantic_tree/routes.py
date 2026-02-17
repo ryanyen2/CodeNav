@@ -286,6 +286,7 @@ async def analyze(request: AnalyzeRequest):
         )
     return AnalyzeResponse(
         tree_md=tree_md,
+        tree_json=tree_to_json(tree),
         root_dir=snapshot.root_dir,
         file_count=len(snapshot.files),
         entity_count=len(snapshot.all_entities),
@@ -386,10 +387,8 @@ async def sync(request: SyncRequest):
                 )
 
     tree_json_out = None
-    if request.format == "json":
-        if tree is not None:
-            tree_json_out = tree_to_json(tree)
-        # When tree is None we don't have a SemanticTree in Python; client can parse tree_md if needed
+    if tree is not None:
+        tree_json_out = tree_to_json(tree)
 
     ds = DeltaSummary(**(delta_summary or {})) if delta_summary else None
     if request.format == "json":
@@ -405,6 +404,7 @@ async def sync(request: SyncRequest):
         )
     return SyncResponse(
         tree_md=tree_md_out,
+        tree_json=tree_json_out,
         root_dir=snapshot.root_dir,
         file_count=len(snapshot.files),
         entity_count=len(snapshot.all_entities),

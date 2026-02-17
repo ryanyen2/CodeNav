@@ -34,12 +34,13 @@ export interface DepLineInfo {
 export interface CodocDocumentSnapshot {
   lineInfos: LineInfo[];
   deps: DepEdge[];
-  /** Per-line dep info for deps block (so we can relate by line). */
   depsLines: DepLineInfo[];
-  /** entity id → line indices that define or reference this entity. */
   entityToLines: Map<string, number[]>;
-  /** Line index of "deps:" (tree body ends before this). */
   depsStartLine: number;
+  /** Tree path: line index → ancestor line indices (root to parent). */
+  lineToAncestors: Map<number, number[]>;
+  /** Tree path: line index → descendant line indices. */
+  lineToDescendants: Map<number, number[]>;
 }
 
 /**
@@ -113,12 +114,40 @@ export function parseCodocDocument(
     }
   }
 
+  const lineToAncestors = new Map<number, number[]>();
+  const lineToDescendants = new Map<number, number[]>();
+  for (let idx = 0; idx < lineInfos.length; idx++) {
+    const info = lineInfos[idx]!;
+    const depth = info.depth;
+    const ancestors: number[] = [];
+    for (let j = idx - 1; j >= 0; j--) {
+      const prev = lineInfos[j]!;
+      if (prev.depth === depth - 1) {
+        ancestors.push(prev.lineIndex);
+        const prevAncestors = lineToAncestors.get(prev.lineIndex) ?? [];
+        ancestors.push(...prevAncestors);
+        break;
+      }
+    }
+    lineToAncestors.set(info.lineIndex, ancestors);
+
+    const descendants: number[] = [];
+    for (let j = idx + 1; j < lineInfos.length; j++) {
+      const next = lineInfos[j]!;
+      if (next.depth <= depth) break;
+      descendants.push(next.lineIndex);
+    }
+    lineToDescendants.set(info.lineIndex, descendants);
+  }
+
   return {
     lineInfos,
     deps,
     depsLines,
     entityToLines,
     depsStartLine,
+    lineToAncestors,
+    lineToDescendants,
   };
 }
 
@@ -169,9 +198,10 @@ function normalizeDepEntity(
 }
 
 /**
- * Get line indices that are "related" to the given line by deps:
- * - If cursor is on a tree line: that line + any line (tree or deps) whose entity appears in a dep with the current entity.
- * - If cursor is on a deps line: that dep line + tree lines for those entities + other deps lines sharing those entities.
+ * Get line indices that should stay at full opacity (focus):
+ * 1) Tree path: the node, its ancestors, and its descendants (semantic hierarchy).
+ * 2) Dep-related: nodes connected by the dependency graph (imports/invokes/etc.).
+ * Combined = tree path ∪ dep-related. All other tree/deps lines are dimmed.
  */
 export function getRelatedLineIndices(
   snapshot: CodocDocumentSnapshot,
@@ -182,12 +212,24 @@ export function getRelatedLineIndices(
   const depLine = snapshot.depsLines.find((d) => d.lineIndex === lineIndex);
   const knownFpaths = new Set(snapshot.lineInfos.map((l) => l.fpath).filter(Boolean) as string[]);
 
-  let entityIdsInvolved = new Set<string>();
+  if (info) {
+    related.add(info.lineIndex);
+    const ancestors = snapshot.lineToAncestors.get(info.lineIndex) ?? [];
+    ancestors.forEach((i) => related.add(i));
+    const descendants = snapshot.lineToDescendants.get(info.lineIndex) ?? [];
+    descendants.forEach((i) => related.add(i));
+  }
 
+  let entityIdsInvolved = new Set<string>();
   if (depLine) {
     related.add(depLine.lineIndex);
     if (depLine.fromId) entityIdsInvolved.add(depLine.fromId);
     if (depLine.toId) entityIdsInvolved.add(depLine.toId);
+  } else if (info?.entityId) {
+    entityIdsInvolved.add(info.entityId);
+  }
+
+  if (entityIdsInvolved.size > 0) {
     let changed = true;
     while (changed) {
       changed = false;
@@ -214,35 +256,8 @@ export function getRelatedLineIndices(
         related.add(d.lineIndex);
       }
     }
-  } else if (info?.entityId) {
-    entityIdsInvolved.add(info.entityId);
-    for (const edge of snapshot.deps) {
-      const fromId = normalizeDepEntity(edge.from, knownFpaths);
-      const toId = normalizeDepEntity(edge.to, knownFpaths);
-      if (fromId && entityIdsInvolved.has(fromId) && toId) entityIdsInvolved.add(toId);
-      if (toId && entityIdsInvolved.has(toId) && fromId) entityIdsInvolved.add(fromId);
-    }
-    for (const eid of entityIdsInvolved) {
-      const indices = snapshot.entityToLines.get(eid);
-      if (indices) indices.forEach((i) => related.add(i));
-    }
-    for (const d of snapshot.depsLines) {
-      if (
-        (d.fromId && entityIdsInvolved.has(d.fromId)) ||
-        (d.toId && entityIdsInvolved.has(d.toId))
-      ) {
-        related.add(d.lineIndex);
-      }
-    }
-  } else {
-    snapshot.lineInfos.forEach((l) => related.add(l.lineIndex));
-    snapshot.depsLines.forEach((d) => related.add(d.lineIndex));
   }
 
-  if (related.size === 0) {
-    snapshot.lineInfos.forEach((l) => related.add(l.lineIndex));
-    snapshot.depsLines.forEach((d) => related.add(d.lineIndex));
-  }
   return related;
 }
 

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { parseTreeBlock, treeToCleanMarkdown } from 'codenav-semantic-tree/extension-api';
 import type { BackendManager } from '../backend/backend-manager';
-import { readMeta, writeMeta, metaFromTree } from '../format/meta-store';
+import { writeMeta, metaFromTree, metaFromTreeJson } from '../format/meta-store';
 
 export function registerAnalyzeCommand(
   context: vscode.ExtensionContext,
@@ -28,7 +28,10 @@ export function registerAnalyzeCommand(
             return;
           }
           const tree = parseTreeBlock(result.tree_md);
-          const meta = metaFromTree(tree);
+          const meta =
+            result.tree_json != null
+              ? metaFromTreeJson(result.tree_json)
+              : metaFromTree(tree);
           const cleanMd = treeToCleanMarkdown(tree);
           const name = folder.name || 'Project';
           const codocUri = vscode.Uri.joinPath(folder.uri, `${name}.codoc`);

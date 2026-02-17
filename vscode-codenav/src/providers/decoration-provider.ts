@@ -86,15 +86,15 @@ export function registerDecorationProvider(context: vscode.ExtensionContext): vo
     });
   }
 
-  const focusRelatedDecorationType = vscode.window.createTextEditorDecorationType({
-    backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
-    opacity: '1',
+  const currentLineDecorationType = vscode.window.createTextEditorDecorationType({
+    borderWidth: '0 0 0 3px',
+    borderColor: new vscode.ThemeColor('editorCursor.foreground'),
     isWholeLine: true,
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
   });
 
   const dimUnrelatedDecorationType = vscode.window.createTextEditorDecorationType({
-    opacity: '0.45',
+    opacity: '0.4',
     isWholeLine: true,
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
   });
@@ -102,7 +102,7 @@ export function registerDecorationProvider(context: vscode.ExtensionContext): vo
   for (const t of Object.values(sigilDecorationTypes)) context.subscriptions.push(t);
   for (const t of Object.values(iconDecorationTypes)) context.subscriptions.push(t);
   for (const t of Object.values(statusDecorationTypes)) context.subscriptions.push(t);
-  context.subscriptions.push(focusRelatedDecorationType, dimUnrelatedDecorationType);
+  context.subscriptions.push(currentLineDecorationType, dimUnrelatedDecorationType);
 
   function updateDecorations(editor: vscode.TextEditor, cursorLine?: number): void {
     if (!isCodocDoc(editor.document)) return;
@@ -166,11 +166,10 @@ export function registerDecorationProvider(context: vscode.ExtensionContext): vo
     const focusMode = vscode.workspace.getConfiguration('codenav').get<boolean>('focusMode', true);
     if (focusMode && cursorLine !== undefined && treeLineIndices.size > 0) {
       const related = getRelatedLineIndices(snapshot, cursorLine);
-      const focusRanges: vscode.DecorationOptions[] = [];
       const dimRanges: vscode.DecorationOptions[] = [];
+      const currentLineRanges: vscode.DecorationOptions[] = [];
       for (let i = 0; i < doc.lineCount; i++) {
         const line = doc.lineAt(i);
-        const range = new vscode.Range(i, 0, i, line.text.length);
         const isTreeLine = treeLineIndices.has(i);
         const isDepsLine =
           snapshot.depsStartLine >= 0 &&
@@ -178,13 +177,14 @@ export function registerDecorationProvider(context: vscode.ExtensionContext): vo
           line.text.trim().length > 0 &&
           line.text.trim() !== 'deps:';
         if (!isTreeLine && !isDepsLine) continue;
-        if (related.has(i)) focusRanges.push({ range });
-        else dimRanges.push({ range });
+        const range = new vscode.Range(i, 0, i, Math.max(1, line.text.length));
+        if (i === cursorLine) currentLineRanges.push({ range });
+        else if (!related.has(i)) dimRanges.push({ range });
       }
-      editor.setDecorations(focusRelatedDecorationType, focusRanges);
+      editor.setDecorations(currentLineDecorationType, currentLineRanges);
       editor.setDecorations(dimUnrelatedDecorationType, dimRanges);
     } else {
-      editor.setDecorations(focusRelatedDecorationType, []);
+      editor.setDecorations(currentLineDecorationType, []);
       editor.setDecorations(dimUnrelatedDecorationType, []);
     }
   }
