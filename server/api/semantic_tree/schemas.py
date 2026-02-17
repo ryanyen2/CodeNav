@@ -30,7 +30,7 @@ class AnalyzeRequest(BaseModel):
     format: str = Field("md", description="Output format: 'md' (markdown) or 'json'")
     excluded_dirs: Optional[List[str]] = None
     excluded_files: Optional[List[str]] = None
-    index_path: Optional[str] = Field(None, description="Where to save FAISS index (default: path/.codenav/index; when using files, a temp dir is used)")
+    index_path: Optional[str] = Field(None, description="Scope ID for Postgres index (default: path/.codenav/index or temp dir when using files)")
 
 
 class AnalyzeResponse(BaseModel):
@@ -45,7 +45,7 @@ class AnalyzeResponse(BaseModel):
 class SearchRequest(BaseModel):
     """Semantic search over indexed entities."""
     query: str = Field(..., description="Natural language or code query")
-    index_path: str = Field(..., description="Path to existing FAISS index directory")
+    index_path: str = Field(..., description="Scope ID of the index (e.g. root_dir or path/.codenav/index)")
     top_k: int = Field(10, ge=1, le=100)
 
 
@@ -96,7 +96,7 @@ class SyncRequest(BaseModel):
     )
     excluded_dirs: Optional[List[str]] = None
     excluded_files: Optional[List[str]] = None
-    index_path: Optional[str] = Field(None, description="Where to save/load FAISS index")
+    index_path: Optional[str] = Field(None, description="Scope ID for Postgres index (default: path/.codenav/index)")
 
 
 class MergeSummary(BaseModel):
@@ -118,7 +118,7 @@ class SyncResponse(BaseModel):
     delta_summary: Optional[DeltaSummary] = None
     timing: Optional[dict] = None
     merge_summary: Optional[MergeSummary] = Field(None, description="Present when forward merge was applied (prior tree + re-encode)")
-    is_patch_based: bool = Field(False, description="True when patch path was used (no embedding/FAISS)")
+    is_patch_based: bool = Field(False, description="Legacy; always False (patch path removed)")
     patch_summary: Optional[dict] = Field(None, description="When is_patch_based: modified/added/removed/needs_feature_update counts")
 
 

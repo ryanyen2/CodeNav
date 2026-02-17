@@ -12,7 +12,6 @@ from api.semantic_tree.models import (
 )
 from api.semantic_tree.llm.prompt_loader import load_prompt, format_prompt, parse_solution_json
 from api.semantic_tree.llm.completion import complete
-from api.semantic_tree.indexing.vector_store import SemanticVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +52,8 @@ def _entities_to_file_slices(entities: List[CodeEntity]) -> List[FileInfo]:
 
 def run_semantic_parsing_rag(
     snapshot: CodebaseSnapshot,
-    store: SemanticVectorStore,
-    embedder: Any,
+    store: Any,
+    scope_id: str,
     areas: List[FunctionalArea],
     repo_name: str = "",
     repo_info: str = "",
@@ -64,6 +63,7 @@ def run_semantic_parsing_rag(
     """
     RAG-based semantic parsing: one LLM call per functional area (retrieve entities by area name),
     then one call for remaining entities. Uses prompts/semantic_parsing.txt.
+    store: CodebaseIndex; scope_id identifies the index scope (e.g. root_dir).
     """
     template = load_prompt("semantic_parsing")
     feature_by_key: Dict[Tuple[str, str], SemanticFeature] = {}
@@ -73,7 +73,7 @@ def run_semantic_parsing_rag(
     for area in areas:
         if not area.name or not area.name.strip():
             continue
-        hits = store.search(area.name.strip(), embedder, top_k=RAG_TOP_K)
+        hits = store.search(scope_id, snapshot, area.name.strip(), top_k=RAG_TOP_K)
         if not hits:
             continue
         entities = [e for e, _ in hits]

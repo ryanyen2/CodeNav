@@ -64,4 +64,4 @@ class SyncState(BaseModel):
     last_sync_direction: Optional[Literal["forward", "inverse"]] = None
     last_tree_md: Optional[str] = Field(None, description="Serialized tree for delta / tree_edit base")
     root_dir: Optional[str] = Field(None, description="Path this state belongs to")
-    index_path: Optional[str] = Field(None, description="Path to FAISS index directory")
+    index_path: Optional[str] = Field(None, description="Scope ID for Postgres code index")

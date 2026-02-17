@@ -1,6 +1,6 @@
-"""Entity-level chunking and vector index for semantic tree pipeline."""
+"""Entity-level chunking and code index for semantic tree pipeline."""
 
 from api.semantic_tree.indexing.chunker import entity_chunks
-from api.semantic_tree.indexing.vector_store import SemanticVectorStore
+from api.semantic_tree.indexing.cocoindex_store import CodebaseIndex, get_codebase_index
 
-__all__ = ["entity_chunks", "SemanticVectorStore"]
+__all__ = ["entity_chunks", "CodebaseIndex", "get_codebase_index"]

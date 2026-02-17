@@ -1,6 +1,6 @@
 """
-CodeNav API configuration. Uses adalflow for LLM and embedder clients.
-Supports OpenAI and Ollama only; config loaded from config/*.json.
+CodeNav API configuration. Uses adalflow for LLM clients.
+Code indexing uses CocoIndex + Postgres (COCOINDEX_DATABASE_URL). Config loaded from config/*.json.
 """
 
 import os
@@ -19,11 +19,6 @@ from adalflow import OllamaClient
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if OPENAI_API_KEY:
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
-# Embedder: openai | ollama
-EMBEDDER_TYPE = os.environ.get("CODENAV_EMBEDDER_TYPE", "openai").lower()
-if EMBEDDER_TYPE not in ("openai", "ollama"):
-    EMBEDDER_TYPE = "openai"
 
 # Config directory (default: server/api/config)
 CONFIG_DIR = os.environ.get("CODENAV_CONFIG_DIR", None)
@@ -84,28 +79,6 @@ def load_generator_config() -> dict:
     return raw
 
 
-def load_embedder_config() -> dict:
-    raw = _load_json_config("embedder.json")
-    if not raw:
-        return raw
-    for key in ("embedder", "embedder_ollama"):
-        if key in raw and raw[key].get("client_class") in CLIENT_CLASSES:
-            raw[key]["model_client"] = CLIENT_CLASSES[raw[key]["client_class"]]
-    return raw
-
-
-def get_embedder_config() -> dict:
-    """Current embedder config by CODENAV_EMBEDDER_TYPE."""
-    if EMBEDDER_TYPE == "ollama" and "embedder_ollama" in configs:
-        return configs.get("embedder_ollama", {})
-    return configs.get("embedder", {})
-
-
-def get_embedder_type() -> str:
-    """'ollama' or 'openai'."""
-    return EMBEDDER_TYPE
-
-
 def get_model_config(provider: str = "openai", model: str | None = None) -> dict:
     """
     Config for LLM completion. provider in ('openai', 'ollama').
@@ -149,13 +122,6 @@ DEFAULT_EXCLUDED_FILES: List[str] = [
 configs: Dict[str, Any] = {}
 
 _gen = load_generator_config()
-_emb = load_embedder_config()
-
 if _gen:
     configs["default_provider"] = _gen.get("default_provider", "openai")
     configs["providers"] = _gen.get("providers", {})
-
-if _emb:
-    for key in ("embedder", "embedder_ollama", "retriever", "text_splitter"):
-        if key in _emb:
-            configs[key] = _emb[key]

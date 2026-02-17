@@ -1,5 +1,3 @@
-"""Tools: embedder via api.config."""
+"""Tools for CodeNav API (indexing is in semantic_tree.indexing)."""
 
-from api.tools.embedder import get_embedder
-
-__all__ = ["get_embedder"]
+__all__: list[str] = []

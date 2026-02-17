@@ -21,4 +21,4 @@ Make MINIMAL changes only. Use exactly one SEARCH/REPLACE block:
 >>>>>>> REPLACE
 Do not rewrite the entire function.
 
-NO explanation, no markdown, no code fence, no docstring and no comments.
+NO explanation, no markdown, no code fence, no docstring and no comments in the code.

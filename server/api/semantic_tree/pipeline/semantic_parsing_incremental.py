@@ -14,7 +14,6 @@ from api.semantic_tree.state.models import SemanticCacheEntry
 from api.semantic_tree.state.fingerprint import compute_entity_fingerprint
 from api.semantic_tree.llm.prompt_loader import load_prompt, format_prompt, parse_solution_json
 from api.semantic_tree.llm.completion import complete
-from api.semantic_tree.indexing.vector_store import SemanticVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +53,8 @@ def _entities_to_file_slices(entities: List[CodeEntity]) -> List[FileInfo]:
 
 def run_semantic_parsing_rag_incremental(
     snapshot: CodebaseSnapshot,
-    store: SemanticVectorStore,
-    embedder: Any,
+    store: Any,
+    scope_id: str,
     areas: List[FunctionalArea],
     target_entities: List[CodeEntity],
     semantic_cache: Dict[str, SemanticCacheEntry],
@@ -67,7 +66,7 @@ def run_semantic_parsing_rag_incremental(
     """
     Run semantic parsing for target_entities (added + modified) via LLM; reuse
     semantic_cache (keyed by content_hash) for all other entities. Returns
-    (all_features, updated_cache).
+    (all_features, updated_cache). store: CodebaseIndex.
     """
     target_keys = {_entity_key(e) for e in target_entities}
     feature_by_entity_key: Dict[Tuple[str, str], SemanticFeature] = {}
@@ -99,7 +98,7 @@ def run_semantic_parsing_rag_incremental(
     for area in areas:
         if not area.name or not area.name.strip():
             continue
-        hits = store.search(area.name.strip(), embedder, top_k=RAG_TOP_K)
+        hits = store.search(scope_id, snapshot, area.name.strip(), top_k=RAG_TOP_K)
         if not hits:
             continue
         entities = [e for e, _ in hits if _entity_key(e) in target_keys]

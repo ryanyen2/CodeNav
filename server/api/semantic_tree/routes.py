@@ -38,7 +38,7 @@ from api.semantic_tree.extraction.discovery import discover_files
 from api.semantic_tree.extraction.python_extractor import extract_python_file
 from api.semantic_tree.models import CodebaseSnapshot, FileInfo
 from api.semantic_tree.indexing.chunker import entity_chunks
-from api.semantic_tree.indexing.vector_store import SemanticVectorStore
+from api.semantic_tree.indexing.cocoindex_store import get_codebase_index
 from api.semantic_tree.pipeline.domain_discovery import run_domain_discovery
 from api.semantic_tree.pipeline.semantic_parsing import run_semantic_parsing_rag
 from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchical_construction
@@ -59,8 +59,6 @@ from api.semantic_tree.state.delta import compute_entity_delta
 from api.semantic_tree.state.fingerprint import compute_entity_fingerprint, compute_file_fingerprint
 from api.semantic_tree.state.models import SyncState, EntityFingerprint, SemanticCacheEntry
 from api.semantic_tree.state.sync_guard import can_run_forward, can_run_inverse
-from api.tools.embedder import get_embedder
-from api.config import get_embedder_type
 
 logger = logging.getLogger(__name__)
 pipeline_log = PipelineLogger()
@@ -120,10 +118,10 @@ def _intervention(step: str, message: str) -> JSONResponse:
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest):
     """
-    Integrated pipeline: extract → index (RAG) → domain discovery → semantic parsing (RAG) → hierarchy → tree.
+    Integrated pipeline: extract → index (RAG, CocoIndex+Postgres) → domain discovery → semantic parsing (RAG) → hierarchy → tree.
     Provide either path (local directory) or files + root_dir (in-memory codebase). Output tree_md is in the
     format required by test fixtures (sigils, [path], (entity), deps:) and parseable by parseTreeBlock().
-    Requires LLM and embedder configured. Stops with 422 intervention_required on parse/LLM issues.
+    Requires LLM and COCOINDEX_DATABASE_URL (Postgres). Stops with 422 intervention_required on parse/LLM issues.
     """
     use_files = request.files and len(request.files) > 0
     if use_files:
@@ -152,27 +150,19 @@ async def analyze(request: AnalyzeRequest):
 
     if not snapshot.all_entities:
         return _intervention("extract", "No entities extracted; check path and filters.")
-    embedder_type = get_embedder_type()
-    try:
-        embedder = get_embedder(embedder_type=embedder_type)
-    except Exception as e:
-        return _intervention("index", f"Embedder not available: {e}")
 
+    scope_id = index_path
     with pipeline_log.stage("extraction", entity_count=len(snapshot.all_entities)):
         pass  # extraction already done above
-    store = SemanticVectorStore()
+    store = get_codebase_index()
     chunks = entity_chunks(snapshot)
     try:
         with pipeline_log.stage("indexing", entity_count=len(chunks)):
-            store.add_entities(chunks, embedder)
+            added = store.add_entities(scope_id, chunks)
     except Exception as e:
         return _intervention("index", f"Failed to build index: {e}")
-    if store.size == 0:
-        return _intervention("index", "No embeddings produced; check embedder config.")
-    try:
-        store.save(index_path)
-    except Exception as e:
-        logger.warning("Could not save index to %s: %s", index_path, e)
+    if added == 0:
+        return _intervention("index", "No embeddings produced; check COCOINDEX_DATABASE_URL and cocoindex.")
 
     try:
         with pipeline_log.stage("domain_discovery"):
@@ -199,7 +189,7 @@ async def analyze(request: AnalyzeRequest):
             features = run_semantic_parsing_rag(
                 snapshot,
                 store=store,
-                embedder=embedder,
+                scope_id=scope_id,
                 areas=areas,
                 repo_name=request.repo_name,
                 repo_info="",
@@ -336,11 +326,6 @@ async def sync(request: SyncRequest):
 
     if not snapshot.all_entities:
         return _intervention("extract", "No entities extracted; check path and filters.")
-    embedder_type = get_embedder_type()
-    try:
-        embedder = get_embedder(embedder_type=embedder_type)
-    except Exception as e:
-        return _intervention("index", f"Embedder not available: {e}")
 
     try:
         with pipeline_log.stage("sync", is_incremental=old_state is not None):
@@ -348,15 +333,14 @@ async def sync(request: SyncRequest):
                 snapshot,
                 index_path,
                 old_state,
-                embedder,
                 repo_name=request.repo_name,
                 provider=request.provider,
                 model=request.model,
             )
         pipeline_log.summary()
     except ValueError as e:
-        if "No index to save" in str(e) or "No valid embeddings" in str(e).lower():
-            return _intervention("index", "No valid embeddings produced; check embedder (e.g. Ollama) is running.")
+        if "No embeddings produced" in str(e):
+            return _intervention("index", "No valid embeddings produced; check COCOINDEX_DATABASE_URL and cocoindex.")
         logger.exception("Sync failed")
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
@@ -679,43 +663,40 @@ async def apply(request: ApplyRequest):
 
 @router.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
-    """Semantic search over an existing index (e.g. after analyze). Requires embedder configured."""
-    if not Path(request.index_path).is_dir():
-        raise HTTPException(status_code=404, detail="Index path not found")
+    """Semantic search over an existing index (e.g. after analyze). Uses CocoIndex + Postgres; index_path is scope_id."""
+    if not request.index_path or not request.index_path.strip():
+        raise HTTPException(status_code=400, detail="index_path (scope_id) required")
 
-    embedder_type = get_embedder_type()
-    embedder = get_embedder(embedder_type=embedder_type)
-
-    store = SemanticVectorStore()
+    store = get_codebase_index()
     try:
-        store.load(request.index_path)
+        hits = store.search_raw(
+            scope_id=request.index_path.strip(),
+            query=request.query,
+            top_k=request.top_k,
+        )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to load index: {e}")
+        raise HTTPException(status_code=400, detail=f"Search failed: {e}")
 
-    hits = store.search(request.query, embedder, top_k=request.top_k)
     results = [
         SearchResultItem(
-            entity_name=e.name,
-            fpath=e.fpath,
-            entity_type=e.entity_type,
-            distance=dist,
+            entity_name=entity_name,
+            fpath=fpath,
+            entity_type=entity_type,
+            distance=1.0 - score,  # API exposes distance; we store similarity
         )
-        for e, dist in hits
+        for fpath, entity_name, entity_type, score in hits
     ]
     return SearchResponse(results=results)
 
 
 @router.get("/status", response_model=StatusResponse)
 async def status(index_path: str | None = None):
-    """Index status if index_path given (e.g. path/.codenav/index after analyze)."""
-    if not index_path:
+    """Index status if index_path (scope_id) given (e.g. path/.codenav/index or root_dir after analyze)."""
+    if not index_path or not index_path.strip():
         return StatusResponse()
-    p = Path(index_path)
-    if not p.is_dir() or not (p / "entities.pkl").exists():
-        return StatusResponse(index_path=index_path, index_size=0)
     try:
-        store = SemanticVectorStore()
-        store.load(index_path)
-        return StatusResponse(index_path=index_path, index_size=store.size)
+        store = get_codebase_index()
+        size = store.size(index_path.strip())
+        return StatusResponse(index_path=index_path, index_size=size)
     except Exception:
         return StatusResponse(index_path=index_path, index_size=0)

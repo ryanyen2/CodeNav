@@ -1,6 +1,6 @@
 """
 CodeNav API — semantic tree pipeline: analyze (extract + index + RAG), search, status.
-Uses adalflow for embeddings and LLM completion.
+Uses CocoIndex (Postgres) for code indexing and adalflow for LLM completion.
 """
 
 import os
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="CodeNav API",
-    description="API for semantic tree: analyze (extract + RAG index + LLM pipeline), search, status.",
+    description="API for semantic tree: analyze (extract + CocoIndex + LLM pipeline), search, status.",
 )
 
 app.add_middleware(

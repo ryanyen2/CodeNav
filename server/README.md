@@ -1,12 +1,12 @@
 # CodeNav API (server)
 
-Backend for **CodeNav**: semantic tree extraction, indexing, analysis, and search. Uses **adalflow** for embeddings and LLM completion.
+Backend for **CodeNav**: semantic tree extraction, indexing, analysis, and search. Uses **CocoIndex** (SentenceTransformer + PostgreSQL/pgvector) for fast, incremental code indexing and **adalflow** for LLM completion.
 
 ## Features
 
-- **Analyze**: Single integrated pipeline — extract → build FAISS index (RAG) → domain discovery (1 LLM call) → semantic parsing via RAG (one call per functional area + one for remaining) → hierarchy (1 call) → tree assembly. Uses both embedder and LLM; index is built automatically and saved to `path/.codenav/index`.
-- **Search**: Semantic search over the index produced by analyze (pass `index_path`, e.g. `path/.codenav/index`).
-- **Status**: Index size for a given `index_path`.
+- **Analyze**: Single integrated pipeline — extract → index (CocoIndex + Postgres) → domain discovery (1 LLM call) → semantic parsing via RAG → hierarchy (1 call) → tree assembly. Index is stored in PostgreSQL; `index_path` is the scope ID (e.g. `path/.codenav/index` or root_dir).
+- **Search**: Semantic search over the index (pass `index_path` as scope_id, e.g. root_dir or `path/.codenav/index`).
+- **Status**: Index size for a given scope_id (`index_path`).
 
 Output trees are markdown/JSON compatible with the TypeScript `parseTreeBlock()` grammar.
 
@@ -55,13 +55,13 @@ This creates/uses a venv, installs the `codenav-api` package in editable mode, a
 Create a `.env` file in the **server** directory. Variables are loaded on startup via `load_dotenv(server_dir / ".env")`.
 
 ```bash
-# Required for OpenAI embedder and LLM (default)
+# Code index: PostgreSQL with pgvector (required for analyze/sync/search)
+COCOINDEX_DATABASE_URL=postgresql://localhost/codoc
+
+# Required for OpenAI LLM (default)
 OPENAI_API_KEY=sk-...
 
-# Embedder: "openai" (default) or "ollama"
-# CODENAV_EMBEDDER_TYPE=openai
-
-# Optional: for Ollama (local) embedder and LLM
+# Optional: for Ollama (local) LLM
 # OLLAMA_HOST=http://localhost:11434
 
 # Optional: config directory (default: server/api/config)
@@ -71,19 +71,15 @@ OPENAI_API_KEY=sk-...
 # PORT=8001
 ```
 
-- **OpenAI**: Set `OPENAI_API_KEY` in `.env`. Use `provider=openai` in `/semantic_tree/analyze`.
-- **Ollama (local)**: If Ollama is installed locally, set `CODENAV_EMBEDDER_TYPE=ollama` and optionally `OLLAMA_HOST`. You **must** pull the embed model before running analyze:
-  ```bash
-  ollama pull nomic-embed-text
-  ```
-  Also pull an LLM for domain/hierarchy/semantic steps (e.g. `ollama pull llama3.2:3b`). Use `provider=ollama` in the analyze request.
+- **PostgreSQL**: Create a database and enable pgvector: `CREATE EXTENSION vector;`. With Homebrew: `brew install postgresql pgvector`, create DB, set `COCOINDEX_DATABASE_URL`.
+- **OpenAI**: Set `OPENAI_API_KEY` for LLM steps. Use `provider=openai` in `/semantic_tree/analyze`.
+- **Ollama (local)**: Pull an LLM (e.g. `ollama pull llama3.2:3b`). Use `provider=ollama` in the analyze request.
 
 ### 4. Config files (optional)
 
 Under `server/api/config/`:
 
 - **`generator.json`** — LLM providers and models (openai, ollama).
-- **`embedder.json`** — Embedder models (OpenAI, Ollama). Override with `CODENAV_CONFIG_DIR` if needed.
 
 ## Run the server
 
@@ -120,7 +116,7 @@ This calls sync (force_full) with the small test codebase (`test/small_python_re
 From **server** (with API running on 8001):
 
 - **Smoke tests**: `uv run python scripts/test_api.py`  
-  All endpoints (health, tree_edit, analyze, sync, apply, …). Set **`CODENAV_FAST_TESTS=1`** to skip analyze/sync (faster; no embedder needed).
+  All endpoints (health, tree_edit, analyze, sync, apply, …). Set **`CODENAV_FAST_TESTS=1`** to skip analyze/sync (faster; no index/LLM needed).
 - **Integration (tree edit + apply, with logging)**: `uv run python scripts/test_api_integration.py [path]`  
   Sync → simulate tree edit → tree_edit → apply dry_run. Prints operations, planned_changes, and **unified_diff** so you can verify context and diff. Use **`CODENAV_LOG_PROMPTS=1`** in the server process to see prompts and generation in server logs.
 - **Bidirectional sync**: `uv run python scripts/test_bidirectional_sync.py`  
@@ -132,18 +128,14 @@ From **server**: `uv run python ../test/draco/test_semantic_tree_flow.py`. Syncs
 
 ## Troubleshooting
 
-- **`model "nomic-embed-text" not found, try pulling it first (404)`** — Ollama is running but the embedding model isn’t installed. Run:
-  ```bash
-  ollama pull nomic-embed-text
-  ```
-  Then retry the analyze request.
+- **Index/search errors** — Ensure PostgreSQL is running and `COCOINDEX_DATABASE_URL` is set. Run `CREATE EXTENSION vector;` in your database if needed.
 
 ## Layout
 
 | Path           | Purpose                                   |
 |----------------|-------------------------------------------|
 | `server/`      | Project root; `main.py`, `.env`, `uv`    |
-| `server/api/`  | Package: app, config, embedder, routes    |
+| `server/api/`  | Package: app, config, routes, semantic_tree (indexing via CocoIndex) |
 | `server/api/semantic_tree/` | Sync/analyze (extract + index + RAG pipeline), tree, tree_edit, search, status |
 
 ## Summary
@@ -153,6 +145,7 @@ From **server**: `uv run python ../test/draco/test_semantic_tree_flow.py`. Syncs
 | `uv sync`       | Install deps and editable `codenav-api`     |
 | `.env` in server | Loaded on startup (OPENAI_API_KEY, etc.)    |
 | `adalflow`      | Embeddings and LLM client abstraction       |
-| `CODENAV_*`     | CodeNav-specific env (embedder type, config) |
+| `CODENAV_*`     | CodeNav-specific env (config dir, etc.) |
+| `COCOINDEX_DATABASE_URL` | Postgres URL for code index (pgvector) |
 
 Incremental sync is implemented: state at `path/.codenav/sync_state.json` stores fingerprints and semantic cache; re-sync only re-embeds and re-parses added/modified entities.

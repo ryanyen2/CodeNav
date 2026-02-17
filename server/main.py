@@ -85,10 +85,10 @@ if is_development:
 
 import uvicorn
 
-# Optional: warn if no API key when using OpenAI (embedder/LLM)
+# Optional: warn if no API key when using OpenAI (LLM)
 if not os.environ.get("OPENAI_API_KEY"):
     logger.info(
-        "OPENAI_API_KEY not set. Set CODENAV_EMBEDDER_TYPE=ollama and use provider=ollama for local-only."
+        "OPENAI_API_KEY not set. Use provider=ollama for local-only LLM."
     )
 
 if __name__ == "__main__":
