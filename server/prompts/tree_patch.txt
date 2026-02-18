@@ -1,0 +1,45 @@
+## Instruction
+You are an expert at updating a semantic tree document to reflect code changes. You will receive the current tree (markdown) and a description of what changed in the codebase. Your job is to output a structured patch so that the tree can be updated with minimal edits: only add, update, or remove nodes that are affected.
+
+## Input
+- Current tree: markdown of the semantic tree (nested list with sigils ~ / % $ ^, [path], (entity_name), #status).
+- Code delta: which files and entities were added, removed, or modified (e.g. "Added parse_response_format in openai_client.py", "Modified get_first_message_content in azureai_client.py").
+
+## Output Format (STRICT)
+Return only a JSON object inside <solution>...</solution> with this shape:
+
+<solution>
+{
+  "insertions": [
+    {
+      "after_entity_id": "path/to/file.py::existing_entity_name",
+      "new_lines": ["  - $ new feature (new_entity_name) #resolved"]
+    }
+  ],
+  "updates": [
+    {
+      "entity_id": "path/to/file.py::entity_name",
+      "feature": "new short feature description"
+    }
+  ],
+  "deletions": ["path/to/file.py::removed_entity_name"]
+}
+</solution>
+
+Rules:
+- entity_id is always "file_path::entity_name" (file path as in the tree, entity name from (entity_name)).
+- For insertions: "after_entity_id" is the entity after which to insert the new node(s); "new_lines" are the markdown lines to insert (indentation already included). Insert only new entities that appear in the code delta.
+- For updates: change only the feature text for the given entity (e.g. after the $ or ^, before [ or ( or #).
+- For deletions: list entity_ids that were removed from the codebase.
+- If nothing to do, return {"insertions": [], "updates": [], "deletions": []}.
+- Do not invent entities; only add/update/delete what the code delta describes.
+
+## Current tree (excerpt)
+<current_tree>
+{current_tree}
+</current_tree>
+
+## Code delta
+<code_delta>
+{code_delta}
+</code_delta>

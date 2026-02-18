@@ -56,7 +56,11 @@ from api.semantic_tree.observation_report import (
 )
 from api.semantic_tree.state.persistence import load_sync_state, save_sync_state
 from api.semantic_tree.state.delta import compute_entity_delta
-from api.semantic_tree.state.fingerprint import compute_entity_fingerprint, compute_file_fingerprint
+from api.semantic_tree.state.fingerprint import (
+    compute_entity_fingerprint,
+    compute_file_fingerprint,
+    get_entity_content_sample,
+)
 from api.semantic_tree.state.models import SyncState, EntityFingerprint, SemanticCacheEntry
 from api.semantic_tree.state.sync_guard import can_run_forward, can_run_inverse
 
@@ -233,7 +237,10 @@ async def analyze(request: AnalyzeRequest):
         new_entity_fps: dict[str, EntityFingerprint] = {}
         for e in snapshot.all_entities:
             ch, sh = compute_entity_fingerprint(e)
-            new_entity_fps[f"{e.fpath}::{e.name}"] = EntityFingerprint(content_hash=ch, signature_hash=sh)
+            sample = get_entity_content_sample(e)
+            new_entity_fps[f"{e.fpath}::{e.name}"] = EntityFingerprint(
+                content_hash=ch, signature_hash=sh, content_sample=sample or None
+            )
         new_file_fps: dict[str, str] = {}
         for f in snapshot.files:
             full_path = Path(root_dir) / f.fpath
@@ -336,6 +343,7 @@ async def sync(request: SyncRequest):
                 repo_name=request.repo_name,
                 provider=request.provider,
                 model=request.model,
+                use_patch_path=getattr(request, "use_patch_path", False),
             )
         pipeline_log.summary()
     except ValueError as e:
@@ -376,6 +384,7 @@ async def sync(request: SyncRequest):
         tree_json_out = tree_to_json(tree)
 
     ds = DeltaSummary(**(delta_summary or {})) if delta_summary else None
+    tree_patch_out = (patch_summary or {}).get("patch") if is_patch_based else None
     if request.format == "json":
         return SyncResponse(
             tree_json=tree_json_out,
@@ -388,6 +397,7 @@ async def sync(request: SyncRequest):
             merge_summary=merge_summary_out,
             is_patch_based=is_patch_based,
             patch_summary=patch_summary,
+            tree_patch=tree_patch_out,
         )
     return SyncResponse(
         tree_md=tree_md_out,
@@ -401,6 +411,7 @@ async def sync(request: SyncRequest):
         merge_summary=merge_summary_out,
         is_patch_based=is_patch_based,
         patch_summary=patch_summary,
+        tree_patch=tree_patch_out,
     )
 
 

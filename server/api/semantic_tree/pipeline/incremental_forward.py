@@ -12,7 +12,11 @@ from api.semantic_tree.models import (
     HierarchyMapping,
 )
 from api.semantic_tree.state.models import SyncState, EntityFingerprint, SemanticCacheEntry
-from api.semantic_tree.state.fingerprint import compute_entity_fingerprint, compute_file_fingerprint
+from api.semantic_tree.state.fingerprint import (
+    compute_entity_fingerprint,
+    compute_file_fingerprint,
+    get_entity_content_sample,
+)
 from api.semantic_tree.state.persistence import load_sync_state, save_sync_state
 from api.semantic_tree.state.delta import compute_entity_delta
 from api.semantic_tree.indexing.chunker import entity_chunks
@@ -23,6 +27,7 @@ from api.semantic_tree.pipeline.semantic_parsing_incremental import run_semantic
 from api.semantic_tree.pipeline.hierarchical_construction import run_hierarchical_construction
 from api.semantic_tree.pipeline.tree_assembly import assemble_tree
 from api.semantic_tree.pipeline.tree_validation import validate_tree
+from api.semantic_tree.pipeline.tree_patch import run_tree_patch_llm, apply_patch_to_markdown
 from api.semantic_tree.output.tree_serializer import tree_to_markdown
 from api.semantic_tree.logging import log_sync
 
@@ -41,6 +46,7 @@ def incremental_forward(
     repo_name: str = "",
     provider: str = "openai",
     model: Optional[str] = None,
+    use_patch_path: bool = False,
 ) -> Tuple[Optional[SemanticTree], SyncState, dict, Optional[dict], bool, Optional[dict]]:
     """
     Run forward sync (code → tree). Index is PostgreSQL-backed (CocoIndex); scope_id = index_path.
@@ -52,11 +58,14 @@ def incremental_forward(
     all_chunks = entity_chunks(snapshot)
     store = get_codebase_index()
 
-    # New fingerprints
+    # New fingerprints (include content_sample for difflib-based delta)
     new_entity_fps: dict[str, EntityFingerprint] = {}
     for e in snapshot.all_entities:
         ch, sh = compute_entity_fingerprint(e)
-        new_entity_fps[_entity_key(e)] = EntityFingerprint(content_hash=ch, signature_hash=sh)
+        sample = get_entity_content_sample(e)
+        new_entity_fps[_entity_key(e)] = EntityFingerprint(
+            content_hash=ch, signature_hash=sh, content_sample=sample or None
+        )
 
     # File fingerprints (for "did file set change")
     new_file_fps: dict[str, str] = {}
@@ -188,6 +197,46 @@ def incremental_forward(
         provider=provider,
         model=model,
     )
+
+    # Optional patch path: LLM produces patch, we apply to prior tree (no full hierarchy + assemble)
+    if use_patch_path and old_state.last_tree_md:
+        code_delta_parts = []
+        for e in delta.added:
+            code_delta_parts.append(f"Added: {_entity_key(e)}")
+        for e in delta.modified:
+            code_delta_parts.append(f"Modified: {_entity_key(e)}")
+        for ek, _ in delta.removed:
+            code_delta_parts.append(f"Removed: {ek}")
+        code_delta_description = "\n".join(code_delta_parts) or "No entity changes."
+        try:
+            patch = run_tree_patch_llm(
+                old_state.last_tree_md,
+                code_delta_description,
+                provider=provider,
+                model=model,
+            )
+            tree_md = apply_patch_to_markdown(old_state.last_tree_md, patch)
+        except Exception as e:
+            logger.warning("[CODENAV] patch path failed, falling back to full tree: %s", e)
+            tree_md = None
+            patch = None
+        if tree_md is not None and patch is not None:
+            new_state = SyncState(
+                entity_fingerprints=new_entity_fps,
+                file_fingerprints=new_file_fps,
+                semantic_cache=updated_cache,
+                domain_areas=[{"name": a.name} for a in areas],
+                hierarchy_cache=old_state.hierarchy_cache,
+                tree_version=old_state.tree_version,
+                code_version=old_state.code_version + 1,
+                last_sync_direction="forward",
+                last_tree_md=tree_md,
+                root_dir=root_dir,
+                index_path=index_path,
+            )
+            save_sync_state(new_state, root_dir)
+            log_sync("incremental", len(snapshot.all_entities), delta_summary, "patch", "patch")
+            return None, new_state, {}, delta_summary, True, {"patch": patch}
 
     # Hierarchy: re-run
     group_to_entities = {f.fpath: [e.name for e in f.entities] for f in snapshot.files}

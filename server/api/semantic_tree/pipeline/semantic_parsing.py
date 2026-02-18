@@ -1,4 +1,4 @@
-"""Step 4: Semantic parsing — LLM extracts per-entity features. RAG version: one call per area."""
+"""Step 4: Semantic parsing — LLM extracts per-entity features. Retrieve-then-generate: context = index chunks only."""
 
 import logging
 from typing import List, Optional, Dict, Any, Set, Tuple
@@ -7,7 +7,6 @@ from api.semantic_tree.models import (
     CodebaseSnapshot,
     CodeEntity,
     SemanticFeature,
-    FileInfo,
     FunctionalArea,
 )
 from api.semantic_tree.llm.prompt_loader import load_prompt, format_prompt, parse_solution_json
@@ -23,31 +22,13 @@ def _entity_key(e: CodeEntity) -> Tuple[str, str]:
     return (e.fpath, e.name)
 
 
-def _format_file_context(file_info: FileInfo) -> str:
-    """Format one file's entities for the prompt."""
-    lines = [f"### File: {file_info.fpath}", ""]
-    for e in file_info.entities:
-        lines.append(f"#### {e.name}")
-        if e.signature:
-            lines.append(f"Signature: {e.signature}")
-        if e.docstring:
-            lines.append(f"Docstring: {e.docstring}")
-        if e.body_text:
-            body = e.body_text[:1500] + ("..." if len(e.body_text) > 1500 else "")
-            lines.append(f"```\n{body}\n```")
-        lines.append("")
-    return "\n".join(lines)
-
-
-def _entities_to_file_slices(entities: List[CodeEntity]) -> List[FileInfo]:
-    """Group entities by fpath into FileInfo slices."""
-    by_fpath: Dict[str, List[CodeEntity]] = {}
-    for e in entities:
-        by_fpath.setdefault(e.fpath, []).append(e)
-    return [
-        FileInfo(fpath=fpath, language="python", entities=ents, imports=[])
-        for fpath, ents in by_fpath.items()
-    ]
+def _chunks_to_context(hits: List[Tuple[CodeEntity, float, str]]) -> str:
+    """Build prompt context from retrieved chunks only (retrieve-then-generate). Each section has entity id for LLM mapping."""
+    parts = []
+    for entity, _score, chunk_text in hits:
+        ident = f"{entity.fpath}::{entity.name}"
+        parts.append(f"### Entity: {entity.name} [{ident}]\n\n```\n{chunk_text}\n```")
+    return "\n\n".join(parts)
 
 
 def run_semantic_parsing_rag(
@@ -73,16 +54,14 @@ def run_semantic_parsing_rag(
     for area in areas:
         if not area.name or not area.name.strip():
             continue
-        hits = store.search(scope_id, snapshot, area.name.strip(), top_k=RAG_TOP_K)
+        hits = store.search_with_chunks(scope_id, snapshot, area.name.strip(), top_k=RAG_TOP_K)
         if not hits:
             continue
-        entities = [e for e, _ in hits]
+        entities = [e for e, _s, _c in hits]
         for e in entities:
             covered.add(_entity_key(e))
         current_area_keys = {_entity_key(e) for e in entities}
-        file_slices = _entities_to_file_slices(entities)
-        context_parts = [_format_file_context(fs) for fs in file_slices]
-        context = "\n\n".join(context_parts)
+        context = _chunks_to_context(hits)
         prompt = format_prompt(template, repo_name=repo_name, repo_info=repo_info)
         prompt += "\n\n" + context
         response = complete(prompt=prompt, provider=provider, model=model)
@@ -93,7 +72,6 @@ def run_semantic_parsing_rag(
         for entity_name, features in data.items():
             name = entity_name.strip()
             feat_list = [str(f) for f in features] if isinstance(features, list) else []
-            # Match back to actual entity from this area's RAG hit list (by name); store by (fpath, name)
             for ek in current_area_keys:
                 if entity_by_key[ek].name == name:
                     if ek not in feature_by_key:
@@ -104,8 +82,15 @@ def run_semantic_parsing_rag(
     if remaining:
         batch = remaining[:REMAINING_BATCH]
         batch_keys = {_entity_key(e) for e in batch}
-        file_slices = _entities_to_file_slices(batch)
-        context = "\n\n".join(_format_file_context(fs) for fs in file_slices)
+        batch_query = " ".join(e.name for e in batch[:20])
+        hits = store.search_with_chunks(scope_id, snapshot, batch_query or "function class", top_k=RAG_TOP_K)
+        hits = [(e, s, c) for e, s, c in hits if _entity_key(e) in batch_keys]
+        if not hits:
+            # Fallback: use chunker format so LLM has context (retrieve missed these entities)
+            from api.semantic_tree.indexing.chunker import entity_chunks
+            entity_to_chunk = {_entity_key(e): ct for e, ct in entity_chunks(snapshot)}
+            hits = [(e, 0.0, entity_to_chunk.get(_entity_key(e), e.name)) for e in batch]
+        context = _chunks_to_context(hits)
         prompt = format_prompt(template, repo_name=repo_name, repo_info=repo_info)
         prompt += "\n\n### Remaining entities\n" + context
         response = complete(prompt=prompt, provider=provider, model=model)

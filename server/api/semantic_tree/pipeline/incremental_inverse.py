@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from api.semantic_tree.models import CodebaseSnapshot
 from api.semantic_tree.state.models import SyncState, EntityFingerprint
 from api.semantic_tree.state.persistence import save_sync_state
-from api.semantic_tree.state.fingerprint import compute_entity_fingerprint, compute_file_fingerprint
+from api.semantic_tree.state.fingerprint import (
+    compute_entity_fingerprint,
+    compute_file_fingerprint,
+    get_entity_content_sample,
+)
 from api.semantic_tree.extraction.python_extractor import extract_python_file
 from api.semantic_tree.pipeline.code_dispatch import dispatch_operation_to_changes
 from api.semantic_tree.pipeline.code_applicator import CodeChange, apply_changes
@@ -58,7 +62,10 @@ def _merge_fingerprints_after_apply(
             continue
         for e in file_info.entities:
             ch, sh = compute_entity_fingerprint(e)
-            entity_out[_entity_key(e.fpath, e.name)] = EntityFingerprint(content_hash=ch, signature_hash=sh)
+            sample = get_entity_content_sample(e)
+            entity_out[_entity_key(e.fpath, e.name)] = EntityFingerprint(
+                content_hash=ch, signature_hash=sh, content_sample=sample or None
+            )
     return entity_out, file_out
 
 

@@ -113,29 +113,28 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
     }
 
     const meta = readMeta(doc.uri);
-    let loc = codeLocationFromMeta(info, meta, lineText);
-    if (!loc) {
+    const loc = codeLocationFromMeta(info, meta, lineText);
+    if (!loc || !loc.fpath) {
       clearCodeHighlight();
       return;
     }
-    // If we got a file-sized range (e.g. whole file) but the line under cursor is a leaf, force entity-level lookup
+    let finalLoc: CodeLocationFromMeta = { fpath: loc.fpath, startLine: loc.startLine, endLine: loc.endLine };
     const parsed = lineText != null && lineText.trim() ? parseTreeLine(lineText) : null;
     const isLeafWithEntity =
       parsed && (parsed.sigil === '$' || parsed.sigil === '^') && parsed.metadata?.entity_name && info.fpath;
-    if (isLeafWithEntity && meta?.nodes) {
+    if (isLeafWithEntity && meta?.nodes && info.fpath) {
       const entityKey = `${info.fpath}::${parsed.metadata.entity_name}`;
       const entityEntry = meta.nodes[entityKey];
-      const span = loc.endLine - loc.startLine + 1;
+      const span = finalLoc.endLine - finalLoc.startLine + 1;
       if (entityEntry?.line_range && span > 15) {
         const [s, e] = entityEntry.line_range;
-        loc = { fpath: info.fpath, startLine: s, endLine: e };
+        finalLoc = { fpath: info.fpath, startLine: s, endLine: e };
       }
     }
 
     const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
     if (!folder) return;
-
-    const codeUri = vscode.Uri.joinPath(folder.uri, loc.fpath);
+    const codeUri = vscode.Uri.joinPath(folder.uri, finalLoc.fpath);
     const uriStr = codeUri.toString();
 
     const existing = vscode.window.visibleTextEditors.find(
@@ -153,7 +152,7 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
     if (existing) {
       lastCodeEditor = existing;
       lastHighlightUri = uriStr;
-      applyHighlightToEditor(existing, loc);
+      applyHighlightToEditor(existing, finalLoc);
       return;
     }
 
@@ -167,7 +166,7 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
         .then((codeEditor) => {
           lastCodeEditor = codeEditor;
           lastHighlightUri = uriStr;
-          applyHighlightToEditor(codeEditor, loc);
+          applyHighlightToEditor(codeEditor, finalLoc);
         });
     });
   }

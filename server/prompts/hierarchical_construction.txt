@@ -27,6 +27,8 @@ label.
 9. Prefer domain or system semantics over low-level actions; use `manage session` rather than `update dict`.
 ## Scope Constraints
 - Only assign top-level groups (keys of <parsed_folder_tree>). The keys are file paths used for grounding; your category and subcategory labels should describe purpose and user-facing behavior, not repeat file or module names.
+- Assign each top-level group (file path) to exactly one target path. Do not list the same file path under multiple paths.
+- Path segments must be semantic labels (area/category/subcategory), not file names or module names (e.g. use "api clients" or "request handling", not "openai_client.py").
 - Exclude docs/examples/tests/vendor code unless essential to core functionality.
 - Do not invent new functional areas; use only those in <functional_areas>.
 - You may define new categories/subcategories as needed, but they must remain meaningful and

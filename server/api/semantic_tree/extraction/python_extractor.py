@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from api.semantic_tree.models import CodeEntity, FileInfo, ImportEdge
 from api.semantic_tree.extraction.import_analyzer import extract_import_edges
+from api.semantic_tree.extraction.call_analyzer import extract_invoke_edges
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,15 @@ def extract_python_file(
     entities, imports = _collect_entities_and_imports(tree, source, fpath)
     if not include_imports:
         imports = []
+    invokes = extract_invoke_edges(tree, fpath, entities)
 
-    return FileInfo(fpath=fpath, language="python", entities=entities, imports=imports)
+    return FileInfo(
+        fpath=fpath,
+        language="python",
+        entities=entities,
+        imports=imports,
+        invokes=invokes,
+    )
 
 
 def _collect_entities_and_imports(

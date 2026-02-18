@@ -71,6 +71,7 @@ def tree_to_json(tree: SemanticTree) -> dict:
             "relation": d.relation,
             "fromExternal": getattr(d, "from_external", None),
             "toExternal": getattr(d, "to_external", None),
+            **({"call_site_line": d.call_site_line} if getattr(d, "call_site_line", None) is not None else {}),
         }
         for d in tree.deps
     ]

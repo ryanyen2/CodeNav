@@ -30,14 +30,16 @@ class ImportEdge(BaseModel):
     is_external: bool = False
     source_fpath: Optional[str] = None
     target_fpath: Optional[str] = None
+    call_site_line: Optional[int] = None  # for invokes: line number of the call
 
 
 class FileInfo(BaseModel):
-    """Single file with entities and its import edges."""
+    """Single file with entities, import edges, and invoke (call) edges."""
     fpath: str
     language: str = "python"
     entities: List[CodeEntity] = Field(default_factory=list)
     imports: List[ImportEdge] = Field(default_factory=list)
+    invokes: List[ImportEdge] = Field(default_factory=list)
 
 
 class CodebaseSnapshot(BaseModel):
@@ -52,6 +54,10 @@ class CodebaseSnapshot(BaseModel):
     @property
     def all_imports(self) -> List[ImportEdge]:
         return [e for f in self.files for e in f.imports]
+
+    @property
+    def all_invokes(self) -> List[ImportEdge]:
+        return [e for f in self.files for e in f.invokes]
 
 
 # --- LLM pipeline outputs ---
@@ -117,6 +123,7 @@ class DepEdge(BaseModel):
     relation: DepRelationType = "imports"
     from_external: Optional[bool] = None
     to_external: Optional[bool] = None
+    call_site_line: Optional[int] = None  # for invokes: line of the call
 
     class Config:
         populate_by_name = True

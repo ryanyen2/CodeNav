@@ -53,7 +53,17 @@ def run_hierarchical_construction(
     if not isinstance(data, dict):
         raise ValueError(f"hierarchical_construction expected dict, got {type(data)}")
 
-    return [
-        HierarchyMapping(path=path.strip(), entity_groups=[str(g) for g in groups])
-        for path, groups in data.items()
-    ]
+    # Dedupe entity_groups per path; then one-file-one-path: each file appears only in first path that lists it
+    path_to_groups: Dict[str, List[str]] = {}
+    for path, groups in data.items():
+        path_to_groups[path.strip()] = list(dict.fromkeys(str(g) for g in groups))
+
+    seen_fpaths: set = set()
+    result: List[HierarchyMapping] = []
+    for path, groups in path_to_groups.items():
+        deduped = [g for g in groups if g not in seen_fpaths]
+        for g in deduped:
+            seen_fpaths.add(g)
+        if deduped:
+            result.append(HierarchyMapping(path=path, entity_groups=deduped))
+    return result

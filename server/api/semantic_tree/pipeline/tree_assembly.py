@@ -123,10 +123,10 @@ def assemble_tree(
     for e in snapshot.all_entities:
         file_entities.setdefault(e.fpath, []).append(e)
 
-    # Group name in hierarchy = file path. path -> list of file paths (entity_groups)
+    # Group name in hierarchy = file path. path -> list of file paths (entity_groups); dedupe per path
     path_to_files: Dict[str, List[str]] = {}
     for hm in hierarchy_mappings:
-        path_to_files[hm.path] = list(hm.entity_groups)
+        path_to_files[hm.path] = list(dict.fromkeys(hm.entity_groups))
 
     root = SemanticNode(
         id="__root",
@@ -140,8 +140,8 @@ def assemble_tree(
     )
 
     placed_entities: Set[Tuple[str, str]] = set()
-    # Per parent node id: set of fpaths already placed under it (avoid duplicate file nodes)
-    placed_files_by_parent: Dict[str, Set[str]] = {}
+    # Global: each fpath appears at most once in the tree (first path that lists it wins)
+    placed_fpaths: Set[str] = set()
 
     for path, file_paths in path_to_files.items():
         parts = [p.strip() for p in path.split("/") if p.strip()]
@@ -150,36 +150,27 @@ def assemble_tree(
         parent_for_files = _ensure_abstract_chain(root, parts, path)
 
         for fpath in file_paths:
-            parent_id = parent_for_files.id or ""
-            placed_files = placed_files_by_parent.setdefault(parent_id, set())
-            if fpath in placed_files:
-                file_node = next(
-                    (c for c in parent_for_files.children if c.sigil == SIGIL_FILE and getattr(c.metadata, "fpath", None) == fpath),
-                    None,
-                )
-                if not file_node:
-                    continue
-            else:
-                placed_files.add(fpath)
-                entities = file_entities.get(fpath, [])
-                exp_list = [e.name for e in entities]
-                exp_str = ", ".join(exp_list) if exp_list else ""
-                file_lr = _file_line_range(entities)
-
-                file_node = SemanticNode(
-                    id=fpath,
-                    sigil=SIGIL_FILE,
-                    artifact_class="concrete-file",
-                    feature=fpath.split("/")[-1].replace(".py", "").replace("_", " "),
-                    metadata=NodeMetadata(type="file", fpath=fpath, line_range=file_lr),
-                    contract=Contract(exp=exp_str) if exp_str else Contract(),
-                    status="resolved",
-                    children=[],
-                )
-                parent_for_files.children.append(file_node)
-                file_node.parent = parent_for_files
-
+            if fpath in placed_fpaths:
+                continue
+            placed_fpaths.add(fpath)
             entities = file_entities.get(fpath, [])
+            exp_list = [e.name for e in entities]
+            exp_str = ", ".join(exp_list) if exp_list else ""
+            file_lr = _file_line_range(entities)
+
+            file_node = SemanticNode(
+                id=fpath,
+                sigil=SIGIL_FILE,
+                artifact_class="concrete-file",
+                feature=fpath.split("/")[-1].replace(".py", "").replace("_", " "),
+                metadata=NodeMetadata(type="file", fpath=fpath, line_range=file_lr),
+                contract=Contract(exp=exp_str) if exp_str else Contract(),
+                status="resolved",
+                children=[],
+            )
+            parent_for_files.children.append(file_node)
+            file_node.parent = parent_for_files
+
             for e in entities:
                 key = _entity_key(e)
                 if key in placed_entities:
@@ -254,6 +245,19 @@ def assemble_tree(
                     relation=_entity_to_dep_relation(imp),
                     from_external=imp.is_external,
                     to_external=None,
+                )
+            )
+        for inv in snapshot.all_invokes:
+            from_id = inv.source_entity or inv.source_fpath or "unknown"
+            to_id = inv.target_entity
+            deps.append(
+                DepEdge(
+                    from_entity=from_id,
+                    to=to_id,
+                    relation="invokes",
+                    from_external=False,
+                    to_external=None,
+                    call_site_line=getattr(inv, "call_site_line", None),
                 )
             )
 

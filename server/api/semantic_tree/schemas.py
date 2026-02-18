@@ -94,6 +94,10 @@ class SyncRequest(BaseModel):
         False,
         description="If True, run full pipeline (slow, re-index all). Use False (default) after first sync for fast incremental (index only changed entities).",
     )
+    use_patch_path: bool = Field(
+        False,
+        description="When True and incremental, produce tree via patch-the-tree LLM and return tree_patch in response.",
+    )
     excluded_dirs: Optional[List[str]] = None
     excluded_files: Optional[List[str]] = None
     index_path: Optional[str] = Field(None, description="Scope ID for Postgres index (default: path/.codenav/index)")
@@ -118,8 +122,9 @@ class SyncResponse(BaseModel):
     delta_summary: Optional[DeltaSummary] = None
     timing: Optional[dict] = None
     merge_summary: Optional[MergeSummary] = Field(None, description="Present when forward merge was applied (prior tree + re-encode)")
-    is_patch_based: bool = Field(False, description="Legacy; always False (patch path removed)")
-    patch_summary: Optional[dict] = Field(None, description="When is_patch_based: modified/added/removed/needs_feature_update counts")
+    is_patch_based: bool = Field(False, description="True when sync used patch-the-tree path (use_patch_path)")
+    patch_summary: Optional[dict] = Field(None, description="When is_patch_based: modified/added/removed counts")
+    tree_patch: Optional[dict] = Field(None, description="When is_patch_based: structured patch (insertions, updates, deletions) for extension")
 
 
 # --- Tree edit → target identification ---

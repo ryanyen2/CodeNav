@@ -8,6 +8,7 @@ class EntityFingerprint(BaseModel):
     """Fingerprint for one code entity (content + signature) for delta detection."""
     content_hash: str = Field(..., description="SHA-256 of normalized body/source")
     signature_hash: str = Field("", description="SHA-256 of normalized signature")
+    content_sample: Optional[str] = Field(None, description="First N chars of normalized content for difflib similarity (optional)")
 
 
 class FileFingerprint(BaseModel):

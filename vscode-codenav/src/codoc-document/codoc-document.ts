@@ -228,8 +228,8 @@ export function getRelatedLineIndices(
   }
 
   if (entityIdsInvolved.size > 0) {
-    // One hop only: add only direct dep neighbors of the focused entity, not full transitive closure.
-    // This keeps focus granular (e.g. one function) instead of brightening the whole file.
+    // One hop only: add only direct dep neighbors (imports + invokes), not full transitive closure.
+    // This keeps focus granular so only the focused entity, ancestors, and direct dep neighbors stay at full opacity.
     const directNeighbors = new Set<string>(entityIdsInvolved);
     for (const d of snapshot.depsLines) {
       if (d.fromId && entityIdsInvolved.has(d.fromId) && d.toId) directNeighbors.add(d.toId);

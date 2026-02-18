@@ -1,11 +1,15 @@
-"""Entity delta: added, removed, modified, renamed, unchanged (content-hash rename detection)."""
+"""Entity delta: added, removed, modified, renamed, unchanged (content-hash + difflib similarity)."""
 
+import difflib
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Tuple
 
 from api.semantic_tree.models import CodeEntity
 from api.semantic_tree.state.models import EntityFingerprint
-from api.semantic_tree.state.fingerprint import compute_entity_fingerprint
+from api.semantic_tree.state.fingerprint import (
+    compute_entity_fingerprint,
+    get_entity_content_sample,
+)
 
 
 def _entity_key(e: CodeEntity) -> str:
@@ -57,6 +61,16 @@ def compute_entity_delta(
             if old_fp.content_hash == content_hash and old_fp.signature_hash == sig_hash:
                 delta.unchanged.append(new_entity)
                 used_new_keys.add(new_key)
+            elif old_fp.content_sample and old_fp.content_sample.strip():
+                # Robust diff: use difflib similarity so minor edits don't force re-index
+                new_sample = get_entity_content_sample(new_entity)
+                ratio = difflib.SequenceMatcher(None, old_fp.content_sample, new_sample).ratio()
+                if ratio >= 0.95:
+                    delta.unchanged.append(new_entity)
+                    used_new_keys.add(new_key)
+                else:
+                    delta.modified.append(new_entity)
+                    used_new_keys.add(new_key)
             else:
                 delta.modified.append(new_entity)
                 used_new_keys.add(new_key)

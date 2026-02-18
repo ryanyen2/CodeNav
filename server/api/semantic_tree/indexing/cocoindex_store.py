@@ -10,6 +10,9 @@ from typing import Any, List, Optional, Tuple
 
 from api.semantic_tree.models import CodebaseSnapshot, CodeEntity
 
+# Type alias: (entity, score, chunk_text) for retrieve-then-generate
+SearchWithChunkResult = Tuple[CodeEntity, float, str]
+
 logger = logging.getLogger(__name__)
 
 # Lazy init so cocoindex is only loaded when indexing is used
@@ -256,6 +259,51 @@ class CodebaseIndex:
             rows = cur.fetchall()
             cur.close()
         return [(r[0], r[1], r[2], float(r[3])) for r in rows]
+
+    def _search_raw_with_chunks(
+        self,
+        scope_id: str,
+        query: str,
+        top_k: int,
+    ) -> List[Tuple[str, str, str, float, str]]:
+        """Return (fpath, entity_name, entity_type, score, chunk_text) for top_k. Used for RAG context."""
+        _ensure_cocoindex_init()
+        query_emb = _embed_text(query)
+        if not query_emb:
+            return []
+        vec_str = "[" + ",".join(str(x) for x in query_emb) + "]"
+        with _connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT fpath, entity_name, entity_type, 1 - (embedding <=> %s::vector) AS score, chunk_text
+                FROM codenav_code_embeddings
+                WHERE scope_id = %s
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (vec_str, scope_id, vec_str, top_k),
+            )
+            rows = cur.fetchall()
+            cur.close()
+        return [(r[0], r[1], r[2], float(r[3]), r[4] or "") for r in rows]
+
+    def search_with_chunks(
+        self,
+        scope_id: str,
+        snapshot: CodebaseSnapshot,
+        query: str,
+        top_k: int = 10,
+    ) -> List[SearchWithChunkResult]:
+        """Return (entity, score, chunk_text) for top_k nearest. Retrieve-then-generate: use chunk_text as sole LLM context."""
+        entity_by_key = {(e.fpath, e.name): e for e in snapshot.all_entities}
+        rows = self._search_raw_with_chunks(scope_id, query, top_k)
+        result: List[SearchWithChunkResult] = []
+        for fpath, entity_name, _entity_type, score, chunk_text in rows:
+            key = (fpath, entity_name)
+            if key in entity_by_key:
+                result.append((entity_by_key[key], float(score), chunk_text))
+        return result
 
     def size(self, scope_id: str) -> int:
         """Return number of entities indexed for this scope."""

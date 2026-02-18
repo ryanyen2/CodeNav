@@ -15,6 +15,13 @@ export interface AnalyzeResult {
   entity_count: number;
 }
 
+export interface MergeSummary {
+  preserved_user_nodes?: number;
+  overwritten_grounded_nodes?: number;
+  surfaced_added?: number;
+  drifted_nodes?: number;
+}
+
 export interface SyncResult {
   tree_md: string;
   tree_json?: { root: { metadata?: { fpath?: string; entity_name?: string; line_range?: [number, number] }; children?: unknown[]; [key: string]: unknown } };
@@ -22,6 +29,10 @@ export interface SyncResult {
   file_count: number;
   entity_count: number;
   is_incremental?: boolean;
+  is_patch_based?: boolean;
+  merge_summary?: MergeSummary;
+  patch_summary?: Record<string, unknown>;
+  tree_patch?: { insertions?: unknown[]; updates?: unknown[]; deletions?: string[] };
   error?: string;
 }
 
@@ -108,10 +119,11 @@ export class ApiClient {
     return ok && data ? data : null;
   }
 
-  async sync(path: string, options?: { force_full?: boolean }): Promise<SyncResult | null> {
+  async sync(path: string, options?: { force_full?: boolean; use_patch_path?: boolean }): Promise<SyncResult | null> {
     const { ok, data, errorDetail } = await this.request<SyncResult>('POST', '/sync', {
       path,
       force_full: options?.force_full ?? false,
+      use_patch_path: options?.use_patch_path ?? false,
     });
     if (!ok) return { tree_md: '', root_dir: '', file_count: 0, entity_count: 0, error: errorDetail ?? 'Sync failed' };
     return data ?? null;
