@@ -70,7 +70,11 @@ export function parseCodocDocument(
       metadata?.fpath ?? (sigil === '%' && feature?.trim() ? feature.trim() : currentFpath);
     if (sigil === '%' && feature?.trim()) currentFpath = feature.trim();
 
-    const entityName = metadata?.entity_name;
+    let entityName = metadata?.entity_name;
+    if (!entityName && (sigil === '$' || sigil === '^') && feature?.trim()) {
+      const m = feature.trim().match(/\s+\(([^)]+)\)$/);
+      if (m) entityName = m[1].trim();
+    }
     const entityId =
       fpath && entityName
         ? `${fpath}::${entityName}`

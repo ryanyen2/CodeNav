@@ -53,8 +53,9 @@
         "codenav.serverUrl": { "type": "string", "default": "http://localhost:8001", "description": "Backend API base URL" },
         "codenav.serverPath": { "type": "string", "default": "", "description": "Optional: path to run server (e.g. server/); if set, can auto-start" },
         "codenav.focusMode": { "type": "boolean", "default": true, "description": "When caret is in a .codoc file, dim unrelated lines and highlight lines related by deps" },
-        "codenav.crossEditorHighlight": { "type": "boolean", "default": true, "description": "When caret is on a node with code location, open the file in split view and highlight the corresponding range" }
-      }
+        "codenav.crossEditorHighlight": { "type": "boolean", "default": true, "description": "When caret is on a node with code location, open the file in split view and highlight the corresponding range" },
+        "codenav.highlightDebug": { "type": "boolean", "default": false, "description": "Log cross-editor highlight resolution to Output channel 'CodeNav Highlight' (H1–H7 hypotheses)" }
+}
     }
   },
   "dependencies": {

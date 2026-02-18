@@ -109,3 +109,6 @@ The backend builds semantic trees from a live codebase. **Embeddings**: CocoInde
 - **`prescriptive-semantic-tree-plan.md`** — Algorithm design: node schema, invariants, operation taxonomy.
 - **`test_cases.md`** — Test spec: tree notation, operation syntax, codebase snapshot format.
 - **`server/prompts/`** — LLM prompts: `domain_discovery.txt`, `semantic_parsing.txt`, `hierarchical_construction.txt`; loaded by `server/api/semantic_tree/llm/prompt_loader.py` (uses `CODENAV_PROMPTS_DIR` or walks up to find `prompts/`).
+
+
+## PITFALLS

@@ -40,8 +40,8 @@ def complete(
         input_str = prompt
 
     if LOG_PROMPTS:
-        logger.info("\n\n===================[CODENAV] LLM system_prompt:\n%s", (system_prompt[:200] or ""))
-        logger.info("\n\n===================[CODENAV] LLM user prompt:\n%s", (prompt[:2000] or ""))
+        logger.info("\n\n===================[CODENAV] LLM system_prompt:\n%s", (input_str[:200] or ""))
+        logger.info("\n\n===================[CODENAV] LLM user prompt:\n%s", (prompt[:1000] or ""))
 
     api_kwargs = client.convert_inputs_to_api_kwargs(
         input=input_str,
