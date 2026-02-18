@@ -3,27 +3,6 @@ import { parseTreeLine } from 'codenav-semantic-tree/extension-api';
 import { parseCodocDocument } from '../codoc-document/codoc-document';
 import { readMeta } from '../format/meta-store';
 
-const DEBUG_OUTPUT_CHANNEL_NAME = 'CodeNav Highlight';
-
-function getLogChannel(): vscode.OutputChannel {
-  return (getLogChannel as { _channel?: vscode.OutputChannel })._channel ?? (
-    (getLogChannel as { _channel?: vscode.OutputChannel })._channel = vscode.window.createOutputChannel(DEBUG_OUTPUT_CHANNEL_NAME)
-  );
-}
-
-let _debugHeaderLogged = false;
-function debugLog(msg: string, data?: object): void {
-  const enabled = vscode.workspace.getConfiguration('codenav').get<boolean>('highlightDebug', false);
-  if (!enabled) return;
-  const ch = getLogChannel();
-  if (!_debugHeaderLogged) {
-    _debugHeaderLogged = true;
-    ch.appendLine('--- CodeNav Highlight debug (H1=cursor/editor, H2=lineInfo, H3=parseLine, H4=meta, H5=nodeKey, H6=span override, H7=selection event) ---');
-  }
-  const line = data != null ? `${msg} ${JSON.stringify(data)}` : msg;
-  ch.appendLine(`[${new Date().toISOString().slice(11, 23)}] ${line}`);
-}
-
 const CODE_HIGHLIGHT_DECORATION = vscode.window.createTextEditorDecorationType({
   backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
   isWholeLine: false,
@@ -55,22 +34,14 @@ function codeLocationFromMeta(
   meta: { nodes: Record<string, { line_range?: [number, number] }> } | null,
   lineText?: string
 ): CodeLocationFromMeta | null {
-  debugLog('codeLocationFromMeta input', { entityId: info.entityId, fpath: info.fpath, hasMeta: !!meta, metaNodeCount: meta ? Object.keys(meta.nodes).length : 0, lineTextPreview: lineText?.slice(0, 60) });
   if (!info.fpath) return null;
   let nodeKey = info.entityId ?? info.fpath;
   if (lineText != null && lineText.trim()) {
     const parsed = parseTreeLine(lineText);
-    debugLog('H3 parseTreeLine on cursor line', {
-      parsed: !!parsed,
-      sigil: parsed?.sigil,
-      entity_name: parsed?.metadata?.entity_name,
-      isLeafSigil: parsed ? (parsed.sigil === '$' || parsed.sigil === '^') : false,
-    });
     if (parsed && (parsed.sigil === '$' || parsed.sigil === '^') && parsed.metadata?.entity_name && info.fpath) {
       nodeKey = `${info.fpath}::${parsed.metadata.entity_name}`;
     }
   }
-  debugLog('H2/H5 nodeKey and meta lookup', { nodeKey, isFileKey: !nodeKey.includes('::'), hasEntry: !!(meta?.nodes?.[nodeKey]), entryLineRange: meta?.nodes?.[nodeKey]?.line_range });
   const entry = meta?.nodes?.[nodeKey];
   const lineRange = entry?.line_range;
   const startLine = lineRange && lineRange.length >= 2 ? lineRange[0] : 1;
@@ -119,11 +90,12 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
       ranges.push(new vscode.Range(i, 0, i, Math.max(0, lineObj.text.length)));
     }
     codeEditor.setDecorations(CODE_HIGHLIGHT_DECORATION, ranges.map((range) => ({ range })));
+    const rangeToReveal = new vscode.Range(startLine0, 0, endLineClamped, doc.lineAt(endLineClamped).text.length);
+    codeEditor.revealRange(rangeToReveal, vscode.TextEditorRevealType.InCenter);
   }
 
   function updateHighlight(codocEditor: vscode.TextEditor, lineIndex: number): void {
     const doc = codocEditor.document;
-    debugLog('H1 updateHighlight', { uri: doc.uri.fsPath, lineIndex, lineCount: doc.lineCount, isCodoc: isCodocDoc(doc) });
     if (!isCodocDoc(doc)) return;
 
     const enabled = vscode.workspace
@@ -136,17 +108,13 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
 
     const snapshot = parseCodocDocument(doc.getText());
     const lineText = doc.lineCount > lineIndex ? doc.lineAt(lineIndex).text : undefined;
-    debugLog('H1 cursor line text', { lineIndex, lineText: lineText?.slice(0, 80) });
     const info = snapshot.lineInfos.find((l) => l.lineIndex === lineIndex);
     if (!info) {
-      debugLog('H2 no lineInfo for cursor line', { lineIndex, lineInfoIndices: snapshot.lineInfos.map((l) => l.lineIndex).slice(0, 20) });
       clearCodeHighlight();
       return;
     }
-    debugLog('H2 lineInfo for cursor', { entityId: info.entityId, fpath: info.fpath, lineIndex: info.lineIndex });
 
     const meta = readMeta(doc.uri);
-    debugLog('H4 meta read', { metaPath: doc.uri.fsPath.replace(/[^/\\]+$/, '.codoc.meta.json'), hasMeta: !!meta, sampleKeys: meta ? Object.keys(meta.nodes).slice(0, 8) : [] });
     const loc = codeLocationFromMeta(info, meta, lineText);
     if (!loc || !loc.fpath) {
       clearCodeHighlight();
@@ -154,7 +122,6 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
     }
     let finalLoc: CodeLocationFromMeta = { fpath: loc.fpath, startLine: loc.startLine, endLine: loc.endLine };
     const span = finalLoc.endLine - finalLoc.startLine + 1;
-    debugLog('H5/H6 initial loc and span', { fpath: finalLoc.fpath, startLine: finalLoc.startLine, endLine: finalLoc.endLine, span });
     const parsed = lineText != null && lineText.trim() ? parseTreeLine(lineText) : null;
     const isLeafWithEntity =
       parsed && (parsed.sigil === '$' || parsed.sigil === '^') && parsed.metadata?.entity_name && info.fpath;
@@ -164,15 +131,8 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
       if (entityEntry?.line_range && span > 15) {
         const [s, e] = entityEntry.line_range;
         finalLoc = { fpath: info.fpath, startLine: s, endLine: e };
-        debugLog('H6 span override applied', { entityKey, newStart: s, newEnd: e });
-      } else {
-        debugLog('H6 span override skipped', { entityKey, hasEntry: !!entityEntry?.line_range, span, threshold: 15 });
       }
-    } else {
-      debugLog('H6 not a leaf-with-entity or no meta', { isLeafWithEntity: !!isLeafWithEntity, hasMetaNodes: !!meta?.nodes });
     }
-
-    debugLog('final highlight range', { fpath: finalLoc.fpath, startLine: finalLoc.startLine, endLine: finalLoc.endLine });
 
     const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
     if (!folder) return;
@@ -214,7 +174,6 @@ export function registerCrossEditorHighlight(context: vscode.ExtensionContext): 
   }
 
   function onCodocCursorChange(editor: vscode.TextEditor | undefined): void {
-    debugLog('H7 onCodocCursorChange', { hasEditor: !!editor, uri: editor?.document?.uri?.fsPath, isCodoc: editor ? isCodocDoc(editor.document) : false });
     if (!editor || !isCodocDoc(editor.document)) {
       clearCodeHighlight();
       return;

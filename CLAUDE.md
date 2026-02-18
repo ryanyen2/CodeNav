@@ -111,4 +111,6 @@ The backend builds semantic trees from a live codebase. **Embeddings**: CocoInde
 - **`server/prompts/`** — LLM prompts: `domain_discovery.txt`, `semantic_parsing.txt`, `hierarchical_construction.txt`; loaded by `server/api/semantic_tree/llm/prompt_loader.py` (uses `CODENAV_PROMPTS_DIR` or walks up to find `prompts/`).
 
 
-## PITFALLS
+## Pitfalls
+
+- **Cross-editor highlight: leaf nodes must have entity id in lineInfos.** In `vscode-codenav`, when the user moves the caret on a .codoc node, the extension resolves the corresponding code range from `.codoc.meta.json` using a node key (`fpath::entity_name` for leaves, `fpath` for file nodes). The key is taken from `parseCodocDocument()`’s `lineInfos`, which assign `entityId = fpath::entityName` only when `metadata.entity_name` is set for that line. If the tree parser does not set `metadata.entity_name` for leaf lines (e.g. due to format or parser version), **every line under a file node inherits the file’s id**, so the extension uses the file key and highlights the whole file instead of the single function/class. Fix: in `codoc-document.ts`, when building lineInfos for a leaf line (`$` or `^`), if `metadata.entity_name` is missing, derive it from the feature string when it ends with ` (name)` (e.g. regex `/\s+\(([^)]+)\)$/`) so `entityId` is always set for leaves and cross-editor highlight stays granular.
