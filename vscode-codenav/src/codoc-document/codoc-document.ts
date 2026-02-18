@@ -199,9 +199,9 @@ function normalizeDepEntity(
 
 /**
  * Get line indices that should stay at full opacity (focus):
- * 1) Tree path: the node, its ancestors, and its descendants (semantic hierarchy).
- * 2) Dep-related: nodes connected by the dependency graph (imports/invokes/etc.).
- * Combined = tree path ∪ dep-related. All other tree/deps lines are dimmed.
+ * 1) Tree path: the focused node and its ancestors only (not descendants — siblings stay dimmed).
+ * 2) Dep-related: nodes connected by the dependency graph (imports/invokes/etc.) from AST.
+ * Combined = current + ancestors ∪ dep-related. All other tree/deps lines are dimmed.
  */
 export function getRelatedLineIndices(
   snapshot: CodocDocumentSnapshot,
@@ -210,14 +210,12 @@ export function getRelatedLineIndices(
   const related = new Set<number>();
   const info = snapshot.lineInfos.find((l) => l.lineIndex === lineIndex);
   const depLine = snapshot.depsLines.find((d) => d.lineIndex === lineIndex);
-  const knownFpaths = new Set(snapshot.lineInfos.map((l) => l.fpath).filter(Boolean) as string[]);
 
   if (info) {
     related.add(info.lineIndex);
     const ancestors = snapshot.lineToAncestors.get(info.lineIndex) ?? [];
     ancestors.forEach((i) => related.add(i));
-    const descendants = snapshot.lineToDescendants.get(info.lineIndex) ?? [];
-    descendants.forEach((i) => related.add(i));
+    // Do not add descendants: highlighting a child should not brighten siblings or other children.
   }
 
   let entityIdsInvolved = new Set<string>();
@@ -230,28 +228,21 @@ export function getRelatedLineIndices(
   }
 
   if (entityIdsInvolved.size > 0) {
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const d of snapshot.depsLines) {
-        if (d.fromId && entityIdsInvolved.has(d.fromId) && d.toId && !entityIdsInvolved.has(d.toId)) {
-          entityIdsInvolved.add(d.toId);
-          changed = true;
-        }
-        if (d.toId && entityIdsInvolved.has(d.toId) && d.fromId && !entityIdsInvolved.has(d.fromId)) {
-          entityIdsInvolved.add(d.fromId);
-          changed = true;
-        }
-      }
+    // One hop only: add only direct dep neighbors of the focused entity, not full transitive closure.
+    // This keeps focus granular (e.g. one function) instead of brightening the whole file.
+    const directNeighbors = new Set<string>(entityIdsInvolved);
+    for (const d of snapshot.depsLines) {
+      if (d.fromId && entityIdsInvolved.has(d.fromId) && d.toId) directNeighbors.add(d.toId);
+      if (d.toId && entityIdsInvolved.has(d.toId) && d.fromId) directNeighbors.add(d.fromId);
     }
-    for (const eid of entityIdsInvolved) {
+    for (const eid of directNeighbors) {
       const indices = snapshot.entityToLines.get(eid);
       if (indices) indices.forEach((i) => related.add(i));
     }
     for (const d of snapshot.depsLines) {
       if (
-        (d.fromId && entityIdsInvolved.has(d.fromId)) ||
-        (d.toId && entityIdsInvolved.has(d.toId))
+        (d.fromId && directNeighbors.has(d.fromId)) ||
+        (d.toId && directNeighbors.has(d.toId))
       ) {
         related.add(d.lineIndex);
       }

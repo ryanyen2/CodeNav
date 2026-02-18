@@ -24,6 +24,8 @@ def extract_import_edges(
 ) -> List[ImportEdge]:
     """
     Extract import edges from a Python AST. relation is always "imports".
+    Dependencies are thus AST-based (imports only). invokes/inherits/type-refs
+    would require additional analysis (e.g. call graph, class hierarchy).
     root_package: e.g. "requests" for requests/api.py; used to mark internal vs external.
     """
     if root_package is None:

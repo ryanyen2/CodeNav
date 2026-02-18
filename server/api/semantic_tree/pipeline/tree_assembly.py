@@ -90,6 +90,17 @@ def _entity_to_dep_relation(imp: ImportEdge) -> str:
     return imp.relation if imp.relation in ("imports", "invokes", "inherits", "type-refs") else "imports"
 
 
+def _file_line_range(entities: List[CodeEntity]) -> Optional[Tuple[int, int]]:
+    """Line range spanning all entities in the file (for file-node correspondence highlight)."""
+    if not entities:
+        return None
+    starts = [e.line_range[0] for e in entities if e.line_range]
+    ends = [e.line_range[1] for e in entities if e.line_range]
+    if not starts or not ends:
+        return None
+    return (min(starts), max(ends))
+
+
 def assemble_tree(
     snapshot: CodebaseSnapshot,
     semantic_features: List[SemanticFeature],
@@ -153,13 +164,14 @@ def assemble_tree(
                 entities = file_entities.get(fpath, [])
                 exp_list = [e.name for e in entities]
                 exp_str = ", ".join(exp_list) if exp_list else ""
+                file_lr = _file_line_range(entities)
 
                 file_node = SemanticNode(
                     id=fpath,
                     sigil=SIGIL_FILE,
                     artifact_class="concrete-file",
                     feature=fpath.split("/")[-1].replace(".py", "").replace("_", " "),
-                    metadata=NodeMetadata(type="file", fpath=fpath),
+                    metadata=NodeMetadata(type="file", fpath=fpath, line_range=file_lr),
                     contract=Contract(exp=exp_str) if exp_str else Contract(),
                     status="resolved",
                     children=[],
@@ -201,12 +213,13 @@ def assemble_tree(
     if not hierarchy_mappings:
         for fpath, entities in file_entities.items():
             exp_str = ", ".join(e.name for e in entities)
+            file_lr = _file_line_range(entities)
             file_node = SemanticNode(
                 id=fpath,
                 sigil=SIGIL_FILE,
                 artifact_class="concrete-file",
                 feature=fpath.split("/")[-1].replace(".py", ""),
-                metadata=NodeMetadata(type="file", fpath=fpath),
+                metadata=NodeMetadata(type="file", fpath=fpath, line_range=file_lr),
                 contract=Contract(exp=exp_str) if exp_str else Contract(),
                 status="resolved",
                 children=[],
