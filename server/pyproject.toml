@@ -18,6 +18,8 @@ dependencies = [
     "ollama>=0.4.8",
     "aiohttp>=3.8.4",
     "ipykernel>=7.2.0",
+    "sentence-transformers>=5.0",
+    "transformers>=4.50",
 ]
 
 [project.optional-dependencies]

@@ -20,9 +20,9 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if OPENAI_API_KEY:
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-# Embedder: openai | ollama
+# Embedder: openai | ollama | huggingface
 EMBEDDER_TYPE = os.environ.get("CODENAV_EMBEDDER_TYPE", "openai").lower()
-if EMBEDDER_TYPE not in ("openai", "ollama"):
+if EMBEDDER_TYPE not in ("openai", "ollama", "huggingface"):
     EMBEDDER_TYPE = "openai"
 
 # Config directory (default: server/api/config)
@@ -98,11 +98,13 @@ def get_embedder_config() -> dict:
     """Current embedder config by CODENAV_EMBEDDER_TYPE."""
     if EMBEDDER_TYPE == "ollama" and "embedder_ollama" in configs:
         return configs.get("embedder_ollama", {})
+    if EMBEDDER_TYPE == "huggingface" and "embedder_huggingface" in configs:
+        return configs.get("embedder_huggingface", {})
     return configs.get("embedder", {})
 
 
 def get_embedder_type() -> str:
-    """'ollama' or 'openai'."""
+    """'ollama', 'openai', or 'huggingface'."""
     return EMBEDDER_TYPE
 
 
@@ -156,6 +158,6 @@ if _gen:
     configs["providers"] = _gen.get("providers", {})
 
 if _emb:
-    for key in ("embedder", "embedder_ollama", "retriever", "text_splitter"):
+    for key in ("embedder", "embedder_ollama", "embedder_huggingface", "retriever", "text_splitter"):
         if key in _emb:
             configs[key] = _emb[key]
