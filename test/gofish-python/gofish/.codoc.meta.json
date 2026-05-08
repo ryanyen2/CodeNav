@@ -1,0 +1,294 @@
+{
+  "version": 1,
+  "nodes": {
+    "arrow_utils.py::dataframe_to_arrow": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(df) -> bytes"
+      },
+      "line_range": [
+        9,
+        58
+      ]
+    },
+    "arrow_utils.py::arrow_to_dataframe": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(arrow_bytes) -> pd.DataFrame"
+      },
+      "line_range": [
+        61,
+        76
+      ]
+    },
+    "widget.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "widget.py::GoFishChartWidget": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, _execute_derive]"
+      },
+      "line_range": [
+        14,
+        137
+      ]
+    },
+    "widget.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(spec, arrow_data, derive_functions=..., width=..., height=..., axes=..., debug=..., **kwargs)"
+      },
+      "line_range": [
+        27,
+        89
+      ]
+    },
+    "widget.py::_execute_derive": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(msg, buffers)"
+      },
+      "line_range": [
+        92,
+        137
+      ]
+    },
+    "ast.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "ast.py::Operator": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, to_dict]"
+      },
+      "line_range": [
+        10,
+        19
+      ]
+    },
+    "ast.py::DeriveOperator": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, to_dict]"
+      },
+      "line_range": [
+        22,
+        32
+      ]
+    },
+    "ast.py::Mark": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, to_dict]"
+      },
+      "line_range": [
+        35,
+        44
+      ]
+    },
+    "ast.py::to_dict": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "() -> dict"
+      },
+      "line_range": [
+        42,
+        44
+      ]
+    },
+    "ast.py::ChartBuilder": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, flow, mark, to_ir, to_json, render]"
+      },
+      "line_range": [
+        47,
+        203
+      ]
+    },
+    "ast.py::flow": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*ops) -> 'ChartBuilder'"
+      },
+      "line_range": [
+        69,
+        83
+      ]
+    },
+    "ast.py::mark": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(mark) -> 'ChartBuilder'"
+      },
+      "line_range": [
+        85,
+        97
+      ]
+    },
+    "ast.py::to_ir": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "() -> dict"
+      },
+      "line_range": [
+        99,
+        120
+      ]
+    },
+    "ast.py::to_json": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "() -> str"
+      },
+      "line_range": [
+        122,
+        124
+      ]
+    },
+    "ast.py::render": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(w=..., h=..., axes=..., debug=...)"
+      },
+      "line_range": [
+        126,
+        203
+      ]
+    },
+    "ast.py::chart": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(data, options=...) -> ChartBuilder"
+      },
+      "line_range": [
+        441,
+        452
+      ]
+    },
+    "ast.py::spread": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(field_or_options, **options) -> Operator"
+      },
+      "line_range": [
+        209,
+        231
+      ]
+    },
+    "ast.py::stack": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(field, dir=..., **options) -> Operator"
+      },
+      "line_range": [
+        234,
+        254
+      ]
+    },
+    "ast.py::derive": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(fn) -> DeriveOperator"
+      },
+      "line_range": [
+        257,
+        267
+      ]
+    },
+    "ast.py::group": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(field) -> Operator"
+      },
+      "line_range": [
+        270,
+        280
+      ]
+    },
+    "ast.py::scatter": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(field, x, y, **options) -> Operator"
+      },
+      "line_range": [
+        283,
+        301
+      ]
+    },
+    "ast.py::rect": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(w=..., h=..., fill=..., stroke=..., strokeWidth=..., rx=..., ry=..., emX=..., emY=..., rs=..., ts=..., debug=...) -> Mark"
+      },
+      "line_range": [
+        307,
+        339
+      ]
+    },
+    "ast.py::circle": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(r=..., fill=..., stroke=..., strokeWidth=..., debug=...) -> Mark"
+      },
+      "line_range": [
+        342,
+        360
+      ]
+    },
+    "ast.py::arc": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(r=..., fill=..., stroke=..., strokeWidth=..., debug=...) -> Mark"
+      },
+      "line_range": [
+        363,
+        381
+      ]
+    },
+    "ast.py::line": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(stroke=..., strokeWidth=..., opacity=..., interpolation=...) -> Mark"
+      },
+      "line_range": [
+        384,
+        400
+      ]
+    },
+    "ast.py::area": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(stroke=..., strokeWidth=..., opacity=..., mixBlendMode=..., dir=..., interpolation=...) -> Mark"
+      },
+      "line_range": [
+        403,
+        423
+      ]
+    },
+    "ast.py::scaffold": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(w=..., h=..., **kwargs) -> Mark"
+      },
+      "line_range": [
+        426,
+        438
+      ]
+    },
+    "ast.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(data, options=..., operators=...)"
+      },
+      "line_range": [
+        50,
+        67
+      ]
+    }
+  },
+  "file_exports": {}
+}

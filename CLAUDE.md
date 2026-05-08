@@ -1,102 +1,115 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Project Overview
 
-CodeNav is a parser and tree-diff engine for prescriptive semantic trees. It parses semantic trees from markdown notation, compares before/after states to infer operations, and dispatches to action stubs. The **TypeScript layer** (`src/`) handles parsing, diffing, and dispatch; the **Python backend** (`server/api/`) provides an integrated semantic tree pipeline: **analyze** (extract → FAISS index/RAG → domain discovery → semantic parsing via RAG → hierarchy → tree assembly). The API returns 422 `intervention_required` when a step needs user fix.
+**codoc** — a system that maintains a human-intent-level view of a codebase as a navigable feature tree, synchronized to the underlying code. Each node is a *feature*: a named unit of intent that binds to many code chunks across many files; a single file's chunks may belong to several features. The tree is first-class authored intent (not LLM-derived), and code attribution is a secondary index updated by the reflective pipeline.
 
-## Current Status & Limitations
-
-- **v0.1.0**: Parsing and diffing in TypeScript; tree construction pipeline in Python. Code generation (AddNode, EditFeature, DeleteNode) runs in Python; tree→ops still uses TS.
-- **`src/` is required**: The server **cannot** run without the TypeScript `src/` tree. It invokes `src/cli/tree-edit-targets.ts` (base vs edited tree → operations) and `src/cli/merge-trees.ts` (forward merge). Do not remove `src/` unless tree-diff and merge are reimplemented in Python.
-- **Python backend** only extracts `.py` files — JS/TS are not supported in the analyze pipeline.
-- **`src/parser/codebase-parser.ts`** is a standalone tool for CLI inspection; it is **not** connected to the Python analyze pipeline. Use it to parse codebase blocks from markdown or to snapshot a directory from the CLI.
+This repo contains the Python core (`codoc/`). The VSCode extension lives in a separate `codoc-vscode` repo.
 
 ## Commands
 
 ```bash
-npm install              # Install dependencies
-npm run build            # Compile TypeScript (tsc → dist/)
+# Install (Python 3.11+ required; use pip or uv)
+pip install -e .
 
-# CLI tools (npm run or npx tsx)
-npm run parse:tree       # or: npx tsx src/cli/parse-tree.ts [path-to-test_cases.md]
-npm run parse:test      # or: npx tsx src/cli/parse-test-case.ts test_cases.md [test-name]
-npm run parse:codebase  # or: npx tsx src/cli/parse-codebase.ts <directory>
-npx tsx src/cli/tree-edit-targets.ts <base.md> <edited.md>   # Tree edit → operations + code targets (JSON)
+# CLI
+codoc init                              # init .codoc/ and install git post-commit hook
+codoc bootstrap [--root-dir DIR]        # cluster codebase, propose feature cards
+codoc bootstrap finish                  # mark bootstrap done
+codoc reflect [--from-ref REF]         # run reflective pipeline on latest commits
+codoc tx list                           # list pending proposals
+codoc tx accept HLC                     # accept a proposal
+codoc tx reject HLC                     # reject a proposal
+codoc tx label HLC LABEL                # label for validation gate (accept-verbatim | accept-light-edit | accept-heavy-edit | reject)
+codoc feature show UUID                 # show feature + state + bindings
+codoc feature amend UUID                # edit intent prose
+codoc feature rename UUID NEW_SLUG      # rename slug
+codoc feature retire UUID               # retire feature
+codoc gate-run [--report]               # compute validation gate metrics
+codoc server [--port 8001]              # start FastAPI server
+
+# Tests (run with Python 3.11)
+python3.11 -m pytest tests/
 ```
-
-**Server (from `server/`):**
-
-```bash
-uv run python main.py    # Start API; port from PORT (default 8001)
-```
-
-No automated test suite; validate via CLI and API.
 
 ## Architecture
 
-**Module system:** ES Modules (`"type": "module"` in package.json, NodeNext resolution). All internal TS imports use `.js` extensions.
+### Core inversion vs. CodeNav
 
-**Zero runtime dependencies** (TS). `@babel/parser` is a devDependency, lazy-loaded in `codebase-parser.ts` for JS/TS AST extraction with regex fallback.
+CodeNav (old): code → LLM → tree → diff → operations. Tree is derived.
+codoc (new): tree is authored intent; code attribution is a secondary index. Features have stable UUIDs, prose, constraints (Phase 5), and many-to-many bindings to code chunks. The reflective pipeline observes commits and proposes attribution updates; the user curates.
 
-### End-to-End Workflow
-
-Two phases:
-
-- **Phase A — Codebase → Semantic Tree (Python):** Extract entities from the codebase (directory path or in-memory files) → build FAISS index → domain discovery (LLM) → semantic parsing with RAG (LLM) → hierarchical construction (LLM) → assemble tree with path/entity grounding and deps → serialize to markdown or JSON. Output is parseable by TS `parseTreeBlock()` (sigils, `[path]`, `(entity)`, `deps:`).
-- **Phase B — Tree Edits → Code Changes (TypeScript):** Markdown tree notation → `parseTreeBlock()` → `SemanticTree` → `diffTrees(before, after)` → operations → `dispatch()` → `ActionResult` (stub plans only; no code generation yet).
-
-### Core Pipeline (TypeScript)
+### Package layout (`codoc/`)
 
 ```
-Markdown tree notation → parseTreeBlock() → SemanticTree
-                                                ↓
-                         diffTrees(before, after) → TreeDiffResult[]
-                                                        ↓
-                              diffResultToOperation() → Operation
-                                                           ↓
-                                         dispatch() → ActionResult (stub plan)
+codoc/
+  model/          # Pydantic types: Feature, Anchor, Binding, Constraint, Transaction, Obligation, HLC, FeatureState
+  core/           # Deterministic core: fingerprint, anchor_resolver, state_derivation, subtree_hash, binding_graph, log (TransactionLog)
+  core/crdt/      # pycrdt-backed CRDT shapes: AWMap, LWWRegister, ORSet
+  lang/           # Tree-sitter LanguageAdapter protocol + python.py + typescript.py; get_adapter(), detect_language()
+  storage/        # SQLiteStore (WAL), JSONLLog (audit), FaissIndex
+  pipelines/
+    bootstrap/    # cluster.py → propose.py → runner.py (run_bootstrap, finish_bootstrap)
+    reflective/   # commit_diff → fingerprint_compare → escalate → propose → runner (run_reflect)
+    intentional/  # amend.py, rename.py, retire.py, runner.py (IntentionalRunner)
+  agents/         # LLM dispatch: bootstrap_clustering, attribution; base utilities (load_prompt, parse_solution)
+  prompts/        # LLM prompt templates: bootstrap_clustering.txt, attribution_judgment.txt
+  api/            # FastAPI app (app.py + routes.py)
+  cli/            # Typer CLI: main.py + init/bootstrap/reflect/tx/feature/gate_run/server
+  config.py       # LLM + embedder config (env-driven: CODOC_PROVIDER, CODOC_MODEL, OPENAI_API_KEY, etc.)
 ```
 
-### Key Modules (TypeScript — `src/`)
+### Data model key types
 
-- **`src/types.ts`** — All type definitions. Semantic nodes: (f, m, c) = feature, metadata, contract. Sigils: `/` dir, `%` file, `$`/`^` leaf, `~` abstract.
-- **`src/parser/tree-parser.ts`** — Line-based parser for markdown nested list → SemanticTree; parses `deps:` blocks with `(a) --rel--> (b)` notation.
-- **`src/parser/codebase-parser.ts`** — Codebase snapshots from markdown blocks, source files, or directory; Babel for JS/TS, regex for Python. CLI only; not part of the Python analyze pipeline.
-- **`src/parser/operation-parser.ts`** — Parses `--- OPERATION ---` blocks into Operation objects (AddNode, DeleteNode, MoveNode, etc.).
-- **`src/diff/tree-diff.ts`** — Compares two SemanticTrees; matches nodes by stable ID; infers operations.
-- **`src/actions/dispatcher.ts`** — Maps Operations to ActionResult stubs (plan arrays).
-- **`src/sync/tree-edit-targets.ts`** — Tree edit (base + edited markdown) → operations and code targets (fpath, entity_name, line_range).
-- **`src/index.ts`** — Public API barrel.
+- **`Feature`**: `{uuid, slug, parent_uuid, intent, retired, created_at_hlc, updated_at_hlc}`. State computed on demand by `core.state_derivation`.
+- **`Anchor`**: `{file, symbol_path?, ts_query?, occurrence_index}`. At least one of `symbol_path`/`ts_query` required. Symbol-path-first resolution; NO byte ranges stored.
+- **`Binding`**: `{uuid, feature_uuid, anchor, fingerprint, fingerprint_at_hlc, parent_symbol?}`.
+- **`Transaction`**: `{hlc, parent_hlcs, kind, payload, author, proposal, accepted_at, label}`. Append-only log; proposals pending user review have `proposal=True`.
+- **`HLC`**: Hybrid Logical Clock (`logical_time, wall_clock, node_id`). `HLC.to_str()` is lexicographically sortable.
+- **`FeatureState`**: `Stub | Drafting | Stable | Strained | Deprecated | Severed` — derived, never stored.
 
-### Backend (Python — `server/api/`)
+### Transaction kinds (Phase 1)
 
-The backend builds semantic trees from a live codebase. It uses `api.config` (e.g. `get_model_config(provider, model)`, `get_embedder_type`), and `api.tools.embedder` (adalflow) for embeddings.
+Reflective (proposed by pipeline): `INTRODUCE ABSORB EVICT RETIRE_REFLECTIVE REATTRIBUTE FRACTURE COALESCE RENAME_INFER`
+Intentional v1 (user-originated, no cascade): `AMEND RENAME RETIRE`
+Phase 2+: `SPLIT MERGE RESTRUCTURE REWIND BRANCH MERGE_BRANCH INSTATE_CONSTRAINT LIFT_CONSTRAINT`
 
-- **`server/api/semantic_tree/`** — Integrated pipeline and routes:
-  - **`models.py`** — Domain models aligned with `src/types.ts` (CodeEntity, FileInfo, CodebaseSnapshot, tree nodes, etc.).
-  - **`schemas.py`** — Request/response Pydantic models (AnalyzeRequest, SyncRequest, TreeEditRequest, InterventionResponse, etc.).
-  - **`extraction/`** — Discovery (directory walk), Python AST extraction, import edges.
-  - **`indexing/`** — Entity-level chunking and FAISS vector store (embedder from `api.tools.embedder`); used as RAG inside analyze.
-  - **`llm/`** — Prompt loader (repo-root `prompts/`), `<solution>` parsing, completion via `api.config.get_model_config(provider, model)`.
-  - **`pipeline/`** — Domain discovery, semantic parsing (RAG), hierarchical construction, tree assembly; **incremental_forward** (uses **semantic_parsing_incremental**) for code→tree with delta and cached semantic/index.
-  - **`state/`** — Sync state: delta, persistence, fingerprint; used by `/sync` and `/apply_tree_edit`.
-  - **`output/tree_serializer.py`** — Tree → markdown (parseable by `parseTreeBlock()`) or JSON.
-  - **`routes.py`** — FastAPI router (prefix `/semantic_tree`): `POST /sync`, `POST /apply_tree_edit`, `POST /analyze`, `GET /tree?path=`, `POST /tree_edit`, `POST /search`, `GET /status`. `POST /tree_edit` invokes TS `src/cli/tree-edit-targets.ts` for operations and code targets. On step failure, returns **422** with `intervention_required`.
-  - **`logging.py`** — Pipeline stage logger and one-line `[CODENAV]` logs (SYNC mode/delta/index/semantic, TREE_EDIT ops/targets, APPLY_TREE_EDIT).
+### Storage schema
 
-Output markdown from the backend is designed to be consumed by TS `parseTreeBlock()` and matches the format in `test_cases.md` (sigils, path grounding, entity names, `deps:` block).
+SQLite WAL at `.codoc/codoc.db`. Tables: `transactions features bindings constraints obligations chunk_fingerprints`. JSONL audit lane at `.codoc/log.jsonl` (rebuildable from SQLite).
 
-### Fixtures and Sample Data
+### Reflective pipeline
 
-- **`test/fixtures/`** — Markdown tree and codebase snapshot examples (including `cases/`); used by CLI and as format reference.
-- **`test/draco/`** — Small Python codebase (Draco) for trying sync/tree_edit/apply_tree_edit manually.
-- **`test/requests/`**, **`test/small_python_repo/`** — Sample Python codebases for extraction/indexing.
-- **`test/mosaic/`** — Sample codebase (TypeScript); not used by Python analyze pipeline (Python-only).
+Triggered by git post-commit hook (installed by `codoc init`). Flow: `git diff → tree-sitter chunk re-parse → fingerprint compare → cheap heuristics → LLM escalation (attribution agent) → proposal queue`. Scales with the change, not the codebase. Never re-indexes everything after bootstrap.
 
-### Design Documents
+### Validation gate
 
-- **`prescriptive-semantic-tree-plan.md`** — Algorithm design: node schema, invariants, operation taxonomy.
-- **`test_cases.md`** — Test spec: tree notation, operation syntax, codebase snapshot format.
-- **`prompts/`** — LLM prompts at repo root (e.g. `domain_discovery.txt`, `semantic_parsing.txt`, `hierarchical_construction.txt`); loaded by `server/api/semantic_tree/llm/prompt_loader.py` (uses `CODENAV_PROMPTS_DIR` or walks up from package to find `prompts/`).
+Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and reflective replay on `test/requests` (Python) + `test/mosaic` (TypeScript). Pass thresholds: accept-verbatim ≥ 60% AND (verbatim + light-edit) ≥ 80% AND median light-edit ≤ 80 chars. If gate fails, the CRDT/cascade/branching architecture must be collapsed to a simpler explicit log.
+
+### Environment variables
+
+| Var | Default | Description |
+|---|---|---|
+| `CODOC_PROVIDER` | `openai` | LLM provider (`openai` or `ollama`) |
+| `CODOC_MODEL` | `gpt-4o-mini` | LLM model name |
+| `OPENAI_API_KEY` | — | OpenAI API key |
+| `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
+| `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider |
+| `CODOC_EMBEDDER_MODEL` | `all-MiniLM-L6-v2` | Embedder model |
+| `CODOC_ROOT_DIR` | cwd | Root directory for API server |
+| `CODOC_LOG_PROMPTS` | — | Set to `1` to log LLM prompt+response to stderr |
+
+### Phase plan
+
+- **Phase 1 (current)**: data model + core + storage + tree-sitter adapters (Python+TS) + bootstrap + reflective + intentional-minimal (AMEND/RENAME/RETIRE) + CLI + FastAPI.
+- **Phase 1.5**: VSCode webview in `codoc-vscode` repo (pending gate passing).
+- **Phase 2**: SPLIT/MERGE/RESTRUCTURE/REWIND + cascade engine + agent reconciliation.
+- **Phase 3**: BRANCH/MERGE_BRANCH + pycrdt merge + conflict resolution UI.
+- **Phase 4**: operational polish.
+- **Phase 5**: constraint subsystem (INSTATE_CONSTRAINT/LIFT_CONSTRAINT, inference).
+
+## Test fixtures
+
+`test/draco/` (small Python), `test/requests/` (real-world Python library), `test/mosaic/` (TypeScript), `test/small_python_repo/` (toy Python), `test/altair/`, `test/gofish-python/`, `test/nanochat/` (additional Python codebases).

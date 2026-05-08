@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "nodes": {
+    "__init__.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "utils.py": {
+      "status": "resolved",
+      "contracts": {
+        "exp": "add, double, concat"
+      }
+    },
+    "main.py": {
+      "status": "resolved",
+      "contracts": {
+        "exp": "greet, run"
+      }
+    }
+  },
+  "file_exports": {}
+}

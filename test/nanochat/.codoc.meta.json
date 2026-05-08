@@ -1,0 +1,1898 @@
+{
+  "version": 1,
+  "nodes": {
+    "execution.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "execution.py::ExecutionResult": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__repr__]"
+      },
+      "line_range": [
+        38,
+        61
+      ]
+    },
+    "execution.py::__repr__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        47,
+        61
+      ]
+    },
+    "execution.py::time_limit": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(seconds)"
+      },
+      "line_range": [
+        65,
+        74
+      ]
+    },
+    "execution.py::signal_handler": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(signum, frame)"
+      },
+      "line_range": [
+        66,
+        67
+      ]
+    },
+    "execution.py::capture_io": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        78,
+        86
+      ]
+    },
+    "execution.py::create_tempdir": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        90,
+        93
+      ]
+    },
+    "execution.py::TimeoutException": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[]"
+      },
+      "line_range": [
+        96,
+        97
+      ]
+    },
+    "execution.py::WriteOnlyStringIO": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[read, readline, readlines, readable]"
+      },
+      "line_range": [
+        100,
+        114
+      ]
+    },
+    "execution.py::read": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        103,
+        104
+      ]
+    },
+    "execution.py::readline": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        106,
+        107
+      ]
+    },
+    "execution.py::readlines": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        109,
+        110
+      ]
+    },
+    "execution.py::readable": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        112,
+        114
+      ]
+    },
+    "execution.py::redirect_stdin": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[]"
+      },
+      "line_range": [
+        117,
+        118
+      ]
+    },
+    "execution.py::chdir": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(root)"
+      },
+      "line_range": [
+        122,
+        131
+      ]
+    },
+    "execution.py::reliability_guard": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(maximum_memory_bytes=...)"
+      },
+      "line_range": [
+        134,
+        211
+      ]
+    },
+    "execution.py::_unsafe_execute": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(code, timeout, maximum_memory_bytes, result_dict)"
+      },
+      "line_range": [
+        214,
+        283
+      ]
+    },
+    "execution.py::execute_code": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(code, timeout=..., maximum_memory_bytes=...) -> ExecutionResult"
+      },
+      "line_range": [
+        286,
+        348
+      ]
+    },
+    "engine.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "engine.py::timeout": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(duration, formula)"
+      },
+      "line_range": [
+        27,
+        34
+      ]
+    },
+    "engine.py::timeout_handler": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(signum, frame)"
+      },
+      "line_range": [
+        28,
+        29
+      ]
+    },
+    "engine.py::eval_with_timeout": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(formula, max_time=...)"
+      },
+      "line_range": [
+        36,
+        45
+      ]
+    },
+    "engine.py::use_calculator": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(expr)"
+      },
+      "line_range": [
+        47,
+        80
+      ]
+    },
+    "common.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "common.py::is_ddp_requested": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "() -> bool"
+      },
+      "line_range": [
+        125,
+        130
+      ]
+    },
+    "common.py::is_ddp_initialized": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "() -> bool"
+      },
+      "line_range": [
+        132,
+        137
+      ]
+    },
+    "common.py::get_dist_info": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        139,
+        149
+      ]
+    },
+    "common.py::autodetect_device_type": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        151,
+        160
+      ]
+    },
+    "common.py::compute_init": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(device_type=...)"
+      },
+      "line_range": [
+        162,
+        197
+      ]
+    },
+    "common.py::compute_cleanup": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        199,
+        202
+      ]
+    },
+    "fp8.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "fp8.py::_to_fp8": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(x, fp8_dtype)"
+      },
+      "line_range": [
+        80,
+        105
+      ]
+    },
+    "fp8.py::_to_col_major": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(x)"
+      },
+      "line_range": [
+        108,
+        116
+      ]
+    },
+    "fp8.py::_Float8Matmul": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[forward, backward]"
+      },
+      "line_range": [
+        123,
+        196
+      ]
+    },
+    "fp8.py::forward": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(input)"
+      },
+      "line_range": [
+        206,
+        219
+      ]
+    },
+    "fp8.py::backward": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(ctx, grad_output)"
+      },
+      "line_range": [
+        158,
+        196
+      ]
+    },
+    "fp8.py::Float8Linear": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[forward, from_float]"
+      },
+      "line_range": [
+        199,
+        233
+      ]
+    },
+    "fp8.py::from_float": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(mod)"
+      },
+      "line_range": [
+        222,
+        233
+      ]
+    },
+    "fp8.py::Float8LinearConfig": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[from_recipe_name]"
+      },
+      "line_range": [
+        236,
+        246
+      ]
+    },
+    "fp8.py::from_recipe_name": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(recipe_name)"
+      },
+      "line_range": [
+        240,
+        246
+      ]
+    },
+    "fp8.py::convert_to_float8_training": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(module, config, module_filter_fn)"
+      },
+      "line_range": [
+        249,
+        272
+      ]
+    },
+    "fp8.py::_convert": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(mod, prefix=...)"
+      },
+      "line_range": [
+        263,
+        269
+      ]
+    },
+    "flash_attention.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "flash_attention.py::_load_flash_attention_3": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        23,
+        38
+      ]
+    },
+    "flash_attention.py::_use_fa3": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        48,
+        55
+      ]
+    },
+    "flash_attention.py::_sdpa_attention": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(q, k, v, window_size, enable_gqa)"
+      },
+      "line_range": [
+        61,
+        94
+      ]
+    },
+    "flash_attention.py::flash_attn_func": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(q, k, v, causal=..., window_size=...)"
+      },
+      "line_range": [
+        99,
+        120
+      ]
+    },
+    "flash_attention.py::flash_attn_with_kvcache": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(q, k_cache, v_cache, k=..., v=..., cache_seqlens=..., causal=..., window_size=...)"
+      },
+      "line_range": [
+        123,
+        169
+      ]
+    },
+    "dataset.py::list_parquet_files": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(data_dir=...)"
+      },
+      "line_range": [
+        33,
+        41
+      ]
+    },
+    "dataset.py::download_single_file": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(index)"
+      },
+      "line_range": [
+        60,
+        109
+      ]
+    },
+    "dataset.py::parquets_iter_batched": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(split, start=..., step=...)"
+      },
+      "line_range": [
+        43,
+        57
+      ]
+    },
+    "common.py::get_base_dir": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        50,
+        68
+      ]
+    },
+    "common.py::download_file_with_lock": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(url, filename, postprocess_fn=...)"
+      },
+      "line_range": [
+        70,
+        104
+      ]
+    },
+    "tokenizer.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "tokenizer.py::HuggingFaceTokenizer": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, from_pretrained, from_directory, train_from_iterator, get_vocab_size, get_special_tokens, id_to_token, _encode_one, encode_special, get_bos_token_id, encode, __call__, decode, save]"
+      },
+      "line_range": [
+        39,
+        155
+      ]
+    },
+    "tokenizer.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(enc, bos_token)"
+      },
+      "line_range": [
+        166,
+        168
+      ]
+    },
+    "tokenizer.py::from_pretrained": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tiktoken_name)"
+      },
+      "line_range": [
+        200,
+        207
+      ]
+    },
+    "tokenizer.py::from_directory": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokenizer_dir)"
+      },
+      "line_range": [
+        193,
+        197
+      ]
+    },
+    "tokenizer.py::train_from_iterator": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(text_iterator, vocab_size)"
+      },
+      "line_range": [
+        171,
+        190
+      ]
+    },
+    "tokenizer.py::get_vocab_size": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        209,
+        210
+      ]
+    },
+    "tokenizer.py::get_special_tokens": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        212,
+        213
+      ]
+    },
+    "tokenizer.py::id_to_token": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(id)"
+      },
+      "line_range": [
+        215,
+        216
+      ]
+    },
+    "tokenizer.py::_encode_one": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(text, prepend=..., append=..., num_threads=...)"
+      },
+      "line_range": [
+        106,
+        119
+      ]
+    },
+    "tokenizer.py::encode_special": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(text)"
+      },
+      "line_range": [
+        219,
+        220
+      ]
+    },
+    "tokenizer.py::get_bos_token_id": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        222,
+        223
+      ]
+    },
+    "tokenizer.py::encode": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(text, prepend=..., append=..., num_threads=...)"
+      },
+      "line_range": [
+        225,
+        250
+      ]
+    },
+    "tokenizer.py::__call__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        252,
+        253
+      ]
+    },
+    "tokenizer.py::decode": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(ids)"
+      },
+      "line_range": [
+        255,
+        256
+      ]
+    },
+    "tokenizer.py::save": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokenizer_dir)"
+      },
+      "line_range": [
+        258,
+        264
+      ]
+    },
+    "tokenizer.py::RustBPETokenizer": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, train_from_iterator, from_directory, from_pretrained, get_vocab_size, get_special_tokens, id_to_token, encode_special, get_bos_token_id, encode, __call__, decode, save, render_conversation, visualize_tokenization, render_for_completion]"
+      },
+      "line_range": [
+        163,
+        385
+      ]
+    },
+    "tokenizer.py::get_tokenizer": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        390,
+        395
+      ]
+    },
+    "tokenizer.py::get_token_bytes": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(device=...)"
+      },
+      "line_range": [
+        397,
+        406
+      ]
+    },
+    "tokenizer.py::render_conversation": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(conversation, max_tokens=...)"
+      },
+      "line_range": [
+        266,
+        350
+      ]
+    },
+    "tokenizer.py::add_tokens": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(token_ids, mask_val)"
+      },
+      "line_range": [
+        275,
+        279
+      ]
+    },
+    "tokenizer.py::visualize_tokenization": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(ids, mask, with_token_id=...)"
+      },
+      "line_range": [
+        352,
+        365
+      ]
+    },
+    "tokenizer.py::render_for_completion": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(conversation)"
+      },
+      "line_range": [
+        367,
+        385
+      ]
+    },
+    "engine.py::KVCache": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, reset, get_pos, get_layer_cache, advance, prefill]"
+      },
+      "line_range": [
+        83,
+        132
+      ]
+    },
+    "engine.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(model, tokenizer)"
+      },
+      "line_range": [
+        166,
+        168
+      ]
+    },
+    "engine.py::reset": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        105,
+        107
+      ]
+    },
+    "engine.py::get_pos": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        109,
+        111
+      ]
+    },
+    "engine.py::get_layer_cache": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(layer_idx)"
+      },
+      "line_range": [
+        113,
+        115
+      ]
+    },
+    "engine.py::advance": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(num_tokens)"
+      },
+      "line_range": [
+        117,
+        119
+      ]
+    },
+    "engine.py::prefill": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(other)"
+      },
+      "line_range": [
+        121,
+        132
+      ]
+    },
+    "engine.py::sample_next_token": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(logits, rng, temperature=..., top_k=...)"
+      },
+      "line_range": [
+        136,
+        151
+      ]
+    },
+    "engine.py::RowState": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__]"
+      },
+      "line_range": [
+        155,
+        162
+      ]
+    },
+    "engine.py::Engine": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, generate, generate_batch]"
+      },
+      "line_range": [
+        164,
+        299
+      ]
+    },
+    "engine.py::generate": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokens, num_samples=..., max_tokens=..., temperature=..., top_k=..., seed=...)"
+      },
+      "line_range": [
+        171,
+        275
+      ]
+    },
+    "engine.py::generate_batch": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokens, num_samples=..., **kwargs)"
+      },
+      "line_range": [
+        277,
+        299
+      ]
+    },
+    "gpt.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "gpt.py::GPTConfig": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[]"
+      },
+      "line_range": [
+        29,
+        39
+      ]
+    },
+    "gpt.py::norm": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(x)"
+      },
+      "line_range": [
+        42,
+        44
+      ]
+    },
+    "gpt.py::has_ve": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(layer_idx, n_layer)"
+      },
+      "line_range": [
+        47,
+        49
+      ]
+    },
+    "gpt.py::apply_rotary_emb": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(x, cos, sin)"
+      },
+      "line_range": [
+        51,
+        57
+      ]
+    },
+    "gpt.py::CausalSelfAttention": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, forward]"
+      },
+      "line_range": [
+        59,
+        118
+      ]
+    },
+    "gpt.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(config, pad_vocab_size_to=...)"
+      },
+      "line_range": [
+        147,
+        186
+      ]
+    },
+    "gpt.py::forward": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(idx, targets=..., kv_cache=..., loss_reduction=...)"
+      },
+      "line_range": [
+        388,
+        423
+      ]
+    },
+    "gpt.py::MLP": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, forward]"
+      },
+      "line_range": [
+        121,
+        131
+      ]
+    },
+    "gpt.py::Block": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, forward]"
+      },
+      "line_range": [
+        134,
+        143
+      ]
+    },
+    "gpt.py::GPT": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, init_weights, _precompute_rotary_embeddings, _compute_window_sizes, get_device, estimate_flops, num_scaling_params, setup_optimizer, forward, generate]"
+      },
+      "line_range": [
+        146,
+        454
+      ]
+    },
+    "gpt.py::init_weights": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        189,
+        241
+      ]
+    },
+    "gpt.py::_precompute_rotary_embeddings": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(seq_len, head_dim, base=..., device=...)"
+      },
+      "line_range": [
+        243,
+        258
+      ]
+    },
+    "gpt.py::_compute_window_sizes": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(config)"
+      },
+      "line_range": [
+        260,
+        287
+      ]
+    },
+    "gpt.py::get_device": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        289,
+        290
+      ]
+    },
+    "gpt.py::estimate_flops": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        292,
+        317
+      ]
+    },
+    "gpt.py::num_scaling_params": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        319,
+        346
+      ]
+    },
+    "gpt.py::setup_optimizer": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(unembedding_lr=..., embedding_lr=..., matrix_lr=..., weight_decay=..., adam_betas=..., scalar_lr=...)"
+      },
+      "line_range": [
+        348,
+        386
+      ]
+    },
+    "gpt.py::generate": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokens, max_tokens, temperature=..., top_k=..., seed=...)"
+      },
+      "line_range": [
+        426,
+        454
+      ]
+    },
+    "common.py::ColoredFormatter": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[format]"
+      },
+      "line_range": [
+        13,
+        37
+      ]
+    },
+    "common.py::format": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(record)"
+      },
+      "line_range": [
+        25,
+        37
+      ]
+    },
+    "common.py::setup_default_logging": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        39,
+        45
+      ]
+    },
+    "common.py::print0": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(s=..., **kwargs)"
+      },
+      "line_range": [
+        106,
+        109
+      ]
+    },
+    "common.py::print_banner": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        111,
+        123
+      ]
+    },
+    "common.py::DummyWandb": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, log, finish]"
+      },
+      "line_range": [
+        204,
+        211
+      ]
+    },
+    "common.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        206,
+        207
+      ]
+    },
+    "common.py::log": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        208,
+        209
+      ]
+    },
+    "common.py::finish": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        210,
+        211
+      ]
+    },
+    "common.py::get_peak_flops": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(device_name) -> float"
+      },
+      "line_range": [
+        216,
+        267
+      ]
+    },
+    "report.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "report.py::run_command": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(cmd)"
+      },
+      "line_range": [
+        15,
+        26
+      ]
+    },
+    "report.py::get_git_info": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        28,
+        42
+      ]
+    },
+    "report.py::get_gpu_info": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        44,
+        65
+      ]
+    },
+    "report.py::get_system_info": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        67,
+        87
+      ]
+    },
+    "report.py::estimate_cost": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(gpu_info, runtime_hours=...)"
+      },
+      "line_range": [
+        89,
+        118
+      ]
+    },
+    "report.py::generate_header": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        120,
+        199
+      ]
+    },
+    "report.py::slugify": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(text)"
+      },
+      "line_range": [
+        203,
+        205
+      ]
+    },
+    "report.py::extract": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(section, keys)"
+      },
+      "line_range": [
+        222,
+        231
+      ]
+    },
+    "report.py::extract_timestamp": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(content, prefix)"
+      },
+      "line_range": [
+        233,
+        242
+      ]
+    },
+    "report.py::Report": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, log, generate, reset]"
+      },
+      "line_range": [
+        244,
+        389
+      ]
+    },
+    "report.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(report_dir)"
+      },
+      "line_range": [
+        247,
+        249
+      ]
+    },
+    "report.py::log": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        395,
+        396
+      ]
+    },
+    "report.py::generate": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        279,
+        369
+      ]
+    },
+    "report.py::reset": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        397,
+        398
+      ]
+    },
+    "report.py::DummyReport": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[log, reset]"
+      },
+      "line_range": [
+        394,
+        398
+      ]
+    },
+    "report.py::get_report": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        400,
+        408
+      ]
+    },
+    "dataloader.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "dataloader.py::_document_batches": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(split, resume_state_dict, tokenizer_batch_size)"
+      },
+      "line_range": [
+        25,
+        70
+      ]
+    },
+    "dataloader.py::tokenizing_distributed_data_loader_with_state_bos_bestfit": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokenizer, B, T, split, tokenizer_threads=..., tokenizer_batch_size=..., device=..., resume_state_dict=..., buffer_size=...)"
+      },
+      "line_range": [
+        73,
+        160
+      ]
+    },
+    "dataloader.py::refill_buffer": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        103,
+        108
+      ]
+    },
+    "dataloader.py::tokenizing_distributed_data_loader_bos_bestfit": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(*args, **kwargs)"
+      },
+      "line_range": [
+        162,
+        165
+      ]
+    },
+    "core_eval.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "core_eval.py::render_prompts_mc": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(item, continuation_delimiter, fewshot_examples=...)"
+      },
+      "line_range": [
+        17,
+        33
+      ]
+    },
+    "core_eval.py::render_prompts_schema": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(item, continuation_delimiter, fewshot_examples=...)"
+      },
+      "line_range": [
+        36,
+        53
+      ]
+    },
+    "core_eval.py::render_prompts_lm": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(item, continuation_delimiter, fewshot_examples=...)"
+      },
+      "line_range": [
+        56,
+        83
+      ]
+    },
+    "core_eval.py::find_common_length": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(token_sequences, direction=...)"
+      },
+      "line_range": [
+        86,
+        101
+      ]
+    },
+    "core_eval.py::stack_sequences": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokens, pad_token_id)"
+      },
+      "line_range": [
+        104,
+        110
+      ]
+    },
+    "core_eval.py::batch_sequences_mc": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokenizer, prompts)"
+      },
+      "line_range": [
+        113,
+        120
+      ]
+    },
+    "core_eval.py::batch_sequences_schema": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokenizer, prompts)"
+      },
+      "line_range": [
+        123,
+        130
+      ]
+    },
+    "core_eval.py::batch_sequences_lm": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(tokenizer, prompts)"
+      },
+      "line_range": [
+        133,
+        141
+      ]
+    },
+    "core_eval.py::forward_model": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(model, input_ids)"
+      },
+      "line_range": [
+        145,
+        164
+      ]
+    },
+    "core_eval.py::evaluate_example": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(idx, model, tokenizer, data, device, task_meta)"
+      },
+      "line_range": [
+        168,
+        241
+      ]
+    },
+    "core_eval.py::evaluate_task": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(model, tokenizer, data, device, task_meta)"
+      },
+      "line_range": [
+        244,
+        262
+      ]
+    },
+    "loss_eval.py::evaluate_bpb": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(model, batches, steps, token_bytes)"
+      },
+      "line_range": [
+        9,
+        65
+      ]
+    },
+    "optim.py::adamw_step_fused": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_t, eps_t, wd_t) -> None"
+      },
+      "line_range": [
+        21,
+        49
+      ]
+    },
+    "optim.py::muon_step_fused": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(stacked_grads, stacked_params, momentum_buffer, second_momentum_buffer, momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim) -> None"
+      },
+      "line_range": [
+        91,
+        146
+      ]
+    },
+    "optim.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "optim.py::MuonAdamW": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, _step_adamw, _step_muon, step]"
+      },
+      "line_range": [
+        152,
+        291
+      ]
+    },
+    "optim.py::__init__": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(param_groups)"
+      },
+      "line_range": [
+        355,
+        367
+      ]
+    },
+    "optim.py::_step_adamw": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(group) -> None"
+      },
+      "line_range": [
+        194,
+        227
+      ]
+    },
+    "optim.py::_step_muon": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(group) -> None"
+      },
+      "line_range": [
+        229,
+        281
+      ]
+    },
+    "optim.py::step": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "()"
+      },
+      "line_range": [
+        508,
+        533
+      ]
+    },
+    "optim.py::DistMuonAdamW": {
+      "status": "resolved",
+      "contracts": {
+        "cls": "methods=[__init__, _reduce_adamw, _reduce_muon, _compute_adamw, _compute_muon, _finish_gathers, step]"
+      },
+      "line_range": [
+        297,
+        533
+      ]
+    },
+    "optim.py::_reduce_adamw": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(group, world_size) -> dict"
+      },
+      "line_range": [
+        369,
+        385
+      ]
+    },
+    "optim.py::_reduce_muon": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(group, world_size) -> dict"
+      },
+      "line_range": [
+        387,
+        406
+      ]
+    },
+    "optim.py::_compute_adamw": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(group, info, gather_list, rank, world_size) -> None"
+      },
+      "line_range": [
+        408,
+        447
+      ]
+    },
+    "optim.py::_compute_muon": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(group, info, gather_list, rank) -> None"
+      },
+      "line_range": [
+        449,
+        497
+      ]
+    },
+    "optim.py::_finish_gathers": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(gather_list) -> None"
+      },
+      "line_range": [
+        499,
+        505
+      ]
+    },
+    "checkpoint_manager.py": {
+      "status": "resolved",
+      "contracts": {}
+    },
+    "checkpoint_manager.py::log0": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(message)"
+      },
+      "line_range": [
+        19,
+        21
+      ]
+    },
+    "checkpoint_manager.py::_patch_missing_config_keys": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(model_config_kwargs)"
+      },
+      "line_range": [
+        23,
+        28
+      ]
+    },
+    "checkpoint_manager.py::_patch_missing_keys": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(model_data, model_config)"
+      },
+      "line_range": [
+        30,
+        40
+      ]
+    },
+    "checkpoint_manager.py::save_checkpoint": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(checkpoint_dir, step, model_data, optimizer_data, meta_data, rank=...)"
+      },
+      "line_range": [
+        42,
+        59
+      ]
+    },
+    "checkpoint_manager.py::load_checkpoint": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(checkpoint_dir, step, device, load_optimizer=..., rank=...)"
+      },
+      "line_range": [
+        61,
+        74
+      ]
+    },
+    "checkpoint_manager.py::build_model": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(checkpoint_dir, step, device, phase)"
+      },
+      "line_range": [
+        77,
+        115
+      ]
+    },
+    "checkpoint_manager.py::find_largest_model": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(checkpoints_dir)"
+      },
+      "line_range": [
+        118,
+        135
+      ]
+    },
+    "checkpoint_manager.py::find_last_step": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(checkpoint_dir)"
+      },
+      "line_range": [
+        138,
+        144
+      ]
+    },
+    "checkpoint_manager.py::load_model_from_dir": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(checkpoints_dir, device, phase, model_tag=..., step=...)"
+      },
+      "line_range": [
+        149,
+        162
+      ]
+    },
+    "checkpoint_manager.py::load_model": {
+      "status": "resolved",
+      "contracts": {
+        "sig": "(source, *args, **kwargs)"
+      },
+      "line_range": [
+        164,
+        172
+      ]
+    }
+  },
+  "file_exports": {
+    "execution.py": [
+      "ExecutionResult",
+      "__repr__",
+      "time_limit",
+      "signal_handler",
+      "capture_io",
+      "create_tempdir",
+      "TimeoutException",
+      "WriteOnlyStringIO",
+      "read",
+      "readline",
+      "readlines",
+      "readable",
+      "redirect_stdin",
+      "chdir",
+      "reliability_guard",
+      "_unsafe_execute",
+      "execute_code"
+    ],
+    "engine.py": [
+      "timeout",
+      "timeout_handler",
+      "eval_with_timeout",
+      "use_calculator",
+      "KVCache",
+      "__init__",
+      "reset",
+      "get_pos",
+      "get_layer_cache",
+      "advance",
+      "prefill",
+      "sample_next_token",
+      "RowState",
+      "Engine",
+      "generate",
+      "generate_batch"
+    ],
+    "common.py": [
+      "is_ddp_requested",
+      "is_ddp_initialized",
+      "get_dist_info",
+      "autodetect_device_type",
+      "compute_init",
+      "compute_cleanup",
+      "get_base_dir",
+      "download_file_with_lock",
+      "ColoredFormatter",
+      "format",
+      "setup_default_logging",
+      "print0",
+      "print_banner",
+      "DummyWandb",
+      "__init__",
+      "log",
+      "finish",
+      "get_peak_flops"
+    ],
+    "fp8.py": [
+      "_to_fp8",
+      "_to_col_major",
+      "_Float8Matmul",
+      "forward",
+      "backward",
+      "Float8Linear",
+      "from_float",
+      "Float8LinearConfig",
+      "from_recipe_name",
+      "convert_to_float8_training",
+      "_convert"
+    ],
+    "flash_attention.py": [
+      "_load_flash_attention_3",
+      "_use_fa3",
+      "_sdpa_attention",
+      "flash_attn_func",
+      "flash_attn_with_kvcache"
+    ],
+    "dataset.py": [
+      "list_parquet_files",
+      "download_single_file",
+      "parquets_iter_batched"
+    ],
+    "tokenizer.py": [
+      "HuggingFaceTokenizer",
+      "__init__",
+      "from_pretrained",
+      "from_directory",
+      "train_from_iterator",
+      "get_vocab_size",
+      "get_special_tokens",
+      "id_to_token",
+      "_encode_one",
+      "encode_special",
+      "get_bos_token_id",
+      "encode",
+      "__call__",
+      "decode",
+      "save",
+      "RustBPETokenizer",
+      "get_tokenizer",
+      "get_token_bytes",
+      "render_conversation",
+      "add_tokens",
+      "visualize_tokenization",
+      "render_for_completion"
+    ],
+    "gpt.py": [
+      "GPTConfig",
+      "norm",
+      "has_ve",
+      "apply_rotary_emb",
+      "CausalSelfAttention",
+      "__init__",
+      "forward",
+      "MLP",
+      "Block",
+      "GPT",
+      "init_weights",
+      "_precompute_rotary_embeddings",
+      "_compute_window_sizes",
+      "get_device",
+      "estimate_flops",
+      "num_scaling_params",
+      "setup_optimizer",
+      "generate"
+    ],
+    "report.py": [
+      "run_command",
+      "get_git_info",
+      "get_gpu_info",
+      "get_system_info",
+      "estimate_cost",
+      "generate_header",
+      "slugify",
+      "extract",
+      "extract_timestamp",
+      "Report",
+      "__init__",
+      "log",
+      "generate",
+      "reset",
+      "DummyReport",
+      "get_report"
+    ],
+    "dataloader.py": [
+      "_document_batches",
+      "tokenizing_distributed_data_loader_with_state_bos_bestfit",
+      "refill_buffer",
+      "tokenizing_distributed_data_loader_bos_bestfit"
+    ],
+    "core_eval.py": [
+      "render_prompts_mc",
+      "render_prompts_schema",
+      "render_prompts_lm",
+      "find_common_length",
+      "stack_sequences",
+      "batch_sequences_mc",
+      "batch_sequences_schema",
+      "batch_sequences_lm",
+      "forward_model",
+      "evaluate_example",
+      "evaluate_task"
+    ],
+    "loss_eval.py": [
+      "evaluate_bpb"
+    ],
+    "optim.py": [
+      "adamw_step_fused",
+      "muon_step_fused",
+      "MuonAdamW",
+      "__init__",
+      "_step_adamw",
+      "_step_muon",
+      "step",
+      "DistMuonAdamW",
+      "_reduce_adamw",
+      "_reduce_muon",
+      "_compute_adamw",
+      "_compute_muon",
+      "_finish_gathers"
+    ],
+    "checkpoint_manager.py": [
+      "log0",
+      "_patch_missing_config_keys",
+      "_patch_missing_keys",
+      "save_checkpoint",
+      "load_checkpoint",
+      "build_model",
+      "find_largest_model",
+      "find_last_step",
+      "load_model_from_dir",
+      "load_model"
+    ]
+  }
+}

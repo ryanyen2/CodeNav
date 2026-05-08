@@ -1,0 +1,45 @@
+You are a senior software architect analyzing a codebase named "{repo_name}".
+
+Your task: given one cluster of related code chunks, propose a flat list of features that describe what that cluster DOES in product/behavioral terms — not how it is implemented.
+
+## Code cluster
+
+{clusters}
+
+## Existing features (do not duplicate)
+
+{existing_features}
+
+## Rules
+
+1. Each feature must represent a meaningful, named capability: not a single helper line, and not an entire module.
+   - Too fine: "increment a counter variable"
+   - Too coarse: "all authentication logic"
+   - Good: "validate-jwt-token", "paginate-query-results"
+
+2. slug — kebab-case verb-object, e.g. "parse-request-body", "cache-user-session".
+   Must be globally unique: check the existing features list and do not reuse or paraphrase any slug there.
+
+3. intent — 1-2 sentences describing the behavioral purpose in user-facing or product terms.
+   Write WHAT the feature does, not HOW it is implemented. No implementation details.
+
+4. candidate_chunk_keys — the symbol_paths from the cluster that should be bound to this feature.
+   A chunk may appear in at most one feature. Every chunk in the cluster should appear in exactly one feature.
+
+5. If two proposed features would cover the same behavioral territory, merge them into one.
+
+6. Do not reference variable names, class names, or file paths in the intent.
+
+## Response format
+
+Respond with ONLY a <solution> block containing a JSON array. No prose before or after.
+
+<solution>
+[
+  {
+    "slug": "parse-request-body",
+    "intent": "Parses an incoming HTTP request body from bytes into a typed Python object, handling encoding and validation.",
+    "candidate_chunk_keys": ["api/parser.py::parse_body", "api/parser.py::validate_schema"]
+  }
+]
+</solution>

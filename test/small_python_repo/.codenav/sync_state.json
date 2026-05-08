@@ -1,0 +1,106 @@
+{
+  "entity_fingerprints": {
+    "utils.py::add": {
+      "content_hash": "62d7330deab903a4185a72a38c86835634c040e082f6d45dbbbdc79cb3aef21e",
+      "signature_hash": "cd6385e8f9b05a9a0127cfc1545d7ec81272a3f0a5fabe88b71b045153ed69af"
+    },
+    "utils.py::double": {
+      "content_hash": "d3fdbec17b27ba1970e3fd7ee1cad8a2be3103fe9f5dfc6dce96952b92b7c660",
+      "signature_hash": "717e5a8242a831b6ae5270385c0cbc5d2c801cc466c608a94d2175a15610793e"
+    },
+    "utils.py::concat": {
+      "content_hash": "6cf3684fc57c0c813da77c9d0fa603bc6b9c8c210d3a75999c60dc0b27fdceaa",
+      "signature_hash": "d07effec82157d1d8f08b1f802c8aca5719b79ff7d0f609cad24000df9eb3fb4"
+    },
+    "main.py::greet": {
+      "content_hash": "12ee6cec1ce79e1ade678aa21d6788874ccb987f3482ab73f5756550dd22eb52",
+      "signature_hash": "9b4c3bec5a3e0e362afd0702432bb8248b1c6e7abed29c390e2921e4f3cd9e8c"
+    },
+    "main.py::run": {
+      "content_hash": "bffcb3309003f955ac53bd1827a323a9aa97aa2f235f2671ecdf2ac23b0bef86",
+      "signature_hash": "6256b1e26a38717938687a8aae970ae16e2b943e5077b4e275e47d0296f80df1"
+    }
+  },
+  "file_fingerprints": {
+    "__init__.py": "629eb9b60dad7276be1296d51ab03f2dd83776ac836c9bd505851b0a9a3a8f3f",
+    "utils.py": "9713893b99ccb096937d5a1b017b905d225fd79d01de5b3fcd7ff0b19fce1102",
+    "main.py": "99f7faf10aa5c012804ee861c0304d841d65d32a8d6863ab1eb300d6f44ae2b5"
+  },
+  "semantic_cache": {
+    "62d7330deab903a4185a72a38c86835634c040e082f6d45dbbbdc79cb3aef21e": {
+      "content_hash": "62d7330deab903a4185a72a38c86835634c040e082f6d45dbbbdc79cb3aef21e",
+      "entity_name": "add",
+      "features": [
+        "compute sum of two integers"
+      ]
+    },
+    "d3fdbec17b27ba1970e3fd7ee1cad8a2be3103fe9f5dfc6dce96952b92b7c660": {
+      "content_hash": "d3fdbec17b27ba1970e3fd7ee1cad8a2be3103fe9f5dfc6dce96952b92b7c660",
+      "entity_name": "double",
+      "features": [
+        "double integer value"
+      ]
+    },
+    "6cf3684fc57c0c813da77c9d0fa603bc6b9c8c210d3a75999c60dc0b27fdceaa": {
+      "content_hash": "6cf3684fc57c0c813da77c9d0fa603bc6b9c8c210d3a75999c60dc0b27fdceaa",
+      "entity_name": "concat",
+      "features": [
+        "concatenate two strings"
+      ]
+    },
+    "d19ccd476d5b6eff637ce32b3f69cdf687e57665e024d457fa02e60c52bd90ed": {
+      "content_hash": "d19ccd476d5b6eff637ce32b3f69cdf687e57665e024d457fa02e60c52bd90ed",
+      "entity_name": "greet",
+      "features": [
+        "generate greeting for name",
+        "include current year in greeting"
+      ]
+    },
+    "bffcb3309003f955ac53bd1827a323a9aa97aa2f235f2671ecdf2ac23b0bef86": {
+      "content_hash": "bffcb3309003f955ac53bd1827a323a9aa97aa2f235f2671ecdf2ac23b0bef86",
+      "entity_name": "run",
+      "features": [
+        "print greeting message",
+        "print addition result"
+      ]
+    }
+  },
+  "domain_areas": [
+    {
+      "name": "applicationexecution"
+    },
+    {
+      "name": "utilityhelpers"
+    },
+    {
+      "name": "packageinitialization"
+    }
+  ],
+  "hierarchy_cache": [
+    {
+      "path": "packageinitialization/initialize package/expose public api",
+      "entity_groups": [
+        "__init__.py"
+      ]
+    },
+    {
+      "path": "utilityhelpers/provide utility functions/transform basic values",
+      "entity_groups": [
+        "utils.py"
+      ]
+    },
+    {
+      "path": "applicationexecution/orchestrate application/execute entrypoint",
+      "entity_groups": [
+        "main.py"
+      ]
+    }
+  ],
+  "mappings": [],
+  "tree_version": 2,
+  "code_version": 4,
+  "last_sync_direction": "forward",
+  "last_tree_md": "- ~   #resolved\n  - ~ packageinitialization #resolved\n    - ~ initialize package #resolved\n      - ~ expose public api #resolved\n        - % __init__.py [__init__.py] #resolved\n  - ~ utilityhelpers #resolved\n    - ~ provide utility functions #resolved\n      - ~ transform basic values #resolved\n        - % utils.py [utils.py] {exp: add, double, concat} #resolved\n          - $ compute sum of two integers (add) [utils.py] {exp: add, double, concat} #resolved\n          - $ double integer value (double) [utils.py] {exp: add, double, concat} #resolved\n          - $ concatenate two strings (concat) [utils.py] {exp: add, double, concat} #resolved\n  - ~ applicationexecution #resolved\n    - ~ orchestrate application #resolved\n      - ~ execute entrypoint #resolved\n        - % main.py [main.py] {exp: greet, run} #resolved\n          - $ generate greeting for name with today's date (greet) [main.py] {exp: greet, run} #resolved\n          - $ print greeting message (run) [main.py] {exp: greet, run} #resolved",
+  "root_dir": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/test/small_python_repo",
+  "index_path": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/test/small_python_repo/.codenav/index"
+}

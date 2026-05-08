@@ -1,83 +1,33 @@
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.env.development
-.env.test
-.env.production
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
 
-.claude/
-.agent/
-.copilot/
+# codoc runtime state (per-repo; not committed)
+**/.codoc/codoc.db
+**/.codoc/log.jsonl
+**/.codoc/faiss/
+**/.codoc/unattributed.json
 
-
-node_modules/
-dist/
-build/
-.DS_Store
-.idea/
-.vscode/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-
-test/
-
-# Semantic tree pipeline index/cache
-.codenav/
-
-.venv/
-.venv*/
-
-pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
+# Python
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-*.pyw
-*.pyz
-*.pywz
-*.pyzz
-*.pywzz
-*.pyzzz
-*.pywzzz
-
-*.log
 *.egg-info/
+.venv/
+.venv*/
+build/
+dist/
 
+# Dev tools
+.DS_Store
+.idea/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-.agents/
+# Claude Code
 .claude/
+.agents/
 .cursor/
 .copilot/
-.planning/
-.projects/
-.research/
-.skills/
-.tools/
-.utils/
-.workspaces/
-.workspaces/
 
-
-test_run_trees/
-ref/
+uv.lock

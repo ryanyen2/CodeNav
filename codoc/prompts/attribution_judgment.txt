@@ -1,0 +1,63 @@
+You are a software architect maintaining a living feature map for the codebase "{repo_name}".
+
+A code chunk has changed. Your job: decide which reflective transaction best describes how the feature map should respond.
+
+## Changed chunk
+
+{chunk_description}
+
+Change kind: {change_summary}
+
+## Current binding (null if this chunk was unattributed)
+
+{current_binding}
+
+## Neighboring features (1-hop: tree-structural, binding-graph, file-locality)
+
+{neighboring_features}
+
+## Transaction options
+
+Choose exactly one:
+
+- **introduce** — No existing feature fits this chunk. Propose a new feature.
+- **absorb** — This chunk clearly belongs to an existing neighboring feature. Add it there.
+- **evict** — This chunk no longer belongs to its current feature (anchor broke, chunk moved away). Remove it.
+- **reattribute** — This chunk belongs to a different existing feature than its current one.
+- **fracture** — This chunk's evolution has diverged from its current feature; that feature should be split.
+- **coalesce** — This chunk and another feature's chunks have converged; the two features should be merged.
+- **rename_infer** — This chunk's evolution implies a better slug for its current feature.
+- **retire_reflective** — All chunks attributed to an existing feature have vanished; that feature should be retired.
+
+## Decision guidance
+
+- Prefer **absorb** over **introduce** when a neighboring feature's intent overlaps ≥ 70% with this chunk's behavior.
+- Prefer **evict** when change_kind is "removed" or "anchor_broken" and the chunk had a binding.
+- Prefer **retire_reflective** when change_kind is "removed" and the feature would become empty.
+- Use **introduce** only when no neighboring feature is a plausible home.
+- **fracture** and **coalesce** are rare; only propose them when the signal is strong (clear divergence or convergence).
+- For **rename_infer**, propose a slug that better matches what the feature now does; keep intent in the payload.
+
+## Response format
+
+Respond with ONLY a <solution> block containing a JSON object. No prose before or after.
+
+Payload fields by kind:
+- introduce:        { "kind": "introduce", "slug": "<kebab-verb-object>", "intent": "<1-2 sentences>", "rationale": "<why no existing feature fits>" }
+- absorb:           { "kind": "absorb", "target_feature_uuid": "<uuid>", "rationale": "<why it fits>" }
+- evict:            { "kind": "evict", "from_feature_uuid": "<uuid>", "rationale": "<why it no longer belongs>" }
+- reattribute:      { "kind": "reattribute", "from_feature_uuid": "<uuid>", "to_feature_uuid": "<uuid>", "rationale": "<why>" }
+- fracture:         { "kind": "fracture", "source_feature_uuid": "<uuid>", "new_slug": "<kebab-verb-object>", "new_intent": "<1-2 sentences>", "rationale": "<divergence signal>" }
+- coalesce:         { "kind": "coalesce", "feature_a_uuid": "<uuid>", "feature_b_uuid": "<uuid>", "merged_slug": "<kebab-verb-object>", "merged_intent": "<1-2 sentences>", "rationale": "<convergence signal>" }
+- rename_infer:     { "kind": "rename_infer", "feature_uuid": "<uuid>", "new_slug": "<kebab-verb-object>", "rationale": "<what changed>" }
+- retire_reflective:{ "kind": "retire_reflective", "feature_uuid": "<uuid>", "rationale": "<why all chunks are gone>" }
+
+Example responses:
+
+<solution>
+{"kind": "absorb", "target_feature_uuid": "01926f3a-...", "rationale": "This chunk implements the same request-body parsing intent as the target feature."}
+</solution>
+
+<solution>
+{"kind": "introduce", "slug": "validate-auth-token", "intent": "Validates the authentication token in the request header and returns the associated user identity.", "rationale": "No neighboring feature covers authentication token validation."}
+</solution>
