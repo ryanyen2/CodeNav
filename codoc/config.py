@@ -6,7 +6,7 @@ No adalflow dependency.
 
 Environment variables:
     CODOC_PROVIDER          LLM provider: "openai" | "ollama"  (default "openai")
-    CODOC_MODEL             Model name  (default "gpt-4o-mini")
+    CODOC_MODEL             Model name  (default "gpt-5.4-mini")
     OPENAI_API_KEY          API key for OpenAI (required when provider=openai)
     CODOC_BASE_URL          Override base URL (e.g. for local OpenAI-compatible servers)
     CODOC_TEMPERATURE       Float  (default 0.2)

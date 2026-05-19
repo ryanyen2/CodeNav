@@ -1,0 +1,128 @@
+"""Test the full sync cycle: parse → diff → apply → re-render."""
+
+from __future__ import annotations
+
+import uuid as _uuid
+from pathlib import Path
+
+import pytest
+
+from codoc.model.feature import Feature
+from codoc.model.hlc import HLC
+from codoc.pipelines.intentional.runner import open_stores
+from codoc.projection.sync import sync_from_dir
+from codoc.projection.tree_codoc import write_tree
+
+
+def _seed_two(codoc_dir: Path) -> tuple[str, str]:
+    store, _, _ = open_stores(str(codoc_dir))
+    try:
+        hlc = HLC.now(node_id="test")
+        a = str(_uuid.uuid4())
+        b = str(_uuid.uuid4())
+        store.upsert_feature(
+            Feature(
+                uuid=a, slug="alpha", parent_uuid=None,
+                intent="Alpha intent.", retired=False,
+                created_at_hlc=hlc, updated_at_hlc=hlc,
+            )
+        )
+        store.upsert_feature(
+            Feature(
+                uuid=b, slug="bravo", parent_uuid=None,
+                intent="Bravo intent.", retired=False,
+                created_at_hlc=hlc, updated_at_hlc=hlc,
+            )
+        )
+    finally:
+        store.close()
+    return a, b
+
+
+def test_sync_stale_buffer_when_no_meta(tmp_path: Path) -> None:
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir()
+    (codoc_dir / "tree").mkdir()
+
+    result = sync_from_dir(str(codoc_dir))
+    assert result.status == "stale_buffer"
+    assert result.errors
+
+
+def test_sync_applies_amend_and_rename(tmp_path: Path) -> None:
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir()
+    a, b = _seed_two(codoc_dir)
+
+    store, _, tx_log = open_stores(str(codoc_dir))
+    try:
+        write_tree(str(codoc_dir), store, tx_log)
+    finally:
+        store.close()
+
+    # Edit alpha: change slug AND intent.
+    f = codoc_dir / "tree" / "alpha.codoc"
+    text = f.read_text()
+    text = text.replace("- alpha", "- alpha-renamed")
+    text = text.replace("Alpha intent.", "Alpha is now updated.")
+    f.write_text(text)
+
+    result = sync_from_dir(str(codoc_dir))
+    assert result.status == "ok", f"errors: {result.errors}"
+    assert len(result.applied) == 2
+    assert any("RENAME" in line for line in result.applied)
+    assert any("AMEND" in line for line in result.applied)
+
+    # Verify in store.
+    store, _, _ = open_stores(str(codoc_dir))
+    try:
+        feat = store.get_feature(a)
+    finally:
+        store.close()
+    assert feat.slug == "alpha-renamed"
+    assert "updated" in feat.intent.lower()
+
+
+def test_sync_parse_error_no_db_writes(tmp_path: Path) -> None:
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir()
+    a, b = _seed_two(codoc_dir)
+
+    store, _, tx_log = open_stores(str(codoc_dir))
+    try:
+        write_tree(str(codoc_dir), store, tx_log)
+    finally:
+        store.close()
+
+    # Inject a bogus feature without UUID — should be a fatal error.
+    f = codoc_dir / "tree" / "alpha.codoc"
+    f.write_text(f.read_text() + "\n- handcrafted-feature-no-uuid  [Drafting]\n  intent line\n")
+
+    result = sync_from_dir(str(codoc_dir))
+    assert result.status == "parse_error"
+    assert result.applied == []
+
+    # The store should be unchanged.
+    store, _, _ = open_stores(str(codoc_dir))
+    try:
+        feat = store.get_feature(a)
+    finally:
+        store.close()
+    assert feat.slug == "alpha"
+    assert feat.intent == "Alpha intent."
+
+
+def test_sync_no_changes_is_ok_noop(tmp_path: Path) -> None:
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir()
+    _seed_two(codoc_dir)
+
+    store, _, tx_log = open_stores(str(codoc_dir))
+    try:
+        write_tree(str(codoc_dir), store, tx_log)
+    finally:
+        store.close()
+
+    result = sync_from_dir(str(codoc_dir))
+    assert result.status == "ok"
+    assert result.applied == []

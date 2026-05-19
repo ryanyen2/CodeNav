@@ -1,39 +1,79 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "CodeNav Tree",
+  "name": "codoc",
   "scopeName": "source.codoc",
   "patterns": [
-    { "include": "#deps-block" },
-    { "include": "#tree-line" }
+    { "include": "#header" },
+    { "include": "#legend" },
+    { "include": "#binding-entry" },
+    { "include": "#bindings-header" },
+    { "include": "#retired-feature" },
+    { "include": "#feature" },
+    { "include": "#proposal-reject" },
+    { "include": "#proposal" },
+    { "include": "#comment" }
   ],
   "repository": {
-    "deps-block": {
-      "match": "^deps:\\s*$",
-      "name": "keyword.control.codoc"
+    "header": {
+      "match": "^#\\s*codoc.*$",
+      "name": "comment.line.number-sign.codoc"
     },
-    "dep-line": {
-      "match": "^\s*\\(([^)]+)\\)\\s*--(imports|invokes|inherits|type-refs)-->\s*\\(([^)]+)\\)",
+    "legend": {
+      "match": "^#\\s*-\\s+active.*$",
+      "name": "comment.line.number-sign.codoc"
+    },
+    "comment": {
+      "match": "#.*$",
+      "name": "comment.line.number-sign.codoc"
+    },
+    "feature": {
+      "match": "^(\\s*)(-)\\s+([^\\s\\[#]+)(?:\\s+(\\[[^\\]]*\\]))?\\s*$",
       "captures": {
-        "1": { "name": "entity.ref.codoc" },
-        "2": { "name": "keyword.relation.codoc" },
-        "3": { "name": "entity.ref.codoc" }
+        "2": { "name": "punctuation.definition.list.codoc" },
+        "3": { "name": "entity.name.function.codoc" },
+        "4": { "name": "keyword.control.state.codoc" }
       }
     },
-    "tree-line": {
-      "patterns": [
-        {
-          "match": "^(\\s*)(-\\s)([/%$^~])(\\s+)([^\\[(]*?)(\\s+\\(([^)]+)\\))?",
-          "captures": {
-            "1": { "name": "punctuation.whitespace.codoc" },
-            "2": { "name": "punctuation.list.codoc" },
-            "3": { "name": "keyword.sigil.codoc" },
-            "4": { "name": "punctuation.whitespace.codoc" },
-            "5": { "name": "entity.name.feature.codoc" },
-            "6": { "name": "meta.entity.codoc" },
-            "7": { "name": "entity.name.function.codoc" }
-          }
-        }
-      ]
+    "retired-feature": {
+      "match": "^(\\s*)(~)\\s+([^\\s\\[#]+)(?:\\s+(\\[[^\\]]*\\]))?\\s*$",
+      "captures": {
+        "2": { "name": "invalid.deprecated.codoc" },
+        "3": { "name": "invalid.deprecated.codoc" },
+        "4": { "name": "keyword.control.state.codoc" }
+      }
+    },
+    "proposal": {
+      "match": "^(\\s*)(\\?)\\s+([\\w\\-]+):\\s+(\\S+)(?:\\s+(\\[[^\\]]*\\]))?\\s*(#\\s*\\?[0-9a-zA-Z:\\-_]+)?\\s*$",
+      "captures": {
+        "2": { "name": "markup.inserted.codoc" },
+        "3": { "name": "keyword.other.proposal-kind.codoc" },
+        "4": { "name": "entity.name.function.codoc" },
+        "5": { "name": "keyword.control.state.codoc" },
+        "6": { "name": "comment.line.hlc.codoc" }
+      }
+    },
+    "proposal-reject": {
+      "match": "^(\\s*)(!)\\s+([\\w\\-]+):\\s+(\\S+).*$",
+      "captures": {
+        "2": { "name": "markup.deleted.codoc" },
+        "3": { "name": "keyword.other.proposal-kind.codoc" },
+        "4": { "name": "markup.deleted.codoc" }
+      }
+    },
+    "bindings-header": {
+      "match": "^\\s*(bindings|candidate-bindings):\\s*$",
+      "captures": {
+        "1": { "name": "keyword.other.bindings.codoc" }
+      }
+    },
+    "binding-entry": {
+      "match": "^(\\s*)(\\[b\\d+\\])\\s+(\\S+)\\s*(::)\\s*(\\S+)",
+      "captures": {
+        "2": { "name": "support.constant.binding-id.codoc" },
+        "3": { "name": "string.other.link.codoc" },
+        "4": { "name": "punctuation.separator.codoc" },
+        "5": { "name": "entity.name.function.codoc" }
+      }
     }
   }
 }

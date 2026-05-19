@@ -1,66 +1,118 @@
 {
-  "name": "vscode-codenav",
-  "displayName": "CodeNav",
-  "description": "Semantic tree editing: .codoc files with sync to codebase and backend",
+  "name": "codoc",
+  "displayName": "codoc",
+  "description": "Feature-tree navigator and transaction queue for codoc",
   "version": "0.1.0",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
+  "publisher": "codoc",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished",
-    "onLanguage:codoc",
-    "onCommand:codenav.analyze",
-    "onCommand:codenav.sync",
-    "onCommand:codenav.apply",
-    "onCommand:codenav.preview",
-    "onCommand:codenav.toggleStatus"
+    "onStartupFinished"
   ],
   "contributes": {
-    "languages": [{
-      "id": "codoc",
-      "extensions": [".codoc"],
-      "aliases": ["CodeNav Tree", "codoc"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "codoc",
-      "scopeName": "source.codoc",
-      "path": "./syntaxes/codoc.tmLanguage.json"
-    }],
-    "commands": [
-      { "command": "codenav.analyze", "title": "CodeNav: Analyze Codebase" },
-      { "command": "codenav.sync", "title": "CodeNav: Sync (Code → Tree)" },
-      { "command": "codenav.apply", "title": "CodeNav: Apply to Code" },
-      { "command": "codenav.preview", "title": "CodeNav: Preview Apply" },
-      { "command": "codenav.toggleStatus", "title": "CodeNav: Toggle Status" }
+    "languages": [
+      {
+        "id": "codoc",
+        "aliases": ["Codoc", "codoc"],
+        "extensions": [".codoc"],
+        "configuration": "./language-configuration.json"
+      }
     ],
-    "menus": {
-      "editor/context": [
-        { "command": "codenav.toggleStatus", "when": "editorLangId == codoc" }
-      ]
-    },
-    "views": {
-      "explorer": [
-        {
-          "id": "codenavTreeView",
-          "name": "CodeNav Tree"
-        }
-      ]
-    },
+    "grammars": [
+      {
+        "language": "codoc",
+        "scopeName": "source.codoc",
+        "path": "./syntaxes/codoc.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "codoc.openPanel",
+        "title": "codoc: Open Panel"
+      },
+      {
+        "command": "codoc.reflect",
+        "title": "codoc: Reflect (process new commits)"
+      },
+      {
+        "command": "codoc.bootstrap",
+        "title": "codoc: Bootstrap codebase"
+      },
+      {
+        "command": "codoc.render",
+        "title": "codoc: Render tree"
+      },
+      {
+        "command": "codoc.syncFile",
+        "title": "codoc: Sync current file"
+      },
+      {
+        "command": "codoc.acceptProposal",
+        "title": "codoc: Accept proposal"
+      },
+      {
+        "command": "codoc.rejectProposal",
+        "title": "codoc: Reject proposal"
+      },
+      {
+        "command": "codoc.acceptAll",
+        "title": "codoc: Accept all proposals"
+      },
+      {
+        "command": "codoc.rejectAll",
+        "title": "codoc: Reject all proposals"
+      },
+      {
+        "command": "codoc.acceptProposalWithEdits",
+        "title": "codoc: Accept proposal with edits"
+      },
+      {
+        "command": "codoc.openIndex",
+        "title": "codoc: Open feature tree (_index.codoc)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codoc.acceptProposal",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
+      },
+      {
+        "command": "codoc.rejectProposal",
+        "key": "ctrl+shift+backspace",
+        "mac": "cmd+shift+backspace",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
+      },
+      {
+        "command": "codoc.openIndex",
+        "key": "ctrl+k ctrl+l",
+        "mac": "cmd+k cmd+l"
+      }
+    ],
     "configuration": {
-      "title": "CodeNav",
+      "title": "codoc",
       "properties": {
-        "codenav.serverUrl": { "type": "string", "default": "http://localhost:8001", "description": "Backend API base URL" },
-        "codenav.serverPath": { "type": "string", "default": "", "description": "Optional: path to run server (e.g. server/); if set, can auto-start" },
-        "codenav.focusMode": { "type": "boolean", "default": true, "description": "When caret is in a .codoc file, dim unrelated lines and highlight lines related by deps" },
-        "codenav.crossEditorHighlight": { "type": "boolean", "default": true, "description": "When caret is on a node with code location, open the file in split view and highlight the corresponding range" }
+        "codoc.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8001",
+          "description": "codoc FastAPI server URL"
+        },
+        "codoc.rootDir": {
+          "type": "string",
+          "default": "",
+          "description": "Root directory of the codoc-initialized repo. Auto-detected from workspace if empty."
+        }
       }
     }
   },
-  "dependencies": {
-    "codenav-semantic-tree": "file:../"
-  },
   "devDependencies": {
+    "@types/node": "^25.6.2",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.3.0"

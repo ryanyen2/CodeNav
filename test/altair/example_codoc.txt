@@ -1,0 +1,270 @@
+- Core API and Schema Generation
+  - Schema Generation System
+    - Schema Generation Process
+  - Core API Components
+    - Core API Structure
+    - Chart Class
+    - Encoding System
+  - Runtime Behavior
+    - Runtime Flow
+    - Schema Validation
+  - Chart API
+    - Chart Class Architecture
+    - Creating Charts
+      - Basic Chart Construction
+      - Data Sources
+    - Chart Customization
+      - Configuration Methods
+      - Customization Approaches
+    - Compound Charts
+    - Encoding and Channels
+    - Transformations
+    - Interactive Features
+    - Export and Serialization
+  - Schema Generation System
+    - Key Components
+      - SchemaGenerator
+      - SchemaInfo
+      - ArgInfo
+    - Schema Translation Process
+      - Handling Schema References
+      - Class Generation Process
+    - Special Handling for Channels and Encodings
+      - Code-to-System Mapping: Encoding Mixins
+    - Type Definitions and Special Handling
+    - Runtime Operation
+      - SchemaBase
+      - Debug Mode
+    - Running the Schema Generation Process
+- Data Handling and Transformation
+  - Supported Data Formats
+  - Data Transformer Registry
+  - Large Dataset Handling
+  - Built-in Datasets
+  - Data Transformation Evaluation
+  - Long-form vs. Wide-form Data
+  - Data Transformer Registry
+    - Purpose and Function
+    - Architecture
+      - System Entity Map
+      - Plugin Registry Implementation
+    - Data Flow and Processing
+      - Transformation Pipeline
+      - Code Entity Interaction
+    - Built-in Data Transformers
+      - Row Limiting and Sampling
+    - Dataset Consolidation
+    - VegaFusion Integration
+    - Usage Examples
+      - Enabling and Disabling
+      - Registering a Custom Transformer
+  - Large Dataset Handling
+    - Default Behavior and Row Limits
+    - Data Transformer Architecture
+      - Code Entity Mapping: Data Transformation
+    - Strategies for Handling Large Datasets
+      - 1. Disabling Row Limits
+      - 2. Sampling
+      - 3. URL-Based Data Loading
+      - 4. VegaFusion Integration
+        - Key VegaFusion Components
+    - Data Evaluation with transformed_data
+      - Code Entity Mapping: Transformed Data Flow
+    - Comparison of Strategies
+  - Built-in Datasets
+    - Architecture and Data Flow
+      - System Entity Map
+    - Multi-Backend Support
+      - Backend Implementation Details
+    - The Reader and Constraints System
+      - Logical Data Flow: Remote to Local Object
+    - Metadata and Caching
+      - Metadata Components
+      - Dataset Caching
+    - Developer Tooling: Metadata Generation
+- Visualization Components
+  - Chart Component Hierarchy
+  - Marks
+    - Mark Types
+      - Primitive Marks
+      - Composite Marks
+    - Mark Properties
+  - Encodings
+    - Encoding Data Types
+    - Channel Options
+  - Compound Charts
+  - Geographical Visualization
+  - Configuration and Themes
+  - Marks and Encodings
+    - Purpose and Scope
+    - Marks and Encodings in Altair's Architecture
+    - Marks
+      - Primitive Mark Types
+      - Mark Properties and Configuration
+    - Encodings
+      - Encoding Channels
+      - Encoding Data Types
+      - Syntax Styles
+    - Data Transformations in Encodings
+  - Compound Charts
+    - Compound Chart Types and Creation Methods
+      - Mapping Natural Language to Code Entities
+      - Summary of API Syntaxes
+    - Layered Charts
+      - Layer Order and Precedence
+      - Configuration and Layers
+    - Concatenation
+      - Shared Data Flow
+    - Faceting and Repeating
+      - Faceting
+      - Repeating
+    - Implementation Architecture
+      - Internal Data Flow Diagram
+    - Configuration in Compound Charts
+      - Resolve Scales
+  - Geographical Visualization
+    - Geographic Data Sources
+      - GeoPandas GeoDataFrame
+      - GeoJSON and TopoJSON Data
+      - Generated Geographic Data
+    - The mark_geoshape Mark
+      - Basic Properties
+      - Basic Map Example
+    - Working with Projections
+      - Common Projection Types
+      - Projection Configuration
+    - Mapping Techniques
+      - Focus and Filtering
+      - Choropleth Maps
+      - Mapping Points, Lines, and Polygons
+    - Interactivity and Advanced Layouts
+      - Interactive Maps
+      - Faceted Maps
+      - Scale Resolution in Compound Maps
+- Interactivity and Expressions
+  - 1. Parameter System: Variables and Selections
+    - 1.1 Variable Parameters
+    - 1.2 Selection Parameters
+  - 2. Conditions and Filters
+    - 2.1 Conditions with when()
+    - 2.2 Filters with transform_filter()
+  - 3. Expression System
+    - 3.1 The datum Object
+    - 3.2 Expression Functions and Constants
+  - 4. Bindings and Widgets
+    - 4.1 Widget Bindings
+    - 4.2 Scale and Legend Bindings
+  - 5. Jupyter Integration
+  - Selections and Parameters
+    - Parameter Types
+      - Variable Parameters
+      - Selection Parameters
+        - Interval Selections
+        - Point Selections
+    - Conditions and Logic
+      - The when() Function
+      - Logical Composition
+    - Parameter Binding
+      - Special Bindings
+    - Data Flow and Implementation
+      - Parameter Naming
+    - Geographic Selections
+  - Vega-Lite Expression System
+    - Core Components
+      - datum Object
+      - Expression Classes
+      - The expr Class
+    - Expression Types and Operations
+      - Creating Basic Expressions
+      - Expression Conversion Flow
+    - Common Expression Functions
+    - Date and Time Handling
+    - Implementation Details
+      - Operator Mapping
+      - Serialization
+- Rendering and Display
+  - Renderer Registry and Selection
+    - Built-in Renderers
+  - HTML Generation and Templates
+  - MIME Bundle Generation
+  - Chart Saving Functionality
+  - Environment Integration
+  - Renderer System
+    - Data Flow and Component Interaction
+    - Key Classes and Interfaces
+    - The Renderer Registry
+      - Registry State Management
+    - Built-in Renderers
+      - HTML and Embed Options
+    - Data Flow: From Spec to Display
+    - Extending the System
+      - Custom Renderers
+      - Entry Point Integration
+    - Related Systems
+  - Chart Export
+    - Export Architecture
+      - Export Architecture Diagram
+      - Key Components
+    - Export Formats
+      - JSON Format
+      - HTML Format
+      - Static Images (PNG, SVG, PDF)
+    - Export API and Logic
+      - Format Detection
+      - Data Flow for File Writing
+    - Dependencies
+  - Jupyter Integration
+    - Basic Usage
+      - Configuration Options
+    - Selections and Parameters Architecture
+      - Accessing Selections
+      - Parameters
+    - Advanced Integration Features
+      - Offline Mode
+      - VegaFusion Integration
+      - Timezone Handling
+    - Implementation Details
+      - JavaScript Rendering and Listeners
+      - Error Reporting
+- Development and Extension
+  - Development Environment Setup
+  - Schema Generation System
+  - Build and Testing Infrastructure
+  - Documentation System
+  - Extension Mechanisms
+  - Release Process
+  - Build and Release Pipeline
+    - Development Environment and Tools
+      - Key Tools
+    - Continuous Integration Pipeline
+      - GitHub Actions Workflows
+    - Code Generation System
+    - Testing Infrastructure
+      - Test Utilities and Marks
+      - Data Sanitization Tests
+    - Release Process
+      - Release Workflow
+      - Version Management
+    - Package Distribution
+  - Documentation System
+    - API Reference Generation
+      - Automated API Mapping
+      - Data Flow for API Docs
+    - Vega Expression Documentation
+    - Sphinx Extensions
+      - The altair-plot Extension
+      - The code_ref and ThemeDirective
+    - Styling and Assets
+    - Release Notes
+  - Theming System
+    - Theme Registry Architecture
+      - Theme System Architecture
+    - Using Themes
+      - Core Theme API
+      - Enabling a Theme
+    - Creating Custom Themes
+      - Data Flow for Theme Application
+      - Theme Implementation Example
+    - Configuration Hierarchy and Precedence
+    - Themeable Components
+- Glossary

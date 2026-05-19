@@ -14,10 +14,15 @@ from codoc.storage.sqlite_store import SQLiteStore
 from codoc.storage.jsonl_log import JSONLLog
 from codoc.core.log import TransactionLog
 from codoc.model.feature import Feature
+from codoc.model.obligation import Obligation
 from codoc.model.transaction import Transaction
 from codoc.pipelines.intentional.amend import amend_feature
+from codoc.pipelines.intentional.merge import merge_features
 from codoc.pipelines.intentional.rename import rename_feature
+from codoc.pipelines.intentional.restructure import restructure_feature
 from codoc.pipelines.intentional.retire import retire_feature
+from codoc.pipelines.intentional.rewind import rewind_feature
+from codoc.pipelines.intentional.split import split_feature
 
 
 # ---------------------------------------------------------------------------
@@ -175,4 +180,84 @@ class IntentionalRunner:
             tx_log=self._open_tx_log,
             jsonl_log=self._open_jsonl,
             author=self._author,
+        )
+
+    def split(
+        self,
+        feature_uuid: str,
+        child_a_slug: str,
+        child_a_intent: str,
+        child_a_binding_uuids: list[str],
+        child_b_slug: str,
+        child_b_intent: str,
+        child_b_binding_uuids: list[str],
+        binding_graph: dict[str, set[str]] | None = None,
+    ) -> tuple[Transaction, list[Obligation]]:
+        """Split a feature into two children; returns (tx, obligations)."""
+        return split_feature(
+            feature_uuid=feature_uuid,
+            child_a_slug=child_a_slug,
+            child_a_intent=child_a_intent,
+            child_a_binding_uuids=child_a_binding_uuids,
+            child_b_slug=child_b_slug,
+            child_b_intent=child_b_intent,
+            child_b_binding_uuids=child_b_binding_uuids,
+            store=self._open_store,
+            tx_log=self._open_tx_log,
+            jsonl_log=self._open_jsonl,
+            author=self._author,
+            binding_graph=binding_graph,
+        )
+
+    def merge(
+        self,
+        source_uuids: list[str],
+        target_slug: str,
+        target_intent: str,
+        binding_graph: dict[str, set[str]] | None = None,
+    ) -> tuple[Transaction, list[Obligation]]:
+        """Merge multiple features into one new target; returns (tx, obligations)."""
+        return merge_features(
+            source_uuids=source_uuids,
+            target_slug=target_slug,
+            target_intent=target_intent,
+            store=self._open_store,
+            tx_log=self._open_tx_log,
+            jsonl_log=self._open_jsonl,
+            author=self._author,
+            binding_graph=binding_graph,
+        )
+
+    def restructure(
+        self,
+        feature_uuid: str,
+        new_parent_uuid: str | None,
+        binding_graph: dict[str, set[str]] | None = None,
+    ) -> tuple[Transaction, list[Obligation]]:
+        """Move a feature to a new parent; returns (tx, obligations)."""
+        return restructure_feature(
+            feature_uuid=feature_uuid,
+            new_parent_uuid=new_parent_uuid,
+            store=self._open_store,
+            tx_log=self._open_tx_log,
+            jsonl_log=self._open_jsonl,
+            author=self._author,
+            binding_graph=binding_graph,
+        )
+
+    def rewind(
+        self,
+        feature_uuid: str,
+        target_hlc_str: str,
+        binding_graph: dict[str, set[str]] | None = None,
+    ) -> tuple[Transaction, list[Obligation]]:
+        """Rewind a feature's intent/slug to a prior HLC state; returns (tx, obligations)."""
+        return rewind_feature(
+            feature_uuid=feature_uuid,
+            target_hlc_str=target_hlc_str,
+            store=self._open_store,
+            tx_log=self._open_tx_log,
+            jsonl_log=self._open_jsonl,
+            author=self._author,
+            binding_graph=binding_graph,
         )

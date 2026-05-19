@@ -1,47 +1,108 @@
-# CodeNav VS Code Extension
+# codoc VS Code Extension
 
-Edit semantic trees in `.codoc` files with sync to the CodeNav backend (analyze, sync, apply).
+Edit `.codoc` feature-tree files with auto-sync to the codoc backend. Proposals from the reflective pipeline appear inline — accept or reject them without leaving your editor.
 
 ## Prerequisites
 
-- Build the CodeNav library from the repo root: `npm run build`
-- Start the backend (from `server/`): `uv run python main.py` (default port 8001)
+- Python backend running: `codoc server` (default port 8001)
+- A codoc-initialized repo: `codoc init` in your project root
 
 ## How to run the extension (F5)
 
-1. **Open the extension folder**: In Cursor/VS Code, use **File → Open Folder** and choose the `vscode-codenav` folder (not the whole CodeNav repo).
-2. **Build**: Run `npm run build` in the terminal (or from repo root: `npm run build` then `cd vscode-codenav && npm run build`).
-3. **Launch**: Press **F5** (or Run → Start Debugging). A new window opens (Extension Development Host).
-4. **Commands**: In the new window, press **Ctrl+Shift+P** (Cmd+Shift+P on Mac), type **CodeNav**, and you should see:
-   - CodeNav: Analyze Codebase
-   - CodeNav: Sync (Code → Tree)
-   - CodeNav: Apply to Code
-   - CodeNav: Preview Apply
-   - CodeNav: Toggle Status
-5. **Status bar**: Bottom-left should show e.g. "CodeNav: Backend Offline" until the backend is running.
+1. Open the `vscode-codenav` folder in VS Code.
+2. Run `npm install && npm run build` in the terminal.
+3. Press **F5** to launch the Extension Development Host.
+4. Open a workspace that has a `.codoc/` directory.
 
-If commands don’t appear or you see errors, open **Help → Toggle Developer Tools** and check the Console for `[CodeNav]` messages.
+## Workflow
 
-## Commands
+1. **Render** the feature tree to editable files:
+   ```bash
+   codoc projection render
+   ```
+   This writes `.codoc/tree/*.codoc` files.
 
-- **CodeNav: Analyze Codebase** — Create `.codoc` and `.codoc.meta.json` from the workspace
-- **CodeNav: Sync** — Code → tree (refresh after editing Python)
-- **CodeNav: Apply to Code** — Tree → code (apply edits)
-- **CodeNav: Preview** — Dry-run apply (show planned changes)
-- **CodeNav: Toggle Status** — Cycle status on the current line (context menu)
+2. **Open** the index with `Cmd+K Cmd+L` — opens `_index.codoc` listing all root features.
+
+3. **Edit** a `.codoc` file — change slugs, amend intent prose, change `-` to `~` to retire. Changes are applied automatically on save.
+
+4. **Review proposals** — after a git commit, the reflective pipeline emits `?` lines into the affected files:
+   ```
+   ? reattribute: constraint-solver  [proposal]  # ?0190ff...
+       candidate-bindings: js.py:new_helper_fn
+   ```
+   - `Cmd+Enter` on a `?` line — accept the proposal
+   - `Cmd+Shift+Backspace` on a `?` line — reject
+   - `$(edit) Edit & Accept` codelens — accept with a slug rename
+
+## Commands (Cmd+Shift+P)
+
+| Command | Description |
+|---|---|
+| `codoc: Open feature tree (_index.codoc)` | Open `_index.codoc` — top-level feature listing |
+| `codoc: Render tree` | Re-render `.codoc/tree/` from SQLite |
+| `codoc: Sync current file` | Apply edits in the current `.codoc` file to SQLite |
+| `codoc: Bootstrap codebase` | Trigger bootstrap (propose initial feature tree) |
+| `codoc: Reflect (process new commits)` | Run the reflective pipeline on recent commits |
+| `codoc: Accept proposal` | Accept the proposal at the cursor |
+| `codoc: Reject proposal` | Reject the proposal at the cursor |
+| `codoc: Accept all proposals` | Accept every pending proposal |
+| `codoc: Reject all proposals` | Reject every pending proposal |
+| `codoc: Accept proposal with edits` | Accept and rename the proposed slug |
+
+## Keybindings
+
+| Key | Action | Context |
+|---|---|---|
+| `Cmd+Enter` | Accept proposal at cursor | `.codoc` file |
+| `Cmd+Shift+Backspace` | Reject proposal at cursor | `.codoc` file |
+| `Cmd+K Cmd+L` | Open `_index.codoc` | Global |
+
+## Status bar
+
+The `codoc` status bar item (bottom-right) shows:
+- `$(warning) codoc: offline` — server not reachable
+- `$(bell) codoc: N` — N pending proposals
+- `$(check) codoc` — connected, no pending proposals
+
+Click the status bar item to open `_index.codoc`.
 
 ## Configuration
 
-- `codenav.serverUrl` — Backend base URL (default `http://localhost:8001`)
-- `codenav.serverPath` — Optional path to auto-start server
+| Setting | Default | Description |
+|---|---|---|
+| `codoc.serverUrl` | `http://localhost:8001` | codoc FastAPI server URL |
+| `codoc.rootDir` | `` | Repo root with `.codoc/`. Auto-detected from workspace if empty. |
+
+## `.codoc` file format
+
+```
+# codoc subtree: visualization
+
+# - active   ~ retired   ? proposal (delete=accept, !=reject)   [State] computed
+
+- visualization  [Stub]
+  Draco visualization recommendation — translates Vega-Lite specs to
+  weighted soft-constraint ASP programs.
+
+  - spec-parser  [Stable]
+    Parse a Vega-Lite JSON spec into internal representation.
+    bindings:
+      [b1] js.py :: Draco
+      [b2] helper.py :: topo_sort
+
+? reattribute: spec-parser  [proposal]  # ?0190ff...
+    candidate-bindings: js.py:new_helper_fn
+```
+
+Edit slugs, indent, and prose directly. The extension syncs on save. Bindings lines are read-only — edits there are ignored.
 
 ## Development
 
-From repo root: build library then extension:
-
 ```bash
-npm run build
-cd vscode-codenav && npm install && npm run build
+cd vscode-codenav
+npm install
+npm run build   # or: npm run watch
 ```
 
-Open the `vscode-codenav` folder in VS Code, then press **F5** to launch the Extension Development Host.
+Press **F5** in VS Code to open the Extension Development Host. Check **Help → Toggle Developer Tools → Console** for `[codoc]` log messages.

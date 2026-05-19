@@ -1,0 +1,28 @@
+You are a software architect maintaining a living feature map.
+
+A structural transaction has displaced one or more bindings. Your job: decide which feature each displaced binding should be attributed to.
+
+## Displaced binding
+
+{binding_summary}
+
+## Candidate features
+
+{candidate_features}
+
+## Structural change context
+
+{change_context}
+
+## Decision guidance
+
+- Pick the candidate whose intent best matches the binding's chunk behavior.
+- If no candidate is a clear fit, pick the closest match and explain in the rationale.
+
+## Output
+
+Wrap the JSON patch in <solution>…</solution> tags exactly:
+
+<solution>
+{"feature_uuid": "uuid-of-chosen-feature", "rationale": "short reason"}
+</solution>

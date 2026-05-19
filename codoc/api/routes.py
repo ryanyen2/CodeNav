@@ -21,8 +21,12 @@ from codoc.pipelines.bootstrap.runner import run_bootstrap, finish_bootstrap
 from codoc.pipelines.reflective.runner import run_reflect
 from codoc.pipelines.intentional.runner import open_stores
 from codoc.pipelines.intentional.amend import amend_feature
+from codoc.pipelines.intentional.merge import merge_features
 from codoc.pipelines.intentional.rename import rename_feature
+from codoc.pipelines.intentional.restructure import restructure_feature
 from codoc.pipelines.intentional.retire import retire_feature
+from codoc.pipelines.intentional.rewind import rewind_feature
+from codoc.pipelines.intentional.split import split_feature
 from codoc.model.feature import Feature
 from codoc.model.binding import Binding
 from codoc.model.anchor import Anchor
@@ -102,6 +106,16 @@ class RejectRequest(BaseModel):
     root_dir: str
 
 
+class BulkAcceptRequest(BaseModel):
+    root_dir: str
+    label: str | None = None
+    edits: dict | None = None
+
+
+class BulkRejectRequest(BaseModel):
+    root_dir: str
+
+
 class LabelRequest(BaseModel):
     root_dir: str
     label: str
@@ -125,6 +139,60 @@ class RetireRequest(BaseModel):
     root_dir: str
     feature_uuid: str
     author: str = "user"
+
+
+class SplitRequest(BaseModel):
+    root_dir: str
+    feature_uuid: str
+    child_a_slug: str
+    child_a_intent: str
+    child_a_binding_uuids: list[str]
+    child_b_slug: str
+    child_b_intent: str
+    child_b_binding_uuids: list[str]
+    author: str = "user"
+
+
+class MergeRequest(BaseModel):
+    root_dir: str
+    source_uuids: list[str]
+    target_slug: str
+    target_intent: str
+    author: str = "user"
+
+
+class RestructureRequest(BaseModel):
+    root_dir: str
+    feature_uuid: str
+    new_parent_uuid: str | None = None
+    author: str = "user"
+
+
+class RewindRequest(BaseModel):
+    root_dir: str
+    feature_uuid: str
+    target_hlc: str
+    author: str = "user"
+
+
+class StructuralResponse(BaseModel):
+    transaction: TransactionResponse
+    obligation_uuids: list[str]
+
+
+class AnchorResolveRequest(BaseModel):
+    root_dir: str
+    file: str  # repo-relative path
+    symbol_path: str | None = None
+    ts_query: str | None = None
+    occurrence_index: int = 0
+
+
+class AnchorPositionResponse(BaseModel):
+    start_line: int
+    end_line: int
+    start_byte: int
+    end_byte: int
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +455,59 @@ async def list_pending(root_dir: str = Query(...)) -> list[TransactionResponse]:
     return [_tx_to_response(tx) for tx in txs]
 
 
+@router.post("/tx/accept-all")
+async def accept_all_transactions(body: BulkAcceptRequest) -> dict:
+    """Accept all pending proposals, optionally applying a label."""
+    from codoc.storage.jsonl_log import JSONLLog
+    from codoc.core.log import TransactionLog
+
+    codoc_dir = _codoc_dir(body.root_dir)
+    jsonl_path = str(Path(codoc_dir) / "log.jsonl")
+    store = _open_store(codoc_dir)
+    accepted_count = 0
+    failed = []
+    try:
+        txs = store.list_transactions(proposal=True, limit=0)
+        tx_log = TransactionLog(store)
+        jsonl_log = JSONLLog(jsonl_path)
+        for tx in txs:
+            try:
+                accepted_tx = tx_log.accept_proposal(tx.hlc.to_str(), edits=body.edits)
+                _apply_accepted_transaction(accepted_tx, store, jsonl_log)
+                jsonl_log.append(accepted_tx)
+                if body.label and body.label in _VALID_LABELS:
+                    store.set_label(accepted_tx.hlc.to_str(), body.label)
+                accepted_count += 1
+            except Exception as exc:
+                failed.append({"hlc": tx.hlc.to_str(), "error": str(exc)})
+    finally:
+        store.close()
+
+    return {"accepted": accepted_count, "failed": failed}
+
+
+@router.post("/tx/reject-all")
+async def reject_all_transactions(body: BulkRejectRequest) -> dict:
+    """Reject (hard-delete) all pending proposals."""
+    codoc_dir = _codoc_dir(body.root_dir)
+    store = _open_store(codoc_dir)
+    rejected_count = 0
+    failed = []
+    try:
+        txs = store.list_transactions(proposal=True, limit=0)
+        tx_log = TransactionLog(store)
+        for tx in txs:
+            try:
+                tx_log.reject_proposal(tx.hlc.to_str())
+                rejected_count += 1
+            except Exception as exc:
+                failed.append({"hlc": tx.hlc.to_str(), "error": str(exc)})
+    finally:
+        store.close()
+
+    return {"rejected": rejected_count, "failed": failed}
+
+
 @router.post("/tx/{hlc_str}/accept", response_model=TransactionResponse)
 async def accept_transaction(hlc_str: str, body: AcceptRequest) -> TransactionResponse:
     """Accept a pending proposal, optionally patching its payload with edits."""
@@ -542,6 +663,116 @@ async def intentional_retire(body: RetireRequest) -> TransactionResponse:
     return _tx_to_response(tx)
 
 
+@router.post("/tx/intentional/split", response_model=StructuralResponse)
+async def intentional_split(body: SplitRequest) -> StructuralResponse:
+    """Split a feature into two children (Phase 2)."""
+    codoc_dir = _codoc_dir(body.root_dir)
+    store, jsonl_log, tx_log = open_stores(codoc_dir)
+    try:
+        try:
+            tx, obligations = split_feature(
+                feature_uuid=body.feature_uuid,
+                child_a_slug=body.child_a_slug,
+                child_a_intent=body.child_a_intent,
+                child_a_binding_uuids=body.child_a_binding_uuids,
+                child_b_slug=body.child_b_slug,
+                child_b_intent=body.child_b_intent,
+                child_b_binding_uuids=body.child_b_binding_uuids,
+                store=store,
+                tx_log=tx_log,
+                jsonl_log=jsonl_log,
+                author=body.author,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        store.close()
+
+    return StructuralResponse(
+        transaction=_tx_to_response(tx),
+        obligation_uuids=[o.uuid for o in obligations],
+    )
+
+
+@router.post("/tx/intentional/merge", response_model=StructuralResponse)
+async def intentional_merge(body: MergeRequest) -> StructuralResponse:
+    """Merge multiple features into one new target (Phase 2)."""
+    codoc_dir = _codoc_dir(body.root_dir)
+    store, jsonl_log, tx_log = open_stores(codoc_dir)
+    try:
+        try:
+            tx, obligations = merge_features(
+                source_uuids=body.source_uuids,
+                target_slug=body.target_slug,
+                target_intent=body.target_intent,
+                store=store,
+                tx_log=tx_log,
+                jsonl_log=jsonl_log,
+                author=body.author,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        store.close()
+
+    return StructuralResponse(
+        transaction=_tx_to_response(tx),
+        obligation_uuids=[o.uuid for o in obligations],
+    )
+
+
+@router.post("/tx/intentional/restructure", response_model=StructuralResponse)
+async def intentional_restructure(body: RestructureRequest) -> StructuralResponse:
+    """Move a feature to a new parent (Phase 2)."""
+    codoc_dir = _codoc_dir(body.root_dir)
+    store, jsonl_log, tx_log = open_stores(codoc_dir)
+    try:
+        try:
+            tx, obligations = restructure_feature(
+                feature_uuid=body.feature_uuid,
+                new_parent_uuid=body.new_parent_uuid,
+                store=store,
+                tx_log=tx_log,
+                jsonl_log=jsonl_log,
+                author=body.author,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        store.close()
+
+    return StructuralResponse(
+        transaction=_tx_to_response(tx),
+        obligation_uuids=[o.uuid for o in obligations],
+    )
+
+
+@router.post("/tx/intentional/rewind", response_model=StructuralResponse)
+async def intentional_rewind(body: RewindRequest) -> StructuralResponse:
+    """Rewind a feature's slug/intent to a prior HLC state (Phase 2)."""
+    codoc_dir = _codoc_dir(body.root_dir)
+    store, jsonl_log, tx_log = open_stores(codoc_dir)
+    try:
+        try:
+            tx, obligations = rewind_feature(
+                feature_uuid=body.feature_uuid,
+                target_hlc_str=body.target_hlc,
+                store=store,
+                tx_log=tx_log,
+                jsonl_log=jsonl_log,
+                author=body.author,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        store.close()
+
+    return StructuralResponse(
+        transaction=_tx_to_response(tx),
+        obligation_uuids=[o.uuid for o in obligations],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Feature query routes
 # ---------------------------------------------------------------------------
@@ -654,3 +885,113 @@ async def get_status(root_dir: str = Query(...)) -> dict:
         "feature_count": len(features),
         "binding_count": len(bindings),
     }
+
+
+# ---------------------------------------------------------------------------
+# Anchor resolution route
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.5 — Projection endpoints
+# ---------------------------------------------------------------------------
+
+
+class RenderResponse(BaseModel):
+    files: dict[str, str]
+    base_hlc: str
+
+
+class SyncResponse(BaseModel):
+    applied: list[str]
+    errors: list[dict]
+    status: str
+    files: dict[str, str] | None = None
+
+
+class SyncRequest(BaseModel):
+    root_dir: str
+    author: str = "user"
+
+
+@router.get("/tree.codoc", response_model=RenderResponse)
+async def get_tree_codoc(root_dir: str = Query(...)) -> RenderResponse:
+    """Render DB state to .codoc/tree/ and return the file contents."""
+    from codoc.projection.tree_codoc import write_tree
+
+    codoc_dir = _codoc_dir(root_dir)
+    store, jsonl_log, tx_log = open_stores(codoc_dir)
+    try:
+        from codoc.projection.tree_codoc import render_tree_with_meta
+
+        files, _ = render_tree_with_meta(store, tx_log)
+        meta = write_tree(codoc_dir, store, tx_log)
+    finally:
+        store.close()
+
+    return RenderResponse(files=files, base_hlc=meta.base_hlc)
+
+
+@router.post("/sync", response_model=SyncResponse)
+async def post_sync(body: SyncRequest) -> SyncResponse:
+    """Parse .codoc/tree/, diff, apply transactions, re-render."""
+    from codoc.projection.sync import sync_from_dir
+
+    codoc_dir = _codoc_dir(body.root_dir)
+    result = sync_from_dir(codoc_dir, author=body.author)
+    return SyncResponse(
+        applied=result.applied,
+        errors=[
+            {
+                "kind": e.kind,
+                "message": e.message,
+                "file": e.file,
+                "line": e.line,
+            }
+            for e in result.errors
+        ],
+        status=result.status,
+        files=result.new_render,
+    )
+
+
+@router.post("/anchor/resolve")
+async def resolve_anchor_endpoint(body: AnchorResolveRequest) -> AnchorPositionResponse | None:
+    """Resolve an Anchor to a (start_line, end_line, start_byte, end_byte) position.
+
+    Returns None when the file's language is unsupported or the anchor cannot
+    be resolved against the current file contents.
+    """
+    from codoc.core.anchor_resolver import resolve_anchor
+    from codoc.lang import detect_language, get_adapter
+
+    abs_file = Path(body.root_dir) / body.file
+    if not abs_file.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {body.file}")
+
+    source = abs_file.read_text(encoding="utf-8", errors="replace")
+    lang = detect_language(str(abs_file))
+    if lang is None:
+        return None
+
+    adapter = get_adapter(lang)
+    anchor = Anchor(
+        file=body.file,
+        symbol_path=body.symbol_path,
+        ts_query=body.ts_query,
+        occurrence_index=body.occurrence_index,
+    )
+    result = resolve_anchor(anchor, source, adapter)
+    if result is None:
+        return None
+
+    start_byte, end_byte = result
+    source_bytes = source.encode("utf-8")
+    start_line = source_bytes[:start_byte].count(b"\n")
+    end_line = source_bytes[:end_byte].count(b"\n")
+    return AnchorPositionResponse(
+        start_line=start_line,
+        end_line=end_line,
+        start_byte=start_byte,
+        end_byte=end_byte,
+    )

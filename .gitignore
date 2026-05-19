@@ -31,3 +31,11 @@ dist/
 .copilot/
 
 uv.lock
+
+
+.hypothesis/
+
+node_modules/
+dist/
+
+.codoc/

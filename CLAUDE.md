@@ -14,25 +14,38 @@ This repo contains the Python core (`codoc/`). The VSCode extension lives in a s
 # Install (Python 3.11+ required; use pip or uv)
 pip install -e .
 
-# CLI
+# CLI — preferred top-level verbs
 codoc init                              # init .codoc/ and install git post-commit hook
 codoc bootstrap [--root-dir DIR]        # cluster codebase, propose feature cards
 codoc bootstrap finish                  # mark bootstrap done
-codoc reflect [--from-ref REF]         # run reflective pipeline on latest commits
-codoc tx list                           # list pending proposals
-codoc tx accept HLC                     # accept a proposal
-codoc tx reject HLC                     # reject a proposal
-codoc tx label HLC LABEL                # label for validation gate (accept-verbatim | accept-light-edit | accept-heavy-edit | reject)
-codoc feature show UUID                 # show feature + state + bindings
-codoc feature amend UUID                # edit intent prose
-codoc feature rename UUID NEW_SLUG      # rename slug
-codoc feature retire UUID               # retire feature
+codoc reflect [--from-ref REF]          # run reflective pipeline on latest commits
+codoc status                            # summary: features, pending proposals, last HLC
+codoc proposals                         # list pending proposals (slug + kind + HLC prefix)
+codoc accept <slug-or-hlc-prefix>       # accept a proposal by slug or HLC prefix
+codoc accept --all-pending              # batch-accept all pending proposals
+codoc reject <slug-or-hlc-prefix>       # reject a proposal
+codoc reject --all-pending --yes        # batch-reject all (no confirm)
+codoc list                              # browse feature tree (Rich table)
+codoc show <slug-path>                  # show feature + state + bindings
+codoc search <term>                     # fuzzy search slug/intent
+codoc edit <slug-path> --intent "..."   # amend intent non-interactively
+codoc rename <slug-path> <new-slug>     # rename slug
+codoc retire <slug-path>                # retire feature
+
+# Projection workflow
+codoc projection render                 # DB → .codoc/tree/ files
+codoc projection sync                   # .codoc/tree/ edits → DB → re-render
+codoc projection diff                   # dry-run diff (shows ops, no apply)
+
+# Gate and server
 codoc gate-run [--report]               # compute validation gate metrics
 codoc server [--port 8001]              # start FastAPI server
 
 # Tests (run with Python 3.11)
 python3.11 -m pytest tests/
 ```
+
+> **Deprecated aliases (still work, emit a notice):** `codoc tx list`, `codoc tx accept HLC`, `codoc tx reject HLC`, `codoc feature show UUID`, `codoc feature amend UUID`, `codoc feature rename UUID NEW`, `codoc feature retire UUID`.
 
 ## Architecture
 
@@ -93,7 +106,7 @@ Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and
 | Var | Default | Description |
 |---|---|---|
 | `CODOC_PROVIDER` | `openai` | LLM provider (`openai` or `ollama`) |
-| `CODOC_MODEL` | `gpt-4o-mini` | LLM model name |
+| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
 | `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider |

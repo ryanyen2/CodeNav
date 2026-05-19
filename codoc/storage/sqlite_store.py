@@ -291,6 +291,10 @@ class SQLiteStore:
         )
         self._db.commit()
 
+    def set_label(self, hlc_str: str, label: str) -> None:
+        self._db.execute("UPDATE transactions SET label = ? WHERE hlc = ?", (label, hlc_str))
+        self._db.commit()
+
     def delete_transaction(self, hlc_str: str) -> None:
         """Hard-delete a transaction row. Only used for proposal rollback."""
         self._db.execute("DELETE FROM transactions WHERE hlc = ?", (hlc_str,))
@@ -395,6 +399,85 @@ class SQLiteStore:
         """Hard-delete a feature. Only for proposal rollback; accepted features use retired flag."""
         self._db.execute("DELETE FROM features WHERE uuid = ?", (uuid,))
         self._db.commit()
+
+    def find_features_by_uuid_prefix(self, hex_prefix: str) -> list[Feature]:
+        """Return features whose UUID (dashes stripped) starts with *hex_prefix*."""
+        rows = self._db.execute(
+            "SELECT * FROM features WHERE REPLACE(uuid, '-', '') LIKE ? || '%'",
+            (hex_prefix.lower(),),
+        ).fetchall()
+        return [_row_to_feature(r) for r in rows]
+
+    def find_features_by_slug(self, slug: str) -> list[Feature]:
+        """Return all features with exactly this slug (may be > 1 if in different subtrees)."""
+        rows = self._db.execute(
+            "SELECT * FROM features WHERE slug = ? ORDER BY slug ASC",
+            (slug,),
+        ).fetchall()
+        return [_row_to_feature(r) for r in rows]
+
+    def find_feature_by_slug_path(self, slug_path: str) -> Feature | None:
+        """Resolve a slash-separated slug-path (e.g. 'auth-flow/token-rotation').
+
+        Uses a recursive CTE to walk from root to leaf matching each segment.
+        Returns None when no match is found.
+        """
+        parts = [p.strip() for p in slug_path.split("/") if p.strip()]
+        if not parts:
+            return None
+
+        # Walk iteratively: find roots with parts[0], then narrow by parent.
+        rows = self._db.execute(
+            "SELECT * FROM features WHERE slug = ? AND parent_uuid IS NULL",
+            (parts[0],),
+        ).fetchall()
+        features = [_row_to_feature(r) for r in rows]
+
+        for slug in parts[1:]:
+            next_features: list[Feature] = []
+            for parent in features:
+                child_rows = self._db.execute(
+                    "SELECT * FROM features WHERE slug = ? AND parent_uuid = ?",
+                    (slug, parent.uuid),
+                ).fetchall()
+                next_features.extend(_row_to_feature(r) for r in child_rows)
+            features = next_features
+            if not features:
+                return None
+
+        return features[0] if features else None
+
+    def list_features_with_slug_paths(self) -> list[tuple[Feature, str]]:
+        """Return all features paired with their computed slug-paths.
+
+        Uses a Python-side BFS (avoids recursive CTE for broad SQLite compat).
+        """
+        all_features = self.list_features(parent_uuid=None)
+        result: list[tuple[Feature, str]] = []
+        # BFS queue: (feature, parent_slug_path)
+        queue: list[tuple[Feature, str]] = []
+        for f in self.list_features(parent_uuid=""):
+            queue.append((f, f.slug))
+        # Build child map
+        by_parent: dict[str | None, list[Feature]] = {}
+        for f in all_features:
+            by_parent.setdefault(f.parent_uuid, []).append(f)
+        # BFS
+        bfs_queue = [(f, f.slug) for f in by_parent.get(None, [])]
+        while bfs_queue:
+            feat, path = bfs_queue.pop(0)
+            result.append((feat, path))
+            for child in by_parent.get(feat.uuid, []):
+                bfs_queue.append((child, f"{path}/{child.slug}"))
+        return result
+
+    def find_transactions_by_hlc_prefix(self, prefix: str) -> list[Transaction]:
+        """Return transactions whose HLC starts with *prefix*."""
+        rows = self._db.execute(
+            "SELECT * FROM transactions WHERE hlc LIKE ? || '%' ORDER BY hlc ASC",
+            (prefix,),
+        ).fetchall()
+        return [_row_to_tx(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Binding CRUD

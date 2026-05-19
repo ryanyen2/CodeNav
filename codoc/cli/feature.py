@@ -7,9 +7,26 @@ from pathlib import Path
 
 import typer
 
+_DEPRECATION_NOTICE = (
+    "[deprecated] `codoc feature` has been replaced by top-level commands.\n"
+    "  codoc feature show    →  codoc show <slug-path-or-prefix>\n"
+    "  codoc feature amend   →  codoc edit <slug-path> [--intent TEXT]\n"
+    "  codoc feature rename  →  codoc rename <slug-path> <new-slug>\n"
+    "  codoc feature retire  →  codoc retire <slug-path>\n"
+)
+
+
+def _deprecation_callback(ctx: typer.Context):
+    import sys
+    if ctx.invoked_subcommand:
+        print(_DEPRECATION_NOTICE, file=sys.stderr)
+
+
 feature_app = typer.Typer(
-    help="Inspect and mutate features.",
+    help="[deprecated] Use `codoc show`, `codoc edit`, `codoc rename`, `codoc retire` instead.",
     no_args_is_help=True,
+    callback=_deprecation_callback,
+    invoke_without_command=True,
 )
 
 

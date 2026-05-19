@@ -10,9 +10,26 @@ import typer
 
 from codoc.cli._utils import require_codoc_dir as _require_codoc_dir
 
+_DEPRECATION_NOTICE = (
+    "[deprecated] `codoc tx` has been replaced by top-level commands.\n"
+    "  codoc tx list      →  codoc proposals\n"
+    "  codoc tx accept    →  codoc accept <slug-path-or-prefix>\n"
+    "  codoc tx reject    →  codoc reject <slug-path-or-prefix>\n"
+    "  codoc tx label     →  codoc label <ref> <label>\n"
+)
+
+
+def _deprecation_callback(ctx: typer.Context):
+    import sys
+    if ctx.invoked_subcommand:
+        print(_DEPRECATION_NOTICE, file=sys.stderr)
+
+
 tx_app = typer.Typer(
-    help="Manage transaction proposals (list, show, accept, reject, label).",
+    help="[deprecated] Use `codoc proposals`, `codoc accept`, `codoc reject` instead.",
     no_args_is_help=True,
+    callback=_deprecation_callback,
+    invoke_without_command=True,
 )
 
 _VALID_LABELS = frozenset(
@@ -332,6 +349,168 @@ def reject_proposal(
         store.close()
 
     typer.echo(f"Rejected: [{hlc[:30]}]  {tx.kind.value}")
+
+
+@tx_app.command("split")
+def split_command(
+    feature_uuid: str = typer.Argument(..., help="UUID of the feature to split"),
+    child_a_slug: str = typer.Option(..., "--a-slug", help="Slug for child A"),
+    child_a_intent: str = typer.Option(..., "--a-intent", help="Intent prose for child A"),
+    child_a_bindings: str = typer.Option(
+        "",
+        "--a-bindings",
+        help="Comma-separated binding UUIDs to assign to child A",
+    ),
+    child_b_slug: str = typer.Option(..., "--b-slug", help="Slug for child B"),
+    child_b_intent: str = typer.Option(..., "--b-intent", help="Intent prose for child B"),
+    child_b_bindings: str = typer.Option(
+        "",
+        "--b-bindings",
+        help="Comma-separated binding UUIDs to assign to child B",
+    ),
+    root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
+    author: str = typer.Option("user", "--author", help="Author identifier"),
+) -> None:
+    """Split a feature into two new children (Phase 2 SPLIT)."""
+    from codoc.pipelines.intentional.split import split_feature
+
+    codoc_dir = _require_codoc_dir(root_dir)
+    store, jsonl_log, tx_log = _open_stores(codoc_dir)
+
+    a_uuids = [s.strip() for s in child_a_bindings.split(",") if s.strip()]
+    b_uuids = [s.strip() for s in child_b_bindings.split(",") if s.strip()]
+
+    try:
+        tx, obligations = split_feature(
+            feature_uuid=feature_uuid,
+            child_a_slug=child_a_slug,
+            child_a_intent=child_a_intent,
+            child_a_binding_uuids=a_uuids,
+            child_b_slug=child_b_slug,
+            child_b_intent=child_b_intent,
+            child_b_binding_uuids=b_uuids,
+            store=store,
+            tx_log=tx_log,
+            jsonl_log=jsonl_log,
+            author=author,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: split failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        store.close()
+
+    typer.echo(f"SPLIT [{tx.hlc.to_str()[:30]}] → emitted {len(obligations)} cascade obligation(s)")
+
+
+@tx_app.command("merge")
+def merge_command(
+    source_uuids: str = typer.Argument(..., help="Comma-separated source feature UUIDs"),
+    target_slug: str = typer.Option(..., "--slug", help="Slug for the merged target feature"),
+    target_intent: str = typer.Option(..., "--intent", help="Intent prose for the merged target"),
+    root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
+    author: str = typer.Option("user", "--author", help="Author identifier"),
+) -> None:
+    """Merge multiple features into one new target (Phase 2 MERGE)."""
+    from codoc.pipelines.intentional.merge import merge_features
+
+    codoc_dir = _require_codoc_dir(root_dir)
+    sources = [s.strip() for s in source_uuids.split(",") if s.strip()]
+    if len(sources) < 1:
+        typer.echo("Error: at least one source UUID is required.", err=True)
+        raise typer.Exit(code=1)
+
+    store, jsonl_log, tx_log = _open_stores(codoc_dir)
+
+    try:
+        tx, obligations = merge_features(
+            source_uuids=sources,
+            target_slug=target_slug,
+            target_intent=target_intent,
+            store=store,
+            tx_log=tx_log,
+            jsonl_log=jsonl_log,
+            author=author,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: merge failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        store.close()
+
+    typer.echo(f"MERGE [{tx.hlc.to_str()[:30]}] → emitted {len(obligations)} cascade obligation(s)")
+
+
+@tx_app.command("restructure")
+def restructure_command(
+    feature_uuid: str = typer.Argument(..., help="UUID of the feature to move"),
+    new_parent_uuid: Optional[str] = typer.Option(
+        None,
+        "--parent",
+        help="UUID of the new parent feature; omit or set to '' to move to root",
+    ),
+    root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
+    author: str = typer.Option("user", "--author", help="Author identifier"),
+) -> None:
+    """Change a feature's parent in the tree (Phase 2 RESTRUCTURE)."""
+    from codoc.pipelines.intentional.restructure import restructure_feature
+
+    codoc_dir = _require_codoc_dir(root_dir)
+    store, jsonl_log, tx_log = _open_stores(codoc_dir)
+
+    new_parent = new_parent_uuid if new_parent_uuid else None
+
+    try:
+        tx, obligations = restructure_feature(
+            feature_uuid=feature_uuid,
+            new_parent_uuid=new_parent,
+            store=store,
+            tx_log=tx_log,
+            jsonl_log=jsonl_log,
+            author=author,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: restructure failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        store.close()
+
+    typer.echo(
+        f"RESTRUCTURE [{tx.hlc.to_str()[:30]}] → emitted {len(obligations)} cascade obligation(s)"
+    )
+
+
+@tx_app.command("rewind")
+def rewind_command(
+    feature_uuid: str = typer.Argument(..., help="UUID of the feature to rewind"),
+    target_hlc: str = typer.Argument(..., help="Target HLC string to rewind to"),
+    root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
+    author: str = typer.Option("user", "--author", help="Author identifier"),
+) -> None:
+    """Rewind a feature's slug/intent to a prior HLC state (Phase 2 REWIND)."""
+    from codoc.pipelines.intentional.rewind import rewind_feature
+
+    codoc_dir = _require_codoc_dir(root_dir)
+    store, jsonl_log, tx_log = _open_stores(codoc_dir)
+
+    try:
+        tx, obligations = rewind_feature(
+            feature_uuid=feature_uuid,
+            target_hlc_str=target_hlc,
+            store=store,
+            tx_log=tx_log,
+            jsonl_log=jsonl_log,
+            author=author,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: rewind failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        store.close()
+
+    typer.echo(
+        f"REWIND [{tx.hlc.to_str()[:30]}] → emitted {len(obligations)} cascade obligation(s)"
+    )
 
 
 @tx_app.command("label")
