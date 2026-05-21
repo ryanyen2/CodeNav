@@ -68,9 +68,28 @@ class TransactionLog:
     def append_proposal(self, tx: Transaction) -> Transaction:
         """Write a proposal (tx.proposal must be True) to storage.
 
+        Invariant 5 (no duplicate proposals): if an INTRODUCE proposal for the
+        same (slug, parent_uuid) is already pending, collapse it into ABSORB
+        by returning the existing proposal without a new write.
+
         If the incoming transaction does not yet carry a valid HLC the log
         stamps it with the next local HLC tick.
         """
+        # Dedup guard for INTRODUCE proposals.
+        if tx.kind == TransactionKind.INTRODUCE:
+            slug = tx.payload.get("slug")
+            parent_uuid = tx.payload.get("parent_uuid")
+            if slug:
+                pending = self._storage.list_transactions(proposal=True, limit=0)
+                for existing in pending:
+                    if (
+                        existing.kind == TransactionKind.INTRODUCE
+                        and existing.payload.get("slug") == slug
+                        and existing.payload.get("parent_uuid") == parent_uuid
+                    ):
+                        # Duplicate — return the existing proposal unchanged.
+                        return existing
+
         hlc = self._tick(tx.hlc)
         stamped = tx.model_copy(update={"hlc": hlc, "proposal": True})
         self._storage.write_transaction(stamped)

@@ -60,8 +60,8 @@ def test_sync_applies_amend_and_rename(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Edit alpha: change slug AND intent.
-    f = codoc_dir / "tree" / "alpha.codoc"
+    # Edit alpha: change slug AND intent in _index.codoc.
+    f = codoc_dir / "tree" / "_index.codoc"
     text = f.read_text()
     text = text.replace("- alpha", "- alpha-renamed")
     text = text.replace("Alpha intent.", "Alpha is now updated.")
@@ -95,7 +95,7 @@ def test_sync_parse_error_no_db_writes(tmp_path: Path) -> None:
         store.close()
 
     # Inject a bogus feature without UUID — should be a fatal error.
-    f = codoc_dir / "tree" / "alpha.codoc"
+    f = codoc_dir / "tree" / "_index.codoc"
     f.write_text(f.read_text() + "\n- handcrafted-feature-no-uuid  [Drafting]\n  intent line\n")
 
     result = sync_from_dir(str(codoc_dir))

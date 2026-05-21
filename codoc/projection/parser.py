@@ -133,8 +133,20 @@ def _parse_one_file(
     def _flush_feature() -> None:
         nonlocal cur_feature, cur_intent_lines
         if cur_feature is not None:
-            joined = " ".join(ln.strip() for ln in cur_intent_lines if ln.strip())
-            cur_feature.intent = joined
+            # Preserve multi-paragraph structure: paragraphs separated by blank lines.
+            paragraphs: list[str] = []
+            current_para: list[str] = []
+            for ln in cur_intent_lines:
+                stripped = ln.strip()
+                if stripped:
+                    current_para.append(stripped)
+                else:
+                    if current_para:
+                        paragraphs.append(" ".join(current_para))
+                        current_para = []
+            if current_para:
+                paragraphs.append(" ".join(current_para))
+            cur_feature.intent = "\n".join(paragraphs)
             parsed.features.append(cur_feature)
             parsed.feature_uuids.add(cur_feature.uuid)
         cur_feature = None
@@ -226,7 +238,12 @@ def _parse_one_file(
 
 
 def parse_tree_dir(codoc_dir: str, old_meta: TreeMeta | None = None) -> ParsedTree:
-    """Read all *.codoc files in .codoc/tree/ and unify into a ParsedTree."""
+    """Read _index.codoc (the single hierarchical document) and parse into a ParsedTree.
+
+    In the new single-document layout, _index.codoc contains the full nested outline
+    with description blocks.  Legacy per-root <slug>.codoc files are also read if
+    present (backward compat for existing stores not yet re-bootstrapped).
+    """
     parsed = ParsedTree()
     tree_dir = Path(codoc_dir) / "tree"
     if not tree_dir.is_dir():
@@ -235,16 +252,25 @@ def parse_tree_dir(codoc_dir: str, old_meta: TreeMeta | None = None) -> ParsedTr
     seen_proposal_hlcs: set[str] = set()
     file_lines_cache: dict[str, list[str]] = {}
 
-    for path in sorted(tree_dir.glob("*.codoc")):
+    index_path = tree_dir / "_index.codoc"
+    if index_path.exists():
         try:
-            if path.name == "_index.codoc":
-                _parse_index_file(path, parsed, seen_proposal_hlcs)
-                file_lines_cache[path.name] = path.read_text(encoding="utf-8").splitlines()
-            else:
-                present_proposals, file_lines = _parse_one_file(
-                    path, parsed, seen_proposal_hlcs, old_meta=old_meta
-                )
-                file_lines_cache[path.name] = file_lines
+            present_proposals, file_lines = _parse_one_file(
+                index_path, parsed, seen_proposal_hlcs, old_meta=old_meta
+            )
+            file_lines_cache[index_path.name] = file_lines
+        except OSError as exc:
+            parsed.parse_errors.append(f"could not read _index.codoc: {exc}")
+
+    # Also parse any legacy per-root .codoc files that are not _index.codoc.
+    for path in sorted(tree_dir.glob("*.codoc")):
+        if path.name == "_index.codoc":
+            continue
+        try:
+            present_proposals, file_lines = _parse_one_file(
+                path, parsed, seen_proposal_hlcs, old_meta=old_meta
+            )
+            file_lines_cache[path.name] = file_lines
         except OSError as exc:
             parsed.parse_errors.append(f"could not read {path.name}: {exc}")
 

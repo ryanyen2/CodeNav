@@ -1,4 +1,4 @@
-"""Test multi-file specifics: top-level rename, cross-file restructure."""
+"""Test single-document layout: top-level rename and cross-feature restructure."""
 
 from __future__ import annotations
 
@@ -16,7 +16,14 @@ from codoc.projection.sync import sync_from_dir
 from codoc.projection.tree_codoc import write_tree
 
 
-def test_top_level_rename_renames_file(tmp_path: Path) -> None:
+_INDEX = "_index.codoc"
+
+
+def _index_path(codoc_dir: Path) -> Path:
+    return codoc_dir / "tree" / _INDEX
+
+
+def test_top_level_rename_updates_index(tmp_path: Path) -> None:
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
 
@@ -40,29 +47,25 @@ def test_top_level_rename_renames_file(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    assert (codoc_dir / "tree" / "auth-flow.codoc").exists()
+    assert _index_path(codoc_dir).exists()
+    assert "auth-flow" in _index_path(codoc_dir).read_text()
 
-    # User renames root feature.
-    f = codoc_dir / "tree" / "auth-flow.codoc"
-    text = f.read_text().replace("- auth-flow", "- auth-system")
-    f.write_text(text)
+    # User renames root feature in _index.codoc.
+    f = _index_path(codoc_dir)
+    f.write_text(f.read_text().replace("- auth-flow", "- auth-system"))
 
     result = sync_from_dir(str(codoc_dir))
     assert result.status == "ok", result.errors
     assert any("auth-system" in line for line in result.applied)
 
-    # File should be renamed (old gone, new present).
-    assert not (codoc_dir / "tree" / "auth-flow.codoc").exists()
-    assert (codoc_dir / "tree" / "auth-system.codoc").exists()
-
-    # _index.codoc should reference the new slug.
-    index_text = (codoc_dir / "tree" / "_index.codoc").read_text()
+    # _index.codoc should reference the new slug only.
+    index_text = _index_path(codoc_dir).read_text()
     assert "auth-system" in index_text
     assert "auth-flow" not in index_text
 
 
-def test_cross_file_restructure(tmp_path: Path) -> None:
-    """Move a top-level feature into another top-level subtree."""
+def test_cross_feature_restructure(tmp_path: Path) -> None:
+    """Move bravo under alpha by re-indenting its block in _index.codoc."""
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
 
@@ -91,19 +94,22 @@ def test_cross_file_restructure(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Move bravo into alpha's subtree by:
-    # 1) Append bravo's content (indented) under alpha
-    # 2) Delete bravo.codoc
-    f_alpha = codoc_dir / "tree" / "alpha.codoc"
-    f_bravo = codoc_dir / "tree" / "bravo.codoc"
-    bravo_text = f_bravo.read_text()
-    indented = []
-    for line in bravo_text.splitlines():
-        if line.startswith("# codoc subtree") or not line.strip():
-            continue
-        indented.append("  " + line)
-    f_alpha.write_text(f_alpha.read_text() + "\n" + "\n".join(indented) + "\n")
-    f_bravo.unlink()
+    # Re-indent bravo's block under alpha by adding 2 spaces to its lines.
+    f = _index_path(codoc_dir)
+    lines = f.read_text().splitlines()
+    new_lines = []
+    in_bravo = False
+    for line in lines:
+        if "- bravo" in line:
+            in_bravo = True
+        if in_bravo and line.strip():
+            new_lines.append("  " + line)
+        else:
+            if in_bravo and not line.strip():
+                new_lines.append(line)
+            else:
+                new_lines.append(line)
+    f.write_text("\n".join(new_lines) + "\n")
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
     store, _, _ = open_stores(str(codoc_dir))

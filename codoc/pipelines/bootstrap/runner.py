@@ -29,8 +29,9 @@ from codoc.pipelines.bootstrap.cluster import (
     embed_chunks,
     cluster_chunks,
     cluster_hierarchical,
+    cluster_recursive,
 )
-from codoc.pipelines.bootstrap.propose import propose_all, propose_hierarchical
+from codoc.pipelines.bootstrap.propose import propose_all, propose_hierarchical, propose_recursive
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +97,26 @@ def _collect_attributed_symbol_paths(store: SQLiteStore) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
+def reset_codoc(codoc_dir: str) -> None:
+    """Wipe all codoc state in *codoc_dir* so bootstrap can start fresh.
+
+    Removes: codoc.db, log.jsonl, tree/, faiss/, unattributed.json.
+    Does NOT remove the .codoc/ directory itself.
+    """
+    import shutil
+
+    codoc_path = Path(codoc_dir)
+    for name in ("codoc.db", "log.jsonl", "unattributed.json"):
+        p = codoc_path / name
+        if p.exists():
+            p.unlink()
+    for name in ("tree", "faiss"):
+        p = codoc_path / name
+        if p.exists():
+            shutil.rmtree(p)
+    print(f"[bootstrap] reset: wiped {codoc_dir}", file=sys.stderr)
+
+
 def run_bootstrap(
     root_dir: str,
     codoc_dir: str,
@@ -103,6 +124,7 @@ def run_bootstrap(
     target_cluster_size: int = 8,
     node_id: str = "default",
     hierarchical: bool = False,
+    reset: bool = False,
 ) -> dict:
     """Run the full bootstrap pipeline on *root_dir*.
 
@@ -138,6 +160,9 @@ def run_bootstrap(
     """
     codoc_path = Path(codoc_dir)
     codoc_path.mkdir(parents=True, exist_ok=True)
+
+    if reset:
+        reset_codoc(codoc_dir)
 
     db_path = str(codoc_path / "codoc.db")
     jsonl_path = str(codoc_path / "log.jsonl")
@@ -175,21 +200,24 @@ def run_bootstrap(
     faiss_index.save()
 
     # ------------------------------------------------------------------
-    # Stage 3: cluster
+    # Stage 3: cluster (recursive by default; flat and legacy hierarchical kept)
     # ------------------------------------------------------------------
-    if hierarchical:
-        hier_clusters = cluster_hierarchical(chunks, vectors, target_leaf_size=target_cluster_size)
-        flat_cluster_count = sum(len(sections) for sections in hier_clusters)
-        print(
-            f"[bootstrap] {len(hier_clusters)} chapters, {flat_cluster_count} sections. "
-            "Calling LLM...",
-            file=sys.stderr,
-        )
-    else:
-        clusters = cluster_chunks(chunks, vectors, target_cluster_size=target_cluster_size)
-        print(
-            f"[bootstrap] {len(clusters)} clusters. Calling LLM...", file=sys.stderr
-        )
+    # Always use recursive clustering now — it produces arbitrary-depth trees.
+    root_node = cluster_recursive(
+        chunks, vectors,
+        target_leaf_size=target_cluster_size,
+        max_depth=5,
+    )
+
+    def _count_nodes(node) -> int:
+        return 1 + sum(_count_nodes(c) for c in node.children)
+
+    node_count = _count_nodes(root_node)
+    print(
+        f"[bootstrap] recursive tree: {node_count} nodes, depth≤5. Calling LLM...",
+        file=sys.stderr,
+    )
+    cluster_count = node_count
 
     # ------------------------------------------------------------------
     # Stage 4 + 5: LLM proposals → transaction log
@@ -200,26 +228,18 @@ def run_bootstrap(
         tx_log = TransactionLog(store, node_id=node_id)
         existing_summaries = _collect_existing_feature_summaries(store)
 
-        if hierarchical:
-            proposals = propose_hierarchical(
-                hierarchical_clusters=hier_clusters,
-                chunks=chunks,
-                tx_log=tx_log,
-                existing_feature_summaries=existing_summaries,
-                repo_name=repo_name,
-                language_adapters=language_adapters,
-            )
-            cluster_count = flat_cluster_count
-        else:
-            proposals = propose_all(
-                clusters=clusters,
-                chunks=chunks,
-                tx_log=tx_log,
-                existing_feature_summaries=existing_summaries,
-                repo_name=repo_name,
-                language_adapters=language_adapters,
-            )
-            cluster_count = len(clusters)
+        proposals = propose_recursive(
+            root_node=root_node,
+            chunks=chunks,
+            tx_log=tx_log,
+            repo_name=repo_name,
+            language_adapters=language_adapters,
+            running_summaries=existing_summaries,
+        )
+
+        # Post-hoc deduplication: merge near-duplicate sibling proposals.
+        from codoc.pipelines.bootstrap.dedupe import dedup_proposals
+        proposals = dedup_proposals(proposals)
 
         jsonl_log = JSONLLog(jsonl_path)
         for tx in proposals:

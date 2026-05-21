@@ -21,7 +21,7 @@ class TreeMeta:
     base_hlc: str
     rendered_at: str
     uuid_to_location: dict = field(default_factory=dict)
-    # uuid_to_location: {uuid: {"file": "auth-flow.codoc", "line": 4, "kind": "feature"|"proposal"}}
+    # uuid_to_location: {uuid: {"file": "_index.codoc", "line": 4, "kind": "feature"|"proposal"}}
     binding_index: dict = field(default_factory=dict)
     # binding_index: {feature_uuid: [{"file": ..., "symbol_path": ..., "binding_uuid": ..., "ts_query": ...}]}
     slug_path_to_uuid: dict = field(default_factory=dict)
@@ -29,7 +29,11 @@ class TreeMeta:
     title_path_to_uuid: dict = field(default_factory=dict)
     # title_path_to_uuid: {"Core API > Schema Generation": "<uuid>"}
     line_range_to_hlc: dict = field(default_factory=dict)
-    # line_range_to_hlc: {"auth-flow.codoc:12-15": "<hlc>"}  — diff hunk lines → proposal HLC
+    # line_range_to_hlc: {"_index.codoc:12-15": "<hlc>"}  — diff hunk lines → proposal HLC
+    content_hash: str = ""
+    # SHA-256 of the _index.codoc content; used for idempotent render short-circuit
+    render_token: str = ""
+    # Random token stamped per render; FS watcher compares to detect self-triggered saves
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -44,6 +48,8 @@ class TreeMeta:
             slug_path_to_uuid=data.get("slug_path_to_uuid", {}),
             title_path_to_uuid=data.get("title_path_to_uuid", {}),
             line_range_to_hlc=data.get("line_range_to_hlc", {}),
+            content_hash=data.get("content_hash", ""),
+            render_token=data.get("render_token", ""),
         )
 
 

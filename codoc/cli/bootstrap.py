@@ -21,16 +21,14 @@ def bootstrap_default(
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
     repo_name: str = typer.Option("", "--repo-name", help="Human-readable repository name"),
     cluster_size: int = typer.Option(8, "--cluster-size", help="Target average chunks per cluster"),
-    hierarchical: bool = typer.Option(False, "--hierarchical", help="Use two-level chapter/section clustering"),
+    hierarchical: bool = typer.Option(False, "--hierarchical", help="[deprecated] Use two-level clustering"),
+    reset: bool = typer.Option(False, "--reset", help="Wipe existing .codoc state before running"),
 ) -> None:
-    """Cluster the codebase and propose a feature tree for review.
-
-    Pass --hierarchical to produce a two-level chapter/section hierarchy instead of a flat list.
-    """
+    """Cluster the codebase and propose a deep hierarchical feature tree for review."""
     if ctx.invoked_subcommand is not None:
         return
 
-    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, hierarchical=hierarchical)
+    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, reset=reset)
 
 
 @bootstrap_app.command("run")
@@ -38,19 +36,22 @@ def run_bootstrap_cmd(
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
     repo_name: str = typer.Option("", "--repo-name", help="Human-readable repository name"),
     cluster_size: int = typer.Option(8, "--cluster-size", help="Target average chunks per cluster"),
-    hierarchical: bool = typer.Option(False, "--hierarchical", help="Use two-level chapter/section clustering"),
+    reset: bool = typer.Option(False, "--reset", help="Wipe existing .codoc state before running"),
 ) -> None:
-    """Cluster the codebase and propose a feature tree for review."""
-    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, hierarchical=hierarchical)
+    """Cluster the codebase and propose a deep hierarchical feature tree for review."""
+    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, reset=reset)
 
 
-def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int, hierarchical: bool = False) -> None:
+def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int, reset: bool = False) -> None:
     check_llm_config()
 
     root = Path(root_dir).resolve()
     codoc_dir = require_codoc_dir(root_dir)
 
     inferred_name = repo_name or root.name
+
+    if reset:
+        typer.echo(f"Resetting {codoc_dir} ...")
 
     typer.echo(f"Bootstrapping {root} ...")
 
@@ -62,7 +63,7 @@ def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int, hierarchica
             codoc_dir=str(codoc_dir),
             repo_name=inferred_name,
             target_cluster_size=cluster_size,
-            hierarchical=hierarchical,
+            reset=reset,
         )
     except Exception as exc:
         typer.echo(f"Error: bootstrap failed: {exc}", err=True)

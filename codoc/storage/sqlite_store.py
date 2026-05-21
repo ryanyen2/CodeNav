@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS features (
     title TEXT NOT NULL DEFAULT '',
     parent_uuid TEXT,
     intent TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
     retired INTEGER NOT NULL DEFAULT 0,
     created_at_hlc TEXT NOT NULL,
     updated_at_hlc TEXT NOT NULL
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS chunk_fingerprints (
 
 _MIGRATIONS = [
     "ALTER TABLE features ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE features ADD COLUMN description TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -129,6 +131,7 @@ def _feature_to_row(f: Feature) -> dict:
         "title": stored_title,
         "parent_uuid": f.parent_uuid,
         "intent": f.intent,
+        "description": f.description,
         "retired": 1 if f.retired else 0,
         "created_at_hlc": f.created_at_hlc.to_str(),
         "updated_at_hlc": f.updated_at_hlc.to_str(),
@@ -142,6 +145,8 @@ def _row_to_feature(row: sqlite3.Row) -> Feature:
     raw["updated_at_hlc"] = HLC.from_str(raw["updated_at_hlc"])
     if not raw.get("title"):
         raw["title"] = raw["slug"]
+    if "description" not in raw:
+        raw["description"] = ""
     return Feature.model_validate(raw)
 
 
@@ -368,14 +373,15 @@ class SQLiteStore:
         self._db.execute(
             """
             INSERT INTO features
-                (uuid, slug, title, parent_uuid, intent, retired, created_at_hlc, updated_at_hlc)
+                (uuid, slug, title, parent_uuid, intent, description, retired, created_at_hlc, updated_at_hlc)
             VALUES
-                (:uuid, :slug, :title, :parent_uuid, :intent, :retired, :created_at_hlc, :updated_at_hlc)
+                (:uuid, :slug, :title, :parent_uuid, :intent, :description, :retired, :created_at_hlc, :updated_at_hlc)
             ON CONFLICT(uuid) DO UPDATE SET
                 slug           = excluded.slug,
                 title          = excluded.title,
                 parent_uuid    = excluded.parent_uuid,
                 intent         = excluded.intent,
+                description    = excluded.description,
                 retired        = excluded.retired,
                 updated_at_hlc = excluded.updated_at_hlc
             """,

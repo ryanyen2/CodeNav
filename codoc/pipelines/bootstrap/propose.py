@@ -16,12 +16,14 @@ from codoc.agents.bootstrap_clustering import (
     ClusterInput,
     FeatureProposal,
     propose_features_for_cluster,
+    propose_subtree,
     build_introduce_payload,
 )
 from codoc.model.transaction import Transaction, TransactionKind
 from codoc.model.hlc import HLC
 from codoc.core.log import TransactionLog
 from codoc.core.fingerprint import fingerprint_chunk
+from codoc.pipelines.bootstrap.cluster import ClusterNode
 
 
 def build_cluster_inputs(
@@ -138,12 +140,16 @@ def emit_introduce_proposal(
             }
         )
 
+    provisional_uuid = proposal.provisional_uuid or None
     payload = {
         "slug": proposal.slug,
         "title": proposal.title or proposal.slug,
         "intent": proposal.intent,
+        "description": proposal.description,
         "candidate_bindings": candidate_bindings,
     }
+    if provisional_uuid:
+        payload["provisional_uuid"] = provisional_uuid
     if parent_uuid is not None:
         payload["parent_uuid"] = parent_uuid
 
@@ -249,6 +255,161 @@ def propose_all(
             f"All {llm_error_count} cluster LLM calls failed. "
             "Check your LLM config: CODOC_PROVIDER, OPENAI_API_KEY, CODOC_BASE_URL."
         )
+
+    return all_transactions
+
+
+def _build_cluster_input_from_node(
+    node: ClusterNode,
+    chunks: list[Chunk],
+    snippet_len: int = 300,
+    max_chunks: int = 20,
+) -> ClusterInput:
+    """Build a ClusterInput for a ClusterNode, sampling up to max_chunks."""
+    sample = node.chunk_indices[:max_chunks]
+    chunk_dicts = [
+        {
+            "symbol_path": chunks[i].symbol_path,
+            "file": chunks[i].file,
+            "source_snippet": chunks[i].source[:snippet_len],
+        }
+        for i in sample
+    ]
+    return ClusterInput(chunks=chunk_dicts, cluster_id=node.depth)
+
+
+def propose_recursive(
+    root_node: ClusterNode,
+    chunks: list[Chunk],
+    tx_log: TransactionLog,
+    repo_name: str = "codebase",
+    language_adapters: dict | None = None,
+    parent_proposal: FeatureProposal | None = None,
+    parent_tx_uuid: str | None = None,
+    running_summaries: list[dict] | None = None,
+    sibling_titles: list[str] | None = None,
+) -> list[Transaction]:
+    """Recursively emit INTRODUCE proposals for a ClusterNode tree.
+
+    Walks *root_node* pre-order. For each non-leaf node, calls the LLM with
+    parent context to produce one feature per child cluster; for leaf nodes the
+    child's chunks are attributed to the parent feature rather than creating a
+    new level.
+
+    Parameters
+    ----------
+    root_node:
+        Root of the cluster tree produced by ``cluster_recursive()``.
+    chunks:
+        All extracted chunks (indexed by position).
+    tx_log:
+        Transaction log for proposal emission.
+    repo_name:
+        Human-readable repository name.
+    language_adapters:
+        Mapping of ``language → adapter`` for fingerprinting.
+    parent_proposal:
+        The FeatureProposal that covers *root_node* (or None at the very top).
+    parent_tx_uuid:
+        The provisional UUID of the already-emitted parent transaction so
+        children can set ``parent_uuid`` correctly.
+    running_summaries:
+        Accumulated {slug, title, intent} dicts across the whole tree (dedup).
+    sibling_titles:
+        Titles of features already proposed at this same level (context).
+
+    Returns
+    -------
+    list[Transaction]
+        All INTRODUCE proposal transactions emitted.
+    """
+    if language_adapters is None:
+        language_adapters = {}
+    if running_summaries is None:
+        running_summaries = []
+    if sibling_titles is None:
+        sibling_titles = []
+
+    all_transactions: list[Transaction] = []
+
+    # If this node has no children (leaf) we don't recurse further.
+    if root_node.is_leaf:
+        return all_transactions
+
+    parent_title = parent_proposal.title if parent_proposal else f"<{repo_name} root>"
+    parent_intent = parent_proposal.intent if parent_proposal else ""
+
+    proposed_at_this_level: list[FeatureProposal] = []
+    child_proposal_by_node: list[tuple[ClusterNode, FeatureProposal]] = []
+
+    # Propose one feature per child cluster using LLM with parent context.
+    for child_node in root_node.children:
+        if not child_node.chunk_indices:
+            continue
+
+        cluster_input = _build_cluster_input_from_node(child_node, chunks)
+        current_sibling_titles = sibling_titles + [p.title for p in proposed_at_this_level]
+
+        try:
+            proposals = propose_subtree(
+                cluster=cluster_input,
+                parent_feature_title=parent_title,
+                parent_feature_intent=parent_intent,
+                sibling_titles=current_sibling_titles,
+                existing_feature_summaries=running_summaries,
+                depth=child_node.depth,
+                repo_name=repo_name,
+            )
+        except Exception as exc:
+            print(
+                f"[bootstrap] depth={child_node.depth} LLM call failed — {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        # Use only the first proposal per child cluster (one feature per cluster).
+        if not proposals:
+            continue
+        proposal = proposals[0]
+        proposed_at_this_level.append(proposal)
+        child_proposal_by_node.append((child_node, proposal))
+
+    # Now emit transactions for all proposals at this level, then recurse.
+    for child_node, proposal in child_proposal_by_node:
+        try:
+            tx = emit_introduce_proposal(
+                proposal=proposal,
+                chunks=chunks,
+                tx_log=tx_log,
+                language_adapters=language_adapters,
+                parent_uuid=parent_tx_uuid,
+            )
+            all_transactions.append(tx)
+            running_summaries.append({
+                "slug": proposal.slug,
+                "title": proposal.title,
+                "intent": proposal.intent,
+            })
+        except Exception as exc:
+            print(f"[bootstrap] emit failed — {exc}", file=sys.stderr)
+            continue
+
+        # The provisional_uuid in the payload IS the child's identity for its own children.
+        child_parent_uuid = tx.payload.get("provisional_uuid") or tx.hlc.to_str()
+
+        # Recurse into child's sub-tree.
+        sub_txs = propose_recursive(
+            root_node=child_node,
+            chunks=chunks,
+            tx_log=tx_log,
+            repo_name=repo_name,
+            language_adapters=language_adapters,
+            parent_proposal=proposal,
+            parent_tx_uuid=child_parent_uuid,
+            running_summaries=running_summaries,
+            sibling_titles=[],
+        )
+        all_transactions.extend(sub_txs)
 
     return all_transactions
 

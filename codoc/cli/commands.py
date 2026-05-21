@@ -785,3 +785,38 @@ def cmd_status(
         typer.echo(f"\nRun `codoc proposals` to review.")
         typer.echo(f"  Accept all: `codoc accept --all`")
         typer.echo(f"  Reject all: `codoc reject --all --yes`")
+
+
+def cmd_conflicts(
+    root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
+) -> None:
+    """Show open merge conflict annotations in the .codoc/tree/ buffer.
+
+    Conflicts are written inline as <!-- conflict: ... --> comments when
+    `codoc projection sync` detects that both the user and the server edited
+    the same feature since the last render.  Run `codoc projection render` after
+    resolving them.
+    """
+    codoc_dir = Path(require_codoc_dir(root_dir))
+    index_path = codoc_dir / "tree" / "_index.codoc"
+
+    if not index_path.exists():
+        typer.echo("No tree buffer found. Run `codoc projection render` first.", err=True)
+        raise typer.Exit(code=1)
+
+    content = index_path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+
+    conflicts = [
+        (i + 1, line)
+        for i, line in enumerate(lines)
+        if line.strip().startswith("<!-- conflict:")
+    ]
+
+    if not conflicts:
+        typer.echo("No open conflicts.")
+        return
+
+    typer.echo(f"{len(conflicts)} open conflict(s) in {index_path}:")
+    for lineno, line in conflicts:
+        typer.echo(f"  Line {lineno:4d}: {line.strip()}")

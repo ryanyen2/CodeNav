@@ -42,9 +42,12 @@ def get_changed_files(
         )
         if fallback.returncode != 0:
             return []
-        return [p.strip() for p in fallback.stdout.splitlines() if p.strip()]
+        all_paths = [p.strip() for p in fallback.stdout.splitlines() if p.strip()]
+        return [p for p in all_paths if not p.startswith(".codoc/")]
 
-    return [p.strip() for p in result.stdout.splitlines() if p.strip()]
+    # Invariant 2: exclude .codoc/ from diff so reflect never re-fires on its own writes.
+    all_paths = [p.strip() for p in result.stdout.splitlines() if p.strip()]
+    return [p for p in all_paths if not p.startswith(".codoc/")]
 
 
 def get_file_source(root_dir: str, file_path: str) -> str | None:

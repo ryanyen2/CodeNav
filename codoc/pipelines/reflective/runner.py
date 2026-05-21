@@ -189,6 +189,18 @@ def run_reflect(
         commit_sha = _get_current_commit(root_dir)
         update_fingerprint_cache(store, chunks_by_file, language_adapters, commit_sha)
 
+    # Re-render so proposals appear in .codoc/tree/ immediately after commit.
+    # (run_reflect_files already does this; run_reflect was missing it.)
+    if proposals_emitted > 0:
+        from codoc.pipelines.intentional.runner import open_stores
+        from codoc.projection.tree_codoc import write_tree
+
+        store2, _, tx_log2 = open_stores(codoc_dir)
+        try:
+            write_tree(codoc_dir, store2, tx_log2)
+        finally:
+            store2.close()
+
     return {
         "changed_files": len(changed_files),
         "changed_chunks": changed_chunk_count,

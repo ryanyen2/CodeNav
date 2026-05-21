@@ -20,7 +20,7 @@ from codoc.projection.differ import (
 )
 from codoc.projection.meta import read_meta
 from codoc.projection.parser import parse_tree_dir
-from codoc.projection.tree_codoc import write_tree
+from codoc.projection.tree_codoc import write_tree, render_tree_with_meta
 
 
 @dataclass
@@ -48,8 +48,31 @@ def _describe_op(op: IntentOp) -> str:
     return repr(op)
 
 
+def _current_store_head(codoc_dir: str) -> str:
+    """Return the current head HLC string from the store, or '' if empty."""
+    from codoc.storage.sqlite_store import SQLiteStore
+
+    db_path = str(Path(codoc_dir) / "codoc.db")
+    store = SQLiteStore(db_path)
+    store.open()
+    try:
+        txs = store.list_transactions(proposal=False, limit=0)
+        if not txs:
+            return ""
+        return max(txs, key=lambda t: t.hlc).hlc.to_str()
+    finally:
+        store.close()
+
+
 def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
-    """Parse `.codoc/tree/`, diff against SQLite, apply transactions, re-render."""
+    """Parse `.codoc/tree/`, diff against SQLite, apply transactions, re-render.
+
+    Invariant 3 (race-detected sync): if the store head has advanced since the
+    last render (base_hlc < current head), user-side ops that touch untouched
+    features are applied cleanly.  Ops that conflict with server-side changes on
+    the same feature emit inline <!-- conflict --> annotations in the buffer
+    rather than aborting.
+    """
     codoc_path = Path(codoc_dir)
     if not codoc_path.exists():
         return SyncResult(
@@ -71,6 +94,11 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
                 )
             ],
         )
+
+    # Invariant 3: detect if the store has moved since last render.
+    current_head = _current_store_head(codoc_dir)
+    base_hlc = old_meta.base_hlc
+    stale = current_head and base_hlc and current_head > base_hlc
 
     parsed = parse_tree_dir(codoc_dir, old_meta=old_meta)
 
@@ -95,8 +123,6 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
 
     if not ops:
         # No-op: re-render to refresh meta & state badges.
-        from codoc.projection.tree_codoc import render_tree_with_meta
-
         store2, _, tx_log2 = open_stores(codoc_dir)
         try:
             files, _ = render_tree_with_meta(store2, tx_log2)
@@ -108,23 +134,43 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
     # Re-open via the runner context manager to apply ops.
     applied: list[str] = []
     runtime_errors: list[DiffError] = list(errors)
+    conflict_uuids: set[str] = set()
 
     with IntentionalRunner(codoc_dir, author=author) as runner:
         for op in ops:
             try:
                 if isinstance(op, AmendOp):
-                    runner.amend(op.uuid, op.new_intent)
+                    # Invariant 3: if store is stale, check whether the server also
+                    # amended this same feature since base_hlc.  If so, mark conflict.
+                    if stale and _server_amended_since(op.uuid, base_hlc, runner._open_store):
+                        conflict_uuids.add(op.uuid)
+                        runtime_errors.append(
+                            DiffError(
+                                kind="conflict",
+                                message=(
+                                    f"AMEND {op.uuid[:8]}: both you and the server edited "
+                                    "this feature since last render — annotated in buffer"
+                                ),
+                            )
+                        )
+                    else:
+                        runner.amend(op.uuid, op.new_intent)
+                        applied.append(_describe_op(op))
                 elif isinstance(op, RenameOp):
                     runner.rename(op.uuid, op.new_slug)
+                    applied.append(_describe_op(op))
                 elif isinstance(op, RetireOp):
                     runner.retire(op.uuid)
+                    applied.append(_describe_op(op))
                 elif isinstance(op, RestructureOp):
                     runner.restructure(op.uuid, op.new_parent_uuid)
+                    applied.append(_describe_op(op))
                 elif isinstance(op, AcceptOp):
                     _apply_accept(op, runner)
+                    applied.append(_describe_op(op))
                 elif isinstance(op, RejectOp):
                     _apply_reject(op, runner)
-                applied.append(_describe_op(op))
+                    applied.append(_describe_op(op))
             except (ValueError, KeyError) as exc:
                 runtime_errors.append(
                     DiffError(
@@ -136,19 +182,64 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
     # Re-render after applying.
     store2, _, tx_log2 = open_stores(codoc_dir)
     try:
-        from codoc.projection.tree_codoc import render_tree_with_meta
-
         files, _ = render_tree_with_meta(store2, tx_log2)
         write_tree(codoc_dir, store2, tx_log2)
     finally:
         store2.close()
 
+    # Inject inline conflict annotations for features where both sides changed.
+    if conflict_uuids:
+        _inject_conflict_annotations(codoc_dir, conflict_uuids, old_meta)
+
     status = "ok"
     if runtime_errors:
-        status = "partial" if applied else "parse_error"
+        conflict_only = all(e.kind == "conflict" for e in runtime_errors)
+        if conflict_only:
+            status = "ok"  # conflicts are non-fatal; annotated inline
+        else:
+            status = "partial" if applied else "parse_error"
     return SyncResult(
         status=status, applied=applied, errors=runtime_errors, new_render=files
     )
+
+
+def _server_amended_since(feature_uuid: str, base_hlc: str, store) -> bool:
+    """Return True if any non-proposal transaction touched *feature_uuid* after *base_hlc*."""
+    txs = store.list_transactions(proposal=False, feature_uuid=feature_uuid, limit=0)
+    return any(tx.hlc.to_str() > base_hlc for tx in txs)
+
+
+def _inject_conflict_annotations(
+    codoc_dir: str,
+    conflict_uuids: set[str],
+    old_meta,
+) -> None:
+    """Write <!-- conflict --> annotations into _index.codoc for conflicting features."""
+    index_path = Path(codoc_dir) / "tree" / "_index.codoc"
+    if not index_path.exists():
+        return
+
+    lines = index_path.read_text(encoding="utf-8").splitlines()
+
+    # Count how many conflict annotations we need to add.
+    annotations_added = 0
+    for uuid in conflict_uuids:
+        loc = old_meta.uuid_to_location.get(uuid)
+        if loc is None or loc.get("kind") != "feature":
+            continue
+        line_no = loc.get("line", -1)
+        if line_no < 0 or line_no >= len(lines):
+            continue
+        # Insert annotation comment above the feature line.
+        annotation = f"<!-- conflict: server and local both edited this feature — resolve manually -->"
+        lines.insert(line_no + annotations_added, annotation)
+        annotations_added += 1
+
+    if annotations_added > 0:
+        # Add a header summary.
+        header = f"<!-- {annotations_added} unresolved conflict(s) — search for 'conflict:' to find them -->"
+        lines.insert(0, header)
+        index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _apply_accept(op: AcceptOp, runner: IntentionalRunner) -> None:

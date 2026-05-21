@@ -1,59 +1,47 @@
-"""Render SQLite state to multi-file `.codoc` text format.
+"""Render SQLite state to a single hierarchical `.codoc` document.
 
 Layout:
     .codoc/tree/
-        _index.codoc          — top-level title listing (no intent prose)
-        <top-slug>.codoc      — one file per root-level feature, contains its subtree
+        _index.codoc          — single document: full nested outline with descriptions
         tree.meta.json        — sidecar (see meta.py)
 
-Format:
-    - Title [( strained|severed|stub|deprecated)]
-        Intent prose, one paragraph.
-      - Child Title
-          Child intent.
+Format (mirrors test/altair/example_codoc.txt):
+    - Section Title
+        Description paragraph one.
 
-    ~ - Retired Feature
+        Description paragraph two.
 
-    Proposals use col-0 diff markers (no inline HLC):
+      - Subsection Title
+          Description …
+
+Proposals use col-0 diff markers (no inline HLC):
     + - New Feature
-    +     New intent.
+    +     New description.
     ~ - Changed Feature
-    ~     Old intent.
-    +     New intent.
+    ~     Old description.
+    +     New description.
+    - ~ Retired Feature
+
+State info (severed/strained/stub) is sidecar-only and NOT written to the buffer,
+so the buffer always looks like a clean human outline.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
 from codoc.core.log import TransactionLog
-from codoc.core.state_derivation import BindingResolution, compute_feature_state
+from codoc.core.state_derivation import compute_feature_state
 from codoc.model.feature import Feature
 from codoc.model.transaction import Transaction, TransactionKind
 from codoc.projection.meta import TreeMeta
 from codoc.storage.sqlite_store import SQLiteStore
 
-# States that show a suffix; Stable, Drafting, and Deprecated render clean.
-# Deprecated is omitted because the ~ marker already signals retirement.
-_WARN_SUFFIX_STATES = {"stub", "strained", "severed"}
-
-
-def _state_suffix(feature: Feature, store: SQLiteStore) -> str:
-    bindings = store.list_bindings(feature.uuid)
-    obligations = store.list_obligations(feature_uuid=feature.uuid, status="pending")
-    state = compute_feature_state(feature, bindings, [], obligations)
-    if state.value in _WARN_SUFFIX_STATES:
-        return f"  ({state.value})"
-    return ""
-
-
-def _format_intent(intent: str, intent_indent: str, col0: str = "") -> list[str]:
-    if not intent.strip():
-        return []
-    text = " ".join(intent.split())
-    return [f"{col0}{intent_indent}{text}"]
+_INDEX_FILENAME = "_index.codoc"
 
 
 def _build_proposal_index(
@@ -71,17 +59,38 @@ def _build_proposal_index(
     return per_feature, top_level
 
 
+def _format_description(
+    description: str,
+    indent: str,
+    col0: str = "",
+) -> list[str]:
+    """Render a multi-paragraph description block with consistent indent."""
+    if not description.strip():
+        return []
+    lines: list[str] = []
+    for para in description.split("\n"):
+        stripped = para.strip()
+        if stripped:
+            lines.append(f"{col0}{indent}{stripped}")
+        else:
+            lines.append("")
+    # Remove trailing blank lines.
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def _render_proposal(
     tx: Transaction,
     depth: int,
-    file_name: str,
     line_offset: int,
     location_tracker: dict,
     line_range_to_hlc: dict,
 ) -> list[str]:
-    """Render a proposal as col-0 diff hunks (+/-/~). Populates line_range_to_hlc."""
+    """Render a proposal as col-0 diff hunks. Populates line_range_to_hlc."""
+    file_name = _INDEX_FILENAME
     indent = "  " * depth
-    intent_indent = indent + "    "
+    desc_indent = indent + "    "
     payload = tx.payload
     kind = tx.kind
     hlc_str = tx.hlc.to_str()
@@ -90,9 +99,9 @@ def _render_proposal(
 
     if kind == TransactionKind.INTRODUCE:
         title = payload.get("title") or payload.get("slug") or "(unnamed)"
-        intent = payload.get("intent", "")
+        description = payload.get("description") or payload.get("intent", "")
         lines.append(f"+ {indent}- {title}")
-        lines.extend(_format_intent(intent, intent_indent, col0="+"))
+        lines.extend(_format_description(description, desc_indent, col0="+"))
 
     elif kind in (TransactionKind.RETIRE, TransactionKind.RETIRE_REFLECTIVE):
         title = payload.get("slug") or "(unknown)"
@@ -100,14 +109,14 @@ def _render_proposal(
 
     elif kind in (TransactionKind.AMEND, TransactionKind.RENAME, TransactionKind.RENAME_INFER):
         new_title = payload.get("new_title") or payload.get("new_slug") or ""
-        old_intent = payload.get("old_intent", "")
-        new_intent = payload.get("new_intent") or payload.get("intent", "")
+        old_desc = payload.get("old_description") or payload.get("old_intent", "")
+        new_desc = payload.get("new_description") or payload.get("new_intent") or payload.get("intent", "")
         if new_title:
             lines.append(f"~ {indent}- {new_title}")
-        if old_intent:
-            lines.extend(_format_intent(old_intent, intent_indent, col0="~"))
-        if new_intent:
-            lines.extend(_format_intent(new_intent, intent_indent, col0="+"))
+        if old_desc:
+            lines.extend(_format_description(old_desc, desc_indent, col0="~"))
+        if new_desc:
+            lines.extend(_format_description(new_desc, desc_indent, col0="+"))
         if not lines:
             slug = payload.get("slug") or "(unknown)"
             lines.append(f"~ {indent}- {slug}")
@@ -117,7 +126,7 @@ def _render_proposal(
         rationale = payload.get("rationale", "")
         lines.append(f"~ {indent}~ {sym}")
         if rationale:
-            lines.append(f"~{intent_indent}{rationale[:100]}")
+            lines.append(f"~{desc_indent}{rationale[:100]}")
 
     else:
         slug = payload.get("slug") or payload.get("symbol_path") or ""
@@ -146,20 +155,19 @@ def _render_feature_block(
     slug_path_to_uuid: dict,
     title_path_to_uuid: dict,
     line_range_to_hlc: dict,
-    file_name: str,
     line_offset: int,
 ) -> list[str]:
+    file_name = _INDEX_FILENAME
     indent = "  " * depth
-    intent_indent = indent + "    "
+    desc_indent = indent + "    "
     lines: list[str] = []
 
     display = feature.title or feature.slug
     current_title_path = f"{title_path} > {display}" if title_path else display
 
-    # --- Feature title line ---
+    # Feature title line.
     marker = "~ " if feature.retired else "- "
-    suffix = _state_suffix(feature, store)
-    feature_line = f"{indent}{marker}{display}{suffix}"
+    feature_line = f"{indent}{marker}{display}"
     if os.environ.get("CODOC_LEGACY_UUID_LINES"):
         feature_line += f"  # @{feature.uuid}"
     feature_line_no = line_offset
@@ -173,11 +181,13 @@ def _render_feature_block(
         "kind": "feature",
     }
 
-    # --- Intent prose (suppressed for retired features) ---
-    if not feature.retired and feature.intent.strip():
-        lines.extend(_format_intent(feature.intent, intent_indent))
+    # Description prose (prefer description, fall back to intent for old features).
+    if not feature.retired:
+        prose = feature.description or feature.intent
+        if prose.strip():
+            lines.extend(_format_description(prose, desc_indent))
 
-    # --- Bindings index (sidecar only, not rendered inline) ---
+    # Bindings index (sidecar only, not rendered inline).
     bindings = store.list_bindings(feature.uuid)
     if bindings:
         binding_index[feature.uuid] = [
@@ -190,7 +200,7 @@ def _render_feature_block(
             for b in bindings
         ]
 
-    # --- Children ---
+    # Children.
     children = store.list_features(parent_uuid=feature.uuid)
     for child in children:
         lines.append("")
@@ -207,16 +217,15 @@ def _render_feature_block(
             slug_path_to_uuid,
             title_path_to_uuid,
             line_range_to_hlc,
-            file_name=file_name,
             line_offset=line_offset + len(lines),
         )
         lines.extend(child_lines)
 
-    # --- Proposals targeting this feature ---
+    # Proposals targeting this feature.
     for tx in proposals_for_feature.get(feature.uuid, []):
         lines.append("")
         prop_lines = _render_proposal(
-            tx, depth, file_name,
+            tx, depth,
             line_offset=line_offset + len(lines),
             location_tracker=location_tracker,
             line_range_to_hlc=line_range_to_hlc,
@@ -226,19 +235,14 @@ def _render_feature_block(
     return lines
 
 
-def _slug_to_filename(slug: str) -> str:
-    return f"{slug}.codoc"
-
-
 def _render_all(
     store: SQLiteStore, tx_log: TransactionLog
 ) -> tuple[dict[str, str], dict, dict, dict, dict, dict, str]:
-    """Build all rendered files plus tracking dicts."""
+    """Build the single _index.codoc document plus tracking dicts."""
     proposals_per_feature, top_level_proposals = _build_proposal_index(store)
     head_hlc = _current_head_hlc(tx_log)
     head_str = head_hlc.to_str() if head_hlc is not None else ""
 
-    files: dict[str, str] = {}
     location_tracker: dict[str, dict] = {}
     binding_index: dict = {}
     slug_path_to_uuid: dict = {}
@@ -247,45 +251,37 @@ def _render_all(
 
     root_features = store.list_features(parent_uuid="")
 
-    # _index.codoc — title listing only (no intent prose, no children).
-    index_lines: list[str] = [
-        "# codoc index — auto-generated. Edit subtree files, not this index.",
-        "# col-0 markers: + introduce  ~ amend  - retire  |  (stub) (strained) (severed) = needs attention",
-        "",
-    ]
+    body_lines: list[str] = []
+
     if not root_features and not top_level_proposals:
-        index_lines.append("# (empty tree — run `codoc bootstrap` to seed)")
-    for f in root_features:
-        display = f.title or f.slug
-        marker = "~ " if f.retired else "- "
-        index_lines.append(f"{marker}{display}")
-    for tx in top_level_proposals:
-        prop_lines = _render_proposal(
-            tx, 0, "_index.codoc",
-            line_offset=len(index_lines),
-            location_tracker=location_tracker,
-            line_range_to_hlc=line_range_to_hlc,
-        )
-        index_lines.extend(prop_lines)
-    files["_index.codoc"] = "\n".join(index_lines) + "\n"
+        body_lines.append("# (empty tree — run `codoc bootstrap` to seed)")
+    else:
+        for f in root_features:
+            block_lines = _render_feature_block(
+                f, depth=0, slug_path=f.slug, title_path="",
+                store=store,
+                proposals_for_feature=proposals_per_feature,
+                location_tracker=location_tracker,
+                binding_index=binding_index,
+                slug_path_to_uuid=slug_path_to_uuid,
+                title_path_to_uuid=title_path_to_uuid,
+                line_range_to_hlc=line_range_to_hlc,
+                line_offset=len(body_lines),
+            )
+            body_lines.extend(block_lines)
+            body_lines.append("")
 
-    # One .codoc file per root-level feature (no header, no legend).
-    for f in root_features:
-        filename = _slug_to_filename(f.slug)
-        block_lines = _render_feature_block(
-            f, depth=0, slug_path=f.slug, title_path="",
-            store=store,
-            proposals_for_feature=proposals_per_feature,
-            location_tracker=location_tracker,
-            binding_index=binding_index,
-            slug_path_to_uuid=slug_path_to_uuid,
-            title_path_to_uuid=title_path_to_uuid,
-            line_range_to_hlc=line_range_to_hlc,
-            file_name=filename,
-            line_offset=0,
-        )
-        files[filename] = "\n".join(block_lines) + "\n"
+        for tx in top_level_proposals:
+            prop_lines = _render_proposal(
+                tx, 0,
+                line_offset=len(body_lines),
+                location_tracker=location_tracker,
+                line_range_to_hlc=line_range_to_hlc,
+            )
+            body_lines.extend(prop_lines)
 
+    content = "\n".join(body_lines) + "\n"
+    files: dict[str, str] = {_INDEX_FILENAME: content}
     return files, location_tracker, binding_index, slug_path_to_uuid, title_path_to_uuid, line_range_to_hlc, head_str
 
 
@@ -302,6 +298,10 @@ def render_tree_with_meta(
     files, loc, bindings, slug_path_to_uuid, title_path_to_uuid, line_range_to_hlc, head_str = (
         _render_all(store, tx_log)
     )
+    content = files.get(_INDEX_FILENAME, "")
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    render_token = secrets.token_hex(8)
+
     meta = TreeMeta(
         base_hlc=head_str,
         rendered_at=datetime.now(timezone.utc).isoformat(),
@@ -310,6 +310,8 @@ def render_tree_with_meta(
         slug_path_to_uuid=slug_path_to_uuid,
         title_path_to_uuid=title_path_to_uuid,
         line_range_to_hlc=line_range_to_hlc,
+        content_hash=content_hash,
+        render_token=render_token,
     )
     return files, meta
 
@@ -322,21 +324,28 @@ def _current_head_hlc(tx_log: TransactionLog):
 
 
 def write_tree(codoc_dir: str, store: SQLiteStore, tx_log: TransactionLog) -> TreeMeta:
-    """Render the DB and write the result to ``.codoc/tree/`` atomically."""
+    """Render the DB and write to .codoc/tree/ — only writes files that changed."""
     files, meta = render_tree_with_meta(store, tx_log)
     tree_dir = Path(codoc_dir) / "tree"
     tree_dir.mkdir(parents=True, exist_ok=True)
 
-    keep: set[str] = set()
+    kept: set[str] = set()
     for filename, content in files.items():
         target = tree_dir / filename
+        # Idempotent write: skip if content is byte-identical.
+        if target.exists():
+            existing = target.read_text(encoding="utf-8")
+            if existing == content:
+                kept.add(filename)
+                continue
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_text(content, encoding="utf-8")
         tmp.replace(target)
-        keep.add(filename)
+        kept.add(filename)
 
+    # Remove any stale .codoc files no longer in the render set.
     for existing in tree_dir.glob("*.codoc"):
-        if existing.name not in keep:
+        if existing.name not in kept:
             try:
                 existing.unlink()
             except OSError:

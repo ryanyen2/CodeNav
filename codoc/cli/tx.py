@@ -56,6 +56,18 @@ def _open_stores(codoc_dir: Path):
 
 
 
+def _resolve_provisional_uuid(provisional_uuid: str, store) -> str | None:
+    """Look up a feature by its provisional_uuid (stored in payload on accept).
+
+    When bootstrap emits INTRODUCE proposals, each carries a ``provisional_uuid``
+    in its payload.  On accept, that UUID becomes the feature's real UUID.  So to
+    resolve a ``parent_uuid`` that was set to a provisional UUID at proposal time,
+    we just check whether a feature with that exact UUID already exists.
+    """
+    feature = store.get_feature(provisional_uuid)
+    return feature.uuid if feature is not None else None
+
+
 def _apply_accepted_transaction(tx, store) -> None:
     """Apply the side-effects of an accepted transaction to the store."""
     from codoc.model.transaction import TransactionKind
@@ -81,15 +93,28 @@ def _apply_accepted_transaction(tx, store) -> None:
 
     if kind == TransactionKind.INTRODUCE:
         slug = payload.get("slug", "feature")
+        title = payload.get("title", "") or slug
         intent = payload.get("intent", "")
+        description = payload.get("description", "")
         parent_uuid = payload.get("parent_uuid", None)
-        feature_uuid = payload.get("feature_uuid") or _new_uuid()
+
+        # Resolve provisional parent UUID: if parent_uuid looks like a provisional
+        # UUID stored in a sibling INTRODUCE payload, look it up in the features table.
+        if parent_uuid and "-" in parent_uuid:
+            # Check if a feature with this provisional_uuid exists.
+            resolved = _resolve_provisional_uuid(parent_uuid, store)
+            if resolved:
+                parent_uuid = resolved
+
+        feature_uuid = payload.get("provisional_uuid") or payload.get("feature_uuid") or _new_uuid()
 
         feature = Feature(
             uuid=feature_uuid,
             slug=slug,
+            title=title,
             parent_uuid=parent_uuid,
             intent=intent,
+            description=description,
             retired=False,
             created_at_hlc=now_hlc,
             updated_at_hlc=now_hlc,

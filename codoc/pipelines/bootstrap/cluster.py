@@ -10,13 +10,28 @@ Phase 1 of bootstrap:
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import faiss
 
 from codoc.lang import get_adapter, detect_language, Chunk
 from codoc.config import embed, get_embedder_config
+
+
+@dataclass
+class ClusterNode:
+    """A node in the recursive cluster tree."""
+
+    chunk_indices: list[int]
+    children: list["ClusterNode"] = field(default_factory=list)
+    depth: int = 0
+
+    @property
+    def is_leaf(self) -> bool:
+        return len(self.children) == 0
 
 
 # Directories to skip unconditionally during the walk.
@@ -191,6 +206,97 @@ def cluster_chunks(
 
     # Return in deterministic label order; omit any empty clusters.
     return [clusters[label] for label in sorted(clusters) if clusters[label]]
+
+
+def cluster_recursive(
+    chunks: list[Chunk],
+    vectors: list[list[float]],
+    target_leaf_size: int = 8,
+    max_depth: int = 5,
+    branching_factor: int | None = None,
+    _depth: int = 0,
+    _indices: list[int] | None = None,
+) -> ClusterNode:
+    """Recursively cluster *chunks* by embedding similarity.
+
+    Produces a :class:`ClusterNode` tree of arbitrary depth.  Recursion stops
+    when a node has ≤ *target_leaf_size* chunks or *max_depth* is reached.
+
+    Parameters
+    ----------
+    chunks:
+        Full list of all extracted chunks (indexed by position).
+    vectors:
+        Embedding vectors parallel to *chunks*.
+    target_leaf_size:
+        Stop splitting a node when it contains ≤ this many chunks.
+    max_depth:
+        Hard recursion limit.
+    branching_factor:
+        Number of child clusters per split.  Defaults to
+        ``max(2, ceil(n / target_leaf_size))`` capped at 10.
+    _depth / _indices:
+        Internal recursion parameters — do not pass.
+
+    Returns
+    -------
+    ClusterNode
+        Root node whose ``chunk_indices`` contains *all* chunk indices and
+        whose ``children`` recursively contain sub-nodes.
+    """
+    import math
+
+    if _indices is None:
+        _indices = list(range(len(chunks)))
+
+    root = ClusterNode(chunk_indices=_indices, depth=_depth)
+
+    n = len(_indices)
+    if n == 0:
+        return root
+
+    # Base cases: too small to split further or maximum depth reached.
+    if n <= target_leaf_size or _depth >= max_depth:
+        return root
+
+    # Choose k (branching factor for this level).
+    if branching_factor is not None:
+        k = branching_factor
+    else:
+        # Broader at top levels (smaller k), finer at deeper levels.
+        k = max(2, min(10, math.ceil(n / target_leaf_size)))
+
+    k = min(k, n)
+
+    sub_mat = np.array([vectors[i] for i in _indices], dtype=np.float32)
+    d = sub_mat.shape[1]
+
+    kmeans = faiss.Kmeans(d, k, niter=20, verbose=False)
+    kmeans.train(sub_mat)
+    _, labels = kmeans.index.search(sub_mat, 1)
+    labels = labels.flatten().tolist()
+
+    # Group local indices by cluster label.
+    child_groups: dict[int, list[int]] = {}
+    for local_idx, label in enumerate(labels):
+        child_groups.setdefault(label, []).append(_indices[local_idx])
+
+    for label in sorted(child_groups):
+        group = child_groups[label]
+        if not group:
+            continue
+        child = cluster_recursive(
+            chunks=chunks,
+            vectors=vectors,
+            target_leaf_size=target_leaf_size,
+            max_depth=max_depth,
+            branching_factor=branching_factor,
+            _depth=_depth + 1,
+            _indices=group,
+        )
+        root.children.append(child)
+
+    return root
 
 
 def cluster_hierarchical(

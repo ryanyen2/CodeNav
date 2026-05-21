@@ -24,6 +24,7 @@ from codoc.cli.commands import (
     cmd_retire,
     cmd_search,
     cmd_status,
+    cmd_conflicts,
 )
 
 app = typer.Typer(
@@ -45,6 +46,7 @@ app.command("rename")(cmd_rename)
 app.command("retire")(cmd_retire)
 app.command("search")(cmd_search)
 app.command("status")(cmd_status)
+app.command("conflicts")(cmd_conflicts)
 
 # ------------------------------------------------------------------
 # Scaffolding and pipeline commands

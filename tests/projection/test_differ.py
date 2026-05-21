@@ -25,6 +25,9 @@ from codoc.projection.parser import parse_tree_dir
 from codoc.projection.tree_codoc import write_tree
 
 
+_INDEX = "_index.codoc"
+
+
 def _seed(codoc_dir: Path, *, n_features: int = 1) -> list[str]:
     store, _, _ = open_stores(str(codoc_dir))
     uuids: list[str] = []
@@ -49,6 +52,10 @@ def _seed(codoc_dir: Path, *, n_features: int = 1) -> list[str]:
     return uuids
 
 
+def _index_path(codoc_dir: Path) -> Path:
+    return codoc_dir / "tree" / _INDEX
+
+
 def test_slug_change_emits_rename_op(tmp_path: Path) -> None:
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
@@ -60,10 +67,9 @@ def test_slug_change_emits_rename_op(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # User edits the slug in feature-0.codoc
-    f = codoc_dir / "tree" / "feature-0.codoc"
+    # User edits the feature title in _index.codoc.
+    f = _index_path(codoc_dir)
     text = f.read_text().replace("- feature-0", "- renamed-feature")
-    # Header reference also references feature-0; only edit the feature line.
     f.write_text(text)
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
@@ -91,7 +97,7 @@ def test_intent_change_emits_amend_op(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    f = codoc_dir / "tree" / "feature-0.codoc"
+    f = _index_path(codoc_dir)
     text = f.read_text().replace(
         "Intent for feature 0.",
         "Updated intent prose, much more descriptive.",
@@ -123,8 +129,11 @@ def test_line_deleted_emits_retire(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Delete feature-1.codoc entirely (UUID disappears from the buffer).
-    (codoc_dir / "tree" / "feature-1.codoc").unlink()
+    # Delete feature-1 block from _index.codoc.
+    f = _index_path(codoc_dir)
+    lines = f.read_text().splitlines()
+    filtered = [l for l in lines if "feature-1" not in l and "Intent for feature 1" not in l]
+    f.write_text("\n".join(filtered) + "\n")
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
     store, _, _ = open_stores(str(codoc_dir))
@@ -139,7 +148,7 @@ def test_line_deleted_emits_retire(tmp_path: Path) -> None:
 
 
 def test_parent_change_emits_restructure(tmp_path: Path) -> None:
-    """Move feature-1 under feature-0."""
+    """Move feature-1 under feature-0 by re-indenting in _index.codoc."""
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
     uuids = _seed(codoc_dir, n_features=2)
@@ -150,25 +159,24 @@ def test_parent_change_emits_restructure(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Move feature-1 into feature-0's subtree by editing both files.
-    f0 = codoc_dir / "tree" / "feature-0.codoc"
-    f1 = codoc_dir / "tree" / "feature-1.codoc"
-    f1_text = f1.read_text()
-    # Find feature-1 line content (with its UUID) and its intent
-    f1_uuid = uuids[1]
+    f = _index_path(codoc_dir)
+    lines = f.read_text().splitlines()
 
-    # Construct the indented child block in f0.
-    indented = []
-    for line in f1_text.splitlines():
-        if line.startswith("# codoc subtree"):
-            continue
-        if not line.strip():
-            continue
-        indented.append("  " + line)
-
-    new_f0 = f0.read_text() + "\n" + "\n".join(indented) + "\n"
-    f0.write_text(new_f0)
-    f1.unlink()
+    # Re-indent feature-1 lines by 2 extra spaces so the parser sees it as a
+    # child of feature-0.
+    new_lines = []
+    in_f1 = False
+    for line in lines:
+        if "- feature-1" in line:
+            in_f1 = True
+        if in_f1:
+            if line.strip():
+                new_lines.append("  " + line)
+            else:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+    f.write_text("\n".join(new_lines) + "\n")
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
     store, _, _ = open_stores(str(codoc_dir))
@@ -176,6 +184,7 @@ def test_parent_change_emits_restructure(tmp_path: Path) -> None:
         ops, errors = diff_tree(parsed, store)
     finally:
         store.close()
+
     restructure_ops = [o for o in ops if isinstance(o, RestructureOp)]
     assert len(restructure_ops) == 1
     assert restructure_ops[0].uuid == uuids[1]
@@ -211,17 +220,15 @@ def test_proposal_deletion_emits_accept(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # New format: proposals render as col-0 diff hunks ("~ ~ sym\n~ rationale\n").
-    # Deleting those lines signals acceptance. Truncate at the first col-0 marker.
-    f = codoc_dir / "tree" / "feature-0.codoc"
+    # Proposals render as col-0 diff hunks. Deleting those lines signals acceptance.
+    f = _index_path(codoc_dir)
     text = f.read_text()
     lines = text.splitlines()
     truncated = []
     for line in lines:
         if line and line[0] in "+-~" and len(line) > 1 and line[1] in " -~+":
-            break  # col-0 diff hunk — delete from here on
+            break
         truncated.append(line)
-    # Remove trailing blank lines left by the separator before the proposal.
     while truncated and not truncated[-1].strip():
         truncated.pop()
     f.write_text("\n".join(truncated) + "\n")
@@ -259,13 +266,9 @@ def test_proposal_reject_marker_emits_reject(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # New format: proposals render as col-0 diff hunks, not as "? kind: slug # ?hlc".
-    # To reject, replace the col-0 diff hunk block with a legacy "! kind: slug # ?hlc"
-    # reject directive, which the parser still recognises via _PROPOSAL_RE_LEGACY.
-    f = codoc_dir / "tree" / "feature-0.codoc"
+    f = _index_path(codoc_dir)
     text = f.read_text()
     lines = text.splitlines()
-    # Strip trailing col-0 diff hunk lines (the rendered proposal block).
     clean_lines = []
     for line in lines:
         if line and line[0] in "+-~" and len(line) > 1 and line[1] in " -~+":
@@ -283,6 +286,7 @@ def test_proposal_reject_marker_emits_reject(tmp_path: Path) -> None:
         ops, errors = diff_tree(parsed, store)
     finally:
         store.close()
+
     reject_ops = [o for o in ops if isinstance(o, RejectOp)]
     assert len(reject_ops) == 1
     assert reject_ops[0].hlc == proposal_hlc.to_str()
@@ -299,8 +303,8 @@ def test_new_feature_without_uuid_is_error(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Append a new feature line with NO UUID comment — illegal.
-    f = codoc_dir / "tree" / "feature-0.codoc"
+    # Append a new feature line with NO UUID — illegal.
+    f = _index_path(codoc_dir)
     f.write_text(f.read_text() + "\n  - new-handcrafted-feature  [Drafting]\n")
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
@@ -325,10 +329,10 @@ def test_unknown_uuid_is_error(tmp_path: Path) -> None:
         store.close()
 
     # Insert a feature line with a fabricated UUID.
-    f = codoc_dir / "tree" / "feature-0.codoc"
+    f = _index_path(codoc_dir)
     fake_uuid = "00000000-0000-0000-0000-deadbeefdead"
     f.write_text(
-        f.read_text() + f"\n- ghost  [Drafting]  # @{fake_uuid}\n  Ghost intent.\n"
+        f.read_text() + f"\n- ghost  [Drafting]  # @{fake_uuid}\n    Ghost intent.\n"
     )
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
@@ -382,7 +386,7 @@ def test_rename_ops_ordered_deepest_first(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    f = codoc_dir / "tree" / "parent-slug.codoc"
+    f = _index_path(codoc_dir)
     text = f.read_text()
     text = text.replace("- parent-slug", "- new-parent-slug")
     text = text.replace("- child-slug", "- new-child-slug")
