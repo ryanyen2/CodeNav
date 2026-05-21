@@ -84,6 +84,7 @@ class BootstrapRequest(BaseModel):
     root_dir: str
     repo_name: str = "codebase"
     target_cluster_size: int = 8
+    hierarchical: bool = False
 
 
 class BootstrapFinishRequest(BaseModel):
@@ -94,6 +95,17 @@ class ReflectRequest(BaseModel):
     root_dir: str
     from_ref: str = "HEAD~1"
     to_ref: str = "HEAD"
+    repo_name: str = "codebase"
+
+
+class ReflectFileRequest(BaseModel):
+    root_dir: str
+    paths: list[str]
+
+
+class PlanRequest(BaseModel):
+    root_dir: str
+    prompt: str
     repo_name: str = "codebase"
 
 
@@ -253,8 +265,9 @@ def _apply_accepted_transaction(
         # Create the Feature record.
         hlc = tx.hlc
         feature = Feature(
-            uuid=str(_uuid.uuid4()),
+            uuid=payload.get("provisional_uuid") or str(_uuid.uuid4()),
             slug=payload.get("slug", "unnamed"),
+            title=payload.get("title", ""),
             parent_uuid=payload.get("parent_uuid"),
             intent=payload.get("intent", ""),
             retired=False,
@@ -390,6 +403,7 @@ async def bootstrap(body: BootstrapRequest) -> BootstrapResponse:
             codoc_dir=str(codoc_path),
             repo_name=body.repo_name,
             target_cluster_size=body.target_cluster_size,
+            hierarchical=body.hierarchical,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -435,6 +449,46 @@ async def reflect(body: ReflectRequest) -> ReflectResponse:
         proposals_emitted=result["proposals_emitted"],
         proposals=result["proposals"],
     )
+
+
+@router.post("/reflect/file", response_model=ReflectResponse)
+async def reflect_file(body: ReflectFileRequest) -> ReflectResponse:
+    """Run incremental reflect on specific files (no git refs required)."""
+    codoc_dir = _codoc_dir(body.root_dir)
+    try:
+        from codoc.pipelines.reflective.runner import run_reflect_files
+        result = run_reflect_files(
+            root_dir=body.root_dir,
+            codoc_dir=codoc_dir,
+            file_paths=body.paths,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return ReflectResponse(
+        changed_files=result.get("processed_files", 0),
+        changed_chunks=result.get("changed_chunks", 0),
+        proposals_emitted=result.get("proposals_emitted", 0),
+        proposals=result.get("proposals", []),
+    )
+
+
+@router.post("/plan")
+async def run_plan_endpoint(body: PlanRequest) -> dict:
+    """Run the planning agent and emit proposals."""
+    codoc_dir = _codoc_dir(body.root_dir)
+    try:
+        from codoc.pipelines.planning.runner import run_plan
+        result = run_plan(
+            prompt=body.prompt,
+            root_dir=body.root_dir,
+            codoc_dir=codoc_dir,
+            repo_name=body.repo_name,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return result
 
 
 # ---------------------------------------------------------------------------

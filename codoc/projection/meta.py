@@ -26,6 +26,10 @@ class TreeMeta:
     # binding_index: {feature_uuid: [{"file": ..., "symbol_path": ..., "binding_uuid": ..., "ts_query": ...}]}
     slug_path_to_uuid: dict = field(default_factory=dict)
     # slug_path_to_uuid: {"root-slug/child-slug": "<uuid>"}
+    title_path_to_uuid: dict = field(default_factory=dict)
+    # title_path_to_uuid: {"Core API > Schema Generation": "<uuid>"}
+    line_range_to_hlc: dict = field(default_factory=dict)
+    # line_range_to_hlc: {"auth-flow.codoc:12-15": "<hlc>"}  — diff hunk lines → proposal HLC
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -38,6 +42,8 @@ class TreeMeta:
             uuid_to_location=data.get("uuid_to_location", {}),
             binding_index=data.get("binding_index", {}),
             slug_path_to_uuid=data.get("slug_path_to_uuid", {}),
+            title_path_to_uuid=data.get("title_path_to_uuid", {}),
+            line_range_to_hlc=data.get("line_range_to_hlc", {}),
         )
 
 

@@ -17,6 +17,7 @@ call ``finish_bootstrap()`` to sweep unattributed chunks into the
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from codoc.storage.sqlite_store import SQLiteStore
@@ -27,8 +28,9 @@ from codoc.pipelines.bootstrap.cluster import (
     extract_all_chunks,
     embed_chunks,
     cluster_chunks,
+    cluster_hierarchical,
 )
-from codoc.pipelines.bootstrap.propose import propose_all
+from codoc.pipelines.bootstrap.propose import propose_all, propose_hierarchical
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,7 @@ def run_bootstrap(
     repo_name: str = "codebase",
     target_cluster_size: int = 8,
     node_id: str = "default",
+    hierarchical: bool = False,
 ) -> dict:
     """Run the full bootstrap pipeline on *root_dir*.
 
@@ -143,6 +146,7 @@ def run_bootstrap(
     # ------------------------------------------------------------------
     # Stage 1: extract
     # ------------------------------------------------------------------
+    print("[bootstrap] extracting chunks...", file=sys.stderr)
     chunks = extract_all_chunks(root_dir)
 
     if not chunks:
@@ -153,13 +157,13 @@ def run_bootstrap(
             "proposals": [],
         }
 
+    print(f"[bootstrap] {len(chunks)} chunks. Embedding...", file=sys.stderr)
+
     # ------------------------------------------------------------------
     # Stage 2: embed + index
     # ------------------------------------------------------------------
     vectors = embed_chunks(chunks)
 
-    # Persist embeddings to the FAISS index so subsequent reflective runs can
-    # reuse them without re-embedding the entire codebase.
     faiss_index = FaissIndex(faiss_dir)
     faiss_index.open()
     for chunk, vector in zip(chunks, vectors):
@@ -173,7 +177,19 @@ def run_bootstrap(
     # ------------------------------------------------------------------
     # Stage 3: cluster
     # ------------------------------------------------------------------
-    clusters = cluster_chunks(chunks, vectors, target_cluster_size=target_cluster_size)
+    if hierarchical:
+        hier_clusters = cluster_hierarchical(chunks, vectors, target_leaf_size=target_cluster_size)
+        flat_cluster_count = sum(len(sections) for sections in hier_clusters)
+        print(
+            f"[bootstrap] {len(hier_clusters)} chapters, {flat_cluster_count} sections. "
+            "Calling LLM...",
+            file=sys.stderr,
+        )
+    else:
+        clusters = cluster_chunks(chunks, vectors, target_cluster_size=target_cluster_size)
+        print(
+            f"[bootstrap] {len(clusters)} clusters. Calling LLM...", file=sys.stderr
+        )
 
     # ------------------------------------------------------------------
     # Stage 4 + 5: LLM proposals → transaction log
@@ -182,21 +198,29 @@ def run_bootstrap(
 
     with SQLiteStore(db_path) as store:
         tx_log = TransactionLog(store, node_id=node_id)
-
-        # Give the LLM context about features already in the tree (for
-        # incremental / partial runs where some features pre-exist).
         existing_summaries = _collect_existing_feature_summaries(store)
 
-        proposals = propose_all(
-            clusters=clusters,
-            chunks=chunks,
-            tx_log=tx_log,
-            existing_feature_summaries=existing_summaries,
-            repo_name=repo_name,
-            language_adapters=language_adapters,
-        )
+        if hierarchical:
+            proposals = propose_hierarchical(
+                hierarchical_clusters=hier_clusters,
+                chunks=chunks,
+                tx_log=tx_log,
+                existing_feature_summaries=existing_summaries,
+                repo_name=repo_name,
+                language_adapters=language_adapters,
+            )
+            cluster_count = flat_cluster_count
+        else:
+            proposals = propose_all(
+                clusters=clusters,
+                chunks=chunks,
+                tx_log=tx_log,
+                existing_feature_summaries=existing_summaries,
+                repo_name=repo_name,
+                language_adapters=language_adapters,
+            )
+            cluster_count = len(clusters)
 
-        # Mirror proposals to the JSONL audit log.
         jsonl_log = JSONLLog(jsonl_path)
         for tx in proposals:
             jsonl_log.append(tx)
@@ -211,9 +235,11 @@ def run_bootstrap(
             for tx in proposals
         ]
 
+    print(f"[bootstrap] {len(proposals)} proposals emitted.", file=sys.stderr)
+
     return {
         "chunk_count": len(chunks),
-        "cluster_count": len(clusters),
+        "cluster_count": cluster_count,
         "proposal_count": len(proposals),
         "proposals": proposal_summaries,
     }

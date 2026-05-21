@@ -1,10 +1,13 @@
 """Parse a directory of `.codoc` files into a structured ParsedTree.
 
-The parser is intentionally permissive: feature lines may carry a UUID
-comment (``# @<uuid>``) or omit it entirely (new default format).  When the
-UUID is absent the parser attempts a slug-path lookup in ``old_meta``.
-Lines that still cannot be resolved are reported as DiffErrors by the
-differ, not raised here.
+The parser handles both the new prose-title format and the legacy
+slug+[Badge]+UUID format. Identity resolution order:
+
+  1. Inline ``# @<uuid>`` comment (legacy format only).
+  2. ``old_meta.title_path_to_uuid`` lookup using the title path.
+  3. ``old_meta.slug_path_to_uuid`` lookup using the display name as slug.
+
+Lines that cannot be resolved are reported as DiffErrors by the differ.
 """
 
 from __future__ import annotations
@@ -16,43 +19,42 @@ from pathlib import Path
 from codoc.projection.meta import TreeMeta
 
 
-# Feature line: optional indent, '- ' or '~ ' prefix, slug, optional state badge,
-# optional trailing UUID comment.
-_FEATURE_RE = re.compile(
-    r"^(?P<indent>\s*)(?P<marker>[-~])\s+(?P<slug>[^\s\[#]+)"
-    r"(?:\s+\[(?P<badge>[^\]]*)\])?"
-    r"\s*(?:#\s*@(?P<uuid>[0-9a-f\-]+))?\s*$",
+# New-format feature line: indent + marker + title + optional (state) suffix.
+_TITLE_LINE_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<marker>[-~])\s+"
+    r"(?P<title>.+?)"
+    r"(?:\s+\((?P<state_suffix>strained|severed|stub|deprecated)\))?"
+    r"(?:\s+\[(?P<badge>[^\]]*)\])?"      # backward compat: old [Badge] format
+    r"\s*(?:#\s*@(?P<uuid>[0-9a-f\-]+))?\s*$",  # backward compat: old inline UUID
     re.IGNORECASE,
 )
 
-# Feature line WITHOUT UUID (new feature, which is not allowed in v1).
-_FEATURE_NO_UUID_RE = re.compile(
-    r"^(?P<indent>\s*)(?P<marker>[-~])\s+(?P<slug>\S+).*$"
-)
-
-# Proposal line: "? <kind>: <slug>  [proposal]  # ?<hlc>"
-# Or rejected proposal: "! <kind>: <slug>  [proposal]  # ?<hlc>"
-_PROPOSAL_RE = re.compile(
+# Old proposal line: "? <kind>: <slug>  [proposal]  # ?<hlc>" — kept for backward compat.
+_PROPOSAL_RE_LEGACY = re.compile(
     r"^(?P<indent>\s*)(?P<marker>[?!])\s+"
     r"(?P<kind>[\w\-]+):\s+(?P<slug>\S+)"
     r"(?:\s+\[(?P<badge>[^\]]*)\])?"
     r"\s*(?:#\s*\?(?P<hlc>[0-9a-zA-Z:\-_]+))?\s*$"
 )
 
-# bindings: prefix line — read-only, not a delta.
-_BINDINGS_RE = re.compile(r"^\s*(?:bindings|candidate-bindings):")
+# New-format diff hunk line: col-0 marker where position-2 char is -, ~, or space.
+# This distinguishes "+ - Title" / "~ - Title" / "+     intent" from regular
+# feature lines "- auth-flow" (where position-2 is a letter/digit).
+_DIFF_HUNK_RE = re.compile(r"^[+\-~] [-~ ]")
 
-# New-format binding entry: "  [b1] file :: symbol" — read-only, skip.
+# bindings/candidate-bindings lines — read-only, skip.
+_BINDINGS_RE = re.compile(r"^\s*(?:bindings|candidate-bindings):")
 _BINDING_ENTRY_RE = re.compile(r"^\s*\[b\d+\]\s")
 
-# Header lines: "# codoc index @ HLC ..." or "# codoc subtree: ..."
+# Legacy header lines.
 _HEADER_RE = re.compile(r"^#\s*codoc\s+(index|subtree)")
 
 
 @dataclass
 class ParsedFeature:
     uuid: str
-    slug: str
+    slug: str        # display name used as slug key (title or old slug)
+    title: str       # prose display title (same as slug for old-format features)
     intent: str
     parent_uuid: str | None
     retired: bool
@@ -67,7 +69,7 @@ class ParsedProposal:
     action: str  # "accept" | "reject" | "accept-with-edits"
     edited_slug: str | None = None
     edited_intent: str | None = None
-    source_file: str | None = None  # file this proposal lived in (per old_meta) or where rejected
+    source_file: str | None = None
 
 
 @dataclass
@@ -75,12 +77,9 @@ class ParsedTree:
     features: list[ParsedFeature] = field(default_factory=list)
     proposals: list[ParsedProposal] = field(default_factory=list)
     parse_errors: list[str] = field(default_factory=list)
-    # uuids_seen: useful for differ
     feature_uuids: set[str] = field(default_factory=set)
-    # Track features that lost their UUID (i.e. lines that match _FEATURE_NO_UUID_RE).
-    # The differ converts these to DiffErrors.
+    # Features whose identity couldn't be resolved (differ will convert to DiffErrors).
     feature_lines_without_uuid: list[tuple[str, int, str]] = field(default_factory=list)
-    # Track duplicate UUIDs encountered.
     duplicate_uuids: list[tuple[str, str, int]] = field(default_factory=list)
 
 
@@ -94,20 +93,16 @@ def _parse_index_file(
     parsed: ParsedTree,
     seen_proposal_hlcs: set[str],
 ) -> None:
-    """Parse _index.codoc — only proposals are meaningful here.
-
-    The feature lines in the index are a read-only mirror of root-level slugs;
-    editing them in the index has no effect (rename/retire happens in the
-    subtree files). The differ ignores them.
-    """
+    """Parse _index.codoc — only proposals are meaningful here."""
     text = path.read_text(encoding="utf-8")
     file_name = path.name
-    for lineno, raw_line in enumerate(text.splitlines()):
+    lines = text.splitlines()
+    for lineno, raw_line in enumerate(lines):
         line = raw_line.rstrip("\n")
         stripped = line.strip()
         if not stripped or _HEADER_RE.match(stripped) or _strip_comment_only_line(line):
             continue
-        p = _PROPOSAL_RE.match(line)
+        p = _PROPOSAL_RE_LEGACY.match(line)
         if p and p.group("hlc"):
             hlc = p.group("hlc")
             kind = p.group("kind")
@@ -115,12 +110,7 @@ def _parse_index_file(
             seen_proposal_hlcs.add(hlc)
             if marker == "!":
                 parsed.proposals.append(
-                    ParsedProposal(
-                        hlc=hlc,
-                        kind=kind,
-                        action="reject",
-                        source_file=file_name,
-                    )
+                    ParsedProposal(hlc=hlc, kind=kind, action="reject", source_file=file_name)
                 )
 
 
@@ -129,23 +119,21 @@ def _parse_one_file(
     parsed: ParsedTree,
     seen_proposal_hlcs: set[str],
     old_meta: "TreeMeta | None" = None,
-) -> dict[str, dict]:
-    """Parse one .codoc file. Returns {hlc: {"slug":..., "intent":...}} for proposals
-    that are still present in this file (used by differ to detect deletions)."""
+) -> tuple[dict[str, dict], list[str]]:
+    """Parse one .codoc file."""
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     file_name = path.name
 
-    # Indent stack: list of (indent_len, slug, uuid_or_none)
     parent_stack: list[tuple[int, str, str | None]] = []
     cur_feature: ParsedFeature | None = None
     cur_intent_lines: list[str] = []
-    present_proposals: dict[str, dict] = {}  # hlc → kept fields
+    present_proposals: dict[str, dict] = {}
 
     def _flush_feature() -> None:
         nonlocal cur_feature, cur_intent_lines
         if cur_feature is not None:
-            joined = " ".join(line.strip() for line in cur_intent_lines if line.strip())
+            joined = " ".join(ln.strip() for ln in cur_intent_lines if ln.strip())
             cur_feature.intent = joined
             parsed.features.append(cur_feature)
             parsed.feature_uuids.add(cur_feature.uuid)
@@ -156,47 +144,61 @@ def _parse_one_file(
         line = raw_line.rstrip("\n")
         stripped = line.strip()
 
-        # Skip blank lines.
         if not stripped:
-            # Blank lines do NOT terminate intent collection — but they are tolerated.
             continue
 
-        # Skip header / pure comment lines.
         if _HEADER_RE.match(stripped) or _strip_comment_only_line(line):
             continue
 
-        # Bindings echo: read-only (both old inline format and new block format).
-        if _BINDINGS_RE.match(line):
+        if _BINDINGS_RE.match(line) or _BINDING_ENTRY_RE.match(line):
             continue
 
-        # New-format binding entry lines: "[b1] file :: symbol" — skip.
-        if _BINDING_ENTRY_RE.match(line):
+        if _DIFF_HUNK_RE.match(line):
+            _flush_feature()
             continue
 
-        # Feature line?
-        m = _FEATURE_RE.match(line)
+        p = _PROPOSAL_RE_LEGACY.match(line)
+        if p and p.group("hlc"):
+            _flush_feature()
+            hlc = p.group("hlc")
+            kind = p.group("kind")
+            marker = p.group("marker")
+            slug = p.group("slug")
+            present_proposals[hlc] = {
+                "slug": slug, "kind": kind, "marker": marker,
+                "file": file_name, "line": lineno,
+            }
+            seen_proposal_hlcs.add(hlc)
+            if marker == "!":
+                parsed.proposals.append(
+                    ParsedProposal(hlc=hlc, kind=kind, action="reject", source_file=file_name)
+                )
+            continue
+
+        m = _TITLE_LINE_RE.match(line)
         if m:
             _flush_feature()
             indent_len = len(m.group("indent"))
             marker = m.group("marker")
-            slug = m.group("slug")
-            uuid = m.group("uuid")
+            title = m.group("title").strip()
+            uuid = m.group("uuid")  # may be None (new format)
 
-            # Pop parent stack until we find a parent with strictly less indent.
             while parent_stack and parent_stack[-1][0] >= indent_len:
                 parent_stack.pop()
             parent_uuid = parent_stack[-1][2] if parent_stack else None
 
-            # When UUID is absent from the line, try meta lookup.
             if uuid is None and old_meta is not None:
-                parent_slugs = [s for _, s, _ in parent_stack]
-                slug_path = "/".join(parent_slugs + [slug])
-                uuid = old_meta.slug_path_to_uuid.get(slug_path)
+                parent_titles = [name for _, name, _ in parent_stack]
+                title_path = " > ".join(parent_titles + [title])
+                uuid = old_meta.title_path_to_uuid.get(title_path)
+
+                if uuid is None:
+                    slug_path = "/".join(parent_titles + [title])
+                    uuid = old_meta.slug_path_to_uuid.get(slug_path)
 
             if uuid is None:
-                # Cannot resolve — report as unresolved (differ will handle).
-                parsed.feature_lines_without_uuid.append((file_name, lineno, slug))
-                parent_stack.append((indent_len, slug, None))
+                parsed.feature_lines_without_uuid.append((file_name, lineno, title))
+                parent_stack.append((indent_len, title, None))
                 continue
 
             if uuid in parsed.feature_uuids:
@@ -204,100 +206,97 @@ def _parse_one_file(
 
             cur_feature = ParsedFeature(
                 uuid=uuid,
-                slug=slug,
+                slug=title,
+                title=title,
                 intent="",
                 parent_uuid=parent_uuid,
                 retired=(marker == "~"),
                 source_file=file_name,
                 line_number=lineno,
             )
-            parent_stack.append((indent_len, slug, uuid))
+            parent_stack.append((indent_len, title, uuid))
             cur_intent_lines = []
             continue
 
-        # Proposal line?
-        p = _PROPOSAL_RE.match(line)
-        if p and p.group("hlc"):
-            _flush_feature()
-            hlc = p.group("hlc")
-            kind = p.group("kind")
-            marker = p.group("marker")
-            slug = p.group("slug")
-
-            # Track seen so the differ knows it was NOT deleted.
-            present_proposals[hlc] = {
-                "slug": slug,
-                "kind": kind,
-                "marker": marker,
-                "file": file_name,
-                "line": lineno,
-            }
-            seen_proposal_hlcs.add(hlc)
-
-            if marker == "!":
-                # Explicit reject directive in the buffer.
-                parsed.proposals.append(
-                    ParsedProposal(
-                        hlc=hlc,
-                        kind=kind,
-                        action="reject",
-                        source_file=file_name,
-                    )
-                )
-            # ? marker: still pending — no action emitted now (we'll detect
-            # deletion vs presence in differ).
-            continue
-
-        # Otherwise, treat as intent prose for the current feature.
         if cur_feature is not None:
             cur_intent_lines.append(line)
 
-    # End of file: flush trailing feature.
     _flush_feature()
-    return present_proposals
+    return present_proposals, lines
 
 
 def parse_tree_dir(codoc_dir: str, old_meta: TreeMeta | None = None) -> ParsedTree:
-    """Read all *.codoc files in .codoc/tree/ and unify into a ParsedTree.
-
-    When *old_meta* is supplied, proposals that were in the previous render
-    but are missing from the current files are emitted as ``accept`` actions
-    (or ``accept-with-edits`` if the slug/intent on a sibling line indicates
-    user edits — Phase 1.5 keeps this minimal: any deletion = accept).
-    """
+    """Read all *.codoc files in .codoc/tree/ and unify into a ParsedTree."""
     parsed = ParsedTree()
     tree_dir = Path(codoc_dir) / "tree"
     if not tree_dir.is_dir():
         return parsed
 
     seen_proposal_hlcs: set[str] = set()
+    file_lines_cache: dict[str, list[str]] = {}
 
-    # Parse every subtree .codoc file. _index.codoc is read-only listing;
-    # editing it has no effect on features (only top-level proposals live there
-    # and the proposal parser handles them).
     for path in sorted(tree_dir.glob("*.codoc")):
         try:
             if path.name == "_index.codoc":
                 _parse_index_file(path, parsed, seen_proposal_hlcs)
+                file_lines_cache[path.name] = path.read_text(encoding="utf-8").splitlines()
             else:
-                _parse_one_file(path, parsed, seen_proposal_hlcs, old_meta=old_meta)
+                present_proposals, file_lines = _parse_one_file(
+                    path, parsed, seen_proposal_hlcs, old_meta=old_meta
+                )
+                file_lines_cache[path.name] = file_lines
         except OSError as exc:
             parsed.parse_errors.append(f"could not read {path.name}: {exc}")
 
-    # Detect deletions of proposal lines (= accept).
     if old_meta is not None:
         for hlc, loc in old_meta.uuid_to_location.items():
             if loc.get("kind") != "proposal":
                 continue
-            if hlc not in seen_proposal_hlcs:
-                # Deleted from buffer → accept.
-                parsed.proposals.append(
-                    ParsedProposal(
-                        hlc=hlc,
-                        kind="",  # unknown at this point; differ will look up
-                        action="accept",
-                        source_file=loc.get("file"),
-                    )
+            if hlc in seen_proposal_hlcs:
+                continue
+
+            file_name = loc.get("file", "")
+            start_line = loc.get("line", -1)
+            if _is_new_format_proposal_present(
+                hlc, file_name, start_line,
+                old_meta, file_lines_cache
+            ):
+                continue
+
+            parsed.proposals.append(
+                ParsedProposal(
+                    hlc=hlc,
+                    kind="",
+                    action="accept",
+                    source_file=file_name,
                 )
+            )
 
     return parsed
+
+
+def _is_new_format_proposal_present(
+    hlc: str,
+    file_name: str,
+    start_line: int,
+    old_meta: TreeMeta,
+    file_lines_cache: dict[str, list[str]],
+) -> bool:
+    """Return True if the col-0 diff hunk for *hlc* is still in the file."""
+    for key, stored_hlc in old_meta.line_range_to_hlc.items():
+        if stored_hlc != hlc:
+            continue
+        try:
+            file_part, range_part = key.rsplit(":", 1)
+            range_start = int(range_part.split("-")[0])
+        except (ValueError, IndexError):
+            continue
+        if file_part != file_name:
+            continue
+        lines = file_lines_cache.get(file_name, [])
+        if range_start < len(lines):
+            line = lines[range_start]
+            return bool(line and line[0] in "+-~")
+        return False
+
+    return False

@@ -20,15 +20,18 @@ Your task: given one cluster of related code chunks, propose a flat list of feat
 2. slug — kebab-case verb-object, e.g. "parse-request-body", "cache-user-session".
    Must be globally unique: check the existing features list and do not reuse or paraphrase any slug there.
 
-3. intent — 1-2 sentences describing the behavioral purpose in user-facing or product terms.
+3. title — 2-5 word prose display name, e.g. "Request Body Parsing", "JWT Token Validation".
+   Must be title-cased. Different from the slug: the slug is the machine ID, the title is shown to users.
+
+4. intent — 1-2 sentences describing the behavioral purpose in user-facing or product terms.
    Write WHAT the feature does, not HOW it is implemented. No implementation details.
 
-4. candidate_chunk_keys — the symbol_paths from the cluster that should be bound to this feature.
+5. candidate_chunk_keys — the symbol_paths from the cluster that should be bound to this feature.
    A chunk may appear in at most one feature. Every chunk in the cluster should appear in exactly one feature.
 
-5. If two proposed features would cover the same behavioral territory, merge them into one.
+6. If two proposed features would cover the same behavioral territory, merge them into one.
 
-6. Do not reference variable names, class names, or file paths in the intent.
+7. Do not reference variable names, class names, or file paths in the intent.
 
 ## Response format
 
@@ -38,6 +41,7 @@ Respond with ONLY a <solution> block containing a JSON array. No prose before or
 [
   {
     "slug": "parse-request-body",
+    "title": "Request Body Parsing",
     "intent": "Parses an incoming HTTP request body from bytes into a typed Python object, handling encoding and validation.",
     "candidate_chunk_keys": ["api/parser.py::parse_body", "api/parser.py::validate_schema"]
   }

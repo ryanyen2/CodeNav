@@ -9,6 +9,7 @@ from codoc.cli.feature import feature_app
 from codoc.cli.gate_run import gate_run
 from codoc.cli.init import init
 from codoc.cli.projection import proj_app
+from codoc.cli.plan import plan_command
 from codoc.cli.reflect import reflect_command
 from codoc.cli.server import server
 from codoc.cli.tx import tx_app
@@ -49,6 +50,7 @@ app.command("status")(cmd_status)
 # Scaffolding and pipeline commands
 # ------------------------------------------------------------------
 app.command("init")(init)
+app.command("plan")(plan_command)
 app.command("reflect")(reflect_command)
 app.command("gate-run")(gate_run)
 app.command("server")(server)

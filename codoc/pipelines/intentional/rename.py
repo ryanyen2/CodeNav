@@ -112,9 +112,12 @@ def rename_feature(
     )
 
     # --- Apply mutation to feature store ---
+    # Always clear title so it falls back to the new slug on read.
+    # An explicit custom title can be set afterward with an AMEND operation.
     updated_feature = feature.model_copy(
         update={
             "slug": new_slug,
+            "title": "",
             "updated_at_hlc": hlc,
         }
     )

@@ -183,7 +183,7 @@ def test_parent_change_emits_restructure(tmp_path: Path) -> None:
 
 
 def test_proposal_deletion_emits_accept(tmp_path: Path) -> None:
-    """Insert a proposal, render, delete its line, expect AcceptOp."""
+    """Insert a proposal, render, delete its diff-hunk lines, expect AcceptOp."""
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
     [u] = _seed(codoc_dir, n_features=1)
@@ -211,21 +211,20 @@ def test_proposal_deletion_emits_accept(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Delete the proposal line.
+    # New format: proposals render as col-0 diff hunks ("~ ~ sym\n~ rationale\n").
+    # Deleting those lines signals acceptance. Truncate at the first col-0 marker.
     f = codoc_dir / "tree" / "feature-0.codoc"
-    new_lines = [
-        line for line in f.read_text().splitlines()
-        if "?reattribute" not in line.lower() and proposal_hlc.to_str() not in line
-    ]
-    # Also strip the proposal body line(s) — keep things simple by removing
-    # every non-feature line indented under a deleted proposal. For this
-    # test, since the proposal block is at the bottom, just truncate at
-    # the first "? reattribute".
     text = f.read_text()
-    idx = text.find("? reattribute")
-    if idx != -1:
-        text = text[:idx].rstrip() + "\n"
-    f.write_text(text)
+    lines = text.splitlines()
+    truncated = []
+    for line in lines:
+        if line and line[0] in "+-~" and len(line) > 1 and line[1] in " -~+":
+            break  # col-0 diff hunk — delete from here on
+        truncated.append(line)
+    # Remove trailing blank lines left by the separator before the proposal.
+    while truncated and not truncated[-1].strip():
+        truncated.pop()
+    f.write_text("\n".join(truncated) + "\n")
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
     store, _, _ = open_stores(str(codoc_dir))
@@ -260,9 +259,23 @@ def test_proposal_reject_marker_emits_reject(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Replace `? reattribute:` with `! reattribute:` to signal reject.
+    # New format: proposals render as col-0 diff hunks, not as "? kind: slug # ?hlc".
+    # To reject, replace the col-0 diff hunk block with a legacy "! kind: slug # ?hlc"
+    # reject directive, which the parser still recognises via _PROPOSAL_RE_LEGACY.
     f = codoc_dir / "tree" / "feature-0.codoc"
-    f.write_text(f.read_text().replace("? reattribute:", "! reattribute:"))
+    text = f.read_text()
+    lines = text.splitlines()
+    # Strip trailing col-0 diff hunk lines (the rendered proposal block).
+    clean_lines = []
+    for line in lines:
+        if line and line[0] in "+-~" and len(line) > 1 and line[1] in " -~+":
+            break
+        clean_lines.append(line)
+    while clean_lines and not clean_lines[-1].strip():
+        clean_lines.pop()
+    hlc_display = proposal_hlc.to_str()
+    clean_lines.append(f"! reattribute: x  [proposal]  # ?{hlc_display}")
+    f.write_text("\n".join(clean_lines) + "\n")
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
     store, _, _ = open_stores(str(codoc_dir))

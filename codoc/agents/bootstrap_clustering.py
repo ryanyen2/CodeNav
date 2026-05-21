@@ -41,6 +41,12 @@ class FeatureProposal:
     intent: str
     """1-2 sentences describing the feature's behavioral purpose."""
 
+    title: str = ""
+    """2-5 word prose display name, e.g. 'Request Body Parsing'."""
+
+    parent_title_hint: str = ""
+    """Chapter title hint for hierarchical clustering (empty = top-level)."""
+
     candidate_chunk_keys: list[str] = field(default_factory=list)
     """symbol_paths of chunks that should be bound to this feature."""
 
@@ -99,6 +105,8 @@ def propose_features_for_cluster(
             FeatureProposal(
                 slug=item["slug"],
                 intent=item["intent"],
+                title=item.get("title", ""),
+                parent_title_hint=item.get("parent_title_hint", ""),
                 candidate_chunk_keys=item.get("candidate_chunk_keys", []),
             )
         )

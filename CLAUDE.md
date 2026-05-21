@@ -16,21 +16,31 @@ pip install -e .
 
 # CLI — preferred top-level verbs
 codoc init                              # init .codoc/ and install git post-commit hook
-codoc bootstrap [--root-dir DIR]        # cluster codebase, propose feature cards
+codoc bootstrap [--hierarchical]        # cluster codebase, propose feature tree
 codoc bootstrap finish                  # mark bootstrap done
-codoc reflect [--from-ref REF]          # run reflective pipeline on latest commits
-codoc status                            # summary: features, pending proposals, last HLC
-codoc proposals                         # list pending proposals (slug + kind + HLC prefix)
+
+# Proposals
+codoc proposals                         # list pending proposals
 codoc accept <slug-or-hlc-prefix>       # accept a proposal by slug or HLC prefix
-codoc accept --all-pending              # batch-accept all pending proposals
+codoc accept --all                      # batch-accept all pending proposals
 codoc reject <slug-or-hlc-prefix>       # reject a proposal
-codoc reject --all-pending --yes        # batch-reject all (no confirm)
+codoc reject --all --yes                # batch-reject all (no confirm)
+
+# Top-down planning (Flow 1)
+codoc plan "<prompt>"                   # planning agent → propose tree changes
+
+# Code-driven updates (Flow 2)
+codoc reflect --file <path>             # on-save reflect (no git refs; can be repeated)
+codoc reflect [--from-ref REF]          # post-commit reflect via git refs
+
+# Browse
 codoc list                              # browse feature tree (Rich table)
 codoc show <slug-path>                  # show feature + state + bindings
 codoc search <term>                     # fuzzy search slug/intent
 codoc edit <slug-path> --intent "..."   # amend intent non-interactively
-codoc rename <slug-path> <new-slug>     # rename slug
+codoc rename <slug-path> <new-slug>     # rename slug (title resets to slug)
 codoc retire <slug-path>                # retire feature
+codoc status                            # summary: features, pending proposals, last HLC
 
 # Projection workflow
 codoc projection render                 # DB → .codoc/tree/ files
@@ -45,7 +55,7 @@ codoc server [--port 8001]              # start FastAPI server
 python3.11 -m pytest tests/
 ```
 
-> **Deprecated aliases (still work, emit a notice):** `codoc tx list`, `codoc tx accept HLC`, `codoc tx reject HLC`, `codoc feature show UUID`, `codoc feature amend UUID`, `codoc feature rename UUID NEW`, `codoc feature retire UUID`.
+> **Deprecated aliases (still work, print a notice):** `codoc tx list`, `codoc tx accept HLC`, `codoc tx reject HLC`, `codoc feature show UUID`, `codoc feature amend UUID`, `codoc feature rename UUID NEW`, `codoc feature retire UUID`. Use the slug-path commands above instead.
 
 ## Architecture
 
@@ -53,6 +63,8 @@ python3.11 -m pytest tests/
 
 CodeNav (old): code → LLM → tree → diff → operations. Tree is derived.
 codoc (new): tree is authored intent; code attribution is a secondary index. Features have stable UUIDs, prose, constraints (Phase 5), and many-to-many bindings to code chunks. The reflective pipeline observes commits and proposes attribution updates; the user curates.
+
+Two interaction flows: **Flow 1 (top-down)** — `codoc plan "<prompt>"` proposes semantic tree changes as diff hunks; accepted proposals carry a `coding_directive` for coding agents. **Flow 2 (bottom-up)** — `codoc reflect --file <path>` runs on save; fingerprint-only changes complete in < 200 ms; structural changes escalate to LLM (1–3 s).
 
 ### Package layout (`codoc/`)
 
@@ -63,12 +75,13 @@ codoc/
   core/crdt/      # pycrdt-backed CRDT shapes: AWMap, LWWRegister, ORSet
   lang/           # Tree-sitter LanguageAdapter protocol + python.py + typescript.py; get_adapter(), detect_language()
   storage/        # SQLiteStore (WAL), JSONLLog (audit), FaissIndex
+  agents/         # LLM dispatch: bootstrap_clustering, attribution, planning; base utilities (load_prompt, parse_solution)
   pipelines/
-    bootstrap/    # cluster.py → propose.py → runner.py (run_bootstrap, finish_bootstrap)
-    reflective/   # commit_diff → fingerprint_compare → escalate → propose → runner (run_reflect)
+    bootstrap/    # cluster.py (flat + hierarchical) → propose.py → runner.py (run_bootstrap --hierarchical)
+    reflective/   # commit_diff → fingerprint_compare → escalate → propose → runner (run_reflect, run_reflect_files)
     intentional/  # amend.py, rename.py, retire.py, runner.py (IntentionalRunner)
-  agents/         # LLM dispatch: bootstrap_clustering, attribution; base utilities (load_prompt, parse_solution)
-  prompts/        # LLM prompt templates: bootstrap_clustering.txt, attribution_judgment.txt
+    planning/     # runner.py (run_plan) — top-down planning from user prompt
+  prompts/        # LLM prompt templates: bootstrap_clustering.txt, attribution_judgment.txt, planning.txt
   api/            # FastAPI app (app.py + routes.py)
   cli/            # Typer CLI: main.py + init/bootstrap/reflect/tx/feature/gate_run/server
   config.py       # LLM + embedder config (env-driven: CODOC_PROVIDER, CODOC_MODEL, OPENAI_API_KEY, etc.)
@@ -76,7 +89,7 @@ codoc/
 
 ### Data model key types
 
-- **`Feature`**: `{uuid, slug, parent_uuid, intent, retired, created_at_hlc, updated_at_hlc}`. State computed on demand by `core.state_derivation`.
+- **`Feature`**: `{uuid, slug, title, parent_uuid, intent, retired, created_at_hlc, updated_at_hlc}`. `title` is the 2–5 word prose display name (falls back to slug if empty). State computed on demand by `core.state_derivation`.
 - **`Anchor`**: `{file, symbol_path?, ts_query?, occurrence_index}`. At least one of `symbol_path`/`ts_query` required. Symbol-path-first resolution; NO byte ranges stored.
 - **`Binding`**: `{uuid, feature_uuid, anchor, fingerprint, fingerprint_at_hlc, parent_symbol?}`.
 - **`Transaction`**: `{hlc, parent_hlcs, kind, payload, author, proposal, accepted_at, label}`. Append-only log; proposals pending user review have `proposal=True`.
@@ -116,7 +129,7 @@ Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and
 
 ### Phase plan
 
-- **Phase 1 (current)**: data model + core + storage + tree-sitter adapters (Python+TS) + bootstrap + reflective + intentional-minimal (AMEND/RENAME/RETIRE) + CLI + FastAPI.
+- **Phase 1 (current)**: data model + core + storage + tree-sitter adapters (Python+TS) + bootstrap (flat + hierarchical) + reflective (git + on-save) + intentional-minimal (AMEND/RENAME/RETIRE) + planning pipeline (codoc plan) + projection layer (render/sync/diff) + CLI + FastAPI.
 - **Phase 1.5**: VSCode webview in `codoc-vscode` repo (pending gate passing).
 - **Phase 2**: SPLIT/MERGE/RESTRUCTURE/REWIND + cascade engine + agent reconciliation.
 - **Phase 3**: BRANCH/MERGE_BRANCH + pycrdt merge + conflict resolution UI.

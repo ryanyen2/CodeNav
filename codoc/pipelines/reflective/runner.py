@@ -200,6 +200,207 @@ def run_reflect(
     }
 
 
+def _get_pending_plan_slugs(store) -> dict[str, str]:
+    """Return {slug: plan_session_id} for pending plan proposals."""
+    from codoc.model.transaction import TransactionKind
+    pending = store.list_transactions(proposal=True, limit=0)
+    result: dict[str, str] = {}
+    for tx in pending:
+        if tx.payload.get("source") != "plan":
+            continue
+        session_id = tx.payload.get("plan_session_id", "")
+        slug = tx.payload.get("slug", "")
+        if slug:
+            result[slug] = session_id
+    return result
+
+
+def _maybe_tag_plan_aligned(tx_summary: dict, store, pending_plan_slugs: dict) -> None:
+    """Tag a proposal summary as plan_aligned if it matches a pending plan op."""
+    slug = tx_summary.get("slug", "") or tx_summary.get("symbol_path", "")
+    if not slug:
+        return
+    # Check if any feature bound to this symbol has a pending plan op.
+    feature_uuid = tx_summary.get("feature_uuid", "")
+    if feature_uuid:
+        feature = store.get_feature(feature_uuid)
+        if feature and feature.slug in pending_plan_slugs:
+            tx_summary["plan_aligned"] = True
+            tx_summary["plan_session_id"] = pending_plan_slugs[feature.slug]
+
+
+def _get_changed_chunks_for_file(
+    root_dir: str,
+    file_path: str,
+    abs_path: str,
+    store,
+) -> list:
+    """Extract changed chunks for a single file by comparing fingerprints."""
+    try:
+        from codoc.lang import detect_language, get_adapter
+        from codoc.pipelines.reflective.commit_diff import extract_chunks_for_files
+        from codoc.pipelines.reflective.fingerprint_compare import compare_chunk_fingerprints
+
+        chunks_by_file = extract_chunks_for_files(root_dir=root_dir, file_paths=[file_path])
+
+        # Build language adapter cache.
+        language_adapters: dict = {}
+        for file in chunks_by_file:
+            lang = detect_language(file)
+            if lang and lang not in language_adapters:
+                try:
+                    language_adapters[lang] = get_adapter(lang)
+                except ValueError:
+                    pass
+
+        return compare_chunk_fingerprints(
+            chunks_by_file=chunks_by_file,
+            deleted_files=[],
+            store=store,
+            language_adapters=language_adapters,
+        )
+    except Exception:
+        return []
+
+
+def run_reflect_files(
+    root_dir: str,
+    codoc_dir: str,
+    file_paths: list[str],
+    node_id: str = "default",
+) -> dict:
+    """Incremental reflect for specific files (no git refs required).
+
+    Used by on-save hooks and the API for Flow 2 (bottom-up real-time reflection).
+    Skips the git diff step and processes the given files directly.
+
+    Args:
+        root_dir: Root directory of the codebase.
+        codoc_dir: Path to .codoc/ directory.
+        file_paths: List of repo-relative file paths to process.
+
+    Returns:
+        dict with processed_files, changed_chunks, proposals_emitted, proposals.
+    """
+    from codoc.pipelines.intentional.runner import open_stores
+    from codoc.projection.tree_codoc import write_tree
+
+    store, jsonl_log, tx_log = open_stores(codoc_dir)
+    result: dict = {
+        "processed_files": len(file_paths),
+        "changed_chunks": 0,
+        "skipped_unchanged": 0,
+        "evicted_directly": 0,
+        "escalated_to_llm": 0,
+        "proposals_emitted": 0,
+        "proposals": [],
+    }
+
+    try:
+        pending_plan_slugs = _get_pending_plan_slugs(store)
+
+        # Accumulate changes across all requested files.
+        all_changed: list = []
+        for file_path in file_paths:
+            abs_path = str(Path(root_dir) / file_path)
+            if not Path(abs_path).exists():
+                continue
+            try:
+                changed = _get_changed_chunks_for_file(
+                    root_dir=root_dir,
+                    file_path=file_path,
+                    abs_path=abs_path,
+                    store=store,
+                )
+                all_changed.extend(changed)
+            except Exception:
+                continue
+
+        result["changed_chunks"] = len(all_changed)
+
+        if all_changed:
+            # Re-use the per-change routing logic from run_reflect.
+            all_bindings = store.get_all_bindings()
+            evicted_directly = 0
+            escalated_to_llm_count = 0
+            proposals_emitted = 0
+            proposal_summaries: list[dict] = []
+
+            for change in all_changed:
+                if change.change_kind == "removed":
+                    if change.existing_binding_uuid is not None:
+                        tx = emit_evict_proposal(change, tx_log, author="reflective")
+                        evicted_directly += 1
+                        proposals_emitted += 1
+                        jsonl_log.append(tx)
+                        summary = {
+                            "hlc": tx.hlc.to_str(),
+                            "kind": tx.kind.value,
+                            "symbol_path": change.symbol_path,
+                        }
+                        _maybe_tag_plan_aligned(summary, store, pending_plan_slugs)
+                        proposal_summaries.append(summary)
+                    continue
+
+                if change.change_kind == "added" and change.existing_binding_uuid is None:
+                    if is_cheap_absorb(change, all_bindings):
+                        tx = _emit_cheap_absorb(change, all_bindings, tx_log, author="reflective")
+                        if tx is not None:
+                            proposals_emitted += 1
+                            jsonl_log.append(tx)
+                            summary = {
+                                "hlc": tx.hlc.to_str(),
+                                "kind": tx.kind.value,
+                                "symbol_path": change.symbol_path,
+                            }
+                            _maybe_tag_plan_aligned(summary, store, pending_plan_slugs)
+                            proposal_summaries.append(summary)
+                        continue
+
+                if not should_escalate(change, all_bindings):
+                    continue
+
+                escalated_to_llm_count += 1
+                tx = escalate_to_llm(
+                    change,
+                    store=store,
+                    tx_log=tx_log,
+                    repo_name="codebase",
+                    author="reflective",
+                )
+                if tx is not None:
+                    proposals_emitted += 1
+                    jsonl_log.append(tx)
+                    summary = {
+                        "hlc": tx.hlc.to_str(),
+                        "kind": tx.kind.value,
+                        "symbol_path": change.symbol_path,
+                    }
+                    _maybe_tag_plan_aligned(summary, store, pending_plan_slugs)
+                    proposal_summaries.append(summary)
+
+            result["skipped_unchanged"] = max(result["changed_chunks"] - sum(
+                1 for ch in all_changed if ch.change_kind in ("added", "modified")
+            ), 0)
+            result["evicted_directly"] = evicted_directly
+            result["escalated_to_llm"] = escalated_to_llm_count
+            result["proposals_emitted"] = proposals_emitted
+            result["proposals"] = proposal_summaries
+
+    finally:
+        store.close()
+
+    # Re-render .codoc files if any proposals were emitted.
+    if result["proposals_emitted"] > 0 or result["changed_chunks"] > 0:
+        store2, _, tx_log2 = open_stores(codoc_dir)
+        try:
+            write_tree(codoc_dir, store2, tx_log2)
+        finally:
+            store2.close()
+
+    return result
+
+
 def update_fingerprint_cache(
     store: SQLiteStore,
     chunks_by_file: dict,

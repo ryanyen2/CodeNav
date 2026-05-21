@@ -191,3 +191,64 @@ def cluster_chunks(
 
     # Return in deterministic label order; omit any empty clusters.
     return [clusters[label] for label in sorted(clusters) if clusters[label]]
+
+
+def cluster_hierarchical(
+    chunks: list[Chunk],
+    vectors: list[list[float]],
+    n_chapters: int = 8,
+    target_leaf_size: int = 8,
+) -> list[list[list[int]]]:
+    """Two-level hierarchical clustering: chapters → sections → chunk indices.
+
+    Outer pass: k-means with ``k = n_chapters`` → chapter clusters.
+    Inner pass: for each chapter cluster, sub-cluster with
+    ``k = max(1, len(chapter_indices) // target_leaf_size)``.
+
+    Returns
+    -------
+    list[list[list[int]]]
+        chapters → sections → chunk indices.
+        ``result[c][s]`` is a list of chunk indices in chapter *c*, section *s*.
+    """
+    n = len(chunks)
+    if n == 0:
+        return []
+
+    mat = np.array(vectors, dtype=np.float32)
+    d = mat.shape[1]
+
+    # Outer: chapter clusters.
+    k_chapters = min(n_chapters, n)
+    kmeans_outer = faiss.Kmeans(d, k_chapters, niter=20, verbose=False)
+    kmeans_outer.train(mat)
+    _, outer_labels = kmeans_outer.index.search(mat, 1)
+    outer_labels = outer_labels.flatten().tolist()
+
+    chapter_indices: dict[int, list[int]] = {}
+    for idx, label in enumerate(outer_labels):
+        chapter_indices.setdefault(label, []).append(idx)
+
+    result: list[list[list[int]]] = []
+    for chapter_label in sorted(chapter_indices):
+        ch_indices = chapter_indices[chapter_label]
+        k_sections = max(1, len(ch_indices) // target_leaf_size)
+        k_sections = min(k_sections, len(ch_indices))
+
+        if k_sections == 1:
+            result.append([ch_indices])
+            continue
+
+        ch_mat = np.array([vectors[i] for i in ch_indices], dtype=np.float32)
+        kmeans_inner = faiss.Kmeans(d, k_sections, niter=20, verbose=False)
+        kmeans_inner.train(ch_mat)
+        _, inner_labels = kmeans_inner.index.search(ch_mat, 1)
+        inner_labels = inner_labels.flatten().tolist()
+
+        sections: dict[int, list[int]] = {}
+        for local_idx, label in enumerate(inner_labels):
+            sections.setdefault(label, []).append(ch_indices[local_idx])
+
+        result.append([sections[l] for l in sorted(sections) if sections[l]])
+
+    return result

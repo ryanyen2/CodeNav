@@ -37,6 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_tx_kind ON transactions(kind);
 CREATE TABLE IF NOT EXISTS features (
     uuid TEXT PRIMARY KEY,
     slug TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
     parent_uuid TEXT,
     intent TEXT NOT NULL DEFAULT '',
     retired INTEGER NOT NULL DEFAULT 0,
@@ -88,6 +89,10 @@ CREATE TABLE IF NOT EXISTS chunk_fingerprints (
 );
 """
 
+_MIGRATIONS = [
+    "ALTER TABLE features ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+]
+
 
 def _tx_to_row(tx: Transaction) -> dict:
     return {
@@ -116,9 +121,12 @@ def _row_to_tx(row: sqlite3.Row) -> Transaction:
 
 
 def _feature_to_row(f: Feature) -> dict:
+    # Store "" when title mirrors the slug so slug renames propagate automatically.
+    stored_title = "" if f.title == f.slug else f.title
     return {
         "uuid": f.uuid,
         "slug": f.slug,
+        "title": stored_title,
         "parent_uuid": f.parent_uuid,
         "intent": f.intent,
         "retired": 1 if f.retired else 0,
@@ -132,6 +140,8 @@ def _row_to_feature(row: sqlite3.Row) -> Feature:
     raw["retired"] = bool(raw["retired"])
     raw["created_at_hlc"] = HLC.from_str(raw["created_at_hlc"])
     raw["updated_at_hlc"] = HLC.from_str(raw["updated_at_hlc"])
+    if not raw.get("title"):
+        raw["title"] = raw["slug"]
     return Feature.model_validate(raw)
 
 
@@ -230,6 +240,11 @@ class SQLiteStore:
             stmt = stmt.strip()
             if stmt:
                 self._conn.execute(stmt)
+        for migration in _MIGRATIONS:
+            try:
+                self._conn.execute(migration)
+            except sqlite3.OperationalError:
+                pass  # column already exists on existing DBs
         self._conn.commit()
 
     def close(self) -> None:
@@ -353,11 +368,12 @@ class SQLiteStore:
         self._db.execute(
             """
             INSERT INTO features
-                (uuid, slug, parent_uuid, intent, retired, created_at_hlc, updated_at_hlc)
+                (uuid, slug, title, parent_uuid, intent, retired, created_at_hlc, updated_at_hlc)
             VALUES
-                (:uuid, :slug, :parent_uuid, :intent, :retired, :created_at_hlc, :updated_at_hlc)
+                (:uuid, :slug, :title, :parent_uuid, :intent, :retired, :created_at_hlc, :updated_at_hlc)
             ON CONFLICT(uuid) DO UPDATE SET
                 slug           = excluded.slug,
+                title          = excluded.title,
                 parent_uuid    = excluded.parent_uuid,
                 intent         = excluded.intent,
                 retired        = excluded.retired,

@@ -345,14 +345,15 @@ def _print_proposals_table(txs, all_hlcs, format: str = "table") -> None:
         kind = _friendly_kind(tx.kind.value)
         payload = tx.payload
         slug = payload.get("slug") or payload.get("new_slug") or ""
-        # Fall back to feature_uuid prefix when no slug (e.g. REATTRIBUTE)
         if not slug:
             slug = payload.get("feature_uuid", "")[:12]
-        label = tx.label or ""
-        rows.append((slug, kind, hlc_prefix, label))
+        title = payload.get("title") or payload.get("new_title") or ""
+        display = f"{title}  ({slug})" if title and title != slug else slug
+        plan_tag = "plan" if payload.get("plan_session_id") else ""
+        rows.append((display, kind, hlc_prefix, plan_tag))
 
     if format == "tsv":
-        typer.echo("slug\tkind\thlc_prefix\tlabel")
+        typer.echo("feature\tkind\thlc_prefix\ttags")
         for row in rows:
             typer.echo("\t".join(row))
         return
@@ -364,23 +365,38 @@ def _print_proposals_table(txs, all_hlcs, format: str = "table") -> None:
 
         console = Console()
         table = Table(box=box.SIMPLE_HEAD, show_header=True)
-        table.add_column("Slug", no_wrap=True)
+        table.add_column("Feature", no_wrap=True)
         table.add_column("Kind", no_wrap=True, style="dim")
-        table.add_column("HLC prefix", style="dim", no_wrap=True)
-        table.add_column("Label", style="dim")
+        table.add_column("Ref", style="dim", no_wrap=True)
+        table.add_column("", style="dim")
         for row in rows:
             table.add_row(*row)
         console.print(table)
         console.print(
             f"[dim]{len(txs)} proposal(s). "
-            "Use [bold]`codoc accept <slug>`[/bold] or [bold]`codoc accept --all-pending`[/bold].[/dim]"
+            "Use [bold]`codoc accept <slug>`[/bold] or [bold]`codoc accept --all`[/bold].[/dim]"
         )
     except ImportError:
-        header = f"{'Slug':<45}  {'Kind':<22}  {'HLC prefix':<24}  Label"
+        header = f"{'Feature':<50}  {'Kind':<22}  {'Ref':<24}"
         typer.echo(header)
         typer.echo("-" * len(header))
         for row in rows:
-            typer.echo(f"{row[0]:<45}  {row[1]:<22}  {row[2]:<24}  {row[3]}")
+            typer.echo(f"{row[0]:<50}  {row[1]:<22}  {row[2]:<24}")
+
+
+def _maybe_print_plan_session_status(tx, store) -> None:
+    session_id = tx.payload.get("plan_session_id")
+    if not session_id:
+        return
+    all_txs = store.list_transactions(limit=0)
+    session_txs = [t for t in all_txs if t.payload.get("plan_session_id") == session_id]
+    pending = [t for t in session_txs if t.proposal]
+    accepted = [t for t in session_txs if not t.proposal]
+    short = session_id[:8]
+    if pending:
+        typer.echo(f"  Plan session {short}: {len(accepted)} accepted, {len(pending)} pending")
+    else:
+        typer.echo(f"  Plan session {short}: all {len(accepted)} accepted — plan complete")
 
 
 def _friendly_kind(kind: str) -> str:
@@ -410,14 +426,14 @@ def _friendly_kind(kind: str) -> str:
 
 
 def cmd_accept(
-    ref: str = typer.Argument(default="", help="Proposal slug, HLC prefix, feature slug-path, or 'all'"),
-    all_pending: bool = typer.Option(False, "--all-pending", help="Accept all pending proposals"),
-    label: Optional[str] = typer.Option(None, "--label", "-l", help="Label for the gate: accept-verbatim | accept-light-edit | accept-heavy-edit"),
+    ref: str = typer.Argument(default="", help="Proposal slug, HLC prefix, or feature slug-path"),
+    all_pending: bool = typer.Option(False, "--all", "--all-pending", help="Accept all pending proposals"),
+    label: Optional[str] = typer.Option(None, "--label", "-l", help="Validation gate label: accept-verbatim | accept-light-edit | accept-heavy-edit"),
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory"),
 ) -> None:
     """Accept a pending proposal and apply its changes."""
     if not ref and not all_pending:
-        typer.echo("Error: provide a proposal ref or use --all-pending.", err=True)
+        typer.echo("Error: provide a proposal ref or use --all.", err=True)
         raise typer.Exit(code=1)
 
     codoc_dir = require_codoc_dir(root_dir)
@@ -459,8 +475,11 @@ def _accept_one(hlc: str, store, jsonl_log, tx_log, codoc_dir: Path, label=None)
             else:
                 store.set_label(accepted.hlc.to_str(), label)
         jsonl_log.append(accepted)
+        slug = tx.payload.get("slug") or tx.payload.get("new_slug") or ""
         kind = _friendly_kind(tx.kind.value)
-        typer.echo(f"Accepted  {kind}  {tx.hlc.to_str()[:16]}…")
+        display = f"{slug}  [{kind}]" if slug else kind
+        typer.echo(f"Accepted  {display}")
+        _maybe_print_plan_session_status(tx, store)
     except Exception as exc:
         typer.echo(f"Error accepting proposal: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -483,8 +502,8 @@ def _accept_many(txs, store, jsonl_log, tx_log, codoc_dir: Path, label=None) -> 
 
 
 def cmd_reject(
-    ref: str = typer.Argument(default="", help="Proposal ref (HLC prefix) or 'all'"),
-    all_pending: bool = typer.Option(False, "--all-pending", help="Reject ALL pending proposals"),
+    ref: str = typer.Argument(default="", help="Proposal ref (HLC prefix) or feature slug-path"),
+    all_pending: bool = typer.Option(False, "--all", "--all-pending", help="Reject all pending proposals"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory"),
 ) -> None:
@@ -495,28 +514,29 @@ def cmd_reject(
         store, _, tx_log = _open_stores(codoc_dir)
         try:
             txs = store.list_transactions(proposal=True, limit=0)
+            if not txs:
+                typer.echo("No pending proposals.")
+                return
+            if not yes:
+                typer.confirm(f"Reject ALL {len(txs)} pending proposal(s)?", abort=True)
+            ok = 0
+            for tx in txs:
+                try:
+                    tx_log.reject_proposal(tx.hlc.to_str())
+                    slug = tx.payload.get("slug") or tx.payload.get("new_slug") or ""
+                    kind = _friendly_kind(tx.kind.value)
+                    display = f"{slug}  [{kind}]" if slug else kind
+                    typer.echo(f"Rejected  {display}")
+                    ok += 1
+                except Exception as exc:
+                    typer.echo(f"Error rejecting {tx.hlc.to_str()[:16]}: {exc}", err=True)
+            typer.echo(f"\nRejected {ok} proposal(s).")
         finally:
             store.close()
-        if not txs:
-            typer.echo("No pending proposals.")
-            return
-        if not yes:
-            typer.confirm(f"Reject ALL {len(txs)} pending proposal(s)?", abort=True)
-        _, _, tx_log2 = _open_stores(codoc_dir)
-        ok = 0
-        for tx in txs:
-            try:
-                tx_log2.reject_proposal(tx.hlc.to_str())
-                kind = _friendly_kind(tx.kind.value)
-                typer.echo(f"Rejected  {kind}  {tx.hlc.to_str()[:16]}…")
-                ok += 1
-            except Exception as exc:
-                typer.echo(f"Error rejecting {tx.hlc.to_str()[:16]}: {exc}", err=True)
-        typer.echo(f"\nRejected {ok} proposal(s).")
         return
 
     if not ref:
-        typer.echo("Error: provide a proposal ref or use --all-pending.", err=True)
+        typer.echo("Error: provide a proposal ref or use --all.", err=True)
         raise typer.Exit(code=1)
 
     tx, store = _resolve_proposal(ref, codoc_dir)
@@ -533,9 +553,13 @@ def cmd_reject(
                 abort=True,
             )
 
-        _, _, tx_log = _open_stores(codoc_dir)
+        from codoc.core.log import TransactionLog
+        tx_log = TransactionLog(store)
         tx_log.reject_proposal(tx.hlc.to_str())
-        typer.echo(f"Rejected  {kind}  {tx.hlc.to_str()[:16]}…")
+        slug = tx.payload.get("slug") or tx.payload.get("new_slug") or ""
+        display = f"{slug}  [{kind}]" if slug else kind
+        typer.echo(f"Rejected  {display}")
+        _maybe_print_plan_session_status(tx, store)
     finally:
         store.close()
 
@@ -759,5 +783,5 @@ def cmd_status(
         typer.echo(render_info)
     if pending:
         typer.echo(f"\nRun `codoc proposals` to review.")
-        typer.echo(f"  Accept all: `codoc accept --all-pending`")
-        typer.echo(f"  Reject all: `codoc reject --all-pending --yes`")
+        typer.echo(f"  Accept all: `codoc accept --all`")
+        typer.echo(f"  Reject all: `codoc reject --all --yes`")

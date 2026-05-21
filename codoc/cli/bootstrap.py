@@ -21,15 +21,16 @@ def bootstrap_default(
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
     repo_name: str = typer.Option("", "--repo-name", help="Human-readable repository name"),
     cluster_size: int = typer.Option(8, "--cluster-size", help="Target average chunks per cluster"),
+    hierarchical: bool = typer.Option(False, "--hierarchical", help="Use two-level chapter/section clustering"),
 ) -> None:
-    """Cluster the codebase and propose features for review.
+    """Cluster the codebase and propose a feature tree for review.
 
-    Running 'codoc bootstrap' is equivalent to 'codoc bootstrap run'.
+    Pass --hierarchical to produce a two-level chapter/section hierarchy instead of a flat list.
     """
     if ctx.invoked_subcommand is not None:
         return
 
-    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size)
+    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, hierarchical=hierarchical)
 
 
 @bootstrap_app.command("run")
@@ -37,12 +38,13 @@ def run_bootstrap_cmd(
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
     repo_name: str = typer.Option("", "--repo-name", help="Human-readable repository name"),
     cluster_size: int = typer.Option(8, "--cluster-size", help="Target average chunks per cluster"),
+    hierarchical: bool = typer.Option(False, "--hierarchical", help="Use two-level chapter/section clustering"),
 ) -> None:
-    """Cluster the codebase and propose features for review."""
-    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size)
+    """Cluster the codebase and propose a feature tree for review."""
+    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, hierarchical=hierarchical)
 
 
-def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int) -> None:
+def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int, hierarchical: bool = False) -> None:
     check_llm_config()
 
     root = Path(root_dir).resolve()
@@ -60,6 +62,7 @@ def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int) -> None:
             codoc_dir=str(codoc_dir),
             repo_name=inferred_name,
             target_cluster_size=cluster_size,
+            hierarchical=hierarchical,
         )
     except Exception as exc:
         typer.echo(f"Error: bootstrap failed: {exc}", err=True)
@@ -90,7 +93,7 @@ def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int) -> None:
         )
     else:
         typer.echo(
-            "\nReview with 'codoc tx list', then 'codoc bootstrap finish' when done."
+            "\nReview with 'codoc proposals', then 'codoc bootstrap finish' when done."
         )
 
 

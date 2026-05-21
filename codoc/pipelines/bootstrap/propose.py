@@ -70,6 +70,7 @@ def emit_introduce_proposal(
     tx_log: TransactionLog,
     language_adapters: dict,  # {language: adapter instance}
     author: str = "bootstrap",
+    parent_uuid: str | None = None,
 ) -> Transaction:
     """Create and append one INTRODUCE proposal transaction to *tx_log*.
 
@@ -139,9 +140,12 @@ def emit_introduce_proposal(
 
     payload = {
         "slug": proposal.slug,
+        "title": proposal.title or proposal.slug,
         "intent": proposal.intent,
         "candidate_bindings": candidate_bindings,
     }
+    if parent_uuid is not None:
+        payload["parent_uuid"] = parent_uuid
 
     hlc = HLC.now(node_id="bootstrap")
     tx = Transaction(
@@ -245,5 +249,132 @@ def propose_all(
             f"All {llm_error_count} cluster LLM calls failed. "
             "Check your LLM config: CODOC_PROVIDER, OPENAI_API_KEY, CODOC_BASE_URL."
         )
+
+    return all_transactions
+
+
+def propose_hierarchical(
+    hierarchical_clusters: list[list[list[int]]],
+    chunks: list[Chunk],
+    tx_log: TransactionLog,
+    existing_feature_summaries: list[dict],
+    repo_name: str = "codebase",
+    language_adapters: dict | None = None,
+) -> list[Transaction]:
+    """Run the hierarchical bootstrap: emit chapter proposals then leaf proposals.
+
+    Parameters
+    ----------
+    hierarchical_clusters:
+        Output of ``cluster_hierarchical()`` — chapters → sections → chunk indices.
+    chunks:
+        All extracted chunks.
+    tx_log:
+        Transaction log for proposal emission.
+    existing_feature_summaries:
+        Already-known features for LLM context.
+    repo_name:
+        Human-readable repository name.
+    language_adapters:
+        Mapping of ``language → LanguageAdapter`` for fingerprinting.
+
+    Returns
+    -------
+    list[Transaction]
+        All emitted INTRODUCE proposal transactions (chapters first, then leaves).
+    """
+    if language_adapters is None:
+        language_adapters = {}
+
+    running_summaries: list[dict] = list(existing_feature_summaries)
+    all_transactions: list[Transaction] = []
+
+    for chapter_idx, sections in enumerate(hierarchical_clusters):
+        # Flatten chapter to get representative chunks for chapter-level naming.
+        chapter_chunk_indices = [idx for section in sections for idx in section]
+        if not chapter_chunk_indices:
+            continue
+
+        chapter_input = ClusterInput(
+            chunks=[
+                {
+                    "symbol_path": chunks[i].symbol_path,
+                    "file": chunks[i].file,
+                    "source_snippet": chunks[i].source[:300],
+                }
+                for i in chapter_chunk_indices[:20]  # sample for LLM
+            ],
+            cluster_id=chapter_idx,
+        )
+
+        try:
+            chapter_proposals = propose_features_for_cluster(
+                cluster=chapter_input,
+                existing_feature_summaries=running_summaries,
+                repo_name=repo_name,
+            )
+        except Exception as exc:
+            print(
+                f"[bootstrap] chapter {chapter_idx}: LLM call failed — {exc}",
+                file=sys.stderr,
+            )
+            chapter_proposals = []
+
+        # Emit one chapter-level feature (first proposal from the LLM).
+        chapter_uuid: str | None = None
+        if chapter_proposals:
+            cp = chapter_proposals[0]
+            try:
+                tx = emit_introduce_proposal(
+                    proposal=cp, chunks=chunks, tx_log=tx_log,
+                    language_adapters=language_adapters,
+                    parent_uuid=None,
+                )
+                all_transactions.append(tx)
+                chapter_uuid = tx.hlc.to_str()  # placeholder; real UUID assigned on accept
+                running_summaries.append({"slug": cp.slug, "title": cp.title, "intent": cp.intent})
+            except Exception as exc:
+                print(f"[bootstrap] chapter {chapter_idx}: emit failed — {exc}", file=sys.stderr)
+
+        # Emit leaf proposals for each section, parented under the chapter.
+        for section_idx, section_indices in enumerate(sections):
+            if not section_indices:
+                continue
+            section_input = ClusterInput(
+                chunks=[
+                    {
+                        "symbol_path": chunks[i].symbol_path,
+                        "file": chunks[i].file,
+                        "source_snippet": chunks[i].source[:300],
+                    }
+                    for i in section_indices
+                ],
+                cluster_id=section_idx,
+            )
+
+            try:
+                leaf_proposals = propose_features_for_cluster(
+                    cluster=section_input,
+                    existing_feature_summaries=running_summaries,
+                    repo_name=repo_name,
+                )
+            except Exception as exc:
+                print(
+                    f"[bootstrap] chapter {chapter_idx} section {section_idx}: LLM failed — {exc}",
+                    file=sys.stderr,
+                )
+                continue
+
+            for proposal in leaf_proposals:
+                try:
+                    tx = emit_introduce_proposal(
+                        proposal=proposal, chunks=chunks, tx_log=tx_log,
+                        language_adapters=language_adapters,
+                        parent_uuid=chapter_uuid,
+                    )
+                    all_transactions.append(tx)
+                    running_summaries.append({"slug": proposal.slug, "title": proposal.title, "intent": proposal.intent})
+                except Exception as exc:
+                    print(f"[bootstrap] section emit failed — {exc}", file=sys.stderr)
 
     return all_transactions
