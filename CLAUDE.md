@@ -16,7 +16,7 @@ pip install -e .
 
 # CLI — preferred top-level verbs
 codoc init                              # init .codoc/ and install git post-commit hook
-codoc bootstrap [--hierarchical]        # cluster codebase, propose feature tree
+codoc bootstrap [--with-intent]         # cluster codebase, propose feature tree
 codoc bootstrap finish                  # mark bootstrap done
 
 # Proposals
@@ -72,15 +72,19 @@ Two interaction flows: **Flow 1 (top-down)** — `codoc plan "<prompt>"` propose
 codoc/
   model/          # Pydantic types: Feature, Anchor, Binding, Constraint, Transaction, Obligation, HLC, FeatureState
   core/           # Deterministic core: fingerprint, anchor_resolver, state_derivation, subtree_hash, binding_graph, log (TransactionLog)
-  core/crdt/      # pycrdt-backed CRDT shapes: AWMap, LWWRegister, ORSet
+                  #   reconciler.py    — central comparison engine: compare(binding, chunks_index) → Comparison
+                  #   tree_walk.py     — one tree-sitter walker emitting (tokens_hash, types_hash, minhash)
+                  #   lens.py          — get/put facade naming the projection layer as a bidirectional lens
+                  #   feature_view.py  — resolve_feature(store, feature) → FeatureView with live binding_resolutions
   lang/           # Tree-sitter LanguageAdapter protocol + python.py + typescript.py; get_adapter(), detect_language()
   storage/        # SQLiteStore (WAL), JSONLLog (audit), FaissIndex
   agents/         # LLM dispatch: bootstrap_clustering, attribution, planning; base utilities (load_prompt, parse_solution)
   pipelines/
-    bootstrap/    # cluster.py (flat + hierarchical) → propose.py → runner.py (run_bootstrap --hierarchical)
-    reflective/   # commit_diff → fingerprint_compare → escalate → propose → runner (run_reflect, run_reflect_files)
+    bootstrap/    # directory_grouping.py → propose.py → runner.py (run_bootstrap [--with-intent])
+    reflective/   # commit_diff → reconciler.compare → escalate → propose → runner (run_reflect, run_reflect_files)
     intentional/  # amend.py, rename.py, retire.py, runner.py (IntentionalRunner)
     planning/     # runner.py (run_plan) — top-down planning from user prompt
+    health/       # runner.py (reconcile_files, reconcile_all) — periodic binding-health sweep; no LLM calls
   prompts/        # LLM prompt templates: bootstrap_clustering.txt, attribution_judgment.txt, planning.txt
   api/            # FastAPI app (app.py + routes.py)
   cli/            # Typer CLI: main.py + init/bootstrap/reflect/tx/feature/gate_run/server
@@ -91,7 +95,7 @@ codoc/
 
 - **`Feature`**: `{uuid, slug, title, parent_uuid, intent, retired, created_at_hlc, updated_at_hlc}`. `title` is the 2–5 word prose display name (falls back to slug if empty). State computed on demand by `core.state_derivation`.
 - **`Anchor`**: `{file, symbol_path?, ts_query?, occurrence_index}`. At least one of `symbol_path`/`ts_query` required. Symbol-path-first resolution; NO byte ranges stored.
-- **`Binding`**: `{uuid, feature_uuid, anchor, fingerprint, fingerprint_at_hlc, parent_symbol?}`.
+- **`Binding`**: `{uuid, feature_uuid, anchor, fingerprint, fingerprint_at_hlc, parent_symbol?, types_hash?, minhash_sketch?}`. `types_hash` is a rename-invariant structural fingerprint (node-type sequence); `minhash_sketch` is a 16-byte MinHash for fast similarity queries. Both are computed by `core.tree_walk` and persisted to enable structural move detection.
 - **`Transaction`**: `{hlc, parent_hlcs, kind, payload, author, proposal, accepted_at, label}`. Append-only log; proposals pending user review have `proposal=True`.
 - **`HLC`**: Hybrid Logical Clock (`logical_time, wall_clock, node_id`). `HLC.to_str()` is lexicographically sortable.
 - **`FeatureState`**: `Stub | Drafting | Stable | Strained | Deprecated | Severed` — derived, never stored.
@@ -104,15 +108,17 @@ Phase 2+: `SPLIT MERGE RESTRUCTURE REWIND BRANCH MERGE_BRANCH INSTATE_CONSTRAINT
 
 ### Storage schema
 
-SQLite WAL at `.codoc/codoc.db`. Tables: `transactions features bindings constraints obligations chunk_fingerprints`. JSONL audit lane at `.codoc/log.jsonl` (rebuildable from SQLite).
+SQLite WAL at `.codoc/codoc.db`. Tables: `transactions features bindings constraints obligations chunk_fingerprints binding_resolutions`. JSONL audit lane at `.codoc/log.jsonl` (rebuildable from SQLite). `binding_resolutions` stores the latest comparison verdict per binding (still_aligned / moved / drifted / severed), populated by both the reflective pipeline and `codoc health`.
 
 ### Reflective pipeline
 
-Triggered by git post-commit hook (installed by `codoc init`). Flow: `git diff → tree-sitter chunk re-parse → fingerprint compare → cheap heuristics → LLM escalation (attribution agent) → proposal queue`. Scales with the change, not the codebase. Never re-indexes everything after bootstrap.
+Triggered by git post-commit hook (installed by `codoc init`). Flow: `git diff → tree-sitter chunk re-parse → reconciler.compare (per binding) → namespace-absorb gate → LLM escalation (attribution agent) → proposal queue`. `reconciler.compare` answers one question per binding: is the stored fingerprint still aligned with the current source? Verdict domain: `still_aligned | moved | drifted | severed | novel`. Scales with the change, not the codebase. Never re-indexes everything after bootstrap.
+
+The same `reconciler.compare` engine runs in the `health` pipeline for sweep-based drift detection between reflects, writing results to `binding_resolutions` so `FeatureState` stays meaningful everywhere.
 
 ### Validation gate
 
-Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and reflective replay on `test/requests` (Python) + `test/mosaic` (TypeScript). Pass thresholds: accept-verbatim ≥ 60% AND (verbatim + light-edit) ≥ 80% AND median light-edit ≤ 80 chars. If gate fails, the CRDT/cascade/branching architecture must be collapsed to a simpler explicit log.
+Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and reflective replay on `test/requests` (Python) + `test/mosaic` (TypeScript). Pass thresholds: accept-verbatim ≥ 60% AND (verbatim + light-edit) ≥ 80% AND median light-edit ≤ 80 chars. If gate fails, the cascade/branching architecture must be collapsed to a simpler explicit log.
 
 ### Environment variables
 
@@ -129,10 +135,10 @@ Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and
 
 ### Phase plan
 
-- **Phase 1 (current)**: data model + core + storage + tree-sitter adapters (Python+TS) + bootstrap (flat + hierarchical) + reflective (git + on-save) + intentional-minimal (AMEND/RENAME/RETIRE) + planning pipeline (codoc plan) + projection layer (render/sync/diff) + CLI + FastAPI.
+- **Phase 1 (current)**: data model + core + storage + tree-sitter adapters (Python+TS) + bootstrap (structural directory-grouping) + reflective (git + on-save, via central reconciler) + binding-health sweep + intentional-minimal (AMEND/RENAME/RETIRE) + planning pipeline (codoc plan) + projection layer (render/sync/diff) + CLI + FastAPI.
 - **Phase 1.5**: VSCode webview in `codoc-vscode` repo (pending gate passing).
 - **Phase 2**: SPLIT/MERGE/RESTRUCTURE/REWIND + cascade engine + agent reconciliation.
-- **Phase 3**: BRANCH/MERGE_BRANCH + pycrdt merge + conflict resolution UI.
+- **Phase 3**: BRANCH/MERGE_BRANCH + prose CRDT merge (pycrdt, scoped to AMEND × AMEND conflicts) + conflict resolution UI.
 - **Phase 4**: operational polish.
 - **Phase 5**: constraint subsystem (INSTATE_CONSTRAINT/LIFT_CONSTRAINT, inference).
 

@@ -44,7 +44,7 @@ codoc init                              # init .codoc/ + post-commit hook
 codoc status                            # features, pending proposals, last change
 
 # Bootstrap (first-time tree creation)
-codoc bootstrap [--hierarchical]        # cluster + propose feature tree
+codoc bootstrap [--with-intent]         # cluster + propose feature tree
 codoc bootstrap finish                  # switch to reflective mode
 
 # Proposals

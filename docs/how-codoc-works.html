@@ -358,6 +358,10 @@
                     <span class="hi">Projection render</span>
                     _index.codoc  +  tree.meta.json</div>
 
+<div class="callout good">
+  <strong>Central thesis — the binding-health loop:</strong> for every <code>Binding</code>, the system asks one question: <em>does the stored fingerprint still match current source?</em> The answer is a <code>Comparison</code> with verdict <code>still_aligned | moved | drifted | severed | novel</code>. Every pipeline is either a <em>producer</em> of comparisons (git-diff reflect, on-save reflect, health sweep, bootstrap) or a <em>consumer</em> (<code>apply.py</code> writes new fingerprints on accept; <code>state_derivation</code> reads the latest verdict per feature → <code>FeatureState</code>; the projection renders drift annotations). The lens (<code>_index.codoc</code> ↔ SQLite) is adjacent but contains no drift logic.
+</div>
+
 <h3 id="data-model">Data model</h3>
 
 <p>The five core types live in <code>codoc/model/</code>:</p>
@@ -408,15 +412,14 @@
 
 <p>The hardest problem in projection sync is <em>feature identity under rename</em>. When you rename a feature in <code>_index.codoc</code>, codoc must recognise that the renamed feature is the same DB record — not retire the old one and introduce a new one (which would destroy history).</p>
 
-<p>codoc solves this with a three-pass structural matching algorithm in <code>codoc/projection/tree_align.py</code>:</p>
+<p>codoc solves this with a two-tier resolution algorithm in <code>codoc/projection/parser.py</code> and <code>codoc/projection/tree_align.py</code>:</p>
 
 <ol>
-  <li><strong>Exact title match</strong> (case-insensitive) within the same parent. Fast O(N) scan.</li>
-  <li><strong>Slug match</strong> — the title normalised to lowercase-hyphen form. Catches "Checkpoint Persistence" → <code>checkpoint-persistence</code>.</li>
-  <li><strong>Sibling-index + Levenshtein guard</strong> — if no title or slug match, try the feature at the same <code>sibling_index</code> under the same parent. Accept only if the edit distance is ≤ 40% of the longer title. This is the critical case: even if both a parent and its child are renamed simultaneously, the parent is first identified by its structural slot (pass 3 on the parent), making the child's parent_uuid resolvable so the child can then also match.</li>
+  <li><strong>Sidecar lookup</strong> — the <code>tree.meta.json</code> sidecar carries <code>title_path_to_uuid</code> and <code>slug_path_to_uuid</code> maps written at the last render. If either map contains the feature, that UUID wins immediately — O(1), no heuristics.</li>
+  <li><strong>Structural recovery (last-resort)</strong> — when the sidecar misses (first sync after a rename, or after the sidecar is deleted), <code>tree_align.resolve_uuid_structural</code> runs one scoring pass over all siblings under the same parent. Each sibling is scored by <code>max(title_exact, slug_normalised_match, levenshtein_ratio)</code>; the best-scoring UUID is returned if the score is ≥ 0.6. If two siblings score equally the match is ambiguous and becomes an INTRODUCE proposal instead of a silent identity assignment.</li>
 </ol>
 
-<p>The sibling index is pre-built in O(N) once per sync cycle as a <code>parent_uuid → [children]</code> map, making each lookup O(1) rather than O(N).</p>
+<p>The sibling index is pre-built in O(N) once per sync cycle as a <code>parent_uuid → [children]</code> map, making the scoring pass O(children).</p>
 
 <p>Features that still fail to match become <strong>INTRODUCE proposals</strong> rather than fatal errors — you may have genuinely added a new feature, and codoc will ask you to confirm.</p>
 
@@ -437,9 +440,9 @@
 <p>The <strong><code>tree.meta.json</code> sidecar</strong> is written alongside <code>_index.codoc</code> on every render. It carries:</p>
 <ul>
   <li><code>uuid_to_location</code> — maps each feature UUID to its rendered line number plus structural fields (<code>depth</code>, <code>sibling_index</code>, <code>parent_uuid</code>, <code>title_norm_hash</code>) used by the identity algorithm on the next parse.</li>
+  <li><code>title_path_to_uuid</code> and <code>slug_path_to_uuid</code> — the primary identity lookups used by Tier 1 resolution (fast, no heuristics).</li>
   <li><code>line_range_to_hlc</code> — maps diff-hunk line ranges to proposal HLCs, so the extension can look up the HLC for any line in a proposal hunk without embedding HLC text in the file.</li>
   <li><code>feature_hashes</code> — <code>sha1(title + intent + parent_uuid + retired)</code> per feature, used for conflict detection.</li>
-  <li><code>render_token</code> — a random token stamped on each render so the extension can suppress the self-triggered save loop (server re-renders → FS event → would re-sync).</li>
 </ul>
 
 <h3 id="reflective">Reflective pipeline</h3>
@@ -450,21 +453,21 @@
 <span class="dim">On-save / post-commit</span>
        │
        ▼
-<span class="add">tree-sitter re-parse</span>      ← language adapter (Python / TypeScript)
+<span class="add">tree-sitter re-parse</span>      ← tree_walk(source, adapter) → tokens_hash, types_hash, minhash
        │
        ▼
-<span class="add">fingerprint compare</span>       ← sha1 of normalised chunk content
+<span class="add">reconciler.compare</span>        ← per binding: stored fingerprint vs current source
        │
-  ┌────┴────┐
-  │unchanged│             skip (< 200 ms on a large repo)
-  └─────────┘
-       │ changed
+  ┌────┴────────────────┐
+  │  still_aligned      │   skip — update fingerprint cache
+  └─────────────────────┘
+       │ not aligned
+  ┌────┴────────────────┐
+  │  moved              │   types_hash match → MOVED proposal (no LLM)
+  └─────────────────────┘
+       │ drifted / severed / novel
        ▼
-<span class="add">cheap heuristics</span>          ← parent_symbol match, path similarity
-       │
-  ┌────┴──────────┐
-  │high confidence│        emit REATTRIBUTE / EVICT proposal directly
-  └───────────────┘
+<span class="add">namespace-absorb gate</span>     ← symbol-prefix majority → ABSORB directly
        │ low confidence
        ▼
 <span class="add">LLM escalation</span>            ← attribution agent (1–3 s)
@@ -473,14 +476,14 @@
 <span class="add">proposal queue</span>            ← stored as pending transactions in SQLite
 </pre>
 
-<p>The key design: the pipeline scales with the <em>change</em>, not the codebase. After bootstrap, it never re-indexes everything. Fingerprint-only changes complete in under 200 ms; only structural changes escalate to the LLM.</p>
+<p>The key design: one comparison function (<code>reconciler.compare</code>) drives both the reflective pipeline and the periodic health sweep. The pipeline scales with the <em>change</em>, not the codebase. After bootstrap, it never re-indexes everything. Structurally unchanged chunks are detected without an LLM; only genuine semantic drift escalates.</p>
 
 <h3 id="sync-invariants">Sync invariants</h3>
 
 <p>The sync path enforces three invariants:</p>
 
 <ol>
-  <li><strong>Invariant 1 (identity preserved):</strong> A feature whose title changed in <code>_index.codoc</code> must map to the same UUID — not produce a RETIRE+INTRODUCE pair. Enforced by the three-pass structural matcher.</li>
+  <li><strong>Invariant 1 (identity preserved):</strong> A feature whose title changed in <code>_index.codoc</code> must map to the same UUID — not produce a RETIRE+INTRODUCE pair. Enforced by the two-tier sidecar + structural-recovery algorithm.</li>
   <li><strong>Invariant 2 (proposals round-trip):</strong> A proposal accepted or rejected in <code>_index.codoc</code> (by deleting or editing the diff hunk) must be applied atomically in the DB and the file re-rendered without the hunk. Enforced by the <code>AcceptOp</code>/<code>RejectOp</code> pathway in <code>sync.py</code>.</li>
   <li><strong>Invariant 3 (race-safe sync):</strong> If the store head HLC has advanced since the last render (another writer, e.g. the reflective pipeline, committed while the user was editing), user changes to <em>untouched</em> features apply cleanly. Changes to the same feature as the server produce an inline <code>&lt;!-- conflict --&gt;</code> annotation rather than silently overwriting.</li>
 </ol>
@@ -510,7 +513,9 @@
   </div>
 </div>
 
-<p>The <strong>echo-suppression</strong> loop is handled by comparing the file's <code>render_token</code> (from <code>tree.meta.json</code>) before and after a server-triggered re-render. If the incoming <code>onDidSaveTextDocument</code> event matches the last render token, the sync debounce is skipped, preventing the server → render → save → sync → render loop.</p>
+<div class="callout warn">
+  <strong>Echo suppression (Phase 1.5 TODO):</strong> The server → render → FS-event → sync → render loop is currently suppressed at the debouncer level (750 ms cooldown after a server-triggered render). A proper render-token echo guard (stamped in <code>tree.meta.json</code>, checked by the extension before dispatching a sync) is deferred to Phase 1.5 when the full FS-watcher lands.
+</div>
 
 <div class="callout">
   <strong>HLC lookup for new-format hunks:</strong> Old proposal lines embedded the HLC directly in the text (<code># ?HLC</code>). New-format diff hunks store only content. The extension resolves an HLC for any line by checking <code>tree.meta.json.line_range_to_hlc</code> — a map from <code>"_index.codoc:start-end"</code> ranges to HLC strings written by the renderer at render time.
