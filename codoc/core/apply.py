@@ -115,7 +115,22 @@ def apply_accepted_transaction(
             )
             store.upsert_feature(feature)
 
-            for cb in payload.get("candidate_bindings", []):
+            candidate_bindings = payload.get("candidate_bindings") or []
+            if not candidate_bindings:
+                # Reflective INTRODUCE proposals (single chunk created a new
+                # feature) carry symbol_path/file/current_fingerprint at the
+                # top level instead of a candidate_bindings list.  Synthesize
+                # one so the feature isn't born as a stub.
+                sp = payload.get("symbol_path")
+                file = payload.get("file")
+                fp = payload.get("current_fingerprint") or payload.get("fingerprint", "")
+                if sp and file:
+                    candidate_bindings = [{
+                        "anchor": {"file": file, "symbol_path": sp},
+                        "fingerprint": fp,
+                    }]
+
+            for cb in candidate_bindings:
                 anchor_data = cb.get("anchor", {})
                 try:
                     anchor = Anchor.model_validate(anchor_data)
@@ -142,15 +157,60 @@ def apply_accepted_transaction(
             return summary  # skip malformed anchors
 
         if not dry_run:
-            binding = Binding(
-                uuid=_new_uuid(),
-                feature_uuid=payload["feature_uuid"],
-                anchor=anchor,
-                fingerprint=payload.get("current_fingerprint") or payload.get("fingerprint", ""),
-                fingerprint_at_hlc=hlc,
-                parent_symbol=payload.get("parent_symbol"),
+            # ``target_feature_uuid`` from LLM path; ``feature_uuid`` from
+            # heuristic path.  Accept either.
+            feature_uuid = (
+                payload.get("feature_uuid")
+                or payload.get("target_feature_uuid")
+                or ""
             )
-            store.upsert_binding(binding)
+            if not feature_uuid:
+                return summary
+            new_fingerprint = (
+                payload.get("current_fingerprint")
+                or payload.get("fingerprint", "")
+            )
+            existing_binding_uuid = payload.get("binding_uuid")
+            existing = (
+                store.get_binding(existing_binding_uuid)
+                if existing_binding_uuid else None
+            )
+            if existing is not None and existing.feature_uuid == feature_uuid:
+                # ABSORB on a modified chunk that already belongs to this
+                # feature: refresh the fingerprint in place, don't duplicate.
+                refreshed = existing.model_copy(update={
+                    "fingerprint": new_fingerprint or existing.fingerprint,
+                    "fingerprint_at_hlc": hlc,
+                })
+                store.upsert_binding(refreshed)
+            else:
+                binding = Binding(
+                    uuid=_new_uuid(),
+                    feature_uuid=feature_uuid,
+                    anchor=anchor,
+                    fingerprint=new_fingerprint,
+                    fingerprint_at_hlc=hlc,
+                    parent_symbol=payload.get("parent_symbol"),
+                )
+                store.upsert_binding(binding)
+
+            # Many-to-many bindings: a chunk can belong to multiple features.
+            # When one ABSORB confirms the chunk's identity (new fingerprint),
+            # the *fingerprint* is a property of the chunk, not the attribution.
+            # Refresh every other binding pointing at the same (file, symbol_path)
+            # so sibling features don't linger as Strained on a now-confirmed chunk.
+            if new_fingerprint and anchor.symbol_path:
+                for b in store.get_all_bindings():
+                    if b.anchor.file != anchor.file:
+                        continue
+                    if b.anchor.symbol_path != anchor.symbol_path:
+                        continue
+                    if b.fingerprint == new_fingerprint:
+                        continue
+                    store.upsert_binding(b.model_copy(update={
+                        "fingerprint": new_fingerprint,
+                        "fingerprint_at_hlc": hlc,
+                    }))
 
     elif kind == TransactionKind.EVICT:
         binding_uuid = payload.get("binding_uuid")

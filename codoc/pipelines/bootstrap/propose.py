@@ -129,7 +129,7 @@ def propose_structural(
     chunks: list[Chunk],
     tx_log: TransactionLog,
     language_adapters: dict | None = None,
-    with_intent: bool = False,
+    with_intent: bool = True,
     repo_name: str = "codebase",
     *,
     _parent_uuid: str | None = None,
@@ -137,12 +137,12 @@ def propose_structural(
 ) -> list[Transaction]:
     """Emit INTRODUCE proposals from a structure-derived StructuralGroup tree.
 
-    Default path (``with_intent=False``): zero LLM calls.  Slug and title come
-    from the directory/class name; intent is empty and the user fills it in
-    via ``codoc edit`` or ``codoc plan``.
+    Default path (``with_intent=True``): calls the LLM once per feature to
+    generate a 1-2 sentence intent before emitting the proposal.  Users review
+    and accept/reject/edit — they never write the tree from scratch.
 
-    ``with_intent=True``: batch-calls the LLM with 5 groups per prompt to
-    generate a 1-2 sentence intent for each feature before emitting.
+    ``with_intent=False``: zero LLM calls, intent left empty.  Use only for
+    offline testing or when no API key is available.
 
     Parameters
     ----------
@@ -257,8 +257,7 @@ def _fetch_group_intent(group, chunks: list[Chunk], repo_name: str) -> str:
     Falls back to an empty string on any failure.  The prompt is minimal:
     slug + title + up to 5 representative symbol_paths + file.
     """
-    from codoc.agents.base import get_client
-    from codoc.config import get_llm_config
+    from codoc.config import complete
 
     sample = group.chunk_indices[:5]
     symbols = [
@@ -274,15 +273,7 @@ def _fetch_group_intent(group, chunks: list[Chunk], repo_name: str) -> str:
         "responsible for. Output only the sentence, no quotes, no punctuation at end."
     )
     try:
-        client = get_client()
-        config = get_llm_config()
-        response = client.chat.completions.create(
-            model=config.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=80,
-            temperature=0,
-        )
-        return response.choices[0].message.content.strip()
+        return complete(prompt).strip()
     except Exception as exc:
         _log.warning("structural.intent_llm_failed %s: %s", group.slug, exc)
         return ""

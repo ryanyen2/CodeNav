@@ -108,13 +108,6 @@ def repo_stage(root_dir: str | Path) -> RepoState:
         features = store.list_features()
         feature_count = len(features)
 
-        if feature_count == 0:
-            return RepoState(
-                Stage.NEEDS_BOOTSTRAP,
-                feature_count=0,
-                hooks_installed=hooks_installed,
-            )
-
         pending = store.list_transactions(proposal=True, limit=0)
         pending_count = len(pending)
 
@@ -124,12 +117,22 @@ def repo_stage(root_dir: str | Path) -> RepoState:
 
         bootstrap_done = (codoc_dir / "unattributed.json").exists()
 
+        # Pending proposals from a never-finished bootstrap → BOOTSTRAP_REVIEW
+        # even if no proposals have been accepted yet (feature_count == 0).
         if pending_count > 0 and not bootstrap_done:
             return RepoState(
                 Stage.BOOTSTRAP_REVIEW,
                 pending_count=pending_count,
                 feature_count=feature_count,
                 head_hlc=head_str,
+                hooks_installed=hooks_installed,
+            )
+
+        # No features and no pending proposals → bootstrap has never run.
+        if feature_count == 0:
+            return RepoState(
+                Stage.NEEDS_BOOTSTRAP,
+                feature_count=0,
                 hooks_installed=hooks_installed,
             )
 

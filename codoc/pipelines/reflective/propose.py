@@ -209,6 +209,8 @@ def escalate_to_llm(
     payload.setdefault("change_kind", change.change_kind)
     if change.existing_binding_uuid is not None:
         payload.setdefault("binding_uuid", change.existing_binding_uuid)
+    if change.current_fingerprint is not None:
+        payload.setdefault("current_fingerprint", change.current_fingerprint)
 
     tx = Transaction(
         hlc=hlc,

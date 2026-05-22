@@ -143,7 +143,15 @@ def diff_tree(parsed: ParsedTree, store: SQLiteStore) -> tuple[list[IntentOp], l
             continue
 
         # Slug differs?
-        if pf.slug != existing.slug:
+        # The renderer prints `feature.title or feature.slug` as the displayed
+        # name; the parser feeds that displayed name back in as `pf.slug` since
+        # the tree format doesn't carry the underlying slug.  Treat a match
+        # against the stored *title* as "no rename" so a clean round-trip is
+        # a no-op even when title != slug (common after bootstrap).
+        display_matches_title = (
+            existing.title and pf.slug == existing.title
+        )
+        if pf.slug != existing.slug and not display_matches_title:
             rename_ops.append(RenameOp(uuid=uuid, new_slug=pf.slug))
 
         # Intent differs? Compare normalized whitespace; skip if both empty.

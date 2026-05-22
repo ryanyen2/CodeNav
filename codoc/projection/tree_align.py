@@ -136,7 +136,9 @@ def resolve_uuid_structural(
     else:
         siblings = _get_old_siblings(parent_uuid, old_meta)
     if not siblings:
-        return None
+        # The new parent had no children in the previous render — the feature
+        # may have moved here from somewhere else.  Try cross-tree matching.
+        return _resolve_uuid_cross_tree(title, old_meta)
 
     title_stripped = title.strip().lower()
     title_as_slug = _title_to_slug(title)
@@ -172,7 +174,12 @@ def resolve_uuid_structural(
                 scored.append((sim, uuid))
 
     if not scored:
-        return None
+        # Fallback: feature may have been moved to a new parent.  Scan ALL
+        # features in old_meta for a unique exact-title match across the tree.
+        # Only return a hit if exactly one feature in the old tree had that
+        # title — otherwise the move is ambiguous and we fall through to
+        # INTRODUCE+RETIRE to be safe.
+        return _resolve_uuid_cross_tree(title, old_meta)
 
     # Sort by score descending.
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -184,6 +191,28 @@ def resolve_uuid_structural(
         return None
 
     return best_uuid
+
+
+def _resolve_uuid_cross_tree(title: str, old_meta: "TreeMeta") -> str | None:
+    """Last-resort: globally unique title match across the previous tree.
+
+    Used when a feature moved between parents, so the same-parent resolver
+    can't find it.  Title matching is case-insensitive after stripping.
+    Returns None when there are zero or multiple matches (ambiguous).
+    """
+    title_stripped = title.strip().lower()
+    title_as_slug = _title_to_slug(title)
+    matches: list[str] = []
+    for uuid, loc in old_meta.uuid_to_location.items():
+        if loc.get("kind") != "feature":
+            continue
+        stored_title = loc.get("title", "").strip().lower()
+        stored_slug = loc.get("slug", "")
+        if stored_title == title_stripped or stored_slug == title_as_slug:
+            matches.append(uuid)
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 # ---------------------------------------------------------------------------

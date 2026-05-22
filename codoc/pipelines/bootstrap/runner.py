@@ -1,16 +1,20 @@
 """
 codoc.pipelines.bootstrap.runner — top-level bootstrap pipeline orchestrator.
 
-Runs the structural bootstrap pipeline on a fresh codebase (no features yet):
+Runs the bootstrap pipeline on a fresh codebase (no features yet):
 
   1. Extract all chunks from the repo via language adapters.
   2. Group chunks by directory + class-prefix hierarchy.
-  3. Emit INTRODUCE proposals (zero LLM calls by default).
-  4. Optionally call LLM once per feature to generate intent text (--with-intent).
+  3. Call LLM once per feature to generate intent text (default).
+  4. Emit INTRODUCE proposals for the user to review.
 
-After the user reviews proposals (accept / edit / reject via CLI or API), they
-call ``finish_bootstrap()`` to sweep unattributed chunks into the
-``unattributed_intentional`` registry and switch the system to reflective mode.
+Users never write the tree from scratch — the LLM proposes an initial tree and
+the user curates it (accept / edit / reject).  Pass ``with_intent=False`` only
+for offline testing when no API key is available.
+
+After the user reviews proposals, they call ``finish_bootstrap()`` to sweep
+unattributed chunks into the ``unattributed_intentional`` registry and switch
+the system to reflective mode.
 """
 
 from __future__ import annotations
@@ -120,17 +124,17 @@ def run_bootstrap(
     codoc_dir: str,
     repo_name: str = "codebase",
     node_id: str = "default",
-    with_intent: bool = False,
+    with_intent: bool = True,
     reset: bool = False,
 ) -> dict:
-    """Bootstrap by reading directory/class structure — zero LLM calls by default.
+    """Bootstrap by reading directory/class structure, then calling LLM to generate intent.
 
     Groups chunks by directory + class-prefix hierarchy to build a structural
-    feature tree without LLM calls. Intent text is empty by default — the user
-    fills it in via ``codoc edit`` or ``codoc plan``. Pass ``with_intent=True``
-    to batch-call the LLM (one call per feature) and generate intent text up front.
+    feature tree, then calls the LLM once per feature to generate intent text.
+    The user reviews the proposals (accept/reject/edit) — they never write the
+    tree from scratch.  Pass ``with_intent=False`` only for offline testing.
 
-    Cost: 0 API calls by default. O(features) calls with ``--with-intent``.
+    Cost: O(features) LLM calls by default. 0 API calls with ``with_intent=False``.
 
     Parameters
     ----------

@@ -117,13 +117,13 @@ def build_structural_tree(
                 by_file_toplevel[chunks[i].file].append(i)
 
         # Class-scoped groups.
+        # Slugs are *local* names; the slug-path is derived by walking parents.
         for class_name in sorted(by_class):
             c_indices = by_class[class_name]
             if merge_small_files and len(c_indices) < min_leaf_size:
-                # Too small — keep in parent's chunk_indices but don't recurse.
                 continue
             dir_group.children.append(StructuralGroup(
-                slug=f"{dir_slug}/{_slugify(class_name)}",
+                slug=_slugify(class_name),
                 title=_human_title(class_name),
                 chunk_indices=c_indices,
                 level=2,
@@ -133,11 +133,10 @@ def build_structural_tree(
         for file_path in sorted(by_file_toplevel):
             f_indices = by_file_toplevel[file_path]
             if merge_small_files and len(f_indices) <= 1:
-                # Single-chunk files fold into parent.
                 continue
             file_stem = Path(file_path).stem
             dir_group.children.append(StructuralGroup(
-                slug=f"{dir_slug}/{_slugify(file_stem)}",
+                slug=_slugify(file_stem),
                 title=_human_title(file_stem),
                 chunk_indices=f_indices,
                 level=3,

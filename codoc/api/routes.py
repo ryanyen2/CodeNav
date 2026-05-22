@@ -822,6 +822,7 @@ async def sync_repo(body: dict) -> dict:
     result = dispatch(
         root_dir,
         accept_all=body.get("accept_all", False),
+        no_intent=body.get("no_intent", False),
         prune_code=body.get("prune_code", False),
         from_ref=body.get("from_ref", "HEAD~1"),
         to_ref=body.get("to_ref", "HEAD"),

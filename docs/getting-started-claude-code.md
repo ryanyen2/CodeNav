@@ -27,7 +27,7 @@ export OPENAI_API_KEY=sk-...
 ```bash
 git clone <your-fork-or-this-repo>
 cd CodeNav
-pip install -e .
+uv pip install -e .
 ```
 
 Verify:

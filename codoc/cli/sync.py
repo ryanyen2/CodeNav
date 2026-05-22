@@ -11,6 +11,7 @@ import typer
 def sync_command(
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-accept all pending proposals"),
+    no_intent: bool = typer.Option(False, "--no-intent", help="Skip LLM intent generation during bootstrap (offline/testing only)"),
     from_ref: str = typer.Option("HEAD~1", "--from-ref", help="Git ref range start (for reflect)"),
     to_ref: str = typer.Option("HEAD", "--to-ref", help="Git ref range end (for reflect)"),
     post_commit: bool = typer.Option(False, "--post-commit", hidden=True, help="Internal: post-commit hook mode"),
@@ -37,6 +38,7 @@ def sync_command(
         result = dispatch(
             root,
             accept_all=yes,
+            no_intent=no_intent,
             from_ref=from_ref,
             to_ref=to_ref,
             post_commit=post_commit,
@@ -58,12 +60,15 @@ def sync_command(
             f"\ncodoc: {pending} proposal(s) pending — "
             "run `codoc proposals` to review or re-run `codoc sync --yes` to accept all"
         )
-    elif after == "needs-bootstrap" and not result.actions:
+    elif after == "needs-bootstrap":
         typer.echo("codoc: ready to bootstrap — set OPENAI_API_KEY and re-run `codoc sync`")
-    elif after in ("clean", "stale-render") and not result.actions:
-        typer.echo(f"codoc: {features} features — nothing to do")
+    elif after == "stale-render" and not result.actions:
+        typer.echo(f"codoc: {features} features — render is stale, re-run `codoc sync`")
     elif after == "clean":
-        typer.echo(f"\ncodoc: {features} features — tree is in sync")
+        if result.actions:
+            typer.echo(f"\ncodoc: {features} features — tree is in sync")
+        else:
+            typer.echo(f"codoc: {features} features — nothing to do")
 
 
 def _write_snapshot_pending(root: Path) -> None:
