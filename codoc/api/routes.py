@@ -227,9 +227,15 @@ def _open_store(codoc_dir: str) -> SQLiteStore:
 
 def _feature_to_response(feature: Feature, store: SQLiteStore) -> FeatureResponse:
     bindings = store.list_bindings(feature.uuid)
-    # Compute state with empty resolutions — conservative, treats unknowns as
-    # unresolved (SEVERED if zero bindings resolve, DRAFTING otherwise).
-    resolutions: list[BindingResolution] = []
+    raw_resolutions = store.get_latest_resolutions_for_feature(feature.uuid)
+    resolutions = [
+        BindingResolution(
+            binding_uuid=r["binding_uuid"],
+            resolved=bool(r["resolved"]),
+            fingerprint_matches=bool(r["fingerprint_matches"]),
+        )
+        for r in raw_resolutions
+    ]
     obligations = store.list_obligations(feature_uuid=feature.uuid, status="pending")
     state = compute_feature_state(feature, bindings, resolutions, obligations)
     return FeatureResponse(

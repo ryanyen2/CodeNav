@@ -153,13 +153,20 @@ def test_conflict_when_server_amends_after_render(tmp_path: Path) -> None:
     # Now sync: store head has advanced past base_hlc; same feature was amended on both sides.
     result = sync_from_dir(str(codoc_dir))
 
-    # The conflict should be detected.
+    # The conflict should be detected and reported in errors.
     conflict_errors = [e for e in result.errors if e.kind == "conflict"]
     assert len(conflict_errors) == 1, (
         f"Expected 1 conflict error, got {len(conflict_errors)}. "
         f"All errors: {result.errors}, applied: {result.applied}"
     )
 
-    # Verify the conflict annotation was injected into the buffer.
+    # User's edit should still be applied (user wins policy — no silent discard).
+    assert any("AMEND" in a for a in result.applied), (
+        f"Expected user amend to be applied; applied={result.applied}"
+    )
+
+    # The buffer should contain the user's edited intent, not the server's.
     index_content = (codoc_dir / "tree" / "_index.codoc").read_text()
-    assert "conflict" in index_content.lower()
+    assert "user-side edit" in index_content.lower(), (
+        f"Expected user's edit in buffer; content={index_content!r}"
+    )

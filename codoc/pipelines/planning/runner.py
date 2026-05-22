@@ -113,7 +113,7 @@ def run_plan(
                         payload={
                             "feature_uuid": feature_uuid,
                             "old_slug": op.slug,
-                            "new_slug": op.slug,
+                            "new_slug": getattr(op, "new_slug", op.slug) or op.slug,
                             "new_title": op.title,
                             "coding_directive": op.coding_directive,
                             "rationale": op.rationale,

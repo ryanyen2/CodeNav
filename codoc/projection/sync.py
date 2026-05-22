@@ -142,22 +142,25 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
         for op in ops:
             try:
                 if isinstance(op, AmendOp):
-                    # Invariant 3: if store is stale, check whether the server also
-                    # amended this same feature since base_hlc.  If so, mark conflict.
+                    # Invariant 3: if store is stale and the server also amended this
+                    # feature since base_hlc, record a conflict warning — but still
+                    # apply the user's edit (explicit user intent takes precedence over
+                    # a background server change).  The conflict is non-fatal: both
+                    # edits land in the transaction log; the server's version is visible
+                    # via `codoc show <slug>` history.
                     if stale and _server_amended_since(op.uuid, base_hlc, runner._open_store):
                         conflict_uuids.add(op.uuid)
                         runtime_errors.append(
                             DiffError(
                                 kind="conflict",
                                 message=(
-                                    f"AMEND {op.uuid[:8]}: both you and the server edited "
-                                    "this feature since last render — annotated in buffer"
+                                    f"AMEND {op.uuid[:8]}: server also edited this feature "
+                                    "since last render — your edit was applied (user wins)"
                                 ),
                             )
                         )
-                    else:
-                        runner.amend(op.uuid, op.new_intent)
-                        applied.append(_describe_op(op))
+                    runner.amend(op.uuid, op.new_intent)
+                    applied.append(_describe_op(op))
                 elif isinstance(op, RenameOp):
                     runner.rename(op.uuid, op.new_slug)
                     applied.append(_describe_op(op))
@@ -192,15 +195,11 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
     finally:
         store2.close()
 
-    # Inject inline conflict annotations for features where both sides changed.
-    if conflict_uuids:
-        _inject_conflict_annotations(codoc_dir, conflict_uuids, old_meta)
-
     status = "ok"
     if runtime_errors:
         conflict_only = all(e.kind == "conflict" for e in runtime_errors)
         if conflict_only:
-            status = "ok"  # conflicts are non-fatal; annotated inline
+            status = "ok"  # conflicts are non-fatal; user edit was applied
         else:
             status = "partial" if applied else "parse_error"
     return SyncResult(

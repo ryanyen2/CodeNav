@@ -175,6 +175,9 @@ def _parse_one_file(
         stripped = line.strip()
 
         if not stripped:
+            # Inside a feature block, blank lines are paragraph separators.
+            if cur_feature is not None:
+                cur_intent_lines.append("")
             continue
 
         if _HEADER_RE.match(stripped) or _strip_comment_only_line(line):

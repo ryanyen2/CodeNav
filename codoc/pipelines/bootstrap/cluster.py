@@ -60,19 +60,29 @@ def extract_all_chunks(
 ) -> list[Chunk]:
     """Walk *root_dir*, detect language for each file, and extract chunks.
 
+    Uses Phase A's :class:`~codoc.core.ignore.IgnoreRules` (pathspec-based
+    .gitignore / .codocignore / linguist markers / size cap) as the primary
+    filter.  The legacy *excluded_dirs* parameter is still accepted but
+    superseded by IgnoreRules when available.
+
     Parameters
     ----------
     root_dir:
         Absolute or relative path to the repository root.
     excluded_dirs:
-        Additional directory names (not full paths) to skip. Combined with the
-        default exclusion set. When *None* only the defaults apply.
+        Additional directory names to skip (merged into legacy fallback set).
 
     Returns
     -------
     list[Chunk]
         All chunks extracted from supported files, in walk order.
     """
+    try:
+        from codoc.core.ignore import IgnoreRules
+        ignore: "IgnoreRules | None" = IgnoreRules.for_root(root_dir)
+    except Exception:
+        ignore = None
+
     excluded: frozenset[str] = _DEFAULT_EXCLUDED_DIRS
     if excluded_dirs:
         excluded = excluded | frozenset(excluded_dirs)
@@ -81,11 +91,29 @@ def extract_all_chunks(
     chunks: list[Chunk] = []
 
     for dirpath, dirnames, filenames in os.walk(root):
-        # Prune excluded directories in-place so os.walk does not descend.
-        dirnames[:] = [d for d in dirnames if d not in excluded]
+        if ignore is not None:
+            # Prune directories that IgnoreRules would skip.
+            kept: list[str] = []
+            for d in dirnames:
+                ok, _ = ignore.should_index(str(Path(dirpath) / d))
+                if ok:
+                    kept.append(d)
+            dirnames[:] = kept
+        else:
+            dirnames[:] = [d for d in dirnames if d not in excluded]
 
         for filename in filenames:
             full_path = Path(dirpath) / filename
+            try:
+                rel_path = full_path.relative_to(root).as_posix()
+            except ValueError:
+                rel_path = str(full_path)
+
+            if ignore is not None:
+                ok, _ = ignore.should_index(str(full_path))
+                if not ok:
+                    continue
+
             language = detect_language(str(full_path))
             if language is None:
                 continue
@@ -100,16 +128,9 @@ def extract_all_chunks(
             except OSError:
                 continue
 
-            # Use repo-relative posix path so chunk.file is stable across machines.
-            try:
-                rel_path = full_path.relative_to(root).as_posix()
-            except ValueError:
-                rel_path = str(full_path)
-
             try:
                 file_chunks = adapter.extract_chunks(rel_path, source)
             except Exception:
-                # Silently skip files that the adapter cannot parse.
                 continue
 
             chunks.extend(file_chunks)

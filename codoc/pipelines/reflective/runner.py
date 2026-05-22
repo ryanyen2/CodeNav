@@ -18,6 +18,7 @@ from codoc.pipelines.reflective.commit_diff import (
     get_changed_files,
     extract_chunks_for_files,
     get_file_source,
+    get_file_source_at_ref,
 )
 from codoc.pipelines.reflective.fingerprint_compare import (
     compare_chunk_fingerprints,
@@ -121,28 +122,57 @@ def run_reflect(
             1 for ch in changes if ch.change_kind in ("added", "modified")
         )
 
-        # --- 4. Route each change through heuristics / LLM ---
+        # --- 4. Move detection pre-pass (RefDiff-2 style) ---
+        old_sources = _get_old_chunk_sources(root_dir, changes, from_ref, language_adapters)
+        move_matches, matched_old_keys, matched_new_keys = _run_move_detection(
+            changes, old_sources, language_adapters
+        )
+        added_changes_by_key: dict[tuple[str, str], ChunkChange] = {
+            (ch.file, ch.symbol_path): ch
+            for ch in changes if ch.change_kind == "added"
+        }
+
+        # --- 5. Route each change through heuristics / LLM ---
         evicted_directly = 0
         escalated_to_llm_count = 0
         proposals_emitted = 0
         proposal_summaries: list[dict] = []
 
         for change in changes:
+            key = (change.file, change.symbol_path)
+
             if change.change_kind == "removed":
-                if change.existing_binding_uuid is not None:
+                if key in matched_old_keys:
+                    # Move detected: emit MOVED proposal instead of EVICT.
+                    match = move_matches[key]
+                    new_ch = added_changes_by_key.get((match.new_file, match.new_symbol_path))
+                    new_fp = new_ch.current_fingerprint if new_ch else None
+                    tx = _emit_moved_proposal(change, match, new_fp, tx_log, author="reflective")
+                    proposals_emitted += 1
+                    jsonl_log.append(tx)
+                    proposal_summaries.append({
+                        "hlc": tx.hlc.to_str(),
+                        "kind": tx.kind.value,
+                        "symbol_path": change.symbol_path,
+                        "file": change.file,
+                    })
+                elif change.existing_binding_uuid is not None:
                     # Emit EVICT proposal directly — no LLM needed.
                     tx = emit_evict_proposal(change, tx_log, author="reflective")
                     evicted_directly += 1
                     proposals_emitted += 1
                     jsonl_log.append(tx)
-                    proposal_summaries.append(
-                        {
-                            "hlc": tx.hlc.to_str(),
-                            "kind": tx.kind.value,
-                            "symbol_path": change.symbol_path,
-                        }
-                    )
+                    proposal_summaries.append({
+                        "hlc": tx.hlc.to_str(),
+                        "kind": tx.kind.value,
+                        "symbol_path": change.symbol_path,
+                        "file": change.file,
+                    })
                 # else: unattributed removal → silent no-op.
+                continue
+
+            if key in matched_new_keys:
+                # This added chunk is the destination of a MOVED proposal.
                 continue
 
             # Check cheap absorb shortcut for "added" + unattributed chunks.
@@ -152,13 +182,12 @@ def run_reflect(
                     if tx is not None:
                         proposals_emitted += 1
                         jsonl_log.append(tx)
-                        proposal_summaries.append(
-                            {
-                                "hlc": tx.hlc.to_str(),
-                                "kind": tx.kind.value,
-                                "symbol_path": change.symbol_path,
-                            }
-                        )
+                        proposal_summaries.append({
+                            "hlc": tx.hlc.to_str(),
+                            "kind": tx.kind.value,
+                            "symbol_path": change.symbol_path,
+                            "file": change.file,
+                        })
                     continue
 
             if not should_escalate(change, all_bindings):
@@ -177,17 +206,24 @@ def run_reflect(
             if tx is not None:
                 proposals_emitted += 1
                 jsonl_log.append(tx)
-                proposal_summaries.append(
-                    {
-                        "hlc": tx.hlc.to_str(),
-                        "kind": tx.kind.value,
-                        "symbol_path": change.symbol_path,
-                    }
-                )
+                proposal_summaries.append({
+                    "hlc": tx.hlc.to_str(),
+                    "kind": tx.kind.value,
+                    "symbol_path": change.symbol_path,
+                    "file": change.file,
+                })
 
         # --- 5. Resolve the current commit hash and update fingerprint cache ---
+        # Gate: skip cache update for any chunk whose proposal is still pending.
+        # This ensures a rejected/failed proposal isn't silently "accepted" by the
+        # cache — next reflect will re-detect the same change.
+        pending_keys: set[str] = {
+            _chunk_cache_key(s.get("file", ""), s.get("symbol_path"))
+            for s in proposal_summaries
+        }
         commit_sha = _get_current_commit(root_dir)
-        update_fingerprint_cache(store, chunks_by_file, language_adapters, commit_sha)
+        update_fingerprint_cache(store, chunks_by_file, language_adapters, commit_sha,
+                                  skip_keys=pending_keys)
 
     # Re-render so proposals appear in .codoc/tree/ immediately after commit.
     # (run_reflect_files already does this; run_reflect was missing it.)
@@ -344,16 +380,47 @@ def run_reflect_files(
         result["changed_chunks"] = len(all_changed)
 
         if all_changed:
-            # Re-use the per-change routing logic from run_reflect.
             all_bindings = store.get_all_bindings()
             evicted_directly = 0
             escalated_to_llm_count = 0
             proposals_emitted = 0
             proposal_summaries: list[dict] = []
 
+            # Move detection pre-pass: use HEAD as "old ref" for on-save reflects
+            # (working tree is new; HEAD is last committed = old version).
+            old_sources = _get_old_chunk_sources(
+                root_dir, all_changed, "HEAD", all_language_adapters
+            )
+            move_matches, matched_old_keys, matched_new_keys = _run_move_detection(
+                all_changed, old_sources, all_language_adapters
+            )
+            added_changes_by_key: dict[tuple[str, str], ChunkChange] = {
+                (ch.file, ch.symbol_path): ch
+                for ch in all_changed if ch.change_kind == "added"
+            }
+
             for change in all_changed:
+                key = (change.file, change.symbol_path)
+
                 if change.change_kind == "removed":
-                    if change.existing_binding_uuid is not None:
+                    if key in matched_old_keys:
+                        match = move_matches[key]
+                        new_ch = added_changes_by_key.get(
+                            (match.new_file, match.new_symbol_path)
+                        )
+                        new_fp = new_ch.current_fingerprint if new_ch else None
+                        tx = _emit_moved_proposal(change, match, new_fp, tx_log, author=author)
+                        proposals_emitted += 1
+                        jsonl_log.append(tx)
+                        summary = {
+                            "hlc": tx.hlc.to_str(),
+                            "kind": tx.kind.value,
+                            "symbol_path": change.symbol_path,
+                            "file": change.file,
+                        }
+                        _maybe_tag_plan_aligned(summary, store, pending_plan_slugs)
+                        proposal_summaries.append(summary)
+                    elif change.existing_binding_uuid is not None:
                         tx = emit_evict_proposal(change, tx_log, author=author)
                         evicted_directly += 1
                         proposals_emitted += 1
@@ -362,9 +429,13 @@ def run_reflect_files(
                             "hlc": tx.hlc.to_str(),
                             "kind": tx.kind.value,
                             "symbol_path": change.symbol_path,
+                            "file": change.file,
                         }
                         _maybe_tag_plan_aligned(summary, store, pending_plan_slugs)
                         proposal_summaries.append(summary)
+                    continue
+
+                if key in matched_new_keys:
                     continue
 
                 if change.change_kind == "added" and change.existing_binding_uuid is None:
@@ -377,6 +448,7 @@ def run_reflect_files(
                                 "hlc": tx.hlc.to_str(),
                                 "kind": tx.kind.value,
                                 "symbol_path": change.symbol_path,
+                                "file": change.file,
                             }
                             _maybe_tag_plan_aligned(summary, store, pending_plan_slugs)
                             proposal_summaries.append(summary)
@@ -400,6 +472,7 @@ def run_reflect_files(
                         "hlc": tx.hlc.to_str(),
                         "kind": tx.kind.value,
                         "symbol_path": change.symbol_path,
+                        "file": change.file,
                     }
                     _maybe_tag_plan_aligned(summary, store, pending_plan_slugs)
                     proposal_summaries.append(summary)
@@ -416,12 +489,18 @@ def run_reflect_files(
         store.close()
 
     # Update fingerprint cache so subsequent runs only process new changes.
+    # Gate: skip chunks that have a pending proposal (re-detect on next run).
     if all_chunks_by_file:
+        pending_keys_files: set[str] = {
+            _chunk_cache_key(s.get("file", ""), s.get("symbol_path"))
+            for s in result.get("proposals", [])
+        }
         commit_sha = _get_current_commit(root_dir)
         store3 = SQLiteStore(str(Path(codoc_dir) / "codoc.db"))
         store3.open()
         try:
-            update_fingerprint_cache(store3, all_chunks_by_file, all_language_adapters, commit_sha)
+            update_fingerprint_cache(store3, all_chunks_by_file, all_language_adapters,
+                                      commit_sha, skip_keys=pending_keys_files)
         finally:
             store3.close()
 
@@ -441,25 +520,22 @@ def update_fingerprint_cache(
     chunks_by_file: dict,
     language_adapters: dict,
     commit: str,
+    skip_keys: set[str] | None = None,
 ) -> None:
     """Update the chunk fingerprint cache in SQLite for all currently-visible chunks.
 
     Called after proposals are emitted so that the next run of the reflective
     pipeline only processes genuinely new changes.
 
-    Parameters
-    ----------
-    store:
-        An open SQLiteStore (caller manages lifecycle).
-    chunks_by_file:
-        Current-state chunks as returned by ``extract_chunks_for_files``.
-    language_adapters:
-        Adapter instances keyed by language name; used to fingerprint chunks.
-    commit:
-        The current commit SHA to record in ``last_seen_commit``.
+    skip_keys: cache keys for chunks with pending proposals — those are NOT
+    updated so the next reflect still re-detects them as changed.  This is the
+    gated-cache invariant: a proposal that hasn't been accepted/rejected keeps
+    the old fingerprint in cache, forcing re-detection until the user acts.
     """
     from codoc.lang import detect_language, get_adapter
     from codoc.core.fingerprint import fingerprint_chunk
+
+    _skip = skip_keys or set()
 
     for file, chunks in chunks_by_file.items():
         lang = detect_language(file)
@@ -473,11 +549,13 @@ def update_fingerprint_cache(
                 continue
 
         for chunk in chunks:
+            cache_key = _chunk_cache_key(file, chunk.symbol_path)
+            if cache_key in _skip:
+                continue  # pending proposal — leave old fingerprint in cache
             try:
                 fp = fingerprint_chunk(chunk.source, adapter)
             except Exception:
                 continue
-            cache_key = _chunk_cache_key(file, chunk.symbol_path)
             store.upsert_chunk_fingerprint(
                 key=cache_key,
                 file=file,
@@ -490,6 +568,138 @@ def update_fingerprint_cache(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _get_old_chunk_sources(
+    root_dir: str,
+    changes: list[ChunkChange],
+    ref: str,
+    language_adapters: dict,
+) -> dict[tuple[str, str], str]:
+    """Fetch old source for each "removed" change by reading *ref* from git.
+
+    Returns a mapping (file, symbol_path) → old_source for every removed chunk
+    whose file existed at *ref*.  Used by move-detection to compute similarity
+    between the old version and any newly-added chunk.
+    """
+    from codoc.lang import detect_language, get_adapter
+
+    removed_files: set[str] = {
+        ch.file for ch in changes if ch.change_kind == "removed"
+    }
+
+    # Fetch old content per file once.
+    old_content: dict[str, str] = {}
+    for file in removed_files:
+        src = get_file_source_at_ref(root_dir, file, ref)
+        if src is not None:
+            old_content[file] = src
+
+    result: dict[tuple[str, str], str] = {}
+    for file, src in old_content.items():
+        language = detect_language(file)
+        if language is None:
+            continue
+        adapter = language_adapters.get(language)
+        if adapter is None:
+            try:
+                adapter = get_adapter(language)
+            except ValueError:
+                continue
+        try:
+            chunks = adapter.extract_chunks(file, src)
+        except Exception:
+            continue
+        for chunk in chunks:
+            result[(file, chunk.symbol_path)] = chunk.source
+
+    return result
+
+
+def _run_move_detection(
+    changes: list[ChunkChange],
+    old_sources: dict[tuple[str, str], str],
+    language_adapters: dict,
+) -> tuple[dict, set, set]:
+    """Run the RefDiff-2-style arbiter over (removed, added) change pairs.
+
+    Returns
+    -------
+    move_matches: dict[(old_file, old_sp) → MatchResult]
+    matched_old_keys: set of (file, symbol_path) for matched removed chunks
+    matched_new_keys: set of (file, symbol_path) for matched added chunks
+    """
+    from codoc.core.chunk_matching.arbiter import match_chunk_sets, MatchResult
+
+    removed_chunks = [
+        {"file": ch.file, "symbol_path": ch.symbol_path,
+         "source": old_sources.get((ch.file, ch.symbol_path), "")}
+        for ch in changes if ch.change_kind == "removed"
+    ]
+    added_chunks = [
+        {"file": ch.file, "symbol_path": ch.symbol_path,
+         "source": ch.chunk.source if ch.chunk is not None else ""}
+        for ch in changes if ch.change_kind == "added"
+    ]
+
+    if not removed_chunks or not added_chunks:
+        return {}, set(), set()
+
+    # Only attempt matching when we have source for at least some removed chunks.
+    if not any(c["source"] for c in removed_chunks):
+        return {}, set(), set()
+
+    adapter = next(iter(language_adapters.values()), None)
+    results: list[MatchResult] = match_chunk_sets(
+        removed_chunks, added_chunks, language_adapter=adapter
+    )
+
+    move_matches: dict[tuple[str, str], MatchResult] = {}
+    matched_old: set[tuple[str, str]] = set()
+    matched_new: set[tuple[str, str]] = set()
+
+    for m in results:
+        old_key = (m.old_file, m.old_symbol_path)
+        new_key = (m.new_file, m.new_symbol_path)
+        move_matches[old_key] = m
+        matched_old.add(old_key)
+        matched_new.add(new_key)
+
+    return move_matches, matched_old, matched_new
+
+
+def _emit_moved_proposal(
+    old_change: ChunkChange,
+    match_result,
+    new_fingerprint: str | None,
+    tx_log: TransactionLog,
+    author: str = "reflective",
+) -> Transaction:
+    """Emit a MOVED proposal preserving the existing binding UUID.
+
+    The payload records the old anchor, new anchor, new fingerprint, and
+    the similarity score so the user can see the confidence at accept-time.
+    """
+    payload: dict = {
+        "binding_uuid": old_change.existing_binding_uuid,
+        "old_file": old_change.file,
+        "old_symbol_path": old_change.symbol_path,
+        "new_file": match_result.new_file,
+        "new_symbol_path": match_result.new_symbol_path,
+        "new_fingerprint": new_fingerprint or "",
+        "score": round(match_result.score, 4),
+        "evidence": match_result.evidence,
+    }
+    tx = Transaction(
+        hlc=HLC.now(),
+        parent_hlcs=[],
+        kind=TransactionKind.MOVED,
+        payload=payload,
+        author=author,
+        proposal=True,
+        label=f"moved {old_change.symbol_path} → {match_result.new_symbol_path}",
+    )
+    return tx_log.append_proposal(tx)
 
 
 def _get_current_commit(root_dir: str) -> str:

@@ -721,3 +721,75 @@ class SQLiteStore:
     def get_all_chunk_fingerprints(self) -> dict[str, str]:
         rows = self._db.execute("SELECT id, fingerprint FROM chunk_fingerprints").fetchall()
         return {r["id"]: r["fingerprint"] for r in rows}
+
+    def delete_chunk_fingerprint(self, key: str) -> None:
+        self._db.execute("DELETE FROM chunk_fingerprints WHERE id = ?", (key,))
+        self._db.commit()
+
+    # ------------------------------------------------------------------
+    # Binding resolution CRUD
+    # ------------------------------------------------------------------
+
+    def upsert_binding_resolution(
+        self,
+        binding_uuid: str,
+        checked_at_hlc: str,
+        resolved: bool,
+        fingerprint_matches: bool,
+        similarity: float | None = None,
+        verdict: str | None = None,
+        confidence: float | None = None,
+        rationale: str | None = None,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+    ) -> None:
+        self._db.execute(
+            """
+            INSERT INTO binding_resolutions
+                (binding_uuid, checked_at_hlc, resolved, fingerprint_matches,
+                 similarity, verdict, confidence, rationale, model, prompt_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(binding_uuid, checked_at_hlc) DO UPDATE SET
+                resolved           = excluded.resolved,
+                fingerprint_matches = excluded.fingerprint_matches,
+                similarity         = excluded.similarity,
+                verdict            = excluded.verdict,
+                confidence         = excluded.confidence,
+                rationale          = excluded.rationale,
+                model              = excluded.model,
+                prompt_hash        = excluded.prompt_hash
+            """,
+            (binding_uuid, checked_at_hlc, 1 if resolved else 0,
+             1 if fingerprint_matches else 0, similarity, verdict,
+             confidence, rationale, model, prompt_hash),
+        )
+        self._db.commit()
+
+    def get_latest_resolution(self, binding_uuid: str) -> dict | None:
+        row = self._db.execute(
+            """SELECT * FROM binding_resolutions
+               WHERE binding_uuid = ?
+               ORDER BY checked_at_hlc DESC LIMIT 1""",
+            (binding_uuid,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_resolutions_for_feature(self, feature_uuid: str) -> list[dict]:
+        """Return the most recent BindingResolution row for each binding in a feature."""
+        rows = self._db.execute(
+            """
+            SELECT br.*
+            FROM binding_resolutions br
+            INNER JOIN (
+                SELECT binding_uuid, MAX(checked_at_hlc) as max_hlc
+                FROM binding_resolutions
+                GROUP BY binding_uuid
+            ) latest ON br.binding_uuid = latest.binding_uuid
+                     AND br.checked_at_hlc = latest.max_hlc
+            WHERE br.binding_uuid IN (
+                SELECT uuid FROM bindings WHERE feature_uuid = ?
+            )
+            """,
+            (feature_uuid,),
+        ).fetchall()
+        return [dict(r) for r in rows]

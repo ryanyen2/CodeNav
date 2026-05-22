@@ -64,6 +64,26 @@ def get_file_source(root_dir: str, file_path: str) -> str | None:
         return None
 
 
+def get_file_source_at_ref(root_dir: str, file_path: str, ref: str) -> str | None:
+    """Return content of *file_path* at git *ref* via ``git show``.
+
+    Used by move detection to recover old chunk sources when the working-tree
+    version has already changed (rename, file move).  Returns ``None`` if the
+    file did not exist at *ref* or git is unavailable.
+    """
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{file_path}"],
+        cwd=root_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
 def extract_chunks_for_files(
     root_dir: str,
     file_paths: list[str],

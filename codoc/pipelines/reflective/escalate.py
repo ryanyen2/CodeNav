@@ -67,23 +67,58 @@ def is_cheap_absorb(change: ChunkChange, all_bindings: list) -> bool:
 
 
 def _is_cheap_absorb(change: ChunkChange, all_bindings: list) -> bool:
-    """Internal implementation of the cheap absorb heuristic."""
+    """Internal implementation of the cheap absorb heuristic.
+
+    Requires *both*:
+    1. Exactly one feature has all its bindings in the same file as the new chunk.
+    2. The new chunk shares its symbol namespace (top-level dotted prefix) with
+       the majority of that feature's bindings — prevents over-absorption into
+       broad single-file features that contain unrelated top-level entities.
+    """
     if not all_bindings:
         return False
 
-    # Group bindings by feature_uuid.
     bindings_by_feature: dict[str, list] = {}
     for b in all_bindings:
         bindings_by_feature.setdefault(b.feature_uuid, []).append(b)
 
-    # Find features whose *every* binding is in the same file as the new chunk.
-    candidate_feature_uuids: list[str] = []
-    for feature_uuid, bindings in bindings_by_feature.items():
+    candidates: list[list] = []
+    for bindings in bindings_by_feature.values():
         if all(b.anchor.file == change.file for b in bindings):
-            candidate_feature_uuids.append(feature_uuid)
+            candidates.append(bindings)
 
-    # Exactly one such feature → safe to absorb without LLM.
-    return len(candidate_feature_uuids) == 1
+    if len(candidates) != 1:
+        return False
+
+    return _shares_symbol_namespace(change.symbol_path, candidates[0])
+
+
+def _shares_symbol_namespace(new_sp: str, bindings: list) -> bool:
+    """Return True if *new_sp* shares its dotted-path prefix with ≥ 50% of bindings.
+
+    Prevents absorbing a top-level function into a feature that only contains
+    methods of a specific class (different namespace prefix).
+    """
+    if not new_sp or not bindings:
+        return True
+
+    new_parts = new_sp.split(".")
+    if len(new_parts) < 2:
+        # Top-level symbol: only absorb if the majority of bindings are also
+        # top-level (no dotted path) — avoids pulling a module-level util into
+        # a class-scoped feature.
+        top_level_count = sum(
+            1 for b in bindings
+            if b.anchor.symbol_path and "." not in b.anchor.symbol_path
+        )
+        return top_level_count / len(bindings) >= 0.5
+
+    new_prefix = new_parts[0]
+    matches = sum(
+        1 for b in bindings
+        if b.anchor.symbol_path and b.anchor.symbol_path.split(".")[0] == new_prefix
+    )
+    return matches / len(bindings) >= 0.5
 
 
 def emit_evict_proposal(

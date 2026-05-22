@@ -16,6 +16,7 @@ class TransactionKind(str, Enum):
     FRACTURE = "fracture"
     COALESCE = "coalesce"
     RENAME_INFER = "rename_infer"
+    MOVED = "moved"          # code-side move/rename detected by chunk matcher
     # Intentional v1: user-authored mutations that are canonical immediately.
     AMEND = "amend"
     RENAME = "rename"
@@ -44,6 +45,7 @@ REFLECTIVE_KINDS: frozenset[TransactionKind] = frozenset({
     TransactionKind.FRACTURE,
     TransactionKind.COALESCE,
     TransactionKind.RENAME_INFER,
+    TransactionKind.MOVED,
 })
 
 INTENTIONAL_V1_KINDS: frozenset[TransactionKind] = frozenset({

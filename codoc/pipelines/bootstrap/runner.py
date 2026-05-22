@@ -31,7 +31,12 @@ from codoc.pipelines.bootstrap.cluster import (
     cluster_hierarchical,
     cluster_recursive,
 )
-from codoc.pipelines.bootstrap.propose import propose_all, propose_hierarchical, propose_recursive
+from codoc.pipelines.bootstrap.propose import (
+    propose_all,
+    propose_hierarchical,
+    propose_recursive,
+    propose_structural,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +265,117 @@ def run_bootstrap(
     return {
         "chunk_count": len(chunks),
         "cluster_count": cluster_count,
+        "proposal_count": len(proposals),
+        "proposals": proposal_summaries,
+    }
+
+
+def run_bootstrap_structural(
+    root_dir: str,
+    codoc_dir: str,
+    repo_name: str = "codebase",
+    node_id: str = "default",
+    with_intent: bool = False,
+    reset: bool = False,
+) -> dict:
+    """Bootstrap by reading directory/class structure — zero LLM calls by default.
+
+    This replaces the expensive k-means + per-cluster LLM approach with a
+    structure-first pipeline inspired by (but not copying) Leiden community
+    detection (Traag et al., Sci. Rep. 2019) and RAPTOR hierarchical
+    summarization (Sarthi et al., ICLR 2024):
+
+    - Directories map to top-level features (free, zero LLM).
+    - Classes / module prefixes within directories map to child features (free).
+    - Intent text is empty by default — the user fills it in via ``codoc edit``
+      or ``codoc plan``.  Pass ``with_intent=True`` to batch-call the LLM
+      (one call per feature, sequential) and generate intent text up front.
+
+    Cost: 0 API calls by default.  O(features) calls with ``--with-intent``.
+
+    Parameters
+    ----------
+    root_dir:
+        Root directory of the codebase to analyse.
+    codoc_dir:
+        Path to the ``.codoc/`` working directory.
+    repo_name:
+        Human-readable name forwarded to the LLM when ``with_intent=True``.
+    node_id:
+        HLC node identifier for emitted transactions.
+    with_intent:
+        If True, call the LLM once per feature to generate intent text.
+    reset:
+        If True, wipe existing codoc state before running.
+
+    Returns
+    -------
+    dict
+        ``{chunk_count, group_count, proposal_count, proposals}``.
+    """
+    from codoc.pipelines.bootstrap.structural import build_structural_tree, count_groups
+
+    codoc_path = Path(codoc_dir)
+    codoc_path.mkdir(parents=True, exist_ok=True)
+
+    if reset:
+        reset_codoc(codoc_dir)
+
+    db_path = str(codoc_path / "codoc.db")
+    jsonl_path = str(codoc_path / "log.jsonl")
+
+    print("[bootstrap:structural] extracting chunks...", file=sys.stderr)
+    chunks = extract_all_chunks(root_dir)
+
+    if not chunks:
+        return {"chunk_count": 0, "group_count": 0, "proposal_count": 0, "proposals": []}
+
+    print(f"[bootstrap:structural] {len(chunks)} chunks extracted. Building structure tree...",
+          file=sys.stderr)
+
+    root_group = build_structural_tree(chunks)
+    group_count = count_groups(root_group) - 1  # exclude root
+
+    if with_intent:
+        print(f"[bootstrap:structural] {group_count} groups. Generating intent via LLM...",
+              file=sys.stderr)
+    else:
+        print(f"[bootstrap:structural] {group_count} groups. Emitting proposals (no LLM)...",
+              file=sys.stderr)
+
+    language_adapters = _build_language_adapters(chunks)
+
+    with SQLiteStore(db_path) as store:
+        tx_log = TransactionLog(store, node_id=node_id)
+
+        proposals = propose_structural(
+            root_group=root_group,
+            chunks=chunks,
+            tx_log=tx_log,
+            language_adapters=language_adapters,
+            with_intent=with_intent,
+            repo_name=repo_name,
+        )
+
+        jsonl_log = JSONLLog(jsonl_path)
+        for tx in proposals:
+            jsonl_log.append(tx)
+
+        proposal_summaries = [
+            {
+                "hlc": tx.hlc.to_str(),
+                "slug": tx.payload.get("slug", ""),
+                "intent": tx.payload.get("intent", ""),
+                "candidate_count": len(tx.payload.get("candidate_bindings", [])),
+            }
+            for tx in proposals
+        ]
+
+    print(f"[bootstrap:structural] {len(proposals)} proposals emitted.", file=sys.stderr)
+
+    return {
+        "chunk_count": len(chunks),
+        "group_count": group_count,
         "proposal_count": len(proposals),
         "proposals": proposal_summaries,
     }

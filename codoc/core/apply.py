@@ -193,10 +193,40 @@ def apply_accepted_transaction(
     elif kind == TransactionKind.REATTRIBUTE:
         binding_uuid = payload.get("binding_uuid")
         new_feature_uuid = payload.get("new_feature_uuid")
+        new_fingerprint = payload.get("new_fingerprint")
         if binding_uuid and new_feature_uuid and not dry_run:
             binding = store.get_binding(binding_uuid)
             if binding is not None:
-                store.upsert_binding(binding.model_copy(update={"feature_uuid": new_feature_uuid}))
+                updates: dict = {"feature_uuid": new_feature_uuid}
+                if new_fingerprint:
+                    updates["fingerprint"] = new_fingerprint
+                    updates["fingerprint_at_hlc"] = hlc
+                store.upsert_binding(binding.model_copy(update=updates))
+
+    elif kind == TransactionKind.MOVED:
+        # Chunk moved/renamed: preserve binding UUID, update anchor, update fingerprint.
+        # Payload: {binding_uuid, new_file, new_symbol_path, new_fingerprint, old_file, old_symbol_path}
+        binding_uuid = payload.get("binding_uuid")
+        new_file = payload.get("new_file")
+        new_symbol_path = payload.get("new_symbol_path")
+        new_fingerprint = payload.get("new_fingerprint")
+        if binding_uuid and (new_file or new_symbol_path) and not dry_run:
+            binding = store.get_binding(binding_uuid)
+            if binding is not None:
+                from codoc.model.anchor import Anchor
+                updated_anchor = binding.anchor.model_copy(update={
+                    k: v for k, v in {
+                        "file": new_file,
+                        "symbol_path": new_symbol_path,
+                    }.items() if v is not None
+                })
+                updates = {"anchor": updated_anchor}
+                if new_fingerprint:
+                    # Accepting a MOVED proposal updates the stored fingerprint —
+                    # this closes the drift gap for moved chunks.
+                    updates["fingerprint"] = new_fingerprint
+                    updates["fingerprint_at_hlc"] = hlc
+                store.upsert_binding(binding.model_copy(update=updates))
 
     elif kind in (
         TransactionKind.AMEND,

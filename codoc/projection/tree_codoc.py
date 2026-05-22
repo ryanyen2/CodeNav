@@ -205,13 +205,20 @@ def _render_feature_block(
     title_path_to_uuid[current_title_path] = feature.uuid
     lines.append(feature_line)
 
-    # Concise intent line: first sentence only (≤160 chars), single line.
+    # Full intent: render all paragraphs so the round-trip is lossless.
     description_lines: list[str] = []
     if not feature.retired:
-        prose = feature.description or feature.intent
-        first = _first_sentence(prose)
-        if first:
-            description_lines = [f"{desc_indent}{first}"]
+        prose = (feature.description or feature.intent or "").strip()
+        if prose:
+            for para in prose.split("\n"):
+                para_stripped = para.strip()
+                if para_stripped:
+                    description_lines.append(f"{desc_indent}{para_stripped}")
+                else:
+                    description_lines.append("")
+            # Remove trailing blank lines.
+            while description_lines and description_lines[-1] == "":
+                description_lines.pop()
 
     lines.extend(description_lines)
     line_end = feature_line_no + len(description_lines)  # last line of this block (before children)

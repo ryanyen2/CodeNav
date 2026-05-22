@@ -20,82 +20,106 @@ def bootstrap_default(
     ctx: typer.Context,
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
     repo_name: str = typer.Option("", "--repo-name", help="Human-readable repository name"),
-    cluster_size: int = typer.Option(8, "--cluster-size", help="Target average chunks per cluster"),
-    hierarchical: bool = typer.Option(False, "--hierarchical", help="[deprecated] Use two-level clustering"),
+    with_intent: bool = typer.Option(False, "--with-intent", help="Call LLM to generate intent text (one call per feature)"),
+    cluster_size: int = typer.Option(8, "--cluster-size", help="[legacy] Target chunks per cluster for embedding-based bootstrap"),
+    structural: bool = typer.Option(True, "--structural/--no-structural", help="Use structure-first bootstrap (default, zero LLM)"),
     reset: bool = typer.Option(False, "--reset", help="Wipe existing .codoc state before running"),
 ) -> None:
-    """Cluster the codebase and propose a deep hierarchical feature tree for review."""
+    """Propose a feature tree from directory/class structure. Zero LLM calls by default.
+
+    The default (--structural) groups code by directory → class hierarchy.
+    Add --with-intent to generate a one-sentence intent per feature via LLM.
+    Use --no-structural to fall back to embedding-based k-means clustering.
+    """
     if ctx.invoked_subcommand is not None:
         return
 
-    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, reset=reset)
+    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, structural=structural,
+                   with_intent=with_intent, cluster_size=cluster_size, reset=reset)
 
 
 @bootstrap_app.command("run")
 def run_bootstrap_cmd(
     root_dir: str = typer.Option(".", "--root-dir", "-d", help="Root directory of the codebase"),
     repo_name: str = typer.Option("", "--repo-name", help="Human-readable repository name"),
-    cluster_size: int = typer.Option(8, "--cluster-size", help="Target average chunks per cluster"),
+    with_intent: bool = typer.Option(False, "--with-intent", help="Call LLM to generate intent text per feature"),
+    structural: bool = typer.Option(True, "--structural/--no-structural", help="Structure-first bootstrap (default)"),
+    cluster_size: int = typer.Option(8, "--cluster-size", help="[legacy] Target chunks per cluster"),
     reset: bool = typer.Option(False, "--reset", help="Wipe existing .codoc state before running"),
 ) -> None:
-    """Cluster the codebase and propose a deep hierarchical feature tree for review."""
-    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, cluster_size=cluster_size, reset=reset)
+    """Propose a feature tree from directory/class structure."""
+    _run_bootstrap(root_dir=root_dir, repo_name=repo_name, structural=structural,
+                   with_intent=with_intent, cluster_size=cluster_size, reset=reset)
 
 
-def _run_bootstrap(root_dir: str, repo_name: str, cluster_size: int, reset: bool = False) -> None:
-    check_llm_config()
-
+def _run_bootstrap(
+    root_dir: str,
+    repo_name: str,
+    structural: bool = True,
+    with_intent: bool = False,
+    cluster_size: int = 8,
+    reset: bool = False,
+) -> None:
     root = Path(root_dir).resolve()
     codoc_dir = require_codoc_dir(root_dir)
-
     inferred_name = repo_name or root.name
+
+    if not structural:
+        check_llm_config()
 
     if reset:
         typer.echo(f"Resetting {codoc_dir} ...")
-
     typer.echo(f"Bootstrapping {root} ...")
 
     try:
-        from codoc.pipelines.bootstrap.runner import run_bootstrap
-
-        result = run_bootstrap(
-            root_dir=str(root),
-            codoc_dir=str(codoc_dir),
-            repo_name=inferred_name,
-            target_cluster_size=cluster_size,
-            reset=reset,
-        )
+        if structural:
+            from codoc.pipelines.bootstrap.runner import run_bootstrap_structural
+            result = run_bootstrap_structural(
+                root_dir=str(root),
+                codoc_dir=str(codoc_dir),
+                repo_name=inferred_name,
+                with_intent=with_intent,
+                reset=reset,
+            )
+            cluster_key = "group_count"
+        else:
+            from codoc.pipelines.bootstrap.runner import run_bootstrap
+            result = run_bootstrap(
+                root_dir=str(root),
+                codoc_dir=str(codoc_dir),
+                repo_name=inferred_name,
+                target_cluster_size=cluster_size,
+                reset=reset,
+            )
+            cluster_key = "cluster_count"
     except Exception as exc:
         typer.echo(f"Error: bootstrap failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     chunk_count = result.get("chunk_count", 0)
-    cluster_count = result.get("cluster_count", 0)
+    group_count = result.get(cluster_key, 0)
     proposal_count = result.get("proposal_count", 0)
     proposals = result.get("proposals", [])
 
     typer.echo(f"\nBootstrap complete.")
     typer.echo(f"  Chunks extracted : {chunk_count}")
-    typer.echo(f"  Clusters formed  : {cluster_count}")
+    typer.echo(f"  Groups / clusters: {group_count}")
     typer.echo(f"  Proposals emitted: {proposal_count}")
 
     if proposals:
         typer.echo("\nProposed features (pending review):")
-        for p in proposals:
+        for p in proposals[:20]:
             hlc_short = p.get("hlc", "")[:30]
             slug = p.get("slug", "")
             candidate_count = p.get("candidate_count", 0)
             typer.echo(f"  [{hlc_short}]  {slug}  ({candidate_count} bindings)")
+        if len(proposals) > 20:
+            typer.echo(f"  ... and {len(proposals) - 20} more")
 
     if proposal_count == 0:
-        typer.echo(
-            "\nNo proposals generated. Check LLM config or run with CODOC_LOG_PROMPTS=1.",
-            err=True,
-        )
+        typer.echo("\nNo proposals generated.", err=True)
     else:
-        typer.echo(
-            "\nReview with 'codoc proposals', then 'codoc bootstrap finish' when done."
-        )
+        typer.echo("\nReview with 'codoc proposals', then 'codoc bootstrap finish' when done.")
 
 
 @bootstrap_app.command("finish")

@@ -17,6 +17,7 @@ from codoc.cli.projection import proj_app
 from codoc.cli.tx import tx_app
 from codoc.cli.feature import feature_app
 from codoc.cli.doctor import doctor
+from codoc.cli.health import health_command
 from codoc.cli.commands import (
     cmd_list,
     cmd_show,
@@ -109,6 +110,7 @@ app.command("gate-run")(gate_run)
 app.command("server")(server)
 app.command("commit-preflight")(commit_preflight)
 app.command("doctor")(doctor)
+app.command("health")(health_command)
 
 # ------------------------------------------------------------------
 # Deprecated aliases (print notice, then delegate)
