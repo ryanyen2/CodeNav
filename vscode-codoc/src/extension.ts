@@ -2,8 +2,6 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { ServerState } from './state/server';
-import { LineTracker } from './state/line-tracker';
-import { ProposalsStatusBar } from './state/proposals-status-bar';
 import { CodocCodeLensProvider } from './providers/code-lens';
 import { CodocFoldingProvider } from './providers/folding';
 import { CodocSymbolProvider } from './providers/symbol';
@@ -11,7 +9,6 @@ import { CodocHoverProvider } from './providers/hover';
 import { CodocCodocCodeLensProvider } from './providers/codelens';
 import { CodocDefinitionProvider } from './providers/definition';
 import { CodocCodeActionProvider } from './providers/code-actions';
-import { CodocConflictProvider } from './providers/conflict-resolver';
 import { applyDecorations, createDecorations } from './providers/decoration';
 import { scheduleSyncCodocFile, onSaveCodocFile } from './sync-on-save';
 import { LiveActivityTracker } from './state/live-activity';
@@ -21,74 +18,80 @@ export function activate(context: vscode.ExtensionContext): void {
     const diagnostics = vscode.languages.createDiagnosticCollection('codoc');
     context.subscriptions.push(diagnostics);
 
-    const proposalsBar = new ProposalsStatusBar();
-    context.subscriptions.push(proposalsBar);
-
-    const lineTracker = new LineTracker();
-
-    // Refresh the pending-proposal count shown in the status bar.
-    async function refreshProposalCount(): Promise<void> {
-        if (!server.client) return;
-        try {
-            const pending = await server.client.listPending();
-            server.setProposalCount(pending.length);
-            proposalsBar.update(pending.length);
-        } catch {
-            // Server unreachable — ServerState health poll updates the display.
-        }
+    // Refresh the status bar by pulling /state (pending count, stage, etc.)
+    async function refreshState(): Promise<void> {
+        await server.refreshState();
     }
 
-    // ── codoc.open — unified smart open command ──────────────────────────────
+    // ── codoc.sync — state-aware one-stop command ────────────────────────────
     context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.open', async () => {
-            if (!server.rootDir) {
-                // No .codoc/ found — offer to init + bootstrap
-                const confirm = await vscode.window.showInformationMessage(
-                    'No codoc tree found in this workspace. Initialize and bootstrap now?',
-                    'Yes', 'Cancel',
+        vscode.commands.registerCommand('codoc.sync', async () => {
+            if (!server.client) {
+                vscode.window.showInformationMessage(
+                    'codoc server not reachable — run `codoc server --port 8001` in a terminal first.',
                 );
-                if (confirm !== 'Yes') return;
-                await vscode.window.withProgress(
+                return;
+            }
+            let result;
+            try {
+                result = await vscode.window.withProgress(
                     {
                         location: vscode.ProgressLocation.Notification,
-                        title: 'codoc',
+                        title: 'codoc: syncing...',
                         cancellable: false,
                     },
-                    async (progress) => {
-                        progress.report({ message: 'Initializing...' });
-                        await server.client?.initRepo();
-                        progress.report({ message: 'Bootstrapping codebase (this may take a minute)...' });
-                        await server.client?.bootstrap();
-                        progress.report({ message: 'Rendering tree...' });
-                        await server.client?.renderTree();
-                    },
+                    () => server.client!.syncRepo(),
                 );
-            } else {
-                // .codoc/ exists — check if index exists and if stale
-                if (server.client) {
-                    try {
-                        const state = await server.client.getRepoState();
-                        if (!state?.hasIndex || state?.isStale) {
-                            await server.client.renderTree();
-                        }
-                    } catch {
-                        // Endpoint not yet implemented — just try to open
-                    }
-                }
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                vscode.window.showErrorMessage(`codoc sync failed: ${msg}`);
+                return;
             }
 
-            if (!server.rootDir) return;
+            await refreshState();
 
-            const indexPath = path.join(server.rootDir, '.codoc', 'tree', '_index.codoc');
-            if (fs.existsSync(indexPath)) {
-                const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(indexPath));
-                await vscode.window.showTextDocument(doc);
+            const after = result.stage_after;
+            if (after === 'proposals-pending' || after === 'bootstrap-review') {
+                const open = await vscode.window.showInformationMessage(
+                    `codoc: ${result.pending_count} proposal(s) ready for review`,
+                    'Open Tree',
+                );
+                if (open === 'Open Tree') await vscode.commands.executeCommand('codoc.open');
+            } else if (after === 'clean' && result.actions.length > 0) {
+                vscode.window.showInformationMessage(`codoc: ${result.summary}`);
+                await vscode.commands.executeCommand('codoc.open');
+            } else if (after === 'needs-bootstrap') {
+                vscode.window.showInformationMessage('codoc: set OPENAI_API_KEY and re-run sync to bootstrap');
             }
-            await refreshProposalCount();
         }),
     );
 
-    // ── codoc.renderHard — explicit hard refresh ─────────────────────────────
+    // ── codoc.open — open the rendered tree file ─────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.open', async () => {
+            if (!server.rootDir) {
+                const confirm = await vscode.window.showInformationMessage(
+                    'No codoc tree found in this workspace. Run `codoc sync` from the terminal to initialize.',
+                    'Run codoc.sync',
+                );
+                if (confirm === 'Run codoc.sync') await vscode.commands.executeCommand('codoc.sync');
+                return;
+            }
+
+            const indexPath = path.join(server.rootDir, '.codoc', 'tree', '_index.codoc');
+            if (!fs.existsSync(indexPath)) {
+                // Tree not rendered yet — run sync first.
+                await vscode.commands.executeCommand('codoc.sync');
+                return;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(indexPath));
+            await vscode.window.showTextDocument(doc);
+            await refreshState();
+        }),
+    );
+
+    // ── codoc.renderHard — force re-render the tree ──────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.renderHard', async () => {
             if (!server.client) return;
@@ -98,88 +101,14 @@ export function activate(context: vscode.ExtensionContext): void {
                     title: 'codoc: Rendering...',
                     cancellable: false,
                 },
-                async () => { await server.client!.renderTree(); },
+                () => server.client!.renderTree(),
             );
-            await refreshProposalCount();
+            await refreshState();
             if (!server.rootDir) return;
             const indexPath = path.join(server.rootDir, '.codoc', 'tree', '_index.codoc');
             if (fs.existsSync(indexPath)) {
                 const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(indexPath));
                 await vscode.window.showTextDocument(doc);
-            }
-        }),
-    );
-
-    // ── Backward-compat: codoc.openIndex → codoc.open ───────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.openIndex', () => {
-            return vscode.commands.executeCommand('codoc.open');
-        }),
-    );
-
-    // ── codoc.reflect ────────────────────────────────────────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.reflect', async () => {
-            if (!server.client) {
-                vscode.window.showInformationMessage('codoc server not connected.');
-                return;
-            }
-            try {
-                await server.client.reflect();
-                vscode.window.showInformationMessage('codoc: reflect complete');
-                await refreshProposalCount();
-            } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc reflect failed: ${msg}`);
-            }
-        }),
-    );
-
-    // ── codoc.bootstrap — direct HTTP, no panel ──────────────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.bootstrap', async () => {
-            if (!server.client) {
-                vscode.window.showInformationMessage('codoc server not connected.');
-                return;
-            }
-            try {
-                await vscode.window.withProgress(
-                    {
-                        location: vscode.ProgressLocation.Notification,
-                        title: 'codoc: Bootstrapping (this may take a minute)...',
-                        cancellable: false,
-                    },
-                    async () => { await server.client!.bootstrap(); },
-                );
-                vscode.window.showInformationMessage('codoc: bootstrap complete');
-                await refreshProposalCount();
-            } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc bootstrap failed: ${msg}`);
-            }
-        }),
-    );
-
-    // ── Projection commands ──────────────────────────────────────────────────
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.render', async () => {
-            if (!server.client) return;
-            try {
-                await server.client.renderTree();
-                vscode.window.showInformationMessage('codoc: tree rendered');
-                await refreshProposalCount();
-            } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc render failed: ${msg}`);
-            }
-        }),
-        vscode.commands.registerCommand('codoc.syncFile', async (uri?: vscode.Uri) => {
-            const target = uri
-                ? vscode.workspace.textDocuments.find(d => d.uri.fsPath === uri.fsPath)
-                : vscode.window.activeTextEditor?.document;
-            if (target && target.languageId === 'codoc') {
-                await onSaveCodocFile(target, server, diagnostics);
-                await refreshProposalCount();
             }
         }),
     );
@@ -190,24 +119,20 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!server.client || !hlc) return;
             try {
                 await server.client.acceptProposal(hlc);
-                vscode.window.showInformationMessage('codoc: proposal accepted');
                 await server.client.renderTree();
-                await refreshProposalCount();
+                await refreshState();
             } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc accept failed: ${msg}`);
+                vscode.window.showErrorMessage(`codoc accept failed: ${e instanceof Error ? e.message : String(e)}`);
             }
         }),
         vscode.commands.registerCommand('codoc.rejectProposal', async (_uri: vscode.Uri | undefined, hlc: string) => {
             if (!server.client || !hlc) return;
             try {
                 await server.client.rejectProposal(hlc);
-                vscode.window.showInformationMessage('codoc: proposal rejected');
                 await server.client.renderTree();
-                await refreshProposalCount();
+                await refreshState();
             } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc reject failed: ${msg}`);
+                vscode.window.showErrorMessage(`codoc reject failed: ${e instanceof Error ? e.message : String(e)}`);
             }
         }),
         vscode.commands.registerCommand('codoc.acceptProposalWithEdits', async (
@@ -222,23 +147,18 @@ export function activate(context: vscode.ExtensionContext): void {
                 value: proposedSlug,
                 prompt: 'Press Enter to confirm, Escape to cancel',
             });
-            if (newSlug === undefined) return; // user cancelled
+            if (newSlug === undefined) return;
 
             const edits: Record<string, unknown> = {};
             if (newSlug.trim() && newSlug.trim() !== proposedSlug) {
                 edits.slug = newSlug.trim();
             }
-
             try {
                 await server.client.acceptProposal(hlc, Object.keys(edits).length ? edits : undefined);
-                vscode.window.showInformationMessage(
-                    Object.keys(edits).length ? 'codoc: proposal accepted with edits' : 'codoc: proposal accepted',
-                );
                 await server.client.renderTree();
-                await refreshProposalCount();
+                await refreshState();
             } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc accept failed: ${msg}`);
+                vscode.window.showErrorMessage(`codoc accept failed: ${e instanceof Error ? e.message : String(e)}`);
             }
         }),
     );
@@ -256,10 +176,9 @@ export function activate(context: vscode.ExtensionContext): void {
                 const result = await server.client.acceptAll();
                 vscode.window.showInformationMessage(`codoc: accepted ${result.accepted} proposal(s)`);
                 await server.client.renderTree();
-                await refreshProposalCount();
+                await refreshState();
             } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc accept-all failed: ${msg}`);
+                vscode.window.showErrorMessage(`codoc accept-all failed: ${e instanceof Error ? e.message : String(e)}`);
             }
         }),
         vscode.commands.registerCommand('codoc.rejectAll', async () => {
@@ -274,22 +193,29 @@ export function activate(context: vscode.ExtensionContext): void {
                 const result = await server.client.rejectAll();
                 vscode.window.showInformationMessage(`codoc: rejected ${result.rejected} proposal(s)`);
                 await server.client.renderTree();
-                await refreshProposalCount();
+                await refreshState();
             } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc reject-all failed: ${msg}`);
+                vscode.window.showErrorMessage(`codoc reject-all failed: ${e instanceof Error ? e.message : String(e)}`);
             }
         }),
     );
 
-    // ── Proposal actions widget (status bar click) ───────────────────────────
+    // ── Proposal actions widget (status bar click dispatches here) ───────────
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.showProposalActions', async () => {
-            const choice = await vscode.window.showQuickPick([
+            const state = server.repoState;
+            const items: vscode.QuickPickItem[] = [
+                { label: '$(file) Open Tree', description: 'Open _index.codoc' },
                 { label: '$(check) Accept All', description: 'Accept all pending proposals' },
                 { label: '$(x) Reject All', description: 'Reject all pending proposals' },
-            ]);
-            if (choice?.label.includes('Accept All')) {
+            ];
+            if (state) {
+                items.unshift({ label: `$(info) Stage: ${state.stage}`, description: state.next_action, kind: vscode.QuickPickItemKind.Separator });
+            }
+            const choice = await vscode.window.showQuickPick(items.filter(i => i.kind !== vscode.QuickPickItemKind.Separator), { title: 'codoc proposals' });
+            if (choice?.label.includes('Open Tree')) {
+                await vscode.commands.executeCommand('codoc.open');
+            } else if (choice?.label.includes('Accept All')) {
                 await vscode.commands.executeCommand('codoc.acceptAll');
             } else if (choice?.label.includes('Reject All')) {
                 await vscode.commands.executeCommand('codoc.rejectAll');
@@ -297,16 +223,14 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
     );
 
-    // ── Per-line proposal actions ────────────────────────────────────────────
+    // ── Per-line proposal quick-fixes ────────────────────────────────────────
     const HLC_RE = /#\s*\?([0-9a-zA-Z:\-_]+)/;
 
     function hlcForLine(document: vscode.TextDocument, lineNum: number): string | null {
-        // Old format: inline "# ?<hlc>" comment on the proposal line.
         const line = document.lineAt(lineNum).text;
         const m = HLC_RE.exec(line);
         if (m) return m[1];
 
-        // New format: col-0 diff hunks — HLC stored in tree.meta.json line_range_to_hlc.
         if (!server.rootDir) return null;
         const metaPath = path.join(server.rootDir, '.codoc', 'tree', 'tree.meta.json');
         try {
@@ -325,9 +249,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 const end = parseInt(rangePart.slice(dashIdx + 1), 10);
                 if (lineNum >= start && lineNum <= end) return hlc;
             }
-        } catch {
-            // meta file unreadable — fall through
-        }
+        } catch { /* meta file unreadable */ }
         return null;
     }
 
@@ -337,10 +259,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const editor = vscode.window.activeTextEditor;
             if (!editor) return;
             const hlc = hlcForLine(editor.document, lineNum);
-            if (!hlc) {
-                vscode.window.showWarningMessage('codoc: no HLC found on this line');
-                return;
-            }
+            if (!hlc) { vscode.window.showWarningMessage('codoc: no HLC found on this line'); return; }
             await vscode.commands.executeCommand('codoc.acceptProposal', editor.document.uri, hlc);
         }),
         vscode.commands.registerCommand('codoc.rejectProposalAtLine', async (lineNum: number) => {
@@ -348,10 +267,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const editor = vscode.window.activeTextEditor;
             if (!editor) return;
             const hlc = hlcForLine(editor.document, lineNum);
-            if (!hlc) {
-                vscode.window.showWarningMessage('codoc: no HLC found on this line');
-                return;
-            }
+            if (!hlc) { vscode.window.showWarningMessage('codoc: no HLC found on this line'); return; }
             await vscode.commands.executeCommand('codoc.rejectProposal', editor.document.uri, hlc);
         }),
     );
@@ -364,10 +280,8 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!fs.existsSync(indexPath)) return;
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(indexPath));
             const editor = await vscode.window.showTextDocument(doc);
-            // Scan for the slug/title in the document
             for (let i = 0; i < doc.lineCount; i++) {
-                const line = doc.lineAt(i).text;
-                if (line.includes(slugOrTitle)) {
+                if (doc.lineAt(i).text.includes(slugOrTitle)) {
                     const pos = new vscode.Position(i, 0);
                     editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
                     editor.selection = new vscode.Selection(pos, pos);
@@ -382,43 +296,31 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('codoc.showBindingsForFeature', async (slug: string) => {
             if (!server.client || !server.rootDir) return;
             try {
-                // Try to look up bindings by searching features for this slug
                 const tree = await server.client.getTree();
                 const feature = tree.find(f => f.slug === slug);
-                if (!feature) {
-                    vscode.window.showInformationMessage(`codoc: feature '${slug}' not found`);
-                    return;
-                }
+                if (!feature) { vscode.window.showInformationMessage(`codoc: feature '${slug}' not found`); return; }
                 const bindings = await server.client.getFeatureBindings(feature.uuid);
-                if (!bindings.length) {
-                    vscode.window.showInformationMessage(`codoc: no bindings for '${slug}'`);
-                    return;
-                }
+                if (!bindings.length) { vscode.window.showInformationMessage(`codoc: no bindings for '${slug}'`); return; }
                 const items = bindings.map(b => ({
                     label: b.anchor.file,
                     description: b.anchor.symbol_path ?? b.anchor.ts_query ?? '',
                     binding: b,
                 }));
-                const chosen = await vscode.window.showQuickPick(items, {
-                    placeHolder: `Bindings for ${slug}`,
-                });
+                const chosen = await vscode.window.showQuickPick(items, { placeHolder: `Bindings for ${slug}` });
                 if (!chosen) return;
                 const fileUri = vscode.Uri.file(path.join(server.rootDir!, chosen.binding.anchor.file));
-                const bindDoc = await vscode.workspace.openTextDocument(fileUri);
-                await vscode.window.showTextDocument(bindDoc);
+                await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(fileUri));
             } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`codoc: failed to load bindings: ${msg}`);
+                vscode.window.showErrorMessage(`codoc: failed to load bindings: ${e instanceof Error ? e.message : String(e)}`);
             }
         }),
     );
 
     // ── Code lens on Python/TypeScript/JavaScript files ──────────────────────
-    const codeLens = new CodocCodeLensProvider(server);
     context.subscriptions.push(
         vscode.languages.registerCodeLensProvider(
             [{ language: 'python' }, { language: 'typescript' }, { language: 'javascript' }],
-            codeLens,
+            new CodocCodeLensProvider(server),
         ),
     );
 
@@ -437,13 +339,6 @@ export function activate(context: vscode.ExtensionContext): void {
         ),
     );
 
-    // ── Conflict resolver URI scheme ─────────────────────────────────────────
-    const conflictProvider = new CodocConflictProvider();
-    context.subscriptions.push(
-        vscode.workspace.registerTextDocumentContentProvider('codoc-conflict', conflictProvider),
-        conflictProvider,
-    );
-
     // ── Decorations ──────────────────────────────────────────────────────────
     const decorations = createDecorations(context);
     const refreshDecorations = (editor?: vscode.TextEditor) => {
@@ -455,10 +350,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.onDidChangeActiveTextEditor(refreshDecorations),
         vscode.workspace.onDidChangeTextDocument(e => {
             const ed = vscode.window.activeTextEditor;
-            if (ed && ed.document === e.document) {
-                lineTracker.onDocumentChange(e);
-                refreshDecorations(ed);
-            }
+            if (ed && ed.document === e.document) refreshDecorations(ed);
         }),
     );
 
@@ -471,18 +363,38 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
     );
 
-    // ── Proposal count: refresh on connect, then every 30s ───────────────────
-    server.onReady(() => refreshProposalCount());
-    // Proposal count is now also refreshed via SSE reflect_done/accept/reject events.
-    // Keep a 60s fallback poll instead of 30s.
-    const countInterval = setInterval(refreshProposalCount, 60_000);
-    context.subscriptions.push({ dispose: () => clearInterval(countInterval) });
+    // ── FileSystemWatcher — keep status bar fresh when server re-renders ─────
+    // The render_token in tree.meta.json changes on every server-side render.
+    // We use it as an echo guard: if the token matches what we last saw, this
+    // change was triggered by our own save and we skip reprocessing.
+    let lastSeenRenderToken = '';
+    const treeWatcher = vscode.workspace.createFileSystemWatcher('**/.codoc/tree/**/*.codoc');
+    const onTreeFileChange = async () => {
+        if (!server.rootDir) return;
+        const metaPath = path.join(server.rootDir, '.codoc', 'tree', 'tree.meta.json');
+        try {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { render_token?: string };
+            const token = meta.render_token ?? '';
+            if (token && token === lastSeenRenderToken) return; // our own save — skip
+            lastSeenRenderToken = token;
+        } catch { /* meta unreadable — proceed anyway */ }
+        await refreshState();
+        refreshDecorations();
+    };
+    context.subscriptions.push(
+        treeWatcher,
+        treeWatcher.onDidChange(onTreeFileChange),
+        treeWatcher.onDidCreate(onTreeFileChange),
+    );
 
-    // Live activity tracker — shows Claude Code activity in gutter + status bar.
+    // ── State refresh: on connect and SSE-driven ─────────────────────────────
+    server.onReady(() => void refreshState());
+
+    // Live activity tracker — Claude Code gutter pulse + status bar entry.
     const liveActivity = new LiveActivityTracker(context);
     server.onActivity((data) => liveActivity.handleEvent(data));
 }
 
 export function deactivate(): void {
-    // Nothing to dispose — all disposables are registered on context.subscriptions.
+    // All disposables registered on context.subscriptions.
 }

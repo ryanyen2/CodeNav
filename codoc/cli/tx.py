@@ -328,7 +328,8 @@ def accept_proposal(
             raise typer.Exit(code=1)
 
         # Apply side-effects before flipping proposal→accepted.
-        _apply_accepted_transaction(tx, store)
+        from codoc.core.apply import apply_accepted_transaction
+        apply_accepted_transaction(tx, store)
 
         # Flip proposal to accepted in the log.
         accepted_tx = tx_log.accept_proposal(hlc)

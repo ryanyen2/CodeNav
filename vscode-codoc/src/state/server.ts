@@ -1,14 +1,14 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { CodocClient } from '../api/client';
+import { CodocClient, StateResponse } from '../api/client';
 
 export class ServerState {
     readonly statusBar: vscode.StatusBarItem;
     private _client: CodocClient | null = null;
     private _rootDir: string | null = null;
     private _connected = false;
-    private _proposalCount: number | null = null;
+    private _state: StateResponse | null = null;
     private _readyCallbacks: Array<() => void> = [];
     private _pollTimer: ReturnType<typeof setInterval> | null = null;
     private _cancelStream: (() => void) | null = null;
@@ -16,7 +16,7 @@ export class ServerState {
 
     constructor(private context: vscode.ExtensionContext) {
         this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-        this.statusBar.command = 'codoc.open';
+        this.statusBar.command = 'codoc.sync';
         context.subscriptions.push(this.statusBar);
         this.init();
     }
@@ -31,16 +31,15 @@ export class ServerState {
         const baseUrl: string = cfg.get('serverUrl', 'http://localhost:8001');
         this._client = new CodocClient(baseUrl, this._rootDir);
         await this.checkHealth();
-        // Try SSE first; fall back to polling on error.
         this._startEventStream();
-        this._pollTimer = setInterval(() => this.checkHealth(), 30_000); // fallback heartbeat
+        this._pollTimer = setInterval(() => this.checkHealth(), 30_000);
         this.context.subscriptions.push({ dispose: () => {
             if (this._pollTimer) clearInterval(this._pollTimer);
             if (this._cancelStream) this._cancelStream();
         }});
     }
 
-    private detectRootDir(): string | null {
+    detectRootDir(): string | null {
         const cfg = vscode.workspace.getConfiguration('codoc');
         const manual: string = cfg.get('rootDir', '');
         if (manual) return manual;
@@ -51,12 +50,13 @@ export class ServerState {
         return null;
     }
 
-    private async checkHealth(): Promise<void> {
+    async checkHealth(): Promise<void> {
         if (!this._client) return;
-        const ok = await this._client.health();
+        const state = await this._client.healthAndState();
         const wasConnected = this._connected;
-        this._connected = ok;
-        if (ok && !wasConnected) {
+        this._connected = state !== null;
+        this._state = state;
+        if (this._connected && !wasConnected) {
             this._readyCallbacks.forEach(cb => cb());
             this._readyCallbacks = [];
         }
@@ -72,26 +72,38 @@ export class ServerState {
             this.statusBar.text = '$(warning) codoc: offline';
             this.statusBar.tooltip = 'codoc server not reachable — run `codoc server` in your terminal';
             this.statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-        } else if (this._proposalCount !== null && this._proposalCount > 0) {
-            this.statusBar.text = `$(bell) codoc: ${this._proposalCount}`;
-            this.statusBar.tooltip = `${this._proposalCount} pending proposal${this._proposalCount === 1 ? '' : 's'} — click to review`;
-            this.statusBar.backgroundColor = undefined;
-        } else {
-            this.statusBar.text = '$(check) codoc';
-            this.statusBar.tooltip = `codoc: tree up to date — root: ${this._rootDir}`;
-            this.statusBar.backgroundColor = undefined;
+        } else if (this._state) {
+            const { stage, pending_count, feature_count } = this._state;
+            if (stage === 'proposals-pending' || stage === 'bootstrap-review') {
+                this.statusBar.text = `$(bell) codoc: ${pending_count}`;
+                this.statusBar.tooltip = `${pending_count} pending proposal${pending_count === 1 ? '' : 's'} — click to sync`;
+                this.statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+            } else if (stage === 'needs-bootstrap' || stage === 'uninit') {
+                this.statusBar.text = `$(sync) codoc: ${stage}`;
+                this.statusBar.tooltip = this._state.next_action;
+                this.statusBar.backgroundColor = undefined;
+            } else if (stage === 'stale-render') {
+                this.statusBar.text = '$(sync) codoc: stale';
+                this.statusBar.tooltip = 'Tree render is behind — click to sync';
+                this.statusBar.backgroundColor = undefined;
+            } else {
+                this.statusBar.text = `$(check) codoc: ${feature_count}`;
+                this.statusBar.tooltip = `codoc: ${feature_count} features — tree in sync`;
+                this.statusBar.backgroundColor = undefined;
+            }
         }
         this.statusBar.show();
     }
 
-    setProposalCount(n: number): void {
-        this._proposalCount = n;
-        if (this._connected) this._updateDisplay();
+    /** Call after any proposal accept/reject to refresh the status bar. */
+    async refreshState(): Promise<void> {
+        await this.checkHealth();
     }
 
     get client(): CodocClient | null { return this._client; }
     get rootDir(): string | null { return this._rootDir; }
     get connected(): boolean { return this._connected; }
+    get repoState(): StateResponse | null { return this._state; }
 
     onReady(cb: () => void): void {
         if (this._connected) cb();
@@ -107,21 +119,13 @@ export class ServerState {
         if (this._cancelStream) this._cancelStream();
         this._cancelStream = this._client.subscribeToEvents(
             (topic, data) => {
-                if (topic === 'activity') this._onActivityEvent(data);
-                else if (topic === 'proposal' || topic === 'accept' || topic === 'reject' || topic === 'reflect_done') {
-                    // Trigger a proposal count refresh.
-                    this._connected = true;
-                    this._updateDisplay();
+                if (topic === 'activity') {
+                    this._activityCallbacks.forEach(cb => cb(data));
+                } else if (topic === 'proposal' || topic === 'accept' || topic === 'reject' || topic === 'reflect_done') {
+                    void this.checkHealth();
                 }
             },
-            () => {
-                // SSE error — polling fallback already running.
-            },
+            () => { /* SSE error — polling fallback handles reconnect */ },
         );
-    }
-
-    private _onActivityEvent(_data: unknown): void {
-        // Notify live activity subscribers (registered externally).
-        this._activityCallbacks.forEach(cb => cb(_data));
     }
 }

@@ -32,20 +32,16 @@
     ],
     "commands": [
       {
+        "command": "codoc.sync",
+        "title": "codoc: Sync"
+      },
+      {
         "command": "codoc.open",
         "title": "codoc: Open"
       },
       {
         "command": "codoc.renderHard",
         "title": "codoc: Render (hard refresh)"
-      },
-      {
-        "command": "codoc.render",
-        "title": "codoc: Render tree"
-      },
-      {
-        "command": "codoc.syncFile",
-        "title": "codoc: Sync current file"
       },
       {
         "command": "codoc.acceptProposal",
@@ -82,14 +78,6 @@
       {
         "command": "codoc.rejectProposalAtLine",
         "title": "codoc: Reject proposal at line"
-      },
-      {
-        "command": "codoc.reflect",
-        "title": "codoc: Reflect (process new commits)"
-      },
-      {
-        "command": "codoc.bootstrap",
-        "title": "codoc: Bootstrap codebase"
       }
     ],
     "keybindings": [
@@ -109,11 +97,6 @@
         "command": "codoc.open",
         "key": "ctrl+k ctrl+c",
         "mac": "cmd+k cmd+c"
-      },
-      {
-        "command": "codoc.open",
-        "key": "ctrl+k ctrl+l",
-        "mac": "cmd+k cmd+l"
       }
     ],
     "configuration": {

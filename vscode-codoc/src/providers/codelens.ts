@@ -13,20 +13,15 @@ export class CodocCodocCodeLensProvider implements vscode.CodeLensProvider {
     provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
         const lenses: vscode.CodeLens[] = [];
 
-        // Header lenses on line 0: Sync, Render, Accept All, Reject All.
+        // Header lenses on line 0: Sync, Hard Render, Accept All, Reject All.
         const headerRange = new vscode.Range(0, 0, 0, 0);
         lenses.push(new vscode.CodeLens(headerRange, {
             title: '$(sync) Sync',
-            command: 'codoc.syncFile',
-            arguments: [document.uri],
+            command: 'codoc.sync',
         }));
         lenses.push(new vscode.CodeLens(headerRange, {
             title: '$(refresh) Render',
-            command: 'codoc.render',
-        }));
-        lenses.push(new vscode.CodeLens(headerRange, {
-            title: '$(git-commit) Reflect',
-            command: 'codoc.reflect',
+            command: 'codoc.renderHard',
         }));
 
         // Count pending proposals to decide whether to show bulk lenses.

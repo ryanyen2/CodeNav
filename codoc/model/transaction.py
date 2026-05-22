@@ -31,6 +31,8 @@ class TransactionKind(str, Enum):
     # Intentional Phase 5.
     INSTATE_CONSTRAINT = "instate_constraint"
     LIFT_CONSTRAINT = "lift_constraint"
+    # Administrative — written by post-commit hook; immediately canonical.
+    SNAPSHOT = "snapshot"
 
 
 REFLECTIVE_KINDS: frozenset[TransactionKind] = frozenset({

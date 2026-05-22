@@ -527,7 +527,8 @@ async def accept_all_transactions(body: BulkAcceptRequest) -> dict:
         for tx in txs:
             try:
                 accepted_tx = tx_log.accept_proposal(tx.hlc.to_str(), edits=body.edits)
-                _apply_accepted_transaction(accepted_tx, store, jsonl_log)
+                from codoc.core.apply import apply_accepted_transaction
+                apply_accepted_transaction(accepted_tx, store)
                 jsonl_log.append(accepted_tx)
                 if body.label and body.label in _VALID_LABELS:
                     store.set_label(accepted_tx.hlc.to_str(), body.label)
@@ -585,7 +586,8 @@ async def accept_transaction(hlc_str: str, body: AcceptRequest) -> TransactionRe
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         jsonl_log = JSONLLog(jsonl_path)
-        _apply_accepted_transaction(accepted_tx, store, jsonl_log)
+        from codoc.core.apply import apply_accepted_transaction
+        apply_accepted_transaction(accepted_tx, store)
         jsonl_log.append(accepted_tx)
 
     finally:
@@ -906,6 +908,49 @@ async def get_tree(
         store.close()
 
     return responses
+
+
+@router.get("/state")
+async def get_state(root_dir: str = Query(...)) -> dict:
+    """Return the full repo stage + next-action hint.  This is the canonical
+    endpoint the VSCode extension uses to drive the status bar and codoc.sync."""
+    from codoc.core.stage import repo_stage
+    state = repo_stage(root_dir)
+    return state.to_dict()
+
+
+@router.post("/sync/repo")
+async def sync_repo(body: dict) -> dict:
+    """State-aware umbrella sync: init → bootstrap → accept → render as needed.
+
+    Body fields (all optional):
+        root_dir (str)         — defaults to CODOC_ROOT_DIR env var
+        accept_all (bool)      — auto-accept pending proposals
+        prune_code (bool)      — delete source lines for RETIRE_REFLECTIVE
+        from_ref (str)         — git ref range start (default HEAD~1)
+        to_ref (str)           — git ref range end (default HEAD)
+        post_commit (bool)     — internal flag from post-commit hook
+    """
+    from codoc.core.sync_dispatcher import dispatch
+
+    import os
+    root_dir = body.get("root_dir") or os.environ.get("CODOC_ROOT_DIR", os.getcwd())
+    result = dispatch(
+        root_dir,
+        accept_all=body.get("accept_all", False),
+        prune_code=body.get("prune_code", False),
+        from_ref=body.get("from_ref", "HEAD~1"),
+        to_ref=body.get("to_ref", "HEAD"),
+        post_commit=body.get("post_commit", False),
+    )
+    return {
+        "stage_before": result.stage_before,
+        "stage_after": result.stage_after,
+        "actions": result.actions,
+        "summary": result.summary,
+        "pending_count": result.pending_count,
+        "feature_count": result.feature_count,
+    }
 
 
 @router.get("/status")
