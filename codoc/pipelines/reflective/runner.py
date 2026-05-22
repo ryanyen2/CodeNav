@@ -20,19 +20,116 @@ from codoc.pipelines.reflective.commit_diff import (
     get_file_source,
     get_file_source_at_ref,
 )
-from codoc.pipelines.reflective.fingerprint_compare import (
-    compare_chunk_fingerprints,
-    ChunkChange,
-    _chunk_cache_key,
-)
+from codoc.core.fingerprint import fingerprint_chunk, are_fingerprints_meaningfully_different
+from codoc.pipelines.reflective.types import ChunkChange, chunk_cache_key as _chunk_cache_key
 from codoc.pipelines.reflective.escalate import (
     should_escalate,
     emit_evict_proposal,
-    is_cheap_absorb,
+    is_namespace_absorb,
 )
 from codoc.pipelines.reflective.propose import escalate_to_llm
 from codoc.model.transaction import Transaction, TransactionKind
 from codoc.model.hlc import HLC
+
+
+def _compare_chunk_fingerprints(
+    chunks_by_file: dict,
+    deleted_files: list[str],
+    store,
+    language_adapters: dict,
+) -> list[ChunkChange]:
+    """Identify every chunk that meaningfully changed relative to stored state.
+
+    Routes fingerprint comparison through ``codoc.core.reconciler.build_chunks_index``
+    for consistency with the health sweep.
+    """
+    from codoc.lang import detect_language, get_adapter
+    from codoc.core.reconciler import build_chunks_index
+
+    changes: list[ChunkChange] = []
+
+    all_bindings = store.get_all_bindings()
+    binding_by_anchor: dict[tuple[str, str | None], str] = {}
+    for binding in all_bindings:
+        anchor = binding.anchor
+        binding_by_anchor[(anchor.file, anchor.symbol_path)] = binding.uuid
+
+    # Build the reconciler's fingerprint index for existing files.
+    chunks_index = build_chunks_index(chunks_by_file, language_adapters)
+
+    deleted_set: set[str] = set(deleted_files)
+
+    # Phase 1: deleted files.
+    for file in deleted_set:
+        for binding in all_bindings:
+            if binding.anchor.file != file:
+                continue
+            symbol_path = binding.anchor.symbol_path or ""
+            stored_fp = store.get_chunk_fingerprint(_chunk_cache_key(file, symbol_path))
+            changes.append(ChunkChange(
+                chunk=None, symbol_path=symbol_path, file=file,
+                change_kind="removed", current_fingerprint=None,
+                stored_fingerprint=stored_fp, existing_binding_uuid=binding.uuid,
+            ))
+        all_fp_rows = store.get_all_chunk_fingerprints()
+        for cache_key, stored_fp in all_fp_rows.items():
+            if not cache_key.startswith(file + "::"):
+                continue
+            symbol_path = cache_key[len(file) + 2:]
+            if binding_by_anchor.get((file, symbol_path)):
+                continue
+            changes.append(ChunkChange(
+                chunk=None, symbol_path=symbol_path, file=file,
+                change_kind="removed", current_fingerprint=None,
+                stored_fingerprint=stored_fp, existing_binding_uuid=None,
+            ))
+
+    # Phase 2: existing files — use reconciler index for fingerprint comparison.
+    seen_cache_keys: set[str] = set()
+    for file, chunks in chunks_by_file.items():
+        for chunk in chunks:
+            symbol_path = chunk.symbol_path
+            cache_key = _chunk_cache_key(file, symbol_path)
+            seen_cache_keys.add(cache_key)
+
+            current_fp = chunks_index.get((file, symbol_path))
+            if current_fp is None:
+                # No adapter for this file — skip.
+                continue
+            stored_fp = store.get_chunk_fingerprint(cache_key)
+            existing_uuid = binding_by_anchor.get((file, symbol_path))
+
+            if stored_fp is None:
+                changes.append(ChunkChange(
+                    chunk=chunk, symbol_path=symbol_path, file=file,
+                    change_kind="added", current_fingerprint=current_fp,
+                    stored_fingerprint=None, existing_binding_uuid=existing_uuid,
+                ))
+            elif are_fingerprints_meaningfully_different(stored_fp, current_fp):
+                changes.append(ChunkChange(
+                    chunk=chunk, symbol_path=symbol_path, file=file,
+                    change_kind="modified", current_fingerprint=current_fp,
+                    stored_fingerprint=stored_fp, existing_binding_uuid=existing_uuid,
+                ))
+
+    # Phase 3: stored bindings in touched files whose symbol_path no longer appears.
+    current_file_set = set(chunks_by_file.keys())
+    for binding in all_bindings:
+        file = binding.anchor.file
+        symbol_path = binding.anchor.symbol_path or ""
+        if file in deleted_set or file not in current_file_set:
+            continue
+        cache_key = _chunk_cache_key(file, symbol_path)
+        if cache_key in seen_cache_keys:
+            continue
+        stored_fp = store.get_chunk_fingerprint(cache_key)
+        changes.append(ChunkChange(
+            chunk=None, symbol_path=symbol_path, file=file,
+            change_kind="removed", current_fingerprint=None,
+            stored_fingerprint=stored_fp, existing_binding_uuid=binding.uuid,
+        ))
+
+    return changes
 
 
 def run_reflect(
@@ -108,7 +205,7 @@ def run_reflect(
         # --- 3. Compare fingerprints ---
         all_bindings = store.get_all_bindings()
 
-        changes: list[ChunkChange] = compare_chunk_fingerprints(
+        changes: list[ChunkChange] = _compare_chunk_fingerprints(
             chunks_by_file=chunks_by_file,
             deleted_files=deleted_files,
             store=store,
@@ -177,7 +274,7 @@ def run_reflect(
 
             # Check cheap absorb shortcut for "added" + unattributed chunks.
             if change.change_kind == "added" and change.existing_binding_uuid is None:
-                if is_cheap_absorb(change, all_bindings):
+                if is_namespace_absorb(change, all_bindings):
                     tx = _emit_cheap_absorb(change, all_bindings, tx_log, author="reflective")
                     if tx is not None:
                         proposals_emitted += 1
@@ -292,7 +389,6 @@ def _get_changed_chunks_for_file(
     try:
         from codoc.lang import detect_language, get_adapter
         from codoc.pipelines.reflective.commit_diff import extract_chunks_for_files
-        from codoc.pipelines.reflective.fingerprint_compare import compare_chunk_fingerprints
 
         chunks_by_file = extract_chunks_for_files(root_dir=root_dir, file_paths=[file_path])
 
@@ -306,7 +402,7 @@ def _get_changed_chunks_for_file(
                 except ValueError:
                     pass
 
-        changes = compare_chunk_fingerprints(
+        changes = _compare_chunk_fingerprints(
             chunks_by_file=chunks_by_file,
             deleted_files=[],
             store=store,
@@ -439,7 +535,7 @@ def run_reflect_files(
                     continue
 
                 if change.change_kind == "added" and change.existing_binding_uuid is None:
-                    if is_cheap_absorb(change, all_bindings):
+                    if is_namespace_absorb(change, all_bindings):
                         tx = _emit_cheap_absorb(change, all_bindings, tx_log, author=author)
                         if tx is not None:
                             proposals_emitted += 1
@@ -621,7 +717,7 @@ def _run_move_detection(
     old_sources: dict[tuple[str, str], str],
     language_adapters: dict,
 ) -> tuple[dict, set, set]:
-    """Run the RefDiff-2-style arbiter over (removed, added) change pairs.
+    """Run the RefDiff-2-style matcher over (removed, added) change pairs.
 
     Returns
     -------
@@ -629,7 +725,7 @@ def _run_move_detection(
     matched_old_keys: set of (file, symbol_path) for matched removed chunks
     matched_new_keys: set of (file, symbol_path) for matched added chunks
     """
-    from codoc.core.chunk_matching.arbiter import match_chunk_sets, MatchResult
+    from codoc.core.chunk_matching.matcher import match_chunk_sets, MatchResult
 
     removed_chunks = [
         {"file": ch.file, "symbol_path": ch.symbol_path,
@@ -734,7 +830,7 @@ def _emit_cheap_absorb(
     for feature_uuid, bindings in bindings_by_feature.items():
         if all(b.anchor.file == change.file for b in bindings):
             target_feature_uuid = feature_uuid
-            break  # is_cheap_absorb already guarantees exactly one match
+            break  # is_namespace_absorb already guarantees exactly one match
 
     if target_feature_uuid is None:
         return None

@@ -213,39 +213,6 @@ def _server_amended_since(feature_uuid: str, base_hlc: str, store) -> bool:
     return any(tx.hlc.to_str() > base_hlc for tx in txs)
 
 
-def _inject_conflict_annotations(
-    codoc_dir: str,
-    conflict_uuids: set[str],
-    old_meta,
-) -> None:
-    """Write <!-- conflict --> annotations into _index.codoc for conflicting features."""
-    index_path = Path(codoc_dir) / "tree" / "_index.codoc"
-    if not index_path.exists():
-        return
-
-    lines = index_path.read_text(encoding="utf-8").splitlines()
-
-    # Count how many conflict annotations we need to add.
-    annotations_added = 0
-    for uuid in conflict_uuids:
-        loc = old_meta.uuid_to_location.get(uuid)
-        if loc is None or loc.get("kind") != "feature":
-            continue
-        line_no = loc.get("line", -1)
-        if line_no < 0 or line_no >= len(lines):
-            continue
-        # Insert annotation comment above the feature line.
-        annotation = f"<!-- conflict: server and local both edited this feature — resolve manually -->"
-        lines.insert(line_no + annotations_added, annotation)
-        annotations_added += 1
-
-    if annotations_added > 0:
-        # Add a header summary.
-        header = f"<!-- {annotations_added} unresolved conflict(s) — search for 'conflict:' to find them -->"
-        lines.insert(0, header)
-        index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def _apply_introduce(op: IntroduceOp, runner: IntentionalRunner) -> None:
     """Create a pending INTRODUCE proposal for an unresolved (new) feature."""
     import re
@@ -286,10 +253,9 @@ def _apply_introduce(op: IntroduceOp, runner: IntentionalRunner) -> None:
 def _apply_accept(op: AcceptOp, runner: IntentionalRunner) -> None:
     """Accept a proposal and apply its side effects to the store.
 
-    Mirrors the logic in ``codoc.cli.tx._apply_accepted_transaction`` so that
-    accepting via the projection sync path has the same effect as ``codoc tx accept``.
+    Delegates to the canonical codoc.core.apply applier.
     """
-    from codoc.cli.tx import _apply_accepted_transaction
+    from codoc.core.apply import apply_accepted_transaction
 
     store = runner._open_store
     tx_log = runner._open_tx_log
@@ -302,7 +268,7 @@ def _apply_accept(op: AcceptOp, runner: IntentionalRunner) -> None:
         raise ValueError(f"Transaction {op.hlc!r} is already accepted")
 
     # Apply side-effects first so the store is consistent before flipping the flag.
-    _apply_accepted_transaction(tx, store)
+    apply_accepted_transaction(tx, store)
     accepted = tx_log.accept_proposal(op.hlc, edits=op.edits)
     jsonl_log.append(accepted)
 

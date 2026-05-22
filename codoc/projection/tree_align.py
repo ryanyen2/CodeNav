@@ -118,13 +118,18 @@ def resolve_uuid_structural(
     -------
     UUID string if matched with confidence, None otherwise.
 
-    Matching passes
-    ---------------
-    1. Exact title match (case-insensitive strip) within parent.
-    2. Exact slug match: normalise *title* to slug form and compare to
-       stored ``slug`` field.
-    3. Sibling-index match with Levenshtein edit-distance guard:
-       ``dist(title, old_title) / max(len(title), len(old_title)) <= 0.4``.
+    Matching
+    --------
+    One scoring pass over all siblings: each candidate gets a score in [0, 1]
+    combining exact-title, slug-normalisation, and Levenshtein similarity
+    (weighted by sibling-position agreement).  The best candidate is returned
+    if its score ≥ 0.6; ties and ambiguous exact matches return None.
+
+    Score formula:
+      - Exact title match (case-insensitive)  → score = 1.0
+      - Exact slug match                      → score = 0.9
+      - Levenshtein similarity ≥ 0.6 with same sibling_index  → similarity score
+      - All other cases                        → score = 0.0 (filtered)
     """
     if prebuilt_sibling_index is not None:
         siblings = prebuilt_sibling_index.get(parent_uuid, [])
@@ -134,49 +139,51 @@ def resolve_uuid_structural(
         return None
 
     title_stripped = title.strip().lower()
-
-    # --- Pass 1: exact title (case-insensitive) ---
-    pass1: list[str] = []
-    for sib in siblings:
-        stored_title = sib.get("title", "").strip().lower()
-        if stored_title == title_stripped:
-            pass1.append(sib["uuid"])
-    if len(pass1) == 1:
-        return pass1[0]
-    if len(pass1) > 1:
-        return None  # ambiguous
-
-    # --- Pass 2: slug match ---
     title_as_slug = _title_to_slug(title)
-    pass2: list[str] = []
+    t1 = title.strip()
+
+    _MIN_SCORE = 0.6
+
+    scored: list[tuple[float, str]] = []  # (score, uuid)
+
     for sib in siblings:
+        uuid = sib["uuid"]
+        stored_title = sib.get("title", "").strip().lower()
         stored_slug = sib.get("slug", "")
+        t2 = sib.get("title", "").strip()
+
+        if stored_title == title_stripped:
+            scored.append((1.0, uuid))
+            continue
+
         if stored_slug == title_as_slug:
-            pass2.append(sib["uuid"])
-    if len(pass2) == 1:
-        return pass2[0]
-    if len(pass2) > 1:
-        return None  # ambiguous
-
-    # --- Pass 3: sibling_index + Levenshtein guard ---
-    pass3: list[str] = []
-    for sib in siblings:
-        if sib.get("sibling_index") != sibling_index_new:
+            scored.append((0.9, uuid))
             continue
-        old_title = sib.get("title", "")
-        t1 = title.strip()
-        t2 = old_title.strip()
-        max_len = max(len(t1), len(t2))
-        if max_len == 0:
-            pass3.append(sib["uuid"])
-            continue
-        dist = _levenshtein(t1.lower(), t2.lower())
-        if dist / max_len <= 0.4:
-            pass3.append(sib["uuid"])
-    if len(pass3) == 1:
-        return pass3[0]
 
-    return None
+        # Levenshtein similarity for same-position siblings.
+        if sib.get("sibling_index") == sibling_index_new:
+            max_len = max(len(t1), len(t2))
+            if max_len == 0:
+                scored.append((0.8, uuid))
+                continue
+            dist = _levenshtein(t1.lower(), t2.lower())
+            sim = 1.0 - dist / max_len
+            if sim >= _MIN_SCORE:
+                scored.append((sim, uuid))
+
+    if not scored:
+        return None
+
+    # Sort by score descending.
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_score, best_uuid = scored[0]
+
+    # Reject if ambiguous at the top score.
+    top_matches = [u for s, u in scored if s == best_score]
+    if len(top_matches) > 1:
+        return None
+
+    return best_uuid
 
 
 # ---------------------------------------------------------------------------

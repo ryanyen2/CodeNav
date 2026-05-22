@@ -74,11 +74,9 @@ def _state_color(state: str) -> str:
 
 
 def _state_badge(feature, store) -> str:
-    from codoc.core.state_derivation import compute_feature_state, BindingResolution
-    bindings = store.list_bindings(feature.uuid)
-    obligations = store.list_obligations(feature_uuid=feature.uuid, status="pending")
-    state = compute_feature_state(feature, bindings, [], obligations)
-    return state.value.capitalize()
+    from codoc.core.feature_view import resolve_feature
+    view = resolve_feature(store, feature)
+    return view.state.value.capitalize()
 
 
 def _binding_count(feature_uuid: str, store) -> int:
@@ -456,7 +454,7 @@ def cmd_accept(
 
 
 def _accept_one(hlc: str, store, jsonl_log, tx_log, codoc_dir: Path, label=None) -> None:
-    from codoc.cli.tx import _apply_accepted_transaction
+    from codoc.core.apply import apply_accepted_transaction
 
     tx = store.get_transaction(hlc)
     if tx is None:
@@ -466,7 +464,7 @@ def _accept_one(hlc: str, store, jsonl_log, tx_log, codoc_dir: Path, label=None)
         typer.echo(f"Error: {hlc[:16]}… is already accepted.", err=True)
         raise typer.Exit(code=1)
     try:
-        _apply_accepted_transaction(tx, store)
+        apply_accepted_transaction(tx, store)
         accepted = tx_log.accept_proposal(hlc)
         if label:
             _valid_labels = {"accept-verbatim", "accept-light-edit", "accept-heavy-edit", "reject"}

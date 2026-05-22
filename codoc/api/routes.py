@@ -86,8 +86,7 @@ class TransactionResponse(BaseModel):
 class BootstrapRequest(BaseModel):
     root_dir: str
     repo_name: str = "codebase"
-    target_cluster_size: int = 8
-    hierarchical: bool = False
+    with_intent: bool = False
 
 
 class BootstrapFinishRequest(BaseModel):
@@ -261,129 +260,6 @@ def _tx_to_response(tx: Transaction) -> TransactionResponse:
     )
 
 
-def _apply_accepted_transaction(
-    tx: Transaction,
-    store: SQLiteStore,
-    jsonl_log: JSONLLog,
-) -> None:
-    """Apply the side-effects of an accepted transaction to the feature store."""
-    kind = tx.kind
-    payload = tx.payload
-
-    if kind == TransactionKind.INTRODUCE:
-        # Create the Feature record.
-        hlc = tx.hlc
-        feature = Feature(
-            uuid=payload.get("provisional_uuid") or str(_uuid.uuid4()),
-            slug=payload.get("slug", "unnamed"),
-            title=payload.get("title", ""),
-            parent_uuid=payload.get("parent_uuid"),
-            intent=payload.get("intent", ""),
-            retired=False,
-            created_at_hlc=hlc,
-            updated_at_hlc=hlc,
-        )
-        store.upsert_feature(feature)
-
-        # Create Binding records for each candidate_binding in the payload.
-        for cb in payload.get("candidate_bindings", []):
-            anchor_data = cb.get("anchor", {})
-            try:
-                anchor = Anchor.model_validate(anchor_data)
-            except Exception:
-                # Skip malformed anchors rather than aborting the whole accept.
-                continue
-            binding = Binding(
-                uuid=str(_uuid.uuid4()),
-                feature_uuid=feature.uuid,
-                anchor=anchor,
-                fingerprint=cb.get("fingerprint", ""),
-                fingerprint_at_hlc=hlc,
-                parent_symbol=cb.get("parent_symbol"),
-            )
-            store.upsert_binding(binding)
-
-    elif kind == TransactionKind.ABSORB:
-        # Create a single new Binding.
-        hlc = tx.hlc
-        anchor_data = payload.get("anchor") or {
-            "file": payload.get("file", ""),
-            "symbol_path": payload.get("symbol_path"),
-        }
-        try:
-            anchor = Anchor.model_validate(anchor_data)
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Invalid anchor in ABSORB payload: {exc}") from exc
-
-        binding = Binding(
-            uuid=str(_uuid.uuid4()),
-            feature_uuid=payload["feature_uuid"],
-            anchor=anchor,
-            fingerprint=payload.get("current_fingerprint") or payload.get("fingerprint", ""),
-            fingerprint_at_hlc=hlc,
-            parent_symbol=payload.get("parent_symbol"),
-        )
-        store.upsert_binding(binding)
-
-    elif kind == TransactionKind.EVICT:
-        # Delete the binding identified by uuid in the payload.
-        binding_uuid = payload.get("binding_uuid")
-        if binding_uuid:
-            store.delete_binding(binding_uuid)
-        # If no explicit binding_uuid, attempt lookup by symbol_path.
-        else:
-            symbol_path = payload.get("symbol_path")
-            feature_uuid = payload.get("feature_uuid")
-            if symbol_path and feature_uuid:
-                bindings = store.list_bindings(feature_uuid)
-                for b in bindings:
-                    if b.anchor.symbol_path == symbol_path:
-                        store.delete_binding(b.uuid)
-                        break
-
-    elif kind == TransactionKind.RETIRE_REFLECTIVE:
-        feature_uuid = payload.get("feature_uuid")
-        if feature_uuid:
-            feature = store.get_feature(feature_uuid)
-            if feature is not None:
-                updated = feature.model_copy(
-                    update={"retired": True, "updated_at_hlc": tx.hlc}
-                )
-                store.upsert_feature(updated)
-
-    elif kind == TransactionKind.RENAME_INFER:
-        feature_uuid = payload.get("feature_uuid")
-        new_slug = payload.get("new_slug")
-        if feature_uuid and new_slug:
-            feature = store.get_feature(feature_uuid)
-            if feature is not None:
-                updated = feature.model_copy(
-                    update={"slug": new_slug, "updated_at_hlc": tx.hlc}
-                )
-                store.upsert_feature(updated)
-
-    elif kind == TransactionKind.REATTRIBUTE:
-        # Move binding(s) from one feature to another.
-        binding_uuid = payload.get("binding_uuid")
-        new_feature_uuid = payload.get("new_feature_uuid")
-        if binding_uuid and new_feature_uuid:
-            binding = store.get_binding(binding_uuid)
-            if binding is not None:
-                updated = binding.model_copy(
-                    update={"feature_uuid": new_feature_uuid}
-                )
-                store.upsert_binding(updated)
-
-    elif kind in (TransactionKind.AMEND, TransactionKind.RENAME, TransactionKind.RETIRE):
-        # Intentional kinds committed directly — no separate apply step needed;
-        # their handlers already mutated the store.  Guard here for completeness.
-        pass
-
-    else:
-        # All other unhandled kinds: no store mutation required at this stage.
-        pass
-
-
 # ---------------------------------------------------------------------------
 # Bootstrap routes
 # ---------------------------------------------------------------------------
@@ -411,8 +287,7 @@ async def bootstrap(body: BootstrapRequest) -> BootstrapResponse:
             root_dir=body.root_dir,
             codoc_dir=str(codoc_path),
             repo_name=body.repo_name,
-            target_cluster_size=body.target_cluster_size,
-            hierarchical=body.hierarchical,
+            with_intent=body.with_intent,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1072,6 +947,7 @@ async def post_sync(body: SyncRequest) -> SyncResponse:
 async def get_severed_features(root_dir: str = Query(...)) -> list[dict]:
     """Return features that are in the SEVERED state (all bindings fail to resolve)."""
     from codoc.core.state_derivation import FeatureState
+    from codoc.core.feature_view import resolve_feature
 
     codoc_dir = _codoc_dir(root_dir)
     store = _open_store(codoc_dir)
@@ -1081,16 +957,13 @@ async def get_severed_features(root_dir: str = Query(...)) -> list[dict]:
         for feature in features:
             if feature.retired:
                 continue
-            bindings = store.list_bindings(feature.uuid)
-            obligations = store.list_obligations(feature_uuid=feature.uuid, status="pending")
-            # Conservative: pass empty resolutions → SEVERED if no resolutions available.
-            state = compute_feature_state(feature, bindings, [], obligations)
-            if state == FeatureState.SEVERED:
+            view = resolve_feature(store, feature)
+            if view.state == FeatureState.SEVERED:
                 result.append({
                     "uuid": feature.uuid,
                     "title": feature.title or feature.slug,
                     "slug": feature.slug,
-                    "binding_count": len(bindings),
+                    "binding_count": len(view.bindings),
                 })
     finally:
         store.close()

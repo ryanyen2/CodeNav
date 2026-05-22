@@ -1,20 +1,9 @@
-"""Structure-first bootstrap grouping.
+"""Directory-and-class-prefix grouping for bootstrap.
 
-Rather than computing clusters from embeddings (k-means, Leiden), this module
-reads the structure that developers have *already expressed*: directory hierarchy
-and class/module membership in symbol paths.
-
-Inspired by:
-- Leiden's insight that community quality = alignment with human structure
-  (Traag, Waltman, van Eck, Sci. Rep. 2019) — we use the explicit code
-  structure instead of computing synthetic communities.
-- RAPTOR's bottom-up summarization (Sarthi et al., ICLR 2024) — the dir/class
-  tree is walked bottom-up; parent title is derived from child names for free.
-- GraphRAG's community descriptions (Edge et al., 2024) — directory/class name
-  IS the description; LLM only needed for groups with opaque names.
-
-Default: zero LLM calls. Use ``propose_structural(with_intent=True)`` to
-optionally batch-generate intent text (one prompt per 5 groups).
+Groups chunks by directory, then by class prefix within directories, to build
+a structural feature tree without LLM calls. Zero LLM calls by default.
+Use ``propose_structural(with_intent=True)`` to optionally batch-generate
+intent text (one call per feature).
 """
 
 from __future__ import annotations

@@ -31,12 +31,10 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
 from codoc.core.log import TransactionLog
-from codoc.core.state_derivation import compute_feature_state
 from codoc.model.feature import Feature
 from codoc.model.transaction import Transaction, TransactionKind
 from codoc.projection.meta import TreeMeta, _sha1
@@ -361,7 +359,6 @@ def render_tree_with_meta(
     )
     content = files.get(_INDEX_FILENAME, "")
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    render_token = secrets.token_hex(8)
 
     meta = TreeMeta(
         base_hlc=head_str,
@@ -372,7 +369,6 @@ def render_tree_with_meta(
         title_path_to_uuid=title_path_to_uuid,
         line_range_to_hlc=line_range_to_hlc,
         content_hash=content_hash,
-        render_token=render_token,
         feature_hashes=feature_hashes,
     )
     return files, meta

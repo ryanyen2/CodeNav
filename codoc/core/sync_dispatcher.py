@@ -163,13 +163,6 @@ def _ensure_hooks(root: Path, result: SyncSummary) -> None:
 
 
 def _run_bootstrap(root: Path, result: SyncSummary) -> None:
-    from codoc.cli._utils import check_llm_config
-    try:
-        check_llm_config()
-    except SystemExit:
-        result.actions.append("LLM not configured — set OPENAI_API_KEY and re-run sync")
-        return
-
     from codoc.pipelines.bootstrap.runner import run_bootstrap
     codoc_dir = root / ".codoc"
     try:
@@ -177,7 +170,6 @@ def _run_bootstrap(root: Path, result: SyncSummary) -> None:
             root_dir=str(root),
             codoc_dir=str(codoc_dir),
             repo_name=root.name,
-            target_cluster_size=8,
         )
         count = r.get("proposal_count", 0)
         result.actions.append(f"bootstrap: {r.get('chunk_count', 0)} chunks → {count} proposals")

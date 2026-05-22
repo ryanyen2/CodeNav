@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS bindings (
     anchor_json TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
     fingerprint_at_hlc TEXT NOT NULL,
-    parent_symbol TEXT
+    parent_symbol TEXT,
+    types_hash TEXT,
+    minhash_sketch BLOB
 );
 CREATE INDEX IF NOT EXISTS idx_bindings_feature ON bindings(feature_uuid);
 
@@ -98,26 +100,9 @@ CREATE TABLE IF NOT EXISTS binding_resolutions (
     verdict TEXT,
     confidence REAL,
     rationale TEXT,
-    model TEXT,
-    prompt_hash TEXT,
     PRIMARY KEY (binding_uuid, checked_at_hlc)
 );
 CREATE INDEX IF NOT EXISTS idx_br_binding ON binding_resolutions(binding_uuid);
-
-CREATE TABLE IF NOT EXISTS provenance (
-    provenance_id TEXT PRIMARY KEY,
-    tx_hlc TEXT,
-    source TEXT NOT NULL,
-    model TEXT,
-    prompt_hash TEXT,
-    prompt_excerpt TEXT,
-    response_hash TEXT,
-    response_excerpt TEXT,
-    inputs_json TEXT,
-    runtime_ms INTEGER,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_prov_tx ON provenance(tx_hlc);
 
 CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
@@ -129,6 +114,8 @@ _MIGRATIONS = [
     "ALTER TABLE features ADD COLUMN title TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE features ADD COLUMN description TEXT NOT NULL DEFAULT ''",
     "INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '2')",
+    "ALTER TABLE bindings ADD COLUMN types_hash TEXT",
+    "ALTER TABLE bindings ADD COLUMN minhash_sketch BLOB",
 ]
 
 
@@ -194,6 +181,8 @@ def _binding_to_row(b: Binding) -> dict:
         "fingerprint": b.fingerprint,
         "fingerprint_at_hlc": b.fingerprint_at_hlc.to_str(),
         "parent_symbol": b.parent_symbol,
+        "types_hash": b.types_hash,
+        "minhash_sketch": b.minhash_sketch,
     }
 
 
@@ -203,6 +192,9 @@ def _row_to_binding(row: sqlite3.Row) -> Binding:
     raw = dict(row)
     raw["anchor"] = Anchor.model_validate(json.loads(raw.pop("anchor_json")))
     raw["fingerprint_at_hlc"] = HLC.from_str(raw["fingerprint_at_hlc"])
+    # types_hash and minhash_sketch may be absent in older DBs.
+    raw.setdefault("types_hash", None)
+    raw.setdefault("minhash_sketch", None)
     return Binding.model_validate(raw)
 
 
@@ -547,15 +539,19 @@ class SQLiteStore:
         self._db.execute(
             """
             INSERT INTO bindings
-                (uuid, feature_uuid, anchor_json, fingerprint, fingerprint_at_hlc, parent_symbol)
+                (uuid, feature_uuid, anchor_json, fingerprint, fingerprint_at_hlc, parent_symbol,
+                 types_hash, minhash_sketch)
             VALUES
-                (:uuid, :feature_uuid, :anchor_json, :fingerprint, :fingerprint_at_hlc, :parent_symbol)
+                (:uuid, :feature_uuid, :anchor_json, :fingerprint, :fingerprint_at_hlc, :parent_symbol,
+                 :types_hash, :minhash_sketch)
             ON CONFLICT(uuid) DO UPDATE SET
                 feature_uuid       = excluded.feature_uuid,
                 anchor_json        = excluded.anchor_json,
                 fingerprint        = excluded.fingerprint,
                 fingerprint_at_hlc = excluded.fingerprint_at_hlc,
-                parent_symbol      = excluded.parent_symbol
+                parent_symbol      = excluded.parent_symbol,
+                types_hash         = excluded.types_hash,
+                minhash_sketch     = excluded.minhash_sketch
             """,
             row,
         )
@@ -740,28 +736,24 @@ class SQLiteStore:
         verdict: str | None = None,
         confidence: float | None = None,
         rationale: str | None = None,
-        model: str | None = None,
-        prompt_hash: str | None = None,
     ) -> None:
         self._db.execute(
             """
             INSERT INTO binding_resolutions
                 (binding_uuid, checked_at_hlc, resolved, fingerprint_matches,
-                 similarity, verdict, confidence, rationale, model, prompt_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 similarity, verdict, confidence, rationale)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(binding_uuid, checked_at_hlc) DO UPDATE SET
                 resolved           = excluded.resolved,
                 fingerprint_matches = excluded.fingerprint_matches,
                 similarity         = excluded.similarity,
                 verdict            = excluded.verdict,
                 confidence         = excluded.confidence,
-                rationale          = excluded.rationale,
-                model              = excluded.model,
-                prompt_hash        = excluded.prompt_hash
+                rationale          = excluded.rationale
             """,
             (binding_uuid, checked_at_hlc, 1 if resolved else 0,
              1 if fingerprint_matches else 0, similarity, verdict,
-             confidence, rationale, model, prompt_hash),
+             confidence, rationale),
         )
         self._db.commit()
 

@@ -7,7 +7,7 @@ emits a transaction directly (EVICT) or takes no action at all.
 
 from __future__ import annotations
 
-from codoc.pipelines.reflective.fingerprint_compare import ChunkChange
+from codoc.pipelines.reflective.types import ChunkChange
 from codoc.model.transaction import Transaction, TransactionKind
 from codoc.model.hlc import HLC
 
@@ -32,7 +32,7 @@ def should_escalate(change: ChunkChange, all_bindings: list) -> bool:
 
     The caller is responsible for actually emitting the ABSORB transaction
     when this function returns False and change_kind == "added" — check
-    ``_is_cheap_absorb(change, all_bindings)`` separately for that case.
+    ``_is_namespace_absorb(change, all_bindings)`` separately for that case.
     """
     kind = change.change_kind
 
@@ -45,8 +45,8 @@ def should_escalate(change: ChunkChange, all_bindings: list) -> bool:
         return False
 
     if kind == "added" and change.existing_binding_uuid is None:
-        # Check cheap absorb heuristic before committing to LLM.
-        if _is_cheap_absorb(change, all_bindings):
+        # Check namespace absorb heuristic before committing to LLM.
+        if _is_namespace_absorb(change, all_bindings):
             return False  # Caller will emit ABSORB directly.
         return True  # Needs LLM to propose INTRODUCE or ABSORB.
 
@@ -55,19 +55,19 @@ def should_escalate(change: ChunkChange, all_bindings: list) -> bool:
     return True
 
 
-def is_cheap_absorb(change: ChunkChange, all_bindings: list) -> bool:
+def is_namespace_absorb(change: ChunkChange, all_bindings: list) -> bool:
     """Return True if this added chunk can be absorbed into an existing feature
     without LLM judgment.
 
-    Condition: exactly one feature has all its bindings in the same file as
-    the new chunk.  This is a high-confidence signal that the new chunk
-    belongs to that feature (e.g. a new method added to an existing class).
+    Namespace-gate absorb: returns True only when the new chunk's dotted symbol
+    prefix matches >= 50% of an existing feature's bindings in the same file.
     """
-    return _is_cheap_absorb(change, all_bindings)
+    return _is_namespace_absorb(change, all_bindings)
 
 
-def _is_cheap_absorb(change: ChunkChange, all_bindings: list) -> bool:
-    """Internal implementation of the cheap absorb heuristic.
+def _is_namespace_absorb(change: ChunkChange, all_bindings: list) -> bool:
+    """Namespace-gate absorb: returns True only when the new chunk's dotted symbol
+    prefix matches >= 50% of an existing feature's bindings in the same file.
 
     Requires *both*:
     1. Exactly one feature has all its bindings in the same file as the new chunk.
@@ -91,6 +91,10 @@ def _is_cheap_absorb(change: ChunkChange, all_bindings: list) -> bool:
         return False
 
     return _shares_symbol_namespace(change.symbol_path, candidates[0])
+
+
+# Keep the old name as an alias so any external callers are not broken.
+is_cheap_absorb = is_namespace_absorb
 
 
 def _shares_symbol_namespace(new_sp: str, bindings: list) -> bool:

@@ -42,9 +42,12 @@ def extract_skeleton(source: str, language_adapter) -> list[str]:
 
 
 def skeleton_hash(source: str, language_adapter) -> str:
-    """SHA-256 of the structural skeleton — rename-invariant chunk fingerprint."""
-    types = extract_skeleton(source, language_adapter)
-    return hashlib.sha256(" ".join(types).encode("utf-8")).hexdigest()
+    """SHA-256 of the structural skeleton — rename-invariant chunk fingerprint.
+
+    Delegates to codoc.core.tree_walk.walk for a single-pass implementation.
+    """
+    from codoc.core.tree_walk import walk as _walk
+    return _walk(source, language_adapter).types_hash
 
 
 def skeleton_distance(a: list[str], b: list[str]) -> float:

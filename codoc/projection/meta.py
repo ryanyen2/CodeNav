@@ -53,8 +53,6 @@ class TreeMeta:
     # line_range_to_hlc: {"_index.codoc:12-15": "<hlc>"}  — diff hunk lines → proposal HLC
     content_hash: str = ""
     # SHA-256 of the _index.codoc content; used for idempotent render short-circuit
-    render_token: str = ""
-    # Random token stamped per render; FS watcher compares to detect self-triggered saves
     feature_hashes: dict = field(default_factory=dict)
     # feature_hashes: {uuid: sha1(title + "|" + intent + "|" + (parent_uuid or "") + "|" + str(retired))}
 
@@ -72,7 +70,6 @@ class TreeMeta:
             title_path_to_uuid=data.get("title_path_to_uuid", {}),
             line_range_to_hlc=data.get("line_range_to_hlc", {}),
             content_hash=data.get("content_hash", ""),
-            render_token=data.get("render_token", ""),
             feature_hashes=data.get("feature_hashes", {}),
         )
 

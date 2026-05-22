@@ -6,7 +6,20 @@ Algorithm references:
 - Winnowing (Schleimer, Wilkerson, Aiken, SIGMOD 2003) + MinHash (Broder 1997).
 """
 
-from codoc.core.chunk_matching.arbiter import MatchResult, match_chunk_sets
-from codoc.core.chunk_matching.similarity import token_jaccard, minhash_jaccard
+from codoc.core.chunk_matching.matcher import (
+    Match,
+    MatchResult,
+    MatchingThresholds,
+    match_chunks,
+    match_chunk_sets,
+)
+from codoc.core.chunk_matching.minhash import minhash_jaccard
 
-__all__ = ["MatchResult", "match_chunk_sets", "token_jaccard", "minhash_jaccard"]
+__all__ = [
+    "Match",
+    "MatchResult",
+    "MatchingThresholds",
+    "match_chunks",
+    "match_chunk_sets",
+    "minhash_jaccard",
+]

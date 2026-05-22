@@ -8,7 +8,7 @@ Transaction and written to the transaction log.
 
 from __future__ import annotations
 
-from codoc.pipelines.reflective.fingerprint_compare import ChunkChange
+from codoc.pipelines.reflective.types import ChunkChange
 from codoc.agents.attribution import AttributionInput, propose_attribution, AttributionProposal
 from codoc.core.log import TransactionLog
 from codoc.core.logging import get_logger
