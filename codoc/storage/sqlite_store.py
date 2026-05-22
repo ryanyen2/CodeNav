@@ -88,11 +88,47 @@ CREATE TABLE IF NOT EXISTS chunk_fingerprints (
     fingerprint TEXT NOT NULL,
     last_seen_commit TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS binding_resolutions (
+    binding_uuid TEXT NOT NULL,
+    checked_at_hlc TEXT NOT NULL,
+    resolved INTEGER NOT NULL DEFAULT 1,
+    fingerprint_matches INTEGER NOT NULL DEFAULT 1,
+    similarity REAL,
+    verdict TEXT,
+    confidence REAL,
+    rationale TEXT,
+    model TEXT,
+    prompt_hash TEXT,
+    PRIMARY KEY (binding_uuid, checked_at_hlc)
+);
+CREATE INDEX IF NOT EXISTS idx_br_binding ON binding_resolutions(binding_uuid);
+
+CREATE TABLE IF NOT EXISTS provenance (
+    provenance_id TEXT PRIMARY KEY,
+    tx_hlc TEXT,
+    source TEXT NOT NULL,
+    model TEXT,
+    prompt_hash TEXT,
+    prompt_excerpt TEXT,
+    response_hash TEXT,
+    response_excerpt TEXT,
+    inputs_json TEXT,
+    runtime_ms INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prov_tx ON provenance(tx_hlc);
+
+CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 _MIGRATIONS = [
     "ALTER TABLE features ADD COLUMN title TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE features ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+    "INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '2')",
 ]
 
 
@@ -241,6 +277,7 @@ class SQLiteStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         for stmt in _DDL.strip().split(";"):
             stmt = stmt.strip()
             if stmt:

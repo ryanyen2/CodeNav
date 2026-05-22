@@ -11,9 +11,12 @@ from __future__ import annotations
 from codoc.pipelines.reflective.fingerprint_compare import ChunkChange
 from codoc.agents.attribution import AttributionInput, propose_attribution, AttributionProposal
 from codoc.core.log import TransactionLog
+from codoc.core.logging import get_logger
 from codoc.storage.sqlite_store import SQLiteStore
 from codoc.model.transaction import Transaction, TransactionKind
 from codoc.model.hlc import HLC
+
+_log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +196,8 @@ def escalate_to_llm(
             attribution_input,
             repo_name=repo_name,
         )
-    except Exception:
-        # If the LLM call fails (network, parsing, etc.) do not crash the
-        # pipeline — skip this chunk and return None.
+    except Exception as exc:
+        _log.warning("reflect.propose.llm_failed %s@%s: %s", change.symbol_path, change.file, exc)
         return None
 
     hlc = HLC.now()

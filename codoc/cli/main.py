@@ -10,6 +10,13 @@ from codoc.cli.gate_run import gate_run
 from codoc.cli.plan import plan_command
 from codoc.cli.server import server
 from codoc.cli.commit_preflight import commit_preflight
+from codoc.cli.init import init
+from codoc.cli.reflect import reflect_command
+from codoc.cli.bootstrap import bootstrap_app
+from codoc.cli.projection import proj_app
+from codoc.cli.tx import tx_app
+from codoc.cli.feature import feature_app
+from codoc.cli.doctor import doctor
 from codoc.cli.commands import (
     cmd_list,
     cmd_show,
@@ -24,11 +31,54 @@ from codoc.cli.commands import (
     cmd_conflicts,
 )
 
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version, PackageNotFoundError
+        try:
+            ver = version("codoc")
+        except PackageNotFoundError:
+            ver = "0.1.1-dev"
+        typer.echo(f"codoc {ver}")
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="codoc",
     help="codoc keeps a feature-tree view of your code, synced as you commit.",
     no_args_is_help=True,
 )
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        None,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    pass
+
+
+# ------------------------------------------------------------------
+# Bootstrap and initialization
+# ------------------------------------------------------------------
+app.command("init")(init)
+app.add_typer(bootstrap_app, name="bootstrap")
+
+# ------------------------------------------------------------------
+# Reflective pipeline
+# ------------------------------------------------------------------
+app.command("reflect")(reflect_command)
+
+# ------------------------------------------------------------------
+# Projection (tree ↔ DB lens)
+# ------------------------------------------------------------------
+app.add_typer(proj_app, name="projection")
 
 # ------------------------------------------------------------------
 # Primary sync verb — start here
@@ -58,3 +108,10 @@ app.command("plan")(plan_command)
 app.command("gate-run")(gate_run)
 app.command("server")(server)
 app.command("commit-preflight")(commit_preflight)
+app.command("doctor")(doctor)
+
+# ------------------------------------------------------------------
+# Deprecated aliases (print notice, then delegate)
+# ------------------------------------------------------------------
+app.add_typer(tx_app, name="tx")
+app.add_typer(feature_app, name="feature")

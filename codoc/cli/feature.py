@@ -7,6 +7,8 @@ from pathlib import Path
 
 import typer
 
+from codoc.cli._utils import require_codoc_dir as _require_codoc_dir
+
 _DEPRECATION_NOTICE = (
     "[deprecated] `codoc feature` has been replaced by top-level commands.\n"
     "  codoc feature show    →  codoc show <slug-path-or-prefix>\n"
@@ -29,16 +31,6 @@ feature_app = typer.Typer(
     invoke_without_command=True,
 )
 
-
-def _require_codoc_dir(root_dir: str) -> Path:
-    root = Path(root_dir).resolve()
-    codoc_dir = root / ".codoc"
-    if not codoc_dir.exists():
-        typer.echo(
-            f"Error: .codoc/ not found at {codoc_dir}. Run 'codoc init' first.", err=True
-        )
-        raise typer.Exit(code=1)
-    return codoc_dir
 
 
 @feature_app.command("show")

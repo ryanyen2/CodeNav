@@ -5,9 +5,12 @@ from __future__ import annotations
 import uuid as _uuid
 from pathlib import Path
 
+from codoc.core.logging import get_logger
 from codoc.model.transaction import Transaction, TransactionKind
 from codoc.model.hlc import HLC
 from codoc.pipelines.intentional.runner import open_stores
+
+_log = get_logger(__name__)
 
 
 def run_plan(
@@ -153,7 +156,8 @@ def run_plan(
                 if op.kind == "introduce" and op.slug:
                     slug_to_uuid[op.slug] = provisional_uuid
 
-            except Exception:
+            except Exception as exc:
+                _log.warning("plan.op_failed %s(%s): %s", op.kind, op.slug, exc)
                 continue
 
     finally:

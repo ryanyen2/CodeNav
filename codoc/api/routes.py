@@ -16,6 +16,9 @@ from pydantic import BaseModel
 from codoc.storage.sqlite_store import SQLiteStore
 from codoc.storage.jsonl_log import JSONLLog
 from codoc.core.log import TransactionLog
+from codoc.core.logging import get_logger
+
+_log = get_logger(__name__)
 from codoc.core.state_derivation import compute_feature_state, BindingResolution
 from codoc.pipelines.bootstrap.runner import run_bootstrap, finish_bootstrap
 from codoc.pipelines.reflective.runner import run_reflect
@@ -1251,7 +1254,8 @@ def _resolve_features(db_path: str, rel_path: str) -> tuple[list[str], list[str]
             return uuids, slugs
         finally:
             store.close()
-    except Exception:
+    except Exception as exc:
+        _log.warning("api.lookup_features_failed: %s", exc)
         return [], []
 
 
@@ -1275,8 +1279,8 @@ async def _run_debounced_reflect(
                 topic="reflect_done",
                 data={"rel_path": rel_path, "proposals": result["proposals"]},
             ))
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("api.debounced_reflect_failed %s: %s", rel_path, exc)
 
 
 class ActivityEntryResponse(BaseModel):
@@ -1361,8 +1365,8 @@ async def claude_code_event(body: ClaudeCodeEventRequest) -> dict:
     if codoc_dir:
         try:
             log_event(codoc_dir, session_id, body.model_dump())
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("api.log_event_failed: %s", exc)
 
     return {}
 
