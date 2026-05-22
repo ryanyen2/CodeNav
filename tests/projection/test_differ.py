@@ -15,6 +15,7 @@ from codoc.projection.differ import (
     AcceptOp,
     AmendOp,
     DiffError,
+    IntroduceOp,
     RejectOp,
     RenameOp,
     RestructureOp,
@@ -292,7 +293,8 @@ def test_proposal_reject_marker_emits_reject(tmp_path: Path) -> None:
     assert reject_ops[0].hlc == proposal_hlc.to_str()
 
 
-def test_new_feature_without_uuid_is_error(tmp_path: Path) -> None:
+def test_new_feature_without_uuid_becomes_introduce_op(tmp_path: Path) -> None:
+    """Unresolvable feature lines are now turned into IntroduceOp (proposals), not errors."""
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
     _seed(codoc_dir, n_features=1)
@@ -303,7 +305,7 @@ def test_new_feature_without_uuid_is_error(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Append a new feature line with NO UUID — illegal.
+    # Append a new feature line that cannot be matched to any known feature.
     f = _index_path(codoc_dir)
     f.write_text(f.read_text() + "\n  - new-handcrafted-feature  [Drafting]\n")
 
@@ -314,7 +316,11 @@ def test_new_feature_without_uuid_is_error(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    assert any(e.kind == "new_feature_not_allowed" for e in errors)
+    # No fatal error — instead we get an IntroduceOp.
+    assert not any(e.kind == "new_feature_not_allowed" for e in errors)
+    introduce_ops = [o for o in ops if isinstance(o, IntroduceOp)]
+    assert len(introduce_ops) == 1
+    assert introduce_ops[0].title == "new-handcrafted-feature"
 
 
 def test_unknown_uuid_is_error(tmp_path: Path) -> None:

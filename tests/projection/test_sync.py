@@ -83,7 +83,8 @@ def test_sync_applies_amend_and_rename(tmp_path: Path) -> None:
     assert "updated" in feat.intent.lower()
 
 
-def test_sync_parse_error_no_db_writes(tmp_path: Path) -> None:
+def test_sync_new_feature_becomes_introduce_proposal(tmp_path: Path) -> None:
+    """Adding a new unresolvable feature line creates an INTRODUCE proposal, not a parse error."""
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
     a, b = _seed_two(codoc_dir)
@@ -94,22 +95,25 @@ def test_sync_parse_error_no_db_writes(tmp_path: Path) -> None:
     finally:
         store.close()
 
-    # Inject a bogus feature without UUID — should be a fatal error.
+    # Inject a new feature line that cannot be matched.
     f = codoc_dir / "tree" / "_index.codoc"
-    f.write_text(f.read_text() + "\n- handcrafted-feature-no-uuid  [Drafting]\n  intent line\n")
+    f.write_text(f.read_text() + "\n- handcrafted-feature-no-uuid\n    A brand new feature.\n")
 
     result = sync_from_dir(str(codoc_dir))
-    assert result.status == "parse_error"
-    assert result.applied == []
+    assert result.status == "ok"
+    assert any("INTRODUCE" in line for line in result.applied)
 
-    # The store should be unchanged.
+    # The existing features should be unchanged.
     store, _, _ = open_stores(str(codoc_dir))
     try:
         feat = store.get_feature(a)
+        proposals = store.list_transactions(proposal=True, limit=0)
     finally:
         store.close()
     assert feat.slug == "alpha"
     assert feat.intent == "Alpha intent."
+    # There should be a pending INTRODUCE proposal.
+    assert any(p.kind.value == "introduce" for p in proposals)
 
 
 def test_sync_no_changes_is_ok_noop(tmp_path: Path) -> None:

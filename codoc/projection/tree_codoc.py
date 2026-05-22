@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,7 +39,8 @@ from codoc.core.log import TransactionLog
 from codoc.core.state_derivation import compute_feature_state
 from codoc.model.feature import Feature
 from codoc.model.transaction import Transaction, TransactionKind
-from codoc.projection.meta import TreeMeta
+from codoc.projection.meta import TreeMeta, _sha1
+from codoc.projection.tree_align import _title_norm_hash
 from codoc.storage.sqlite_store import SQLiteStore
 
 _INDEX_FILENAME = "_index.codoc"
@@ -78,6 +80,28 @@ def _format_description(
     while lines and lines[-1] == "":
         lines.pop()
     return lines
+
+
+def _first_sentence(prose: str, max_chars: int = 160) -> str:
+    """Return the first sentence of *prose*, capped at *max_chars*.
+
+    A sentence ends at the first ``.``, ``!``, or ``?`` followed by
+    whitespace or end-of-string.
+    """
+    if not prose.strip():
+        return ""
+    text = " ".join(prose.split())  # normalise whitespace
+    m = re.search(r"[.!?](?:\s|$)", text)
+    if m:
+        sentence = text[: m.start() + 1]
+    else:
+        sentence = text
+    return sentence[:max_chars]
+
+
+def _intent_hash(intent: str) -> str:
+    """sha1 of intent with normalised whitespace."""
+    return _sha1(" ".join(intent.split()))
 
 
 def _render_proposal(
@@ -156,7 +180,12 @@ def _render_feature_block(
     title_path_to_uuid: dict,
     line_range_to_hlc: dict,
     line_offset: int,
+    sibling_index: int = 0,
+    feature_hashes: dict | None = None,
 ) -> list[str]:
+    if feature_hashes is None:
+        feature_hashes = {}
+
     file_name = _INDEX_FILENAME
     indent = "  " * depth
     desc_indent = indent + "    "
@@ -175,17 +204,37 @@ def _render_feature_block(
     slug_path_to_uuid[slug_path] = feature.uuid
     title_path_to_uuid[current_title_path] = feature.uuid
     lines.append(feature_line)
-    location_tracker[feature.uuid] = {
-        "file": file_name,
-        "line": feature_line_no,
-        "kind": "feature",
-    }
 
-    # Description prose (prefer description, fall back to intent for old features).
+    # Concise intent line: first sentence only (≤160 chars), single line.
+    description_lines: list[str] = []
     if not feature.retired:
         prose = feature.description or feature.intent
-        if prose.strip():
-            lines.extend(_format_description(prose, desc_indent))
+        first = _first_sentence(prose)
+        if first:
+            description_lines = [f"{desc_indent}{first}"]
+
+    lines.extend(description_lines)
+    line_end = feature_line_no + len(description_lines)  # last line of this block (before children)
+
+    # Populate sidecar location entry with structural fields.
+    location_tracker[feature.uuid] = {
+        "file": file_name,
+        "kind": "feature",
+        "line": feature_line_no,
+        "line_end": line_end,
+        "depth": depth,
+        "sibling_index": sibling_index,
+        "parent_uuid": feature.parent_uuid,
+        "title": display,
+        "slug": feature.slug,
+        "title_norm_hash": _title_norm_hash(display),
+        "intent_hash": _intent_hash(feature.intent),
+    }
+
+    # Populate feature_hashes for conflict detection.
+    feature_hashes[feature.uuid] = _sha1(
+        display + "|" + feature.intent + "|" + (feature.parent_uuid or "") + "|" + str(feature.retired)
+    )
 
     # Bindings index (sidecar only, not rendered inline).
     bindings = store.list_bindings(feature.uuid)
@@ -202,7 +251,7 @@ def _render_feature_block(
 
     # Children.
     children = store.list_features(parent_uuid=feature.uuid)
-    for child in children:
+    for child_idx, child in enumerate(children):
         lines.append("")
         child_slug_path = f"{slug_path}/{child.slug}"
         child_lines = _render_feature_block(
@@ -218,6 +267,8 @@ def _render_feature_block(
             title_path_to_uuid,
             line_range_to_hlc,
             line_offset=line_offset + len(lines),
+            sibling_index=child_idx,
+            feature_hashes=feature_hashes,
         )
         lines.extend(child_lines)
 
@@ -237,7 +288,7 @@ def _render_feature_block(
 
 def _render_all(
     store: SQLiteStore, tx_log: TransactionLog
-) -> tuple[dict[str, str], dict, dict, dict, dict, dict, str]:
+) -> tuple[dict[str, str], dict, dict, dict, dict, dict, str, dict]:
     """Build the single _index.codoc document plus tracking dicts."""
     proposals_per_feature, top_level_proposals = _build_proposal_index(store)
     head_hlc = _current_head_hlc(tx_log)
@@ -248,6 +299,7 @@ def _render_all(
     slug_path_to_uuid: dict = {}
     title_path_to_uuid: dict = {}
     line_range_to_hlc: dict = {}
+    feature_hashes: dict = {}
 
     root_features = store.list_features(parent_uuid="")
 
@@ -256,7 +308,7 @@ def _render_all(
     if not root_features and not top_level_proposals:
         body_lines.append("# (empty tree — run `codoc bootstrap` to seed)")
     else:
-        for f in root_features:
+        for root_idx, f in enumerate(root_features):
             block_lines = _render_feature_block(
                 f, depth=0, slug_path=f.slug, title_path="",
                 store=store,
@@ -267,6 +319,8 @@ def _render_all(
                 title_path_to_uuid=title_path_to_uuid,
                 line_range_to_hlc=line_range_to_hlc,
                 line_offset=len(body_lines),
+                sibling_index=root_idx,
+                feature_hashes=feature_hashes,
             )
             body_lines.extend(block_lines)
             body_lines.append("")
@@ -282,7 +336,7 @@ def _render_all(
 
     content = "\n".join(body_lines) + "\n"
     files: dict[str, str] = {_INDEX_FILENAME: content}
-    return files, location_tracker, binding_index, slug_path_to_uuid, title_path_to_uuid, line_range_to_hlc, head_str
+    return files, location_tracker, binding_index, slug_path_to_uuid, title_path_to_uuid, line_range_to_hlc, head_str, feature_hashes
 
 
 def render_tree(store: SQLiteStore, tx_log: TransactionLog) -> dict[str, str]:
@@ -295,7 +349,7 @@ def render_tree_with_meta(
     store: SQLiteStore, tx_log: TransactionLog
 ) -> tuple[dict[str, str], TreeMeta]:
     """Like render_tree but also returns the meta sidecar."""
-    files, loc, bindings, slug_path_to_uuid, title_path_to_uuid, line_range_to_hlc, head_str = (
+    files, loc, bindings, slug_path_to_uuid, title_path_to_uuid, line_range_to_hlc, head_str, feature_hashes = (
         _render_all(store, tx_log)
     )
     content = files.get(_INDEX_FILENAME, "")
@@ -312,6 +366,7 @@ def render_tree_with_meta(
         line_range_to_hlc=line_range_to_hlc,
         content_hash=content_hash,
         render_token=render_token,
+        feature_hashes=feature_hashes,
     )
     return files, meta
 

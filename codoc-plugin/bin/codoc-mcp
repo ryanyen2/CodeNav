@@ -1,0 +1,5 @@
+#!/bin/sh
+# Launch the codoc MCP stdio server.
+# CODOC_ROOT_DIR defaults to CLAUDE_PROJECT_DIR if not set.
+export CODOC_ROOT_DIR="${CODOC_ROOT_DIR:-$CLAUDE_PROJECT_DIR}"
+exec python -m codoc.mcp "$@"

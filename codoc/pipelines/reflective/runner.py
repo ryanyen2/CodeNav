@@ -246,8 +246,13 @@ def _get_changed_chunks_for_file(
     file_path: str,
     abs_path: str,
     store,
-) -> list:
-    """Extract changed chunks for a single file by comparing fingerprints."""
+) -> tuple[list, dict, dict]:
+    """Extract changed chunks for a single file by comparing fingerprints.
+
+    Returns
+    -------
+    tuple of (changes, chunks_by_file, language_adapters)
+    """
     try:
         from codoc.lang import detect_language, get_adapter
         from codoc.pipelines.reflective.commit_diff import extract_chunks_for_files
@@ -265,14 +270,15 @@ def _get_changed_chunks_for_file(
                 except ValueError:
                     pass
 
-        return compare_chunk_fingerprints(
+        changes = compare_chunk_fingerprints(
             chunks_by_file=chunks_by_file,
             deleted_files=[],
             store=store,
             language_adapters=language_adapters,
         )
+        return changes, chunks_by_file, language_adapters
     except Exception:
-        return []
+        return [], {}, {}
 
 
 def run_reflect_files(
@@ -280,6 +286,8 @@ def run_reflect_files(
     codoc_dir: str,
     file_paths: list[str],
     node_id: str = "default",
+    session_id: str | None = None,
+    author: str = "reflective",
 ) -> dict:
     """Incremental reflect for specific files (no git refs required).
 
@@ -307,6 +315,9 @@ def run_reflect_files(
         "proposals_emitted": 0,
         "proposals": [],
     }
+    # Declared before try so they're always accessible after finally.
+    all_chunks_by_file: dict = {}
+    all_language_adapters: dict = {}
 
     try:
         pending_plan_slugs = _get_pending_plan_slugs(store)
@@ -318,13 +329,15 @@ def run_reflect_files(
             if not Path(abs_path).exists():
                 continue
             try:
-                changed = _get_changed_chunks_for_file(
+                changed, chunks_by_file, language_adapters = _get_changed_chunks_for_file(
                     root_dir=root_dir,
                     file_path=file_path,
                     abs_path=abs_path,
                     store=store,
                 )
                 all_changed.extend(changed)
+                all_chunks_by_file.update(chunks_by_file)
+                all_language_adapters.update(language_adapters)
             except Exception:
                 continue
 
@@ -341,7 +354,7 @@ def run_reflect_files(
             for change in all_changed:
                 if change.change_kind == "removed":
                     if change.existing_binding_uuid is not None:
-                        tx = emit_evict_proposal(change, tx_log, author="reflective")
+                        tx = emit_evict_proposal(change, tx_log, author=author)
                         evicted_directly += 1
                         proposals_emitted += 1
                         jsonl_log.append(tx)
@@ -356,7 +369,7 @@ def run_reflect_files(
 
                 if change.change_kind == "added" and change.existing_binding_uuid is None:
                     if is_cheap_absorb(change, all_bindings):
-                        tx = _emit_cheap_absorb(change, all_bindings, tx_log, author="reflective")
+                        tx = _emit_cheap_absorb(change, all_bindings, tx_log, author=author)
                         if tx is not None:
                             proposals_emitted += 1
                             jsonl_log.append(tx)
@@ -378,7 +391,7 @@ def run_reflect_files(
                     store=store,
                     tx_log=tx_log,
                     repo_name="codebase",
-                    author="reflective",
+                    author=author,
                 )
                 if tx is not None:
                     proposals_emitted += 1
@@ -401,6 +414,16 @@ def run_reflect_files(
 
     finally:
         store.close()
+
+    # Update fingerprint cache so subsequent runs only process new changes.
+    if all_chunks_by_file:
+        commit_sha = _get_current_commit(root_dir)
+        store3 = SQLiteStore(str(Path(codoc_dir) / "codoc.db"))
+        store3.open()
+        try:
+            update_fingerprint_cache(store3, all_chunks_by_file, all_language_adapters, commit_sha)
+        finally:
+            store3.close()
 
     # Re-render .codoc files if any proposals were emitted.
     if result["proposals_emitted"] > 0 or result["changed_chunks"] > 0:

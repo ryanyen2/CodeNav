@@ -68,6 +68,20 @@ def _install_hook(root: Path) -> bool:
     hook_script = '#!/bin/sh\ncodoc reflect --root-dir "$(git rev-parse --show-toplevel)"\n'
     hook_path.write_text(hook_script, encoding="utf-8")
     hook_path.chmod(0o755)
+
+    # Install pre-commit hook for soft-warn gate.
+    pre_commit_path = hooks_dir / "pre-commit"
+    pre_commit_script = (
+        '#!/bin/sh\n'
+        'STAGED="$(git diff --cached --name-only 2>/dev/null)"\n'
+        'if [ -n "$STAGED" ]; then\n'
+        '  codoc commit-preflight --staged "$STAGED" --root-dir "$(git rev-parse --show-toplevel)"\n'
+        'fi\n'
+        'exit 0\n'
+    )
+    pre_commit_path.write_text(pre_commit_script, encoding="utf-8")
+    pre_commit_path.chmod(0o755)
+
     return True
 
 
@@ -113,7 +127,7 @@ def _run_reflect(root: Path, codoc_dir: Path) -> None:
         result = run_reflect(
             root_dir=str(root),
             codoc_dir=str(codoc_dir),
-            from_ref=None,
+            from_ref="HEAD~1",
             to_ref="HEAD",
             repo_name=root.name,
         )

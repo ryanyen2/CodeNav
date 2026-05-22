@@ -49,6 +49,15 @@ class RejectOp:
 
 
 @dataclass
+class IntroduceOp:
+    title: str
+    parent_uuid: str | None
+    intent: str
+    source_file: str
+    line: int
+
+
+@dataclass
 class DiffError:
     kind: str
     message: str
@@ -56,7 +65,7 @@ class DiffError:
     line: int | None = None
 
 
-IntentOp = Union[AmendOp, RenameOp, RetireOp, RestructureOp, AcceptOp, RejectOp]
+IntentOp = Union[AmendOp, RenameOp, RetireOp, RestructureOp, AcceptOp, RejectOp, IntroduceOp]
 
 
 def _depth_of(uuid: str, store: SQLiteStore) -> int:
@@ -82,18 +91,16 @@ def diff_tree(parsed: ParsedTree, store: SQLiteStore) -> tuple[list[IntentOp], l
     5. AcceptOp / RejectOp
     """
     errors: list[DiffError] = []
+    introduce_ops: list[IntroduceOp] = []
 
-    # --- Errors from parsing stage ---
-    for fname, lineno, slug in parsed.feature_lines_without_uuid:
-        errors.append(
-            DiffError(
-                kind="new_feature_not_allowed",
-                message=(
-                    f"Feature line {slug!r} cannot be matched to any known feature. "
-                    "To rename a feature, use `codoc rename <current-slug> <new-slug>`. "
-                    "New features are created via bootstrap or reflective proposals."
-                ),
-                file=fname,
+    # --- Unresolved features → IntroduceOp (proposals) ---
+    for fname, lineno, title, parent_uuid, intent in parsed.feature_lines_without_uuid:
+        introduce_ops.append(
+            IntroduceOp(
+                title=title,
+                parent_uuid=parent_uuid,
+                intent=intent,
+                source_file=fname,
                 line=lineno,
             )
         )
@@ -268,6 +275,7 @@ def diff_tree(parsed: ParsedTree, store: SQLiteStore) -> tuple[list[IntentOp], l
     ops.extend(restructure_ops)
     ops.extend(amend_ops)
     ops.extend(retire_ops)
+    ops.extend(introduce_ops)
     ops.extend(accept_ops)
     ops.extend(reject_ops)
 

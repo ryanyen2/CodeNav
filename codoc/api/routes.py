@@ -1009,6 +1009,108 @@ async def post_sync(body: SyncRequest) -> SyncResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.5 — New feature query endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/features/severed")
+async def get_severed_features(root_dir: str = Query(...)) -> list[dict]:
+    """Return features that are in the SEVERED state (all bindings fail to resolve)."""
+    from codoc.core.state_derivation import FeatureState
+
+    codoc_dir = _codoc_dir(root_dir)
+    store = _open_store(codoc_dir)
+    try:
+        features = store.list_features()
+        result: list[dict] = []
+        for feature in features:
+            if feature.retired:
+                continue
+            bindings = store.list_bindings(feature.uuid)
+            obligations = store.list_obligations(feature_uuid=feature.uuid, status="pending")
+            # Conservative: pass empty resolutions → SEVERED if no resolutions available.
+            state = compute_feature_state(feature, bindings, [], obligations)
+            if state == FeatureState.SEVERED:
+                result.append({
+                    "uuid": feature.uuid,
+                    "title": feature.title or feature.slug,
+                    "slug": feature.slug,
+                    "binding_count": len(bindings),
+                })
+    finally:
+        store.close()
+
+    return result
+
+
+@router.get("/features/{uuid}/binding-candidates")
+async def get_binding_candidates(uuid: str, root_dir: str = Query(...)) -> list[dict]:
+    """Return top-3 nearest tree-sitter chunks for re-attribution of a feature."""
+    codoc_dir = _codoc_dir(root_dir)
+    store = _open_store(codoc_dir)
+    try:
+        feature = store.get_feature(uuid)
+        if feature is None:
+            raise HTTPException(status_code=404, detail=f"Feature {uuid!r} not found")
+
+        bindings = store.list_bindings(uuid)
+        # Collect files where this feature had bindings.
+        anchor_files: set[str] = {b.anchor.file for b in bindings}
+        anchor_symbol_paths: set[str] = {
+            b.anchor.symbol_path for b in bindings if b.anchor.symbol_path
+        }
+
+        # Score chunk_fingerprints in the same files as existing bindings.
+        scored: list[dict] = []
+        if anchor_files:
+            placeholders = ",".join("?" * len(anchor_files))
+            rows = store._db.execute(
+                f"SELECT file, symbol_path FROM chunk_fingerprints WHERE file IN ({placeholders})",
+                tuple(anchor_files),
+            ).fetchall()
+            for row in rows:
+                chunk_file = row["file"]
+                chunk_symbol = row["symbol_path"]
+                score = 2  # same file
+                if chunk_symbol and chunk_symbol in anchor_symbol_paths:
+                    score = 4  # exact symbol_path match
+                scored.append({
+                    "file": chunk_file,
+                    "symbol_path": chunk_symbol or "",
+                    "score": score,
+                })
+
+        # Sort descending by score and return top 3.
+        scored.sort(key=lambda x: -x["score"])
+        top3 = scored[:3]
+    finally:
+        store.close()
+
+    return top3
+
+
+@router.get("/bindings/by-file")
+async def get_bindings_by_file(
+    root_dir: str = Query(...),
+    file: str = Query(...),
+) -> dict:
+    """Return {symbol_path: feature_uuid} for all active bindings in the given file."""
+    codoc_dir = _codoc_dir(root_dir)
+    store = _open_store(codoc_dir)
+    try:
+        bindings = store.list_bindings_by_file(file)
+        result: dict[str, str] = {
+            b.anchor.symbol_path: b.feature_uuid
+            for b in bindings
+            if b.anchor.symbol_path
+        }
+    finally:
+        store.close()
+
+    return result
+
+
 @router.post("/anchor/resolve")
 async def resolve_anchor_endpoint(body: AnchorResolveRequest) -> AnchorPositionResponse | None:
     """Resolve an Anchor to a (start_line, end_line, start_byte, end_byte) position.
@@ -1049,3 +1151,277 @@ async def resolve_anchor_endpoint(body: AnchorResolveRequest) -> AnchorPositionR
         start_byte=start_byte,
         end_byte=end_byte,
     )
+
+
+# ---------------------------------------------------------------------------
+# Claude Code integration — hook receiver, SSE stream, live activity, commit gate
+# ---------------------------------------------------------------------------
+
+import asyncio
+import json as _json
+from fastapi.responses import StreamingResponse
+
+_EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
+
+
+class ClaudeCodeEventRequest(BaseModel):
+    """Payload from a Claude Code hook (PreToolUse or PostToolUse)."""
+    session_id: str = ""
+    transcript_path: str = ""
+    cwd: str = ""
+    hook_event_name: str = ""  # "PreToolUse" | "PostToolUse"
+    tool_name: str = ""        # "Edit" | "Write" | "MultiEdit" | "Read" etc.
+    tool_input: dict = {}
+    tool_response: dict | None = None
+    tool_use_id: str = ""
+
+
+def _extract_file_paths(tool: str, tool_input: dict) -> list[str]:
+    """Return absolute file paths touched by a tool call (one per MultiEdit edit, else 0/1)."""
+    if tool == "MultiEdit":
+        return [e["file_path"] for e in tool_input.get("edits", []) if e.get("file_path")]
+    fp = tool_input.get("file_path", "")
+    return [fp] if fp else []
+
+
+def _resolve_features(db_path: str, rel_path: str) -> tuple[list[str], list[str]]:
+    """Look up feature uuids + slugs bound to a file. Best-effort; returns ([], []) on any error."""
+    if not db_path or not Path(db_path).exists():
+        return [], []
+    try:
+        store = SQLiteStore(db_path)
+        store.open()
+        try:
+            uuids: list[str] = []
+            slugs: list[str] = []
+            seen: set[str] = set()
+            for b in store.list_bindings_by_file(rel_path):
+                if b.feature_uuid in seen:
+                    continue
+                seen.add(b.feature_uuid)
+                uuids.append(b.feature_uuid)
+                feat = store.get_feature(b.feature_uuid)
+                if feat:
+                    slugs.append(feat.slug)
+            return uuids, slugs
+        finally:
+            store.close()
+    except Exception:
+        return [], []
+
+
+async def _run_debounced_reflect(
+    root_dir: str, codoc_dir: str, rel_path: str, session_id: str
+) -> None:
+    """Run reflect on a single file and publish reflect_done if proposals were emitted."""
+    from codoc.listener.event_bus import BusEvent, bus
+    from codoc.pipelines.reflective.runner import run_reflect_files
+
+    try:
+        result = run_reflect_files(
+            root_dir=root_dir,
+            codoc_dir=codoc_dir,
+            file_paths=[rel_path],
+            session_id=session_id,
+            author="claude-code",
+        )
+        if result.get("proposals_emitted", 0) > 0:
+            await bus.publish(BusEvent(
+                topic="reflect_done",
+                data={"rel_path": rel_path, "proposals": result["proposals"]},
+            ))
+    except Exception:
+        pass
+
+
+class ActivityEntryResponse(BaseModel):
+    session_id: str
+    rel_path: str
+    tool: str
+    started_at: float
+    feature_uuids: list[str]
+    feature_slugs: list[str]
+
+
+class CommitPreflightRequest(BaseModel):
+    root_dir: str
+    staged_files: list[str]  # repo-relative paths
+
+
+class CommitPreflightResponse(BaseModel):
+    blocked: bool
+    pending: list[dict]
+    message: str
+
+
+@router.post("/claude-code/event")
+async def claude_code_event(body: ClaudeCodeEventRequest) -> dict:
+    """Receive a Claude Code hook event (PreToolUse / PostToolUse).
+
+    Returns {} immediately so the hook never blocks the Claude session.
+    Side effects: updates live-activity ledger, publishes SSE event,
+    schedules debounced reflect on PostToolUse file edits.
+    """
+    from codoc.listener.debouncer import debouncer
+    from codoc.listener.event_bus import BusEvent, bus
+    from codoc.listener.ledger import ledger
+    from codoc.listener.session_log import log_event
+
+    root_dir = body.cwd or ""
+    session_id = body.session_id or "unknown"
+    phase = "pre" if body.hook_event_name == "PreToolUse" else "post"
+    tool = body.tool_name
+
+    abs_paths = _extract_file_paths(tool, body.tool_input)
+    if not abs_paths:
+        return {}
+
+    codoc_dir = str(Path(root_dir) / ".codoc") if root_dir else ""
+    db_path = str(Path(codoc_dir) / "codoc.db") if codoc_dir else ""
+
+    for abs_path in abs_paths:
+        try:
+            rel_path = str(Path(abs_path).relative_to(root_dir)) if root_dir else abs_path
+        except ValueError:
+            rel_path = abs_path
+
+        feature_uuids, feature_slugs = _resolve_features(db_path, rel_path)
+
+        ledger.record(
+            session_id=session_id,
+            file_path=abs_path,
+            rel_path=rel_path,
+            tool=f"{body.hook_event_name}:{tool}",
+            phase=phase,
+            feature_uuids=feature_uuids,
+            feature_slugs=feature_slugs,
+        )
+
+        await bus.publish(BusEvent(topic="activity", data={
+            "session_id": session_id,
+            "phase": phase,
+            "tool": tool,
+            "rel_path": rel_path,
+            "feature_uuids": feature_uuids,
+            "feature_slugs": feature_slugs,
+        }))
+
+        if phase == "post" and tool in _EDIT_TOOLS and root_dir and codoc_dir:
+            file_key = f"{root_dir}::{rel_path}"
+            # Bind loop-variable values into the closure via defaults.
+            async def _cb(rd=root_dir, cd=codoc_dir, rp=rel_path, sid=session_id):
+                await _run_debounced_reflect(rd, cd, rp, sid)
+            await debouncer.schedule(file_key, _cb)
+
+    if codoc_dir:
+        try:
+            log_event(codoc_dir, session_id, body.model_dump())
+        except Exception:
+            pass
+
+    return {}
+
+
+@router.get("/claude-code/activity", response_model=list[ActivityEntryResponse])
+async def get_claude_code_activity(root_dir: str = Query(...)) -> list[ActivityEntryResponse]:
+    """Return the current in-memory live-activity ledger snapshot."""
+    from codoc.listener.ledger import ledger
+
+    return [
+        ActivityEntryResponse(
+            session_id=e.session_id,
+            rel_path=e.rel_path,
+            tool=e.tool,
+            started_at=e.started_at,
+            feature_uuids=e.feature_uuids,
+            feature_slugs=e.feature_slugs,
+        )
+        for e in ledger.get_active()
+    ]
+
+
+@router.get("/events/stream")
+async def events_stream(root_dir: str = Query(...)):
+    """Server-Sent Events stream for live codoc events.
+
+    Topics: activity, proposal, accept, reject, reflect_done.
+    Sends keepalive comment every 25s to prevent proxy timeouts.
+    """
+    from codoc.listener.event_bus import bus
+
+    async def generate():
+        q = bus.subscribe()
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=25.0)
+                    data = _json.dumps(event.data)
+                    yield f"event: {event.topic}\ndata: {data}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            bus.unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/commit/preflight", response_model=CommitPreflightResponse)
+async def commit_preflight(body: CommitPreflightRequest) -> CommitPreflightResponse:
+    """Check if staged files have unaccepted codoc proposals.
+
+    Called by the git pre-commit hook. Returns blocked=True plus the list of
+    pending proposals that touch the staged files, so the user can accept/reject
+    before committing.
+    """
+    codoc_dir = _codoc_dir(body.root_dir)
+    store = _open_store(codoc_dir)
+    try:
+        pending = store.list_transactions(proposal=True, limit=0)
+    finally:
+        store.close()
+
+    staged_set = set(body.staged_files)
+
+    # Find pending proposals that touch staged files.
+    # Proposals carry file info in their payload (e.g. "file" field for EVICT/ABSORB,
+    # "bindings" field for INTRODUCE, or we check feature bindings for AMEND/RENAME).
+    blocking: list[dict] = []
+    for tx in pending:
+        payload = tx.payload
+        tx_files: set[str] = set()
+
+        # Most reflective proposals have a "file" key directly.
+        if "file" in payload:
+            tx_files.add(payload["file"])
+        # INTRODUCE may have bindings list.
+        for binding in payload.get("bindings", []):
+            if isinstance(binding, dict) and "file" in binding.get("anchor", {}):
+                tx_files.add(binding["anchor"]["file"])
+
+        if tx_files & staged_set or not tx_files:
+            # Include if files overlap OR if we can't determine files (conservative).
+            blocking.append({
+                "hlc": tx.hlc.to_str(),
+                "kind": tx.kind.value,
+                "slug": payload.get("slug", ""),
+                "title": payload.get("title", payload.get("slug", "")),
+                "files": list(tx_files),
+            })
+
+    blocked = len(blocking) > 0
+    message = (
+        f"{len(blocking)} pending proposal(s) touch staged files"
+        if blocked
+        else "No pending proposals — commit is clean"
+    )
+
+    return CommitPreflightResponse(blocked=blocked, pending=blocking, message=message)

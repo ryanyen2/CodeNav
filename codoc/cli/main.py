@@ -12,6 +12,7 @@ from codoc.cli.projection import proj_app
 from codoc.cli.plan import plan_command
 from codoc.cli.reflect import reflect_command
 from codoc.cli.server import server
+from codoc.cli.commit_preflight import commit_preflight
 from codoc.cli.tx import tx_app
 from codoc.cli.commands import (
     cmd_list,
@@ -56,6 +57,7 @@ app.command("plan")(plan_command)
 app.command("reflect")(reflect_command)
 app.command("gate-run")(gate_run)
 app.command("server")(server)
+app.command("commit-preflight")(commit_preflight)
 
 # ------------------------------------------------------------------
 # Sub-apps  (bootstrap, projection kept; tx/feature kept as aliases)

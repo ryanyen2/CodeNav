@@ -13,10 +13,12 @@ Lines that cannot be resolved are reported as DiffErrors by the differ.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.projection.meta import TreeMeta
+from codoc.projection import tree_align
 
 
 # New-format feature line: indent + marker + title + optional (state) suffix.
@@ -78,8 +80,9 @@ class ParsedTree:
     proposals: list[ParsedProposal] = field(default_factory=list)
     parse_errors: list[str] = field(default_factory=list)
     feature_uuids: set[str] = field(default_factory=set)
-    # Features whose identity couldn't be resolved (differ will convert to DiffErrors).
-    feature_lines_without_uuid: list[tuple[str, int, str]] = field(default_factory=list)
+    # Features whose identity couldn't be resolved (differ will convert to IntroduceOps).
+    # Each tuple: (file, lineno, title, parent_uuid_or_none, intent_str)
+    feature_lines_without_uuid: list[tuple[str, int, str, str | None, str]] = field(default_factory=list)
     duplicate_uuids: list[tuple[str, str, int]] = field(default_factory=list)
 
 
@@ -119,6 +122,7 @@ def _parse_one_file(
     parsed: ParsedTree,
     seen_proposal_hlcs: set[str],
     old_meta: "TreeMeta | None" = None,
+    sibling_index: "dict | None" = None,
 ) -> tuple[dict[str, dict], list[str]]:
     """Parse one .codoc file."""
     text = path.read_text(encoding="utf-8")
@@ -129,6 +133,12 @@ def _parse_one_file(
     cur_feature: ParsedFeature | None = None
     cur_intent_lines: list[str] = []
     present_proposals: dict[str, dict] = {}
+    sibling_counter: defaultdict[str | None, int] = defaultdict(int)
+    # Pre-built sibling index — shared across the parse (passed from parse_tree_dir).
+    _sibling_index = sibling_index
+
+    # Non-empty sentinel distinct from any real UUID so `if uuid:` guards work correctly.
+    _SENTINEL_UUID = "__unresolved__"
 
     def _flush_feature() -> None:
         nonlocal cur_feature, cur_intent_lines
@@ -146,9 +156,17 @@ def _parse_one_file(
                         current_para = []
             if current_para:
                 paragraphs.append(" ".join(current_para))
-            cur_feature.intent = "\n".join(paragraphs)
-            parsed.features.append(cur_feature)
-            parsed.feature_uuids.add(cur_feature.uuid)
+            intent_text = "\n".join(paragraphs)
+            cur_feature.intent = intent_text
+
+            if cur_feature.uuid == _SENTINEL_UUID:
+                parsed.feature_lines_without_uuid.append(
+                    (cur_feature.source_file, cur_feature.line_number, cur_feature.title,
+                     cur_feature.parent_uuid, intent_text)
+                )
+            else:
+                parsed.features.append(cur_feature)
+                parsed.feature_uuids.add(cur_feature.uuid)
         cur_feature = None
         cur_intent_lines = []
 
@@ -200,6 +218,7 @@ def _parse_one_file(
             parent_uuid = parent_stack[-1][2] if parent_stack else None
 
             if uuid is None and old_meta is not None:
+                # Pass 1 (backward compat): title-path and slug-path exact lookups.
                 parent_titles = [name for _, name, _ in parent_stack]
                 title_path = " > ".join(parent_titles + [title])
                 uuid = old_meta.title_path_to_uuid.get(title_path)
@@ -208,9 +227,30 @@ def _parse_one_file(
                     slug_path = "/".join(parent_titles + [title])
                     uuid = old_meta.slug_path_to_uuid.get(slug_path)
 
+                # Pass 2/3 (structural): use sibling position + edit distance.
+                if uuid is None:
+                    sibling_index_new = sibling_counter[parent_uuid]
+                    uuid = tree_align.resolve_uuid_structural(
+                        title, parent_uuid, sibling_index_new, old_meta,
+                        prebuilt_sibling_index=_sibling_index,
+                    )
+
+            # Increment sibling counter for this parent (after resolving uuid).
+            sibling_counter[parent_uuid] += 1
+
             if uuid is None:
-                parsed.feature_lines_without_uuid.append((file_name, lineno, title))
+                cur_feature = ParsedFeature(
+                    uuid=_SENTINEL_UUID,
+                    slug=title,
+                    title=title,
+                    intent="",
+                    parent_uuid=parent_uuid,
+                    retired=(marker == "~"),
+                    source_file=file_name,
+                    line_number=lineno,
+                )
                 parent_stack.append((indent_len, title, None))
+                cur_intent_lines = []
                 continue
 
             if uuid in parsed.feature_uuids:
@@ -252,11 +292,15 @@ def parse_tree_dir(codoc_dir: str, old_meta: TreeMeta | None = None) -> ParsedTr
     seen_proposal_hlcs: set[str] = set()
     file_lines_cache: dict[str, list[str]] = {}
 
+    # Build sibling index once (O(N)) to avoid O(N*D) repeated scans during parse.
+    sibling_idx = tree_align.build_sibling_index(old_meta) if old_meta is not None else None
+
     index_path = tree_dir / "_index.codoc"
     if index_path.exists():
         try:
             present_proposals, file_lines = _parse_one_file(
-                index_path, parsed, seen_proposal_hlcs, old_meta=old_meta
+                index_path, parsed, seen_proposal_hlcs, old_meta=old_meta,
+                sibling_index=sibling_idx,
             )
             file_lines_cache[index_path.name] = file_lines
         except OSError as exc:
@@ -268,7 +312,8 @@ def parse_tree_dir(codoc_dir: str, old_meta: TreeMeta | None = None) -> ParsedTr
             continue
         try:
             present_proposals, file_lines = _parse_one_file(
-                path, parsed, seen_proposal_hlcs, old_meta=old_meta
+                path, parsed, seen_proposal_hlcs, old_meta=old_meta,
+                sibling_index=sibling_idx,
             )
             file_lines_cache[path.name] = file_lines
         except OSError as exc:

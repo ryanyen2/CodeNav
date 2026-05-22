@@ -1,0 +1,146 @@
+{
+  "name": "codoc",
+  "displayName": "codoc",
+  "description": "Feature-tree navigator and transaction queue for codoc",
+  "version": "0.1.0",
+  "publisher": "codoc",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "codoc",
+        "aliases": ["Codoc", "codoc"],
+        "extensions": [".codoc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "codoc",
+        "scopeName": "source.codoc",
+        "path": "./syntaxes/codoc.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "codoc.open",
+        "title": "codoc: Open"
+      },
+      {
+        "command": "codoc.renderHard",
+        "title": "codoc: Render (hard refresh)"
+      },
+      {
+        "command": "codoc.render",
+        "title": "codoc: Render tree"
+      },
+      {
+        "command": "codoc.syncFile",
+        "title": "codoc: Sync current file"
+      },
+      {
+        "command": "codoc.acceptProposal",
+        "title": "codoc: Accept proposal"
+      },
+      {
+        "command": "codoc.rejectProposal",
+        "title": "codoc: Reject proposal"
+      },
+      {
+        "command": "codoc.acceptAll",
+        "title": "codoc: Accept all proposals"
+      },
+      {
+        "command": "codoc.rejectAll",
+        "title": "codoc: Reject all proposals"
+      },
+      {
+        "command": "codoc.acceptProposalWithEdits",
+        "title": "codoc: Accept proposal with edits"
+      },
+      {
+        "command": "codoc.showProposalActions",
+        "title": "codoc: Show proposal actions"
+      },
+      {
+        "command": "codoc.navigateToFeature",
+        "title": "codoc: Navigate to feature"
+      },
+      {
+        "command": "codoc.acceptProposalAtLine",
+        "title": "codoc: Accept proposal at line"
+      },
+      {
+        "command": "codoc.rejectProposalAtLine",
+        "title": "codoc: Reject proposal at line"
+      },
+      {
+        "command": "codoc.reflect",
+        "title": "codoc: Reflect (process new commits)"
+      },
+      {
+        "command": "codoc.bootstrap",
+        "title": "codoc: Bootstrap codebase"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codoc.acceptProposal",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
+      },
+      {
+        "command": "codoc.rejectProposal",
+        "key": "ctrl+shift+backspace",
+        "mac": "cmd+shift+backspace",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
+      },
+      {
+        "command": "codoc.open",
+        "key": "ctrl+k ctrl+c",
+        "mac": "cmd+k cmd+c"
+      },
+      {
+        "command": "codoc.open",
+        "key": "ctrl+k ctrl+l",
+        "mac": "cmd+k cmd+l"
+      }
+    ],
+    "configuration": {
+      "title": "codoc",
+      "properties": {
+        "codoc.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8001",
+          "description": "codoc FastAPI server URL"
+        },
+        "codoc.rootDir": {
+          "type": "string",
+          "default": "",
+          "description": "Root directory of the codoc-initialized repo. Auto-detected from workspace if empty."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.2",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.3.0"
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "compile": "npm run build",
+    "watch": "node esbuild.config.mjs --watch"
+  }
+}

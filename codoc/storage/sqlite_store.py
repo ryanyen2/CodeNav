@@ -544,6 +544,14 @@ class SQLiteStore:
         rows = self._db.execute("SELECT * FROM bindings").fetchall()
         return [_row_to_binding(r) for r in rows]
 
+    def list_bindings_by_file(self, file: str) -> list[Binding]:
+        """Return all bindings whose anchor.file matches *file* (repo-relative path)."""
+        rows = self._db.execute(
+            "SELECT * FROM bindings WHERE json_extract(anchor_json, '$.file') = ?",
+            (file,),
+        ).fetchall()
+        return [_row_to_binding(r) for r in rows]
+
     # ------------------------------------------------------------------
     # Constraint CRUD
     # ------------------------------------------------------------------

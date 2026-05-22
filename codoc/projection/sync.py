@@ -12,6 +12,7 @@ from codoc.projection.differ import (
     AmendOp,
     DiffError,
     IntentOp,
+    IntroduceOp,
     RejectOp,
     RenameOp,
     RestructureOp,
@@ -45,6 +46,8 @@ def _describe_op(op: IntentOp) -> str:
         return f"ACCEPT proposal {op.hlc[:24]}"
     if isinstance(op, RejectOp):
         return f"REJECT proposal {op.hlc[:24]}"
+    if isinstance(op, IntroduceOp):
+        return f"INTRODUCE {op.title!r} (proposal)"
     return repr(op)
 
 
@@ -114,7 +117,6 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
         "duplicate_uuid",
         "cycle_detected",
         "slug_collision",
-        "new_feature_not_allowed",
         "parse_error",
     }
     fatal = [e for e in errors if e.kind in fatal_kinds]
@@ -164,6 +166,9 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
                     applied.append(_describe_op(op))
                 elif isinstance(op, RestructureOp):
                     runner.restructure(op.uuid, op.new_parent_uuid)
+                    applied.append(_describe_op(op))
+                elif isinstance(op, IntroduceOp):
+                    _apply_introduce(op, runner)
                     applied.append(_describe_op(op))
                 elif isinstance(op, AcceptOp):
                     _apply_accept(op, runner)
@@ -240,6 +245,43 @@ def _inject_conflict_annotations(
         header = f"<!-- {annotations_added} unresolved conflict(s) — search for 'conflict:' to find them -->"
         lines.insert(0, header)
         index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _apply_introduce(op: IntroduceOp, runner: IntentionalRunner) -> None:
+    """Create a pending INTRODUCE proposal for an unresolved (new) feature."""
+    import re
+    import uuid as _uuid_mod
+
+    from codoc.model.hlc import HLC
+    from codoc.model.transaction import Transaction, TransactionKind
+
+    tx_log = runner._open_tx_log
+    jsonl_log = runner._open_jsonl
+
+    try:
+        import uuid6
+        new_uuid = str(uuid6.uuid7())
+    except ImportError:
+        new_uuid = str(_uuid_mod.uuid4())
+
+    slug = re.sub(r"[^a-z0-9]+", "-", op.title.lower()).strip("-") or "unnamed"
+    tx = Transaction(
+        hlc=HLC(),
+        parent_hlcs=[],
+        kind=TransactionKind.INTRODUCE,
+        payload={
+            "title": op.title,
+            "slug": slug,
+            "intent": op.intent,
+            "feature_uuid": new_uuid,
+            "provisional_uuid": new_uuid,
+            "parent_uuid": op.parent_uuid,
+        },
+        author="user",
+        proposal=True,
+    )
+    stamped = tx_log.append_proposal(tx)
+    jsonl_log.append(stamped)
 
 
 def _apply_accept(op: AcceptOp, runner: IntentionalRunner) -> None:

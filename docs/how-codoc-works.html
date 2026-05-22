@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How codoc works</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --amber: #d29922;
+    --red: #f85149;
+    --blue-dim: #1c2b3a;
+    --green-dim: #0d2218;
+    --red-dim: #2a0d0d;
+    --code-bg: #1a1f27;
+    --max-w: 860px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding: 2.5rem 1.5rem 6rem;
+  }
+  .wrap { max-width: var(--max-w); margin: 0 auto; }
+
+  h1 { font-size: 2rem; font-weight: 700; margin-bottom: 0.4rem; }
+  h2 { font-size: 1.4rem; font-weight: 600; border-bottom: 1px solid var(--border);
+       padding-bottom: 0.4rem; margin: 2.8rem 0 1rem; color: var(--accent); }
+  h3 { font-size: 1.1rem; font-weight: 600; margin: 1.8rem 0 0.6rem; color: #cdd9e5; }
+  p  { margin-bottom: 0.9rem; color: var(--text); }
+  ul, ol { margin: 0.5rem 0 0.9rem 1.5rem; }
+  li { margin-bottom: 0.35rem; }
+  a  { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .subtitle { color: var(--muted); font-size: 1.05rem; margin-bottom: 2.5rem; }
+
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.4rem;
+    margin-bottom: 3rem;
+    font-size: 0.9rem;
+  }
+  .toc-title { font-weight: 600; margin-bottom: 0.5rem; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.05em; text-transform: uppercase; }
+  .toc ol { margin-left: 1.2rem; }
+  .toc li { margin-bottom: 0.2rem; }
+
+  pre, code {
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 0.875rem;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    margin: 0.6rem 0 1.2rem;
+    line-height: 1.5;
+  }
+  code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.15em 0.4em;
+  }
+  pre code { background: none; border: none; padding: 0; }
+
+  /* diff colouring inside <pre class="diff"> */
+  pre.diff .add  { color: #3fb950; }
+  pre.diff .rem  { color: #f85149; }
+  pre.diff .chg  { color: #d2a820; }
+  pre.diff .dim  { color: var(--muted); }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--blue-dim);
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1rem;
+    margin: 1rem 0 1.2rem;
+    font-size: 0.9rem;
+  }
+  .callout.warn { border-color: var(--amber); background: #1e1608; }
+  .callout.good { border-color: var(--green); background: var(--green-dim); }
+  .callout strong { color: inherit; }
+
+  .cols { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+  .col  { flex: 1 1 300px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.2rem; font-size: 0.88rem; }
+  th { background: var(--surface); text-align: left; padding: 0.5rem 0.8rem; border: 1px solid var(--border); color: var(--muted); font-weight: 600; }
+  td { padding: 0.45rem 0.8rem; border: 1px solid var(--border); vertical-align: top; }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.1em 0.5em;
+    border-radius: 3px;
+    margin-right: 0.3em;
+    vertical-align: middle;
+  }
+  .badge.stable     { background: #0d3321; color: var(--green); }
+  .badge.drafting   { background: #0c1d33; color: #6baed6; }
+  .badge.strained   { background: #2a1e08; color: var(--amber); }
+  .badge.severed    { background: var(--red-dim); color: var(--red); }
+  .badge.stub       { background: #1a1a2e; color: #8884cc; }
+  .badge.deprecated { background: #1a1a1a; color: #888; }
+
+  .flow-step {
+    display: flex;
+    gap: 0.8rem;
+    margin-bottom: 0.8rem;
+    align-items: flex-start;
+  }
+  .step-num {
+    background: var(--accent);
+    color: #000;
+    font-weight: 700;
+    font-size: 0.75rem;
+    border-radius: 50%;
+    width: 1.4rem;
+    height: 1.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 0.2rem;
+  }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0; }
+
+  .arch-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1.2rem 1.4rem;
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--muted);
+    margin: 0.8rem 0 1.2rem;
+  }
+  .arch-diagram .hi  { color: var(--accent); }
+  .arch-diagram .grn { color: var(--green); }
+  .arch-diagram .amb { color: var(--amber); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>How codoc works</h1>
+<p class="subtitle">A feature-tree overlay that keeps intent in sync with code — for humans, not LLMs.</p>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#user-level">User-level overview</a>
+      <ol>
+        <li><a href="#what-is-it">What is codoc?</a></li>
+        <li><a href="#the-codoc-file">The <code>_index.codoc</code> file</a></li>
+        <li><a href="#workflow">Day-to-day workflow</a></li>
+        <li><a href="#proposals">Proposals: the change-review loop</a></li>
+        <li><a href="#feature-states">Feature states</a></li>
+        <li><a href="#vscode-ux">VS Code experience</a></li>
+      </ol>
+    </li>
+    <li><a href="#arch">Architectural deep-dive</a>
+      <ol>
+        <li><a href="#data-model">Data model</a></li>
+        <li><a href="#transaction-log">Transaction log and HLC</a></li>
+        <li><a href="#tree-align">Tree-alignment identity</a></li>
+        <li><a href="#projection">Projection layer</a></li>
+        <li><a href="#reflective">Reflective pipeline</a></li>
+        <li><a href="#sync-invariants">Sync invariants</a></li>
+        <li><a href="#extension-arch">Extension architecture</a></li>
+      </ol>
+    </li>
+  </ol>
+</nav>
+
+<!-- ======================================================================= -->
+<h2 id="user-level">Part 1 — User-level overview</h2>
+
+<h3 id="what-is-it">What is codoc?</h3>
+
+<p>codoc is a persistent, navigable <em>feature tree</em> that sits alongside your codebase. Each node is a named unit of intent — a <strong>feature</strong> — with a short prose description and links to the code chunks that implement it. The tree is <em>yours</em>: you author it, refine it, and rename it however you like. codoc's job is to keep the links from intent to code accurate as the code changes.</p>
+
+<p>Unlike code-search or auto-documentation tools, codoc doesn't derive the tree from the code on every query. The tree is the ground truth; code attribution is a secondary index that the system maintains incrementally.</p>
+
+<div class="callout good">
+  <strong>One-sentence pitch:</strong> codoc is a living table-of-contents for your codebase that never goes stale.
+</div>
+
+<h3 id="the-codoc-file">The <code>_index.codoc</code> file</h3>
+
+<p>When you run <code>codoc projection render</code> (or hit <kbd>Cmd+Shift+P</kbd> → <strong>codoc: Open</strong>), codoc writes a single file at <code>.codoc/tree/_index.codoc</code>. It's a plain-text indented outline you can read and edit directly in VS Code:</p>
+
+<pre>
+- Checkpoint persistence
+    Persists training state so runs can be paused and resumed.
+
+  - Checkpoint file management
+      Saves and loads a single checkpoint snapshot to disk.
+
+    - Checkpoint compatibility patching
+        Fills in defaults when loading checkpoints from older model versions.
+
+    - Checkpoint discovery
+        Finds the latest available checkpoint in a directory.
+
+  - Checkpoint status logging
+      Emits a single status message per checkpoint op, suppressing duplicates in distributed runs.
+
+- Dataset file management
+    Manages the set of parquet shards that make up the training corpus.
+
+  - Dataset file discovery
+      Lists shards already present locally.
+</pre>
+
+<p>Each line that begins with <code>-</code> is a feature. Indentation is 2 spaces per level. The line below the feature title is a one-sentence description. That's the whole file format for stable content.</p>
+
+<h3 id="workflow">Day-to-day workflow</h3>
+
+<div class="flow-step">
+  <div class="step-num">1</div>
+  <div><strong>Open your project in VS Code.</strong> Hit <kbd>Cmd+Shift+P</kbd> and run <strong>codoc: Open</strong>. On the very first run it initialises <code>.codoc/</code>, clusters your codebase into features (this may take a minute), and opens <code>_index.codoc</code>.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">2</div>
+  <div><strong>Read and refine the tree.</strong> The initial tree is a proposal — every node begins with a <code>+ </code> prefix (green diff hunk) meaning "accept me". Rename things, fix intent lines, restructure the hierarchy, and delete features that don't make sense. Just edit the file like any text document.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">3</div>
+  <div><strong>Save.</strong> codoc detects the save, parses the file, diffs it against the database, and applies your changes. Accepted features become stable in the DB; any new lines you added become INTRODUCE proposals for your review.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">4</div>
+  <div><strong>Code.</strong> As you modify source files, codoc's reflective pipeline observes the changes (on save, or after a git commit) and emits proposals for any features whose code links may need updating.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">5</div>
+  <div><strong>Review proposals.</strong> Hunks marked with <code>+ -</code> (introduce), <code>- ~</code> (retire), or <code>~ -</code> (amend/rename) appear inline in <code>_index.codoc</code>. Accept with the CodeLens button or the bulk status-bar widget; reject to discard.</div>
+</div>
+
+<h3 id="proposals">Proposals: the change-review loop</h3>
+
+<p>codoc never changes the feature tree without your approval. Instead it proposes changes as <em>diff hunks</em> inline in <code>_index.codoc</code>:</p>
+
+<pre class="diff">
+<span class="dim">- Checkpoint persistence</span>
+<span class="dim">    Persists training state so runs can be paused and resumed.</span>
+<span class="dim"></span>
+<span class="add">+ - Checkpoint warm-restart</span>
+<span class="add">+     Loads a checkpoint and continues training from the saved step.</span>
+<span class="dim"></span>
+<span class="rem">- ~ Old checkpoint resume</span>
+</pre>
+
+<p>A <code>+ -</code> line is a proposed <strong>introduction</strong>. A <code>- ~</code> line is a proposed <strong>retirement</strong>. A <code>~ -</code> followed by description lines is a proposed <strong>amendment or rename</strong>.</p>
+
+<p>You can act on each proposal with the CodeLens buttons that appear above the hunk, or use the status bar widget that shows <code>codoc: 4 pending</code> and lets you accept or reject everything at once.</p>
+
+<h3 id="feature-states">Feature states</h3>
+
+<p>Each feature has a computed state based on how its code bindings look right now:</p>
+
+<table>
+  <tr>
+    <th>State</th>
+    <th>Meaning</th>
+    <th>Gutter icon</th>
+  </tr>
+  <tr>
+    <td><span class="badge stub">Stub</span></td>
+    <td>No code bindings yet (just authored).</td>
+    <td>Purple dot</td>
+  </tr>
+  <tr>
+    <td><span class="badge drafting">Drafting</span></td>
+    <td>Has bindings but some are unresolved.</td>
+    <td>Blue dot</td>
+  </tr>
+  <tr>
+    <td><span class="badge stable">Stable</span></td>
+    <td>All bindings resolve cleanly.</td>
+    <td>Green dot</td>
+  </tr>
+  <tr>
+    <td><span class="badge strained">Strained</span></td>
+    <td>Some bindings resolve but others have diverged.</td>
+    <td>Amber dot</td>
+  </tr>
+  <tr>
+    <td><span class="badge severed">Severed</span></td>
+    <td>All bindings have diverged — the feature's code was moved or deleted.</td>
+    <td>Red dot</td>
+  </tr>
+  <tr>
+    <td><span class="badge deprecated">Deprecated</span></td>
+    <td>Feature is intentionally retired.</td>
+    <td>Grey dot</td>
+  </tr>
+</table>
+
+<p>State is <em>computed</em> on every render from live bindings — it is never stored. This means it stays accurate automatically as code evolves.</p>
+
+<h3 id="vscode-ux">VS Code experience</h3>
+
+<p><strong>Unified entry:</strong> A single command <code>codoc: Open</code> auto-detects the repo state and does the right thing — init + bootstrap if no <code>.codoc/</code> exists, re-render if stale, otherwise just open the file.</p>
+
+<p><strong>Gutter status icons:</strong> Every feature line in <code>_index.codoc</code> gets a color-coded dot in the gutter reflecting its current state (green / blue / amber / red / grey). No noisy <code>[State]</code> badge text clutters the prose.</p>
+
+<p><strong>Inline diff styling:</strong> Proposed additions glow green, retirements glow red, and amendments glow blue — but the rest of the file stays clean readable prose.</p>
+
+<p><strong>Cross-tab navigation:</strong></p>
+<ul>
+  <li>In <code>_index.codoc</code>, a CodeLens above each feature title reads <code>▸ bindings</code>. Click it to open a Quick Pick of the bound source files and jump directly to the code.</li>
+  <li>In any <code>.py</code> or <code>.ts</code> source file, a CodeLens above each <code>def</code>/<code>class</code>/<code>function</code> shows the feature it belongs to. Click to navigate back to <code>_index.codoc</code>.</li>
+</ul>
+
+<p><strong>Conflict handling:</strong> If you and the server both edit the same feature between syncs, the conflict is annotated inline rather than silently overwritten. A code-action lightbulb lets you choose "use mine", "use server's", or open a three-way diff view.</p>
+
+<!-- ======================================================================= -->
+<hr>
+<h2 id="arch">Part 2 — Architectural deep-dive</h2>
+
+<div class="arch-diagram"><span class="hi">User edits</span>           <span class="grn">Git commits</span>           <span class="amb">LLM planning</span>
+      │                        │                        │
+      ▼                        ▼                        ▼
+<span class="hi">Projection sync</span>      <span class="grn">Reflective pipeline</span>    <span class="amb">Planning pipeline</span>
+(parse+diff+apply)   (fingerprint+escalate)   (diff-hunk proposals)
+      │                        │                        │
+      └────────────────────────┴────────────────────────┘
+                               │
+                               ▼
+                    <span class="hi">Transaction log (HLC-ordered)</span>
+                    SQLite WAL  +  JSONL audit lane
+                               │
+                               ▼
+                    <span class="hi">Feature store</span>  ←→  <span class="hi">Binding index</span>
+                    (uuid, slug, title,      (feature_uuid → anchors)
+                     intent, parent_uuid)
+                               │
+                               ▼
+                    <span class="hi">Projection render</span>
+                    _index.codoc  +  tree.meta.json</div>
+
+<h3 id="data-model">Data model</h3>
+
+<p>The five core types live in <code>codoc/model/</code>:</p>
+
+<table>
+  <tr><th>Type</th><th>Key fields</th><th>Notes</th></tr>
+  <tr>
+    <td><code>Feature</code></td>
+    <td><code>uuid, slug, title, parent_uuid, intent, retired</code></td>
+    <td>The stable node identity. <code>title</code> is 2–5 words prose; <code>slug</code> is kebab-case. State is derived, never stored.</td>
+  </tr>
+  <tr>
+    <td><code>Anchor</code></td>
+    <td><code>file, symbol_path?, ts_query?, occurrence_index</code></td>
+    <td>Points at a code chunk without byte ranges (those are resolved live by tree-sitter).</td>
+  </tr>
+  <tr>
+    <td><code>Binding</code></td>
+    <td><code>uuid, feature_uuid, anchor, fingerprint</code></td>
+    <td>Links a feature to one code chunk. A feature can have many bindings across many files.</td>
+  </tr>
+  <tr>
+    <td><code>Transaction</code></td>
+    <td><code>hlc, kind, payload, author, proposal</code></td>
+    <td>Append-only log entry. <code>proposal=True</code> means pending user review.</td>
+  </tr>
+  <tr>
+    <td><code>HLC</code></td>
+    <td><code>logical_time, wall_clock, node_id</code></td>
+    <td>Hybrid Logical Clock — lexicographically sortable, causal across nodes.</td>
+  </tr>
+</table>
+
+<h3 id="transaction-log">Transaction log and HLC</h3>
+
+<p>Every change to the feature tree goes through the <code>TransactionLog</code> (<code>codoc/core/log.py</code>). There are two write paths:</p>
+
+<ul>
+  <li><strong><code>append_proposal(tx)</code></strong> — writes a proposal (pending review). Automatically deduplicates INTRODUCE proposals for the same <code>(slug, parent_uuid)</code> pair.</li>
+  <li><strong><code>append(tx)</code></strong> — writes an accepted intentional transaction (AMEND, RENAME, RETIRE) directly, bypassing the proposal queue.</li>
+</ul>
+
+<p>Each transaction receives an HLC timestamp stamped at write time. The HLC advances monotonically, incorporates wall-clock time, and is safe across concurrent nodes without coordination. The HLC string is the primary key in SQLite (<code>transactions</code> table).</p>
+
+<p>The JSONL audit lane at <code>.codoc/log.jsonl</code> is a complete rebuild-able copy of the SQLite log — useful for inspection, diffing, and migration.</p>
+
+<h3 id="tree-align">Tree-alignment identity</h3>
+
+<p>The hardest problem in projection sync is <em>feature identity under rename</em>. When you rename a feature in <code>_index.codoc</code>, codoc must recognise that the renamed feature is the same DB record — not retire the old one and introduce a new one (which would destroy history).</p>
+
+<p>codoc solves this with a three-pass structural matching algorithm in <code>codoc/projection/tree_align.py</code>:</p>
+
+<ol>
+  <li><strong>Exact title match</strong> (case-insensitive) within the same parent. Fast O(N) scan.</li>
+  <li><strong>Slug match</strong> — the title normalised to lowercase-hyphen form. Catches "Checkpoint Persistence" → <code>checkpoint-persistence</code>.</li>
+  <li><strong>Sibling-index + Levenshtein guard</strong> — if no title or slug match, try the feature at the same <code>sibling_index</code> under the same parent. Accept only if the edit distance is ≤ 40% of the longer title. This is the critical case: even if both a parent and its child are renamed simultaneously, the parent is first identified by its structural slot (pass 3 on the parent), making the child's parent_uuid resolvable so the child can then also match.</li>
+</ol>
+
+<p>The sibling index is pre-built in O(N) once per sync cycle as a <code>parent_uuid → [children]</code> map, making each lookup O(1) rather than O(N).</p>
+
+<p>Features that still fail to match become <strong>INTRODUCE proposals</strong> rather than fatal errors — you may have genuinely added a new feature, and codoc will ask you to confirm.</p>
+
+<h3 id="projection">Projection layer</h3>
+
+<p>The projection layer is the bridge between the <code>_index.codoc</code> text and the SQLite store. It lives in <code>codoc/projection/</code>:</p>
+
+<table>
+  <tr><th>Module</th><th>Role</th></tr>
+  <tr><td><code>tree_codoc.py</code></td><td>Render: DB → <code>_index.codoc</code> + <code>tree.meta.json</code> sidecar</td></tr>
+  <tr><td><code>parser.py</code></td><td>Parse: <code>_index.codoc</code> → <code>ParsedTree</code> (uses tree-align for identity)</td></tr>
+  <tr><td><code>differ.py</code></td><td>Diff: <code>ParsedTree</code> × DB → list of <code>IntentOp</code></td></tr>
+  <tr><td><code>sync.py</code></td><td>Sync: parse + diff + apply + re-render in one transaction</td></tr>
+  <tr><td><code>meta.py</code></td><td><code>TreeMeta</code> sidecar schema + read/write helpers</td></tr>
+  <tr><td><code>tree_align.py</code></td><td>Structural identity resolution (see above)</td></tr>
+</table>
+
+<p>The <strong><code>tree.meta.json</code> sidecar</strong> is written alongside <code>_index.codoc</code> on every render. It carries:</p>
+<ul>
+  <li><code>uuid_to_location</code> — maps each feature UUID to its rendered line number plus structural fields (<code>depth</code>, <code>sibling_index</code>, <code>parent_uuid</code>, <code>title_norm_hash</code>) used by the identity algorithm on the next parse.</li>
+  <li><code>line_range_to_hlc</code> — maps diff-hunk line ranges to proposal HLCs, so the extension can look up the HLC for any line in a proposal hunk without embedding HLC text in the file.</li>
+  <li><code>feature_hashes</code> — <code>sha1(title + intent + parent_uuid + retired)</code> per feature, used for conflict detection.</li>
+  <li><code>render_token</code> — a random token stamped on each render so the extension can suppress the self-triggered save loop (server re-renders → FS event → would re-sync).</li>
+</ul>
+
+<h3 id="reflective">Reflective pipeline</h3>
+
+<p>When you save a source file (or after a git commit), the reflective pipeline observes the change and proposes binding updates:</p>
+
+<pre class="diff">
+<span class="dim">On-save / post-commit</span>
+       │
+       ▼
+<span class="add">tree-sitter re-parse</span>      ← language adapter (Python / TypeScript)
+       │
+       ▼
+<span class="add">fingerprint compare</span>       ← sha1 of normalised chunk content
+       │
+  ┌────┴────┐
+  │unchanged│             skip (< 200 ms on a large repo)
+  └─────────┘
+       │ changed
+       ▼
+<span class="add">cheap heuristics</span>          ← parent_symbol match, path similarity
+       │
+  ┌────┴──────────┐
+  │high confidence│        emit REATTRIBUTE / EVICT proposal directly
+  └───────────────┘
+       │ low confidence
+       ▼
+<span class="add">LLM escalation</span>            ← attribution agent (1–3 s)
+       │
+       ▼
+<span class="add">proposal queue</span>            ← stored as pending transactions in SQLite
+</pre>
+
+<p>The key design: the pipeline scales with the <em>change</em>, not the codebase. After bootstrap, it never re-indexes everything. Fingerprint-only changes complete in under 200 ms; only structural changes escalate to the LLM.</p>
+
+<h3 id="sync-invariants">Sync invariants</h3>
+
+<p>The sync path enforces three invariants:</p>
+
+<ol>
+  <li><strong>Invariant 1 (identity preserved):</strong> A feature whose title changed in <code>_index.codoc</code> must map to the same UUID — not produce a RETIRE+INTRODUCE pair. Enforced by the three-pass structural matcher.</li>
+  <li><strong>Invariant 2 (proposals round-trip):</strong> A proposal accepted or rejected in <code>_index.codoc</code> (by deleting or editing the diff hunk) must be applied atomically in the DB and the file re-rendered without the hunk. Enforced by the <code>AcceptOp</code>/<code>RejectOp</code> pathway in <code>sync.py</code>.</li>
+  <li><strong>Invariant 3 (race-safe sync):</strong> If the store head HLC has advanced since the last render (another writer, e.g. the reflective pipeline, committed while the user was editing), user changes to <em>untouched</em> features apply cleanly. Changes to the same feature as the server produce an inline <code>&lt;!-- conflict --&gt;</code> annotation rather than silently overwriting.</li>
+</ol>
+
+<h3 id="extension-arch">Extension architecture</h3>
+
+<p>The VS Code extension (<code>vscode-codoc/src/</code>) communicates with the codoc FastAPI server over HTTP. The server runs locally; the extension connects to it on port 8001 (configurable).</p>
+
+<div class="cols">
+  <div class="col">
+    <h3>State layer</h3>
+    <ul>
+      <li><code>state/server.ts</code> — manages the server process lifecycle and the <code>CodocClient</code> HTTP wrapper.</li>
+      <li><code>state/line-tracker.ts</code> — maintains a <code>Map&lt;uuid, {startLine, endLine}&gt;</code> that applies incremental line shifts from <code>onDidChangeTextDocument</code> events. Decorations re-read from this tracker, not from a stale sidecar.</li>
+      <li><code>state/proposals-status-bar.ts</code> — right-aligned pending-count widget with bulk accept/reject.</li>
+    </ul>
+  </div>
+  <div class="col">
+    <h3>Provider layer</h3>
+    <ul>
+      <li><code>providers/decoration.ts</code> — gutter status icons + diff-hunk background tints.</li>
+      <li><code>providers/codelens.ts</code> — sync / render / reflect buttons + per-proposal accept/reject + feature-to-bindings navigation.</li>
+      <li><code>providers/code-lens.ts</code> — reverse lens on source files (code → feature).</li>
+      <li><code>providers/code-actions.ts</code> — lightbulb accept/reject on diff-hunk lines.</li>
+      <li><code>providers/conflict-resolver.ts</code> — virtual document provider for <code>codoc-conflict://</code> three-way diff URIs.</li>
+    </ul>
+  </div>
+</div>
+
+<p>The <strong>echo-suppression</strong> loop is handled by comparing the file's <code>render_token</code> (from <code>tree.meta.json</code>) before and after a server-triggered re-render. If the incoming <code>onDidSaveTextDocument</code> event matches the last render token, the sync debounce is skipped, preventing the server → render → save → sync → render loop.</p>
+
+<div class="callout">
+  <strong>HLC lookup for new-format hunks:</strong> Old proposal lines embedded the HLC directly in the text (<code># ?HLC</code>). New-format diff hunks store only content. The extension resolves an HLC for any line by checking <code>tree.meta.json.line_range_to_hlc</code> — a map from <code>"_index.codoc:start-end"</code> ranges to HLC strings written by the renderer at render time.
+</div>
+
+<hr>
+<p style="color: var(--muted); font-size: 0.85rem; text-align: center;">
+  codoc — part of the CodeNav research project &nbsp;·&nbsp;
+  <a href="https://github.com/anthropics/claude-code">Generated with Claude Code</a>
+</p>
+
+</div>
+</body>
+</html>
