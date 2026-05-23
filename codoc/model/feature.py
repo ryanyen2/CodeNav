@@ -10,6 +10,11 @@ class Feature(BaseModel):
     parent_uuid: str | None = None  # last RENAME/RESTRUCTURE wins
     intent: str = ""  # one or two sentences summary
     description: str = ""  # multi-paragraph prose explaining what + why; preserved newlines
+    purpose: str = ""     # one-line WHAT this feature does in product terms
+    rationale: str = ""   # one-line WHY this design, not an obvious alternative
+    scenario: str = ""    # BDD multi-line: "given ...\nwhen ...\nthen ..."
     retired: bool = False  # set True by RETIRE transaction; never deleted
+    # Authoring lifecycle: placeholder → feedforward_pending → realized
+    status: str = "realized"
     created_at_hlc: HLC
     updated_at_hlc: HLC  # advances on any field mutation

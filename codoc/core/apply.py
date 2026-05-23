@@ -90,6 +90,11 @@ def apply_accepted_transaction(
         title = payload.get("title", "") or slug
         intent = payload.get("intent", "")
         description = payload.get("description", "")
+        purpose = payload.get("purpose", "")
+        rationale = payload.get("rationale", "")
+        scenario = payload.get("scenario", "")
+        status = payload.get("status", "realized")
+        needs_slugs: list[str] = payload.get("needs", [])
         parent_uuid = payload.get("parent_uuid")
 
         # Resolve provisional parent: bootstrap siblings reference each other
@@ -109,11 +114,22 @@ def apply_accepted_transaction(
                 parent_uuid=parent_uuid,
                 intent=intent,
                 description=description,
+                purpose=purpose,
+                rationale=rationale,
+                scenario=scenario,
+                status=status,
                 retired=False,
                 created_at_hlc=hlc,
                 updated_at_hlc=hlc,
             )
             store.upsert_feature(feature)
+
+            # Index citations so rename/retire tracking can maintain them.
+            try:
+                from codoc.core.citations import populate_citations
+                populate_citations(feature_uuid, feature, store)
+            except Exception:
+                pass
 
             candidate_bindings = payload.get("candidate_bindings") or []
             if not candidate_bindings:
@@ -145,6 +161,12 @@ def apply_accepted_transaction(
                     parent_symbol=cb.get("parent_symbol"),
                 )
                 store.upsert_binding(binding)
+
+            # Create feature edges for 'needs' dependencies
+            for needs_slug in needs_slugs:
+                matches = store.find_features_by_slug(needs_slug)
+                if matches:
+                    store.upsert_feature_edge(feature_uuid, matches[0].uuid, "needs")
 
     elif kind == TransactionKind.ABSORB:
         anchor_data = payload.get("anchor") or {
@@ -288,6 +310,126 @@ def apply_accepted_transaction(
                     updates["fingerprint_at_hlc"] = hlc
                 store.upsert_binding(binding.model_copy(update=updates))
 
+                # Update citations whose target referenced the old symbol path.
+                old_file = payload.get("old_file") or binding.anchor.file
+                old_sp = payload.get("old_symbol_path") or binding.anchor.symbol_path or ""
+                if old_sp and new_symbol_path:
+                    old_code_path = f"{old_file}::{old_sp}" if "::" not in old_sp else old_sp
+                    new_code_path = f"{new_file or old_file}::{new_symbol_path}" if "::" not in new_symbol_path else new_symbol_path
+                    try:
+                        store.update_citation_target(old_code_path, new_code_path, "code")
+                    except Exception:
+                        pass
+
+    elif kind == TransactionKind.FRACTURE:
+        # One binding split into N new bindings under the same feature.
+        # Payload: {source_binding_uuid, feature_uuid, new_chunks: [{file, symbol_path, fingerprint}]}
+        source_binding_uuid = payload.get("source_binding_uuid")
+        feature_uuid = payload.get("feature_uuid")
+        new_chunks = payload.get("new_chunks", [])
+
+        if source_binding_uuid and feature_uuid and new_chunks and not dry_run:
+            store.delete_binding(source_binding_uuid)
+            for chunk_info in new_chunks:
+                anchor = Anchor(
+                    file=chunk_info.get("file", ""),
+                    symbol_path=chunk_info.get("symbol_path"),
+                )
+                store.upsert_binding(Binding(
+                    uuid=_new_uuid(),
+                    feature_uuid=feature_uuid,
+                    anchor=anchor,
+                    fingerprint=chunk_info.get("fingerprint", ""),
+                    fingerprint_at_hlc=hlc,
+                ))
+
+    elif kind == TransactionKind.COALESCE:
+        # N bindings merged into one under the same feature.
+        # Payload: {source_binding_uuids, survivor_uuid, feature_uuid, new_chunk: {file, symbol_path, fingerprint}}
+        source_uuids: list[str] = payload.get("source_binding_uuids", [])
+        survivor_uuid = payload.get("survivor_uuid")
+        feature_uuid = payload.get("feature_uuid")
+        new_chunk = payload.get("new_chunk", {})
+
+        if source_uuids and feature_uuid and new_chunk and not dry_run:
+            new_anchor = Anchor(
+                file=new_chunk.get("file", ""),
+                symbol_path=new_chunk.get("symbol_path"),
+            )
+            new_fp = new_chunk.get("fingerprint", "")
+
+            for uuid in source_uuids:
+                if uuid != survivor_uuid:
+                    store.delete_binding(uuid)
+
+            if survivor_uuid:
+                binding = store.get_binding(survivor_uuid)
+                if binding is not None:
+                    store.upsert_binding(binding.model_copy(update={
+                        "anchor": new_anchor,
+                        "fingerprint": new_fp,
+                        "fingerprint_at_hlc": hlc,
+                    }))
+            else:
+                store.upsert_binding(Binding(
+                    uuid=_new_uuid(),
+                    feature_uuid=feature_uuid,
+                    anchor=new_anchor,
+                    fingerprint=new_fp,
+                    fingerprint_at_hlc=hlc,
+                ))
+
+    elif kind == TransactionKind.RETIRE_FILE:
+        # Whole file deleted; evict all bindings and retire orphaned features.
+        # Payload: {file, affected_feature_uuids, affected_binding_uuids}
+        binding_uuids: list[str] = payload.get("affected_binding_uuids", [])
+        feature_uuids: list[str] = payload.get("affected_feature_uuids", [])
+        retired_file = payload.get("file", "")
+
+        if not dry_run:
+            for uuid in binding_uuids:
+                store.delete_binding(uuid)
+
+            for feature_uuid in feature_uuids:
+                remaining = store.list_bindings(feature_uuid)
+                if not remaining:
+                    feature = store.get_feature(feature_uuid)
+                    if feature is not None and not feature.retired:
+                        store.upsert_feature(feature.model_copy(update={
+                            "retired": True,
+                            "updated_at_hlc": hlc,
+                        }))
+
+            # Mark all citations referencing this file as stale.
+            if retired_file:
+                try:
+                    store.retire_citations_for_file(retired_file)
+                except Exception:
+                    pass
+
+    elif kind == TransactionKind.RENAME_FILE:
+        # File moved/renamed; remap all binding anchors to the new path.
+        # Payload: {old_file, new_file, affected_binding_uuids, similarity}
+        old_file = payload.get("old_file", "")
+        new_file = payload.get("new_file", "")
+        binding_uuids_to_remap: list[str] = payload.get("affected_binding_uuids", [])
+
+        if old_file and new_file and not dry_run:
+            for uuid in binding_uuids_to_remap:
+                binding = store.get_binding(uuid)
+                if binding is not None and binding.anchor.file == old_file:
+                    new_anchor = binding.anchor.model_copy(update={"file": new_file})
+                    store.upsert_binding(binding.model_copy(update={
+                        "anchor": new_anchor,
+                        "fingerprint_at_hlc": hlc,
+                    }))
+
+            # Rewrite all citations pointing at old_file → new_file.
+            try:
+                store.rename_citations_for_file(old_file, new_file)
+            except Exception:
+                pass
+
     elif kind in (
         TransactionKind.AMEND,
         TransactionKind.RENAME,
@@ -298,7 +440,7 @@ def apply_accepted_transaction(
         # are administrative records (SNAPSHOT) with no store side-effects.
         pass
 
-    # FRACTURE, COALESCE, SPLIT, MERGE, RESTRUCTURE, REWIND, BRANCH,
-    # MERGE_BRANCH, INSTATE_CONSTRAINT, LIFT_CONSTRAINT — Phase 2/3/5; no-op.
+    # SPLIT_FILE, MERGE_FILE, RESTRUCTURE, REWIND, BRANCH, MERGE_BRANCH,
+    # INSTATE_CONSTRAINT, LIFT_CONSTRAINT — reserved; no-op.
 
     return summary

@@ -51,16 +51,18 @@ def test_top_level_rename_updates_index(tmp_path: Path) -> None:
     assert "auth-flow" in _index_path(codoc_dir).read_text()
 
     # User renames root feature in _index.codoc.
+    # "auth-flaw" is similar enough to "auth-flow" (1 edit, sim=0.89) for
+    # structural UUID resolution to work without inline @uuid comments.
     f = _index_path(codoc_dir)
-    f.write_text(f.read_text().replace("- auth-flow", "- auth-system"))
+    f.write_text(f.read_text().replace("- auth-flow", "- auth-flaw"))
 
     result = sync_from_dir(str(codoc_dir))
     assert result.status == "ok", result.errors
-    assert any("auth-system" in line for line in result.applied)
+    assert any("auth-flaw" in line for line in result.applied)
 
     # _index.codoc should reference the new slug only.
     index_text = _index_path(codoc_dir).read_text()
-    assert "auth-system" in index_text
+    assert "auth-flaw" in index_text
     assert "auth-flow" not in index_text
 
 

@@ -6,6 +6,7 @@ import typer
 
 from codoc.cli.sync import sync_command
 from codoc.cli.diff import diff_command
+from codoc.cli.watch import watch_command
 from codoc.cli.gate_run import gate_run
 from codoc.cli.plan import plan_command
 from codoc.cli.server import server
@@ -14,8 +15,6 @@ from codoc.cli.init import init
 from codoc.cli.reflect import reflect_command
 from codoc.cli.bootstrap import bootstrap_app
 from codoc.cli.projection import proj_app
-from codoc.cli.tx import tx_app
-from codoc.cli.feature import feature_app
 from codoc.cli.doctor import doctor
 from codoc.cli.health import health_command
 from codoc.cli.commands import (
@@ -103,6 +102,11 @@ app.command("conflicts")(cmd_conflicts)
 app.command("diff")(diff_command)
 
 # ------------------------------------------------------------------
+# FS watcher + realize
+# ------------------------------------------------------------------
+app.command("watch")(watch_command)
+
+# ------------------------------------------------------------------
 # Infra commands
 # ------------------------------------------------------------------
 app.command("plan")(plan_command)
@@ -112,8 +116,3 @@ app.command("commit-preflight")(commit_preflight)
 app.command("doctor")(doctor)
 app.command("health")(health_command)
 
-# ------------------------------------------------------------------
-# Deprecated aliases (print notice, then delegate)
-# ------------------------------------------------------------------
-app.add_typer(tx_app, name="tx")
-app.add_typer(feature_app, name="feature")

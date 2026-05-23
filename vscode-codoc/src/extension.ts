@@ -9,6 +9,7 @@ import { CodocHoverProvider } from './providers/hover';
 import { CodocCodocCodeLensProvider } from './providers/codelens';
 import { CodocDefinitionProvider } from './providers/definition';
 import { CodocCodeActionProvider } from './providers/code-actions';
+import { CodocCompletionProvider } from './providers/completion';
 import { applyDecorations, createDecorations } from './providers/decoration';
 import { scheduleSyncCodocFile, onSaveCodocFile } from './sync-on-save';
 import { LiveActivityTracker } from './state/live-activity';
@@ -336,6 +337,11 @@ export function activate(context: vscode.ExtensionContext): void {
             codocSelector,
             new CodocCodeActionProvider(),
             { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+        ),
+        vscode.languages.registerCompletionItemProvider(
+            codocSelector,
+            new CodocCompletionProvider(server),
+            '@',
         ),
     );
 

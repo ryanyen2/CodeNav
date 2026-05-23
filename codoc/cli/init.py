@@ -154,7 +154,7 @@ def _run_bootstrap(root: Path, codoc_dir: Path, repo_name: str, cluster_size: in
             root_dir=str(root),
             codoc_dir=str(codoc_dir),
             repo_name=repo_name,
-            target_cluster_size=cluster_size,
+            # target_cluster_size=cluster_size,
         )
     except Exception as exc:
         typer.echo(f"Bootstrap failed: {exc}", err=True)

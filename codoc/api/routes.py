@@ -989,23 +989,21 @@ async def get_binding_candidates(uuid: str, root_dir: str = Query(...)) -> list[
             b.anchor.symbol_path for b in bindings if b.anchor.symbol_path
         }
 
-        # Score chunk_fingerprints in the same files as existing bindings.
+        # Score indexed chunks in the same files as existing bindings.
         scored: list[dict] = []
         if anchor_files:
-            placeholders = ",".join("?" * len(anchor_files))
-            rows = store._db.execute(
-                f"SELECT file, symbol_path FROM chunk_fingerprints WHERE file IN ({placeholders})",
-                tuple(anchor_files),
-            ).fetchall()
-            for row in rows:
-                chunk_file = row["file"]
-                chunk_symbol = row["symbol_path"]
+            from codoc.pipelines.indexing.reader import read_all_chunks
+
+            all_rows = read_all_chunks(codoc_dir)
+            for row in all_rows:
+                if row.file not in anchor_files:
+                    continue
                 score = 2  # same file
-                if chunk_symbol and chunk_symbol in anchor_symbol_paths:
+                if row.symbol_path and row.symbol_path in anchor_symbol_paths:
                     score = 4  # exact symbol_path match
                 scored.append({
-                    "file": chunk_file,
-                    "symbol_path": chunk_symbol or "",
+                    "file": row.file,
+                    "symbol_path": row.symbol_path or "",
                     "score": score,
                 })
 

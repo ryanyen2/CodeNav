@@ -61,9 +61,11 @@ def test_sync_applies_amend_and_rename(tmp_path: Path) -> None:
         store.close()
 
     # Edit alpha: change slug AND intent in _index.codoc.
+    # "alpha-v2" is similar enough to "alpha" (3 edits / max 8 = 0.625 > 0.6) for
+    # structural UUID resolution to work without inline @uuid comments.
     f = codoc_dir / "tree" / "_index.codoc"
     text = f.read_text()
-    text = text.replace("- alpha", "- alpha-renamed")
+    text = text.replace("- alpha", "- alpha-v2")
     text = text.replace("Alpha intent.", "Alpha is now updated.")
     f.write_text(text)
 
@@ -79,7 +81,7 @@ def test_sync_applies_amend_and_rename(tmp_path: Path) -> None:
         feat = store.get_feature(a)
     finally:
         store.close()
-    assert feat.slug == "alpha-renamed"
+    assert feat.slug == "alpha-v2"
     assert "updated" in feat.intent.lower()
 
 

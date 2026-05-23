@@ -7,10 +7,12 @@
     { "include": "#legend" },
     { "include": "#binding-entry" },
     { "include": "#bindings-header" },
+    { "include": "#placeholder-feature" },
     { "include": "#retired-feature" },
     { "include": "#feature" },
     { "include": "#proposal-reject" },
     { "include": "#proposal" },
+    { "include": "#inline-ref" },
     { "include": "#comment" }
   ],
   "repository": {
@@ -98,6 +100,35 @@
         "4": { "name": "punctuation.separator.codoc" },
         "5": { "name": "entity.name.function.codoc" }
       }
+    },
+    "placeholder-feature": {
+      "patterns": [
+        {
+          "match": "^(\\*\\s)(.+)$",
+          "captures": {
+            "1": { "name": "markup.changed.codoc" },
+            "2": { "name": "entity.name.function.codoc" }
+          }
+        },
+        {
+          "match": "^  (\\*\\s)(.+)$",
+          "captures": {
+            "1": { "name": "markup.changed.codoc" },
+            "2": { "name": "entity.name.section.codoc.h2" }
+          }
+        },
+        {
+          "match": "^    (\\*\\s)(.+)$",
+          "captures": {
+            "1": { "name": "markup.changed.codoc" },
+            "2": { "name": "entity.name.section.codoc.h3" }
+          }
+        }
+      ]
+    },
+    "inline-ref": {
+      "match": "@[\\w.]+(?:::[\\w.]+)*",
+      "name": "variable.other.inline-ref.codoc"
     }
   }
 }

@@ -46,6 +46,10 @@ class AttributionInput:
     """List of ``{uuid, slug, intent, binding_count}`` for each feature in the
     1-hop neighbourhood."""
 
+    tree_context: dict = field(default_factory=dict)
+    """Existing tree summary: naming style, root features, total count.
+    Built by :func:`~codoc.pipelines._shared.prompt_context.build_tree_context`."""
+
 
 @dataclass
 class AttributionProposal:
@@ -112,6 +116,7 @@ def propose_attribution(
         if input.current_binding is not None
         else "null"
     )
+    tree_context_json = json.dumps(input.tree_context, indent=2) if input.tree_context else "null"
 
     prompt = format_prompt(
         template,
@@ -120,6 +125,7 @@ def propose_attribution(
         change_summary=input.change_kind,
         neighboring_features=neighboring_json,
         current_binding=current_binding_json,
+        tree_context=tree_context_json,
     )
 
     raw: dict = run_agent(prompt, config)  # type: ignore[assignment]

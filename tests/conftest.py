@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-os.environ.setdefault("CODOC_LEGACY_UUID_LINES", "1")
 
 import uuid as _uuid
 from pathlib import Path

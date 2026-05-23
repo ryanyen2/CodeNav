@@ -159,7 +159,11 @@ def sync_from_dir(codoc_dir: str, author: str = "user") -> SyncResult:
                                 ),
                             )
                         )
-                    runner.amend(op.uuid, op.new_intent)
+                    if op.new_intent:
+                        runner.amend(op.uuid, op.new_intent)
+                    # Apply new structured fields directly if present
+                    if op.new_fields:
+                        _apply_structured_fields(op.uuid, op.new_fields, runner)
                     applied.append(_describe_op(op))
                 elif isinstance(op, RenameOp):
                     runner.rename(op.uuid, op.new_slug)
@@ -213,6 +217,70 @@ def _server_amended_since(feature_uuid: str, base_hlc: str, store) -> bool:
     return any(tx.hlc.to_str() > base_hlc for tx in txs)
 
 
+def _apply_structured_fields(feature_uuid: str, new_fields: dict, runner: "IntentionalRunner") -> None:
+    """Apply purpose/rationale/scenario/needs changes directly to the store."""
+    from datetime import datetime, timezone
+    from codoc.model.hlc import HLC
+    from codoc.model.transaction import Transaction, TransactionKind
+
+    store = runner._open_store
+    tx_log = runner._open_tx_log
+    jsonl_log = runner._open_jsonl
+
+    feature = store.get_feature(feature_uuid)
+    if feature is None:
+        return
+
+    updates = {}
+    if "purpose" in new_fields:
+        updates["purpose"] = new_fields["purpose"]
+    if "rationale" in new_fields:
+        updates["rationale"] = new_fields["rationale"]
+    if "scenario" in new_fields:
+        updates["scenario"] = new_fields["scenario"]
+    if "status" in new_fields:
+        updates["status"] = new_fields["status"]
+
+    if updates:
+        hlc = tx_log._tick()
+        updated = feature.model_copy(update={**updates, "updated_at_hlc": hlc})
+        store.upsert_feature(updated)
+        tx = Transaction(
+            hlc=hlc,
+            parent_hlcs=[],
+            kind=TransactionKind.AMEND,
+            payload={"feature_uuid": feature_uuid, **{f"new_{k}": v for k, v in updates.items()}},
+            author="projection-sync",
+            proposal=False,
+            accepted_at=datetime.now(timezone.utc),
+        )
+        tx_log.append(tx)
+        jsonl_log.append(tx)
+
+        # Re-index citations whenever structured text fields change.
+        try:
+            from codoc.core.citations import populate_citations
+            populate_citations(feature_uuid, updated, store)
+        except Exception:
+            pass
+
+    # Handle needs (feature_edges)
+    if "needs" in new_fields:
+        new_needs_slugs: list[str] = new_fields["needs"]
+        # Delete all existing edges from this feature
+        try:
+            existing_edges = store.list_feature_edges(feature_uuid)
+            for edge in existing_edges:
+                store.delete_feature_edge(feature_uuid, edge["target_uuid"], edge["kind"])
+        except Exception:
+            pass
+        # Add new ones
+        for slug in new_needs_slugs:
+            target = store.find_features_by_slug(slug)
+            if target:
+                store.upsert_feature_edge(feature_uuid, target[0].uuid, "needs")
+
+
 def _apply_introduce(op: IntroduceOp, runner: IntentionalRunner) -> None:
     """Create a pending INTRODUCE proposal for an unresolved (new) feature."""
     import re
@@ -231,6 +299,7 @@ def _apply_introduce(op: IntroduceOp, runner: IntentionalRunner) -> None:
         new_uuid = str(_uuid_mod.uuid4())
 
     slug = re.sub(r"[^a-z0-9]+", "-", op.title.lower()).strip("-") or "unnamed"
+    is_placeholder = not op.intent and not getattr(op, "purpose", "")
     tx = Transaction(
         hlc=HLC(),
         parent_hlcs=[],
@@ -242,6 +311,7 @@ def _apply_introduce(op: IntroduceOp, runner: IntentionalRunner) -> None:
             "feature_uuid": new_uuid,
             "provisional_uuid": new_uuid,
             "parent_uuid": op.parent_uuid,
+            "status": "placeholder" if is_placeholder else "realized",
         },
         author="user",
         proposal=True,

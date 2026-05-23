@@ -21,33 +21,39 @@ Tree depth: {depth}  (0 = top-level subsystem, 1 = module/concept, 2 = component
 Use the tree depth to calibrate how broad or narrow each feature should be:
 
 - Depth 0 (top-level): Subsystem groupings. Broad behavioral domains.
-  Example: "Data handling and transformation", "Visualization components"
+  Example: "Training pipeline", "Model architecture"
 - Depth 1 (module/concept): Major components within the parent subsystem.
-  Example: "Built-in datasets", "Data transformer registry"
+  Example: "Distributed data loading", "Optimizer state management"
 - Depth 2 (component): A cohesive mechanism or behavior within the parent module.
-  Example: "Multi-backend support", "Metadata and caching"
+  Example: "KV-cache eviction policy", "Checkpoint patching"
 - Depth 3+ (leaf operation): A specific, bounded behavior.
-  Example: "Download dataset file", "Stream parquet documents"
+  Example: "BOS-token packing", "Parquet shard download"
+
+## Style and description rules
+
+{{include:_shared_description}}
 
 ## Rules
 
 1. Each feature must represent a meaningful, named capability at the appropriate abstraction level.
    Do NOT propose something too fine (a single helper line) or too coarse (all logic in the file).
 
-2. slug — kebab-case noun phrase (not verb-object), e.g. "data-transformer-registry", "built-in-datasets".
-   Must be globally unique: check all existing features and siblings and do not reuse or paraphrase any slug.
+2. slug — follow the style rules above: kebab-case noun phrase, globally unique.
+   Check all existing features and siblings and do not reuse or paraphrase any slug.
 
-3. title — 3-6 word NL phrase in sentence case, e.g. "Data transformer registry", "Built-in datasets".
-   Different from the slug: human-readable, uses natural language, NOT title case.
+3. title — 3-6 word NL phrase in sentence case.
 
-4. intent — 1-2 sentences summarizing the behavioral purpose in user-facing or product terms.
-   Write WHAT the feature does. No implementation details, no variable/class/file names.
+4. purpose — one line (≤140 chars) stating WHAT this feature does in product or behavior terms.
+   Omit if it would only paraphrase the slug. No implementation details, no variable/class/file names.
 
-5. description — 2-6 sentences of multi-paragraph prose that explains:
-   (a) what this feature does and why it exists,
-   (b) how it relates to sibling features and the parent context,
-   (c) any important behavioral nuances.
-   Write in plain English. No code. Preserve newlines between paragraphs using \n.
+5. rationale — one line (≤140 chars) stating WHY this design rather than the obvious alternative.
+   MUST end with at least one [ref: ...] token pointing to a candidate binding.
+   Omit if the design choice is obvious from the name alone.
+
+5a. scenario — exactly 3 BDD lines (given / when / then). The "then" line MUST include a [ref: ...] token.
+    Omit if no clean scenario fits (e.g. purely structural/data-shape features).
+
+5b. needs — list of slug strings for sibling features this feature cooperates with. Omit if empty.
 
 6. candidate_chunk_keys — the symbol_paths from the cluster that should be bound to this feature.
    Every chunk in the cluster should appear in exactly one proposed feature.
@@ -69,8 +75,10 @@ Respond with ONLY a <solution> block containing a JSON array. No prose before or
   {
     "slug": "data-transformer-registry",
     "title": "Data transformer registry",
-    "intent": "Manages the registration and dispatch of data transformation functions that convert raw data objects before they are serialized.",
-    "description": "The data transformer registry provides a plugin-style mechanism for attaching pre-processing functions to Altair's data pipeline. Transformers are registered by name and selected at runtime to handle format conversion, row limiting, or backend-specific optimizations.\n\nThis is the central coordination point between user-supplied transformers and Altair's built-in defaults. It enables features like VegaFusion integration and large-dataset sampling without changing the chart API.",
+    "purpose": "routes raw data objects through named pre-processing functions before serialization",
+    "rationale": "registry pattern keeps the chart API stable while backends can be swapped without modifying chart code  [ref: altair/utils/data.py::DataTransformerRegistry.enable]",
+    "scenario": "given a chart with a pandas DataFrame and the 'vegafusion' transformer enabled\nwhen  the chart is rendered to JSON\nthen  the DataFrame is converted by the registered transformer before it leaves Python  [ref: altair/utils/data.py::DataTransformerRegistry]",
+    "needs": [],
     "candidate_chunk_keys": ["altair/utils/data.py::DataTransformerRegistry", "altair/utils/data.py::DataTransformerRegistry.enable"]
   }
 ]

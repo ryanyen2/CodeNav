@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS features (
     intent TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     retired INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'realized',
     created_at_hlc TEXT NOT NULL,
     updated_at_hlc TEXT NOT NULL
 );
@@ -83,14 +84,6 @@ CREATE TABLE IF NOT EXISTS obligations (
 CREATE INDEX IF NOT EXISTS idx_obligations_feature ON obligations(feature_uuid);
 CREATE INDEX IF NOT EXISTS idx_obligations_status ON obligations(status);
 
-CREATE TABLE IF NOT EXISTS chunk_fingerprints (
-    id TEXT PRIMARY KEY,
-    file TEXT NOT NULL,
-    symbol_path TEXT,
-    fingerprint TEXT NOT NULL,
-    last_seen_commit TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS binding_resolutions (
     binding_uuid TEXT NOT NULL,
     checked_at_hlc TEXT NOT NULL,
@@ -108,6 +101,29 @@ CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS feature_edges (
+    source_uuid TEXT NOT NULL,
+    target_uuid TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'needs',
+    PRIMARY KEY (source_uuid, target_uuid, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_fe_source ON feature_edges(source_uuid);
+CREATE INDEX IF NOT EXISTS idx_fe_target ON feature_edges(target_uuid);
+
+CREATE TABLE IF NOT EXISTS citations (
+    id TEXT PRIMARY KEY,
+    feature_uuid TEXT NOT NULL,
+    field TEXT NOT NULL,
+    bullet_index INTEGER NOT NULL DEFAULT 0,
+    target_kind TEXT NOT NULL,
+    target_path TEXT NOT NULL,
+    line_start INTEGER,
+    line_end INTEGER,
+    is_stale INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_citations_feature ON citations(feature_uuid);
+CREATE INDEX IF NOT EXISTS idx_citations_target ON citations(target_kind, target_path);
 """
 
 _MIGRATIONS = [
@@ -116,6 +132,15 @@ _MIGRATIONS = [
     "INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '2')",
     "ALTER TABLE bindings ADD COLUMN types_hash TEXT",
     "ALTER TABLE bindings ADD COLUMN minhash_sketch BLOB",
+    "ALTER TABLE features ADD COLUMN purpose TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE features ADD COLUMN rationale TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE features ADD COLUMN scenario TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE features ADD COLUMN status TEXT NOT NULL DEFAULT 'realized'",
+    "CREATE TABLE IF NOT EXISTS feature_edges (source_uuid TEXT NOT NULL, target_uuid TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'needs', PRIMARY KEY (source_uuid, target_uuid, kind))",
+    "CREATE INDEX IF NOT EXISTS idx_fe_source ON feature_edges(source_uuid)",
+    "CREATE TABLE IF NOT EXISTS citations (id TEXT PRIMARY KEY, feature_uuid TEXT NOT NULL, field TEXT NOT NULL, bullet_index INTEGER NOT NULL DEFAULT 0, target_kind TEXT NOT NULL, target_path TEXT NOT NULL, line_start INTEGER, line_end INTEGER, is_stale INTEGER NOT NULL DEFAULT 0)",
+    "CREATE INDEX IF NOT EXISTS idx_citations_feature ON citations(feature_uuid)",
+    "CREATE INDEX IF NOT EXISTS idx_citations_target ON citations(target_kind, target_path)",
 ]
 
 
@@ -155,7 +180,11 @@ def _feature_to_row(f: Feature) -> dict:
         "parent_uuid": f.parent_uuid,
         "intent": f.intent,
         "description": f.description,
+        "purpose": f.purpose,
+        "rationale": f.rationale,
+        "scenario": f.scenario,
         "retired": 1 if f.retired else 0,
+        "status": f.status,
         "created_at_hlc": f.created_at_hlc.to_str(),
         "updated_at_hlc": f.updated_at_hlc.to_str(),
     }
@@ -170,6 +199,10 @@ def _row_to_feature(row: sqlite3.Row) -> Feature:
         raw["title"] = raw["slug"]
     if "description" not in raw:
         raw["description"] = ""
+    raw.setdefault("purpose", "")
+    raw.setdefault("rationale", "")
+    raw.setdefault("scenario", "")
+    raw.setdefault("status", "realized")
     return Feature.model_validate(raw)
 
 
@@ -402,16 +435,22 @@ class SQLiteStore:
         self._db.execute(
             """
             INSERT INTO features
-                (uuid, slug, title, parent_uuid, intent, description, retired, created_at_hlc, updated_at_hlc)
+                (uuid, slug, title, parent_uuid, intent, description, purpose, rationale, scenario,
+                 retired, status, created_at_hlc, updated_at_hlc)
             VALUES
-                (:uuid, :slug, :title, :parent_uuid, :intent, :description, :retired, :created_at_hlc, :updated_at_hlc)
+                (:uuid, :slug, :title, :parent_uuid, :intent, :description, :purpose, :rationale, :scenario,
+                 :retired, :status, :created_at_hlc, :updated_at_hlc)
             ON CONFLICT(uuid) DO UPDATE SET
                 slug           = excluded.slug,
                 title          = excluded.title,
                 parent_uuid    = excluded.parent_uuid,
                 intent         = excluded.intent,
                 description    = excluded.description,
+                purpose        = excluded.purpose,
+                rationale      = excluded.rationale,
+                scenario       = excluded.scenario,
                 retired        = excluded.retired,
+                status         = excluded.status,
                 updated_at_hlc = excluded.updated_at_hlc
             """,
             row,
@@ -683,46 +722,6 @@ class SQLiteStore:
         self._db.commit()
 
     # ------------------------------------------------------------------
-    # Chunk fingerprint cache
-    # ------------------------------------------------------------------
-
-    def upsert_chunk_fingerprint(
-        self,
-        key: str,
-        file: str,
-        symbol_path: str | None,
-        fingerprint: str,
-        commit: str,
-    ) -> None:
-        self._db.execute(
-            """
-            INSERT INTO chunk_fingerprints (id, file, symbol_path, fingerprint, last_seen_commit)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                file             = excluded.file,
-                symbol_path      = excluded.symbol_path,
-                fingerprint      = excluded.fingerprint,
-                last_seen_commit = excluded.last_seen_commit
-            """,
-            (key, file, symbol_path, fingerprint, commit),
-        )
-        self._db.commit()
-
-    def get_chunk_fingerprint(self, key: str) -> str | None:
-        row = self._db.execute(
-            "SELECT fingerprint FROM chunk_fingerprints WHERE id = ?", (key,)
-        ).fetchone()
-        return row["fingerprint"] if row else None
-
-    def get_all_chunk_fingerprints(self) -> dict[str, str]:
-        rows = self._db.execute("SELECT id, fingerprint FROM chunk_fingerprints").fetchall()
-        return {r["id"]: r["fingerprint"] for r in rows}
-
-    def delete_chunk_fingerprint(self, key: str) -> None:
-        self._db.execute("DELETE FROM chunk_fingerprints WHERE id = ?", (key,))
-        self._db.commit()
-
-    # ------------------------------------------------------------------
     # Binding resolution CRUD
     # ------------------------------------------------------------------
 
@@ -785,3 +784,115 @@ class SQLiteStore:
             (feature_uuid,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Feature edges
+    # ------------------------------------------------------------------
+
+    def upsert_feature_edge(self, source_uuid: str, target_uuid: str, kind: str = "needs") -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO feature_edges (source_uuid, target_uuid, kind) VALUES (?,?,?)",
+            (source_uuid, target_uuid, kind),
+        )
+
+    def delete_feature_edge(self, source_uuid: str, target_uuid: str, kind: str = "needs") -> None:
+        self._conn.execute(
+            "DELETE FROM feature_edges WHERE source_uuid=? AND target_uuid=? AND kind=?",
+            (source_uuid, target_uuid, kind),
+        )
+
+    def list_feature_edges(self, source_uuid: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT source_uuid, target_uuid, kind FROM feature_edges WHERE source_uuid=?",
+            (source_uuid,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Citations
+    # ------------------------------------------------------------------
+
+    def upsert_citation(
+        self,
+        id: str,
+        feature_uuid: str,
+        field: str,
+        bullet_index: int,
+        target_kind: str,
+        target_path: str,
+        line_start: int | None = None,
+        line_end: int | None = None,
+        is_stale: bool = False,
+    ) -> None:
+        self._db.execute(
+            """INSERT OR REPLACE INTO citations
+               (id, feature_uuid, field, bullet_index, target_kind, target_path, line_start, line_end, is_stale)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (id, feature_uuid, field, bullet_index, target_kind, target_path, line_start, line_end, 1 if is_stale else 0),
+        )
+        self._db.commit()
+
+    def delete_citations_for_feature(self, feature_uuid: str) -> None:
+        """Remove all citations for a feature (called before re-populating)."""
+        self._db.execute("DELETE FROM citations WHERE feature_uuid=?", (feature_uuid,))
+        self._db.commit()
+
+    def list_citations(self, feature_uuid: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM citations WHERE feature_uuid=? ORDER BY field, bullet_index",
+            (feature_uuid,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_citations_stale(self, target_kind: str, target_path: str) -> int:
+        cur = self._conn.execute(
+            "UPDATE citations SET is_stale=1 WHERE target_kind=? AND target_path=?",
+            (target_kind, target_path),
+        )
+        return cur.rowcount
+
+    def update_citation_target(self, old_target_path: str, new_target_path: str, target_kind: str = "code") -> int:
+        cur = self._conn.execute(
+            "UPDATE citations SET target_path=?, is_stale=0 WHERE target_kind=? AND target_path=?",
+            (new_target_path, target_kind, old_target_path),
+        )
+        return cur.rowcount
+
+    def rename_citations_for_file(self, old_file: str, new_file: str) -> int:
+        """Remap all citations whose target references old_file to new_file.
+
+        Handles both code citations (old_file::sym → new_file::sym) and
+        whole-file citations (target_kind='file', target_path=old_file).
+        Returns total rows updated.
+        """
+        prefix = old_file + "::"
+        # Code citations: replace the file portion of "old_file::sym" paths.
+        cur1 = self._conn.execute(
+            """UPDATE citations
+               SET target_path = ? || substr(target_path, ?), is_stale=0
+               WHERE target_kind='code' AND target_path LIKE ?""",
+            (new_file, len(prefix), prefix + "%"),
+        )
+        # Whole-file citations.
+        cur2 = self._conn.execute(
+            "UPDATE citations SET target_path=?, is_stale=0 WHERE target_kind='file' AND target_path=?",
+            (new_file, old_file),
+        )
+        return cur1.rowcount + cur2.rowcount
+
+    def retire_citations_for_file(self, file: str) -> int:
+        """Mark all citations referencing *file* as stale.
+
+        Affects code citations whose target_path starts with 'file::' and
+        whole-file citations with target_path == file.
+        """
+        prefix = file + "::"
+        cur1 = self._conn.execute(
+            "UPDATE citations SET is_stale=1 WHERE target_kind='code' AND target_path LIKE ?",
+            (prefix + "%",),
+        )
+        cur2 = self._conn.execute(
+            "UPDATE citations SET is_stale=1 WHERE target_kind='file' AND target_path=?",
+            (file,),
+        )
+        return cur1.rowcount + cur2.rowcount

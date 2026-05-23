@@ -69,8 +69,10 @@ def test_slug_change_emits_rename_op(tmp_path: Path) -> None:
         store.close()
 
     # User edits the feature title in _index.codoc.
+    # Use a name with Levenshtein similarity > 0.6 to "feature-0" so structural
+    # alignment can resolve the UUID without an inline @uuid comment.
     f = _index_path(codoc_dir)
-    text = f.read_text().replace("- feature-0", "- renamed-feature")
+    text = f.read_text().replace("- feature-0", "- feature-0x")
     f.write_text(text)
 
     parsed = parse_tree_dir(str(codoc_dir), old_meta=meta)
@@ -84,7 +86,7 @@ def test_slug_change_emits_rename_op(tmp_path: Path) -> None:
     assert len(ops) == 1
     assert isinstance(ops[0], RenameOp)
     assert ops[0].uuid == u
-    assert ops[0].new_slug == "renamed-feature"
+    assert ops[0].new_slug == "feature-0x"
 
 
 def test_intent_change_emits_amend_op(tmp_path: Path) -> None:

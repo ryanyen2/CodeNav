@@ -1,12 +1,14 @@
-"""
-codoc.pipelines.bootstrap.runner — top-level bootstrap pipeline orchestrator.
+"""Top-level bootstrap pipeline orchestrator (cocoindex-driven).
 
 Runs the bootstrap pipeline on a fresh codebase (no features yet):
 
-  1. Extract all chunks from the repo via language adapters.
-  2. Group chunks by directory + class-prefix hierarchy.
-  3. Call LLM once per feature to generate intent text (default).
-  4. Emit INTRODUCE proposals for the user to review.
+  1. Run the cocoindex incremental indexer over the repo — chunks + embeddings
+     land in ``.codoc/lancedb`` (resumable, only re-processes changed files).
+  2. Read indexed chunks back from LanceDB.
+  3. Cluster files using composite similarity (embeddings + imports + lexical).
+  4. Walk the cluster tree top-down, calling the LLM at each level so the agent
+     sees parent + sibling context and can calibrate abstraction.
+  5. Emit INTRODUCE proposals for the user to review.
 
 Users never write the tree from scratch — the LLM proposes an initial tree and
 the user curates it (accept / edit / reject).  Pass ``with_intent=False`` only
@@ -23,22 +25,36 @@ import json
 import sys
 from pathlib import Path
 
-from codoc.storage.sqlite_store import SQLiteStore
-from codoc.storage.faiss_index import FaissIndex
-from codoc.storage.jsonl_log import JSONLLog
 from codoc.core.log import TransactionLog
-from codoc.pipelines.bootstrap.cluster import (
-    extract_all_chunks,
-    embed_chunks,
+from codoc.lang import Chunk
+from codoc.pipelines.indexing.reader import (
+    ChunkRow,
+    per_file_mean_embeddings,
+    read_all_chunks,
 )
-from codoc.pipelines.bootstrap.propose import (
-    propose_structural,
-)
+from codoc.pipelines.indexing.runner import update_index
+from codoc.storage.jsonl_log import JSONLLog
+from codoc.storage.sqlite_store import SQLiteStore
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _row_to_chunk(row: ChunkRow) -> Chunk:
+    """Adapt a LanceDB-backed :class:`ChunkRow` to the legacy :class:`Chunk` shape.
+
+    Downstream clustering and proposal code expects ``Chunk`` instances; the
+    extra fields on ``ChunkRow`` (embedding, hashes) are routed separately.
+    """
+    return Chunk(
+        symbol_path=row.symbol_path,
+        file=row.file,
+        start_byte=row.start_byte,
+        end_byte=row.end_byte,
+        source=row.source,
+    )
 
 
 def _build_language_adapters(chunks) -> dict:
@@ -56,16 +72,6 @@ def _build_language_adapters(chunks) -> dict:
     return adapters
 
 
-def _collect_existing_feature_summaries(store: SQLiteStore) -> list[dict]:
-    """Return {slug, intent} for every non-retired feature in the store."""
-    features = store.list_features()
-    return [
-        {"slug": f.slug, "intent": f.intent}
-        for f in features
-        if not f.retired
-    ]
-
-
 def _collect_attributed_symbol_paths(store: SQLiteStore) -> set[str]:
     """Return all symbol_paths currently bound to an accepted feature.
 
@@ -75,13 +81,10 @@ def _collect_attributed_symbol_paths(store: SQLiteStore) -> set[str]:
     """
     attributed: set[str] = set()
 
-    # From concrete bindings (already materialised into the feature graph).
     for binding in store.get_all_bindings():
         if binding.anchor.symbol_path:
             attributed.add(binding.anchor.symbol_path)
 
-    # From accepted INTRODUCE transactions: their payload.candidate_bindings
-    # hold the symbol paths that were approved by the user.
     from codoc.model.transaction import TransactionKind
 
     for tx in store.list_transactions(proposal=False, limit=0):
@@ -100,9 +103,9 @@ def _collect_attributed_symbol_paths(store: SQLiteStore) -> set[str]:
 
 
 def reset_codoc(codoc_dir: str) -> None:
-    """Wipe all codoc state in *codoc_dir* so bootstrap can start fresh.
+    """Wipe codoc + cocoindex state in *codoc_dir* so bootstrap can start fresh.
 
-    Removes: codoc.db, log.jsonl, tree/, faiss/, unattributed.json.
+    Removes: codoc.db, log.jsonl, tree/, unattributed.json, lancedb/, cocoindex.db/.
     Does NOT remove the .codoc/ directory itself.
     """
     import shutil
@@ -112,7 +115,7 @@ def reset_codoc(codoc_dir: str) -> None:
         p = codoc_path / name
         if p.exists():
             p.unlink()
-    for name in ("tree", "faiss"):
+    for name in ("tree", "lancedb", "cocoindex.db"):
         p = codoc_path / name
         if p.exists():
             shutil.rmtree(p)
@@ -126,15 +129,18 @@ def run_bootstrap(
     node_id: str = "default",
     with_intent: bool = True,
     reset: bool = False,
+    mode: str | None = None,  # accepted for back-compat; ignored
 ) -> dict:
-    """Bootstrap by reading directory/class structure, then calling LLM to generate intent.
+    """Bootstrap the feature tree using semantic clustering over cocoindex output.
 
-    Groups chunks by directory + class-prefix hierarchy to build a structural
-    feature tree, then calls the LLM once per feature to generate intent text.
-    The user reviews the proposals (accept/reject/edit) — they never write the
-    tree from scratch.  Pass ``with_intent=False`` only for offline testing.
+    Flow:
+      1. ``update_index`` — incremental cocoindex run; cheap when up to date.
+      2. ``read_all_chunks`` — load chunks + embeddings from LanceDB.
+      3. ``build_hierarchical_clusters`` — cluster files (embedding + import + lexical).
+      4. ``propose_subtree`` — LLM call per cluster generates feature proposals.
+      5. Emit INTRODUCE proposals.
 
-    Cost: O(features) LLM calls by default. 0 API calls with ``with_intent=False``.
+    Cost: O(clusters) LLM calls. 0 API calls with ``with_intent=False``.
 
     Parameters
     ----------
@@ -147,17 +153,17 @@ def run_bootstrap(
     node_id:
         HLC node identifier for emitted transactions.
     with_intent:
-        If True, call the LLM once per feature to generate intent text.
+        If True, call the LLM to generate feature tree proposals.
     reset:
         If True, wipe existing codoc state before running.
+    mode:
+        Ignored. Retained for backward compatibility with old CLIs.
 
     Returns
     -------
     dict
         ``{chunk_count, group_count, proposal_count, proposals}``.
     """
-    from codoc.pipelines.bootstrap.directory_grouping import build_structural_tree, count_groups
-
     codoc_path = Path(codoc_dir)
     codoc_path.mkdir(parents=True, exist_ok=True)
 
@@ -167,40 +173,50 @@ def run_bootstrap(
     db_path = str(codoc_path / "codoc.db")
     jsonl_path = str(codoc_path / "log.jsonl")
 
-    print("[bootstrap:structural] extracting chunks...", file=sys.stderr)
-    chunks = extract_all_chunks(root_dir)
+    # --- 1. Incremental index (resumes from where it left off if interrupted) ---
+    print("[bootstrap] indexing chunks via cocoindex...", file=sys.stderr)
+    update_index(root_dir, codoc_dir)
 
-    if not chunks:
-        return {"chunk_count": 0, "group_count": 0, "proposal_count": 0, "proposals": []}
+    # --- 2. Read indexed chunks + embeddings ---
+    rows = read_all_chunks(codoc_dir)
+    if not rows:
+        return {
+            "chunk_count": 0,
+            "group_count": 0,
+            "proposal_count": 0,
+            "proposals": [],
+        }
 
-    print(f"[bootstrap:structural] {len(chunks)} chunks extracted. Building structure tree...",
-          file=sys.stderr)
+    chunks = [_row_to_chunk(r) for r in rows]
+    file_embeddings_np = per_file_mean_embeddings(rows)
+    # Hand the clusterer plain lists so the existing similarity helpers work.
+    file_embeddings: dict[str, list[float] | None] = {
+        f: (v.tolist() if v is not None else None)
+        for f, v in file_embeddings_np.items()
+    }
 
-    root_group = build_structural_tree(chunks)
-    group_count = count_groups(root_group) - 1  # exclude root
-
-    if with_intent:
-        print(f"[bootstrap:structural] {group_count} groups. Generating intent via LLM...",
-              file=sys.stderr)
-    else:
-        print(f"[bootstrap:structural] {group_count} groups. Emitting proposals (no LLM)...",
-              file=sys.stderr)
+    print(
+        f"[bootstrap] {len(chunks)} chunks across {len(file_embeddings)} files.",
+        file=sys.stderr,
+    )
 
     language_adapters = _build_language_adapters(chunks)
 
     with SQLiteStore(db_path) as store:
         tx_log = TransactionLog(store, node_id=node_id)
+        jsonl_log = JSONLLog(jsonl_path)
 
-        proposals = propose_structural(
-            root_group=root_group,
+        proposals = _run_semantic_bootstrap(
             chunks=chunks,
+            root_dir=root_dir,
             tx_log=tx_log,
             language_adapters=language_adapters,
             with_intent=with_intent,
             repo_name=repo_name,
+            file_embeddings=file_embeddings,
         )
+        group_count = len(proposals)
 
-        jsonl_log = JSONLLog(jsonl_path)
         for tx in proposals:
             jsonl_log.append(tx)
 
@@ -214,7 +230,7 @@ def run_bootstrap(
             for tx in proposals
         ]
 
-    print(f"[bootstrap:structural] {len(proposals)} proposals emitted.", file=sys.stderr)
+    print(f"[bootstrap] {len(proposals)} proposals emitted.", file=sys.stderr)
 
     return {
         "chunk_count": len(chunks),
@@ -224,18 +240,177 @@ def run_bootstrap(
     }
 
 
+def _run_semantic_bootstrap(
+    chunks: list,
+    root_dir: str,
+    tx_log,
+    language_adapters: dict,
+    with_intent: bool,
+    repo_name: str,
+    file_embeddings: dict[str, list[float] | None],
+) -> list:
+    """Semantic bootstrap: cluster files, then call LLM per cluster.
+
+    Walks the SemanticGroup tree top-down, calling propose_subtree at each
+    level so the LLM sees parent+sibling context and can calibrate abstraction.
+    Returns all emitted INTRODUCE proposal transactions.
+    """
+    from codoc.agents.bootstrap_clustering import propose_subtree
+    from codoc.pipelines.bootstrap.propose import emit_introduce_proposal
+    from codoc.pipelines.bootstrap.semantic_cluster import (
+        build_cluster_input,
+        build_hierarchical_clusters,
+        cluster_into_parents,
+    )
+
+    root_group = build_hierarchical_clusters(
+        chunks, root_dir=root_dir, file_embeddings=file_embeddings,
+    )
+
+    if not root_group.children:
+        # Degenerate: all chunks in one group — treat as single cluster
+        root_group.children = [root_group]
+
+    # Flatten-wide guard — if >6 top-level groups, merge into parents.
+    if len(root_group.children) > 6:
+        root_group.children = cluster_into_parents(
+            root_group.children, chunks, root_dir=root_dir, n_target=5,
+            file_embeddings=file_embeddings,
+        )
+
+    print(
+        f"[bootstrap] {len(root_group.children)} top-level clusters found.",
+        file=sys.stderr,
+    )
+
+    all_proposals: list = []
+    existing_summaries: list[dict] = []
+
+    def _walk(
+        group,
+        parent_uuid: str | None,
+        parent_title: str,
+        parent_intent: str,
+        depth: int,
+    ):
+        sibling_titles: list[str] = []
+
+        if not with_intent:
+            import uuid as _uuid
+
+            from codoc.model.hlc import HLC
+            from codoc.model.transaction import Transaction, TransactionKind
+
+            cand = _build_candidate_bindings(group, chunks, language_adapters)
+            if not cand:
+                return
+            provisional = str(_uuid.uuid4())
+            slug = f"group-{group.group_id}"
+            payload: dict = {
+                "slug": slug,
+                "title": slug,
+                "intent": "",
+                "description": "",
+                "provisional_uuid": provisional,
+                "candidate_bindings": cand,
+            }
+            if parent_uuid:
+                payload["parent_uuid"] = parent_uuid
+            tx = Transaction(
+                hlc=HLC.now(node_id="bootstrap"),
+                parent_hlcs=[],
+                kind=TransactionKind.INTRODUCE,
+                payload=payload,
+                author="bootstrap",
+                proposal=True,
+            )
+            stamped = tx_log.append_proposal(tx)
+            all_proposals.append(stamped)
+            for child in group.children:
+                _walk(child, provisional, slug, "", depth + 1)
+            return
+
+        # Build cluster input for this group
+        cluster_input = build_cluster_input(group, chunks, root_dir=root_dir)
+        if not cluster_input.chunks:
+            return
+
+        try:
+            feature_proposals = propose_subtree(
+                cluster=cluster_input,
+                parent_feature_title=parent_title,
+                parent_feature_intent=parent_intent,
+                sibling_titles=sibling_titles,
+                existing_feature_summaries=existing_summaries,
+                depth=depth,
+                repo_name=repo_name,
+            )
+        except Exception as exc:
+            print(
+                f"[bootstrap] LLM failed for group {group.group_id}: {exc}",
+                file=sys.stderr,
+            )
+            return
+
+        group_symbol_paths = {chunks[i].symbol_path for i in group.chunk_indices}
+
+        for fp in feature_proposals:
+            fp.candidate_chunk_keys = [
+                k for k in fp.candidate_chunk_keys if k in group_symbol_paths
+            ]
+            tx = emit_introduce_proposal(
+                proposal=fp,
+                chunks=chunks,
+                tx_log=tx_log,
+                language_adapters=language_adapters,
+                author="bootstrap",
+                parent_uuid=parent_uuid,
+            )
+            all_proposals.append(tx)
+            existing_summaries.append({"slug": fp.slug, "intent": fp.intent})
+            sibling_titles.append(fp.title or fp.slug)
+
+            for child in group.children:
+                _walk(child, fp.provisional_uuid, fp.title or fp.slug, fp.intent, depth + 1)
+
+    for top_group in root_group.children:
+        _walk(top_group, None, "<repo-root>", "", 0)
+
+    return all_proposals
+
+
+def _build_candidate_bindings(group, chunks: list, language_adapters: dict) -> list[dict]:
+    """Build fingerprinted candidate_bindings for a group (no-LLM path)."""
+    from codoc.core.fingerprint import fingerprint_chunk
+    from codoc.lang import detect_language
+
+    result: list[dict] = []
+    for i in group.chunk_indices:
+        chunk = chunks[i]
+        language = detect_language(chunk.file)
+        adapter = language_adapters.get(language) if language else None
+        if adapter is None:
+            continue
+        try:
+            fp = fingerprint_chunk(chunk.source, adapter)
+        except Exception:
+            continue
+        result.append({
+            "anchor": {"file": chunk.file, "symbol_path": chunk.symbol_path},
+            "fingerprint": fp,
+        })
+    return result
+
+
 def finish_bootstrap(codoc_dir: str, node_id: str = "default") -> dict:
     """Mark bootstrap as complete and record unattributed chunks.
 
-    Scans the codebase (re-using previously extracted chunks stored via the
-    FAISS index metadata) to find any chunks not yet mentioned in an accepted
-    INTRODUCE transaction or in the concrete bindings table.  Those chunks are
-    written to ``{codoc_dir}/unattributed.json`` as ``unattributed_intentional``
-    — meaning the user is aware they exist and has intentionally left them
-    unattributed for now.
-
-    After this call the system should switch to reflective mode (the caller or
-    CLI is responsible for setting the mode flag in its own config).
+    Reads the cocoindex-managed chunk index (LanceDB) to find every symbol path
+    currently visible in the repo, then subtracts the symbol paths already
+    attributed via accepted INTRODUCE transactions or concrete bindings. The
+    remainder is written to ``{codoc_dir}/unattributed.json`` as
+    ``unattributed_intentional`` — the user is aware they exist and has
+    intentionally left them unattributed for now.
 
     Parameters
     ----------
@@ -251,29 +426,17 @@ def finish_bootstrap(codoc_dir: str, node_id: str = "default") -> dict:
     """
     codoc_path = Path(codoc_dir)
     db_path = str(codoc_path / "codoc.db")
-    faiss_dir = str(codoc_path / "faiss")
     unattributed_path = codoc_path / "unattributed.json"
 
-    # ------------------------------------------------------------------
-    # Collect all known symbol_paths from the FAISS index.
-    # ------------------------------------------------------------------
-    faiss_index = FaissIndex(faiss_dir)
-    faiss_index.open()
-    all_symbol_paths: list[str] = faiss_index.all_keys()
+    rows = read_all_chunks(codoc_dir)
+    all_symbol_paths: list[str] = [r.symbol_path for r in rows]
 
-    # ------------------------------------------------------------------
-    # Collect attributed symbol_paths from the store.
-    # ------------------------------------------------------------------
     if not Path(db_path).exists():
-        # No database at all → everything is unattributed.
         attributed: set[str] = set()
     else:
         with SQLiteStore(db_path) as store:
             attributed = _collect_attributed_symbol_paths(store)
 
-    # ------------------------------------------------------------------
-    # Compute unattributed set.
-    # ------------------------------------------------------------------
     unattributed = [sp for sp in all_symbol_paths if sp not in attributed]
 
     record = {

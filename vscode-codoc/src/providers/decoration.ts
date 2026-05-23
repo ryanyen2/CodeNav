@@ -94,8 +94,8 @@ export function createDecorations(context: vscode.ExtensionContext): StateDecora
     };
 }
 
-// State badge regex — kept for backward compat with rendered files that still carry [State]
-const STATE_RE = /\[([^\]]+)\]/;
+// State suffix regex: matches "(strained)", "(severed)", "(stub)", "(deprecated)" in title lines.
+const STATE_SUFFIX_RE = /\((strained|severed|stub|drafting|stable|deprecated)\)/i;
 
 export function applyDecorations(editor: vscode.TextEditor, dec: StateDecorations): void {
     if (editor.document.languageId !== 'codoc') return;
@@ -115,11 +115,9 @@ export function applyDecorations(editor: vscode.TextEditor, dec: StateDecoration
         const text = editor.document.lineAt(i).text;
         const range = new vscode.Range(i, 0, i, text.length);
 
-        // Proposal / retired prefix decorations
         if (PROPOSAL_PREFIX_RE.test(text)) proposal.push(range);
         if (RETIRED_PREFIX_RE.test(text)) retired.push(range);
 
-        // Diff hunk decorations
         if (text.startsWith(DIFF_INTRO_PREFIX)) {
             introHunk.push(range);
         } else if (text.startsWith(DIFF_RETIRE_PREFIX)) {
@@ -128,8 +126,7 @@ export function applyDecorations(editor: vscode.TextEditor, dec: StateDecoration
             amendHunk.push(range);
         }
 
-        // State badge gutter icons
-        const m = STATE_RE.exec(text);
+        const m = STATE_SUFFIX_RE.exec(text);
         if (!m) continue;
         const state = m[1].toLowerCase();
         switch (state) {

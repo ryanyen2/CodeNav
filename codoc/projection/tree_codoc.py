@@ -29,7 +29,6 @@ so the buffer always looks like a clean human outline.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,11 +49,14 @@ def _build_proposal_index(
     proposals = store.list_transactions(proposal=True, limit=0)
     per_feature: dict[str, list[Transaction]] = {}
     top_level: list[Transaction] = []
+    existing_uuids = {f.uuid for f in store.list_features()}
     for tx in proposals:
         feat = tx.payload.get("feature_uuid") or tx.payload.get("affected_feature_uuid")
-        if feat:
+        if feat and feat in existing_uuids:
             per_feature.setdefault(feat, []).append(tx)
         else:
+            # INTRODUCE proposals reference a provisional_uuid that isn't in
+            # the features table yet — treat as top-level until accepted.
             top_level.append(tx)
     return per_feature, top_level
 
@@ -121,7 +123,9 @@ def _render_proposal(
 
     if kind == TransactionKind.INTRODUCE:
         title = payload.get("title") or payload.get("slug") or "(unnamed)"
-        description = payload.get("description") or payload.get("intent", "")
+        # Try new structured format first, fall back to intent
+        purpose = payload.get("purpose", "")
+        description = purpose or payload.get("description") or payload.get("intent", "")
         lines.append(f"+ {indent}- {title}")
         lines.extend(_format_description(description, desc_indent, col0="+"))
 
@@ -150,6 +154,68 @@ def _render_proposal(
         if rationale:
             lines.append(f"~{desc_indent}{rationale[:100]}")
 
+    elif kind == TransactionKind.RETIRE_FILE:
+        file = payload.get("file", "(unknown)")
+        n_bindings = len(payload.get("affected_binding_uuids", []))
+        n_features = len(payload.get("affected_feature_uuids", []))
+        lines.append(f"- {indent}~ file:{file}")
+        lines.append(f"-{desc_indent}({n_bindings} bindings, {n_features} features)")
+
+    elif kind == TransactionKind.RENAME_FILE:
+        old_f = payload.get("old_file", "?")
+        new_f = payload.get("new_file", "?")
+        sim = payload.get("similarity", 0.0)
+        n = len(payload.get("affected_binding_uuids", []))
+        lines.append(f"→ {indent}~ {old_f} → {new_f}")
+        lines.append(f"→{desc_indent}({n} bindings remapped, {sim:.0%} similar)")
+
+    elif kind in (TransactionKind.FRACTURE, TransactionKind.COALESCE):
+        if kind == TransactionKind.FRACTURE:
+            old_sp = payload.get("old_symbol_path", "?")
+            n = len(payload.get("new_chunks", []))
+            lines.append(f"> {indent}~ {old_sp} → {n} chunks")
+        else:
+            n = len(payload.get("source_binding_uuids", []))
+            new_sp = payload.get("new_chunk", {}).get("symbol_path", "?")
+            lines.append(f"< {indent}~ {n} chunks → {new_sp}")
+
+    elif kind == TransactionKind.FEEDFORWARD_FILL:
+        slug = payload.get("slug") or "(unknown)"
+        lines.append(f"? {indent}feedforward: {slug}")
+        for field_key, field_label in [
+            ("new_purpose", "purpose"),
+            ("new_rationale", "rationale"),
+        ]:
+            val = payload.get(field_key, "")
+            if val:
+                lines.append(f"+{desc_indent}{field_label}: {val}")
+        scenario = payload.get("new_scenario", "")
+        if scenario:
+            lines.append(f"+{desc_indent}scenario:")
+            for sline in scenario.split("\n"):
+                sline = sline.strip()
+                if sline:
+                    lines.append(f"+{desc_indent}    {sline}")
+        directive = payload.get("coding_directive", "")
+        if directive:
+            lines.append(f"+{desc_indent}plan: {directive[:200]}")
+
+    elif kind == TransactionKind.FEEDBACK_RECONCILE:
+        slug = payload.get("slug") or "(unknown)"
+        note = payload.get("divergence_note", "")
+        header = f"feedback: {slug}" + (f" ({note[:120]})" if note else "")
+        lines.append(f"? {indent}{header}")
+        old_val = payload.get("old_rationale", "")
+        new_val = payload.get("new_rationale", "")
+        if old_val:
+            lines.append(f"~{desc_indent}rationale: {old_val[:200]}")
+        if new_val:
+            lines.append(f"+{desc_indent}rationale: {new_val[:200]}")
+        for intro in payload.get("introduce_features", []):
+            lines.append(f"+ {indent}  * {intro.get('title', '?')}")
+            if intro.get("purpose"):
+                lines.append(f"+  {desc_indent}purpose: {intro['purpose'][:200]}")
+
     else:
         slug = payload.get("slug") or payload.get("symbol_path") or ""
         lines.append(f"~ {indent}~ {slug}")
@@ -162,6 +228,68 @@ def _render_proposal(
         "line": start_line,
         "kind": "proposal",
     }
+    return lines
+
+
+def _stale_paths_for_feature(feature_uuid: str, store: "SQLiteStore") -> frozenset[str]:
+    """Return the set of stale target_path values for this feature's citations."""
+    try:
+        rows = store.list_citations(feature_uuid)
+        return frozenset(r["target_path"] for r in rows if r.get("is_stale"))
+    except Exception:
+        return frozenset()
+
+
+def _render_structured_fields(feature: "Feature", desc_indent: str, store: "SQLiteStore") -> list[str]:
+    """Render a feature's structured fields (purpose/rationale/scenario/needs/binds)."""
+    from codoc.core.citations import apply_stale_markers
+
+    lines: list[str] = []
+    field_indent = desc_indent  # 4 spaces past the feature marker indent
+
+    stale = _stale_paths_for_feature(feature.uuid, store)
+
+    if feature.purpose:
+        text = apply_stale_markers(feature.purpose, stale)
+        lines.append(f"{field_indent}purpose: {text}")
+
+    if feature.rationale:
+        text = apply_stale_markers(feature.rationale, stale)
+        lines.append(f"{field_indent}rationale: {text}")
+
+    if feature.scenario:
+        lines.append(f"{field_indent}scenario:")
+        scenario_indent = field_indent + "    "
+        for scenario_line in feature.scenario.split("\n"):
+            stripped = scenario_line.strip()
+            if stripped:
+                marked = apply_stale_markers(stripped, stale)
+                lines.append(f"{scenario_indent}{marked}")
+
+    # needs: from feature_edges — CSV when ≤3 deps, arrow-list when more
+    try:
+        edges = store.list_feature_edges(feature.uuid)
+        if edges:
+            slugs = []
+            for edge in edges:
+                target = store.get_feature(edge["target_uuid"])
+                if target:
+                    slugs.append(target.slug)
+            if slugs:
+                if len(slugs) <= 3:
+                    lines.append(f"{field_indent}needs: {', '.join(slugs)}")
+                else:
+                    lines.append(f"{field_indent}needs:")
+                    edge_indent = field_indent + "    "
+                    for slug in slugs:
+                        lines.append(f"{edge_indent}-> feature://{slug}")
+    except Exception:
+        pass
+
+    # Bindings are NOT rendered in the human file — they live in the DB and in
+    # .codoc/tree/_index.bindings.json (written by write_bindings_sidecar).
+    # VSCode shows them via CodeLens above each feature title.
+
     return lines
 
 
@@ -192,11 +320,14 @@ def _render_feature_block(
     display = feature.title or feature.slug
     current_title_path = f"{title_path} > {display}" if title_path else display
 
-    # Feature title line.
-    marker = "~ " if feature.retired else "- "
+    # Feature title line.  * = placeholder, ~ = retired, - = live
+    if feature.retired:
+        marker = "~ "
+    elif feature.status in ("placeholder", "feedforward_pending"):
+        marker = "* "
+    else:
+        marker = "- "
     feature_line = f"{indent}{marker}{display}"
-    if os.environ.get("CODOC_LEGACY_UUID_LINES"):
-        feature_line += f"  # @{feature.uuid}"
     feature_line_no = line_offset
 
     slug_path_to_uuid[slug_path] = feature.uuid
@@ -206,17 +337,15 @@ def _render_feature_block(
     # Full intent: render all paragraphs so the round-trip is lossless.
     description_lines: list[str] = []
     if not feature.retired:
-        prose = (feature.description or feature.intent or "").strip()
-        if prose:
-            for para in prose.split("\n"):
+        if feature.purpose:
+            description_lines.extend(_render_structured_fields(feature, desc_indent, store))
+        elif feature.intent:
+            # Legacy fallback: features created before Phase 1 have only intent, not purpose.
+            # Render intent as prose so the round-trip is lossless for these features.
+            for para in feature.intent.split("\n"):
                 para_stripped = para.strip()
                 if para_stripped:
                     description_lines.append(f"{desc_indent}{para_stripped}")
-                else:
-                    description_lines.append("")
-            # Remove trailing blank lines.
-            while description_lines and description_lines[-1] == "":
-                description_lines.pop()
 
     lines.extend(description_lines)
     line_end = feature_line_no + len(description_lines)  # last line of this block (before children)
@@ -411,4 +540,11 @@ def write_tree(codoc_dir: str, store: SQLiteStore, tx_log: TransactionLog) -> Tr
 
     from codoc.projection.meta import write_meta
     write_meta(codoc_dir, meta)
+
+    try:
+        from codoc.projection.bindings_sidecar import write_bindings_sidecar
+        write_bindings_sidecar(codoc_dir, store)
+    except Exception:
+        pass
+
     return meta

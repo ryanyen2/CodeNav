@@ -6,7 +6,7 @@ The differ is pure: it does not mutate the store.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Union
 
 from codoc.pipelines.intentional.restructure import _would_create_cycle
@@ -18,6 +18,7 @@ from codoc.storage.sqlite_store import SQLiteStore
 class AmendOp:
     uuid: str
     new_intent: str
+    new_fields: dict = field(default_factory=dict)  # {purpose, rationale, scenario, needs} when changed
 
 
 @dataclass
@@ -66,6 +67,20 @@ class DiffError:
 
 
 IntentOp = Union[AmendOp, RenameOp, RetireOp, RestructureOp, AcceptOp, RejectOp, IntroduceOp]
+
+
+def existing_needs_slugs(feature_uuid: str, store: "SQLiteStore") -> list[str]:
+    """Return slug list of features this feature 'needs' (feature_edges)."""
+    try:
+        edges = store.list_feature_edges(feature_uuid)
+        slugs = []
+        for edge in edges:
+            target = store.get_feature(edge["target_uuid"])
+            if target:
+                slugs.append(target.slug)
+        return sorted(slugs)
+    except Exception:
+        return []
 
 
 def _depth_of(uuid: str, store: SQLiteStore) -> int:
@@ -157,8 +172,28 @@ def diff_tree(parsed: ParsedTree, store: SQLiteStore) -> tuple[list[IntentOp], l
         # Intent differs? Compare normalized whitespace; skip if both empty.
         existing_intent_norm = " ".join(existing.intent.split())
         parsed_intent_norm = " ".join(pf.intent.split())
-        if parsed_intent_norm != existing_intent_norm and parsed_intent_norm:
-            amend_ops.append(AmendOp(uuid=uuid, new_intent=parsed_intent_norm))
+        new_fields: dict = {}
+        if pf.purpose and pf.purpose != existing.purpose:
+            new_fields["purpose"] = pf.purpose
+        if pf.rationale and pf.rationale != existing.rationale:
+            new_fields["rationale"] = pf.rationale
+        if pf.scenario and pf.scenario != existing.scenario:
+            new_fields["scenario"] = pf.scenario
+        if sorted(pf.needs) != existing_needs_slugs(existing.uuid, store):
+            new_fields["needs"] = pf.needs
+        # Detect explicit placeholder/realized status changes from * or - marker.
+        # Skip when the feature is being retired (RetireOp handles that case).
+        if not pf.retired:
+            parsed_status = "placeholder" if pf.is_placeholder else "realized"
+            if parsed_status != existing.status and existing.status != "feedforward_pending":
+                new_fields["status"] = parsed_status
+        intent_changed = parsed_intent_norm != existing_intent_norm and parsed_intent_norm
+        if intent_changed or new_fields:
+            amend_ops.append(AmendOp(
+                uuid=uuid,
+                new_intent=parsed_intent_norm if intent_changed else existing_intent_norm,
+                new_fields=new_fields,
+            ))
 
         # Parent differs?
         if pf.parent_uuid != existing.parent_uuid:

@@ -1,0 +1,59 @@
+## Feature description schema (all pipelines)
+
+**slug** — kebab-case noun phrase, e.g. "data-transformer-registry", "flash-attention-kernel".
+  - NO verb-object patterns like "validate-auth-token" or "build-embedding-index".
+  - Must be globally unique; check sibling and existing features before choosing.
+
+**title** — 3–6 word sentence case phrase, e.g. "Flash attention kernel".
+
+**purpose** — one line (≤140 chars). WHAT this feature does in product or behavior terms.
+  Omit if it would only paraphrase the slug. Write from the perspective of what a caller
+  or user of this feature observes, not what code files are involved.
+
+**rationale** — one line (≤140 chars). WHY this design rather than the obvious alternative;
+  what constraint, tradeoff, or prior failure drove the decision.
+  MUST end with at least one [ref: ...] token pointing to a candidate binding.
+  Omit if the design choice is obvious from the name alone.
+
+**scenario** — exactly 3 lines in BDD format:
+      given <precondition in domain terms>
+      when  <trigger or call>
+      then  <observable outcome>                               [ref: <symbol_path>]
+  The "then" line MUST include at least one [ref: ...] token.
+  Keep each line ≤140 chars. Omit the scenario block if no clean scenario fits
+  (e.g. purely structural/data-shape features).
+
+**needs** — list of slug strings for sibling features this feature cooperates with.
+  Omit if empty.
+
+## Citation token formats
+
+  [ref: nanochat/engine.py::Engine.generate]        code symbol reference
+  [ref: nanochat/engine.py::Engine.generate#L40-78] code symbol with line range
+  [ref: feature://tokenizer-lifecycle]               feature reference
+  [ref: file://nanochat/engine.py]                  whole-file reference
+
+## Validation rules
+  - Every [ref:] must resolve to a candidate_binding shown in the prompt,
+    a neighboring feature slug, or a file path in the repository.
+  - purpose and rationale are each a single line (no newlines).
+  - scenario lines begin with exactly "given ", "when  ", or "then  ".
+
+## Worked example
+
+slug:      inference-generation-engine
+title:     Inference generation engine
+purpose:   turns a prompt into one or more model continuations
+rationale: caches context across tokens to avoid quadratic re-decode overhead  [ref: nanochat/engine.py::Engine.kv_cache]
+scenario:
+    given a prompt sequence and a loaded model
+    when  generate() is called with temperature > 0
+    then  it streams sampled tokens until a terminal marker is reached           [ref: nanochat/engine.py::Engine.generate]
+needs:
+    - tokenizer-lifecycle-and-serialization
+    - tokenization-and-conversation-rendering
+
+## Anti-example (bad — only paraphrases the name)
+
+purpose: wraps generation logic to produce text from the model
+[Bad: no new information beyond what "inference-generation-engine" already says.]

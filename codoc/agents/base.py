@@ -11,11 +11,26 @@ from codoc.config import LLMConfig, complete, get_llm_config
 
 
 def load_prompt(name: str) -> str:
-    """Load a prompt template from codoc/prompts/{name}.txt."""
+    """Load a prompt template from codoc/prompts/{name}.txt.
+
+    Supports ``{{include:_shared_name}}`` directives: any occurrence of
+    ``{{include:X}}`` is replaced inline with the contents of ``prompts/X.txt``.
+    """
     from pathlib import Path
 
     prompts_dir = Path(__file__).parent.parent / "prompts"
-    return (prompts_dir / f"{name}.txt").read_text()
+    text = (prompts_dir / f"{name}.txt").read_text()
+
+    import re
+    def _expand(m: re.Match) -> str:
+        inc_name = m.group(1).strip()
+        inc_path = prompts_dir / f"{inc_name}.txt"
+        try:
+            return inc_path.read_text()
+        except FileNotFoundError:
+            return f"[missing include: {inc_name}]"
+
+    return re.sub(r"\{\{include:(.*?)\}\}", _expand, text)
 
 
 def format_prompt(template: str, **kwargs) -> str:

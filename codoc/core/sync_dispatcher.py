@@ -356,39 +356,8 @@ def _accept_all(root: Path, prune_code: bool, result: SyncSummary) -> None:
             jsonl_log.append(accepted_tx)
             accepted += 1
         result.actions.append(f"accepted {accepted} proposal(s)")
-
-        # Seed chunk_fingerprints cache from every (file, symbol_path) now bound.
-        # Without this, the very next reflect treats every bound chunk as "added"
-        # because the cache is empty, producing spurious ABSORB proposals.
-        _seed_fingerprint_cache_from_bindings(store)
     finally:
         store.close()
-
-
-def _seed_fingerprint_cache_from_bindings(store) -> None:
-    """Populate chunk_fingerprints for every binding that lacks a cache entry.
-
-    Uses the fingerprint stored on the Binding itself (set at INTRODUCE time)
-    so we never have to re-parse the file.  Idempotent: only writes when the
-    cache key isn't already present.
-    """
-    from codoc.pipelines.reflective.types import chunk_cache_key
-
-    cached = store.get_all_chunk_fingerprints()
-    for binding in store.get_all_bindings():
-        symbol_path = binding.anchor.symbol_path or ""
-        key = chunk_cache_key(binding.anchor.file, symbol_path)
-        if key in cached:
-            continue
-        if not binding.fingerprint:
-            continue
-        store.upsert_chunk_fingerprint(
-            key=key,
-            file=binding.anchor.file,
-            symbol_path=symbol_path,
-            fingerprint=binding.fingerprint,
-            commit="",
-        )
 
 
 def _render_tree(root: Path, result: SyncSummary) -> None:

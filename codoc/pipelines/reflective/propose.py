@@ -4,6 +4,10 @@ When cheap heuristics cannot decide what to do with a changed chunk, this
 module builds the attribution input (chunk + 1-hop neighbourhood) and calls
 the attribution agent.  The agent's response is converted into a proposal
 Transaction and written to the transaction log.
+
+Also provides ``propose_for_new_file`` — a batched entrypoint that treats an
+entirely new file as a mini-bootstrap, grouping all its chunks in one LLM call
+instead of N separate per-chunk escalations.
 """
 
 from __future__ import annotations
@@ -29,111 +33,10 @@ def build_neighborhood(
     store: SQLiteStore,
     max_neighbors: int = 20,
 ) -> list[dict]:
-    """Build the 1-hop neighbourhood of features for LLM context.
+    # Delegate to the shared module (kept here for backward compatibility).
+    from codoc.pipelines._shared.prompt_context import build_neighborhood_features
+    return build_neighborhood_features(change.file, change.symbol_path, store, max_neighbors)
 
-    Neighbours are ranked by proximity to the changed chunk in three tiers:
-
-    1. Features with at least one binding **in the same file** as the chunk.
-    2. Features that are **binding-graph adjacent** — their bindings reference
-       symbols also referenced by the changed chunk (shared symbol refs).
-    3. Features that are **tree-structural neighbours** — parent or sibling
-       chunks by symbol_path prefix.
-
-    Each returned dict has the shape::
-
-        {
-            "uuid": str,
-            "slug": str,
-            "intent": str,
-            "binding_count": int,
-        }
-
-    The list is deduplicated and capped at *max_neighbors* entries.
-    """
-    all_bindings = store.get_all_bindings()
-
-    # --- Tier 1: same-file features ---
-    same_file_features: dict[str, int] = {}  # feature_uuid → binding count
-    for b in all_bindings:
-        if b.anchor.file == change.file:
-            same_file_features[b.feature_uuid] = same_file_features.get(b.feature_uuid, 0) + 1
-
-    # --- Tier 2: binding-graph adjacent via shared symbol prefix ---
-    # Heuristic: features whose bindings share the same top-level module/class
-    # prefix as the changed chunk's symbol_path are likely adjacent.
-    adjacent_features: dict[str, int] = {}
-    changed_prefix = _symbol_prefix(change.symbol_path)
-    if changed_prefix:
-        for b in all_bindings:
-            if b.feature_uuid in same_file_features:
-                continue
-            if b.anchor.symbol_path and _symbol_prefix(b.anchor.symbol_path) == changed_prefix:
-                adjacent_features[b.feature_uuid] = adjacent_features.get(b.feature_uuid, 0) + 1
-
-    # --- Tier 3: tree-structural neighbours (parent / sibling by symbol path) ---
-    structural_features: dict[str, int] = {}
-    changed_parts = change.symbol_path.rsplit(".", 1)
-    if len(changed_parts) == 2:
-        parent_prefix = changed_parts[0]
-        for b in all_bindings:
-            if b.feature_uuid in same_file_features or b.feature_uuid in adjacent_features:
-                continue
-            if b.anchor.symbol_path and b.anchor.symbol_path.startswith(parent_prefix):
-                structural_features[b.feature_uuid] = (
-                    structural_features.get(b.feature_uuid, 0) + 1
-                )
-
-    # Build ordered, deduplicated list respecting tier priority.
-    ordered_uuids: list[str] = []
-    seen: set[str] = set()
-
-    for tier in (same_file_features, adjacent_features, structural_features):
-        for uuid in sorted(tier, key=lambda u: -tier[u]):  # sort by binding count desc
-            if uuid not in seen:
-                ordered_uuids.append(uuid)
-                seen.add(uuid)
-            if len(ordered_uuids) >= max_neighbors:
-                break
-        if len(ordered_uuids) >= max_neighbors:
-            break
-
-    # Hydrate feature metadata.
-    result: list[dict] = []
-    bindings_count_by_feature: dict[str, int] = {}
-    for b in all_bindings:
-        bindings_count_by_feature[b.feature_uuid] = (
-            bindings_count_by_feature.get(b.feature_uuid, 0) + 1
-        )
-
-    for uuid in ordered_uuids[:max_neighbors]:
-        feature = store.get_feature(uuid)
-        if feature is None:
-            continue
-        result.append(
-            {
-                "uuid": uuid,
-                "slug": feature.slug,
-                "intent": feature.intent,
-                "binding_count": bindings_count_by_feature.get(uuid, 0),
-            }
-        )
-
-    return result
-
-
-def _symbol_prefix(symbol_path: str) -> str:
-    """Return the top-level module/class prefix of a symbol path.
-
-    ``"api/parser.py::RequestParser.parse"`` → ``"api/parser.py::RequestParser"``
-    ``"api/parser.py::top_level_func"``       → ``"api/parser.py"``
-    """
-    if "::" in symbol_path:
-        file_part, entity_part = symbol_path.split("::", 1)
-        parts = entity_part.split(".")
-        if len(parts) > 1:
-            return f"{file_part}::{parts[0]}"
-        return file_part
-    return symbol_path.rsplit(".", 1)[0] if "." in symbol_path else symbol_path
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +74,9 @@ def escalate_to_llm(
     """
     neighborhood = build_neighborhood(change, store)
 
+    from codoc.pipelines._shared.prompt_context import build_tree_context
+    tree_context = build_tree_context(store)
+
     # Build the current_binding dict if this chunk is already attributed.
     current_binding_dict: dict | None = None
     if change.existing_binding_uuid is not None:
@@ -189,6 +95,7 @@ def escalate_to_llm(
         change_kind=change.change_kind,
         current_binding=current_binding_dict,
         neighboring_features=neighborhood,
+        tree_context=tree_context,
     )
 
     try:
@@ -207,6 +114,7 @@ def escalate_to_llm(
     payload.setdefault("file", change.file)
     payload.setdefault("rationale", proposal.rationale)
     payload.setdefault("change_kind", change.change_kind)
+    payload.setdefault("description", "")  # ensure description field is always present
     if change.existing_binding_uuid is not None:
         payload.setdefault("binding_uuid", change.existing_binding_uuid)
     if change.current_fingerprint is not None:
@@ -227,3 +135,206 @@ def escalate_to_llm(
         return None
 
     return stamped
+
+
+# ---------------------------------------------------------------------------
+# New-file batched proposal
+# ---------------------------------------------------------------------------
+
+
+def propose_for_new_file(
+    file: str,
+    changes: list[ChunkChange],
+    store: SQLiteStore,
+    tx_log: TransactionLog,
+    root_dir: str = "",
+    repo_name: str = "codebase",
+    author: str = "reflective",
+    language_adapters: dict | None = None,
+) -> list[Transaction]:
+    """Propose features for a brand-new file in a single batched LLM call.
+
+    Instead of calling the LLM N times (once per chunk in the new file), this
+    bundles all of the file's chunks into one ``ClusterInput`` and calls
+    ``propose_subtree`` — the same agent used by the bootstrap pipeline.  This
+    ensures:
+
+    - At most 1-3 proposals per new file (matching the existing tree's grain).
+    - Consistent noun-phrase slug style with the bootstrap tree.
+    - The LLM sees the existing tree for context and can choose a fitting parent.
+
+    Parameters
+    ----------
+    file:
+        Repo-relative path of the new file.
+    changes:
+        All ``ChunkChange`` objects for this file (all should be change_kind="added").
+    store:
+        Open SQLiteStore for existing tree context.
+    tx_log:
+        TransactionLog for proposal emission.
+    root_dir:
+        Repository root (used to read source for module docstring/imports).
+    repo_name:
+        Human-readable repo name for the LLM prompt.
+    author:
+        Author string for emitted transactions.
+    language_adapters:
+        Mapping of language → adapter for fingerprinting candidate bindings.
+
+    Returns
+    -------
+    list[Transaction]
+        Emitted INTRODUCE proposal transactions (may be empty on LLM failure).
+    """
+    from codoc.lang import Chunk as LangChunk
+    from codoc.agents.bootstrap_clustering import propose_subtree, ClusterInput
+    from codoc.pipelines._shared.prompt_context import build_tree_context
+    from codoc.pipelines.bootstrap.propose import emit_introduce_proposal
+    from codoc.pipelines.bootstrap.semantic_cluster import (
+        extract_module_docstring,
+        extract_imports,
+    )
+    from pathlib import Path as _Path
+
+    if language_adapters is None:
+        language_adapters = {}
+
+    # Read source once for module docstring + imports
+    source = ""
+    abs_path = _Path(root_dir) / file if root_dir else _Path(file)
+    try:
+        source = abs_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    module_docstring = extract_module_docstring(source)
+    imports = sorted(extract_imports(source))
+
+    # Build cluster input from all chunks in this file
+    chunk_dicts: list[dict] = []
+    for change in changes:
+        if change.chunk is None:
+            continue
+        chunk_dicts.append({
+            "symbol_path": change.symbol_path,
+            "file": file,
+            "source_snippet": change.chunk.source[:600],
+            "module_docstring": module_docstring,
+            "imports": imports,
+        })
+
+    if not chunk_dicts:
+        return []
+
+    cluster = ClusterInput(chunks=chunk_dicts, cluster_id=0)
+
+    # Build existing-tree context for parent/sibling hints
+    tree_ctx = build_tree_context(store)
+    existing_summaries = [
+        {"slug": f["slug"], "intent": f["intent"]}
+        for f in tree_ctx.get("root_features", [])
+    ]
+
+    # Find the best-matching existing parent feature by cosine similarity of
+    # the file's module docstring/imports to existing feature intents.
+    parent_uuid, parent_title, parent_intent = _find_best_parent(
+        module_docstring=module_docstring,
+        imports=imports,
+        store=store,
+    )
+
+    try:
+        feature_proposals = propose_subtree(
+            cluster=cluster,
+            parent_feature_title=parent_title,
+            parent_feature_intent=parent_intent,
+            sibling_titles=[],
+            existing_feature_summaries=existing_summaries,
+            depth=1 if parent_uuid else 0,
+            repo_name=repo_name,
+        )
+    except Exception as exc:
+        _log.warning("reflect.propose_for_new_file: LLM failed for %s: %s", file, exc)
+        return []
+
+    # Collect all chunk objects for fingerprinting
+    chunks: list = [
+        _change_to_lang_chunk(ch)
+        for ch in changes
+        if ch.chunk is not None
+    ]
+
+    emitted: list[Transaction] = []
+    for fp in feature_proposals:
+        # Restrict candidate_chunk_keys to symbols actually in this file
+        file_symbols = {ch.symbol_path for ch in changes if ch.chunk is not None}
+        fp.candidate_chunk_keys = [k for k in fp.candidate_chunk_keys if k in file_symbols]
+
+        tx = emit_introduce_proposal(
+            proposal=fp,
+            chunks=chunks,
+            tx_log=tx_log,
+            language_adapters=language_adapters,
+            author=author,
+            parent_uuid=parent_uuid,
+        )
+        emitted.append(tx)
+
+    return emitted
+
+
+def _find_best_parent(
+    module_docstring: str,
+    imports: list[str],
+    store: SQLiteStore,
+    threshold: float = 0.40,
+) -> tuple[str | None, str, str]:
+    """Find the best existing feature to nest a new file under.
+
+    Uses cosine similarity of the file's module docstring embedding vs each
+    feature's intent embedding.  Returns ``(uuid, title, intent)`` of the
+    best match, or ``(None, "<repo-root>", "")`` when no match exceeds
+    *threshold* or embeddings are unavailable.
+    """
+    from codoc.pipelines._shared.prompt_context import build_tree_context
+    from codoc.config import embed as _embed
+
+    try:
+        file_text = module_docstring + " " + " ".join(imports)
+        file_vec = _embed(file_text)
+    except Exception:
+        return None, "<repo-root>", ""
+
+    try:
+        all_features = store.list_features()
+    except Exception:
+        return None, "<repo-root>", ""
+
+    active = [f for f in all_features if not f.retired and f.intent]
+    if not active:
+        return None, "<repo-root>", ""
+
+    best_sim, best_feature = 0.0, None
+    for f in active:
+        try:
+            fv = _embed(f.intent)
+            import math
+            dot = sum(x * y for x, y in zip(file_vec, fv))
+            na = math.sqrt(sum(x * x for x in file_vec))
+            nb = math.sqrt(sum(x * x for x in fv))
+            sim = dot / (na * nb) if na > 1e-9 and nb > 1e-9 else 0.0
+            if sim > best_sim:
+                best_sim, best_feature = sim, f
+        except Exception:
+            continue
+
+    if best_feature is not None and best_sim >= threshold:
+        return best_feature.uuid, best_feature.title or best_feature.slug, best_feature.intent
+
+    return None, "<repo-root>", ""
+
+
+def _change_to_lang_chunk(change: ChunkChange):
+    """Wrap a ChunkChange's Chunk in the Chunk interface expected by emit_introduce_proposal."""
+    return change.chunk

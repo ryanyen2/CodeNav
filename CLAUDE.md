@@ -77,11 +77,12 @@ codoc/
                   #   lens.py          — get/put facade naming the projection layer as a bidirectional lens
                   #   feature_view.py  — resolve_feature(store, feature) → FeatureView with live binding_resolutions
   lang/           # Tree-sitter LanguageAdapter protocol + python.py + typescript.py; get_adapter(), detect_language()
-  storage/        # SQLiteStore (WAL), JSONLLog (audit), FaissIndex
+  storage/        # SQLiteStore (WAL), JSONLLog (audit)
   agents/         # LLM dispatch: bootstrap_clustering, attribution, planning; base utilities (load_prompt, parse_solution)
   pipelines/
-    bootstrap/    # directory_grouping.py → propose.py → runner.py (run_bootstrap [--with-intent])
-    reflective/   # commit_diff → reconciler.compare → escalate → propose → runner (run_reflect, run_reflect_files)
+    indexing/     # cocoindex_app.py (walk + AST chunk + embed → LanceDB), runner.update_index(), reader.read_all_chunks()
+    bootstrap/    # runner.run_bootstrap (update_index → cluster on LanceDB rows → LLM per cluster → INTRODUCE), semantic_cluster, propose
+    reflective/   # runner.run_reflect (snapshot LanceDB before/after update_index → diff → reconcile + LLM) — no git diff, no chunk_fingerprints table
     intentional/  # amend.py, rename.py, retire.py, runner.py (IntentionalRunner)
     planning/     # runner.py (run_plan) — top-down planning from user prompt
     health/       # runner.py (reconcile_files, reconcile_all) — periodic binding-health sweep; no LLM calls
@@ -108,13 +109,21 @@ Phase 2+: `SPLIT MERGE RESTRUCTURE REWIND BRANCH MERGE_BRANCH INSTATE_CONSTRAINT
 
 ### Storage schema
 
-SQLite WAL at `.codoc/codoc.db`. Tables: `transactions features bindings constraints obligations chunk_fingerprints binding_resolutions`. JSONL audit lane at `.codoc/log.jsonl` (rebuildable from SQLite). `binding_resolutions` stores the latest comparison verdict per binding (still_aligned / moved / drifted / severed), populated by both the reflective pipeline and `codoc health`.
+SQLite WAL at `.codoc/codoc.db`. Tables: `transactions features bindings constraints obligations binding_resolutions`. JSONL audit lane at `.codoc/log.jsonl` (rebuildable from SQLite). `binding_resolutions` stores the latest comparison verdict per binding (still_aligned / moved / drifted / severed), populated by both the reflective pipeline and `codoc health`.
+
+The chunk index is owned by **cocoindex** and lives outside `codoc.db`: AST chunks + embeddings + identity hashes (tokens_hash / types_hash / minhash) are written to `.codoc/lancedb/code_chunks.lance` (LanceDB, embedded). Cocoindex's own memoization state lives in `.codoc/cocoindex.db/`. Together these provide durable, incremental, crash-resumable indexing — a killed `codoc init` resumes from the last completed file rather than re-embedding from scratch.
+
+### Indexing layer (cocoindex + LanceDB)
+
+`codoc/pipelines/indexing/` owns the chunk + embedding substrate. `update_index(root_dir, codoc_dir)` runs the cocoindex App once: walks the repo, parses each supported file via the existing tree-sitter adapters, embeds each AST chunk via sentence-transformers, and upserts to LanceDB. Memoized per-file: unchanged files cost nothing. Killed mid-run, the next call resumes from the last completed component.
+
+Bootstrap and reflective both call `update_index` first, then read from LanceDB via `read_all_chunks(codoc_dir)`. There is no parallel `chunk_fingerprints` SQLite table — LanceDB rows carry the `tokens_hash` (fingerprint), `types_hash` (rename-invariant skeleton), and `minhash` (Jaccard sketch) needed for reconciliation.
 
 ### Reflective pipeline
 
-Triggered by git post-commit hook (installed by `codoc init`). Flow: `git diff → tree-sitter chunk re-parse → reconciler.compare (per binding) → namespace-absorb gate → LLM escalation (attribution agent) → proposal queue`. `reconciler.compare` answers one question per binding: is the stored fingerprint still aligned with the current source? Verdict domain: `still_aligned | moved | drifted | severed | novel`. Scales with the change, not the codebase. Never re-indexes everything after bootstrap.
+Triggered by git post-commit hook (installed by `codoc init`) or on save. Flow: **snapshot LanceDB → `update_index` → snapshot LanceDB → diff → reconcile against bindings → LLM escalation → proposal queue**. The before/after snapshot diff replaces the old git-diff + `chunk_fingerprints` mechanism; cocoindex's per-file memoization keeps the cost proportional to the change set. `from_ref`/`to_ref` parameters on `run_reflect` are retained for back-compat but unused — disk state via cocoindex is the source of truth.
 
-The same `reconciler.compare` engine runs in the `health` pipeline for sweep-based drift detection between reflects, writing results to `binding_resolutions` so `FeatureState` stays meaningful everywhere.
+The reconciler verdict domain (still_aligned / moved / drifted / severed / novel) is unchanged, as are move detection (RefDiff-2 / MinHash) and FRACTURE / COALESCE detection. Move detection now reads old chunk sources from the LanceDB pre-snapshot instead of `git show`. The `health` pipeline still runs its own sweep-based drift detection, writing results to `binding_resolutions`.
 
 ### Validation gate
 
@@ -128,14 +137,16 @@ Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and
 | `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
-| `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider |
+| `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider (used by dedup / proposal similarity; chunk embeddings live in cocoindex) |
 | `CODOC_EMBEDDER_MODEL` | `all-MiniLM-L6-v2` | Embedder model |
+| `COCOINDEX_DB` | `.codoc/cocoindex.db` | Path to cocoindex's internal memoization state (auto-set by `update_index`) |
+| `CODOC_LANCE_PATH` | `.codoc/lancedb` | Path to the LanceDB directory holding the `code_chunks` table |
 | `CODOC_ROOT_DIR` | cwd | Root directory for API server |
 | `CODOC_LOG_PROMPTS` | — | Set to `1` to log LLM prompt+response to stderr |
 
 ### Phase plan
 
-- **Phase 1 (current)**: data model + core + storage + tree-sitter adapters (Python+TS) + bootstrap (structural directory-grouping) + reflective (git + on-save, via central reconciler) + binding-health sweep + intentional-minimal (AMEND/RENAME/RETIRE) + planning pipeline (codoc plan) + projection layer (render/sync/diff) + CLI + FastAPI.
+- **Phase 1 (current)**: data model + core + storage + tree-sitter adapters (Python+TS) + cocoindex/LanceDB indexing substrate + bootstrap (semantic clustering over LanceDB embeddings) + reflective (LanceDB snapshot diff, via central reconciler) + binding-health sweep + intentional-minimal (AMEND/RENAME/RETIRE) + planning pipeline (codoc plan) + projection layer (render/sync/diff) + CLI + FastAPI.
 - **Phase 1.5**: VSCode webview in `codoc-vscode` repo (pending gate passing).
 - **Phase 2**: SPLIT/MERGE/RESTRUCTURE/REWIND + cascade engine + agent reconciliation.
 - **Phase 3**: BRANCH/MERGE_BRANCH + prose CRDT merge (pycrdt, scoped to AMEND × AMEND conflicts) + conflict resolution UI.

@@ -101,8 +101,12 @@ def emit_introduce_proposal(
     payload = {
         "slug": proposal.slug,
         "title": proposal.title or proposal.slug,
-        "intent": proposal.intent,
-        "description": proposal.description,
+        "purpose": proposal.purpose,
+        "rationale": proposal.rationale,
+        "scenario": proposal.scenario,
+        "needs": proposal.needs,
+        "intent": proposal.intent or proposal.purpose,  # backward compat
+        "description": proposal.description,            # backward compat
         "candidate_bindings": candidate_bindings,
     }
     if provisional_uuid:
@@ -123,158 +127,4 @@ def emit_introduce_proposal(
     stamped = tx_log.append_proposal(tx)
     return stamped
 
-
-def propose_structural(
-    root_group,
-    chunks: list[Chunk],
-    tx_log: TransactionLog,
-    language_adapters: dict | None = None,
-    with_intent: bool = True,
-    repo_name: str = "codebase",
-    *,
-    _parent_uuid: str | None = None,
-    _results: list | None = None,
-) -> list[Transaction]:
-    """Emit INTRODUCE proposals from a structure-derived StructuralGroup tree.
-
-    Default path (``with_intent=True``): calls the LLM once per feature to
-    generate a 1-2 sentence intent before emitting the proposal.  Users review
-    and accept/reject/edit — they never write the tree from scratch.
-
-    ``with_intent=False``: zero LLM calls, intent left empty.  Use only for
-    offline testing or when no API key is available.
-
-    Parameters
-    ----------
-    root_group:
-        Root :class:`~codoc.pipelines.bootstrap.directory_grouping.StructuralGroup`
-        (level=0).  Non-root children become INTRODUCE proposals.
-    chunks:
-        All extracted chunks (indexed by position).
-    tx_log:
-        Transaction log for proposal emission.
-    language_adapters:
-        Mapping ``{language: adapter}`` for fingerprinting.
-    with_intent:
-        If True, batch-call LLM to generate intent text before emitting.
-    repo_name:
-        Human-readable repo name forwarded to the LLM when with_intent=True.
-    """
-    import uuid as _uuid
-
-    if language_adapters is None:
-        language_adapters = {}
-    if _results is None:
-        _results = []
-
-    # Walk all non-root children of root_group.
-    for group in root_group.children:
-        if not group.chunk_indices:
-            continue
-
-        provisional_uuid = str(_uuid.uuid4())
-
-        # Compute candidate_bindings for this group (fingerprinted chunks).
-        candidate_bindings = _structural_candidate_bindings(
-            group.chunk_indices, chunks, language_adapters
-        )
-        if not candidate_bindings:
-            continue
-
-        intent_text = ""
-        if with_intent:
-            intent_text = _fetch_group_intent(group, chunks, repo_name)
-
-        payload: dict = {
-            "slug": group.slug,
-            "title": group.title,
-            "intent": intent_text,
-            "description": "",
-            "provisional_uuid": provisional_uuid,
-            "candidate_bindings": candidate_bindings,
-        }
-        if _parent_uuid is not None:
-            payload["parent_uuid"] = _parent_uuid
-
-        hlc = HLC.now(node_id="bootstrap")
-        tx = Transaction(
-            hlc=hlc,
-            parent_hlcs=[],
-            kind=TransactionKind.INTRODUCE,
-            payload=payload,
-            author="bootstrap",
-            proposal=True,
-        )
-        stamped = tx_log.append_proposal(tx)
-        _results.append(stamped)
-
-        # Recurse into children using this group's provisional UUID as parent.
-        if group.children:
-            propose_structural(
-                root_group=group,
-                chunks=chunks,
-                tx_log=tx_log,
-                language_adapters=language_adapters,
-                with_intent=with_intent,
-                repo_name=repo_name,
-                _parent_uuid=provisional_uuid,
-                _results=_results,
-            )
-
-    return _results
-
-
-def _structural_candidate_bindings(
-    chunk_indices: list[int],
-    chunks: list[Chunk],
-    language_adapters: dict,
-) -> list[dict]:
-    """Build candidate_bindings list for the given chunk indices."""
-    from codoc.lang import detect_language
-
-    result: list[dict] = []
-    for i in chunk_indices:
-        chunk = chunks[i]
-        language = detect_language(chunk.file)
-        adapter = language_adapters.get(language) if language else None
-        if adapter is None:
-            continue
-        try:
-            fp = fingerprint_chunk(chunk.source, adapter)
-        except Exception as exc:
-            _log.warning("structural.fingerprint_failed %s: %s", chunk.symbol_path, exc)
-            continue
-        result.append({
-            "anchor": {"file": chunk.file, "symbol_path": chunk.symbol_path},
-            "fingerprint": fp,
-        })
-    return result
-
-
-def _fetch_group_intent(group, chunks: list[Chunk], repo_name: str) -> str:
-    """Call LLM to generate a 1-2 sentence intent for *group*.
-
-    Falls back to an empty string on any failure.  The prompt is minimal:
-    slug + title + up to 5 representative symbol_paths + file.
-    """
-    from codoc.config import complete
-
-    sample = group.chunk_indices[:5]
-    symbols = [
-        f"  {chunks[i].symbol_path} ({chunks[i].file})"
-        for i in sample
-    ]
-    prompt = (
-        f"You are helping document a codebase called '{repo_name}'.\n"
-        f"Feature slug: {group.slug}\n"
-        f"Feature title: {group.title}\n"
-        f"Representative code chunks:\n" + "\n".join(symbols) + "\n\n"
-        "Write a single sentence (max 120 chars) describing what this feature is "
-        "responsible for. Output only the sentence, no quotes, no punctuation at end."
-    )
-    try:
-        return complete(prompt).strip()
-    except Exception as exc:
-        _log.warning("structural.intent_llm_failed %s: %s", group.slug, exc)
-        return ""
 

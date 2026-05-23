@@ -22,11 +22,13 @@ from codoc.agents.base import format_prompt, load_prompt, run_agent
 
 @dataclass
 class ClusterInput:
-    """A single embedding-derived cluster of code chunks."""
+    """A single semantic cluster of code chunks for LLM feature proposal."""
 
     chunks: list[dict]
-    """Each entry: {symbol_path, file, source_snippet} where source_snippet
-    is the first ~300 chars of the chunk source."""
+    """Each entry: {symbol_path, file, source_snippet, module_docstring, imports}
+    where source_snippet is the first ~600 chars of the chunk source,
+    module_docstring is the file-level docstring, and imports is a list of
+    top-level module names imported by the file."""
 
     cluster_id: int
 
@@ -36,16 +38,30 @@ class FeatureProposal:
     """A single feature proposed by the LLM for one cluster."""
 
     slug: str
-    """Kebab-case verb-object identifier, e.g. 'parse-request-body'."""
+    """Kebab-case noun-phrase identifier, e.g. 'data-transformer-registry'."""
 
-    intent: str
-    """1-2 sentences summary of the feature's behavioral purpose."""
+    # New structured fields
+    purpose: str = ""
+    """One-line WHAT this feature does in product/behavior terms (≤140 chars)."""
+
+    rationale: str = ""
+    """One-line WHY this design, not an obvious alternative (≤140 chars). May include [ref:...] tokens."""
+
+    scenario: str = ""
+    """BDD multi-line: 'given ...\nwhen  ...\nthen  ...' Each line ≤140 chars."""
+
+    needs: list[str] = field(default_factory=list)
+    """Slug names of sibling features this feature depends on."""
+
+    # Legacy fields (kept for backward compat)
+    intent: str = ""
+    """1-2 sentences summary. Falls back from purpose if empty."""
 
     title: str = ""
-    """3-6 word NL display name (sentence case), e.g. 'Request body parsing'."""
+    """3-6 word NL display name (sentence case)."""
 
     description: str = ""
-    """2-6 sentence multi-paragraph prose: what this does, why it exists, how it relates to siblings."""
+    """Legacy: multi-paragraph prose. Falls back when purpose is empty."""
 
     provisional_uuid: str = ""
     """Stable UUID minted at proposal time so children can reference parent before accept."""
@@ -104,11 +120,15 @@ def propose_features_for_cluster(
         proposals.append(
             FeatureProposal(
                 slug=item["slug"],
-                intent=item.get("intent", ""),
+                purpose=item.get("purpose", ""),
+                rationale=item.get("rationale", ""),
+                scenario=item.get("scenario", ""),
+                needs=item.get("needs", []),
+                intent=item.get("intent", ""),  # backward compat
                 title=item.get("title", ""),
-                description=item.get("description", ""),
+                description=item.get("description", ""),  # backward compat
                 provisional_uuid=_new_provisional_uuid(),
-                parent_title_hint=item.get("parent_title_hint", ""),
+                parent_title_hint="",
                 candidate_chunk_keys=item.get("candidate_chunk_keys", []),
             )
         )
@@ -181,9 +201,13 @@ def propose_subtree(
         proposals.append(
             FeatureProposal(
                 slug=item["slug"],
-                intent=item.get("intent", ""),
+                purpose=item.get("purpose", ""),
+                rationale=item.get("rationale", ""),
+                scenario=item.get("scenario", ""),
+                needs=item.get("needs", []),
+                intent=item.get("intent", ""),  # backward compat
                 title=item.get("title", ""),
-                description=item.get("description", ""),
+                description=item.get("description", ""),  # backward compat
                 provisional_uuid=_new_provisional_uuid(),
                 parent_title_hint=parent_feature_title,
                 candidate_chunk_keys=item.get("candidate_chunk_keys", []),
@@ -223,6 +247,13 @@ def build_introduce_payload(
     ]
     return {
         "slug": proposal.slug,
-        "intent": proposal.intent,
+        "title": proposal.title or proposal.slug,
+        "purpose": proposal.purpose,
+        "rationale": proposal.rationale,
+        "scenario": proposal.scenario,
+        "needs": proposal.needs,
+        # backward compat: keep intent/description so existing tests don't break
+        "intent": proposal.intent or proposal.purpose,
+        "description": proposal.description,
         "anchors": anchors,
     }

@@ -444,11 +444,13 @@ def cmd_accept(
                 typer.echo("No pending proposals.")
                 return
             _accept_many(txs, store, jsonl_log, tx_log, codoc_dir, label=label)
+            _try_write_tree(codoc_dir, store, tx_log)
             return
 
         tx, _ = _resolve_proposal(ref, codoc_dir)
         # Re-open via tx_log since _resolve_proposal opens its own store.
         _accept_one(tx.hlc.to_str(), store, jsonl_log, tx_log, codoc_dir, label=label)
+        _try_write_tree(codoc_dir, store, tx_log)
     finally:
         store.close()
 
@@ -481,6 +483,15 @@ def _accept_one(hlc: str, store, jsonl_log, tx_log, codoc_dir: Path, label=None)
     except Exception as exc:
         typer.echo(f"Error accepting proposal: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+def _try_write_tree(codoc_dir: Path, store, tx_log) -> None:
+    """Re-render the .codoc tree silently; ignore errors (non-fatal)."""
+    try:
+        from codoc.projection.tree_codoc import write_tree
+        write_tree(str(codoc_dir), store, tx_log)
+    except Exception:
+        pass
 
 
 def _accept_many(txs, store, jsonl_log, tx_log, codoc_dir: Path, label=None) -> None:

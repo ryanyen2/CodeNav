@@ -17,6 +17,11 @@ class TransactionKind(str, Enum):
     COALESCE = "coalesce"
     RENAME_INFER = "rename_infer"
     MOVED = "moved"          # code-side move/rename detected by chunk matcher
+    # Reflective file-level events: one proposal per file event, not one per binding.
+    RETIRE_FILE = "retire_file"   # whole file deleted; all bindings evicted atomically
+    RENAME_FILE = "rename_file"   # file moved/renamed; all binding anchors remapped
+    SPLIT_FILE = "split_file"     # one file → N files; binding partition
+    MERGE_FILE = "merge_file"     # N files → one file; binding union
     # Intentional v1: user-authored mutations that are canonical immediately.
     AMEND = "amend"
     RENAME = "rename"
@@ -32,6 +37,11 @@ class TransactionKind(str, Enum):
     # Intentional Phase 5.
     INSTATE_CONSTRAINT = "instate_constraint"
     LIFT_CONSTRAINT = "lift_constraint"
+    # Feedforward / feedback loop (Phase D–E).
+    # FEEDFORWARD_FILL: LLM proposes purpose/rationale/scenario + coding_directive before code is written.
+    # FEEDBACK_RECONCILE: LLM proposes codoc edits that reflect what was actually built vs. the plan.
+    FEEDFORWARD_FILL = "feedforward_fill"
+    FEEDBACK_RECONCILE = "feedback_reconcile"
     # Administrative — written by post-commit hook; immediately canonical.
     SNAPSHOT = "snapshot"
 
@@ -46,6 +56,10 @@ REFLECTIVE_KINDS: frozenset[TransactionKind] = frozenset({
     TransactionKind.COALESCE,
     TransactionKind.RENAME_INFER,
     TransactionKind.MOVED,
+    TransactionKind.RETIRE_FILE,
+    TransactionKind.RENAME_FILE,
+    TransactionKind.SPLIT_FILE,
+    TransactionKind.MERGE_FILE,
 })
 
 INTENTIONAL_V1_KINDS: frozenset[TransactionKind] = frozenset({

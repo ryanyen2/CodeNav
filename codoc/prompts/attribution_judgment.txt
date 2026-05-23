@@ -16,6 +16,10 @@ Change kind: {change_summary}
 
 {neighboring_features}
 
+## Existing tree context (naming style and scale)
+
+{tree_context}
+
 ## Transaction options
 
 Choose exactly one:
@@ -35,21 +39,28 @@ Choose exactly one:
 - Prefer **evict** when change_kind is "removed" or "anchor_broken" and the chunk had a binding.
 - Prefer **retire_reflective** when change_kind is "removed" and the feature would become empty.
 - Use **introduce** only when no neighboring feature is a plausible home.
-- **fracture** and **coalesce** are rare; only propose them when the signal is strong (clear divergence or convergence).
-- For **rename_infer**, propose a slug that better matches what the feature now does; keep intent in the payload.
+- **fracture** and **coalesce** are rare; only propose them when the signal is strong.
+- For **rename_infer**, propose a slug that better matches what the feature now does.
+
+## Style rules for introduce slugs, titles, and descriptions
+
+{{include:_shared_description}}
 
 ## Response format
 
 Respond with ONLY a <solution> block containing a JSON object. No prose before or after.
 
+For **introduce**: the payload must include slug, title, purpose, rationale, scenario, and needs.
+Follow the style rules above for slug (noun-phrase) and the description schema above for all fields.
+
 Payload fields by kind:
-- introduce:        { "kind": "introduce", "slug": "<kebab-verb-object>", "intent": "<1-2 sentences>", "rationale": "<why no existing feature fits>" }
+- introduce:        { "kind": "introduce", "slug": "<kebab-noun-phrase>", "title": "<3-6 word sentence case>", "purpose": "<one line ≤140 chars>", "rationale": "<one line ≤140 chars ending with [ref: ...]>", "scenario": "given ...\nwhen  ...\nthen  ...  [ref: ...]", "needs": ["<slug>"] }
 - absorb:           { "kind": "absorb", "target_feature_uuid": "<uuid>", "rationale": "<why it fits>" }
 - evict:            { "kind": "evict", "from_feature_uuid": "<uuid>", "rationale": "<why it no longer belongs>" }
 - reattribute:      { "kind": "reattribute", "from_feature_uuid": "<uuid>", "to_feature_uuid": "<uuid>", "rationale": "<why>" }
-- fracture:         { "kind": "fracture", "source_feature_uuid": "<uuid>", "new_slug": "<kebab-verb-object>", "new_intent": "<1-2 sentences>", "rationale": "<divergence signal>" }
-- coalesce:         { "kind": "coalesce", "feature_a_uuid": "<uuid>", "feature_b_uuid": "<uuid>", "merged_slug": "<kebab-verb-object>", "merged_intent": "<1-2 sentences>", "rationale": "<convergence signal>" }
-- rename_infer:     { "kind": "rename_infer", "feature_uuid": "<uuid>", "new_slug": "<kebab-verb-object>", "rationale": "<what changed>" }
+- fracture:         { "kind": "fracture", "source_feature_uuid": "<uuid>", "new_slug": "<kebab-noun-phrase>", "new_intent": "<1-2 sentences>", "rationale": "<divergence signal>" }
+- coalesce:         { "kind": "coalesce", "feature_a_uuid": "<uuid>", "feature_b_uuid": "<uuid>", "merged_slug": "<kebab-noun-phrase>", "merged_intent": "<1-2 sentences>", "rationale": "<convergence signal>" }
+- rename_infer:     { "kind": "rename_infer", "feature_uuid": "<uuid>", "new_slug": "<kebab-noun-phrase>", "rationale": "<what changed>" }
 - retire_reflective:{ "kind": "retire_reflective", "feature_uuid": "<uuid>", "rationale": "<why all chunks are gone>" }
 
 Example responses:
@@ -59,5 +70,5 @@ Example responses:
 </solution>
 
 <solution>
-{"kind": "introduce", "slug": "validate-auth-token", "intent": "Validates the authentication token in the request header and returns the associated user identity.", "rationale": "No neighboring feature covers authentication token validation."}
+{"kind": "introduce", "slug": "request-body-parser", "title": "Request body parser", "purpose": "deserializes and validates incoming HTTP request bodies before they reach business logic", "rationale": "no neighboring feature covers request-body parsing; routing and auth are handled separately  [ref: api/routes.py::parse_request_body]", "scenario": "given an HTTP POST with a JSON body\nwhen  the handler receives the request\nthen  validated fields are available as a typed object or a 400 is raised for malformed input  [ref: api/routes.py::parse_request_body]", "needs": []}
 </solution>

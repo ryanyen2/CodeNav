@@ -1,11 +1,10 @@
 """Parse a directory of `.codoc` files into a structured ParsedTree.
 
-The parser handles both the new prose-title format and the legacy
-slug+[Badge]+UUID format. Identity resolution order:
-
-  1. Inline ``# @<uuid>`` comment (legacy format only).
+Identity resolution order:
+  1. Inline ``# @<uuid>`` comment (backward compat).
   2. ``old_meta.title_path_to_uuid`` lookup using the title path.
   3. ``old_meta.slug_path_to_uuid`` lookup using the display name as slug.
+  4. Structural sibling-position + edit-distance alignment.
 
 Lines that cannot be resolved are reported as DiffErrors by the differ.
 """
@@ -22,21 +21,14 @@ from codoc.projection import tree_align
 
 
 # New-format feature line: indent + marker + title + optional (state) suffix.
+# Markers: - live, ~ retired, * placeholder (authored stub awaiting feedforward)
 _TITLE_LINE_RE = re.compile(
-    r"^(?P<indent>\s*)(?P<marker>[-~])\s+"
+    r"^(?P<indent>\s*)(?P<marker>[-~*])\s+"
     r"(?P<title>.+?)"
     r"(?:\s+\((?P<state_suffix>strained|severed|stub|deprecated)\))?"
     r"(?:\s+\[(?P<badge>[^\]]*)\])?"      # backward compat: old [Badge] format
     r"\s*(?:#\s*@(?P<uuid>[0-9a-f\-]+))?\s*$",  # backward compat: old inline UUID
     re.IGNORECASE,
-)
-
-# Old proposal line: "? <kind>: <slug>  [proposal]  # ?<hlc>" — kept for backward compat.
-_PROPOSAL_RE_LEGACY = re.compile(
-    r"^(?P<indent>\s*)(?P<marker>[?!])\s+"
-    r"(?P<kind>[\w\-]+):\s+(?P<slug>\S+)"
-    r"(?:\s+\[(?P<badge>[^\]]*)\])?"
-    r"\s*(?:#\s*\?(?P<hlc>[0-9a-zA-Z:\-_]+))?\s*$"
 )
 
 # New-format diff hunk line: col-0 marker where position-2 char is -, ~, or space.
@@ -51,6 +43,18 @@ _BINDING_ENTRY_RE = re.compile(r"^\s*\[b\d+\]\s")
 # Legacy header lines.
 _HEADER_RE = re.compile(r"^#\s*codoc\s+(index|subtree)")
 
+# Legacy reject marker: "! kind: ... # ?hlc" written by user to reject a proposal.
+_REJECT_MARKER_RE = re.compile(
+    r"^!\s+\S+.*#\s*\?(?P<hlc>[0-9a-zA-Z:\-_]+)\s*$"
+)
+
+# Structured field lines (new format)
+_FIELD_RE = re.compile(r"^(?P<indent>\s*)(?P<key>purpose|rationale|scenario|needs|binds)\s*:\s*(?P<value>.*)$", re.IGNORECASE)
+# Edge/binding lines: "    -> feature://slug" or "    -> code://file::sym"
+_EDGE_RE = re.compile(r"^\s*->\s*(?P<ref>\S+)")
+# Scenario continuation: "    given ..." / "    when  ..." / "    then  ..."
+_SCENARIO_LINE_RE = re.compile(r"^\s*(given|when\s+|then\s+)\s*.+", re.IGNORECASE)
+
 
 @dataclass
 class ParsedFeature:
@@ -62,6 +66,12 @@ class ParsedFeature:
     retired: bool
     source_file: str
     line_number: int  # 0-indexed line of the feature header line
+    # New structured fields
+    purpose: str = ""
+    rationale: str = ""
+    scenario: str = ""
+    needs: list = field(default_factory=list)  # list of slug strings
+    is_placeholder: bool = False  # True when authored with * marker
 
 
 @dataclass
@@ -91,32 +101,6 @@ def _strip_comment_only_line(line: str) -> bool:
     return s.startswith("#") and not s.startswith("#!")
 
 
-def _parse_index_file(
-    path: Path,
-    parsed: ParsedTree,
-    seen_proposal_hlcs: set[str],
-) -> None:
-    """Parse _index.codoc — only proposals are meaningful here."""
-    text = path.read_text(encoding="utf-8")
-    file_name = path.name
-    lines = text.splitlines()
-    for lineno, raw_line in enumerate(lines):
-        line = raw_line.rstrip("\n")
-        stripped = line.strip()
-        if not stripped or _HEADER_RE.match(stripped) or _strip_comment_only_line(line):
-            continue
-        p = _PROPOSAL_RE_LEGACY.match(line)
-        if p and p.group("hlc"):
-            hlc = p.group("hlc")
-            kind = p.group("kind")
-            marker = p.group("marker")
-            seen_proposal_hlcs.add(hlc)
-            if marker == "!":
-                parsed.proposals.append(
-                    ParsedProposal(hlc=hlc, kind=kind, action="reject", source_file=file_name)
-                )
-
-
 def _parse_one_file(
     path: Path,
     parsed: ParsedTree,
@@ -132,6 +116,11 @@ def _parse_one_file(
     parent_stack: list[tuple[int, str, str | None]] = []
     cur_feature: ParsedFeature | None = None
     cur_intent_lines: list[str] = []
+    cur_scenario_lines: list[str] = []
+    cur_needs: list[str] = []
+    cur_in_scenario: bool = False
+    cur_in_needs: bool = False
+    cur_in_binds: bool = False
     present_proposals: dict[str, dict] = {}
     sibling_counter: defaultdict[str | None, int] = defaultdict(int)
     # Pre-built sibling index — shared across the parse (passed from parse_tree_dir).
@@ -141,9 +130,10 @@ def _parse_one_file(
     _SENTINEL_UUID = "__unresolved__"
 
     def _flush_feature() -> None:
-        nonlocal cur_feature, cur_intent_lines
+        nonlocal cur_feature, cur_intent_lines, cur_scenario_lines, cur_needs
+        nonlocal cur_in_scenario, cur_in_needs, cur_in_binds
         if cur_feature is not None:
-            # Preserve multi-paragraph structure: paragraphs separated by blank lines.
+            # Preserve multi-paragraph structure for legacy intent
             paragraphs: list[str] = []
             current_para: list[str] = []
             for ln in cur_intent_lines:
@@ -158,6 +148,11 @@ def _parse_one_file(
                 paragraphs.append(" ".join(current_para))
             intent_text = "\n".join(paragraphs)
             cur_feature.intent = intent_text
+            # Apply structured fields
+            if cur_scenario_lines:
+                cur_feature.scenario = "\n".join(cur_scenario_lines)
+            if cur_needs:
+                cur_feature.needs = list(cur_needs)
 
             if cur_feature.uuid == _SENTINEL_UUID:
                 parsed.feature_lines_without_uuid.append(
@@ -169,6 +164,11 @@ def _parse_one_file(
                 parsed.feature_uuids.add(cur_feature.uuid)
         cur_feature = None
         cur_intent_lines = []
+        cur_scenario_lines = []
+        cur_needs = []
+        cur_in_scenario = False
+        cur_in_needs = False
+        cur_in_binds = False
 
     for lineno, raw_line in enumerate(lines):
         line = raw_line.rstrip("\n")
@@ -177,6 +177,9 @@ def _parse_one_file(
         if not stripped:
             # Inside a feature block, blank lines are paragraph separators.
             if cur_feature is not None:
+                cur_in_scenario = False
+                cur_in_needs = False
+                cur_in_binds = False
                 cur_intent_lines.append("")
             continue
 
@@ -190,22 +193,13 @@ def _parse_one_file(
             _flush_feature()
             continue
 
-        p = _PROPOSAL_RE_LEGACY.match(line)
-        if p and p.group("hlc"):
+        rm = _REJECT_MARKER_RE.match(line)
+        if rm and rm.group("hlc"):
             _flush_feature()
-            hlc = p.group("hlc")
-            kind = p.group("kind")
-            marker = p.group("marker")
-            slug = p.group("slug")
-            present_proposals[hlc] = {
-                "slug": slug, "kind": kind, "marker": marker,
-                "file": file_name, "line": lineno,
-            }
-            seen_proposal_hlcs.add(hlc)
-            if marker == "!":
-                parsed.proposals.append(
-                    ParsedProposal(hlc=hlc, kind=kind, action="reject", source_file=file_name)
-                )
+            hlc = rm.group("hlc")
+            if hlc not in seen_proposal_hlcs:
+                seen_proposal_hlcs.add(hlc)
+                parsed.proposals.append(ParsedProposal(hlc=hlc, kind="", action="reject"))
             continue
 
         m = _TITLE_LINE_RE.match(line)
@@ -249,6 +243,7 @@ def _parse_one_file(
                     intent="",
                     parent_uuid=parent_uuid,
                     retired=(marker == "~"),
+                    is_placeholder=(marker == "*"),
                     source_file=file_name,
                     line_number=lineno,
                 )
@@ -266,6 +261,7 @@ def _parse_one_file(
                 intent="",
                 parent_uuid=parent_uuid,
                 retired=(marker == "~"),
+                is_placeholder=(marker == "*"),
                 source_file=file_name,
                 line_number=lineno,
             )
@@ -274,6 +270,53 @@ def _parse_one_file(
             continue
 
         if cur_feature is not None:
+            # Check for structured field lines FIRST
+            fm = _FIELD_RE.match(line)
+            if fm:
+                key = fm.group("key").lower()
+                value = fm.group("value").strip()
+                cur_in_scenario = False
+                cur_in_needs = False
+                cur_in_binds = False
+                if key == "purpose":
+                    cur_feature.purpose = value
+                elif key == "rationale":
+                    cur_feature.rationale = value
+                elif key == "scenario":
+                    cur_in_scenario = True
+                elif key == "needs":
+                    if value:
+                        # CSV form: "needs: slug-a, slug-b"
+                        for slug in (s.strip() for s in value.split(",")):
+                            if slug:
+                                cur_needs.append(slug)
+                    cur_in_needs = True  # also accept -> lines below
+                elif key == "binds":
+                    cur_in_binds = True
+                continue
+
+            # Handle continuation lines for multi-line blocks
+            em = _EDGE_RE.match(line)
+            if em and cur_in_needs:
+                ref = em.group("ref")
+                if ref.startswith("feature://"):
+                    slug = ref[len("feature://"):]
+                    if slug:
+                        cur_needs.append(slug)
+                continue
+            if em and cur_in_binds:
+                continue  # binds are read-only, skip
+
+            if cur_in_scenario:
+                stripped_line = line.strip()
+                if stripped_line and not stripped_line.startswith("->"):
+                    cur_scenario_lines.append(stripped_line)
+                    continue
+
+            # Legacy fallback: treat as intent prose
+            cur_in_scenario = False
+            cur_in_needs = False
+            cur_in_binds = False
             cur_intent_lines.append(line)
 
     _flush_feature()

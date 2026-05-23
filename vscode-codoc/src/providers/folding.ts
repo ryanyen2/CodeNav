@@ -13,7 +13,7 @@ export class CodocFoldingProvider implements vscode.FoldingRangeProvider {
             return n;
         };
 
-        const isHeader = (line: string): boolean => /^\s*[-~?!]\s/.test(line);
+        const isHeader = (line: string): boolean => /^\s*[-~?!*]\s/.test(line);
 
         for (let i = 0; i < document.lineCount; i++) {
             const text = document.lineAt(i).text;

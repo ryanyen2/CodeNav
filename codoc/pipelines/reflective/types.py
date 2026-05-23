@@ -38,8 +38,3 @@ class ChunkChange:
     existing_binding_uuid: str | None
     """UUID of the Binding in the feature map whose anchor points to this
     symbol path, if one exists.  ``None`` for unattributed chunks."""
-
-
-def chunk_cache_key(file: str, symbol_path: str) -> str:
-    """Stable primary key for the ``chunk_fingerprints`` table."""
-    return f"{file}::{symbol_path}"

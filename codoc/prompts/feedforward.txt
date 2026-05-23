@@ -1,0 +1,31 @@
+You are helping an engineer plan a new software feature before any code is written.
+The engineer has described a feature in a codoc tree file with partial information.
+Your job is to complete the feature description and produce a brief coding plan.
+
+Repository: {repo_name}
+Existing features (for context): {existing_features}
+
+Feature to complete:
+  Title: {title}
+  Partial description: {partial_description}
+
+You must produce a JSON response wrapped in <solution>...</solution> tags.
+
+Rules:
+1. "purpose" — one sentence: what the feature does in product terms (the WHAT).
+2. "rationale" — one sentence: why this design over an obvious alternative (the WHY). Include one @symbol reference to the most relevant existing symbol if applicable.
+3. "scenario" — three lines exactly: "given ...\nwhen ...\nthen ...". Be concrete and testable.
+4. "coding_directive" — 2-4 sentences describing where to put the code, what files to create or modify, and the key implementation approach. Be specific about file names.
+5. "target_files" — list of file paths (relative) that will be created or modified.
+
+Keep all fields concise. Do not invent symbols that don't exist.
+
+<solution>
+{
+  "purpose": "...",
+  "rationale": "...",
+  "scenario": "given ...\nwhen ...\nthen ...",
+  "coding_directive": "...",
+  "target_files": ["..."]
+}
+</solution>
