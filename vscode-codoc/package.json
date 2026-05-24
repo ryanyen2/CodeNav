@@ -15,6 +15,28 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "codoc.featureTree",
+          "name": "codoc Features"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "codoc.refreshFeatureTree",
+          "when": "view == codoc.featureTree",
+          "group": "navigation"
+        },
+        {
+          "command": "codoc.open",
+          "when": "view == codoc.featureTree",
+          "group": "navigation"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "codoc",
@@ -78,6 +100,11 @@
       {
         "command": "codoc.rejectProposalAtLine",
         "title": "codoc: Reject proposal at line"
+      },
+      {
+        "command": "codoc.refreshFeatureTree",
+        "title": "codoc: Refresh feature tree",
+        "icon": "$(refresh)"
       }
     ],
     "keybindings": [

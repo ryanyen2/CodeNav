@@ -61,6 +61,7 @@ class ReflectResponse(BaseModel):
 class FeatureResponse(BaseModel):
     uuid: str
     slug: str
+    title: str
     parent_uuid: str | None
     intent: str
     retired: bool
@@ -240,6 +241,7 @@ def _feature_to_response(feature: Feature, store: SQLiteStore) -> FeatureRespons
     return FeatureResponse(
         uuid=feature.uuid,
         slug=feature.slug,
+        title=feature.title or feature.slug,
         parent_uuid=feature.parent_uuid,
         intent=feature.intent,
         retired=feature.retired,

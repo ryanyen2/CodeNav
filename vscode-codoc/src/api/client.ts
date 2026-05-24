@@ -14,6 +14,7 @@ export interface TransactionResponse {
 export interface FeatureResponse {
     uuid: string;
     slug: string;
+    title: string;
     parent_uuid: string | null;
     intent: string;
     retired: boolean;

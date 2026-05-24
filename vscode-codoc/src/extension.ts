@@ -13,15 +13,31 @@ import { CodocCompletionProvider } from './providers/completion';
 import { applyDecorations, createDecorations } from './providers/decoration';
 import { scheduleSyncCodocFile, onSaveCodocFile } from './sync-on-save';
 import { LiveActivityTracker } from './state/live-activity';
+import { FeatureTreeProvider } from './providers/feature-tree-view';
 
 export function activate(context: vscode.ExtensionContext): void {
     const server = new ServerState(context);
     const diagnostics = vscode.languages.createDiagnosticCollection('codoc');
     context.subscriptions.push(diagnostics);
 
+    // Feature tree panel
+    const featureTreeProvider = new FeatureTreeProvider(server);
+    const featureTreeView = vscode.window.createTreeView('codoc.featureTree', {
+        treeDataProvider: featureTreeProvider,
+        showCollapseAll: true,
+    });
+    context.subscriptions.push(featureTreeView);
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.refreshFeatureTree', () => {
+            featureTreeProvider.refresh();
+        }),
+    );
+
     // Refresh the status bar by pulling /state (pending count, stage, etc.)
     async function refreshState(): Promise<void> {
         await server.refreshState();
+        featureTreeProvider.refresh();
     }
 
     // ── codoc.sync — state-aware one-stop command ────────────────────────────
@@ -394,7 +410,10 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     // ── State refresh: on connect and SSE-driven ─────────────────────────────
-    server.onReady(() => void refreshState());
+    server.onReady(() => {
+        void refreshState();
+        featureTreeProvider.refresh();
+    });
 
     // Live activity tracker — Claude Code gutter pulse + status bar entry.
     const liveActivity = new LiveActivityTracker(context);
