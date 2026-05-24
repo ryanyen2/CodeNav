@@ -97,6 +97,20 @@ def _is_arrow_function_declarator(decl_node: ts.Node) -> tuple[bool, str | None]
     return has_arrow, name
 
 
+def _simple_declarator_name(decl_node: ts.Node) -> str | None:
+    """Return the name if *decl_node* is a ``const NAME = value`` with a plain
+    identifier LHS (no destructuring, not private).  Returns None otherwise.
+    """
+    for child in decl_node.children:
+        if child.type == "identifier":
+            name = child.text.decode("utf-8", errors="replace")
+            if name and not name.startswith("_"):
+                return name
+        elif child.type in {"object_pattern", "array_pattern"}:
+            return None  # destructuring — skip
+    return None
+
+
 def _unwrap_export(node: ts.Node) -> ts.Node:
     """If node is an export_statement, return the declaration it wraps."""
     if node.type == "export_statement":
@@ -202,8 +216,31 @@ def _extract_chunks_recursive(
                             )
                         )
             if not found_arrow:
-                # Plain const/let/var — accumulate as module-level code.
-                if child.type not in {"comment", ""}:
+                # Plain const/let/var — emit as named chunk if a simple identifier
+                # LHS is present; otherwise accumulate into module-level code.
+                named: str | None = None
+                for decl in inner.children:
+                    if decl.type == "variable_declarator":
+                        named = _simple_declarator_name(decl)
+                        if named:
+                            break
+                if named:
+                    flush_module_chunk()
+                    qualified = f"{prefix}.{named}" if prefix else named
+                    sym_path = f"{file}::{qualified}"
+                    raw = source_bytes[child.start_byte:child.end_byte].decode(
+                        "utf-8", errors="replace"
+                    )
+                    chunks.append(
+                        Chunk(
+                            symbol_path=sym_path,
+                            file=file,
+                            start_byte=child.start_byte,
+                            end_byte=child.end_byte,
+                            source=raw,
+                        )
+                    )
+                elif child.type not in {"comment", ""}:
                     if module_start is None:
                         module_start = child.start_byte
                     module_end = child.end_byte

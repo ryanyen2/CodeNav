@@ -329,7 +329,13 @@ def cluster_into_parents(
     *,
     file_embeddings: dict[str, "Optional[list[float]]"] | None = None,
 ) -> list[SemanticGroup]:
-    """Merge leaf groups into n_target parent groups using HAC.
+    """Merge leaf groups into n_target parent groups using group-level HAC.
+
+    Clusters the *groups themselves* (not their constituent files) so each
+    original group belongs to exactly one parent.  The old file-level approach
+    scattered a single group's files across multiple merged parents, causing
+    the same group to appear as a child of several parents and producing
+    massive feature duplication downstream in ``_walk``.
 
     Used as a post-pass when ``build_hierarchical_clusters`` returns >6
     top-level children.  Each returned SemanticGroup wraps the original
@@ -338,42 +344,72 @@ def cluster_into_parents(
     if len(groups) <= n_target:
         return groups
 
-    # Collect all files across all top-level groups.
-    all_files = [f for g in groups for f in g.file_paths]
-    if not all_files:
-        return groups
-
+    file_embs = file_embeddings or {}
     summaries = _file_summaries(chunks, root_dir)
-    group_summaries = {f: summaries[f] for f in all_files if f in summaries}
-    embeddings = {f: (file_embeddings or {}).get(f) for f in group_summaries}
 
-    merged_file_lists = _hac_cluster(all_files, group_summaries, embeddings, n_target)
+    # Build one pseudo-summary and one centroid embedding per group so we can
+    # reuse _hac_cluster with groups as the "files".
+    group_keys: list[str] = []
+    pseudo_summaries: dict[str, dict] = {}
+    pseudo_embeddings: dict[str, Optional[list[float]]] = {}
 
-    # Map each file back to its original SemanticGroup.
-    file_to_group: dict[str, SemanticGroup] = {}
     for g in groups:
-        for f in g.file_paths:
-            file_to_group[f] = g
+        key = f"__group_{g.group_id}__"
+        group_keys.append(key)
 
+        all_imports: set = set()
+        all_identifiers: set = set()
+        all_chunk_indices: list[int] = []
+        all_symbol_paths: list[str] = []
+        for f in g.file_paths:
+            if f in summaries:
+                all_imports |= summaries[f]["imports"]
+                all_identifiers |= summaries[f]["identifiers"]
+                all_chunk_indices.extend(summaries[f]["chunk_indices"])
+                all_symbol_paths.extend(summaries[f]["symbol_paths"])
+
+        pseudo_summaries[key] = {
+            "chunk_indices": all_chunk_indices,
+            "symbol_paths": all_symbol_paths,
+            "module_docstring": "",
+            "imports": all_imports,
+            "identifiers": all_identifiers,
+            "source": "",
+        }
+
+        # Centroid = mean of available file embeddings for this group.
+        vecs = [file_embs[f] for f in g.file_paths if file_embs.get(f)]
+        if vecs:
+            dim = len(vecs[0])
+            centroid: list[float] = [
+                sum(v[i] for v in vecs) / len(vecs) for i in range(dim)
+            ]
+            pseudo_embeddings[key] = centroid
+        else:
+            pseudo_embeddings[key] = None
+
+    # Cluster groups (not files) — each group_key maps 1:1 to one parent bucket.
+    merged_key_lists = _hac_cluster(
+        group_keys, pseudo_summaries, pseudo_embeddings, n_target
+    )
+
+    key_to_group: dict[str, SemanticGroup] = {
+        f"__group_{g.group_id}__": g for g in groups
+    }
     next_id = max((g.group_id for g in groups), default=0) + 1
     parent_groups: list[SemanticGroup] = []
 
-    for merged_files in merged_file_lists:
-        seen_ids: set[int] = set()
-        child_groups: list[SemanticGroup] = []
-        all_chunk_indices: list[int] = []
-
-        for f in merged_files:
-            child_g = file_to_group.get(f)
-            if child_g is None or child_g.group_id in seen_ids:
-                continue
-            seen_ids.add(child_g.group_id)
-            child_groups.append(child_g)
-            all_chunk_indices.extend(child_g.all_chunk_indices())
+    for merged_keys in merged_key_lists:
+        child_groups = [key_to_group[k] for k in merged_keys if k in key_to_group]
+        all_chunk_indices = []
+        all_file_paths: list[str] = []
+        for cg in child_groups:
+            all_chunk_indices.extend(cg.all_chunk_indices())
+            all_file_paths.extend(cg.file_paths)
 
         parent = SemanticGroup(
             group_id=next_id,
-            file_paths=merged_files,
+            file_paths=all_file_paths,
             chunk_indices=all_chunk_indices,
             children=child_groups,
         )

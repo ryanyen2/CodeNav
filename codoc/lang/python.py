@@ -74,6 +74,27 @@ def _node_name(node: ts.Node) -> str | None:
     return None
 
 
+def _module_assignment_name(node: ts.Node) -> str | None:
+    """If *node* is a simple ``NAME = value`` expression_statement, return NAME.
+
+    Returns None for private names (leading underscore), augmented assignments,
+    destructuring patterns, and anything that isn't a single-identifier LHS.
+    """
+    if node.type != "expression_statement":
+        return None
+    for child in node.children:
+        if child.type == "assignment":
+            targets = [c for c in child.children if c.type not in {"=", "type"}]
+            if not targets:
+                return None
+            lhs = targets[0]
+            if lhs.type == "identifier":
+                name = lhs.text.decode("utf-8", errors="replace")
+                if name and not name.startswith("_"):
+                    return name
+    return None
+
+
 def _extract_chunks_recursive(
     node: ts.Node,
     source_bytes: bytes,
@@ -164,11 +185,30 @@ def _extract_chunks_recursive(
                     _extract_chunks_recursive(body, source_bytes, file, qualified, chunks)
 
         else:
-            # Non-definition node at module scope → accumulate into __module__.
+            # Non-definition node at module scope.
             if is_module_scope and child.type not in {"comment", "newline", ""}:
-                if module_start is None:
-                    module_start = child.start_byte
-                module_end = child.end_byte
+                # Emit simple public assignments (NAME = ...) as named chunks so
+                # features can bind to specific module-level constructs.
+                assign_name = _module_assignment_name(child)
+                if assign_name:
+                    flush_module_chunk()
+                    raw = source_bytes[child.start_byte:child.end_byte].decode(
+                        "utf-8", errors="replace"
+                    )
+                    chunks.append(
+                        Chunk(
+                            symbol_path=f"{file}::{assign_name}",
+                            file=file,
+                            start_byte=child.start_byte,
+                            end_byte=child.end_byte,
+                            source=raw,
+                        )
+                    )
+                else:
+                    # Imports, augmented assignments, patterns → __module__ run.
+                    if module_start is None:
+                        module_start = child.start_byte
+                    module_end = child.end_byte
 
     if is_module_scope:
         flush_module_chunk()

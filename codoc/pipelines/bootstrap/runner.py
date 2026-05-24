@@ -285,6 +285,7 @@ def _run_semantic_bootstrap(
 
     all_proposals: list = []
     existing_summaries: list[dict] = []
+    emitted_slugs: set[str] = set()
 
     def _walk(
         group,
@@ -292,6 +293,7 @@ def _run_semantic_bootstrap(
         parent_title: str,
         parent_intent: str,
         depth: int,
+        max_depth: int = 2,
     ):
         sibling_titles: list[str] = []
 
@@ -326,8 +328,9 @@ def _run_semantic_bootstrap(
             )
             stamped = tx_log.append_proposal(tx)
             all_proposals.append(stamped)
-            for child in group.children:
-                _walk(child, provisional, slug, "", depth + 1)
+            if depth < max_depth:
+                for child in group.children:
+                    _walk(child, provisional, slug, "", depth + 1, max_depth)
             return
 
         # Build cluster input for this group
@@ -354,24 +357,57 @@ def _run_semantic_bootstrap(
 
         group_symbol_paths = {chunks[i].symbol_path for i in group.chunk_indices}
 
-        for fp in feature_proposals:
+        # For internal groups the first proposed feature is the "head"; subsequent
+        # proposals become its children rather than siblings of the head so we
+        # preserve a clean hierarchy without artificially widening the tree.
+        head_uuid: str | None = None
+        head_title: str = parent_title
+        head_intent: str = parent_intent
+
+        for i, fp in enumerate(feature_proposals):
+            # Hard dedup guard: skip if this slug was already emitted in this run.
+            if fp.slug in emitted_slugs:
+                print(
+                    f"[bootstrap] dedup: skipping duplicate slug '{fp.slug}' "
+                    f"(group {group.group_id})",
+                    file=sys.stderr,
+                )
+                continue
+
             fp.candidate_chunk_keys = [
                 k for k in fp.candidate_chunk_keys if k in group_symbol_paths
             ]
+
+            # Extras in an internal group nest under the head instead of floating
+            # as root-level siblings of unrelated subtrees.
+            fp_parent = (
+                parent_uuid if (i == 0 or not group.children) else head_uuid
+            )
             tx = emit_introduce_proposal(
                 proposal=fp,
                 chunks=chunks,
                 tx_log=tx_log,
                 language_adapters=language_adapters,
                 author="bootstrap",
-                parent_uuid=parent_uuid,
+                parent_uuid=fp_parent,
             )
             all_proposals.append(tx)
-            existing_summaries.append({"slug": fp.slug, "intent": fp.intent})
+            emitted_slugs.add(fp.slug)
+            existing_summaries.append({"slug": fp.slug, "intent": fp.intent or fp.purpose})
             sibling_titles.append(fp.title or fp.slug)
 
+            if i == 0 and group.children:
+                head_uuid = fp.provisional_uuid or None
+                head_title = fp.title or fp.slug
+                head_intent = fp.intent or fp.purpose
+
+        # Recurse into child sub-clusters exactly once, parented under the head.
+        if group.children and depth < max_depth:
+            walk_parent = head_uuid if head_uuid is not None else parent_uuid
+            walk_title = head_title
+            walk_intent = head_intent
             for child in group.children:
-                _walk(child, fp.provisional_uuid, fp.title or fp.slug, fp.intent, depth + 1)
+                _walk(child, walk_parent, walk_title, walk_intent, depth + 1, max_depth)
 
     for top_group in root_group.children:
         _walk(top_group, None, "<repo-root>", "", 0)
