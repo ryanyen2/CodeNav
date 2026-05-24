@@ -104,9 +104,11 @@ export class CodocClient {
         return this.request('GET', `/tx/pending?root_dir=${encodeURIComponent(this.rootDir)}`);
     }
 
-    getTree(rootUuid?: string): Promise<FeatureResponse[]> {
-        const q = rootUuid ? `&root_uuid=${rootUuid}` : '';
-        return this.request('GET', `/tree?root_dir=${encodeURIComponent(this.rootDir)}${q}`);
+    getTree(parentUuid?: string, flat = false): Promise<FeatureResponse[]> {
+        const params = new URLSearchParams({ root_dir: this.rootDir });
+        if (parentUuid) params.set('parent_uuid', parentUuid);
+        if (flat) params.set('flat', 'true');
+        return this.request('GET', `/tree?${params}`);
     }
 
     getFeatureBindings(uuid: string): Promise<BindingResponse[]> {

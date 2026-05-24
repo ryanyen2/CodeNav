@@ -4,9 +4,6 @@ import { ServerState } from '../state/server';
 // Matches proposal lines: "? introduce: my-slug [Stub] # ?HLC"
 const PROPOSAL_LINE_RE = /^\s*\?\s+([\w-]+):\s+(\S+)(?:\s+\[[^\]]+\])?\s*(?:#\s*\?([0-9a-zA-Z:\-_]+))?\s*$/;
 
-// Matches feature title lines: "  - my-feature [State]" or "- root-feature"
-const FEATURE_TITLE_RE = /^(\s*)-\s+(\S+)/;
-
 export class CodocCodocCodeLensProvider implements vscode.CodeLensProvider {
     constructor(private server: ServerState) {}
 
@@ -65,25 +62,6 @@ export class CodocCodocCodeLensProvider implements vscode.CodeLensProvider {
                 command: 'codoc.rejectProposal',
                 arguments: [document.uri, hlc],
             }));
-        }
-
-        // Feature title lenses: "▸ N bindings" — only when server is connected.
-        if (this.server.connected && this.server.client) {
-            const relPath = vscode.workspace.asRelativePath(document.uri.fsPath);
-            // Build a slug→line map from the document so we can look up binding counts.
-            for (let i = 0; i < document.lineCount; i++) {
-                const line = document.lineAt(i).text;
-                const fm = FEATURE_TITLE_RE.exec(line);
-                if (!fm) continue;
-                const slug = fm[2];
-                const range = new vscode.Range(i, 0, i, line.length);
-                lenses.push(new vscode.CodeLens(range, {
-                    title: `▸ bindings`,
-                    command: 'codoc.showBindingsForFeature',
-                    arguments: [slug, relPath],
-                    tooltip: `Show all code bindings for feature '${slug}'`,
-                }));
-            }
         }
 
         return lenses;

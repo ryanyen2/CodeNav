@@ -14,6 +14,8 @@ import { applyDecorations, createDecorations } from './providers/decoration';
 import { scheduleSyncCodocFile, onSaveCodocFile } from './sync-on-save';
 import { LiveActivityTracker } from './state/live-activity';
 import { FeatureTreeProvider } from './providers/feature-tree-view';
+import { CodocDocumentLinkProvider } from './providers/doc-links';
+import { subtreeTitleLines } from './providers/feature-lines';
 
 export function activate(context: vscode.ExtensionContext): void {
     const server = new ServerState(context);
@@ -39,6 +41,13 @@ export function activate(context: vscode.ExtensionContext): void {
         await server.refreshState();
         featureTreeProvider.refresh();
     }
+
+    // Collapse all attribute blocks → table-of-contents view. Deferred a tick
+    // because VS Code computes folding ranges asynchronously after a document
+    // is shown; folding immediately can otherwise be a no-op.
+    const foldAllAttributes = (): void => {
+        setTimeout(() => void vscode.commands.executeCommand('editor.foldAll'), 200);
+    };
 
     // ── codoc.sync — state-aware one-stop command ────────────────────────────
     context.subscriptions.push(
@@ -104,6 +113,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(indexPath));
             await vscode.window.showTextDocument(doc);
+            // Open as a table of contents: collapse every attribute block.
+            const cfg = vscode.workspace.getConfiguration('codoc');
+            if (cfg.get<boolean>('foldAttributesOnOpen', true)) foldAllAttributes();
             await refreshState();
         }),
     );
@@ -308,6 +320,53 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
     );
 
+    // ── Folding: table-of-contents collapse/expand ──────────────────────────
+    // Attribute-only fold ranges (see folding.ts) mean "Fold All" already yields
+    // a clean TOC of every title. These commands wrap the built-ins and add a
+    // recursive subtree fold that keeps all titles visible.
+    const isCodocEditor = (ed?: vscode.TextEditor): ed is vscode.TextEditor =>
+        !!ed && ed.document.languageId === 'codoc';
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.collapseAllFeatures', async () => {
+            if (!isCodocEditor(vscode.window.activeTextEditor)) return;
+            await vscode.commands.executeCommand('editor.foldAll');
+        }),
+        vscode.commands.registerCommand('codoc.expandAllFeatures', async () => {
+            if (!isCodocEditor(vscode.window.activeTextEditor)) return;
+            await vscode.commands.executeCommand('editor.unfoldAll');
+        }),
+        vscode.commands.registerCommand('codoc.collapseFeatureSubtree', async () => {
+            const ed = vscode.window.activeTextEditor;
+            if (!isCodocEditor(ed)) return;
+            const lines = subtreeTitleLines(ed.document, ed.selection.active.line);
+            if (lines.length) await vscode.commands.executeCommand('editor.fold', { selectionLines: lines });
+        }),
+        vscode.commands.registerCommand('codoc.expandFeatureSubtree', async () => {
+            const ed = vscode.window.activeTextEditor;
+            if (!isCodocEditor(ed)) return;
+            const lines = subtreeTitleLines(ed.document, ed.selection.active.line);
+            if (lines.length) await vscode.commands.executeCommand('editor.unfold', { selectionLines: lines });
+        }),
+    );
+
+    // Auto-fold attributes the first time each .codoc file is shown, so it opens
+    // as a table of contents. Tracked per-URI so it doesn't fight edits on tab switches.
+    const autoFolded = new Set<string>();
+    const maybeAutoFold = async (ed?: vscode.TextEditor): Promise<void> => {
+        if (!isCodocEditor(ed)) return;
+        const cfg = vscode.workspace.getConfiguration('codoc');
+        if (!cfg.get<boolean>('foldAttributesOnOpen', true)) return;
+        const key = ed.document.uri.toString();
+        if (autoFolded.has(key)) return;
+        autoFolded.add(key);
+        foldAllAttributes();
+    };
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(ed => void maybeAutoFold(ed)),
+    );
+    void maybeAutoFold(vscode.window.activeTextEditor);
+
     // ── Show bindings QuickPick for a feature slug ───────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.showBindingsForFeature', async (slug: string) => {
@@ -358,6 +417,10 @@ export function activate(context: vscode.ExtensionContext): void {
             codocSelector,
             new CodocCompletionProvider(server),
             '@',
+        ),
+        vscode.languages.registerDocumentLinkProvider(
+            codocSelector,
+            new CodocDocumentLinkProvider(server),
         ),
     );
 

@@ -57,7 +57,7 @@ export class FeatureTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     private _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined | null | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-    // null key = root features
+    // null key = root features (parent_uuid is null/empty)
     private childrenMap = new Map<string | null, FeatureResponse[]>();
     private loaded = false;
     private loading = false;
@@ -73,10 +73,11 @@ export class FeatureTreeProvider implements vscode.TreeDataProvider<TreeNode> {
                 this.loaded = false;
                 return;
             }
-            const features = await this.server.client.getTree();
+            // Fetch ALL features in one call and build the parent→children map locally.
+            const all = await this.server.client.getTree(undefined, true);
             this.childrenMap.clear();
-            for (const f of features) {
-                const key = f.parent_uuid ?? null;
+            for (const f of all) {
+                const key = f.parent_uuid || null;
                 if (!this.childrenMap.has(key)) this.childrenMap.set(key, []);
                 this.childrenMap.get(key)!.push(f);
             }

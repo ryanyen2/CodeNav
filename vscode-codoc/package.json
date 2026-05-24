@@ -35,6 +35,30 @@
           "when": "view == codoc.featureTree",
           "group": "navigation"
         }
+      ],
+      "editor/title": [
+        {
+          "command": "codoc.collapseAllFeatures",
+          "when": "editorLangId == 'codoc'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codoc.expandAllFeatures",
+          "when": "editorLangId == 'codoc'",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "codoc.collapseFeatureSubtree",
+          "when": "editorLangId == 'codoc'",
+          "group": "codoc@1"
+        },
+        {
+          "command": "codoc.expandFeatureSubtree",
+          "when": "editorLangId == 'codoc'",
+          "group": "codoc@2"
+        }
       ]
     },
     "languages": [
@@ -105,6 +129,24 @@
         "command": "codoc.refreshFeatureTree",
         "title": "codoc: Refresh feature tree",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "codoc.collapseAllFeatures",
+        "title": "codoc: Collapse all (table of contents)",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "codoc.expandAllFeatures",
+        "title": "codoc: Expand all features",
+        "icon": "$(expand-all)"
+      },
+      {
+        "command": "codoc.collapseFeatureSubtree",
+        "title": "codoc: Collapse feature subtree"
+      },
+      {
+        "command": "codoc.expandFeatureSubtree",
+        "title": "codoc: Expand feature subtree"
       }
     ],
     "keybindings": [
@@ -124,6 +166,18 @@
         "command": "codoc.open",
         "key": "ctrl+k ctrl+c",
         "mac": "cmd+k cmd+c"
+      },
+      {
+        "command": "codoc.collapseFeatureSubtree",
+        "key": "ctrl+shift+[",
+        "mac": "cmd+shift+[",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
+      },
+      {
+        "command": "codoc.expandFeatureSubtree",
+        "key": "ctrl+shift+]",
+        "mac": "cmd+shift+]",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
       }
     ],
     "configuration": {
@@ -138,6 +192,11 @@
           "type": "string",
           "default": "",
           "description": "Root directory of the codoc-initialized repo. Auto-detected from workspace if empty."
+        },
+        "codoc.foldAttributesOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "When opening a .codoc tree, collapse every feature's attribute block so the file shows as a table of contents (all titles, no details). Expand individual features to see their attributes."
         }
       }
     }

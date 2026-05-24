@@ -781,14 +781,16 @@ async def get_feature_history(
 async def get_tree(
     root_dir: str = Query(...),
     parent_uuid: str = Query(default=""),
+    flat: bool = Query(default=False),
 ) -> list[FeatureResponse]:
-    """Return a flat list of features under parent_uuid (root if empty/omitted)."""
+    """Return features under parent_uuid (root if empty). flat=true returns ALL features."""
     codoc_dir = _codoc_dir(root_dir)
     store = _open_store(codoc_dir)
     try:
-        # Empty string → root features (parent_uuid IS NULL).
-        # Any other value → children of that UUID.
-        features = store.list_features(parent_uuid=parent_uuid if parent_uuid else "")
+        if flat:
+            features = store.list_features()
+        else:
+            features = store.list_features(parent_uuid=parent_uuid if parent_uuid else "")
         responses = [_feature_to_response(f, store) for f in features]
     finally:
         store.close()

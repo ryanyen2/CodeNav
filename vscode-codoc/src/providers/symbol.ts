@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 
-const FEATURE_RE = /^(\s*)([-~])\s+(\S+)(?:\s+\[([^\]]*)\])?\s*(?:#\s*@([0-9a-f-]+))?/i;
+// indent + marker + full title (everything up to an optional (state) suffix or
+// trailing legacy [Badge]/# @uuid). Captures the WHOLE title, not just the first word.
+const FEATURE_RE = /^(\s*)([-~*])\s+(.+?)(?:\s+\((?:strained|severed|stub|deprecated)\))?(?:\s+\[([^\]]*)\])?\s*(?:#\s*@([0-9a-f-]+))?\s*$/i;
+const DIFF_HUNK_RE = /^[+\-~] [-~ ]/;
 
 interface FeatureLine {
     line: number;
@@ -15,10 +18,11 @@ export class CodocSymbolProvider implements vscode.DocumentSymbolProvider {
         const flat: FeatureLine[] = [];
         for (let i = 0; i < document.lineCount; i++) {
             const text = document.lineAt(i).text;
+            if (DIFF_HUNK_RE.test(text)) continue; // skip proposal diff hunks
             const m = FEATURE_RE.exec(text);
             if (!m) continue;
             const indent = m[1].length;
-            const slug = m[3];
+            const slug = m[3].trim();
             const badge = m[4] ?? null;
             flat.push({
                 line: i,

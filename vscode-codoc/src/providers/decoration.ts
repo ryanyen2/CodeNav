@@ -118,12 +118,18 @@ export function applyDecorations(editor: vscode.TextEditor, dec: StateDecoration
         if (PROPOSAL_PREFIX_RE.test(text)) proposal.push(range);
         if (RETIRED_PREFIX_RE.test(text)) retired.push(range);
 
-        if (text.startsWith(DIFF_INTRO_PREFIX)) {
-            introHunk.push(range);
-        } else if (text.startsWith(DIFF_RETIRE_PREFIX)) {
-            retireHunk.push(range);
-        } else if (text.startsWith(DIFF_AMEND_PREFIX)) {
-            amendHunk.push(range);
+        // Diff hunk lines are col-0: [+\-~] then space then [-~ ].
+        // Regular feature lines like "- My Feature" would also start with "- "
+        // but position 2 is a letter, not [-~ ]. Guard against false positives.
+        const isDiffHunk = /^[+\-~] [-~ ]/.test(text);
+        if (isDiffHunk) {
+            if (text.startsWith(DIFF_INTRO_PREFIX)) {
+                introHunk.push(range);
+            } else if (text.startsWith(DIFF_RETIRE_PREFIX)) {
+                retireHunk.push(range);
+            } else if (text.startsWith(DIFF_AMEND_PREFIX)) {
+                amendHunk.push(range);
+            }
         }
 
         const m = STATE_SUFFIX_RE.exec(text);
