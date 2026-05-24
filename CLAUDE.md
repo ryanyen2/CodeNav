@@ -134,7 +134,7 @@ Run `codoc gate-run` after labeling proposals from bootstrap on `test/draco` and
 | Var | Default | Description |
 |---|---|---|
 | `CODOC_PROVIDER` | `openai` | LLM provider (`openai` or `ollama`) |
-| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name |
+| `CODOC_MODEL` | `gpt-4o` | LLM model name |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
 | `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider (used by dedup / proposal similarity; chunk embeddings live in cocoindex) |

@@ -22,6 +22,7 @@ from codoc.storage.sqlite_store import SQLiteStore
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRACO_DIR = REPO_ROOT / "test" / "draco"
 MOSAIC_DIR = REPO_ROOT / "test" / "mosaic"
+FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 
 
 @pytest.fixture
@@ -112,3 +113,8 @@ def draco_dir() -> Path:
 @pytest.fixture
 def mosaic_dir() -> Path:
     return MOSAIC_DIR
+
+
+@pytest.fixture
+def fixtures_dir() -> Path:
+    return FIXTURES_DIR

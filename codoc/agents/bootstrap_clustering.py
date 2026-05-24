@@ -87,6 +87,25 @@ def _new_provisional_uuid() -> str:
         return str(uuid.uuid4())
 
 
+def _normalize_proposals_list(raw: object) -> list[dict]:
+    """Normalize LLM output to a list of proposal dicts.
+
+    Handles common model response variations where the LLM wraps the array
+    in a dict (e.g. ``{"features": [...]}``) instead of returning a bare array.
+    """
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if isinstance(raw, dict):
+        for key in ("features", "proposals", "items", "results", "data"):
+            val = raw.get(key)
+            if isinstance(val, list):
+                return [item for item in val if isinstance(item, dict)]
+        for val in raw.values():
+            if isinstance(val, list):
+                return [item for item in val if isinstance(item, dict)]
+    return []
+
+
 def propose_features_for_cluster(
     cluster: ClusterInput,
     existing_feature_summaries: list[dict],
@@ -113,7 +132,7 @@ def propose_features_for_cluster(
         depth=0,
     )
 
-    raw: list[dict] = run_agent(prompt, config)  # type: ignore[assignment]
+    raw = _normalize_proposals_list(run_agent(prompt, config))
 
     proposals: list[FeatureProposal] = []
     for item in raw:
@@ -194,7 +213,7 @@ def propose_subtree(
         depth=depth,
     )
 
-    raw: list[dict] = run_agent(prompt, config)  # type: ignore[assignment]
+    raw = _normalize_proposals_list(run_agent(prompt, config))
 
     proposals: list[FeatureProposal] = []
     for item in raw:

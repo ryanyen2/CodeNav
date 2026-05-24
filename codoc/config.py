@@ -46,7 +46,7 @@ def get_llm_config() -> LLMConfig:
     """Build LLMConfig from environment variables."""
     return LLMConfig(
         provider=os.environ.get("CODOC_PROVIDER", "openai"),
-        model=os.environ.get("CODOC_MODEL", "gpt-5.4-mini"),
+        model=os.environ.get("CODOC_MODEL", "gpt-4o"),
         api_key=os.environ.get("OPENAI_API_KEY"),
         base_url=os.environ.get("CODOC_BASE_URL"),
         max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "4096")),
