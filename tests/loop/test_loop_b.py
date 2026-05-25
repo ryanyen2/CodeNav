@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from codoc.codoc_file.render import tree_path, write_tree
+from codoc.loop import inbox
 from codoc.loop.loop_a import LoopAResult
 from codoc.loop.loop_b import run_loop_b
 from codoc.model.binding import Binding
@@ -23,15 +24,6 @@ def dirs(tmp_path):
     return str(root), str(codoc_dir)
 
 
-def _flip(path: Path, event_id: str, new: str) -> None:
-    out = []
-    for line in path.read_text().splitlines():
-        if event_id in line and line.lstrip().startswith("?"):
-            line = line.replace("?", new, 1)
-        out.append(line)
-    path.write_text("\n".join(out) + "\n")
-
-
 def _edit_file(path: Path, old: str, new: str) -> None:
     path.write_text(path.read_text().replace(old, new))
 
@@ -47,7 +39,7 @@ def test_accept_proposal_applies_and_builds_directive(dirs):
     write_tree(s, codoc_dir)
     s.close()
 
-    _flip(tree_path(codoc_dir), e.id, "+")
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
     res = run_loop_b(root, codoc_dir, dry_run=True)
 
     assert res.accepted == 1
@@ -67,7 +59,7 @@ def test_reject_proposal_drops_event(dirs):
     write_tree(s, codoc_dir)
     s.close()
 
-    _flip(tree_path(codoc_dir), e.id, "-")
+    inbox.append_verdict(codoc_dir, e.id, accept=False)
     res = run_loop_b(root, codoc_dir, dry_run=True)
 
     assert res.rejected == 1 and res.directives == []
@@ -102,7 +94,7 @@ def test_spawn_and_refine_loop_closure(dirs):
     s.append_event(e)
     write_tree(s, codoc_dir)
     s.close()
-    _flip(tree_path(codoc_dir), e.id, "+")
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
 
     calls = {}
 

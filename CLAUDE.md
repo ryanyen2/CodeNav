@@ -28,9 +28,12 @@ codoc watch --no-realize  # sync the tree but never spawn the coding agent
 python3.11 -m pytest tests/
 ```
 
-The only human surface is `.codoc/tree.codoc`. You edit it directly; structural
-proposals appear inline as `?` blocks (change `?`→`+` to accept, `?`→`-` or delete
-to reject).
+The only human surface is `.codoc/tree.codoc`. You edit titles/descriptions
+directly; structural proposals appear at the bottom as a git-style diff block and
+are accepted/rejected with the IDE's inline **Accept / Reject** actions (which
+write verdicts to `.codoc/inbox.json` — there is no accept/reject *syntax* to
+type). Feature ids (`⟨f-id⟩`) stay on disk for stable identity but the IDE hides
+them. Code is cited inline with markdown links: `[label](codoc:file.py#symbol)`.
 
 ## Architecture
 
@@ -69,6 +72,8 @@ codoc/
                   #   query.py     — build_graph, update_graph (incremental), neighbors, ego_graph,
                   #                  topological_order, entry_points, neighbor_feature(store, symbol)
   loop/           # the two loops + their pieces:
+                  #   inbox.py       — .codoc/inbox.json verdict channel (IDE Accept/Reject → loops)
+                  #   status.py      — .codoc/status.json lifecycle (in_sync/code_drift/tree_dirty/realizing)
                   #   diff.py        — compute_changeset; ChunkRef carries tokens_hash + types_hash
                   #   apply.py       — derive_auto_ops, apply_op, AMEND_SAFE_RATIO (the one threshold)
                   #   subtree.py     — select_relevant_subtree (file-locality seeds)
@@ -87,8 +92,10 @@ codoc/
   agent/          # base.py (load_prompt/format_prompt/parse_solution/run_agent)
                   # tree_update.py     — the single incremental LLM call
                   # bootstrap_agent.py — propose_file_features, propose_organization (bootstrap-only LLM calls)
-  codoc_file/     # render.py (store → tree.codoc + tree.bindings.json sidecar; refs grouped by file),
-                  # parse.py (text → ParsedTree; skips ↪ refs: lines), diff.py (→ user ops + verdicts)
+  codoc_file/     # render.py (store → tree.codoc + tree.bindings.json sidecar; hidden ⟨f-id⟩;
+                  #            proposals as a diff block under "# ── pending changes"),
+                  # parse.py (text → ParsedTree; multi-paragraph descriptions, extract_refs,
+                  #           ignores everything past the pending sentinel), diff.py (→ user ops only)
   lang/           # Tree-sitter adapters: python.py + typescript.py; get_adapter(), detect_language()  [KEPT]
   core/           # tree_walk.py (tokens_hash/types_hash/minhash) + chunk_matching/minhash.py  [KEPT substrate]
   pipelines/
@@ -110,7 +117,7 @@ codoc/
 ### NodeOp kinds
 
 Safe (auto-applied): `ATTACH DETACH REFRESH AMEND` (AMEND only when the edit is small — `AMEND_SAFE_RATIO`, the sole threshold).
-Structural (surfaced as `?` proposals in `tree.codoc`): `ADD_NODE MOVE_NODE RETIRE_NODE`.
+Structural (surfaced as a diff block in `tree.codoc`, accepted/rejected via `.codoc/inbox.json`): `ADD_NODE MOVE_NODE RETIRE_NODE`.
 
 ### Storage schema
 
@@ -151,7 +158,7 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 ### Loop B in detail (codoc → code)
 
-`run_loop_b` parses `tree.codoc`, diffs against the store (`codoc_file/diff.py`) into user ops + proposal verdicts, applies them (user edits are intentional → applied immediately), builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`), spawns `claude -p … --dangerously-skip-permissions` once, then re-runs Loop A scoped to the files the agent wrote — surfacing any refinement the under-specified intent missed.
+`run_loop_b` first drains `.codoc/inbox.json` (proposal verdicts written by the IDE's Accept/Reject actions: accept → `apply_op` + delete event; reject → delete event), then parses `tree.codoc` and diffs against the store (`codoc_file/diff.py`) into user ops (verdicts no longer come from the text), applies them (user edits are intentional → applied immediately), builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`), writes `status.json` = `realizing`, spawns `claude -p … --dangerously-skip-permissions` once, then re-runs Loop A scoped to the files the agent wrote — surfacing any refinement the under-specified intent missed.
 
 ### Environment variables
 
@@ -172,26 +179,38 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 `codoc_file/render.py` writes two files on every `write_tree` call:
 
-- **`.codoc/tree.codoc`** — human-readable feature tree. Refs line format: `↪ refs: api.py › get, post, put +4  ·  models.py › Response` (grouped by file, `‹module›` for `__module__` chunks; capped at `_REFS_MAX_FILES=4` files and `_REFS_MAX_PER_FILE=4` symbols each).
-- **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE. Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id}}}`. Written atomically (tmp → rename). `parse.py` explicitly skips `↪ refs:` lines so render→parse→diff is always a no-op.
+- **`.codoc/tree.codoc`** — human-authored feature tree. `- Title  ⟨f-id⟩` (id hidden by the IDE decoration; minted on save for hand-added nodes). Descriptions are free prose and may span multiple paragraphs — blank lines are *kept* (a node ends only at the next feature-marker line / the pending sentinel / EOF, never at a blank). Code is cited inline as `[label](codoc:file.py#symbol)` markdown links; `parse.extract_refs` pulls them out. **No `↪ refs:` line** — derived bindings are not printed into the text; they ride in the sidecar and the IDE renders them as inlay-hint chips. Pending structural proposals render last as a git-style diff block under `# ── pending changes`: `+` add / `-` retire / `~` move·amend, each carrying a hidden `⟨e-id⟩`. The parser ignores everything past that sentinel, so render→parse→diff stays a no-op.
+- **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE. Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id}}}`. Written atomically (tmp → rename). Drives inlay chips, `@`-completion, code lens, and the feature panel.
+- **`.codoc/status.json`** (written by the loops, not `write_tree`) — `{version, state, pending, detail, at}`; `state ∈ {in_sync, code_drift, tree_dirty, realizing}` drives the IDE status bar + the tree.codoc header CodeLens.
+- **`.codoc/inbox.json`** (written by the IDE) — `{version, verdicts:[{event_id, accept}]}`; drained by Loop B / `codoc sync`, then cleared. The watch daemon watches it so an Accept/Reject wakes the loop.
 
 ### VSCode extension (`vscode-codoc/`)
 
-File-based; no HTTP server, no port. `WorkspaceState` watches `**/.codoc/tree.codoc` and `**/.codoc/tree.bindings.json`; parses them on any change; fires `onDidChange` to refresh providers. Status bar is never "offline": `$(sync) codoc: not initialized` | `$(bell) codoc: N proposals` | `$(check) codoc: N`.
+File-based; no HTTP server, no port. `WorkspaceState` watches `**/.codoc/{tree.codoc, tree.bindings.json, status.json, inbox.json}`; reparses on change; fires `onDidChange`. Status bar follows `status.json`: `$(loading~spin) implementing…` (realizing) | `$(pencil) applying tree edits…` (tree_dirty) | `$(bell) N proposals` (code_drift) | `$(check) N` (in_sync) | `$(sync) not initialized`.
 
 Key source files:
-- `src/state/workspace-state.ts` — detects root dir, reloads on file change, drives status bar
-- `src/state/tree-model.ts` — TypeScript port of `parse.py`; skips `↪ refs:` lines
-- `src/state/bindings-model.ts` — sidecar types + `entriesForFile` / `bindingsForFeature` helpers
-- `src/providers/feature-tree-view.ts` — Explorer panel reading `WorkspaceState.features`
-- `src/providers/code-lens.ts` — CodeLens on `def`/`class` lines, reads `sidecar.by_file`
-- `src/extension.ts` — activates `WorkspaceState`, registers commands (`codoc.open`, `codoc.sync`, `codoc.navigateToFeature`, fold/expand commands)
+- `src/state/workspace-state.ts` — root detection, reload, status bar; `writeVerdict()` appends to `inbox.json`
+- `src/state/tree-model.ts` — TypeScript port of `parse.py` (parity-tested); multi-paragraph descriptions, hidden ids, harvests proposal hunks + inline refs
+- `src/state/bindings-model.ts` — sidecar types + `entriesForFile` / `bindingsForFeature`
+- `src/providers/decoration.ts` — hides `⟨…⟩` ids (`display:none`), colours diff hunks, strikes retired nodes
+- `src/providers/inlay.ts` — derived-binding chips at the end of each title line (from the sidecar)
+- `src/providers/codoc-tree-lens.ts` — tree.codoc header status + per-proposal Accept/Reject (+ Accept/Reject all)
+- `src/providers/code-actions.ts` — lightbulb Accept/Reject on a proposal hunk (recovers `⟨e-id⟩`)
+- `src/providers/completion.ts` — `[`-triggered autocomplete inserting `[label](codoc:file#symbol)`
+- `src/providers/doc-links.ts` — makes `[..](codoc:file#symbol)` clickable via the `codoc.openRef` command
+- `src/providers/code-lens.ts` — source-file CodeLens (which feature owns a symbol), reads `sidecar.by_file`
+- `src/providers/{folding,symbol,feature-tree-view,feature-lines}.ts` — outline / fold / panel
+- `src/extension.ts` — activates `WorkspaceState`, registers providers + commands (`codoc.open/sync/openRef`, `codoc.{accept,reject}Proposal`, `codoc.{accept,reject}All`, fold/expand)
+
+The pre-rewrite HTTP-era providers (`state/server.ts`, `live-activity.ts`, `sync-on-save.ts`, old `codelens.ts`/`hover.ts`/`definition.ts`, `api/client.ts`) were **deleted** in the format redesign.
 
 ### Status / next
 
-Two-loop system fully implemented and tested (157 Python unit tests pass; TypeScript compiles clean). The cocoindex integration test for `compute_changeset` is gated to skip when the embedding model can't load. Real bootstrap on `test/requests` (320 chunks) yields 28 features, depth 3, 23/28 nested, zero empty descriptions, zero duplicate titles.
+Two-loop system fully implemented and tested (141 Python unit tests pass; TypeScript `tsc --noEmit` + esbuild clean; the TS parser is parity-tested against `parse.py` on the real 28-feature `test/requests` tree). The cocoindex integration test for `compute_changeset` is gated to skip when the embedding model can't load.
 
-Possible next steps: ego-graph context for Loop A subtree selection (Phase 3 of the plan); may-impact propagation in the LLM prompt (Phase 4); trim `minhash` from the index schema.
+**Format redesign (2026-05-25):** `↪ refs:`/`›` removed (inline `[label](codoc:file#symbol)` markdown links + sidecar inlay chips instead); `⟨f-id⟩` hidden by an IDE decoration (still on disk for stable identity); `?`→`+`/`-` accept/reject syntax removed (proposals render as a diff block, verdicts flow through `.codoc/inbox.json` via IDE Accept/Reject); descriptions now support multi-paragraph prose (blank lines preserved); lifecycle surfaced via `.codoc/status.json`.
+
+Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); ego-graph context for Loop A subtree selection; may-impact propagation in the LLM prompt; trim `minhash` from the index schema.
 
 ## Test fixtures
 

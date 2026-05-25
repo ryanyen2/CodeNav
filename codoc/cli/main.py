@@ -10,6 +10,7 @@ react.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -57,12 +58,16 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
     try:
         feats = store.list_features()
         pending = store.pending_events()
-        typer.echo(f"codoc · {len(feats)} features · {len(pending)} pending proposal(s)")
+        from codoc.loop.status import refresh_status
+
+        st = refresh_status(_codoc_dir(root), store)
+        state = json.loads(st.read_text()).get("state", "in_sync")
+        typer.echo(f"codoc · {len(feats)} features · {len(pending)} pending · state: {state}")
         if pending:
-            typer.echo("\nPending proposals (review in tree.codoc):")
+            typer.echo("\nPending proposals (review in tree.codoc, Accept/Reject in the IDE):")
             for e in pending:
                 title = e.op.title or e.op.feature_id or ""
-                typer.echo(f"  ? {e.op.kind.value:11} {title}  ⟨{e.id}⟩")
+                typer.echo(f"  · {e.op.kind.value:11} {title}  ⟨{e.id}⟩")
         recent = [e for e in store.recent_events(8) if e.applied]
         if recent:
             typer.echo("\nRecent changes:")

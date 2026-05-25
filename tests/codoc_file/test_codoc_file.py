@@ -1,11 +1,12 @@
-"""Phase 3 — render / parse / diff of tree.codoc."""
+"""render / parse / diff of tree.codoc (new format: hidden ids, multi-paragraph
+descriptions, proposals as a display-only diff block)."""
 from __future__ import annotations
 
 import pytest
 
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import render_tree
+from codoc.codoc_file.render import PENDING_SENTINEL, render_tree
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -38,9 +39,7 @@ def test_roundtrip_is_noop(store):
                                        description="desc", rationale="no fit")))
 
     text = render_tree(store)
-    parsed = parse_text(text)
-    diff = diff_codoc(parsed, store)
-
+    diff = diff_codoc(parse_text(text), store)
     assert diff.is_empty(), f"expected no-op round-trip, got {diff}"
 
 
@@ -55,6 +54,36 @@ def test_parse_recovers_structure(store):
     assert by_id[child.id].description == "Diffs the index before and after an update.\nSecond line of prose."
 
 
+def test_id_marker_present_on_disk(store):
+    root, *_ = _tree(store)
+    # The id stays in the bytes (the IDE hides it); authors never type it.
+    assert f"⟨{root.id}⟩" in render_tree(store)
+
+
+# -- multi-paragraph descriptions -----------------------------------------
+def test_blank_line_does_not_end_node(store):
+    f = Feature(title="Big idea",
+                description="First paragraph of intent.\n\nSecond paragraph after a blank line.")
+    store.upsert_feature(f)
+    text = render_tree(store)
+    parsed = parse_text(text)
+    node = next(n for n in parsed.nodes if n.id == f.id)
+    assert node.description == "First paragraph of intent.\n\nSecond paragraph after a blank line."
+    # exact round-trip → no spurious AMEND
+    assert diff_codoc(parsed, store).is_empty()
+
+
+def test_paragraph_break_then_child(store):
+    parent = Feature(title="Parent", description="Para one.\n\nPara two.")
+    store.upsert_feature(parent)
+    child = Feature(title="Child", parent_id=parent.id, description="kid")
+    store.upsert_feature(child)
+    parsed = parse_text(render_tree(store))
+    by_id = {n.id: n for n in parsed.nodes}
+    assert by_id[parent.id].description == "Para one.\n\nPara two."
+    assert by_id[child.id].parent_id == parent.id
+
+
 # -- edit detection -------------------------------------------------------
 def test_amend_title_and_description(store):
     root, child, *_ = _tree(store)
@@ -66,7 +95,6 @@ def test_amend_title_and_description(store):
 
 def test_retire_via_marker(store):
     root, child, *_ = _tree(store)
-    # flip the child's '-' marker to '~'
     text = render_tree(store).replace(f"- Index snapshot diff  ⟨{child.id}⟩",
                                       f"~ Index snapshot diff  ⟨{child.id}⟩")
     diff = diff_codoc(parse_text(text), store)
@@ -74,7 +102,7 @@ def test_retire_via_marker(store):
 
 
 def test_hand_authored_node_becomes_add(store):
-    root, *_ = _tree(store)
+    _tree(store)
     text = render_tree(store) + "\n- Brand new top-level feature\n    a fresh idea\n"
     diff = diff_codoc(parse_text(text), store)
     adds = [o for o in diff.user_ops if o.kind is NodeOpKind.ADD_NODE]
@@ -84,8 +112,6 @@ def test_hand_authored_node_becomes_add(store):
 
 def test_reparent_detected(store):
     root, child, grand, sib = _tree(store)
-    # move 'Chunk reader' (sib) to be a child of 'Index snapshot diff' (child)
-    # by re-authoring the text with deeper indentation under child.
     text = f"""# header
 - Indexing layer  ⟨{root.id}⟩
     Owns the chunk + embedding substrate.
@@ -105,19 +131,8 @@ def test_reparent_detected(store):
     assert any(o.feature_id == sib.id and o.parent_id == child.id for o in moves)
 
 
-# -- proposal verdicts ----------------------------------------------------
-def _flip_action(text: str, event_id: str, new: str) -> str:
-    out = []
-    for line in text.splitlines():
-        if event_id in line and line.lstrip().startswith("?"):
-            line = line.replace("?", new, 1)
-        out.append(line)
-    return "\n".join(out)
-
-
-@pytest.fixture
-def proposal(store):
-    _tree(store)
+# -- proposals render as a display-only diff block ------------------------
+def _add_proposal(store):
     e = Event(source="loop_a", applied=False,
               op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Proposed thing",
                         description="does a thing", rationale="no node fits"))
@@ -125,25 +140,33 @@ def proposal(store):
     return e
 
 
-def test_proposal_pending_no_verdict(store, proposal):
-    diff = diff_codoc(parse_text(render_tree(store)), store)
-    assert diff.verdicts == []
+def test_proposal_renders_as_diff_hunk(store):
+    _tree(store)
+    e = _add_proposal(store)
+    text = render_tree(store)
+    assert PENDING_SENTINEL in text
+    # diff hunk: col-0 '+' op char, then a normal feature line, hidden event id.
+    assert f"+ - Proposed thing  ⟨{e.id}⟩" in text
+    assert "+     does a thing" in text
 
 
-def test_proposal_accept(store, proposal):
-    text = _flip_action(render_tree(store), proposal.id, "+")
-    diff = diff_codoc(parse_text(text), store)
-    assert [(v.event_id, v.accept) for v in diff.verdicts] == [(proposal.id, True)]
+def test_proposals_never_appear_as_live_nodes(store):
+    _tree(store)
+    _add_proposal(store)
+    parsed = parse_text(render_tree(store))
+    # everything past the sentinel is display-only → no node titled "Proposed thing"
+    assert all(n.title != "Proposed thing" for n in parsed.nodes)
+    # …and the proposal does not create a phantom user op
+    assert diff_codoc(parsed, store).is_empty()
 
 
-def test_proposal_reject_via_minus(store, proposal):
-    text = _flip_action(render_tree(store), proposal.id, "-")
-    diff = diff_codoc(parse_text(text), store)
-    assert [(v.event_id, v.accept) for v in diff.verdicts] == [(proposal.id, False)]
-
-
-def test_proposal_reject_via_deletion(store, proposal):
-    # drop every line mentioning the event id
-    text = "\n".join(l for l in render_tree(store).splitlines() if proposal.id not in l)
-    diff = diff_codoc(parse_text(text), store)
-    assert [(v.event_id, v.accept) for v in diff.verdicts] == [(proposal.id, False)]
+def test_retire_and_move_proposals_render(store):
+    root, child, *_ = _tree(store)
+    store.append_event(Event(source="loop_a", applied=False,
+                             op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=child.id, rationale="gone")))
+    store.append_event(Event(source="loop_a", applied=False,
+                             op=NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=child.id, parent_id=root.id)))
+    text = render_tree(store)
+    assert "- ~ Index snapshot diff" in text  # retire hunk
+    assert "~ - Index snapshot diff" in text  # move hunk
+    assert "move → Indexing layer" in text

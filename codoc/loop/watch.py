@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from codoc.codoc_file.render import tree_path
+from codoc.loop import status
+from codoc.loop.inbox import inbox_path
 from codoc.loop.loop_a import run_loop_a
 from codoc.loop.loop_b import run_loop_b
 from codoc.store.db import open_store
@@ -40,15 +42,20 @@ def _is_code(path: Path) -> bool:
     return path.suffix in CODE_EXTENSIONS
 
 
-def _classify(paths: list[str], root_dir: str, codoc_dir: str) -> tuple[bool, set[str]]:
+def _classify(paths: list[str], root_dir: str, codoc_dir: str) -> tuple[bool, bool, set[str]]:
     tp = tree_path(codoc_dir).resolve()
+    ip = inbox_path(codoc_dir).resolve()
     root = Path(root_dir).resolve()
     codoc_touched = False
+    inbox_touched = False
     code_files: set[str] = set()
     for p in paths:
         rp = Path(p).resolve()
         if rp == tp:
             codoc_touched = True
+            continue
+        if rp == ip:
+            inbox_touched = True
             continue
         if any(part in _SKIP_DIRS for part in rp.parts):
             continue
@@ -57,17 +64,19 @@ def _classify(paths: list[str], root_dir: str, codoc_dir: str) -> tuple[bool, se
                 code_files.add(str(rp.relative_to(root)))
             except ValueError:
                 pass
-    return codoc_touched, code_files
+    return codoc_touched, inbox_touched, code_files
 
 
 def watch_filter(codoc_dir: str):
-    """A watchfiles filter: allow tree.codoc + code files; drop everything else
-    (notably .codoc indexing artifacts that churn during update_index)."""
+    """A watchfiles filter: allow tree.codoc, the verdict inbox, and code files;
+    drop everything else (notably .codoc indexing artifacts that churn during
+    update_index, and codoc's own status.json/sidecar re-writes)."""
     tp = tree_path(codoc_dir).resolve()
+    ip = inbox_path(codoc_dir).resolve()
 
     def _f(_change, path: str) -> bool:
         rp = Path(path).resolve()
-        if rp == tp:
+        if rp == tp or rp == ip:
             return True
         if any(part in _SKIP_DIRS for part in rp.parts):
             return False
@@ -100,13 +109,16 @@ def process_batch(
 ) -> tuple[str, str] | None:
     """Handle one debounced change batch. Returns (label, summary) or None."""
     tp = tree_path(codoc_dir)
-    codoc_touched, code_files = _classify(paths, root_dir, codoc_dir)
+    codoc_touched, inbox_touched, code_files = _classify(paths, root_dir, codoc_dir)
 
     # Ignore our own re-render of tree.codoc (content-hash guard).
     if codoc_touched and _hash(tp) == state.last_tree_hash:
         codoc_touched = False
 
-    if codoc_touched:
+    # A tree edit or an Accept/Reject verdict both drive Loop B (codoc → code).
+    if codoc_touched or inbox_touched:
+        if codoc_touched:
+            status.write_status(codoc_dir, status.TREE_DIRTY, detail="applying tree edits")
         res = loop_b(root_dir, codoc_dir, dry_run=dry_run or no_realize)
         label, summary = "codoc→code", res.summary()
     elif code_files:

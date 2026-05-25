@@ -1,0 +1,56 @@
+import * as vscode from 'vscode';
+import { WorkspaceState } from '../state/workspace-state';
+import { parseTreeCodoc } from '../state/tree-model';
+import { bindingsForFeature } from '../state/bindings-model';
+
+/**
+ * Derived code bindings (computed by Loop A) ride in tree.bindings.json, not in
+ * the text. We surface them as subtle inlay-hint chips at the end of each
+ * feature's title line — "where the feature touches code" without polluting the
+ * authored prose. Authored citations are different: they live inline as
+ * [label](codoc:file#symbol) markdown links (see doc-links / completion).
+ */
+const MAX_CHIPS = 3;
+
+function leaf(symbol: string): string {
+    const i = symbol.indexOf('::');
+    const tail = i >= 0 ? symbol.slice(i + 2) : symbol;
+    return tail === '__module__' ? '‹module›' : tail;
+}
+
+export class CodocInlayHintsProvider implements vscode.InlayHintsProvider {
+    private _onDidChange = new vscode.EventEmitter<void>();
+    readonly onDidChangeInlayHints = this._onDidChange.event;
+
+    constructor(private state: WorkspaceState) {
+        state.onDidChange(() => this._onDidChange.fire());
+    }
+
+    provideInlayHints(document: vscode.TextDocument): vscode.InlayHint[] {
+        if (document.languageId !== 'codoc') return [];
+        const hints: vscode.InlayHint[] = [];
+        // Parse the live buffer so line numbers track unsaved edits.
+        const { features } = parseTreeCodoc(document.getText());
+
+        for (const f of features) {
+            if (!f.id || f.retired) continue;
+            const binds = bindingsForFeature(this.state.sidecar, f.id);
+            if (binds.length === 0) continue;
+
+            const labels = binds.map(b => `${b.file}:${leaf(b.symbol)}`);
+            const shown = labels.slice(0, MAX_CHIPS);
+            const extra = labels.length - shown.length;
+            let text = '  ↪ ' + shown.join('  ');
+            if (extra > 0) text += `  +${extra}`;
+
+            const lineLen = document.lineAt(f.line).text.length;
+            const hint = new vscode.InlayHint(new vscode.Position(f.line, lineLen), text);
+            hint.paddingLeft = true;
+            hint.tooltip = new vscode.MarkdownString(
+                `**Code bindings** (${binds.length})\n\n` + labels.map(l => `- \`${l}\``).join('\n'),
+            );
+            hints.push(hint);
+        }
+        return hints;
+    }
+}

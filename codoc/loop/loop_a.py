@@ -294,6 +294,10 @@ def run_loop_a(
     store = open_store(codoc_dir)
     try:
         update_graph(store, cs.rows, cs.touched_files())
-        return apply_changeset(cs, store, source=source, repo_name=repo_name, config=config)
+        result = apply_changeset(cs, store, source=source, repo_name=repo_name, config=config)
+        from codoc.loop.status import refresh_status
+
+        refresh_status(codoc_dir, store)
+        return result
     finally:
         store.close()

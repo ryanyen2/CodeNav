@@ -1,21 +1,29 @@
 """Render the store as ``tree.codoc`` text.
 
 Live features render depth-first as ``- Title  ⟨f-id⟩`` with indented description
-lines. Pending proposals render below, each as a ``?``-prefixed block carrying its
-``⟨e-id⟩``. Re-parsing freshly rendered text yields the identical tree and only
-``?`` (pending) proposals, so render→parse→diff is a no-op (the round-trip
-invariant).
+lines beneath. The ``⟨f-id⟩`` marker is the durable identity anchor; the IDE
+collapses it with a decoration so a human never sees or types it (it is also
+mirrored into ``tree.bindings.json``). Authors never write ids: a hand-added
+``- Title`` line gets one minted on the next render.
 
-Bindings are surfaced inline as a ``↪ refs:`` line (parse.py skips these so they
-never appear in the description or break round-trip). The full registry is also
-written to ``.codoc/tree.bindings.json`` for the IDE extension to consume without
-an HTTP server.
+Descriptions are free prose and may span multiple paragraphs (blank lines are
+preserved); the node boundary is the *next* feature-marker line, never a blank
+line. Code is cited inline with markdown links — ``[label](codoc:file.py#symbol)``
+— so refs live inside the sentence they explain. Derived bindings (computed by
+Loop A) are NOT written into the text; they ride in ``tree.bindings.json`` and
+the IDE renders them as inlay-hint chips.
+
+Pending structural proposals render last, as a git-style diff block under a
+``# ── pending changes`` sentinel: ``+`` add, ``-`` retire, ``~`` move/amend,
+each carrying a hidden ``⟨e-id⟩``. There is no accept/reject *syntax*; the IDE's
+Accept/Reject actions write verdicts to ``.codoc/inbox.json`` (see
+:mod:`codoc.loop.inbox`). The parser ignores everything past the sentinel, so
+render→parse→diff stays a no-op (the round-trip invariant).
 """
 from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 from codoc.model.event import Event, NodeOpKind
@@ -23,12 +31,18 @@ from codoc.store.db import Store
 
 TREE_FILENAME = "tree.codoc"
 BINDINGS_FILENAME = "tree.bindings.json"
-_REFS_MAX_FILES = 4       # files shown on a refs line before "+N more files"
-_REFS_MAX_PER_FILE = 4    # symbols shown per file before "+N"
+
+# Sentinel that opens the pending-changes diff block. The parser stops collecting
+# features once it sees this, so proposal hunks never leak into the live tree.
+PENDING_SENTINEL = "# ── pending changes"
+_PENDING_HEADER = (
+    "# ── pending changes ─────────────────────────────────────────────\n"
+    "# Proposed by codoc — use the Accept / Reject actions above each change.\n"
+)
 
 _HEADER = (
-    "# codoc feature tree — edit titles/descriptions directly; this file is the source of truth.\n"
-    "# Proposals appear as '?' blocks: change '?'→'+' to accept, '?'→'-' (or delete) to reject.\n"
+    "# codoc feature tree — edit titles and descriptions freely; this file is the source of truth.\n"
+    "# Cite code inline with markdown links: [label](codoc:file.py#symbol).\n"
 )
 
 
@@ -36,42 +50,15 @@ def tree_path(codoc_dir: str | Path) -> Path:
     return Path(codoc_dir) / TREE_FILENAME
 
 
-def _leaf(symbol_path: str) -> str:
-    """The display name of a chunk: the qualified part after ``::``.
+def _description_lines(description: str, indent: str) -> list[str]:
+    """Indent each prose line by ``indent + 4``; keep blank lines truly blank.
 
-    ``"adapters.py::HTTPAdapter.send"`` → ``"HTTPAdapter.send"``; a module-level
-    chunk ``"certs.py::__module__"`` → ``"‹module›"``.
-    """
-    qualified = symbol_path.split("::", 1)[1] if "::" in symbol_path else symbol_path
-    return "‹module›" if qualified == "__module__" else qualified
-
-
-def _refs_line(bindings: list, indent: str) -> str:
-    """One inline reference line, grouped by file: ``file › a, b, c +N  ·  …``.
-
-    Grouping by file keeps the filename from repeating once per symbol and makes
-    a feature's spread across files legible at a glance.
-    """
-    by_file: dict[str, list[str]] = {}
-    for b in bindings:
-        by_file.setdefault(b.file, []).append(_leaf(b.symbol_path))
-
-    files = sorted(by_file)
-    segments: list[str] = []
-    for f in files[:_REFS_MAX_FILES]:
-        leaves = sorted(by_file[f])
-        shown = leaves[:_REFS_MAX_PER_FILE]
-        seg = f"{f} › {', '.join(shown)}"
-        extra = len(leaves) - len(shown)
-        if extra > 0:
-            seg += f" +{extra}"
-        segments.append(seg)
-
-    line = f"{indent}↪ refs: " + "  ·  ".join(segments)
-    extra_files = len(files) - _REFS_MAX_FILES
-    if extra_files > 0:
-        line += f"  ·  +{extra_files} more file{'s' if extra_files != 1 else ''}"
-    return line
+    Blank lines are paragraph breaks inside one description — the parser keeps
+    them, so they must round-trip as empty lines (no indentation to strip)."""
+    out: list[str] = []
+    for dl in description.split("\n"):
+        out.append(f"{indent}    {dl}" if dl.strip() else "")
+    return out
 
 
 def render_tree(store: Store) -> str:
@@ -80,22 +67,18 @@ def render_tree(store: Store) -> str:
     def walk(parent_id: str | None, depth: int) -> None:
         indent = "  " * depth
         for f in store.children(parent_id):
-            lines.append(f"{indent}- {f.title}  ⟨{f.id}⟩")
+            marker = "~" if f.retired else "-"
+            lines.append(f"{indent}{marker} {f.title}  ⟨{f.id}⟩")
             if f.description:
-                for dl in f.description.splitlines():
-                    lines.append(f"{indent}    {dl}")
+                lines.extend(_description_lines(f.description, indent))
             lines.append("")
-            bindings = store.bindings_for_feature(f.id)
-            if bindings:
-                lines.append(_refs_line(bindings, indent + "  "))
-                lines.append("")
             walk(f.id, depth + 1)
 
     walk(None, 0)
 
     pending = store.pending_events()
     if pending:
-        lines.append("# ── proposals ──────────────────────────────────")
+        lines.append(_PENDING_HEADER.rstrip("\n"))
         lines.append("")
         for e in pending:
             lines.extend(_render_proposal(e, store))
@@ -111,37 +94,46 @@ def _title_of(store: Store, feature_id: str | None) -> str:
     return f.title if f else feature_id
 
 
+def _proposal_desc(op_char: str, description: str) -> list[str]:
+    return [f"{op_char}     {dl}" for dl in description.split("\n") if dl.strip()]
+
+
 def _render_proposal(e: Event, store: Store) -> list[str]:
+    """One proposal as a diff hunk. Col-0 op char (``+``/``-``/``~``) + a normal
+    feature line ``- Title  ⟨e-id⟩``, so the IDE colours it like a git diff and
+    can recover the event id from the hidden marker."""
     op = e.op
     eid = e.id
     if op.kind is NodeOpKind.ADD_NODE:
-        out = [f'? add "{op.title or "Untitled"}"  ⟨{eid}⟩']
-        if op.description:
-            out.append(f"?     {op.description}")
-        meta = f"parent: {_title_of(store, op.parent_id)}"
+        out = [f"+ - {op.title or 'Untitled'}  ⟨{eid}⟩"]
+        out.extend(_proposal_desc("+", op.description or ""))
+        meta = f"under {_title_of(store, op.parent_id)}"
         if op.rationale:
             meta += f" · {op.rationale}"
-        out.append(f"?     {meta}")
+        out.append(f"+     {meta}")
         return out
     if op.kind is NodeOpKind.RETIRE_NODE:
-        out = [f'? retire "{_title_of(store, op.feature_id)}"  ⟨{eid}⟩']
+        out = [f"- ~ {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
+        meta = "retire"
         if op.rationale:
-            out.append(f"?     {op.rationale}")
+            meta += f" · {op.rationale}"
+        out.append(f"-     {meta}")
         return out
     if op.kind is NodeOpKind.MOVE_NODE:
-        out = [f'? move "{_title_of(store, op.feature_id)}" → {_title_of(store, op.parent_id)}  ⟨{eid}⟩']
+        out = [f"~ - {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
+        meta = f"move → {_title_of(store, op.parent_id)}"
         if op.rationale:
-            out.append(f"?     {op.rationale}")
+            meta += f" · {op.rationale}"
+        out.append(f"~     {meta}")
         return out
     if op.kind is NodeOpKind.AMEND:
-        out = [f'? amend "{_title_of(store, op.feature_id)}"  ⟨{eid}⟩']
-        if op.description:
-            out.append(f"?     {op.description}")
+        out = [f"~ - {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
+        out.extend(_proposal_desc("~", op.description or ""))
         if op.rationale:
-            out.append(f"?     · {op.rationale}")
+            out.append(f"~     amend · {op.rationale}")
         return out
-    # safe ops are never pending, but render a generic line just in case
-    return [f'? {op.kind.value}  ⟨{eid}⟩']
+    # safe ops are never pending, but render a generic hunk just in case
+    return [f"~ - {op.kind.value}  ⟨{eid}⟩"]
 
 
 def _write_sidecar(store: Store, codoc_dir: str | Path) -> None:
@@ -162,9 +154,9 @@ def _write_sidecar(store: Store, codoc_dir: str | Path) -> None:
 
     sidecar = {"version": 1, "by_feature": by_feature, "by_file": by_file, "features": feats_meta}
     dest = Path(codoc_dir) / BINDINGS_FILENAME
-    tmp = dest.with_suffix(".tmp")
+    tmp = dest.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(sidecar, indent=2))
-    tmp.rename(dest)
+    os.replace(tmp, dest)
 
 
 def write_tree(store: Store, codoc_dir: str | Path) -> Path:

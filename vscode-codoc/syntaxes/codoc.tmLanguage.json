@@ -3,132 +3,76 @@
   "name": "codoc",
   "scopeName": "source.codoc",
   "patterns": [
-    { "include": "#header" },
-    { "include": "#legend" },
-    { "include": "#binding-entry" },
-    { "include": "#bindings-header" },
-    { "include": "#placeholder-feature" },
+    { "include": "#pending-sentinel" },
+    { "include": "#diff-add" },
+    { "include": "#diff-retire" },
+    { "include": "#diff-move" },
+    { "include": "#comment" },
     { "include": "#retired-feature" },
     { "include": "#feature" },
-    { "include": "#proposal-reject" },
-    { "include": "#proposal" },
-    { "include": "#inline-ref" },
-    { "include": "#comment" }
+    { "include": "#id-marker" },
+    { "include": "#inline-ref" }
   ],
   "repository": {
-    "header": {
-      "match": "^#\\s*codoc.*$",
-      "name": "comment.line.number-sign.codoc"
-    },
-    "legend": {
-      "match": "^#\\s*-\\s+active.*$",
-      "name": "comment.line.number-sign.codoc"
-    },
     "comment": {
-      "match": "#.*$",
+      "match": "^\\s*#.*$",
       "name": "comment.line.number-sign.codoc"
+    },
+    "pending-sentinel": {
+      "match": "^#\\s*──\\s*pending changes.*$",
+      "name": "comment.line.number-sign.codoc"
+    },
+    "diff-add": {
+      "match": "^(\\+)( .*)$",
+      "captures": {
+        "1": { "name": "markup.inserted.codoc punctuation.definition.inserted" },
+        "2": { "name": "markup.inserted.codoc" }
+      }
+    },
+    "diff-retire": {
+      "match": "^(-)( [-~] .*)$",
+      "captures": {
+        "1": { "name": "markup.deleted.codoc punctuation.definition.deleted" },
+        "2": { "name": "markup.deleted.codoc" }
+      }
+    },
+    "diff-move": {
+      "match": "^(~)( [-~] .*)$",
+      "captures": {
+        "1": { "name": "markup.changed.codoc punctuation.definition.changed" },
+        "2": { "name": "markup.changed.codoc" }
+      }
     },
     "feature": {
       "patterns": [
-        {
-          "match": "^(- |~ ).*$",
-          "name": "entity.name.section.codoc.h1"
-        },
-        {
-          "match": "^  (- |~ ).*$",
-          "name": "entity.name.section.codoc.h2"
-        },
-        {
-          "match": "^    (- |~ ).*$",
-          "name": "entity.name.section.codoc.h3"
-        },
-        {
-          "match": "^      (- |~ ).*$",
-          "name": "entity.name.section.codoc.h4"
-        },
-        {
-          "match": "^        (- |~ ).*$",
-          "name": "entity.name.section.codoc.h5"
-        },
-        {
-          "match": "^(\\s*)(-)\\s+([^\\s\\[#]+)(?:\\s+(\\[[^\\]]*\\]))?\\s*$",
-          "captures": {
-            "2": { "name": "punctuation.definition.list.codoc" },
-            "3": { "name": "entity.name.function.codoc" },
-            "4": { "name": "keyword.control.state.codoc" }
-          }
-        }
+        { "match": "^(- ).*$", "name": "entity.name.section.codoc.h1" },
+        { "match": "^  (- ).*$", "name": "entity.name.section.codoc.h2" },
+        { "match": "^    (- ).*$", "name": "entity.name.section.codoc.h3" },
+        { "match": "^      (- ).*$", "name": "entity.name.section.codoc.h4" },
+        { "match": "^        (- ).*$", "name": "entity.name.section.codoc.h5" }
       ]
     },
     "retired-feature": {
-      "match": "^(\\s*)(~)\\s+([^\\s\\[#]+)(?:\\s+(\\[[^\\]]*\\]))?\\s*$",
+      "match": "^\\s*(~)\\s+([^⟨#]+).*$",
       "captures": {
-        "2": { "name": "invalid.deprecated.codoc" },
-        "3": { "name": "invalid.deprecated.codoc" },
-        "4": { "name": "keyword.control.state.codoc" }
+        "1": { "name": "invalid.deprecated.codoc" },
+        "2": { "name": "invalid.deprecated.codoc" }
       }
     },
-    "proposal": {
-      "match": "^(\\s*)(\\?)\\s+([\\w\\-]+):\\s+(\\S+)(?:\\s+(\\[[^\\]]*\\]))?\\s*(#\\s*\\?[0-9a-zA-Z:\\-_]+)?\\s*$",
-      "captures": {
-        "2": { "name": "markup.inserted.codoc" },
-        "3": { "name": "keyword.other.proposal-kind.codoc" },
-        "4": { "name": "entity.name.function.codoc" },
-        "5": { "name": "keyword.control.state.codoc" },
-        "6": { "name": "comment.line.hlc.codoc" }
-      }
-    },
-    "proposal-reject": {
-      "match": "^(\\s*)(!)\\s+([\\w\\-]+):\\s+(\\S+).*$",
-      "captures": {
-        "2": { "name": "markup.deleted.codoc" },
-        "3": { "name": "keyword.other.proposal-kind.codoc" },
-        "4": { "name": "markup.deleted.codoc" }
-      }
-    },
-    "bindings-header": {
-      "match": "^\\s*(bindings|candidate-bindings):\\s*$",
-      "captures": {
-        "1": { "name": "keyword.other.bindings.codoc" }
-      }
-    },
-    "binding-entry": {
-      "match": "^(\\s*)(\\[b\\d+\\])\\s+(\\S+)\\s*(::)\\s*(\\S+)",
-      "captures": {
-        "2": { "name": "support.constant.binding-id.codoc" },
-        "3": { "name": "string.other.link.codoc" },
-        "4": { "name": "punctuation.separator.codoc" },
-        "5": { "name": "entity.name.function.codoc" }
-      }
-    },
-    "placeholder-feature": {
-      "patterns": [
-        {
-          "match": "^(\\*\\s)(.+)$",
-          "captures": {
-            "1": { "name": "markup.changed.codoc" },
-            "2": { "name": "entity.name.function.codoc" }
-          }
-        },
-        {
-          "match": "^  (\\*\\s)(.+)$",
-          "captures": {
-            "1": { "name": "markup.changed.codoc" },
-            "2": { "name": "entity.name.section.codoc.h2" }
-          }
-        },
-        {
-          "match": "^    (\\*\\s)(.+)$",
-          "captures": {
-            "1": { "name": "markup.changed.codoc" },
-            "2": { "name": "entity.name.section.codoc.h3" }
-          }
-        }
-      ]
+    "id-marker": {
+      "match": "⟨[^⟩]+⟩",
+      "name": "comment.other.id.codoc"
     },
     "inline-ref": {
-      "match": "@[\\w.]+(?:::[\\w.]+)*",
-      "name": "variable.other.inline-ref.codoc"
+      "match": "(\\[)([^\\]]*)(\\])(\\()(codoc:[^)]+)(\\))",
+      "captures": {
+        "1": { "name": "punctuation.definition.string.begin.codoc" },
+        "2": { "name": "string.other.link.title.codoc" },
+        "3": { "name": "punctuation.definition.string.end.codoc" },
+        "4": { "name": "punctuation.definition.metadata.codoc" },
+        "5": { "name": "markup.underline.link.codoc" },
+        "6": { "name": "punctuation.definition.metadata.codoc" }
+      }
     }
   }
 }

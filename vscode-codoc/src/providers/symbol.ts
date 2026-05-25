@@ -22,7 +22,7 @@ export class CodocSymbolProvider implements vscode.DocumentSymbolProvider {
             const m = FEATURE_RE.exec(text);
             if (!m) continue;
             const indent = m[1].length;
-            const slug = m[3].trim();
+            const slug = m[3].replace(/\s*⟨[^⟩]*⟩\s*$/, '').trim();
             const badge = m[4] ?? null;
             flat.push({
                 line: i,

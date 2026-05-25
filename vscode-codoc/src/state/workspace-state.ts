@@ -1,36 +1,43 @@
 /**
- * WorkspaceState — file-based replacement for the old ServerState / HTTP client.
+ * WorkspaceState — the file-based bridge to the codoc daemon (no HTTP server).
  *
- * Watches .codoc/tree.codoc and .codoc/tree.bindings.json; parses them on any
- * change; fires onDidChange so providers can refresh without polling.
+ * Watches .codoc/{tree.codoc, tree.bindings.json, status.json, inbox.json};
+ * reparses on change; fires onDidChange so providers refresh without polling.
  *
- * Status bar rules (never "offline"):
- *   $(sync) codoc: not initialized   – no .codoc dir
- *   $(bell) codoc: N proposals       – pending proposals (warning colour)
- *   $(check) codoc: N features       – healthy
+ * Status bar reflects .codoc/status.json's lifecycle state:
+ *   $(loading~spin) implementing…   – realizing  (agent writing code)
+ *   $(pencil) applying tree edits…  – tree_dirty (codoc edited, code pending)
+ *   $(bell) N proposals             – code_drift (code changed, review pending)
+ *   $(check) N                      – in_sync
+ *   $(sync) not initialized         – no .codoc dir
  */
 
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { parseTreeCodoc, ParsedFeature } from './tree-model';
+import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
 import { SidecarData, emptySidecar } from './bindings-model';
 
 export { ParsedFeature, SidecarData };
+
+export interface CodocStatus {
+    state: 'in_sync' | 'code_drift' | 'tree_dirty' | 'realizing';
+    pending: number;
+    detail: string;
+}
 
 export class WorkspaceState {
     readonly statusBar: vscode.StatusBarItem;
     private _rootDir: string | null = null;
     private _features: ParsedFeature[] = [];
+    private _proposals: ProposalHunk[] = [];
     private _sidecar: SidecarData = emptySidecar();
-    private _pendingCount = 0;
+    private _status: CodocStatus = { state: 'in_sync', pending: 0, detail: '' };
 
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
 
-    /** Compatibility shim: providers that check server.client return [] gracefully. */
-    get client(): null { return null; }
-    /** Compatibility shim: always true (we're file-based, never "offline"). */
+    /** Compatibility shim: always file-based, never "offline". */
     get connected(): boolean { return this._rootDir !== null; }
 
     constructor(private context: vscode.ExtensionContext) {
@@ -44,64 +51,65 @@ export class WorkspaceState {
         this._rootDir = this.detectRootDir();
         this._reload();
 
-        const treeWatcher = vscode.workspace.createFileSystemWatcher('**/.codoc/tree.codoc');
-        const sidecarWatcher = vscode.workspace.createFileSystemWatcher('**/.codoc/tree.bindings.json');
-
-        const reload = (): void => {
-            this._rootDir = this.detectRootDir();
-            this._reload();
-        };
-
-        this.context.subscriptions.push(
-            treeWatcher,
-            treeWatcher.onDidChange(reload),
-            treeWatcher.onDidCreate(reload),
-            treeWatcher.onDidDelete(reload),
-            sidecarWatcher,
-            sidecarWatcher.onDidChange(reload),
-            sidecarWatcher.onDidCreate(reload),
-        );
+        const reload = (): void => { this._rootDir = this.detectRootDir(); this._reload(); };
+        for (const glob of [
+            '**/.codoc/tree.codoc',
+            '**/.codoc/tree.bindings.json',
+            '**/.codoc/status.json',
+            '**/.codoc/inbox.json',
+        ]) {
+            const w = vscode.workspace.createFileSystemWatcher(glob);
+            this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));
+        }
     }
 
     detectRootDir(): string | null {
         const cfg = vscode.workspace.getConfiguration('codoc');
         const manual: string = cfg.get('rootDir', '');
         if (manual && fs.existsSync(path.join(manual, '.codoc'))) return manual;
-
         for (const folder of vscode.workspace.workspaceFolders ?? []) {
-            const candidate = path.join(folder.uri.fsPath, '.codoc');
-            if (fs.existsSync(candidate)) return folder.uri.fsPath;
+            if (fs.existsSync(path.join(folder.uri.fsPath, '.codoc'))) return folder.uri.fsPath;
         }
         return null;
+    }
+
+    private _codocPath(name: string): string {
+        return path.join(this._rootDir!, '.codoc', name);
     }
 
     private _reload(): void {
         if (!this._rootDir) {
             this._features = [];
+            this._proposals = [];
             this._sidecar = emptySidecar();
-            this._pendingCount = 0;
+            this._status = { state: 'in_sync', pending: 0, detail: '' };
             this._updateStatusBar();
             this._onDidChange.fire();
             return;
         }
 
-        const treePath = path.join(this._rootDir, '.codoc', 'tree.codoc');
-        const sidecarPath = path.join(this._rootDir, '.codoc', 'tree.bindings.json');
-
         try {
-            const text = fs.readFileSync(treePath, 'utf-8');
-            const parsed = parseTreeCodoc(text);
+            const parsed = parseTreeCodoc(fs.readFileSync(this._codocPath('tree.codoc'), 'utf-8'));
             this._features = parsed.features;
-            this._pendingCount = parsed.pendingCount;
+            this._proposals = parsed.proposals;
         } catch {
             this._features = [];
-            this._pendingCount = 0;
+            this._proposals = [];
         }
 
         try {
-            this._sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf-8')) as SidecarData;
+            this._sidecar = JSON.parse(fs.readFileSync(this._codocPath('tree.bindings.json'), 'utf-8')) as SidecarData;
         } catch {
             this._sidecar = emptySidecar();
+        }
+
+        try {
+            const st = JSON.parse(fs.readFileSync(this._codocPath('status.json'), 'utf-8'));
+            this._status = { state: st.state, pending: st.pending ?? 0, detail: st.detail ?? '' };
+        } catch {
+            // No status file yet → derive from the parsed proposal count.
+            const n = this._proposals.length;
+            this._status = { state: n ? 'code_drift' : 'in_sync', pending: n, detail: '' };
         }
 
         this._updateStatusBar();
@@ -109,24 +117,45 @@ export class WorkspaceState {
     }
 
     private _updateStatusBar(): void {
+        const bar = this.statusBar;
+        bar.backgroundColor = undefined;
         if (!this._rootDir) {
-            this.statusBar.text = '$(sync) codoc: not initialized';
-            this.statusBar.tooltip = 'No .codoc directory — run `codoc init` to initialize';
-            this.statusBar.backgroundColor = undefined;
-        } else if (this._pendingCount > 0) {
-            this.statusBar.text = `$(bell) codoc: ${this._pendingCount} proposal${this._pendingCount === 1 ? '' : 's'}`;
-            this.statusBar.tooltip = `${this._pendingCount} pending proposal(s) — edit tree.codoc and change '?' → '+' to accept or '-' to reject`;
-            this.statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+            bar.text = '$(sync) codoc: not initialized';
+            bar.tooltip = 'No .codoc directory — run `codoc init` to initialize';
+            bar.show();
+            return;
+        }
+        const { state, pending } = this._status;
+        if (state === 'realizing') {
+            bar.text = '$(loading~spin) codoc: implementing…';
+            bar.tooltip = this._status.detail || 'The coding agent is implementing your tree edits';
+        } else if (state === 'tree_dirty') {
+            bar.text = '$(pencil) codoc: applying tree edits…';
+            bar.tooltip = this._status.detail || 'tree.codoc was edited — realizing the code change';
+        } else if (state === 'code_drift' || pending > 0) {
+            bar.text = `$(bell) codoc: ${pending} proposal${pending === 1 ? '' : 's'}`;
+            bar.tooltip = 'Code changed — review proposed tree updates (Accept / Reject in the editor)';
+            bar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         } else {
             const count = this._features.filter(f => !f.retired).length;
-            this.statusBar.text = `$(check) codoc: ${count}`;
-            this.statusBar.tooltip = `codoc: ${count} feature${count === 1 ? '' : 's'} — tree in sync`;
-            this.statusBar.backgroundColor = undefined;
+            bar.text = `$(check) codoc: ${count}`;
+            bar.tooltip = `codoc: ${count} feature${count === 1 ? '' : 's'} — in sync`;
         }
-        this.statusBar.show();
+        bar.show();
     }
 
-    /** Force a reload (e.g., after a sync command). */
+    /** Append an Accept/Reject verdict to .codoc/inbox.json; the daemon applies it. */
+    writeVerdict(eventIds: string[], accept: boolean): void {
+        if (!this._rootDir || eventIds.length === 0) return;
+        const inboxPath = this._codocPath('inbox.json');
+        let verdicts: Array<{ event_id: string; accept: boolean }> = [];
+        try {
+            verdicts = JSON.parse(fs.readFileSync(inboxPath, 'utf-8')).verdicts ?? [];
+        } catch { /* no inbox yet */ }
+        for (const id of eventIds) verdicts.push({ event_id: id, accept });
+        fs.writeFileSync(inboxPath, JSON.stringify({ version: 1, verdicts }, null, 2));
+    }
+
     async refreshState(): Promise<void> {
         this._rootDir = this.detectRootDir();
         this._reload();
@@ -134,6 +163,8 @@ export class WorkspaceState {
 
     get rootDir(): string | null { return this._rootDir; }
     get features(): ParsedFeature[] { return this._features; }
+    get proposals(): ProposalHunk[] { return this._proposals; }
     get sidecar(): SidecarData { return this._sidecar; }
-    get pendingCount(): number { return this._pendingCount; }
+    get status(): CodocStatus { return this._status; }
+    get pendingCount(): number { return this._status.pending; }
 }

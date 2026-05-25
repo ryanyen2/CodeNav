@@ -24,6 +24,14 @@
       ]
     },
     "menus": {
+      "commandPalette": [
+        { "command": "codoc.navigateToFeature", "when": "false" },
+        { "command": "codoc.acceptProposal", "when": "false" },
+        { "command": "codoc.rejectProposal", "when": "false" },
+        { "command": "codoc.acceptAll", "when": "false" },
+        { "command": "codoc.rejectAll", "when": "false" },
+        { "command": "codoc.openRef", "when": "false" }
+      ],
       "view/title": [
         {
           "command": "codoc.refreshFeatureTree",
@@ -90,6 +98,26 @@
         "title": "codoc: Navigate to feature"
       },
       {
+        "command": "codoc.acceptProposal",
+        "title": "codoc: Accept proposed change"
+      },
+      {
+        "command": "codoc.rejectProposal",
+        "title": "codoc: Reject proposed change"
+      },
+      {
+        "command": "codoc.acceptAll",
+        "title": "codoc: Accept all proposed changes"
+      },
+      {
+        "command": "codoc.rejectAll",
+        "title": "codoc: Reject all proposed changes"
+      },
+      {
+        "command": "codoc.openRef",
+        "title": "codoc: Open code reference"
+      },
+      {
         "command": "codoc.refreshFeatureTree",
         "title": "codoc: Refresh feature tree",
         "icon": "$(refresh)"
@@ -145,6 +173,13 @@
           "default": true,
           "description": "When opening a .codoc tree, collapse every feature's attribute block so the file shows as a table of contents (all titles, no details). Expand individual features to see their attributes."
         }
+      }
+    },
+    "configurationDefaults": {
+      "[codoc]": {
+        "editor.wordWrap": "on",
+        "editor.wrappingIndent": "deepIndent",
+        "editor.inlayHints.enabled": "on"
       }
     }
   },

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_tree_file
+from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
 from codoc.loop.loop_a import LoopAResult, run_loop_a
 from codoc.model.event import NodeOp, NodeOpKind
@@ -113,13 +114,11 @@ def run_loop_b(
 
 
 def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) -> LoopBResult:
-    parsed = parse_tree_file(codoc_dir)
-    diff = diff_codoc(parsed, store)
     res = LoopBResult()
     directive_ops: list[NodeOp] = []
 
-    # 1. Proposal verdicts.
-    for v in diff.verdicts:
+    # 1. Proposal verdicts — drained from the IDE's inbox, not parsed from text.
+    for v in inbox.read_verdicts(codoc_dir):
         e = store.get_event(v.event_id)
         if e is None:
             continue
@@ -132,8 +131,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
         else:
             store.delete_event(e.id)
             res.rejected += 1
+    inbox.clear(codoc_dir)
 
     # 2. Direct user edits (intentional → applied immediately).
+    parsed = parse_tree_file(codoc_dir)
+    diff = diff_codoc(parsed, store)
     for op in diff.user_ops:
         apply_op(op, store, source="user", applied=True)
         res.user_edits += 1
@@ -144,15 +146,18 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
     res.directives = [d for d in res.directives if d]
 
     if dry_run or not res.directives:
+        status.refresh_status(codoc_dir, store)
         return res
 
     # 3. Spawn the coding agent once with all directives.
+    status.refresh_status(codoc_dir, store, realizing=True, detail="implementing tree edits")
     prompt = build_realize_prompt(res.directives, root_dir)
     started = time.time()
     try:
         code, _ = spawn(prompt, root_dir)
     except Exception as e:  # subprocess failure, claude missing, timeout
         res.error = str(e)
+        status.refresh_status(codoc_dir, store)
         return res
     res.spawned = True
     res.files_written = _files_modified_since(root_dir, started)
@@ -160,4 +165,5 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
     # 4. Reflect on what was written — closes the loop.
     if res.files_written:
         res.refinement = refine(root_dir, codoc_dir, file_scope=set(res.files_written), source="loop_b", config=config)
+    status.refresh_status(codoc_dir, store)
     return res

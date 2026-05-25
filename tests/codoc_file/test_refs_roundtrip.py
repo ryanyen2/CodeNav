@@ -1,4 +1,10 @@
-"""Phase 5 — refs render + sidecar round-trip tests."""
+"""Bindings sidecar + inline markdown refs.
+
+Derived bindings are no longer printed into tree.codoc (no more ``↪ refs:`` line);
+they ride in tree.bindings.json for the IDE to render as inlay chips. Authored
+code citations use inline markdown links — ``[label](codoc:file#symbol)`` — which
+stay verbatim in the description so the round-trip is exact.
+"""
 from __future__ import annotations
 
 import json
@@ -6,14 +12,8 @@ import json
 import pytest
 
 from codoc.codoc_file.diff import diff_codoc
-from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import (
-    BINDINGS_FILENAME,
-    _REFS_MAX_FILES,
-    _REFS_MAX_PER_FILE,
-    render_tree,
-    write_tree,
-)
+from codoc.codoc_file.parse import extract_refs, parse_text
+from codoc.codoc_file.render import BINDINGS_FILENAME, render_tree, write_tree
 from codoc.model.binding import Binding
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -25,10 +25,6 @@ def store(tmp_path):
     yield s
     s.close()
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _populate(store):
     auth = Feature(title="Authentication", description="Handles login and session creation.")
@@ -51,137 +47,94 @@ def _populate(store):
 
 
 # ---------------------------------------------------------------------------
-# Refs line render
+# Derived bindings stay out of the text
 # ---------------------------------------------------------------------------
 
-def test_refs_line_appears_in_output(store):
-    auth, util, _, _ = _populate(store)
-    text = render_tree(store)
-    assert "↪ refs:" in text
-
-
-def test_refs_line_groups_by_file(store):
-    """Refs group under the file (filename shown once), with leaf names listed."""
-    auth, util, _, _ = _populate(store)
-    text = render_tree(store)
-    # File header appears, leaves listed without repeating "auth.py::" per symbol.
-    assert "auth.py › " in text
-    assert "login" in text and "logout" in text
-    assert "auth.py::login" not in text  # no per-symbol filename repetition
-
-
-def test_refs_line_per_file_symbol_overflow(store):
-    """Many symbols in one file collapse to '+N' after the per-file cap."""
-    feat = Feature(title="Big feature", description="Has many bindings.")
-    store.upsert_feature(feat)
-    extra = 3
-    for i in range(_REFS_MAX_PER_FILE + extra):
-        store.upsert_binding(
-            Binding(feature_id=feat.id, file="big.py", symbol_path=f"big.py::fn{i}", fingerprint=f"h{i}")
-        )
-    text = render_tree(store)
-    assert f"+{extra}" in text
-
-
-def test_refs_line_file_overflow(store):
-    """Many files collapse to '+N more files' after the file cap."""
-    feat = Feature(title="Spread", description="Bindings across many files.")
-    store.upsert_feature(feat)
-    extra = 2
-    for i in range(_REFS_MAX_FILES + extra):
-        store.upsert_binding(
-            Binding(feature_id=feat.id, file=f"f{i}.py", symbol_path=f"f{i}.py::fn", fingerprint=f"h{i}")
-        )
-    text = render_tree(store)
-    assert f"+{extra} more file" in text
-
-
-def test_module_chunk_rendered_cleanly(store):
-    """A file::__module__ binding renders as ‹module›, not the raw dunder."""
-    feat = Feature(title="Certs", description="CA bundle access.")
-    store.upsert_feature(feat)
-    store.upsert_binding(
-        Binding(feature_id=feat.id, file="certs.py", symbol_path="certs.py::__module__", fingerprint="h")
-    )
-    text = render_tree(store)
-    assert "‹module›" in text
-    assert "__module__" not in text
-
-
-def test_no_refs_line_for_unbound_feature(store):
-    feat = Feature(title="Empty", description="No bindings.")
-    store.upsert_feature(feat)
+def test_no_refs_line_in_text(store):
+    _populate(store)
     text = render_tree(store)
     assert "↪ refs:" not in text
+    assert "›" not in text
+    # raw symbol paths never leak into the human-facing tree
+    assert "auth.py::login" not in text
 
 
-# ---------------------------------------------------------------------------
-# Round-trip: render → parse → diff must be empty (refs lines are skipped)
-# ---------------------------------------------------------------------------
-
-def test_refs_roundtrip_no_diff(store):
-    auth, util, _, _ = _populate(store)
-    text = render_tree(store)
-    parsed = parse_text(text)
-    cd = diff_codoc(parsed, store)
-    # refs lines must not pollute the description
-    auth_node = next(n for n in parsed.nodes if n.id == auth.id)
-    assert "↪ refs:" not in auth_node.description
-    assert cd.user_ops == [] and cd.verdicts == []
-
-
-def test_refs_not_captured_in_description(store):
+def test_derived_bindings_roundtrip_noop(store):
     auth, _, _, _ = _populate(store)
     text = render_tree(store)
     parsed = parse_text(text)
     auth_node = next(n for n in parsed.nodes if n.id == auth.id)
     assert auth_node.description == "Handles login and session creation."
+    assert diff_codoc(parsed, store).is_empty()
 
 
 # ---------------------------------------------------------------------------
-# Sidecar: tree.bindings.json
+# Inline markdown refs
+# ---------------------------------------------------------------------------
+
+def test_inline_ref_preserved_and_extracted(store):
+    feat = Feature(
+        title="Default CA bundle lookup",
+        description="Points TLS verification at the bundled store via "
+                    "[where](codoc:certs.py#where_to_bundle), with override support.",
+    )
+    store.upsert_feature(feat)
+
+    text = render_tree(store)
+    assert "[where](codoc:certs.py#where_to_bundle)" in text
+
+    parsed = parse_text(text)
+    node = next(n for n in parsed.nodes if n.id == feat.id)
+    # description (with the link) round-trips exactly → no spurious edit
+    assert node.description == feat.description
+    assert diff_codoc(parsed, store).is_empty()
+
+    refs = node.refs
+    assert len(refs) == 1
+    assert refs[0].file == "certs.py" and refs[0].symbol == "where_to_bundle" and refs[0].label == "where"
+
+
+def test_extract_refs_handles_no_symbol():
+    refs = extract_refs("see [models](codoc:models.py) and [get](codoc:api.py#get)")
+    assert (refs[0].file, refs[0].symbol) == ("models.py", None)
+    assert (refs[1].file, refs[1].symbol) == ("api.py", "get")
+
+
+# ---------------------------------------------------------------------------
+# Sidecar: tree.bindings.json (unchanged contract)
 # ---------------------------------------------------------------------------
 
 def test_sidecar_written_by_write_tree(store, tmp_path):
     _populate(store)
     write_tree(store, tmp_path)
-    sidecar_path = tmp_path / BINDINGS_FILENAME
-    assert sidecar_path.exists(), "tree.bindings.json was not written"
+    assert (tmp_path / BINDINGS_FILENAME).exists()
 
 
 def test_sidecar_structure(store, tmp_path):
-    auth, util, bindings_auth, bindings_util = _populate(store)
+    auth, util, _, _ = _populate(store)
     write_tree(store, tmp_path)
     sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
 
     assert sidecar["version"] == 1
-    assert auth.id in sidecar["by_feature"]
-    assert util.id in sidecar["by_feature"]
-
+    assert auth.id in sidecar["by_feature"] and util.id in sidecar["by_feature"]
     auth_syms = {e["symbol"] for e in sidecar["by_feature"][auth.id]}
-    assert "auth.py::login" in auth_syms
-    assert "session.py::create_session" in auth_syms
+    assert "auth.py::login" in auth_syms and "session.py::create_session" in auth_syms
 
 
 def test_sidecar_by_file_index(store, tmp_path):
-    auth, util, _, _ = _populate(store)
+    auth, _, _, _ = _populate(store)
     write_tree(store, tmp_path)
     sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
 
     assert "auth.py" in sidecar["by_file"]
-    auth_file_entries = sidecar["by_file"]["auth.py"]
-    syms = {e["symbol"] for e in auth_file_entries}
-    assert "auth.py::login" in syms
-    assert "auth.py::logout" in syms
-    fids = {e["feature_id"] for e in auth_file_entries}
-    assert auth.id in fids
+    syms = {e["symbol"] for e in sidecar["by_file"]["auth.py"]}
+    assert {"auth.py::login", "auth.py::logout"} <= syms
+    assert auth.id in {e["feature_id"] for e in sidecar["by_file"]["auth.py"]}
 
 
 def test_sidecar_features_meta(store, tmp_path):
-    auth, util, _, _ = _populate(store)
+    auth, _, _, _ = _populate(store)
     write_tree(store, tmp_path)
     sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
-
-    assert auth.id in sidecar["features"]
     assert sidecar["features"][auth.id]["title"] == "Authentication"
     assert sidecar["features"][auth.id]["parent_id"] is None
