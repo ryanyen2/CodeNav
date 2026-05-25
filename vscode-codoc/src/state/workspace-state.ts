@@ -17,6 +17,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
 import { SidecarData, emptySidecar } from './bindings-model';
+import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
 
 export { ParsedFeature, SidecarData };
 
@@ -33,6 +34,7 @@ export class WorkspaceState {
     private _proposals: ProposalHunk[] = [];
     private _sidecar: SidecarData = emptySidecar();
     private _status: CodocStatus = { state: 'in_sync', pending: 0, detail: '' };
+    private _activity: ActivityData = {};
 
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
@@ -57,6 +59,7 @@ export class WorkspaceState {
             '**/.codoc/tree.bindings.json',
             '**/.codoc/status.json',
             '**/.codoc/inbox.json',
+            '**/.codoc/activity.json',
         ]) {
             const w = vscode.workspace.createFileSystemWatcher(glob);
             this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));
@@ -112,6 +115,10 @@ export class WorkspaceState {
             this._status = { state: n ? 'code_drift' : 'in_sync', pending: n, detail: '' };
         }
 
+        let activityText = '';
+        try { activityText = fs.readFileSync(this._codocPath('activity.json'), 'utf-8'); } catch { /* file absent → no active agent */ }
+        this._activity = parseActivity(activityText);
+
         this._updateStatusBar();
         this._onDidChange.fire();
     }
@@ -122,6 +129,13 @@ export class WorkspaceState {
         if (!this._rootDir) {
             bar.text = '$(sync) codoc: not initialized';
             bar.tooltip = 'No .codoc directory — run `codoc init` to initialize';
+            bar.show();
+            return;
+        }
+        if (this.agentActive) {
+            const n = Object.keys(this._activity.touched ?? {}).length;
+            bar.text = `$(zap) codoc: agent working… (${n} files)`;
+            bar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
             bar.show();
             return;
         }
@@ -167,4 +181,9 @@ export class WorkspaceState {
     get sidecar(): SidecarData { return this._sidecar; }
     get status(): CodocStatus { return this._status; }
     get pendingCount(): number { return this._status.pending; }
+    get activity(): ActivityData { return this._activity; }
+    get agentActive(): boolean { return isAgentActive(this._activity); }
+    get activeFeatureLines(): number[] {
+        return computeActiveFeatureLines(this._activity, this._features, this._sidecar);
+    }
 }

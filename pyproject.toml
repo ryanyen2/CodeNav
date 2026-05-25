@@ -55,6 +55,9 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["codoc*"]
 
+[tool.setuptools.package-data]
+"codoc.plugin" = ["**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

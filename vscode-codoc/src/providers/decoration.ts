@@ -14,6 +14,7 @@ export interface CodocDecorations {
     retireHunk: vscode.TextEditorDecorationType;
     moveHunk: vscode.TextEditorDecorationType;
     retired: vscode.TextEditorDecorationType;
+    activeFeature: vscode.TextEditorDecorationType;
 }
 
 export function createDecorations(_context: vscode.ExtensionContext): CodocDecorations {
@@ -44,10 +45,16 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
             textDecoration: 'line-through',
             opacity: '0.55',
         }),
+        activeFeature: vscode.window.createTextEditorDecorationType({
+            isWholeLine: true,
+            backgroundColor: new vscode.ThemeColor('diffEditor.insertedLineBackground'),
+            overviewRulerColor: new vscode.ThemeColor('charts.yellow'),
+            overviewRulerLane: vscode.OverviewRulerLane.Left,
+        }),
     };
 }
 
-export function applyDecorations(editor: vscode.TextEditor, dec: CodocDecorations): void {
+export function applyDecorations(editor: vscode.TextEditor, dec: CodocDecorations, activeFeatureLines: number[] = []): void {
     if (editor.document.languageId !== 'codoc') return;
     const hiddenId: vscode.Range[] = [];
     const addHunk: vscode.Range[] = [];
@@ -81,4 +88,9 @@ export function applyDecorations(editor: vscode.TextEditor, dec: CodocDecoration
     editor.setDecorations(dec.retireHunk, retireHunk);
     editor.setDecorations(dec.moveHunk, moveHunk);
     editor.setDecorations(dec.retired, retired);
+
+    const activeRanges = activeFeatureLines.map(
+        line => new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER)
+    );
+    editor.setDecorations(dec.activeFeature, activeRanges);
 }

@@ -172,9 +172,12 @@ from .exceptions import (
     Timeout,
     TooManyRedirects,
     URLRequired,
+    WebSocketError,
+    WebSocketHandshakeError,
 )
 from .models import PreparedRequest, Request, Response
 from .sessions import Session, session
+from .websocket import WebSocketAdapter, WebSocketConnection
 from .status_codes import codes
 
 logging.getLogger(__name__).addHandler(NullHandler())

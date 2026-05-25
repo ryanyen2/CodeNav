@@ -158,7 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const decorations = createDecorations(context);
     const refreshDecorations = (editor?: vscode.TextEditor): void => {
         const ed = editor ?? vscode.window.activeTextEditor;
-        if (ed) applyDecorations(ed, decorations);
+        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines);
     };
     refreshDecorations();
     context.subscriptions.push(

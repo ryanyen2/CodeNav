@@ -27,7 +27,14 @@ def _codoc_dir(root: str) -> str:
 
 
 @app.command()
-def init(root: str = typer.Option(".", "--root", help="Repository root.")):
+def init(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    hooks: bool = typer.Option(
+        True,
+        "--hooks/--no-hooks",
+        help="Install codoc Claude Code hooks into .claude/settings.json.",
+    ),
+):
     """Index the repo, propose an initial feature tree, render tree.codoc."""
     from codoc.loop.bootstrap import run_init
 
@@ -35,6 +42,14 @@ def init(root: str = typer.Option(".", "--root", help="Repository root.")):
     res = run_init(root)
     typer.echo(f"✓ {res.summary()}")
     typer.echo(f"  Edit {_codoc_dir(root)}/tree.codoc, then run `codoc watch`.")
+
+    if hooks:
+        try:
+            from codoc.agent.install_hooks import install_hooks
+            install_hooks(root)
+            typer.echo("  ✓ Claude Code hooks installed in .claude/settings.json")
+        except Exception as exc:
+            typer.echo(f"  ⚠  Could not install hooks: {exc}", err=True)
 
 
 @app.command()
@@ -99,6 +114,64 @@ def sync(
         write_tree(store, cd)
     finally:
         store.close()
+
+
+@app.command()
+def propose(
+    kind: str = typer.Argument(..., help="add_node | amend | retire_node | move_node"),
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    title: str = typer.Option(None, "--title", help="Feature title (add_node / amend)."),
+    description: str = typer.Option(None, "--description", help="Feature description prose."),
+    parent: str = typer.Option(None, "--parent", help="Parent feature id (add_node / move_node)."),
+    feature: str = typer.Option(None, "--feature", help="Target feature id (amend / retire_node / move_node)."),
+    rationale: str = typer.Option("", "--rationale", help="One-line justification shown in the diff block."),
+    bind: list[str] = typer.Option(None, "--bind", help="Binding as file.py::symbol_path (repeatable)."),
+):
+    """Author an agent plan proposal in the codoc feature tree.
+
+    Creates a pending proposal (applied=False Event) tagged as an **agent plan**
+    in the ``# ── pending changes`` block of ``tree.codoc``.  The user can Accept
+    or Reject it in the VS Code IDE; acceptance triggers Loop B to implement.
+
+    Example::
+
+        codoc propose add_node --title "Date formatting" \\
+            --description "ISO-8601 date helpers." \\
+            --bind utils/dates.py::format_date
+    """
+    from codoc.agent.propose import propose_plan
+
+    try:
+        eid = propose_plan(
+            root,
+            kind=kind,
+            title=title,
+            description=description,
+            parent_id=parent,
+            feature_id=feature,
+            rationale=rationale,
+            binds=list(bind) if bind else [],
+        )
+        typer.echo(f"✓ Proposal created  ⟨{eid}⟩")
+        typer.echo(f"  Accept it in the VS Code IDE (inline action on the diff block).")
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command(name="install-hooks")
+def install_hooks_cmd(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+):
+    """Install codoc Claude Code hooks into .claude/settings.json.
+
+    Idempotent — safe to run multiple times.
+    """
+    from codoc.agent.install_hooks import install_hooks
+
+    install_hooks(root)
+    typer.echo("✓ Claude Code hooks installed in .claude/settings.json")
+    typer.echo("  Hooks: SessionStart, Stop, PreToolUse(Edit|Write|Read), PostToolUse(Edit|Write)")
 
 
 if __name__ == "__main__":

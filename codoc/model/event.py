@@ -34,6 +34,10 @@ class NodeOpKind(str, Enum):
     RETIRE_NODE = "retire_node"  # retire a feature
 
 
+# Event.source constants — plain strings (no Pydantic enum so no migration needed)
+PLAN_SOURCE = "plan"          # agent-authored intent proposal (plan before code)
+AGENT_SOURCES = frozenset({"plan"})  # sources that originate from an AI agent
+
 SAFE_OPS: frozenset[NodeOpKind] = frozenset(
     {NodeOpKind.ATTACH, NodeOpKind.DETACH, NodeOpKind.REFRESH, NodeOpKind.AMEND}
 )
@@ -55,7 +59,7 @@ class NodeOp(BaseModel):
 class Event(BaseModel):
     id: str = Field(default_factory=new_event_id)
     at: HLC = Field(default_factory=HLC.now)
-    source: str  # "loop_a" | "loop_b" | "user" | "bootstrap"
+    source: str  # "loop_a" | "loop_b" | "user" | "bootstrap" | "plan"
     op: NodeOp
     applied: bool = True  # False ⇒ pending proposal
     accepted_at: datetime | None = None

@@ -1,14 +1,18 @@
 """Phase 4 — Loop B (codoc → code). No real `claude` spawn in CI."""
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from codoc.codoc_file.render import tree_path, write_tree
 from codoc.loop import inbox
+from codoc.loop.activity import ACTIVITY_FILENAME
 from codoc.loop.loop_a import LoopAResult
-from codoc.loop.loop_b import run_loop_b
+from codoc.loop.loop_b import _spawn_claude, run_loop_b
 from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
@@ -117,6 +121,73 @@ def test_spawn_and_refine_loop_closure(dirs):
     assert "new.py" in res.files_written
     assert calls["refine_scope"] == {"new.py"} and calls["refine_source"] == "loop_b"
     assert res.refinement is sentinel
+
+
+def test_precise_reflect_uses_activity_json(dirs):
+    """When activity.json records touched files, Loop B uses them (not mtime walk)."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    f = Feature(title="Widget", description="A UI widget.", id="f-widget")
+    s.upsert_feature(f)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    # Pre-write inbox verdict so Loop B spawns.
+    from codoc.codoc_file.render import write_tree as wt
+    from codoc.codoc_file.diff import diff_codoc
+    from codoc.codoc_file.parse import parse_tree_file
+    from codoc.model.event import PLAN_SOURCE
+    from codoc.loop.apply import apply_op
+    s2 = open_store(codoc_dir)
+    op = NodeOp(kind=NodeOpKind.ADD_NODE, title="New", description="d.")
+    e = apply_op(op, s2, source=PLAN_SOURCE, applied=False)
+    wt(s2, codoc_dir)
+    s2.close()
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
+
+    # Write activity.json with a specific touched file.
+    activity_data = {
+        "version": 1,
+        "epoch": {"id": "ep-lb", "origin": "loop_b", "open": False,
+                  "started_at": None, "ended_at": None},
+        "touched": {"from_activity.py": {"feature_ids": [], "last": None, "mode": "write"}},
+        "recent": [],
+    }
+    (Path(codoc_dir) / ACTIVITY_FILENAME).write_text(json.dumps(activity_data))
+
+    calls: dict = {}
+
+    def fake_spawn(prompt, root_dir, **kw):
+        # Agent writes a DIFFERENT file than what's in activity.json.
+        Path(root_dir, "from_mtime.py").write_text("x = 1\n")
+        return 0, "ok"
+
+    def fake_refine(root_dir, codoc_dir, *, file_scope=None, source="loop_b", config=None):
+        calls["file_scope"] = file_scope
+        return LoopAResult()
+
+    run_loop_b(root, codoc_dir, dry_run=False, spawn=fake_spawn, refine=fake_refine)
+
+    # Activity.json file should be used, not the mtime-discovered file.
+    assert "from_activity.py" in (calls.get("file_scope") or set()), \
+        f"Expected activity.json path in file_scope, got {calls.get('file_scope')}"
+
+
+def test_spawn_claude_sets_loop_b_origin_env(tmp_path):
+    """_spawn_claude must pass CODOC_EPOCH_ORIGIN=loop_b in the subprocess env."""
+    captured_env: dict = {}
+
+    def fake_run(cmd, **kw):
+        captured_env.update(kw.get("env", {}))
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = ""
+        return m
+
+    with patch("codoc.loop.loop_b.subprocess.run", side_effect=fake_run):
+        _spawn_claude("echo hi", str(tmp_path))
+
+    assert captured_env.get("CODOC_EPOCH_ORIGIN") == "loop_b"
 
 
 def test_spawn_failure_is_captured(dirs):

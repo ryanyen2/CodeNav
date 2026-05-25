@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from ._internal_utils import to_native_string
 from .adapters import HTTPAdapter
+from .websocket import WebSocketAdapter
 from .auth import _basic_auth_str
 from .compat import Mapping, cookielib, urljoin, urlparse
 from .cookies import (
@@ -448,6 +449,8 @@ class Session(SessionRedirectMixin):
         self.adapters = OrderedDict()
         self.mount("https://", HTTPAdapter())
         self.mount("http://", HTTPAdapter())
+        self.mount("wss://", WebSocketAdapter())
+        self.mount("ws://", WebSocketAdapter())
 
     def __enter__(self):
         return self
@@ -670,6 +673,57 @@ class Session(SessionRedirectMixin):
         """
 
         return self.request("DELETE", url, **kwargs)
+
+    def ws_connect(
+        self,
+        url,
+        headers=None,
+        timeout=None,
+        verify=None,
+        cert=None,
+        proxies=None,
+    ):
+        """Open a WebSocket connection to *url*.
+
+        Looks up the registered :class:`~requests.adapters.WebSocketAdapter`
+        for the URL scheme (``ws://`` or ``wss://``), performs the HTTP/1.1
+        upgrade handshake, and returns a live
+        :class:`~requests.websocket.WebSocketConnection`.
+
+        Session-level settings (``verify``, ``cert``, ``proxies``,
+        ``headers``) are applied as defaults, just like :meth:`request`.
+
+        :param url: A ``ws://`` or ``wss://`` URL.
+        :param headers: (optional) Extra headers to include in the upgrade
+            request.
+        :param timeout: (optional) Socket timeout in seconds.
+        :param verify: (optional) TLS certificate verification.
+        :param cert: (optional) Client certificate for mTLS.
+        :param proxies: (optional) Proxy configuration dict.
+        :rtype: requests.websocket.WebSocketConnection
+        """
+        from .exceptions import InvalidSchema
+        from .websocket import WebSocketAdapter
+
+        adapter = self.get_adapter(url=url)
+        if not isinstance(adapter, WebSocketAdapter):
+            raise InvalidSchema(
+                f"No WebSocket adapter found for {url!r}. "
+                "Mount a WebSocketAdapter for 'ws://' or 'wss://'."
+            )
+
+        merged_headers = CaseInsensitiveDict(self.headers)
+        if headers:
+            merged_headers.update(headers)
+
+        return adapter.connect(
+            url,
+            headers=merged_headers,
+            timeout=timeout,
+            verify=self.verify if verify is None else verify,
+            cert=self.cert if cert is None else cert,
+            proxies=proxies or self.proxies,
+        )
 
     def send(self, request, **kwargs):
         """Send a given PreparedRequest.

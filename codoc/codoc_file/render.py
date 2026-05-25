@@ -26,7 +26,7 @@ import json
 import os
 from pathlib import Path
 
-from codoc.model.event import Event, NodeOpKind
+from codoc.model.event import PLAN_SOURCE, Event, NodeOpKind
 from codoc.store.db import Store
 
 TREE_FILENAME = "tree.codoc"
@@ -87,6 +87,11 @@ def render_tree(store: Store) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _source_tag(e: Event) -> str:
+    """Human-readable label for the origin of a proposal hunk."""
+    return "agent plan" if e.source == PLAN_SOURCE else "code drift"
+
+
 def _title_of(store: Store, feature_id: str | None) -> str:
     if not feature_id:
         return "(root)"
@@ -104,24 +109,25 @@ def _render_proposal(e: Event, store: Store) -> list[str]:
     can recover the event id from the hidden marker."""
     op = e.op
     eid = e.id
+    tag = _source_tag(e)
     if op.kind is NodeOpKind.ADD_NODE:
         out = [f"+ - {op.title or 'Untitled'}  ⟨{eid}⟩"]
         out.extend(_proposal_desc("+", op.description or ""))
-        meta = f"under {_title_of(store, op.parent_id)}"
+        meta = f"under {_title_of(store, op.parent_id)} · {tag}"
         if op.rationale:
             meta += f" · {op.rationale}"
         out.append(f"+     {meta}")
         return out
     if op.kind is NodeOpKind.RETIRE_NODE:
         out = [f"- ~ {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
-        meta = "retire"
+        meta = f"retire · {tag}"
         if op.rationale:
             meta += f" · {op.rationale}"
         out.append(f"-     {meta}")
         return out
     if op.kind is NodeOpKind.MOVE_NODE:
         out = [f"~ - {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
-        meta = f"move → {_title_of(store, op.parent_id)}"
+        meta = f"move → {_title_of(store, op.parent_id)} · {tag}"
         if op.rationale:
             meta += f" · {op.rationale}"
         out.append(f"~     {meta}")
@@ -129,8 +135,10 @@ def _render_proposal(e: Event, store: Store) -> list[str]:
     if op.kind is NodeOpKind.AMEND:
         out = [f"~ - {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
         out.extend(_proposal_desc("~", op.description or ""))
+        amend_meta = f"amend · {tag}"
         if op.rationale:
-            out.append(f"~     amend · {op.rationale}")
+            amend_meta += f" · {op.rationale}"
+        out.append(f"~     {amend_meta}")
         return out
     # safe ops are never pending, but render a generic hunk just in case
     return [f"~ - {op.kind.value}  ⟨{eid}⟩"]

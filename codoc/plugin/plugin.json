@@ -1,0 +1,7 @@
+{
+  "name": "codoc-intent",
+  "version": "0.1.0",
+  "description": "Observability + intent-first planning for codoc: emits live activity, manages agent epochs, and authors plan proposals in the codoc feature tree.",
+  "author": { "name": "codoc" },
+  "homepage": "https://github.com/codoc/codoc"
+}

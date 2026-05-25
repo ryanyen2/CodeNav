@@ -17,6 +17,7 @@ from codoc.agent.base import format_prompt, load_prompt
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_tree_file
 from codoc.loop import inbox, status
+from codoc.loop.activity import epoch_touched_files
 from codoc.loop.apply import apply_op
 from codoc.loop.loop_a import LoopAResult, run_loop_a
 from codoc.model.event import NodeOp, NodeOpKind
@@ -76,9 +77,12 @@ def build_realize_prompt(directives: list[str], root_dir: str) -> str:
 
 
 def _spawn_claude(prompt: str, root_dir: str, *, timeout: int = 300) -> tuple[int, str]:
+    # CODOC_EPOCH_ORIGIN=loop_b tells the SessionStart hook to record this as a
+    # Loop B-owned epoch so the watch daemon skips independent reconciliation.
+    env = {**os.environ, "CODOC_EPOCH_ORIGIN": "loop_b"}
     proc = subprocess.run(
         ["claude", "-p", prompt, "--dangerously-skip-permissions"],
-        cwd=root_dir, capture_output=True, text=True, timeout=timeout,
+        cwd=root_dir, capture_output=True, text=True, timeout=timeout, env=env,
     )
     return proc.returncode, (proc.stdout or "")[:2000]
 
@@ -160,7 +164,9 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
         status.refresh_status(codoc_dir, store)
         return res
     res.spawned = True
-    res.files_written = _files_modified_since(root_dir, started)
+    # Prefer the precise touched-file list from activity.json (populated by hooks);
+    # fall back to the mtime walk when hooks are not installed.
+    res.files_written = epoch_touched_files(codoc_dir) or _files_modified_since(root_dir, started)
 
     # 4. Reflect on what was written — closes the loop.
     if res.files_written:

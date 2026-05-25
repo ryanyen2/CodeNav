@@ -137,6 +137,14 @@ class UnrewindableBodyError(RequestException):
     """Requests encountered an error when trying to rewind a body."""
 
 
+class WebSocketError(ConnectionError):
+    """A WebSocket connection or communication error occurred."""
+
+
+class WebSocketHandshakeError(WebSocketError):
+    """The WebSocket upgrade handshake was rejected or produced an invalid response."""
+
+
 # Warnings
 
 
