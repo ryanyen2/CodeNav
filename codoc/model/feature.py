@@ -1,20 +1,24 @@
-from pydantic import BaseModel
+"""Feature — a named unit of authored intent that binds to code chunks.
+
+The tree of features is first-class authored intent; code attribution
+(:class:`~codoc.model.binding.Binding`) is a secondary index. A feature carries
+exactly one prose field, ``description`` (what + why), plus a short display
+``title``. Identity is the stable ``id``; ``title`` is free text the user may
+rename at will.
+"""
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
 
 from codoc.model.hlc import HLC
+from codoc.model.ids import new_feature_id
 
 
 class Feature(BaseModel):
-    uuid: str  # UUIDv7 string; time-ordered for efficient range scans
-    slug: str  # human-navigable, user-editable; not guaranteed unique across branches
-    title: str = ""  # 3–6 word NL display name (sentence case); falls back to slug if empty
-    parent_uuid: str | None = None  # last RENAME/RESTRUCTURE wins
-    intent: str = ""  # one or two sentences summary
-    description: str = ""  # multi-paragraph prose explaining what + why; preserved newlines
-    purpose: str = ""     # one-line WHAT this feature does in product terms
-    rationale: str = ""   # one-line WHY this design, not an obvious alternative
-    scenario: str = ""    # BDD multi-line: "given ...\nwhen ...\nthen ..."
-    retired: bool = False  # set True by RETIRE transaction; never deleted
-    # Authoring lifecycle: placeholder → feedforward_pending → realized
-    status: str = "realized"
-    created_at_hlc: HLC
-    updated_at_hlc: HLC  # advances on any field mutation
+    id: str = Field(default_factory=new_feature_id)
+    title: str  # 3–6 word display name (sentence case)
+    description: str = ""  # the one prose field: what the feature does + why; newlines preserved
+    parent_id: str | None = None  # None = top-level
+    retired: bool = False  # tombstoned; never hard-deleted
+    created_at: HLC = Field(default_factory=HLC.now)
+    updated_at: HLC = Field(default_factory=HLC.now)  # advances on any field mutation

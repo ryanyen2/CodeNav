@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from codoc.core.fingerprint import fingerprint_chunk
+from codoc.core.tree_walk import walk
 from codoc.lang import detect_language, get_adapter
+
+
+def fingerprint_chunk(source: str, adapter) -> str:
+    """Whitespace-/comment-stable token fingerprint (tree_walk tokens_hash)."""
+    return walk(source, adapter).tokens_hash
 
 
 def test_detect_language_python() -> None:

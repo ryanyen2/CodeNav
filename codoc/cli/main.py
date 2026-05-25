@@ -1,118 +1,100 @@
-"""codoc CLI — root Typer application."""
+"""codoc CLI — four commands.
 
+``init``   bootstrap a fresh repo into a feature tree + render tree.codoc
+``watch``  the daemon: run both loops as you edit code / tree.codoc
+``status`` tree size, pending proposals, recent activity
+``sync``   one-shot escape hatch: apply tree.codoc edits, then reflect code
+
+Everything else is done by editing ``.codoc/tree.codoc`` and letting watch/sync
+react.
+"""
 from __future__ import annotations
+
+from pathlib import Path
 
 import typer
 
-from codoc.cli.sync import sync_command
-from codoc.cli.diff import diff_command
-from codoc.cli.watch import watch_command
-from codoc.cli.gate_run import gate_run
-from codoc.cli.plan import plan_command
-from codoc.cli.server import server
-from codoc.cli.commit_preflight import commit_preflight
-from codoc.cli.init import init
-from codoc.cli.reflect import reflect_command
-from codoc.cli.bootstrap import bootstrap_app
-from codoc.cli.projection import proj_app
-from codoc.cli.doctor import doctor
-from codoc.cli.health import health_command
-from codoc.cli.commands import (
-    cmd_list,
-    cmd_show,
-    cmd_proposals,
-    cmd_accept,
-    cmd_reject,
-    cmd_edit,
-    cmd_rename,
-    cmd_retire,
-    cmd_search,
-    cmd_status,
-    cmd_conflicts,
-)
-
-
-def _version_callback(value: bool) -> None:
-    if value:
-        from importlib.metadata import version, PackageNotFoundError
-        try:
-            ver = version("codoc")
-        except PackageNotFoundError:
-            ver = "0.1.1-dev"
-        typer.echo(f"codoc {ver}")
-        raise typer.Exit()
-
-
 app = typer.Typer(
     name="codoc",
-    help="codoc keeps a feature-tree view of your code, synced as you commit.",
+    help="codoc keeps a feature-tree view of your code, synced as you edit.",
     no_args_is_help=True,
 )
 
 
-@app.callback()
-def _main(
-    version: bool = typer.Option(
-        None,
-        "--version",
-        "-V",
-        callback=_version_callback,
-        is_eager=True,
-        help="Show version and exit.",
-    ),
-) -> None:
-    pass
+def _codoc_dir(root: str) -> str:
+    return str(Path(root) / ".codoc")
 
 
-# ------------------------------------------------------------------
-# Bootstrap and initialization
-# ------------------------------------------------------------------
-app.command("init")(init)
-app.add_typer(bootstrap_app, name="bootstrap")
+@app.command()
+def init(root: str = typer.Option(".", "--root", help="Repository root.")):
+    """Index the repo, propose an initial feature tree, render tree.codoc."""
+    from codoc.loop.bootstrap import run_init
 
-# ------------------------------------------------------------------
-# Reflective pipeline
-# ------------------------------------------------------------------
-app.command("reflect")(reflect_command)
+    typer.echo(f"Indexing {root} and bootstrapping the feature tree…")
+    res = run_init(root)
+    typer.echo(f"✓ {res.summary()}")
+    typer.echo(f"  Edit {_codoc_dir(root)}/tree.codoc, then run `codoc watch`.")
 
-# ------------------------------------------------------------------
-# Projection (tree ↔ DB lens)
-# ------------------------------------------------------------------
-app.add_typer(proj_app, name="projection")
 
-# ------------------------------------------------------------------
-# Primary sync verb — start here
-# ------------------------------------------------------------------
-app.command("sync")(sync_command)
+@app.command()
+def watch(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    no_realize: bool = typer.Option(False, "--no-realize", help="Reflect + sync, but don't spawn the coding agent."),
+    dry: bool = typer.Option(False, "--dry", help="Build coding directives but don't spawn the agent."),
+):
+    """Watch code + tree.codoc and run both loops continuously."""
+    from codoc.loop.watch import run_watch
 
-# ------------------------------------------------------------------
-# Browse and curate the feature tree
-# ------------------------------------------------------------------
-app.command("list")(cmd_list)
-app.command("show")(cmd_show)
-app.command("proposals")(cmd_proposals)
-app.command("accept")(cmd_accept)
-app.command("reject")(cmd_reject)
-app.command("edit")(cmd_edit)
-app.command("rename")(cmd_rename)
-app.command("retire")(cmd_retire)
-app.command("search")(cmd_search)
-app.command("status")(cmd_status)
-app.command("conflicts")(cmd_conflicts)
-app.command("diff")(diff_command)
+    run_watch(_root := root, _codoc_dir(root), no_realize=no_realize, dry_run=dry, printer=typer.echo)
 
-# ------------------------------------------------------------------
-# FS watcher + realize
-# ------------------------------------------------------------------
-app.command("watch")(watch_command)
 
-# ------------------------------------------------------------------
-# Infra commands
-# ------------------------------------------------------------------
-app.command("plan")(plan_command)
-app.command("gate-run")(gate_run)
-app.command("server")(server)
-app.command("commit-preflight")(commit_preflight)
-app.command("doctor")(doctor)
-app.command("health")(health_command)
+@app.command()
+def status(root: str = typer.Option(".", "--root", help="Repository root.")):
+    """Show feature count, pending proposals, and recent activity."""
+    from codoc.store.db import open_store
 
+    store = open_store(_codoc_dir(root))
+    try:
+        feats = store.list_features()
+        pending = store.pending_events()
+        typer.echo(f"codoc · {len(feats)} features · {len(pending)} pending proposal(s)")
+        if pending:
+            typer.echo("\nPending proposals (review in tree.codoc):")
+            for e in pending:
+                title = e.op.title or e.op.feature_id or ""
+                typer.echo(f"  ? {e.op.kind.value:11} {title}  ⟨{e.id}⟩")
+        recent = [e for e in store.recent_events(8) if e.applied]
+        if recent:
+            typer.echo("\nRecent changes:")
+            for e in recent:
+                title = e.op.title or e.op.feature_id or ""
+                typer.echo(f"  · {e.source:9} {e.op.kind.value:11} {title}")
+    finally:
+        store.close()
+
+
+@app.command()
+def sync(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    dry: bool = typer.Option(False, "--dry", help="Don't spawn the coding agent for tree edits."),
+):
+    """One-shot: apply tree.codoc edits (Loop B), then reflect code (Loop A)."""
+    from codoc.codoc_file.render import write_tree
+    from codoc.loop.loop_a import run_loop_a
+    from codoc.loop.loop_b import run_loop_b
+    from codoc.store.db import open_store
+
+    cd = _codoc_dir(root)
+    rb = run_loop_b(root, cd, dry_run=dry)
+    typer.echo(f"▸ codoc→code  {rb.summary()}")
+    ra = run_loop_a(root, cd)
+    typer.echo(f"▸ code→codoc  {ra.summary()}")
+    store = open_store(cd)
+    try:
+        write_tree(store, cd)
+    finally:
+        store.close()
+
+
+if __name__ == "__main__":
+    app()

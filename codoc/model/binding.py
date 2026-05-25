@@ -1,15 +1,22 @@
-from pydantic import BaseModel
+"""Binding — attribution of one code chunk to one feature.
 
-from codoc.model.anchor import Anchor
+The anchor is inlined as ``(file, symbol_path)`` — the exact key the cocoindex
+``code_chunks`` index uses — so resolving a binding against current code is a
+dict lookup, not a tree-sitter re-resolve. ``fingerprint`` is the chunk's
+``tokens_hash``; a mismatch against the live index means the bound code drifted.
+"""
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
 from codoc.model.hlc import HLC
+from codoc.model.ids import new_binding_id
 
 
 class Binding(BaseModel):
-    uuid: str  # UUIDv7; stable binding identity
-    feature_uuid: str
-    anchor: Anchor
-    fingerprint: str  # SHA-256 hex of the tree-sitter token stream (comments stripped, whitespace normalised)
-    fingerprint_at_hlc: HLC  # HLC when this fingerprint was last computed; staleness check uses this
-    parent_symbol: str | None = None  # enclosing entity path for sub-entity anchors (ts_query inside a method)
-    types_hash: str | None = None  # SHA-256 of the AST node-type sequence (rename-invariant structural identity)
-    minhash_sketch: bytes | None = None  # 16-byte MinHash sketch over k=5 token n-grams (move detection)
+    id: str = Field(default_factory=new_binding_id)
+    feature_id: str
+    file: str  # repo-relative posix path
+    symbol_path: str  # "pkg/mod.py::Class.method" — joins to the index
+    fingerprint: str  # tokens_hash at attribution time; staleness signal
+    updated_at: HLC = Field(default_factory=HLC.now)
