@@ -72,3 +72,20 @@ def test_bootstrap_dedups_across_batches(store):
 def test_bootstrap_empty_repo(store):
     res = bootstrap_from_chunks([], store, propose=lambda *a, **k: [], max_per_call=40)
     assert res.chunks == 0 and res.features == 0 and res.batches == 0
+
+
+def test_bootstrap_fallback_covers_chunks_when_llm_returns_nothing(store):
+    # LLM returns no ops (the flaky reasoning-model failure mode) → deterministic
+    # fallback must still bind every chunk, one node per file.
+    rows = [
+        Row("auth.py", "auth.py::login", tokens_hash="h1"),
+        Row("auth.py", "auth.py::logout", tokens_hash="h2"),
+        Row("math_utils.py", "math_utils.py::add", tokens_hash="h3"),
+    ]
+    res = bootstrap_from_chunks(rows, store, propose=lambda *a, **k: [], max_per_call=40)
+
+    assert res.features == 2  # one per file
+    all_bound = {b.symbol_path for b in store.all_bindings()}
+    assert all_bound == {"auth.py::login", "auth.py::logout", "math_utils.py::add"}
+    titles = {f.title for f in store.list_features()}
+    assert titles == {"Auth", "Math utils"}

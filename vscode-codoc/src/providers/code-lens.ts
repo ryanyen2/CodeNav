@@ -1,18 +1,23 @@
 import * as vscode from 'vscode';
-import { ServerState } from '../state/server';
+import { WorkspaceState } from '../state/workspace-state';
+import { entriesForFile } from '../state/bindings-model';
 
 export class CodocCodeLensProvider implements vscode.CodeLensProvider {
-    constructor(private server: ServerState) {}
+    constructor(private state: WorkspaceState) {}
 
-    async provideCodeLenses(document: vscode.TextDocument): Promise<vscode.CodeLens[]> {
-        if (!this.server.connected || !this.server.client) return [];
+    provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+        if (!this.state.rootDir) return [];
 
         const relPath = vscode.workspace.asRelativePath(document.fileName);
-        let bindingMap: Record<string, string> = {};
-        try {
-            bindingMap = await this.server.client.getBindingsByFile(relPath);
-        } catch {
-            // Server unreachable or endpoint not yet implemented — fall back to generic lens.
+        const entries = entriesForFile(this.state.sidecar, relPath);
+
+        // Build a symbol → feature_title map for fast lookup by symbol name.
+        // Symbol path format: "file.py::ClassName.method_name" — the leaf is
+        // what we match against declaration lines.
+        const byLeaf = new Map<string, string>();
+        for (const e of entries) {
+            const leaf = e.symbol.includes('::') ? e.symbol.split('::')[1] : e.symbol;
+            byLeaf.set(leaf, e.feature_title);
         }
 
         const lenses: vscode.CodeLens[] = [];
@@ -22,13 +27,12 @@ export class CodocCodeLensProvider implements vscode.CodeLensProvider {
             if (!isDecl) continue;
 
             const range = new vscode.Range(i, 0, i, line.length);
-            const featureTitle = findFeatureTitleForLine(bindingMap, i);
+            const featureTitle = _findFeatureTitle(byLeaf, line);
 
             if (featureTitle) {
                 lenses.push(new vscode.CodeLens(range, {
                     title: `codoc: ${featureTitle}`,
-                    command: 'codoc.navigateToFeature',
-                    arguments: [featureTitle],
+                    command: 'codoc.open',
                     tooltip: 'Open feature in codoc tree',
                 }));
             } else {
@@ -44,14 +48,12 @@ export class CodocCodeLensProvider implements vscode.CodeLensProvider {
 }
 
 /**
- * Given a map of {symbolOrRange → featureTitle} returned by the server's
- * /bindings/by-file endpoint, find the best match for a given line number.
- * The server may return line numbers as keys (e.g. "42") or symbol names.
- * We try line-number first, then fall back to returning null.
+ * Identify the feature title for a declaration line by matching the declared
+ * name against the symbol leaf names we know from the sidecar.
  */
-function findFeatureTitleForLine(bindingMap: Record<string, string>, line: number): string | null {
-    // Key could be a stringified line number
-    const byLine = bindingMap[String(line)];
-    if (byLine) return byLine;
-    return null;
+function _findFeatureTitle(byLeaf: Map<string, string>, line: string): string | null {
+    // Extract the declared name from common patterns.
+    const m = /(?:def |class |function |async def )\s*(\w+)/.exec(line);
+    if (!m) return null;
+    return byLeaf.get(m[1]) ?? null;
 }

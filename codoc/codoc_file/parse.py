@@ -60,6 +60,8 @@ def parse_text(text: str) -> ParsedTree:
             continue
         if s.startswith("#"):
             continue
+        if s.startswith("↪ refs:"):
+            continue
 
         mp = _PROPOSAL_RE.match(line)
         if mp:

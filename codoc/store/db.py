@@ -53,6 +53,20 @@ CREATE TABLE IF NOT EXISTS events (
     accepted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_applied ON events(applied);
+
+CREATE TABLE IF NOT EXISTS code_edges (
+    src_file    TEXT NOT NULL,
+    src_symbol  TEXT NOT NULL,
+    dst_name    TEXT NOT NULL,
+    dst_symbol  TEXT,
+    dst_file    TEXT,
+    kind        TEXT NOT NULL,
+    internal    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (src_symbol, dst_name, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_edges_src_symbol ON code_edges(src_symbol);
+CREATE INDEX IF NOT EXISTS idx_edges_dst_symbol ON code_edges(dst_symbol);
+CREATE INDEX IF NOT EXISTS idx_edges_src_file   ON code_edges(src_file);
 """
 
 
@@ -231,6 +245,50 @@ class Store:
     def delete_event(self, event_id: str) -> None:
         self.conn.execute("DELETE FROM events WHERE id=?", (event_id,))
         self.conn.commit()
+
+    # -- code_edges (derived graph cache) ---------------------------------
+    def insert_edges(self, edges: list[dict]) -> None:
+        self.conn.executemany(
+            """
+            INSERT OR REPLACE INTO code_edges
+                (src_file, src_symbol, dst_name, dst_symbol, dst_file, kind, internal)
+            VALUES
+                (:src_file, :src_symbol, :dst_name, :dst_symbol, :dst_file, :kind, :internal)
+            """,
+            edges,
+        )
+        self.conn.commit()
+
+    def delete_edges_from_files(self, files: set[str]) -> None:
+        if not files:
+            return
+        placeholders = ",".join("?" * len(files))
+        self.conn.execute(
+            f"DELETE FROM code_edges WHERE src_file IN ({placeholders})", tuple(files)
+        )
+        self.conn.commit()
+
+    def drop_all_edges(self) -> None:
+        self.conn.execute("DELETE FROM code_edges")
+        self.conn.commit()
+
+    def edges_out(self, symbol: str, *, internal_only: bool = True) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM code_edges WHERE src_symbol=?"
+        if internal_only:
+            sql += " AND internal=1"
+        return self.conn.execute(sql, (symbol,)).fetchall()
+
+    def edges_in(self, symbol: str, *, internal_only: bool = True) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM code_edges WHERE dst_symbol=?"
+        if internal_only:
+            sql += " AND internal=1"
+        return self.conn.execute(sql, (symbol,)).fetchall()
+
+    def all_edges(self, *, internal_only: bool = False) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM code_edges"
+        if internal_only:
+            sql += " WHERE internal=1"
+        return self.conn.execute(sql).fetchall()
 
 
 # ---------------------------------------------------------------------------

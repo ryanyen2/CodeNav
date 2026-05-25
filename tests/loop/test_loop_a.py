@@ -115,21 +115,102 @@ def test_added_unbound_add_node_is_structural(store):
 def test_small_amend_autoapplies_large_amend_proposed(store):
     f = _feature(store, title="Foo", description="the quick brown fox jumps over")
     _bind(store, f.id, "a.py", "a.py::foo")
-    # an unbound add forces the LLM pass; the amend targets the existing feature
-    cs = ChangeSet(
-        added=[ChunkRef("a.py", "a.py::new", "fp", "src")],
-        modified=[ChunkRef("a.py", "a.py::foo", "new", "src")],
-    )
 
+    # A fresh unbound add per sub-case forces the LLM pass; the LLM attaches it
+    # (so the coverage net stays out of the way) and emits the amend under test.
+    def _attach(sym):
+        return NodeOp(kind=NodeOpKind.ATTACH, feature_id=f.id, bindings=[("a.py", sym)])
+
+    cs_small = ChangeSet(added=[ChunkRef("a.py", "a.py::new1", "fp", "src")],
+                         modified=[ChunkRef("a.py", "a.py::foo", "new", "src")])
     small = NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id,
                    description="the quick brown fox jumped over")  # ~1 char change
-    res = apply_changeset(cs, store, propose=_propose([small]))
+    res = apply_changeset(cs_small, store, propose=_propose([_attach("a.py::new1"), small]))
     assert not res.proposed
     assert store.get_feature(f.id).description == "the quick brown fox jumped over"
 
+    cs_large = ChangeSet(added=[ChunkRef("a.py", "a.py::new2", "fp", "src")],
+                         modified=[ChunkRef("a.py", "a.py::foo", "new", "src")])
     large = NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id,
                    description="completely different prose describing an entirely new responsibility set")
-    res2 = apply_changeset(cs, store, propose=_propose([large]))
+    res2 = apply_changeset(cs_large, store, propose=_propose([_attach("a.py::new2"), large]))
     assert res2.proposed and res2.proposed[0].kind is NodeOpKind.AMEND
     # unchanged because the large amend is only a proposal
     assert store.get_feature(f.id).description == "the quick brown fox jumped over"
+
+
+# -----------------------------------------------------------------------
+# Correspondence: move / rename relocate the binding deterministically (no LLM)
+# -----------------------------------------------------------------------
+
+def test_move_relocates_binding_without_llm(store):
+    """Same content (tokens_hash) at a new file/symbol carries the attribution."""
+    f = _feature(store, title="HTTP verbs")
+    _bind(store, f.id, "api.py", "api.py::trace", fp="HASH_A")
+    cs = ChangeSet(
+        removed=[ChunkRef("api.py", "api.py::trace", "HASH_A", "", "TYPES_A")],
+        added=[ChunkRef("utils.py", "utils.py::trace", "HASH_A", "def trace(): ...", "TYPES_A")],
+    )
+    res = apply_changeset(cs, store, propose=_raising)  # LLM must NOT run
+    assert not res.llm_called
+    assert store.binding_at("api.py", "api.py::trace") is None
+    moved = store.binding_at("utils.py", "utils.py::trace")
+    assert moved is not None and moved.feature_id == f.id
+
+
+def test_rename_relocates_binding_same_file(store):
+    """Same AST shape (types_hash) in the same file, different content = a rename."""
+    f = _feature(store, title="Public API")
+    _bind(store, f.id, "a.py", "a.py::options", fp="HASH_OLD")
+    cs = ChangeSet(
+        removed=[ChunkRef("a.py", "a.py::options", "HASH_OLD", "", "SHAPE_X")],
+        added=[ChunkRef("a.py", "a.py::options_request", "HASH_NEW", "def options_request(): ...", "SHAPE_X")],
+    )
+    res = apply_changeset(cs, store, propose=_raising)
+    assert not res.llm_called
+    assert store.binding_at("a.py", "a.py::options") is None
+    renamed = store.binding_at("a.py", "a.py::options_request")
+    assert renamed is not None and renamed.feature_id == f.id
+
+
+def test_rename_not_matched_across_files(store):
+    """A types_hash match across DIFFERENT files is not a rename — fall through."""
+    f = _feature(store, title="Owner")
+    _bind(store, f.id, "a.py", "a.py::x", fp="H1")
+    cs = ChangeSet(
+        removed=[ChunkRef("a.py", "a.py::x", "H1", "", "SHAPE")],
+        added=[ChunkRef("b.py", "b.py::y", "H2", "def y(): ...", "SHAPE")],
+    )
+    res = apply_changeset(cs, store, propose=_propose([]))  # no neighbor, no LLM op
+    assert res.llm_called                                   # treated as a genuine add
+    # not silently bound to f by a (wrong) relocation; coverage proposes a home
+    assert store.binding_at("b.py", "b.py::y") is None
+    assert res.proposed and res.proposed[0].kind is NodeOpKind.ADD_NODE
+
+
+# -----------------------------------------------------------------------
+# Coverage net: an added chunk the LLM ignored is never silently dropped
+# -----------------------------------------------------------------------
+
+def test_coverage_attaches_uncovered_add_to_neighbor(store):
+    """LLM returns nothing for a new chunk → it lands with its graph-neighbor's feature."""
+    f = _feature(store, title="Helpers")
+    _bind(store, f.id, "util.py", "util.py::helper", fp="h")
+    store.insert_edges([{
+        "src_file": "new.py", "src_symbol": "new.py::caller", "dst_name": "helper",
+        "dst_symbol": "util.py::helper", "dst_file": "util.py", "kind": "call", "internal": 1,
+    }])
+    cs = ChangeSet(added=[ChunkRef("new.py", "new.py::caller", "hh", "def caller(): helper()")])
+    res = apply_changeset(cs, store, propose=_propose([]))
+    bound = store.binding_at("new.py", "new.py::caller")
+    assert bound is not None and bound.feature_id == f.id
+    assert not res.proposed
+
+
+def test_coverage_proposes_for_isolated_add(store):
+    """An added chunk with no neighbors and no LLM placement → pending proposal."""
+    _feature(store, title="Something")  # exists so the tree isn't empty
+    cs = ChangeSet(added=[ChunkRef("x.py", "x.py::lonely", "z", "def lonely(): pass")])
+    res = apply_changeset(cs, store, propose=_propose([]))
+    assert store.binding_at("x.py", "x.py::lonely") is None     # proposal, not applied
+    assert res.proposed and res.proposed[0].kind is NodeOpKind.ADD_NODE

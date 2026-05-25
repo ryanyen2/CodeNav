@@ -86,44 +86,8 @@
         "title": "codoc: Open"
       },
       {
-        "command": "codoc.renderHard",
-        "title": "codoc: Render (hard refresh)"
-      },
-      {
-        "command": "codoc.acceptProposal",
-        "title": "codoc: Accept proposal"
-      },
-      {
-        "command": "codoc.rejectProposal",
-        "title": "codoc: Reject proposal"
-      },
-      {
-        "command": "codoc.acceptAll",
-        "title": "codoc: Accept all proposals"
-      },
-      {
-        "command": "codoc.rejectAll",
-        "title": "codoc: Reject all proposals"
-      },
-      {
-        "command": "codoc.acceptProposalWithEdits",
-        "title": "codoc: Accept proposal with edits"
-      },
-      {
-        "command": "codoc.showProposalActions",
-        "title": "codoc: Show proposal actions"
-      },
-      {
         "command": "codoc.navigateToFeature",
         "title": "codoc: Navigate to feature"
-      },
-      {
-        "command": "codoc.acceptProposalAtLine",
-        "title": "codoc: Accept proposal at line"
-      },
-      {
-        "command": "codoc.rejectProposalAtLine",
-        "title": "codoc: Reject proposal at line"
       },
       {
         "command": "codoc.refreshFeatureTree",
@@ -151,18 +115,6 @@
     ],
     "keybindings": [
       {
-        "command": "codoc.acceptProposal",
-        "key": "ctrl+enter",
-        "mac": "cmd+enter",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
-        "command": "codoc.rejectProposal",
-        "key": "ctrl+shift+backspace",
-        "mac": "cmd+shift+backspace",
-        "when": "editorTextFocus && editorLangId == 'codoc'"
-      },
-      {
         "command": "codoc.open",
         "key": "ctrl+k ctrl+c",
         "mac": "cmd+k cmd+c"
@@ -183,11 +135,6 @@
     "configuration": {
       "title": "codoc",
       "properties": {
-        "codoc.serverUrl": {
-          "type": "string",
-          "default": "http://localhost:8001",
-          "description": "codoc FastAPI server URL"
-        },
         "codoc.rootDir": {
           "type": "string",
           "default": "",

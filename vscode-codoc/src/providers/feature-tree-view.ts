@@ -1,45 +1,26 @@
 import * as vscode from 'vscode';
-import { ServerState } from '../state/server';
-import { FeatureResponse } from '../api/client';
+import { WorkspaceState, ParsedFeature } from '../state/workspace-state';
 
-export class FeatureTreeItem extends vscode.TreeItem {
-    constructor(
-        public readonly feature: FeatureResponse,
-        collapsibleState: vscode.TreeItemCollapsibleState,
-    ) {
-        super(feature.title || feature.slug, collapsibleState);
+class FeatureTreeItem extends vscode.TreeItem {
+    constructor(public readonly feature: ParsedFeature) {
+        const label = feature.title || '(untitled)';
+        // Determine whether this feature has children by inspecting via the provider.
+        super(label, vscode.TreeItemCollapsibleState.Collapsed);
 
-        const stateLabel = feature.retired ? 'retired'
-            : feature.state === 'severed' ? 'severed'
-            : feature.state === 'strained' ? 'strained'
-            : null;
-
-        this.description = stateLabel ? `(${stateLabel})` : undefined;
-
-        const tooltipLines = [feature.title || feature.slug];
-        if (feature.intent) tooltipLines.push('', feature.intent);
-        this.tooltip = tooltipLines.join('\n');
-
+        this.description = feature.retired ? '(retired)' : undefined;
+        this.tooltip = feature.description
+            ? `${label}\n\n${feature.description}`
+            : label;
         this.contextValue = 'codocFeature';
+        this.iconPath = feature.retired
+            ? new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground'))
+            : new vscode.ThemeIcon('symbol-module');
 
         this.command = {
-            command: 'codoc.navigateToFeature',
-            title: 'Navigate to feature',
-            arguments: [feature.title || feature.slug],
+            command: 'codoc.open',
+            title: 'Open tree.codoc',
+            arguments: [],
         };
-
-        if (feature.retired) {
-            this.iconPath = new vscode.ThemeIcon('circle-slash',
-                new vscode.ThemeColor('disabledForeground'));
-        } else if (feature.state === 'severed') {
-            this.iconPath = new vscode.ThemeIcon('error',
-                new vscode.ThemeColor('errorForeground'));
-        } else if (feature.state === 'strained') {
-            this.iconPath = new vscode.ThemeIcon('warning',
-                new vscode.ThemeColor('editorWarning.foreground'));
-        } else {
-            this.iconPath = new vscode.ThemeIcon('symbol-module');
-        }
     }
 }
 
@@ -57,42 +38,27 @@ export class FeatureTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     private _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined | null | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-    // null key = root features (parent_uuid is null/empty)
-    private childrenMap = new Map<string | null, FeatureResponse[]>();
-    private loaded = false;
-    private loading = false;
+    // parent_id → children (null key = root)
+    private childrenMap = new Map<string | null, ParsedFeature[]>();
 
-    constructor(private server: ServerState) {}
+    constructor(private state: WorkspaceState) {
+        // Refresh whenever the files change.
+        state.onDidChange(() => this.refresh());
+        this._buildMap();
+    }
 
-    async loadFeatures(): Promise<void> {
-        if (this.loading) return;
-        this.loading = true;
-        try {
-            if (!this.server.client) {
-                this.childrenMap.clear();
-                this.loaded = false;
-                return;
-            }
-            // Fetch ALL features in one call and build the parent→children map locally.
-            const all = await this.server.client.getTree(undefined, true);
-            this.childrenMap.clear();
-            for (const f of all) {
-                const key = f.parent_uuid || null;
-                if (!this.childrenMap.has(key)) this.childrenMap.set(key, []);
-                this.childrenMap.get(key)!.push(f);
-            }
-            this.loaded = true;
-        } catch {
-            this.childrenMap.clear();
-            this.loaded = false;
-        } finally {
-            this.loading = false;
-            this._onDidChangeTreeData.fire();
+    private _buildMap(): void {
+        this.childrenMap.clear();
+        for (const f of this.state.features) {
+            const key = f.parent_id ?? null;
+            if (!this.childrenMap.has(key)) this.childrenMap.set(key, []);
+            this.childrenMap.get(key)!.push(f);
         }
     }
 
     refresh(): void {
-        void this.loadFeatures();
+        this._buildMap();
+        this._onDidChangeTreeData.fire();
     }
 
     getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -100,29 +66,23 @@ export class FeatureTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
 
     getChildren(element?: TreeNode): vscode.ProviderResult<TreeNode[]> {
-        if (!this.server.client) {
-            return [new PlaceholderItem('codoc server offline — run `codoc server`')];
-        }
-        if (!this.loaded) {
-            void this.loadFeatures();
-            return [new PlaceholderItem('Loading features…')];
+        if (!this.state.rootDir) {
+            return [new PlaceholderItem('codoc not initialized — run `codoc init`')];
         }
 
-        const parentKey = (element instanceof FeatureTreeItem) ? element.feature.uuid : null;
+        const parentKey = (element instanceof FeatureTreeItem) ? element.feature.id : null;
         const children = this.childrenMap.get(parentKey) ?? [];
 
         if (parentKey === null && children.length === 0) {
-            return [new PlaceholderItem('No features — run `codoc sync` to bootstrap')];
+            return [new PlaceholderItem('No features — run `codoc init` to bootstrap')];
         }
 
         return children.map(f => {
-            const hasChildren = this.childrenMap.has(f.uuid);
-            return new FeatureTreeItem(
-                f,
-                hasChildren
-                    ? vscode.TreeItemCollapsibleState.Collapsed
-                    : vscode.TreeItemCollapsibleState.None,
-            );
+            const item = new FeatureTreeItem(f);
+            item.collapsibleState = this.childrenMap.has(f.id)
+                ? vscode.TreeItemCollapsibleState.Collapsed
+                : vscode.TreeItemCollapsibleState.None;
+            return item;
         });
     }
 }

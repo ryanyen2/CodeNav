@@ -16,6 +16,12 @@ nodes.
   were bound to. A feature listed here has just lost its last binding.
 - `modified` — chunks whose code changed but stay bound to `current_feature_id`;
   use these only to decide whether that feature's description is now stale.
+- `edges` (optional) — call/import/contain edges from the code dependency graph
+  near the changed symbols. Use these to understand cohesion and choose
+  `parent_id` for new nodes, or to spot related existing features.
+- `impacted` (optional) — features whose code directly calls or imports the
+  changed symbols (upstream dependents). **Advisory only**: emit an `amend` for
+  an impacted feature only when the upstream change genuinely shifts its meaning.
 
 ## The relevant subtree (full detail)
 
@@ -42,10 +48,15 @@ Every op may carry a one-line `rationale`.
 
 ## Rules
 
-1. Return the FEWEST ops that capture the change. Doing nothing is valid — emit
-   `"ops": []` if the change is cosmetic and no node needs updating.
+1. Return the FEWEST ops that capture the change. **Every chunk in `added` MUST
+   be covered by exactly one op — either `attach` it to an existing feature or
+   put it in an `add_node`. Never leave an added chunk unattributed.** Returning
+   `"ops": []` is only valid when `added` is empty and the `modified`/`removed`
+   changes need no node update.
 2. Strongly prefer `attach` to an existing feature over `add_node`. Only add a
-   node when no feature in the subtree plausibly covers the new chunk.
+   node when no feature in the subtree plausibly covers the new chunk. (When the
+   tree is empty — `subtree` and the title list are empty — group the added
+   chunks into a small number of cohesive `add_node`s.)
 3. NEVER create a node whose `title` duplicates or paraphrases any title in the
    tree (see the full title list above). If two added chunks belong together,
    cover them with ONE node, not two.

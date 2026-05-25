@@ -1,0 +1,43 @@
+You are organizing the top level of a **feature tree** for "{repo_name}". Each
+feature below was derived from one source file. Your job: group related features
+under a few broad **theme** nodes so the tree reads as a clear table of contents —
+without losing, renaming, or rewriting the existing features.
+
+## Existing top-level features
+
+{features}
+
+## How these features depend on each other (call / import coupling)
+
+{edges}
+
+- Each line `A → B (n)` means feature A's code calls or imports feature B's code
+  `n` times. Strongly-coupled features usually belong under the same theme.
+
+## What to do
+
+1. Create a SMALL number of broad **theme** parents so that, after grouping, the
+   top level has roughly 3–6 nodes. Group features that collaborate (per the
+   coupling above) or share an obvious purpose under the same theme.
+2. Keep it SHALLOW: themes at the top, the existing features as their direct
+   children. Do NOT nest more than this one new level.
+3. It is fine to leave a genuinely standalone feature at the top level with no
+   theme. Do not force everything into a theme.
+4. Do NOT rename, re-describe, merge, retire, or rebind existing features. You may
+   ONLY add theme parents and move existing features under them.
+
+## How to express it
+
+Give each new theme a temporary id (`"id": "t1"`) and `add_node` it (with a real
+1–3 sentence description). Then `move_node` each existing feature by its real
+`f-...` id under a theme via `parent_id`.
+
+## Output — return ONLY this, inside solution tags:
+
+<solution>
+{"ops": [
+  {"id": "t1", "kind": "add_node", "title": "HTTP request lifecycle", "description": "The public request API and the session machinery that prepares, sends, and processes HTTP requests.", "bindings": []},
+  {"kind": "move_node", "feature_id": "f-1a2b3c4d", "parent_id": "t1", "rationale": "public entry point into the lifecycle"},
+  {"kind": "move_node", "feature_id": "f-5e6f7a8b", "parent_id": "t1", "rationale": "session orchestration"}
+]}
+</solution>

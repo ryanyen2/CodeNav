@@ -1,0 +1,59 @@
+You are building the initial **feature tree** for the codebase "{repo_name}" — a
+navigable hierarchy of *intent*, where each node is a named unit of what the code
+is for and binds to code chunks (a chunk = a function, method, class, or
+module-level block, identified by `file::symbol_path`).
+
+You are looking at ONE file: `{file}`. Below are all of its code chunks and the
+call/containment relationships among them. Produce a SMALL, coherent set of
+features that captures what this file is for.
+
+## Chunks in {file}
+
+{chunks}
+
+## Relationships near these chunks
+
+{edges}
+
+- `calls` / `called_by` are other symbols (some in other files) — use them to
+  judge cohesion, NOT to bind anything outside this file.
+- `contained_in` means the symbol is a method/member of that class.
+
+## Features already created from other files (for naming consistency only — do NOT bind to them)
+
+{existing_titles}
+
+## How to choose nodes
+
+1. **Group coarsely — prefer FEW nodes.** A small or single-purpose file is
+   usually ONE feature. Only split a file when it clearly does two or more
+   unrelated things.
+2. A class and its methods are normally ONE feature (the class). Only break out a
+   cluster of methods as a CHILD node when they form a clearly separable concern.
+3. **Every chunk listed above MUST be bound by exactly one node you emit.** Bind
+   module-level chunks (`{file}::__module__`) to the file's primary feature, not a
+   node of their own.
+4. Do not invent a node whose title merely paraphrases one already created in
+   another file (see the list above); name this file's intent on its own terms.
+
+## Nesting (within this file)
+
+To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
+`"parent_id"` to that temporary id. Parents must appear before their children.
+
+## Field rules
+
+- `title`: a 3–6 word sentence-case noun phrase naming the intent ("HTTP
+  transport adapter") — NEVER the bare filename.
+- `description`: 1–3 sentences — what it does and why it exists. No lists of code
+  locations (bindings carry that). NEVER leave it empty.
+- `bindings`: the `[file, symbol_path]` pairs this node owns.
+
+## Output — return ONLY this, inside solution tags:
+
+<solution>
+{"ops": [
+  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "Sends prepared requests over urllib3, managing connection pools, proxies, and TLS.", "bindings": [["{file}", "{file}::HTTPAdapter"], ["{file}", "{file}::HTTPAdapter.send"]], "rationale": "the file's primary class"},
+  {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Connection pool configuration", "description": "Derives and caches urllib3 pool managers for a request's target and proxy.", "bindings": [["{file}", "{file}::HTTPAdapter.get_connection"]], "rationale": "separable pooling concern"}
+]}
+</solution>

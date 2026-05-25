@@ -25,7 +25,9 @@ import sys
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env file if present
+# override=True so the project's .env is authoritative over stale shell exports
+# (e.g. a globally-exported CODOC_MAX_TOKENS that would otherwise win).
+load_dotenv(override=True)
 
 
 # ---------------------------------------------------------------------------
@@ -46,10 +48,13 @@ def get_llm_config() -> LLMConfig:
     """Build LLMConfig from environment variables."""
     return LLMConfig(
         provider=os.environ.get("CODOC_PROVIDER", "openai"),
-        model=os.environ.get("CODOC_MODEL", "gpt-4o"),
+        model=os.environ.get("CODOC_MODEL", "gpt-5.4-mini"),
         api_key=os.environ.get("OPENAI_API_KEY"),
         base_url=os.environ.get("CODOC_BASE_URL"),
-        max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "4096")),
+        temperature=float(os.environ.get("CODOC_TEMPERATURE", "0.2")),
+        # GPT-5 reasoning models spend completion budget on hidden reasoning, so
+        # the budget must comfortably exceed the visible JSON we want back.
+        max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "16000")),
     )
 
 
@@ -88,14 +93,23 @@ def _complete_openai(prompt: str, config: LLMConfig) -> str:
         kwargs["base_url"] = config.base_url
 
     client = openai.OpenAI(**kwargs)
-    response = client.chat.completions.create(
-        model=config.model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=config.temperature,
-        max_completion_tokens=config.max_tokens,
-    )
-    content = response.choices[0].message.content
-    return content if content is not None else ""
+    # Reasoning models (GPT-5 family) spend completion budget on hidden reasoning;
+    # if the visible answer gets truncated (finish_reason == "length"), retry once
+    # with a larger budget so we don't return half a JSON object.
+    budget = config.max_tokens
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=config.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=config.temperature,
+            max_completion_tokens=budget,
+        )
+        choice = response.choices[0]
+        content = choice.message.content or ""
+        if choice.finish_reason != "length" or attempt == 1:
+            return content
+        budget = min(budget * 3, 64000)
+    return content
 
 
 def _complete_ollama(prompt: str, config: LLMConfig) -> str:

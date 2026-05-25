@@ -19,12 +19,17 @@ from codoc.pipelines.indexing.runner import update_index
 @dataclass
 class ChunkRef:
     """A chunk involved in a change. ``source`` is the new source for
-    added/modified, or the pre-change source for removed (best-effort)."""
+    added/modified, or the pre-change source for removed (best-effort).
+
+    ``fingerprint`` is the chunk's ``tokens_hash`` (content identity, move-
+    invariant); ``types_hash`` is its AST-shape identity (rename-invariant).
+    Together they let Loop A recognise a remove+add pair as a relocation."""
 
     file: str
     symbol_path: str
     fingerprint: str = ""
     source: str = ""
+    types_hash: str = ""
 
 
 @dataclass
@@ -32,6 +37,7 @@ class ChangeSet:
     added: list[ChunkRef] = field(default_factory=list)
     removed: list[ChunkRef] = field(default_factory=list)
     modified: list[ChunkRef] = field(default_factory=list)
+    rows: list[ChunkRow] = field(default_factory=list)  # post-update index snapshot
 
     def is_empty(self) -> bool:
         return not (self.added or self.removed or self.modified)
@@ -67,20 +73,21 @@ def compute_changeset(
     """
     old_rows = _scope(read_all_chunks(codoc_dir), file_scope)
     update_index(root_dir, codoc_dir)
-    new_rows = _scope(read_all_chunks(codoc_dir), file_scope)
+    all_new_rows = read_all_chunks(codoc_dir)
+    new_rows = _scope(all_new_rows, file_scope)
 
     old_by_key = {(r.file, r.symbol_path): r for r in old_rows}
     new_by_key = {(r.file, r.symbol_path): r for r in new_rows}
 
-    cs = ChangeSet()
+    cs = ChangeSet(rows=all_new_rows)
     for key in set(old_by_key) | set(new_by_key):
         file, symbol_path = key
         old = old_by_key.get(key)
         new = new_by_key.get(key)
         if old is None and new is not None:
-            cs.added.append(ChunkRef(file, symbol_path, new.tokens_hash, new.source))
+            cs.added.append(ChunkRef(file, symbol_path, new.tokens_hash, new.source, new.types_hash))
         elif old is not None and new is None:
-            cs.removed.append(ChunkRef(file, symbol_path, old.tokens_hash, old.source))
+            cs.removed.append(ChunkRef(file, symbol_path, old.tokens_hash, old.source, old.types_hash))
         elif old is not None and new is not None and old.tokens_hash != new.tokens_hash:
-            cs.modified.append(ChunkRef(file, symbol_path, new.tokens_hash, new.source))
+            cs.modified.append(ChunkRef(file, symbol_path, new.tokens_hash, new.source, new.types_hash))
     return cs
