@@ -60,37 +60,27 @@ def _use_fa3():
 # =============================================================================
 def _sdpa_attention(q, k, v, window_size, enable_gqa):
     """
-    SDPA attention with sliding window support.
-    q, k, v are (B, H, T, D) format.
+    SDPA fallback for Flash Attention 3, refactored to always build an explicit
+    causal mask instead of branching on Tq == Tk. This avoids the
+    is_causal=True fast path so we get consistent behavior across training
+    and KV-cache generation without special-casing single-token decode.
     """
     Tq = q.size(2)
     Tk = k.size(2)
     window = window_size[0]
-
-    # Full context, same length
-    if (window < 0 or window >= Tq) and Tq == Tk:
-        return F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=enable_gqa)
-
-    # Single token generation
-    if Tq == 1:
-        if window >= 0 and window < Tk:
-            # window is "left" tokens we need to include (window + 1) keys total
-            start = max(0, Tk - (window + 1))
-            k = k[:, :, start:, :]
-            v = v[:, :, start:, :]
-        return F.scaled_dot_product_attention(q, k, v, is_causal=False, enable_gqa=enable_gqa)
-
-    # Need explicit mask for sliding window/chunk inference
     device = q.device
-    # For chunk inference (Tq != Tk), is_causal is not aligned to cache position => build an explicit bool mask
-    row_idx = (Tk - Tq) + torch.arange(Tq, device=device).unsqueeze(1)
-    col_idx = torch.arange(Tk, device=device).unsqueeze(0)
-    mask = col_idx <= row_idx
 
-    # sliding window (left)
-    if window >= 0 and window < Tk:
-        mask = mask & ((row_idx - col_idx) <= window)
-    
+    # Build explicit causal + sliding-window attention mask
+    q_pos = (Tk - Tq) + torch.arange(Tq, device=device)  # (Tq,)
+    k_pos = torch.arange(Tk, device=device)               # (Tk,)
+    causal_mask = k_pos.unsqueeze(0) <= q_pos.unsqueeze(1)  # (Tq, Tk)
+
+    if window >= 0:
+        window_mask = (q_pos.unsqueeze(1) - k_pos.unsqueeze(0)) <= window
+        causal_mask = causal_mask & window_mask
+
+    # Expand to (B, H, Tq, Tk) for SDPA
+    mask = causal_mask.unsqueeze(0).unsqueeze(0)
     return F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=enable_gqa)
 
 # =============================================================================

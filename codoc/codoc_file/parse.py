@@ -24,6 +24,9 @@ from codoc.codoc_file.render import PENDING_SENTINEL
 
 _FEATURE_RE = re.compile(r"^(?P<indent>\s*)(?P<marker>[-~])\s+(?P<rest>.*\S)\s*$")
 _ID_RE = re.compile(r"⟨(f-[0-9a-f]+|new)⟩")
+# Detects a line that looks like a feature line (indented non-space + space + text)
+# but uses an unrecognized marker — e.g. "    * Title ⟨f-id⟩".
+_BAD_MARKER_RE = re.compile(r"^(?P<indent>\s*)(?P<marker>[^\s\-~#])[ \t]+\S")
 # A diff hunk: col-0 op char, space, then a feature marker. Distinguishes a
 # proposal line (``- ~ Title``) from a live feature line (``- Title``).
 _DIFF_HUNK_RE = re.compile(r"^[+\-~] [-~] ")
@@ -68,6 +71,7 @@ def parse_text(text: str) -> ParsedTree:
     desc_owner: ParsedNode | None = None
     desc_buf: list[str] = []
     in_pending = False
+    skip_desc = False  # True after a bad-marker line; cleared on next valid feature
 
     def flush_desc() -> None:
         nonlocal desc_owner, desc_buf
@@ -107,6 +111,7 @@ def parse_text(text: str) -> ParsedTree:
 
         mf = _FEATURE_RE.match(line)
         if mf:
+            skip_desc = False
             flush_desc()
             indent = len(mf.group("indent"))
             marker = mf.group("marker")
@@ -130,7 +135,17 @@ def parse_text(text: str) -> ParsedTree:
             desc_owner, desc_buf = node, []
             continue
 
+        # Detect mangled feature lines (wrong marker, e.g. `*` or `+`).
+        # They contain a feature id or look structurally like a feature line.
+        # Don't bleed their text (or their following description) into a previous node.
+        if _BAD_MARKER_RE.match(line) and _ID_RE.search(s):
+            tree.errors.append(f"Unrecognized feature marker on line: {s!r}")
+            skip_desc = True
+            continue
+
         # otherwise: a description line for the current node
+        if skip_desc:
+            continue
         if desc_owner is not None:
             desc_buf.append(s)
 

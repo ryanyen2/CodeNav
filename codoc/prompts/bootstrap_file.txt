@@ -28,11 +28,20 @@ features that captures what this file is for.
 1. **Group coarsely — prefer FEW nodes.** A small or single-purpose file is
    usually ONE feature. Only split a file when it clearly does two or more
    unrelated things.
+   - **Upper-bound check:** If a single node would own more than ~12 bindings,
+     ask whether the bindings represent genuinely one concern. If your description
+     needs to comma-list 4+ distinct subsystems (e.g. "config, attention, MLP,
+     generation, analysis"), split it — that description is signaling multiple nodes.
+   - **Two parallel implementations rule:** If a file contains two classes with
+     independent implementations of the same interface (e.g. two different tokenizer
+     backends, two different optimizer variants), give each class its own node rather
+     than lumping them. They serve different purposes even if they share a protocol.
 2. A class and its methods are normally ONE feature (the class). Only break out a
    cluster of methods as a CHILD node when they form a clearly separable concern.
 3. **Every chunk listed above MUST be bound by exactly one node you emit.** Bind
    module-level chunks (`{file}::__module__`) to the file's primary feature, not a
-   node of their own.
+   node of their own. Bind module-level constants to the node that primarily *uses*
+   them, not to a generic utilities node.
 4. Do not invent a node whose title merely paraphrases one already created in
    another file (see the list above); name this file's intent on its own terms.
 

@@ -33,7 +33,7 @@ def timeout(duration, formula):
     yield
     signal.alarm(0)
 
-def eval_with_timeout(formula, max_time=3):
+def eval_with_timeout(formula, max_time=5):
     try:
         with timeout(max_time, formula):
             with warnings.catch_warnings():
@@ -133,7 +133,7 @@ class KVCache:
 
 # -----------------------------------------------------------------------------
 @torch.inference_mode()
-def sample_next_token(logits, rng, temperature=1.0, top_k=None):
+def sample_token_logits(logits, rng, temperature=1.0, top_k=None):
     """Sample a single next token from given logits of shape (B, vocab_size). Returns (B, 1)."""
     assert temperature >= 0.0, "temperature must be non-negative"
     if temperature == 0.0:
@@ -231,7 +231,7 @@ class Engine:
                 break
 
             # Sample the next token for each row
-            next_ids = sample_next_token(logits, rng, temperature, top_k)  # (B, 1)
+            next_ids = sample_token_logits(logits, rng, temperature, top_k)  # (B, 1)
             sampled_tokens = next_ids[:, 0].tolist()
 
             # Process each row: choose the next token, update state, optional tool use

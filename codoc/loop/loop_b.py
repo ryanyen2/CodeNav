@@ -139,6 +139,12 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
 
     # 2. Direct user edits (intentional → applied immediately).
     parsed = parse_tree_file(codoc_dir)
+    if parsed.errors:
+        import logging
+        _log = logging.getLogger(__name__)
+        for err in parsed.errors:
+            _log.warning("tree.codoc parse warning: %s", err)
+        res.error = "; ".join(parsed.errors)
     diff = diff_codoc(parsed, store)
     for op in diff.user_ops:
         apply_op(op, store, source="user", applied=True)

@@ -74,6 +74,60 @@ def load_checkpoint(checkpoint_dir, step, device, load_optimizer=False, rank=0):
     return model_data, optimizer_data, meta_data
 
 
+def compute_checkpoint_delta(checkpoint_dir, step_a, step_b, device="cpu", threshold=None):
+    """
+    Compute the parameter-level delta between two checkpoint snapshots.
+
+    Loads the model weights saved at `step_a` and `step_b` and, for every
+    parameter they share, measures how much it moved during training. This is
+    useful for diagnosing training instability (a layer whose weights exploded)
+    or for verifying that fine-tuning only touched the parameters it was meant
+    to (everything else should have a near-zero delta).
+
+    Keys are matched after stripping the torch-compile "_orig_mod." prefix, so
+    compiled and uncompiled checkpoints compare cleanly. Tensors are upcast to
+    float32 before differencing to avoid bfloat16 precision loss.
+
+    Returns a dict:
+      {
+        "deltas": {param_name: {"abs_delta": float, "rel_delta": float}, ...},
+        "significant": [param_name, ...],   # sorted by rel_delta, largest first
+        "missing": [param_name, ...],       # present in one snapshot but not both
+      }
+    where abs_delta is the L2 norm of (b - a) and rel_delta normalizes it by the
+    L2 norm of a (0.0 when a is all zeros). A parameter is "significant" when its
+    rel_delta exceeds `threshold`; if `threshold` is None it defaults to the mean
+    rel_delta, so significant layers are those that moved more than average.
+    """
+    model_data_a, _, _ = load_checkpoint(checkpoint_dir, step_a, device)
+    model_data_b, _, _ = load_checkpoint(checkpoint_dir, step_b, device)
+    # Normalize keys so compiled/uncompiled checkpoints line up.
+    model_data_a = {k.removeprefix("_orig_mod."): v for k, v in model_data_a.items()}
+    model_data_b = {k.removeprefix("_orig_mod."): v for k, v in model_data_b.items()}
+
+    shared = sorted(set(model_data_a) & set(model_data_b))
+    missing = sorted(set(model_data_a) ^ set(model_data_b))
+
+    deltas = {}
+    for name in shared:
+        a = model_data_a[name].float()
+        b = model_data_b[name].float()
+        abs_delta = torch.linalg.vector_norm(b - a).item()
+        a_norm = torch.linalg.vector_norm(a).item()
+        rel_delta = abs_delta / a_norm if a_norm > 0 else 0.0
+        deltas[name] = {"abs_delta": abs_delta, "rel_delta": rel_delta}
+
+    if threshold is None:
+        rels = [d["rel_delta"] for d in deltas.values()]
+        threshold = sum(rels) / len(rels) if rels else 0.0
+    significant = sorted(
+        (name for name, d in deltas.items() if d["rel_delta"] > threshold),
+        key=lambda name: deltas[name]["rel_delta"],
+        reverse=True,
+    )
+    return {"deltas": deltas, "significant": significant, "missing": missing}
+
+
 def build_model(checkpoint_dir, step, device, phase):
     """
     A bunch of repetitive code to build a model from a given checkpoint.
@@ -135,14 +189,6 @@ def find_largest_model(checkpoints_dir):
     return model_tags[0]
 
 
-def find_last_step(checkpoint_dir):
-    # Look into checkpoint_dir and find model_<step>.pt with the highest step
-    checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "model_*.pt"))
-    if not checkpoint_files:
-        raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
-    last_step = int(max(os.path.basename(f).split("_")[-1].split(".")[0] for f in checkpoint_files))
-    return last_step
-
 # -----------------------------------------------------------------------------
 # convenience functions that take into account nanochat's directory structure
 
@@ -153,8 +199,9 @@ def load_model_from_dir(checkpoints_dir, device, phase, model_tag=None, step=Non
         log0(f"No model tag provided, guessing model tag: {model_tag}")
     checkpoint_dir = os.path.join(checkpoints_dir, model_tag)
     if step is None:
-        # guess the step by defaulting to the last step
-        step = find_last_step(checkpoint_dir)
+        # inline: find model_<step>.pt with the highest step
+        checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "model_*.pt"))
+        step = int(max(os.path.basename(f).split("_")[-1].split(".")[0] for f in checkpoint_files))
     assert step is not None, f"No checkpoints found in {checkpoint_dir}"
     # build the model
     log0(f"Loading model from {checkpoint_dir} with step {step}")
