@@ -16,7 +16,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
-import { SidecarData, emptySidecar } from './bindings-model';
+import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
 
 export { ParsedFeature, SidecarData };
@@ -185,5 +185,8 @@ export class WorkspaceState {
     get agentActive(): boolean { return isAgentActive(this._activity); }
     get activeFeatureLines(): number[] {
         return computeActiveFeatureLines(this._activity, this._features, this._sidecar);
+    }
+    get featureEdges(): Map<string, Set<string>> {
+        return featureAdjacency(this._sidecar);
     }
 }

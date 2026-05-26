@@ -139,6 +139,30 @@
       {
         "command": "codoc.expandFeatureSubtree",
         "title": "codoc: Expand feature subtree"
+      },
+      {
+        "command": "codoc.nav.nextSibling",
+        "title": "codoc: Next Sibling Feature"
+      },
+      {
+        "command": "codoc.nav.prevSibling",
+        "title": "codoc: Previous Sibling Feature"
+      },
+      {
+        "command": "codoc.nav.parent",
+        "title": "codoc: Go to Parent Feature"
+      },
+      {
+        "command": "codoc.nav.firstChild",
+        "title": "codoc: Go to First Child Feature"
+      },
+      {
+        "command": "codoc.acceptHunkAtCursor",
+        "title": "codoc: Accept Change at Cursor"
+      },
+      {
+        "command": "codoc.rejectHunkAtCursor",
+        "title": "codoc: Reject Change at Cursor"
       }
     ],
     "keybindings": [
@@ -158,6 +182,36 @@
         "key": "ctrl+shift+]",
         "mac": "cmd+shift+]",
         "when": "editorTextFocus && editorLangId == 'codoc'"
+      },
+      {
+        "command": "codoc.nav.nextSibling",
+        "key": "alt+down",
+        "when": "editorLangId == codoc && editorTextFocus"
+      },
+      {
+        "command": "codoc.nav.prevSibling",
+        "key": "alt+up",
+        "when": "editorLangId == codoc && editorTextFocus"
+      },
+      {
+        "command": "codoc.nav.parent",
+        "key": "alt+left",
+        "when": "editorLangId == codoc && editorTextFocus"
+      },
+      {
+        "command": "codoc.nav.firstChild",
+        "key": "alt+right",
+        "when": "editorLangId == codoc && editorTextFocus"
+      },
+      {
+        "command": "codoc.acceptHunkAtCursor",
+        "key": "alt+a",
+        "when": "editorLangId == codoc && editorTextFocus"
+      },
+      {
+        "command": "codoc.rejectHunkAtCursor",
+        "key": "alt+r",
+        "when": "editorLangId == codoc && editorTextFocus"
       }
     ],
     "configuration": {
@@ -172,6 +226,16 @@
           "type": "boolean",
           "default": true,
           "description": "When opening a .codoc tree, collapse every feature's attribute block so the file shows as a table of contents (all titles, no details). Expand individual features to see their attributes."
+        },
+        "codoc.focusDependencies": {
+          "type": "boolean",
+          "default": true,
+          "description": "Dim unrelated features when cursor is on a node with dependency edges."
+        },
+        "codoc.agentGutter": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show pulsing gutter icons on features the coding agent is currently editing."
         }
       }
     },
@@ -179,7 +243,9 @@
       "[codoc]": {
         "editor.wordWrap": "on",
         "editor.wrappingIndent": "deepIndent",
-        "editor.inlayHints.enabled": "on"
+        "editor.inlayHints.enabled": "on",
+        "editor.guides.indentation": true,
+        "editor.guides.highlightActiveIndentation": true
       }
     }
   },

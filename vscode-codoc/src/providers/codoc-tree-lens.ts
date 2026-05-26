@@ -36,7 +36,7 @@ export class CodocTreeLensProvider implements vscode.CodeLensProvider {
                 command: 'codoc.acceptAll', arguments: [ids],
             }));
             lenses.push(new vscode.CodeLens(top, {
-                title: '$(trash) Reject all',
+                title: `$(close-all) Reject all (${proposals.length})`,
                 command: 'codoc.rejectAll', arguments: [ids],
             }));
         }

@@ -59,3 +59,75 @@ export function subtreeTitleLines(
     }
     return result;
 }
+
+/** Jump to next/previous feature title at the same indent depth as `line`. */
+export function siblingTitleLine(
+    document: vscode.TextDocument,
+    line: number,
+    dir: 'next' | 'prev',
+): number | null {
+    const titleLines = collectFeatureLines(document).map(f => f.line);
+    if (titleLines.length === 0) return null;
+    const idx = titleLines.indexOf(line);
+    // If cursor is on a non-title line, snap to the nearest title first.
+    const anchorIdx = idx >= 0 ? idx : (() => {
+        let best = -1;
+        for (let i = 0; i < titleLines.length; i++) {
+            if (titleLines[i] <= line) best = i;
+        }
+        return best;
+    })();
+    if (anchorIdx < 0) return null;
+    const anchorLine = titleLines[anchorIdx];
+    const depth = indentOf(document.lineAt(anchorLine).text);
+    if (dir === 'next') {
+        for (let i = anchorIdx + 1; i < titleLines.length; i++) {
+            const d = indentOf(document.lineAt(titleLines[i]).text);
+            if (d === depth) return titleLines[i];
+            if (d < depth) break; // passed the parent, no sibling found
+        }
+    } else {
+        for (let i = anchorIdx - 1; i >= 0; i--) {
+            const d = indentOf(document.lineAt(titleLines[i]).text);
+            if (d === depth) return titleLines[i];
+            if (d < depth) break;
+        }
+    }
+    return null;
+}
+
+/** Return the nearest ancestor title line (shallower indent) above `line`. */
+export function parentTitleLine(
+    document: vscode.TextDocument,
+    line: number,
+): number | null {
+    const titleLines = collectFeatureLines(document).map(f => f.line);
+    let anchorLine = line;
+    // find the closest title at or above line
+    for (let i = titleLines.length - 1; i >= 0; i--) {
+        if (titleLines[i] <= line) { anchorLine = titleLines[i]; break; }
+    }
+    const depth = indentOf(document.lineAt(anchorLine).text);
+    if (depth === 0) return null; // already root
+    for (let i = titleLines.indexOf(anchorLine) - 1; i >= 0; i--) {
+        if (indentOf(document.lineAt(titleLines[i]).text) < depth) return titleLines[i];
+    }
+    return null;
+}
+
+/** First direct child title line below `line` (one indent deeper). */
+export function firstChildTitleLine(
+    document: vscode.TextDocument,
+    line: number,
+): number | null {
+    const titleLines = collectFeatureLines(document).map(f => f.line);
+    const anchorIdx = titleLines.indexOf(line);
+    if (anchorIdx < 0) return null;
+    const depth = indentOf(document.lineAt(line).text);
+    for (let i = anchorIdx + 1; i < titleLines.length; i++) {
+        const d = indentOf(document.lineAt(titleLines[i]).text);
+        if (d === depth + 2) return titleLines[i]; // 2-space indent
+        if (d <= depth) break;
+    }
+    return null;
+}

@@ -6,7 +6,8 @@ import pytest
 
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import PENDING_SENTINEL, render_tree
+from codoc.codoc_file.render import PENDING_SENTINEL, _compute_feature_edges, render_tree
+from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -170,3 +171,36 @@ def test_retire_and_move_proposals_render(store):
     assert "- ~ Index snapshot diff" in text  # retire hunk
     assert "~ - Index snapshot diff" in text  # move hunk
     assert "move → Indexing layer" in text
+
+
+# -- feature_edges sidecar helper -----------------------------------------
+def test_compute_feature_edges_aggregates_symbol_edges(store):
+    """_compute_feature_edges returns cross-feature coupling edges from code_edges."""
+    caller = Feature(title="Caller feature")
+    callee = Feature(title="Callee feature")
+    store.upsert_feature(caller)
+    store.upsert_feature(callee)
+
+    store.upsert_binding(Binding(feature_id=caller.id, file="a.py", symbol_path="a.py::caller_fn", fingerprint="h1"))
+    store.upsert_binding(Binding(feature_id=callee.id, file="b.py", symbol_path="b.py::callee_fn", fingerprint="h2"))
+
+    store.insert_edges([{
+        "src_file": "a.py",
+        "src_symbol": "a.py::caller_fn",
+        "dst_name": "callee_fn",
+        "dst_symbol": "b.py::callee_fn",
+        "dst_file": "b.py",
+        "kind": "call",
+        "internal": 1,
+    }])
+
+    result = _compute_feature_edges(store)
+
+    assert caller.id in result
+    edges = result[caller.id]
+    assert len(edges) == 1
+    assert edges[0]["to"] == callee.id
+    assert edges[0]["weight"] == 1
+    assert edges[0]["kinds"] == ["call"]
+    # callee has no outgoing edges to other features
+    assert callee.id not in result

@@ -12,7 +12,10 @@ import { CodocFoldingProvider } from './providers/folding';
 import { CodocSymbolProvider } from './providers/symbol';
 import { FeatureTreeProvider } from './providers/feature-tree-view';
 import { applyDecorations, createDecorations } from './providers/decoration';
-import { subtreeTitleLines } from './providers/feature-lines';
+import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
+import { DependencyFocus } from './providers/focus';
+import { AgentGutter } from './providers/agent';
+import { CodocFileDecorationProvider } from './providers/file-decoration';
 
 export function activate(context: vscode.ExtensionContext): void {
     const state = new WorkspaceState(context);
@@ -20,9 +23,26 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── Feature tree panel ───────────────────────────────────────────────────
     const featureTreeProvider = new FeatureTreeProvider(state);
+    const treeView = vscode.window.createTreeView('codoc.featureTree', { treeDataProvider: featureTreeProvider, showCollapseAll: true });
     context.subscriptions.push(
-        vscode.window.createTreeView('codoc.featureTree', { treeDataProvider: featureTreeProvider, showCollapseAll: true }),
+        treeView,
         vscode.commands.registerCommand('codoc.refreshFeatureTree', () => featureTreeProvider.refresh()),
+        // Sync sidebar selection to the cursor in tree.codoc.
+        vscode.window.onDidChangeTextEditorSelection(e => {
+            if (e.textEditor.document.languageId !== 'codoc') return;
+            const line = e.selections[0]?.active.line;
+            if (line === undefined) return;
+            const features = state.features;
+            // Find the feature at/above cursor.
+            let best: typeof features[0] | undefined;
+            for (const f of features) {
+                if (f.line <= line && (!best || f.line > best.line)) best = f;
+            }
+            if (best) {
+                const item = featureTreeProvider.itemForId(best.id ?? '');
+                if (item) treeView.reveal(item, { select: true, focus: false }).then(undefined, () => {});
+            }
+        }),
     );
 
     // ── codoc.open ───────────────────────────────────────────────────────────
@@ -64,18 +84,54 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!state.rootDir) return;
             const uri = vscode.Uri.file(path.join(state.rootDir, file));
             const doc = await vscode.workspace.openTextDocument(uri);
-            const editor = await vscode.window.showTextDocument(doc);
+            // Open Beside, preserve focus on tree.codoc.
+            const targetEditor = await vscode.window.showTextDocument(doc, {
+                viewColumn: vscode.ViewColumn.Beside,
+                preserveFocus: true,
+                preview: true,
+            });
+
             if (!symbol) return;
-            const leaf = symbol.includes('.') ? symbol.split('.').pop()! : symbol;
-            const re = new RegExp(`(?:def|class|function|const|let|var)\\s+${leaf}\\b|\\b${leaf}\\s*[=:(]`);
-            for (let i = 0; i < doc.lineCount; i++) {
-                if (re.test(doc.lineAt(i).text)) {
-                    const pos = new vscode.Position(i, 0);
-                    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
-                    editor.selection = new vscode.Selection(pos, pos);
-                    break;
+
+            let targetRange: vscode.Range | null = null;
+
+            // Try VS Code's document symbol provider for precise range.
+            try {
+                const syms = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                    'vscode.executeDocumentSymbolProvider', uri
+                );
+                if (syms) {
+                    // symbol may be "file::Qualified.Name" format; extract leaf after last '.' or '::'
+                    const leaf = symbol.split('::').pop()?.split('.').pop() ?? symbol;
+                    const found = findSymbolByName(syms, leaf);
+                    if (found) targetRange = found.selectionRange;
+                }
+            } catch { /* fall through to regex */ }
+
+            // Fallback: regex scan
+            if (!targetRange) {
+                const leaf = symbol.includes('::') ? symbol.split('::').pop()!.split('.').pop()!
+                            : symbol.includes('.')  ? symbol.split('.').pop()!
+                            : symbol;
+                const re = new RegExp(`(?:def|class|function|const|let|var)\\s+${leaf}\\b|\\b${leaf}\\s*[=:(]`);
+                for (let i = 0; i < doc.lineCount; i++) {
+                    if (re.test(doc.lineAt(i).text)) {
+                        targetRange = new vscode.Range(i, 0, i, doc.lineAt(i).text.length);
+                        break;
+                    }
                 }
             }
+
+            if (!targetRange) return;
+            targetEditor.revealRange(targetRange, vscode.TextEditorRevealType.InCenter);
+
+            // Flash highlight: apply then fade over 900ms.
+            const flashDec = vscode.window.createTextEditorDecorationType({
+                backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
+                isWholeLine: false,
+            });
+            targetEditor.setDecorations(flashDec, [targetRange]);
+            setTimeout(() => { targetEditor.setDecorations(flashDec, []); flashDec.dispose(); }, 900);
         }),
     );
 
@@ -86,13 +142,21 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!treePath || !titleOrId || !fs.existsSync(treePath)) return;
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(treePath));
             const editor = await vscode.window.showTextDocument(doc);
+            // Match by feature id ⟨f-id⟩ first, then fall back to title/id substring.
+            const exactId = `⟨${titleOrId}⟩`;
+            let targetLine = -1;
             for (let i = 0; i < doc.lineCount; i++) {
-                if (doc.lineAt(i).text.includes(titleOrId)) {
-                    const pos = new vscode.Position(i, 0);
-                    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
-                    editor.selection = new vscode.Selection(pos, pos);
-                    break;
+                if (doc.lineAt(i).text.includes(exactId)) { targetLine = i; break; }
+            }
+            if (targetLine < 0) {
+                for (let i = 0; i < doc.lineCount; i++) {
+                    if (doc.lineAt(i).text.includes(titleOrId)) { targetLine = i; break; }
                 }
+            }
+            if (targetLine >= 0) {
+                const pos = new vscode.Position(targetLine, 0);
+                editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+                editor.selection = new vscode.Selection(pos, pos);
             }
         }),
     );
@@ -119,6 +183,59 @@ export function activate(context: vscode.ExtensionContext): void {
             const lines = subtreeTitleLines(ed.document, ed.selection.active.line);
             if (lines.length) await vscode.commands.executeCommand('editor.unfold', { selectionLines: lines });
         }),
+    );
+
+    // ── Tree keyboard navigation (Alt+Arrow, doesn't break text editing) ────────
+    const navTo = (ed: vscode.TextEditor, target: number | null): void => {
+        if (target === null) return;
+        const pos = new vscode.Position(target, 0);
+        ed.selection = new vscode.Selection(pos, pos);
+        ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
+    };
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.nav.nextSibling', () => {
+            const ed = vscode.window.activeTextEditor;
+            if (!isCodocEditor(ed)) return;
+            navTo(ed, siblingTitleLine(ed.document, ed.selection.active.line, 'next'));
+        }),
+        vscode.commands.registerCommand('codoc.nav.prevSibling', () => {
+            const ed = vscode.window.activeTextEditor;
+            if (!isCodocEditor(ed)) return;
+            navTo(ed, siblingTitleLine(ed.document, ed.selection.active.line, 'prev'));
+        }),
+        vscode.commands.registerCommand('codoc.nav.parent', () => {
+            const ed = vscode.window.activeTextEditor;
+            if (!isCodocEditor(ed)) return;
+            navTo(ed, parentTitleLine(ed.document, ed.selection.active.line));
+        }),
+        vscode.commands.registerCommand('codoc.nav.firstChild', async () => {
+            const ed = vscode.window.activeTextEditor;
+            if (!isCodocEditor(ed)) return;
+            const curLine = ed.selection.active.line;
+            const target = firstChildTitleLine(ed.document, curLine);
+            if (target !== null) {
+                navTo(ed, target);
+            } else {
+                // No child — try to expand.
+                await vscode.commands.executeCommand('editor.unfold', { selectionLines: [curLine] });
+            }
+        }),
+    );
+
+    // ── Hunk-at-cursor accept/reject (keyboard shortcuts alt+a / alt+r) ──────────
+    const hunkVerdict = (accept: boolean): void => {
+        const ed = vscode.window.activeTextEditor;
+        if (!isCodocEditor(ed)) return;
+        const line = ed.selection.active.line;
+        const text = ed.document.lineAt(line).text;
+        const eventIdMatch = /⟨(e-[0-9a-f]+)⟩/.exec(text);
+        if (eventIdMatch) {
+            state.writeVerdict([eventIdMatch[1]], accept);
+        }
+    };
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.acceptHunkAtCursor', () => hunkVerdict(true)),
+        vscode.commands.registerCommand('codoc.rejectHunkAtCursor', () => hunkVerdict(false)),
     );
 
     // Auto-fold attribute blocks on first open (table-of-contents view).
@@ -158,7 +275,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const decorations = createDecorations(context);
     const refreshDecorations = (editor?: vscode.TextEditor): void => {
         const ed = editor ?? vscode.window.activeTextEditor;
-        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines);
+        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines, state.features);
     };
     refreshDecorations();
     context.subscriptions.push(
@@ -169,10 +286,33 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
     );
 
+    // ── Dependency focus (opacity dimming on cursor) ───────────────────────────
+    const focusController = new DependencyFocus(state, decorations, context);
+
+    // ── Agent gutter pulse ────────────────────────────────────────────────────
+    const agentGutter = new AgentGutter(state, context);
+
+    // ── File decoration provider (Explorer badges) ────────────────────────────
+    const fileDecProvider = new CodocFileDecorationProvider(state);
+    context.subscriptions.push(vscode.window.registerFileDecorationProvider(fileDecProvider));
+
     state.onDidChange(() => {
         refreshDecorations();
         featureTreeProvider.refresh();
+        focusController.refresh();
+        agentGutter.update();
+        fileDecProvider.update();
     });
+}
+
+/** Recursively find a document symbol by exact name. */
+function findSymbolByName(symbols: vscode.DocumentSymbol[], name: string): vscode.DocumentSymbol | undefined {
+    for (const s of symbols) {
+        if (s.name === name) return s;
+        const found = findSymbolByName(s.children, name);
+        if (found) return found;
+    }
+    return undefined;
 }
 
 export function deactivate(): void {

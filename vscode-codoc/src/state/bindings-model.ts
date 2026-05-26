@@ -23,11 +23,19 @@ export interface FeatureMeta {
     parent_id: string | null;
 }
 
+export interface FeatureEdge {
+    to: string;
+    weight: number;
+    kinds: string[];
+}
+
 export interface SidecarData {
     version: number;
     by_feature: Record<string, SymbolEntry[]>;
     by_file: Record<string, FileEntry[]>;
     features: Record<string, FeatureMeta>;
+    // Optional for backward compat — sidecar version 1 has no edges.
+    feature_edges?: Record<string, FeatureEdge[]>;
 }
 
 /** Return an empty sidecar (used when the file hasn't been created yet). */
@@ -43,4 +51,18 @@ export function entriesForFile(sidecar: SidecarData, relPath: string): FileEntry
 /** Look up bindings for a feature by ID. */
 export function bindingsForFeature(sidecar: SidecarData, featureId: string): SymbolEntry[] {
     return sidecar.by_feature[featureId] ?? [];
+}
+
+/** Build an undirected feature→feature adjacency map from the sidecar's edges. */
+export function featureAdjacency(sidecar: SidecarData): Map<string, Set<string>> {
+    const adj = new Map<string, Set<string>>();
+    for (const [src, edges] of Object.entries(sidecar.feature_edges ?? {})) {
+        if (!adj.has(src)) adj.set(src, new Set());
+        for (const e of edges) {
+            adj.get(src)!.add(e.to);
+            if (!adj.has(e.to)) adj.set(e.to, new Set());
+            adj.get(e.to)!.add(src);
+        }
+    }
+    return adj;
 }

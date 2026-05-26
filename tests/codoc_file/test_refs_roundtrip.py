@@ -115,7 +115,7 @@ def test_sidecar_structure(store, tmp_path):
     write_tree(store, tmp_path)
     sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
 
-    assert sidecar["version"] == 1
+    assert sidecar["version"] == 2
     assert auth.id in sidecar["by_feature"] and util.id in sidecar["by_feature"]
     auth_syms = {e["symbol"] for e in sidecar["by_feature"][auth.id]}
     assert "auth.py::login" in auth_syms and "session.py::create_session" in auth_syms

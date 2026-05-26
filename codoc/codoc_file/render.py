@@ -144,6 +144,33 @@ def _render_proposal(e: Event, store: Store) -> list[str]:
     return [f"~ - {op.kind.value}  ⟨{eid}⟩"]
 
 
+def _compute_feature_edges(store: Store) -> dict[str, list[dict]]:
+    """Aggregate symbol-level call/import edges into feature-level coupling.
+
+    Returns ``{src_feature_id: [{to: dst_feature_id, weight: int, kinds: list[str]}]}``.
+    Used by the VS Code extension for dependency-focus opacity dimming.
+    """
+    sym2feat = {b.symbol_path: b.feature_id for b in store.all_bindings()}
+    agg: dict[tuple[str, str], dict] = {}  # (src_fid, dst_fid) → {weight, kinds}
+    for e in store.all_edges(internal_only=True):
+        dst = e["dst_symbol"]
+        if not dst:
+            continue
+        sf = sym2feat.get(e["src_symbol"])
+        df = sym2feat.get(dst)
+        if not sf or not df or sf == df:
+            continue
+        slot = agg.setdefault((sf, df), {"weight": 0, "kinds": set()})
+        slot["weight"] += 1
+        slot["kinds"].add(e["kind"])
+    out: dict[str, list[dict]] = {}
+    for (sf, df), v in agg.items():
+        out.setdefault(sf, []).append(
+            {"to": df, "weight": v["weight"], "kinds": sorted(v["kinds"])}
+        )
+    return out
+
+
 def _write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename)."""
     features = store.list_features()
@@ -160,7 +187,7 @@ def _write_sidecar(store: Store, codoc_dir: str | Path) -> None:
                 {"symbol": b.symbol_path, "feature_id": f.id, "feature_title": f.title}
             )
 
-    sidecar = {"version": 1, "by_feature": by_feature, "by_file": by_file, "features": feats_meta}
+    sidecar = {"version": 2, "by_feature": by_feature, "by_file": by_file, "features": feats_meta, "feature_edges": _compute_feature_edges(store)}
     dest = Path(codoc_dir) / BINDINGS_FILENAME
     tmp = dest.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(sidecar, indent=2))
