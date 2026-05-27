@@ -163,6 +163,10 @@
       {
         "command": "codoc.rejectHunkAtCursor",
         "title": "codoc: Reject Change at Cursor"
+      },
+      {
+        "command": "codoc.openFirstBinding",
+        "title": "codoc: Open First Code Binding"
       }
     ],
     "keybindings": [
@@ -184,34 +188,34 @@
         "when": "editorTextFocus && editorLangId == 'codoc'"
       },
       {
-        "command": "codoc.nav.nextSibling",
-        "key": "alt+down",
-        "when": "editorLangId == codoc && editorTextFocus"
+        "command": "codoc.nav.prevSibling",
+        "key": "ctrl+k up",
+        "mac": "cmd+k up",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
       },
       {
-        "command": "codoc.nav.prevSibling",
-        "key": "alt+up",
-        "when": "editorLangId == codoc && editorTextFocus"
+        "command": "codoc.nav.nextSibling",
+        "key": "ctrl+k down",
+        "mac": "cmd+k down",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
       },
       {
         "command": "codoc.nav.parent",
-        "key": "alt+left",
-        "when": "editorLangId == codoc && editorTextFocus"
+        "key": "ctrl+k left",
+        "mac": "cmd+k left",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
       },
       {
         "command": "codoc.nav.firstChild",
-        "key": "alt+right",
-        "when": "editorLangId == codoc && editorTextFocus"
+        "key": "ctrl+k right",
+        "mac": "cmd+k right",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
       },
       {
-        "command": "codoc.acceptHunkAtCursor",
-        "key": "alt+a",
-        "when": "editorLangId == codoc && editorTextFocus"
-      },
-      {
-        "command": "codoc.rejectHunkAtCursor",
-        "key": "alt+r",
-        "when": "editorLangId == codoc && editorTextFocus"
+        "command": "codoc.openFirstBinding",
+        "key": "alt+b",
+        "mac": "alt+b",
+        "when": "editorTextFocus && editorLangId == 'codoc'"
       }
     ],
     "configuration": {
@@ -230,12 +234,12 @@
         "codoc.focusDependencies": {
           "type": "boolean",
           "default": true,
-          "description": "Dim unrelated features when cursor is on a node with dependency edges."
+          "description": "Dim unrelated features while the cursor rests on a node that has dependency edges (suppressed while you type)."
         },
         "codoc.agentGutter": {
           "type": "boolean",
           "default": true,
-          "description": "Show pulsing gutter icons on features the coding agent is currently editing."
+          "description": "Show a gutter marker on features the coding agent is currently editing."
         }
       }
     },

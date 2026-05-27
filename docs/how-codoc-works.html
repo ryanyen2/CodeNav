@@ -100,22 +100,6 @@
   th { background: var(--surface); text-align: left; padding: 0.5rem 0.8rem; border: 1px solid var(--border); color: var(--muted); font-weight: 600; }
   td { padding: 0.45rem 0.8rem; border: 1px solid var(--border); vertical-align: top; }
 
-  .badge {
-    display: inline-block;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 0.1em 0.5em;
-    border-radius: 3px;
-    margin-right: 0.3em;
-    vertical-align: middle;
-  }
-  .badge.stable     { background: #0d3321; color: var(--green); }
-  .badge.drafting   { background: #0c1d33; color: #6baed6; }
-  .badge.strained   { background: #2a1e08; color: var(--amber); }
-  .badge.severed    { background: var(--red-dim); color: var(--red); }
-  .badge.stub       { background: #1a1a2e; color: #8884cc; }
-  .badge.deprecated { background: #1a1a1a; color: #888; }
-
   .flow-step {
     display: flex;
     gap: 0.8rem;
@@ -161,7 +145,7 @@
 <div class="wrap">
 
 <h1>How codoc works</h1>
-<p class="subtitle">A feature-tree overlay that keeps intent in sync with code — for humans, not LLMs.</p>
+<p class="subtitle">A feature-tree overlay that keeps intent in sync with code — file-based, no server, no HTTP.</p>
 
 <nav class="toc">
   <div class="toc-title">Contents</div>
@@ -169,21 +153,20 @@
     <li><a href="#user-level">User-level overview</a>
       <ol>
         <li><a href="#what-is-it">What is codoc?</a></li>
-        <li><a href="#the-codoc-file">The <code>_index.codoc</code> file</a></li>
+        <li><a href="#the-codoc-file">The <code>tree.codoc</code> file</a></li>
         <li><a href="#workflow">Day-to-day workflow</a></li>
-        <li><a href="#proposals">Proposals: the change-review loop</a></li>
-        <li><a href="#feature-states">Feature states</a></li>
+        <li><a href="#proposals">Proposals: the in-situ review loop</a></li>
+        <li><a href="#cc-integration">Claude Code integration</a></li>
         <li><a href="#vscode-ux">VS Code experience</a></li>
       </ol>
     </li>
     <li><a href="#arch">Architectural deep-dive</a>
       <ol>
         <li><a href="#data-model">Data model</a></li>
-        <li><a href="#transaction-log">Transaction log and HLC</a></li>
-        <li><a href="#tree-align">Tree-alignment identity</a></li>
-        <li><a href="#projection">Projection layer</a></li>
-        <li><a href="#reflective">Reflective pipeline</a></li>
-        <li><a href="#sync-invariants">Sync invariants</a></li>
+        <li><a href="#loop-a">Loop A — code → codoc</a></li>
+        <li><a href="#loop-b">Loop B — codoc → code</a></li>
+        <li><a href="#file-format">File format and round-trip invariant</a></li>
+        <li><a href="#sidecar">Sidecar and dependency graph</a></li>
         <li><a href="#extension-arch">Extension architecture</a></li>
       </ol>
     </li>
@@ -195,330 +178,333 @@
 
 <h3 id="what-is-it">What is codoc?</h3>
 
-<p>codoc is a persistent, navigable <em>feature tree</em> that sits alongside your codebase. Each node is a named unit of intent — a <strong>feature</strong> — with a short prose description and links to the code chunks that implement it. The tree is <em>yours</em>: you author it, refine it, and rename it however you like. codoc's job is to keep the links from intent to code accurate as the code changes.</p>
+<p>codoc is a persistent, navigable <em>feature tree</em> that sits alongside your codebase. Each node is a named unit of intent — a <strong>feature</strong> — with a prose description and optional inline citations to the code that implements it. The tree is <em>yours</em>: you author it, refine it, and rename it however you like. codoc's job is to keep the links from intent to code accurate as the code changes.</p>
 
-<p>Unlike code-search or auto-documentation tools, codoc doesn't derive the tree from the code on every query. The tree is the ground truth; code attribution is a secondary index that the system maintains incrementally.</p>
+<p>Unlike code-search or auto-documentation tools, codoc doesn't derive the tree from code on every query. The tree is ground truth; code attribution is a secondary index the system maintains incrementally.</p>
 
 <div class="callout good">
   <strong>One-sentence pitch:</strong> codoc is a living table-of-contents for your codebase that never goes stale.
 </div>
 
-<h3 id="the-codoc-file">The <code>_index.codoc</code> file</h3>
+<h3 id="the-codoc-file">The <code>tree.codoc</code> file</h3>
 
-<p>When you run <code>codoc projection render</code> (or hit <kbd>Cmd+Shift+P</kbd> → <strong>codoc: Open</strong>), codoc writes a single file at <code>.codoc/tree/_index.codoc</code>. It's a plain-text indented outline you can read and edit directly in VS Code:</p>
+<p>After <code>codoc init</code>, the file lives at <code>.codoc/tree.codoc</code>. It's a plain-text indented outline you can read and edit directly in VS Code:</p>
 
 <pre>
-- Checkpoint persistence
-    Persists training state so runs can be paused and resumed.
+- Authentication flow  ⟨f-3a9c2e⟩
+    Handles login, session creation, and token lifecycle.
 
-  - Checkpoint file management
-      Saves and loads a single checkpoint snapshot to disk.
+    Cites [session creation](codoc:auth.py#AuthManager.create_session).
 
-    - Checkpoint compatibility patching
-        Fills in defaults when loading checkpoints from older model versions.
+  - Token rotation  ⟨f-7b1d04⟩
+      Refreshes session tokens before expiry.
 
-    - Checkpoint discovery
-        Finds the latest available checkpoint in a directory.
+  - Password reset  ⟨f-cc90f1⟩
+      Lets a user reset a forgotten password via an emailed one-time token.
 
-  - Checkpoint status logging
-      Emits a single status message per checkpoint op, suppressing duplicates in distributed runs.
+  ~ Legacy HTTP Basic auth  ⟨f-2c8b01⟩
+      Deprecated in v3; removed from all production paths.
 
-- Dataset file management
-    Manages the set of parquet shards that make up the training corpus.
-
-  - Dataset file discovery
-      Lists shards already present locally.
+- Notification dispatch  ⟨f-1f88aa⟩
+    Queues and flushes email + in-app notifications.
 </pre>
 
-<p>Each line that begins with <code>-</code> is a feature. Indentation is 2 spaces per level. The line below the feature title is a one-sentence description. That's the whole file format for stable content.</p>
+<p>Each <code>-</code> line is a live feature. <code>~</code> marks a retired feature (struck-through in VS Code). Indentation (2 spaces per level) determines the hierarchy. The hidden <code>⟨f-…⟩</code> id is the stable identity that survives renames — the VS Code extension renders it invisible. Inline <code>[label](codoc:file.py#symbol)</code> links are the only way to cite code; derived bindings are shown as inlay chips, not written into the text.</p>
 
 <h3 id="workflow">Day-to-day workflow</h3>
 
 <div class="flow-step">
   <div class="step-num">1</div>
-  <div><strong>Open your project in VS Code.</strong> Hit <kbd>Cmd+Shift+P</kbd> and run <strong>codoc: Open</strong>. On the very first run it initialises <code>.codoc/</code>, clusters your codebase into features (this may take a minute), and opens <code>_index.codoc</code>.</div>
+  <div><strong>Initialize.</strong> Run <code>codoc init</code> in your project root. This indexes the repo (incrementally — a killed run resumes from the last completed file), proposes a hierarchy, and writes <code>.codoc/tree.codoc</code>. Open the file in VS Code.</div>
 </div>
 <div class="flow-step">
   <div class="step-num">2</div>
-  <div><strong>Read and refine the tree.</strong> The initial tree is a proposal — every node begins with a <code>+ </code> prefix (green diff hunk) meaning "accept me". Rename things, fix intent lines, restructure the hierarchy, and delete features that don't make sense. Just edit the file like any text document.</div>
+  <div><strong>Read and refine the tree.</strong> Rename things, fix descriptions, restructure the hierarchy — edit the file like any text document. The initial tree is a good starting point; intent is yours to author.</div>
 </div>
 <div class="flow-step">
   <div class="step-num">3</div>
-  <div><strong>Save.</strong> codoc detects the save, parses the file, diffs it against the database, and applies your changes. Accepted features become stable in the DB; any new lines you added become INTRODUCE proposals for your review.</div>
+  <div><strong>Start the daemon.</strong> Run <code>codoc watch</code>. It watches both code files and <code>tree.codoc</code>, reacting to changes in either direction.</div>
 </div>
 <div class="flow-step">
   <div class="step-num">4</div>
-  <div><strong>Code.</strong> As you modify source files, codoc's reflective pipeline observes the changes (on save, or after a git commit) and emits proposals for any features whose code links may need updating.</div>
+  <div><strong>Code.</strong> Modify source files. codoc detects changes, auto-applies safe updates (re-attach a moved symbol, tweak a description), and places structural proposals in-situ in <code>tree.codoc</code>.</div>
 </div>
 <div class="flow-step">
   <div class="step-num">5</div>
-  <div><strong>Review proposals.</strong> Hunks marked with <code>+ -</code> (introduce), <code>- ~</code> (retire), or <code>~ -</code> (amend/rename) appear inline in <code>_index.codoc</code>. Accept with the CodeLens button or the bulk status-bar widget; reject to discard.</div>
+  <div><strong>Edit the tree.</strong> Change a description, rename a node, or add a new one. codoc builds a coding directive and spawns <code>claude -p</code> to implement the corresponding code change, then reflects on the result.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">6</div>
+  <div><strong>Review proposals.</strong> Proposals appear inline at their target position in the tree. Click <strong>Accept</strong> or <strong>Reject</strong> in the VS Code CodeLens — no text to type.</div>
 </div>
 
-<h3 id="proposals">Proposals: the change-review loop</h3>
+<h3 id="proposals">Proposals: the in-situ review loop</h3>
 
-<p>codoc never changes the feature tree without your approval. Instead it proposes changes as <em>diff hunks</em> inline in <code>_index.codoc</code>:</p>
+<p>codoc never changes the feature tree without your approval. Instead it places diff hunks <em>at the exact tree position where the change would land</em>:</p>
 
 <pre class="diff">
-<span class="dim">- Checkpoint persistence</span>
-<span class="dim">    Persists training state so runs can be paused and resumed.</span>
+<span class="dim">- Authentication flow  ⟨f-3a9c2e⟩</span>
+<span class="dim">    Handles login, session creation, and token lifecycle.</span>
 <span class="dim"></span>
-<span class="add">+ - Checkpoint warm-restart</span>
-<span class="add">+     Loads a checkpoint and continues training from the saved step.</span>
+<span class="add">+ - Rate limiting  ⟨e-9f01c2⟩</span>
+<span class="add">+     Caps API requests per user per minute.</span>
 <span class="dim"></span>
-<span class="rem">- ~ Old checkpoint resume</span>
+<span class="dim">  - Token rotation  ⟨f-7b1d04⟩</span>
 </pre>
 
-<p>A <code>+ -</code> line is a proposed <strong>introduction</strong>. A <code>- ~</code> line is a proposed <strong>retirement</strong>. A <code>~ -</code> followed by description lines is a proposed <strong>amendment or rename</strong>.</p>
+<p>A <code>+</code> line (green tint) is a proposed <strong>addition</strong>. A <code>-</code> line (red tint) is a proposed <strong>retirement</strong>. A <code>~</code> line (blue tint) is a proposed <strong>move or amendment</strong>. Each block ends with a blank line. The <code>⟨e-id⟩</code> identifies the pending event — you never type it.</p>
 
-<p>You can act on each proposal with the CodeLens buttons that appear above the hunk, or use the status bar widget that shows <code>codoc: 4 pending</code> and lets you accept or reject everything at once.</p>
+<p>Use the <strong>Accept</strong> / <strong>Reject</strong> CodeLens buttons that appear above each block, or <strong>Accept all</strong> / <strong>Reject all</strong> in the header. Verdicts are written to <code>.codoc/inbox.json</code>; the daemon applies them and removes the blocks on the next write cycle.</p>
 
-<h3 id="feature-states">Feature states</h3>
+<div class="callout good">
+  <strong>No text syntax.</strong> The old <code>?</code>→<code>+</code>/<code>-</code> character-swap syntax no longer exists. Proposals are read-only diff views; all interaction is through the CodeLens buttons.
+</div>
 
-<p>Each feature has a computed state based on how its code bindings look right now:</p>
+<h3 id="cc-integration">Claude Code integration</h3>
+
+<p>codoc integrates with Claude Code through <strong>hooks and a skill file</strong> — not an MCP server, not a VS Code plugin, not an SDK. There is no server process and no port. <code>codoc init</code> installs both automatically into the repo's <code>.claude/</code> directory.</p>
 
 <table>
+  <tr><th>Component</th><th>Location</th><th>What it does</th></tr>
   <tr>
-    <th>State</th>
-    <th>Meaning</th>
-    <th>Gutter icon</th>
+    <td><strong>Hooks</strong></td>
+    <td><code>.claude/settings.json</code></td>
+    <td>Fire on <code>SessionStart</code>, <code>Stop</code>, <code>PreToolUse</code>, <code>PostToolUse</code>. Maintain <code>.codoc/activity.json</code> — the live agent touch log (which files Claude read/wrote, which features they belong to). Never blocks the agent; exits zero on any error.</td>
   </tr>
   <tr>
-    <td><span class="badge stub">Stub</span></td>
-    <td>No code bindings yet (just authored).</td>
-    <td>Purple dot</td>
-  </tr>
-  <tr>
-    <td><span class="badge drafting">Drafting</span></td>
-    <td>Has bindings but some are unresolved.</td>
-    <td>Blue dot</td>
-  </tr>
-  <tr>
-    <td><span class="badge stable">Stable</span></td>
-    <td>All bindings resolve cleanly.</td>
-    <td>Green dot</td>
-  </tr>
-  <tr>
-    <td><span class="badge strained">Strained</span></td>
-    <td>Some bindings resolve but others have diverged.</td>
-    <td>Amber dot</td>
-  </tr>
-  <tr>
-    <td><span class="badge severed">Severed</span></td>
-    <td>All bindings have diverged — the feature's code was moved or deleted.</td>
-    <td>Red dot</td>
-  </tr>
-  <tr>
-    <td><span class="badge deprecated">Deprecated</span></td>
-    <td>Feature is intentionally retired.</td>
-    <td>Grey dot</td>
+    <td><strong>Skill</strong></td>
+    <td><code>.claude/skills/codoc-intent/SKILL.md</code></td>
+    <td>Auto-loaded by every Claude Code session in the repo. Instructs Claude to express code changes as codoc proposals first (via <code>codoc propose</code>), never touching code until the user Accepts.</td>
   </tr>
 </table>
 
-<p>State is <em>computed</em> on every render from live bindings — it is never stored. This means it stays accurate automatically as code evolves.</p>
+<p><strong>Two distinct Claude invocations:</strong></p>
+<ul>
+  <li><strong>Interactive session</strong> — you open Claude Code and ask it to add or change a feature. Claude reads the skill, runs <code>codoc propose …</code> (a CLI call that creates a pending Event and re-renders <code>tree.codoc</code>), and waits. It does not edit code files during planning.</li>
+  <li><strong>Headless implementation</strong> — after you Accept a proposal in VS Code, Loop B spawns <code>claude -p --dangerously-skip-permissions</code> once with a coding directive. This is a separate, non-interactive invocation; it implements the accepted intent and exits.</li>
+</ul>
+
+<p><strong>The propose-then-implement loop step by step:</strong></p>
+
+<div class="flow-step">
+  <div class="step-num">1</div>
+  <div><strong>You ask Claude Code</strong> — "Add rate limiting to the auth module."</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">2</div>
+  <div><strong>Claude proposes (no code touched).</strong> Reads <code>codoc-intent</code> skill → reads <code>tree.codoc</code> to understand existing structure → runs <code>codoc propose add_node --title "Rate limiting" --description "…" --parent f-3a9c2e</code>. An in-situ <code>+ - Rate limiting</code> block appears in the file. Claude tells you to Accept in the IDE.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">3</div>
+  <div><strong>You review and Accept.</strong> Edit the description in the proposal block if needed. Click Accept in the VS Code CodeLens. Verdict → <code>.codoc/inbox.json</code>.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">4</div>
+  <div><strong>Loop B implements.</strong> Drains <code>inbox.json</code>, applies the op to the store, builds a coding directive from the accepted description + bound symbols, sets <code>status.json = realizing</code>, spawns <code>claude -p</code> once, waits for exit.</div>
+</div>
+<div class="flow-step">
+  <div class="step-num">5</div>
+  <div><strong>Loop A re-reflects.</strong> Runs scoped to the files the agent wrote. If the code matches intent cleanly → status → <code>in_sync</code>. If the implementation revealed something the description didn't capture → additional proposals surface in <code>tree.codoc</code> for the next review cycle.</div>
+</div>
+
+<div class="callout good">
+  <strong>Installation is one command:</strong> <code>codoc init</code> is idempotent — it deep-merges the hook block into <code>.claude/settings.json</code> without clobbering other hooks, and writes the skill file. Safe to re-run after cloning.
+</div>
 
 <h3 id="vscode-ux">VS Code experience</h3>
 
-<p><strong>Unified entry:</strong> A single command <code>codoc: Open</code> auto-detects the repo state and does the right thing — init + bootstrap if no <code>.codoc/</code> exists, re-render if stale, otherwise just open the file.</p>
+<p><strong>Dependency focus dimming.</strong> When your cursor rests on a feature that has call/import edges to other features, that feature and all its graph-neighbors stay full-opacity. Everything else dims to 0.6. The dimming clears instantly when you move to a leaf with no edges, or when you start typing. Toggle with <code>codoc.focusDependencies</code>.</p>
 
-<p><strong>Gutter status icons:</strong> Every feature line in <code>_index.codoc</code> gets a color-coded dot in the gutter reflecting its current state (green / blue / amber / red / grey). No noisy <code>[State]</code> badge text clutters the prose.</p>
+<p><strong>Tree-native keyboard navigation.</strong> In <code>tree.codoc</code>, use <kbd>⌘K ↑</kbd> / <kbd>⌘K ↓</kbd> to hop between siblings, <kbd>⌘K ←</kbd> to jump to the parent, and <kbd>⌘K →</kbd> to jump to the first child. Normal arrow keys still edit text. <kbd>⌘Shift+[</kbd> / <kbd>⌘Shift+]</kbd> fold/unfold the subtree under the cursor.</p>
 
-<p><strong>Inline diff styling:</strong> Proposed additions glow green, retirements glow red, and amendments glow blue — but the rest of the file stays clean readable prose.</p>
+<p><strong>Sidebar feature panel.</strong> The <em>codoc Features</em> panel in Explorer shows the full hierarchy. Click any item to jump to its exact line in <code>tree.codoc</code>. Each item shows a binding count (e.g. <code>3 refs</code>) and a state-aware icon (live / retired / has proposal).</p>
 
-<p><strong>Cross-tab navigation:</strong></p>
-<ul>
-  <li>In <code>_index.codoc</code>, a CodeLens above each feature title reads <code>▸ bindings</code>. Click it to open a Quick Pick of the bound source files and jump directly to the code.</li>
-  <li>In any <code>.py</code> or <code>.ts</code> source file, a CodeLens above each <code>def</code>/<code>class</code>/<code>function</code> shows the feature it belongs to. Click to navigate back to <code>_index.codoc</code>.</li>
-</ul>
+<p><strong>Ref navigation.</strong> Click any <code>[label](codoc:file.py#symbol)</code> link: the target code opens in a split pane <em>beside</em> the tree editor with focus preserved in the tree. The target symbol is revealed and briefly highlighted. Stale refs (symbol moved or deleted) show a graceful warning.</p>
 
-<p><strong>Conflict handling:</strong> If you and the server both edit the same feature between syncs, the conflict is annotated inline rather than silently overwritten. A code-action lightbulb lets you choose "use mine", "use server's", or open a three-way diff view.</p>
+<p><strong>Source CodeLens.</strong> In every <code>.py</code> or <code>.ts</code> file, a CodeLens label above each <code>def</code>/<code>class</code>/<code>function</code> shows which feature owns that symbol. Click to navigate back to the feature in <code>tree.codoc</code>. Only symbols with an actual attribution are labeled — no noise for unattributed code.</p>
+
+<p><strong>Agent activity.</strong> While <code>codoc watch</code> is running and the coding agent is writing code: gutter markers appear on feature title lines in <code>tree.codoc</code>, and Explorer file badges mark touched source files. Both clear when the agent epoch closes. Toggle with <code>codoc.agentGutter</code>.</p>
+
+<p><strong>Proposal styling.</strong> Add proposals glow green, retire proposals red, move/amend blue — using a left-border accent and a whole-block background tint. The retired node strike-through and proposal coloring never conflict (proposal blocks are excluded from the strike scan).</p>
 
 <!-- ======================================================================= -->
 <hr>
 <h2 id="arch">Part 2 — Architectural deep-dive</h2>
 
-<div class="arch-diagram"><span class="hi">User edits</span>           <span class="grn">Git commits</span>           <span class="amb">LLM planning</span>
-      │                        │                        │
-      ▼                        ▼                        ▼
-<span class="hi">Projection sync</span>      <span class="grn">Reflective pipeline</span>    <span class="amb">Planning pipeline</span>
-(parse+diff+apply)   (fingerprint+escalate)   (diff-hunk proposals)
-      │                        │                        │
-      └────────────────────────┴────────────────────────┘
-                               │
-                               ▼
-                    <span class="hi">Transaction log (HLC-ordered)</span>
-                    SQLite WAL  +  JSONL audit lane
-                               │
-                               ▼
-                    <span class="hi">Feature store</span>  ←→  <span class="hi">Binding index</span>
-                    (uuid, slug, title,      (feature_uuid → anchors)
-                     intent, parent_uuid)
-                               │
-                               ▼
-                    <span class="hi">Projection render</span>
-                    _index.codoc  +  tree.meta.json</div>
+<div class="arch-diagram"><span class="hi">User edits tree.codoc</span>            <span class="grn">User edits source code</span>
+           │                                     │
+           ▼                                     ▼
+<span class="hi">Loop B — codoc → code</span>          <span class="grn">Loop A — code → codoc</span>
+  drain inbox.json verdicts        update_index (cocoindex)
+  parse + diff tree.codoc          compute_changeset
+  apply user ops immediately       auto-ops (REFRESH/ATTACH/DETACH)
+  build directive                  relocation detection (no LLM)
+  spawn claude -p once             one LLM pass for structural ops
+  re-run Loop A on written files   structural ops → pending Events
+           │                                     │
+           └──────────────────┬──────────────────┘
+                              │
+                              ▼
+                   <span class="hi">Store  (SQLite WAL)</span>
+                   features · bindings · events
+                              │
+                              ▼
+                   <span class="hi">render.py → write_tree</span>
+                   tree.codoc  +  tree.bindings.json
+                   (atomic tmp→rename)</div>
 
 <div class="callout good">
-  <strong>Central thesis — the binding-health loop:</strong> for every <code>Binding</code>, the system asks one question: <em>does the stored fingerprint still match current source?</em> The answer is a <code>Comparison</code> with verdict <code>still_aligned | moved | drifted | severed | novel</code>. Every pipeline is either a <em>producer</em> of comparisons (git-diff reflect, on-save reflect, health sweep, bootstrap) or a <em>consumer</em> (<code>apply.py</code> writes new fingerprints on accept; <code>state_derivation</code> reads the latest verdict per feature → <code>FeatureState</code>; the projection renders drift annotations). The lens (<code>_index.codoc</code> ↔ SQLite) is adjacent but contains no drift logic.
+  <strong>Central design:</strong> the store (SQLite) is the single source of truth. <code>tree.codoc</code> is a rendered view of it — not a database replica. Loop A and Loop B both write the store; <code>write_tree</code> renders it back to disk. The extension reads the rendered files; no HTTP, no server process.
 </div>
 
 <h3 id="data-model">Data model</h3>
 
-<p>The five core types live in <code>codoc/model/</code>:</p>
+<p>Core types live in <code>codoc/model/</code>:</p>
 
 <table>
   <tr><th>Type</th><th>Key fields</th><th>Notes</th></tr>
   <tr>
     <td><code>Feature</code></td>
-    <td><code>uuid, slug, title, parent_uuid, intent, retired</code></td>
-    <td>The stable node identity. <code>title</code> is 2–5 words prose; <code>slug</code> is kebab-case. State is derived, never stored.</td>
-  </tr>
-  <tr>
-    <td><code>Anchor</code></td>
-    <td><code>file, symbol_path?, ts_query?, occurrence_index</code></td>
-    <td>Points at a code chunk without byte ranges (those are resolved live by tree-sitter).</td>
+    <td><code>id, title, description, parent_id, retired, created_at, updated_at</code></td>
+    <td>Stable identity via <code>id</code> (<code>f-xxxxxxxx</code>). One prose field: <code>description</code>. No status, no state enum — state is never stored.</td>
   </tr>
   <tr>
     <td><code>Binding</code></td>
-    <td><code>uuid, feature_uuid, anchor, fingerprint</code></td>
-    <td>Links a feature to one code chunk. A feature can have many bindings across many files.</td>
+    <td><code>id, feature_id, file, symbol_path, fingerprint</code></td>
+    <td>Links a feature to one code chunk. <code>UNIQUE(file, symbol_path)</code> — a chunk binds to at most one feature. <code>fingerprint</code> = <code>tokens_hash</code> for staleness detection.</td>
   </tr>
   <tr>
-    <td><code>Transaction</code></td>
-    <td><code>hlc, kind, payload, author, proposal</code></td>
-    <td>Append-only log entry. <code>proposal=True</code> means pending user review.</td>
+    <td><code>Event</code></td>
+    <td><code>id, at, source, op, applied, accepted_at</code></td>
+    <td>Append-only log entry. <code>applied=False</code> = pending proposal. Accepting flips it and runs the op.</td>
+  </tr>
+  <tr>
+    <td><code>NodeOp</code></td>
+    <td><code>kind, feature_id, parent_id, title, description, bindings, rationale</code></td>
+    <td>The payload of an Event. Safe kinds: <code>ATTACH DETACH REFRESH AMEND</code>. Structural: <code>ADD_NODE MOVE_NODE RETIRE_NODE</code>.</td>
   </tr>
   <tr>
     <td><code>HLC</code></td>
     <td><code>logical_time, wall_clock, node_id</code></td>
-    <td>Hybrid Logical Clock — lexicographically sortable, causal across nodes.</td>
+    <td>Hybrid Logical Clock — lexicographically sortable, causal. Used for <code>created_at</code>/<code>updated_at</code>/<code>at</code> everywhere.</td>
   </tr>
 </table>
 
-<h3 id="transaction-log">Transaction log and HLC</h3>
+<p>Three authoritative SQLite tables: <code>features</code>, <code>bindings</code>, <code>events</code>. One derived cache: <code>code_edges(src_symbol, dst_symbol, kind, internal)</code> — safe to drop and rebuild from the chunk index.</p>
 
-<p>Every change to the feature tree goes through the <code>TransactionLog</code> (<code>codoc/core/log.py</code>). There are two write paths:</p>
+<h3 id="loop-a">Loop A — code → codoc</h3>
 
-<ul>
-  <li><strong><code>append_proposal(tx)</code></strong> — writes a proposal (pending review). Automatically deduplicates INTRODUCE proposals for the same <code>(slug, parent_uuid)</code> pair.</li>
-  <li><strong><code>append(tx)</code></strong> — writes an accepted intentional transaction (AMEND, RENAME, RETIRE) directly, bypassing the proposal queue.</li>
-</ul>
-
-<p>Each transaction receives an HLC timestamp stamped at write time. The HLC advances monotonically, incorporates wall-clock time, and is safe across concurrent nodes without coordination. The HLC string is the primary key in SQLite (<code>transactions</code> table).</p>
-
-<p>The JSONL audit lane at <code>.codoc/log.jsonl</code> is a complete rebuild-able copy of the SQLite log — useful for inspection, diffing, and migration.</p>
-
-<h3 id="tree-align">Tree-alignment identity</h3>
-
-<p>The hardest problem in projection sync is <em>feature identity under rename</em>. When you rename a feature in <code>_index.codoc</code>, codoc must recognise that the renamed feature is the same DB record — not retire the old one and introduce a new one (which would destroy history).</p>
-
-<p>codoc solves this with a two-tier resolution algorithm in <code>codoc/projection/parser.py</code> and <code>codoc/projection/tree_align.py</code>:</p>
+<p>Triggered whenever source files change. Five phases:</p>
 
 <ol>
-  <li><strong>Sidecar lookup</strong> — the <code>tree.meta.json</code> sidecar carries <code>title_path_to_uuid</code> and <code>slug_path_to_uuid</code> maps written at the last render. If either map contains the feature, that UUID wins immediately — O(1), no heuristics.</li>
-  <li><strong>Structural recovery (last-resort)</strong> — when the sidecar misses (first sync after a rename, or after the sidecar is deleted), <code>tree_align.resolve_uuid_structural</code> runs one scoring pass over all siblings under the same parent. Each sibling is scored by <code>max(title_exact, slug_normalised_match, levenshtein_ratio)</code>; the best-scoring UUID is returned if the score is ≥ 0.6. If two siblings score equally the match is ambiguous and becomes an INTRODUCE proposal instead of a silent identity assignment.</li>
+  <li><strong>Index update.</strong> <code>update_index</code> (cocoindex + LanceDB) re-parses changed files via tree-sitter, embeds AST chunks, upserts to LanceDB. Memoised per file — unchanged files cost nothing.</li>
+  <li><strong>Changeset diff.</strong> <code>compute_changeset</code> reads the old and new snapshots from LanceDB, keys by <code>(file, symbol_path)</code>, compares <code>tokens_hash</code> → <code>ChangeSet{added, removed, modified}</code>.</li>
+  <li><strong>Auto-ops.</strong> <code>derive_auto_ops</code> resolves trivially-safe changes (modified-bound → REFRESH, removed-bound → DETACH) with no LLM.</li>
+  <li><strong>Relocation detection.</strong> <code>_detect_relocations</code> pairs removed↔added chunks that are the same code relocated: a <em>move</em> (identical <code>tokens_hash</code>) or a <em>rename</em> (same-file unique <code>types_hash</code>). Each match emits an ATTACH to the removed chunk's feature — no LLM, no risk of lost attribution.</li>
+  <li><strong>LLM pass.</strong> Only if there are still-unbound additions or a feature lost its last binding. One <code>propose_tree_update</code> call with the change set, a file-locality seed subtree, and every node title (de-dup context). Safe ops apply immediately; structural ops become <code>applied=False</code> Events rendered as proposals.</li>
 </ol>
 
-<p>The sibling index is pre-built in O(N) once per sync cycle as a <code>parent_uuid → [children]</code> map, making the scoring pass O(children).</p>
+<p><strong>Coverage net:</strong> <code>_cover_uncovered_adds</code> ensures no added chunk is silently dropped — it attaches to the <code>neighbor_feature</code> (graph-neighbor feature with the most call/import edges to the new symbol) or, failing that, surfaces a pending ADD_NODE proposal.</p>
 
-<p>Features that still fail to match become <strong>INTRODUCE proposals</strong> rather than fatal errors — you may have genuinely added a new feature, and codoc will ask you to confirm.</p>
+<h3 id="loop-b">Loop B — codoc → code</h3>
 
-<h3 id="projection">Projection layer</h3>
+<p>Triggered when <code>tree.codoc</code> changes (user edits) or when <code>inbox.json</code> has new verdicts (user Accept/Reject in the IDE).</p>
 
-<p>The projection layer is the bridge between the <code>_index.codoc</code> text and the SQLite store. It lives in <code>codoc/projection/</code>:</p>
+<ol>
+  <li><strong>Drain inbox.</strong> For each verdict in <code>inbox.json</code>: accept → <code>apply_op</code> + mark event applied; reject → delete event. Clear the file.</li>
+  <li><strong>Parse + diff.</strong> Parse <code>tree.codoc</code> with <code>parse.py</code>, diff against the store with <code>diff.py</code> → list of user ops (title edits, description edits, new nodes, retires).</li>
+  <li><strong>Apply immediately.</strong> User edits are intentional — applied to the store without a proposal step.</li>
+  <li><strong>Build directive.</strong> For each code-implying op (a description edit with bound symbols, a new node), render a coding prompt from <code>prompts/realize.txt</code>.</li>
+  <li><strong>Realize.</strong> Write <code>status.json = realizing</code>, spawn <code>claude -p … --dangerously-skip-permissions</code> once, wait.</li>
+  <li><strong>Re-reflect.</strong> Re-run Loop A scoped to the files the agent wrote — surfaces any refinements the under-specified intent missed.</li>
+</ol>
 
-<table>
-  <tr><th>Module</th><th>Role</th></tr>
-  <tr><td><code>tree_codoc.py</code></td><td>Render: DB → <code>_index.codoc</code> + <code>tree.meta.json</code> sidecar</td></tr>
-  <tr><td><code>parser.py</code></td><td>Parse: <code>_index.codoc</code> → <code>ParsedTree</code> (uses tree-align for identity)</td></tr>
-  <tr><td><code>differ.py</code></td><td>Diff: <code>ParsedTree</code> × DB → list of <code>IntentOp</code></td></tr>
-  <tr><td><code>sync.py</code></td><td>Sync: parse + diff + apply + re-render in one transaction</td></tr>
-  <tr><td><code>meta.py</code></td><td><code>TreeMeta</code> sidecar schema + read/write helpers</td></tr>
-  <tr><td><code>tree_align.py</code></td><td>Structural identity resolution (see above)</td></tr>
-</table>
+<h3 id="file-format">File format and round-trip invariant</h3>
 
-<p>The <strong><code>tree.meta.json</code> sidecar</strong> is written alongside <code>_index.codoc</code> on every render. It carries:</p>
-<ul>
-  <li><code>uuid_to_location</code> — maps each feature UUID to its rendered line number plus structural fields (<code>depth</code>, <code>sibling_index</code>, <code>parent_uuid</code>, <code>title_norm_hash</code>) used by the identity algorithm on the next parse.</li>
-  <li><code>title_path_to_uuid</code> and <code>slug_path_to_uuid</code> — the primary identity lookups used by Tier 1 resolution (fast, no heuristics).</li>
-  <li><code>line_range_to_hlc</code> — maps diff-hunk line ranges to proposal HLCs, so the extension can look up the HLC for any line in a proposal hunk without embedding HLC text in the file.</li>
-  <li><code>feature_hashes</code> — <code>sha1(title + intent + parent_uuid + retired)</code> per feature, used for conflict detection.</li>
-</ul>
+<p>The key correctness property: <strong>render → parse → diff is always a no-op</strong>.</p>
 
-<h3 id="reflective">Reflective pipeline</h3>
-
-<p>When you save a source file (or after a git commit), the reflective pipeline observes the change and proposes binding updates:</p>
+<p>This is enforced by identifying proposal blocks via their <code>⟨e-id⟩</code> (event id) vs the <code>⟨f-id⟩</code> on live features — both parsers (<code>parse.py</code> and the TypeScript <code>tree-model.ts</code>) skip proposal blocks entirely. The diff step only sees live features, so a round-trip produces zero ops.</p>
 
 <pre class="diff">
-<span class="dim">On-save / post-commit</span>
-       │
-       ▼
-<span class="add">tree-sitter re-parse</span>      ← tree_walk(source, adapter) → tokens_hash, types_hash, minhash
-       │
-       ▼
-<span class="add">reconciler.compare</span>        ← per binding: stored fingerprint vs current source
-       │
-  ┌────┴────────────────┐
-  │  still_aligned      │   skip — update fingerprint cache
-  └─────────────────────┘
-       │ not aligned
-  ┌────┴────────────────┐
-  │  moved              │   types_hash match → MOVED proposal (no LLM)
-  └─────────────────────┘
-       │ drifted / severed / novel
-       ▼
-<span class="add">namespace-absorb gate</span>     ← symbol-prefix majority → ABSORB directly
-       │ low confidence
-       ▼
-<span class="add">LLM escalation</span>            ← attribution agent (1–3 s)
-       │
-       ▼
-<span class="add">proposal queue</span>            ← stored as pending transactions in SQLite
+<span class="dim">tree.codoc on disk after a propose_add:</span>
+
+<span class="dim">- Authentication flow  ⟨f-3a9c2e⟩</span>
+<span class="dim">    Handles login, session creation, and token lifecycle.</span>
+<span class="dim"></span>
+<span class="add">+ - Rate limiting  ⟨e-9f01c2⟩</span>       ← proposal block (skipped by parser)
+<span class="add">+     Caps API requests per user per minute.</span>
+<span class="dim"></span>
+<span class="dim">  - Token rotation  ⟨f-7b1d04⟩</span>       ← live node (parsed normally)
 </pre>
 
-<p>The key design: one comparison function (<code>reconciler.compare</code>) drives both the reflective pipeline and the periodic health sweep. The pipeline scales with the <em>change</em>, not the codebase. After bootstrap, it never re-indexes everything. Structurally unchanged chunks are detected without an LLM; only genuine semantic drift escalates.</p>
+<p>In-situ proposals render at their target position: ADD proposals under their proposed parent, RETIRE/AMEND proposals immediately beneath the target node, MOVE proposals at the destination. A col-0 op char (<code>+</code>/<code>-</code>/<code>~</code>) + the node indented to its tree depth + <code>⟨e-id⟩</code>, blank-line terminated. Both parsers are parity-tested against each other on real trees.</p>
 
-<h3 id="sync-invariants">Sync invariants</h3>
+<h3 id="sidecar">Sidecar and dependency graph</h3>
 
-<p>The sync path enforces three invariants:</p>
+<p><code>render.py</code> writes two files atomically (tmp → rename) on every <code>write_tree</code> call:</p>
 
-<ol>
-  <li><strong>Invariant 1 (identity preserved):</strong> A feature whose title changed in <code>_index.codoc</code> must map to the same UUID — not produce a RETIRE+INTRODUCE pair. Enforced by the two-tier sidecar + structural-recovery algorithm.</li>
-  <li><strong>Invariant 2 (proposals round-trip):</strong> A proposal accepted or rejected in <code>_index.codoc</code> (by deleting or editing the diff hunk) must be applied atomically in the DB and the file re-rendered without the hunk. Enforced by the <code>AcceptOp</code>/<code>RejectOp</code> pathway in <code>sync.py</code>.</li>
-  <li><strong>Invariant 3 (race-safe sync):</strong> If the store head HLC has advanced since the last render (another writer, e.g. the reflective pipeline, committed while the user was editing), user changes to <em>untouched</em> features apply cleanly. Changes to the same feature as the server produce an inline <code>&lt;!-- conflict --&gt;</code> annotation rather than silently overwriting.</li>
-</ol>
+<p><strong><code>tree.codoc</code></strong> — the human surface. Features, descriptions, inline refs, and in-situ proposals.</p>
+
+<p><strong><code>tree.bindings.json</code></strong> — the IDE sidecar. Schema version 2:</p>
+
+<pre>
+{
+  "version": 2,
+  "by_feature": { "f-id": [{"file": "auth.py", "symbol": "auth.py::AuthManager.login"}] },
+  "by_file":    { "auth.py": [{"symbol": "...", "feature_id": "f-id", "feature_title": "Authentication flow"}] },
+  "features":   { "f-id": {"title": "Authentication flow", "parent_id": null} },
+  "feature_edges": {
+    "f-id": [{"to": "f-other", "weight": 4, "kinds": ["call"]}]
+  }
+}
+</pre>
+
+<p><code>feature_edges</code> (new in v2) aggregates <code>code_edges</code> into feature-level call/import coupling — <code>sym2feat</code> maps each bound symbol to its feature, and edges between features are counted and typed. The extension reads this to build an undirected adjacency map for dependency dimming. The extension tolerates the absence of <code>feature_edges</code> (old v1 trees have no dimming).</p>
+
+<p>Three additional files written by the loops, not by <code>write_tree</code>:</p>
+
+<ul>
+  <li><code>status.json</code> — <code>{state, pending, detail, at}</code>; state ∈ <code>{in_sync, code_drift, tree_dirty, realizing}</code>. Drives the IDE status bar and the header CodeLens.</li>
+  <li><code>inbox.json</code> — <code>{version, verdicts:[{event_id, accept}]}</code>. The verdict channel: the IDE's Accept/Reject writes here; Loop B drains and clears it.</li>
+  <li><code>activity.json</code> — per-file agent touch log: <code>{epoch:{open}, touched:{file:{mode, feature_ids}}, recent:[]}</code>. Drives the agent gutter markers and Explorer file badges.</li>
+</ul>
 
 <h3 id="extension-arch">Extension architecture</h3>
 
-<p>The VS Code extension (<code>vscode-codoc/src/</code>) communicates with the codoc FastAPI server over HTTP. The server runs locally; the extension connects to it on port 8001 (configurable).</p>
+<p>The VS Code extension (<code>vscode-codoc/src/</code>) is entirely file-based. No HTTP client, no server process, no port.</p>
 
 <div class="cols">
   <div class="col">
     <h3>State layer</h3>
     <ul>
-      <li><code>state/server.ts</code> — manages the server process lifecycle and the <code>CodocClient</code> HTTP wrapper.</li>
-      <li><code>state/line-tracker.ts</code> — maintains a <code>Map&lt;uuid, {startLine, endLine}&gt;</code> that applies incremental line shifts from <code>onDidChangeTextDocument</code> events. Decorations re-read from this tracker, not from a stale sidecar.</li>
-      <li><code>state/proposals-status-bar.ts</code> — right-aligned pending-count widget with bulk accept/reject.</li>
+      <li><code>state/workspace-state.ts</code> — root detection, file watchers on all five <code>.codoc/</code> files, reload on change, fires <code>onDidChange</code>; status bar; <code>writeVerdict()</code> appends to <code>inbox.json</code>.</li>
+      <li><code>state/tree-model.ts</code> — TypeScript port of <code>parse.py</code>, parity-tested. Parses features, proposal hunks (with <code>endLine</code> for block coloring), inline refs.</li>
+      <li><code>state/bindings-model.ts</code> — sidecar types, <code>entriesForFile</code>, <code>bindingsForFeature</code>, and <code>featureAdjacency()</code> which builds the undirected adjacency map from <code>feature_edges</code>.</li>
     </ul>
   </div>
   <div class="col">
     <h3>Provider layer</h3>
     <ul>
-      <li><code>providers/decoration.ts</code> — gutter status icons + diff-hunk background tints.</li>
-      <li><code>providers/codelens.ts</code> — sync / render / reflect buttons + per-proposal accept/reject + feature-to-bindings navigation.</li>
-      <li><code>providers/code-lens.ts</code> — reverse lens on source files (code → feature).</li>
-      <li><code>providers/code-actions.ts</code> — lightbulb accept/reject on diff-hunk lines.</li>
-      <li><code>providers/conflict-resolver.ts</code> — virtual document provider for <code>codoc-conflict://</code> three-way diff URIs.</li>
+      <li><code>providers/decoration.ts</code> — hides <code>⟨…⟩</code> ids (<code>display:none</code>); colors in-situ proposal blocks from parser ranges (not per-line regex); strikes retired live nodes (excludes proposal lines from the strike scan).</li>
+      <li><code>providers/focus.ts</code> — dependency dimming: selection listener + 400 ms debounce + undirected adjacency map → dims complement at 0.6 opacity; clears on blur or cursor on edge-free node.</li>
+      <li><code>providers/agent.ts</code> — static gutter marker on <code>activity.json</code> <code>activeFeatureLines</code>.</li>
+      <li><code>providers/file-decoration.ts</code> — Explorer file badges on touched source files.</li>
+      <li><code>providers/inlay.ts</code> — derived-binding chips at the end of each feature title line.</li>
+      <li><code>providers/codoc-tree-lens.ts</code> — header status + per-proposal Accept/Reject + Accept all / Reject all.</li>
+      <li><code>providers/code-actions.ts</code> — lightbulb Accept/Reject on hunk lines.</li>
+      <li><code>providers/code-lens.ts</code> — source-file CodeLens: owned symbols → feature name + navigate.</li>
+      <li><code>providers/feature-tree-view.ts</code> — sidebar tree: click → precise line jump; binding count; state icons; cursor↔selection <code>reveal</code> sync.</li>
+      <li><code>providers/{folding,symbol,feature-lines,completion,doc-links}.ts</code> — outline, fold, nav helpers, <code>[</code>-triggered ref autocomplete, clickable <code>codoc:</code> links.</li>
     </ul>
   </div>
 </div>
 
-<div class="callout warn">
-  <strong>Echo suppression (Phase 1.5 TODO):</strong> The server → render → FS-event → sync → render loop is currently suppressed at the debouncer level (750 ms cooldown after a server-triggered render). A proper render-token echo guard (stamped in <code>tree.meta.json</code>, checked by the extension before dispatching a sync) is deferred to Phase 1.5 when the full FS-watcher lands.
+<div class="callout">
+  <strong>Watcher coverage:</strong> <code>WorkspaceState</code> watches <code>**/.codoc/{tree.codoc,tree.bindings.json,status.json,inbox.json,activity.json}</code>. Every write by the daemon fires <code>onDidChange</code> and all providers update synchronously — no polling, no HTTP round-trips.
 </div>
 
-<div class="callout">
-  <strong>HLC lookup for new-format hunks:</strong> Old proposal lines embedded the HLC directly in the text (<code># ?HLC</code>). New-format diff hunks store only content. The extension resolves an HLC for any line by checking <code>tree.meta.json.line_range_to_hlc</code> — a map from <code>"_index.codoc:start-end"</code> ranges to HLC strings written by the renderer at render time.
+<div class="callout warn">
+  <strong>Self-write guard:</strong> <code>watch.py</code> tracks the last time it wrote <code>tree.codoc</code> and ignores FS events that arrive within a short window after its own write. This prevents the daemon from triggering itself in a loop when it re-renders the tree after applying ops.
 </div>
 
 <hr>

@@ -5,7 +5,7 @@ import pytest
 
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import PENDING_SENTINEL, render_tree
+from codoc.codoc_file.render import render_tree
 from codoc.model.event import PLAN_SOURCE, Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -30,7 +30,6 @@ def _add_proposal(store, source: str, kind=NodeOpKind.ADD_NODE, **op_kw):
 def test_plan_proposal_renders_agent_plan_tag(store):
     _add_proposal(store, source=PLAN_SOURCE)
     text = render_tree(store)
-    assert PENDING_SENTINEL in text
     assert "agent plan" in text
     assert "code drift" not in text
 
@@ -38,7 +37,6 @@ def test_plan_proposal_renders_agent_plan_tag(store):
 def test_code_drift_proposal_renders_code_drift_tag(store):
     _add_proposal(store, source="loop_a")
     text = render_tree(store)
-    assert PENDING_SENTINEL in text
     assert "code drift" in text
     assert "agent plan" not in text
 

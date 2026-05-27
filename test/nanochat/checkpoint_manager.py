@@ -20,24 +20,32 @@ def log0(message):
     if int(os.environ.get('RANK', 0)) == 0:
         logger.info(message)
 
-def _patch_missing_config_keys(model_config_kwargs):
-    """Add default values for new config keys missing in old checkpoints."""
-    # Old models were trained with full context (no sliding window)
-    if "window_pattern" not in model_config_kwargs:
-        model_config_kwargs["window_pattern"] = "L"
-        log0(f"Patching missing window_pattern in model config to 'L'")
+# Keys added after the initial checkpoint format; value is the backward-compatible default.
+# Config patches: (key, scalar_default)
+_CONFIG_COMPAT: list[tuple[str, object]] = [
+    ("window_pattern", "L"),  # old models used full context, no sliding window
+]
 
-def _patch_missing_keys(model_data, model_config):
-    """Add default values for new parameters that may be missing in old checkpoints."""
-    n_layer = model_config.n_layer
-    # resid_lambdas defaults to 1.0 (identity scaling)
-    if "resid_lambdas" not in model_data:
-        model_data["resid_lambdas"] = torch.ones(n_layer)
-        log0(f"Patching missing resid_lambdas in model data to 1.0")
-    # x0_lambdas defaults to 0.0 (disabled)
-    if "x0_lambdas" not in model_data:
-        model_data["x0_lambdas"] = torch.zeros(n_layer)
-        log0(f"Patching missing x0_lambdas in model data to 0.0")
+# Model-data patches: (key, factory(model_config) -> tensor)
+_MODEL_DATA_COMPAT: list[tuple[str, object]] = [
+    ("resid_lambdas", lambda cfg: torch.ones(cfg.n_layer)),   # identity scaling
+    ("x0_lambdas",    lambda cfg: torch.zeros(cfg.n_layer)),  # feature disabled
+]
+
+def _patch_checkpoint(model_config_kwargs: dict, model_data: dict | None = None, model_config=None):
+    """Back-fill keys missing from old checkpoints with their safe defaults."""
+    applied = []
+    for key, default in _CONFIG_COMPAT:
+        if key not in model_config_kwargs:
+            model_config_kwargs[key] = default
+            applied.append(f"config.{key}={default!r}")
+    if model_data is not None and model_config is not None:
+        for key, factory in _MODEL_DATA_COMPAT:
+            if key not in model_data:
+                model_data[key] = factory(model_config)
+                applied.append(f"weights.{key}")
+    if applied:
+        log0(f"Old checkpoint — patched missing keys: {', '.join(applied)}")
 
 def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data, rank=0):
     if rank == 0:
@@ -147,10 +155,10 @@ def build_model(checkpoint_dir, step, device, phase):
     # Hack: fix torch compile issue, which prepends all keys with _orig_mod.
     model_data = {k.removeprefix("_orig_mod."): v for k, v in model_data.items()}
     model_config_kwargs = meta_data["model_config"]
-    _patch_missing_config_keys(model_config_kwargs)
+    _patch_checkpoint(model_config_kwargs)
     log0(f"Building model with config: {model_config_kwargs}")
     model_config = GPTConfig(**model_config_kwargs)
-    _patch_missing_keys(model_data, model_config)
+    _patch_checkpoint(model_config_kwargs, model_data, model_config)
     with torch.device("meta"):
         model = GPT(model_config)
     # Load the model state

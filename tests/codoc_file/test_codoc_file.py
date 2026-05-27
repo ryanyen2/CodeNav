@@ -1,12 +1,14 @@
 """render / parse / diff of tree.codoc (new format: hidden ids, multi-paragraph
-descriptions, proposals as a display-only diff block)."""
+descriptions, proposals as in-situ diff hunks)."""
 from __future__ import annotations
+
+import re
 
 import pytest
 
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import PENDING_SENTINEL, _compute_feature_edges, render_tree
+from codoc.codoc_file.render import _compute_feature_edges, render_tree
 from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
@@ -132,7 +134,7 @@ def test_reparent_detected(store):
     assert any(o.feature_id == sib.id and o.parent_id == child.id for o in moves)
 
 
-# -- proposals render as a display-only diff block ------------------------
+# -- proposals render in situ as diff hunks -------------------------------
 def _add_proposal(store):
     e = Event(source="loop_a", applied=False,
               op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Proposed thing",
@@ -145,8 +147,8 @@ def test_proposal_renders_as_diff_hunk(store):
     _tree(store)
     e = _add_proposal(store)
     text = render_tree(store)
-    assert PENDING_SENTINEL in text
-    # diff hunk: col-0 '+' op char, then a normal feature line, hidden event id.
+    # in-situ diff hunk: col-0 '+' op char, then the node at its tree depth
+    # (a root add → no indent), hidden event id, then a '+'-prefixed body.
     assert f"+ - Proposed thing  ⟨{e.id}⟩" in text
     assert "+     does a thing" in text
 
@@ -155,7 +157,7 @@ def test_proposals_never_appear_as_live_nodes(store):
     _tree(store)
     _add_proposal(store)
     parsed = parse_text(render_tree(store))
-    # everything past the sentinel is display-only → no node titled "Proposed thing"
+    # in-situ proposal blocks are skipped → no node titled "Proposed thing"
     assert all(n.title != "Proposed thing" for n in parsed.nodes)
     # …and the proposal does not create a phantom user op
     assert diff_codoc(parsed, store).is_empty()
@@ -168,8 +170,10 @@ def test_retire_and_move_proposals_render(store):
     store.append_event(Event(source="loop_a", applied=False,
                              op=NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=child.id, parent_id=root.id)))
     text = render_tree(store)
-    assert "- ~ Index snapshot diff" in text  # retire hunk
-    assert "~ - Index snapshot diff" in text  # move hunk
+    # hunks render in situ at the node's tree depth, so allow leading indent.
+    assert re.search(r"(?m)^- \s*~ Index snapshot diff", text)  # retire hunk
+    assert re.search(r"(?m)^~ \s*- Index snapshot diff", text)  # move hunk (at destination)
+    assert "retire · code drift" in text
     assert "move → Indexing layer" in text
 
 

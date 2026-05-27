@@ -13,6 +13,7 @@ import { CodocSymbolProvider } from './providers/symbol';
 import { FeatureTreeProvider } from './providers/feature-tree-view';
 import { applyDecorations, createDecorations } from './providers/decoration';
 import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
+import { bindingsForFeature } from './state/bindings-model';
 import { DependencyFocus } from './providers/focus';
 import { AgentGutter } from './providers/agent';
 import { CodocFileDecorationProvider } from './providers/file-decoration';
@@ -68,14 +69,24 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     // ── Proposal verdicts → .codoc/inbox.json (the daemon applies them) ───────
-    const verdict = (ids: string[] | string, accept: boolean): void => {
+    const verdict = async (ids: string[] | string, accept: boolean): Promise<void> => {
         state.writeVerdict(Array.isArray(ids) ? ids : [ids], accept);
+        vscode.window.setStatusBarMessage('$(sync~spin) codoc: applying…', 3000);
+    };
+    const bulkVerdict = async (ids: string[], accept: boolean): Promise<void> => {
+        if (!ids || ids.length === 0) return;
+        const label = accept ? 'Accept all' : 'Reject all';
+        const choice = await vscode.window.showWarningMessage(
+            `${label} ${ids.length} proposed change${ids.length === 1 ? '' : 's'}?`,
+            { modal: true }, label);
+        if (choice !== label) return;
+        await verdict(ids, accept);
     };
     context.subscriptions.push(
-        vscode.commands.registerCommand('codoc.acceptProposal', (id: string) => verdict(id, true)),
-        vscode.commands.registerCommand('codoc.rejectProposal', (id: string) => verdict(id, false)),
-        vscode.commands.registerCommand('codoc.acceptAll', (ids: string[]) => verdict(ids, true)),
-        vscode.commands.registerCommand('codoc.rejectAll', (ids: string[]) => verdict(ids, false)),
+        vscode.commands.registerCommand('codoc.acceptProposal', async (id: string) => verdict(id, true)),
+        vscode.commands.registerCommand('codoc.rejectProposal', async (id: string) => verdict(id, false)),
+        vscode.commands.registerCommand('codoc.acceptAll', async (ids: string[]) => bulkVerdict(ids, true)),
+        vscode.commands.registerCommand('codoc.rejectAll', async (ids: string[]) => bulkVerdict(ids, false)),
     );
 
     // ── codoc.openRef — jump from an inline [..](codoc:file#symbol) to code ───
@@ -83,13 +94,20 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('codoc.openRef', async (file: string, symbol: string) => {
             if (!state.rootDir) return;
             const uri = vscode.Uri.file(path.join(state.rootDir, file));
-            const doc = await vscode.workspace.openTextDocument(uri);
-            // Open Beside, preserve focus on tree.codoc.
-            const targetEditor = await vscode.window.showTextDocument(doc, {
-                viewColumn: vscode.ViewColumn.Beside,
-                preserveFocus: true,
-                preview: true,
-            });
+            let doc: vscode.TextDocument;
+            let targetEditor: vscode.TextEditor;
+            try {
+                doc = await vscode.workspace.openTextDocument(uri);
+                // Open Beside, preserve focus on tree.codoc.
+                targetEditor = await vscode.window.showTextDocument(doc, {
+                    viewColumn: vscode.ViewColumn.Beside,
+                    preserveFocus: true,
+                    preview: true,
+                });
+            } catch {
+                void vscode.window.showWarningMessage(`codoc: couldn't open ${file} — the reference may be stale.`);
+                return;
+            }
 
             if (!symbol) return;
 
@@ -132,6 +150,32 @@ export function activate(context: vscode.ExtensionContext): void {
             });
             targetEditor.setDecorations(flashDec, [targetRange]);
             setTimeout(() => { targetEditor.setDecorations(flashDec, []); flashDec.dispose(); }, 900);
+        }),
+    );
+
+    // ── codoc.openFirstBinding — Alt+B: jump from tree node to its first bound symbol ──
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.openFirstBinding', async () => {
+            const ed = vscode.window.activeTextEditor;
+            if (!ed || ed.document.languageId !== 'codoc') return;
+            const line = ed.selection.active.line;
+            // Find the feature whose title is at or above the cursor.
+            const features = state.features;
+            let best: typeof features[0] | undefined;
+            for (const f of features) {
+                if (f.line <= line && (!best || f.line > best.line)) best = f;
+            }
+            if (!best?.id) {
+                void vscode.window.showInformationMessage('No feature at cursor — position cursor on a feature title line.');
+                return;
+            }
+            const binds = bindingsForFeature(state.sidecar, best.id);
+            if (binds.length === 0) {
+                void vscode.window.showInformationMessage(`"${best.title}" has no code bindings yet.`);
+                return;
+            }
+            const b = binds[0];
+            await vscode.commands.executeCommand('codoc.openRef', b.file, b.symbol);
         }),
     );
 
@@ -275,7 +319,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const decorations = createDecorations(context);
     const refreshDecorations = (editor?: vscode.TextEditor): void => {
         const ed = editor ?? vscode.window.activeTextEditor;
-        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines, state.features);
+        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines);
     };
     refreshDecorations();
     context.subscriptions.push(

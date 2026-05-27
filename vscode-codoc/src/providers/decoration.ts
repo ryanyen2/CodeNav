@@ -1,15 +1,11 @@
 import * as vscode from 'vscode';
-import { ParsedFeature } from '../state/workspace-state';
+import { parseTreeCodoc } from '../state/tree-model';
 
 // Identity / event markers ⟨f-…⟩ ⟨e-…⟩ (plus the two spaces before them) are
 // collapsed to nothing — the human never sees or types an id.
 const HIDDEN_ID_RE = /\s*⟨(?:f|e)-[0-9a-f]+⟩/g;
-// A proposal diff hunk: col-0 op char, space, a feature marker, space.
-const DIFF_HUNK_RE = /^([+\-~]) [-~] /;
 // A retired *live* feature line: '~ Title' (3rd char is a letter, not a marker).
 const RETIRED_RE = /^\s*~\s+\S/;
-// A live feature title line: indent + marker (- or ~) + space + word char.
-const FEATURE_RE = /^(\s*)[-~]\s+\S/;
 
 export interface CodocDecorations {
     hiddenId: vscode.TextEditorDecorationType;
@@ -19,8 +15,6 @@ export interface CodocDecorations {
     retired: vscode.TextEditorDecorationType;
     activeFeature: vscode.TextEditorDecorationType;
     dimmed: vscode.TextEditorDecorationType;
-    nodeGlyphParent: vscode.TextEditorDecorationType;
-    nodeGlyphLeaf: vscode.TextEditorDecorationType;
 }
 
 export function createDecorations(_context: vscode.ExtensionContext): CodocDecorations {
@@ -67,21 +61,7 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
             overviewRulerLane: vscode.OverviewRulerLane.Left,
         }),
         dimmed: vscode.window.createTextEditorDecorationType({
-            opacity: '0.45',
-        }),
-        nodeGlyphParent: vscode.window.createTextEditorDecorationType({
-            before: {
-                contentText: '▸ ',
-                color: new vscode.ThemeColor('editorIndentGuide.activeBackground'),
-                margin: '0 2px 0 0',
-            },
-        }),
-        nodeGlyphLeaf: vscode.window.createTextEditorDecorationType({
-            before: {
-                contentText: '• ',
-                color: new vscode.ThemeColor('editorGhostText.foreground'),
-                margin: '0 2px 0 0',
-            },
+            opacity: '0.6',
         }),
     };
 }
@@ -90,7 +70,6 @@ export function applyDecorations(
     editor: vscode.TextEditor,
     dec: CodocDecorations,
     activeFeatureLines: number[] = [],
-    features: ParsedFeature[] = [],
 ): void {
     if (editor.document.languageId !== 'codoc') return;
     const hiddenId: vscode.Range[] = [];
@@ -98,14 +77,19 @@ export function applyDecorations(
     const retireHunk: vscode.Range[] = [];
     const moveHunk: vscode.Range[] = [];
     const retired: vscode.Range[] = [];
-    const nodeParent: vscode.Range[] = [];
-    const nodeLeaf: vscode.Range[] = [];
 
-    // Set of ids that are parents (own at least one child).
-    const parentIds = new Set(
-        features.map(f => f.parent_id).filter((id): id is string => id !== null)
-    );
-    const featureByLine = new Map(features.map(f => [f.line, f]));
+    // Colour each in-situ proposal block by op, using the parser's line ranges.
+    // Their lines are excluded from the retired-strike scan below (a move/amend
+    // hunk title starts with '~', which RETIRED_RE would otherwise match).
+    const { proposals } = parseTreeCodoc(editor.document.getText());
+    const proposalLines = new Set<number>();
+    for (const p of proposals) {
+        const bucket = p.op === 'add' ? addHunk : p.op === 'retire' ? retireHunk : moveHunk;
+        for (let ln = p.line; ln <= p.endLine; ln++) {
+            bucket.push(new vscode.Range(ln, 0, ln, 0));
+            proposalLines.add(ln);
+        }
+    }
 
     for (let i = 0; i < editor.document.lineCount; i++) {
         const text = editor.document.lineAt(i).text;
@@ -116,23 +100,8 @@ export function applyDecorations(
             hiddenId.push(new vscode.Range(i, m.index, i, m.index + m[0].length));
         }
 
-        const hunk = DIFF_HUNK_RE.exec(text);
-        if (hunk) {
-            const range = new vscode.Range(i, 0, i, text.length);
-            if (hunk[1] === '+') addHunk.push(range);
-            else if (hunk[1] === '-') retireHunk.push(range);
-            else moveHunk.push(range);
-            continue;
-        }
-
-        if (RETIRED_RE.test(text)) retired.push(new vscode.Range(i, 0, i, text.length));
-
-        // Node glyph: prepend ▸ (parent) or • (leaf) to each feature title line.
-        if (FEATURE_RE.test(text)) {
-            const feat = featureByLine.get(i);
-            const range = new vscode.Range(i, 0, i, 0);
-            if (feat?.id && parentIds.has(feat.id)) nodeParent.push(range);
-            else nodeLeaf.push(range);
+        if (!proposalLines.has(i) && RETIRED_RE.test(text)) {
+            retired.push(new vscode.Range(i, 0, i, text.length));
         }
     }
 
@@ -141,8 +110,6 @@ export function applyDecorations(
     editor.setDecorations(dec.retireHunk, retireHunk);
     editor.setDecorations(dec.moveHunk, moveHunk);
     editor.setDecorations(dec.retired, retired);
-    editor.setDecorations(dec.nodeGlyphParent, nodeParent);
-    editor.setDecorations(dec.nodeGlyphLeaf, nodeLeaf);
 
     const activeRanges = activeFeatureLines.map(
         line => new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER)

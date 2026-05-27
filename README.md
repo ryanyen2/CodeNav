@@ -1,14 +1,32 @@
 # codoc
 
-codoc maintains a **human-intent-level feature tree** synchronized to a codebase. Each node is a *feature*: a named unit of intent that binds to code chunks across many files. The tree is first-class authored intent — not LLM-derived. Code attribution is a secondary index kept in sync by a reflective pipeline.
+codoc maintains a **human-intent-level feature tree** synchronized to a codebase. Each node is a *feature*: a named unit of intent that binds to code chunks across many files. The tree is first-class authored intent — not LLM-derived. Code attribution is a secondary index kept in sync by a two-loop reflective pipeline.
 
 ## Two interaction flows
 
-**Flow 1 — Top-down (plan → code):**
-`codoc plan "add dark mode support"` → planning agent reads the feature tree and emits proposals as col-0 diff hunks in the `.codoc` file → user accepts → realize pipeline spawns `claude -p` to implement the code → post-realize reflect writes feedback proposals back to the same file.
+**Flow 1 — Bottom-up (code → tree):**
+You (or an agent) change source files → codoc detects what moved → auto-applies safe updates (refresh bindings, small description tweaks) → surfaces structural proposals (add/move/retire nodes) in-situ in `tree.codoc` → you Accept/Reject via the VS Code CodeLens.
 
-**Flow 2 — Bottom-up (code → tree):**
-File saved or committed → fingerprint comparison (< 200 ms for unchanged structure; 1–3 s with LLM for structural changes) → absorb/introduce proposals emitted → user accepts or rejects.
+**Flow 2 — Top-down (tree → code):**
+You (or Claude Code) edit or add features in `tree.codoc` → codoc builds a coding directive → spawns `claude -p` (headless) to write the code → re-reflects to refine the tree if intent was under-specified.
+
+## Claude Code integration
+
+codoc integrates with Claude Code via **hooks + a skill file** — no MCP server,
+no VS Code plugin, no port. `codoc init` installs both automatically:
+
+- **Hooks** in `.claude/settings.json` — fire on `SessionStart`/`Stop`/`PreToolUse`/`PostToolUse`
+  to maintain `.codoc/activity.json` (live agent touch log → VS Code gutter decorations).
+- **Skill** in `.claude/skills/codoc-intent/SKILL.md` — loaded automatically by every
+  Claude Code session in the repo; teaches Claude to propose changes via `codoc propose`
+  before touching code, then wait for your Accept.
+
+**The propose-then-implement loop:**
+1. You ask Claude Code to add/change a feature.
+2. Claude runs `codoc propose add_node …` — a plan proposal appears in-situ in `tree.codoc` (no code touched yet).
+3. You review the description, Accept in VS Code → verdict → `inbox.json`.
+4. Loop B builds a directive from the accepted intent and spawns `claude -p` to write the code.
+5. Loop A re-reflects on the written files — may surface additional proposals if intent was under-specified.
 
 ## Requirements
 
@@ -24,186 +42,127 @@ File saved or committed → fingerprint comparison (< 200 ms for unchanged struc
 pip install -e .
 
 export CODOC_PROVIDER=openai
-export CODOC_MODEL=gpt-4o-mini
+export CODOC_MODEL=gpt-4o
 export OPENAI_API_KEY=sk-...
 
 cd my-repo
-codoc init            # creates .codoc/, installs git post-commit hook
-                      # also auto-runs bootstrap and prompts to review
-codoc proposals       # list pending bootstrap proposals
-codoc accept --all    # accept all at once (re-renders tree automatically)
+codoc init        # index repo, propose initial tree, write .codoc/tree.codoc
+codoc watch       # run both loops as you edit code / tree.codoc
 ```
 
 ## Core commands
 
 ```bash
-# Setup
-codoc init                              # init .codoc/ + post-commit hook
-codoc status                            # features, pending proposals, last change
-
-# Bootstrap (first-time tree creation)
-codoc bootstrap [--with-intent]         # cluster + propose feature tree
-codoc bootstrap finish                  # switch to reflective mode
-
-# Proposals
-codoc proposals                         # list pending proposals
-codoc accept <slug>                     # accept by feature slug (auto-renders tree)
-codoc accept --all                      # batch accept
-codoc reject <slug>                     # reject by slug
-codoc reject --all --yes                # batch reject
-
-# Top-down planning (Flow 1)
-codoc plan "<prompt>"                   # propose tree changes from description
-
-# Code-driven updates (Flow 2)
-codoc reflect --file <path>             # on-save reflect (no git required)
-codoc reflect [--from-ref REF]          # post-commit reflect
-
-# Continuous watching (combines both flows)
-codoc watch                             # watch code files + .codoc edits
-codoc watch --no-realize                # watch only; skip Claude realize pass
-codoc watch --dry-realize               # build realize prompt without spawning claude
-
-# File-based editing
-codoc projection render                 # DB -> .codoc/tree/ files
-codoc projection sync                   # .codoc/tree/ edits -> DB -> re-render
-codoc projection diff                   # dry-run
-
-# Browse
-codoc list                              # feature tree with states
-codoc show <slug-path>                  # feature detail + bindings
-codoc search <term>                     # search slug/intent
-
-# Direct operations
-codoc edit <slug-path> --intent "..."   # amend intent
-codoc rename <slug-path> <new-slug>     # rename slug
-codoc retire <slug-path>               # retire feature
+codoc init                # index repo + propose initial feature tree
+codoc watch               # daemon: bidirectional sync as you work
+codoc watch --dry         # reflect + build directives, but don't spawn the agent
+codoc watch --no-realize  # sync the tree but never spawn the coding agent
+codoc status              # feature count, pending proposals, recent activity
+codoc sync                # one-shot: apply tree edits, then reflect code
 ```
 
-## The `.codoc` file format
+## The `tree.codoc` file
 
-Feature trees live in `.codoc/tree/_index.codoc` as a single human-editable document.
-
-### Feature markers
-
-| Marker | Meaning |
-|---|---|
-| `- Title` | Live feature (realized or stub) |
-| `* Title` | Placeholder — no spec yet; triggers feedforward |
-| `~ Title` | Retired feature |
-| `? proposal-kind: slug` | Pending proposal diff hunk |
-
-Col-0 diff markers on proposal lines: `+` add, `-` remove, `~` change.
-
-### Structured fields
+The only human surface. Located at `.codoc/tree.codoc`:
 
 ```
-- Authentication flow
-    purpose: handle user login, session creation, and token lifecycle
-    rationale: centralises auth so no controller handles tokens directly @AuthManager
-    scenario:
-        given a valid username and password
-        when  the user calls /login
-        then  a signed JWT is returned [ref: src/auth.py::AuthManager.login]
-    needs: token-lifecycle, rate-limiting
+- Authentication flow  ⟨f-3a9c2e⟩
+    Handles login, session creation, and token lifecycle.
+
+    Cites [session creation](codoc:auth.py#AuthManager.create_session).
+
+  - Token rotation  ⟨f-7b1d04⟩
+      Refreshes session tokens before expiry.
+
+  ~ Legacy password auth  ⟨f-2c8b01⟩
+      Deprecated in favour of OAuth.
 ```
 
-- **`purpose`** — one sentence: what the feature does (the WHAT).
-- **`rationale`** — one sentence: why this design (the WHY). Use `@symbol` or `[ref: file::Symbol]` to anchor to code.
-- **`scenario`** — three lines: `given … / when … / then …`. Use `[ref:]` for testable anchors.
-- **`needs`** — comma-separated feature slugs (≤3) or arrow-list (>3).
-- **`binds`** — hidden; moved to `_index.bindings.json` sidecar. Never appears in the human file.
+**Markers:**
+- `-` — live feature
+- `~` — retired feature (struck-through in the IDE)
 
-### Inline code references
+**IDs** (`⟨f-…⟩`) — stable feature identifiers written by the backend; hidden by
+the VS Code extension decoration. Never edit them.
 
-Two equivalent forms — use `@symbol` for brevity, `[ref:]` for explicit file paths:
+**Inline refs** — `[label](codoc:file.py#symbol)` markdown links cite code.
+The parser extracts them; the IDE makes them clickable.
 
-```
-@rotate_session                         # @symbol form
-[ref: auth.py::rotate_session]          # [ref:] form (also accepted)
-[ref: feature://token-lifecycle]        # cross-feature ref
-```
+**Indentation** — 2 spaces per level; determines parent/child relationships.
 
-Both forms are tracked in the citations table and rendered stale (`[⚠ @sym]`) when the target moves.
-
-### Proposal hunks
-
-Proposals appear inline. Col-0 prefix indicates the proposal type:
+**Proposals** render in-situ, at the tree position where the change would land:
 
 ```
-+ - Rate limiting                       # INTRODUCE proposal
-+     purpose: cap requests per user per minute
+- Authentication flow  ⟨f-3a9c2e⟩
+    Handles login, session creation, and token lifecycle.
 
-? feedforward: rate-limiting            # FEEDFORWARD_FILL proposal (LLM filled missing spec)
-+     purpose: cap requests per user per minute
-+     rationale: token-bucket per user_id @check_rate_limit
-+     plan: create rate_limit.py, modify @request_handler
++ - Rate limiting  ⟨e-9f01c2⟩
++     Caps API requests per user per minute.
 
-? feedback: rate-limiting (unexpected files modified: cache.py)
-~     rationale: token-bucket per user_id @check_rate_limit
-+     rationale: token-bucket per user_id; cache layer @check_rate_limit @cache_get
-
-~ ~ auth.py::rotate_session             # ABSORB proposal (code change detected)
+  - Token rotation  ⟨f-7b1d04⟩
 ```
 
-### Placeholder → feedforward → realize loop
-
-Write `* Title` (or `* Title` with partial prose) to stub a new feature:
-
-```
-* Rate limiting
-* Invite quota
-    Admins should not be able to flood users with invites.
-```
-
-On save, `codoc watch` detects placeholders and calls the feedforward LLM agent, which proposes a complete spec + coding plan as diff hunks. Accept to trigger the realize pipeline (Claude writes the code). After Claude exits, the feedback agent compares what was actually written against the plan and proposes rationale corrections.
+`+` add / `-` retire / `~` move·amend. Each block is blank-line terminated.
+Accept or Reject using the VS Code CodeLens buttons — no text syntax to type.
+Verdicts flow through `.codoc/inbox.json`; the daemon applies them.
 
 ## `.codoc/` layout
 
 ```
 .codoc/
-  codoc.db                  — SQLite WAL (features, bindings, transactions, citations)
-  log.jsonl                 — append-only audit log
-  lancedb/                  — cocoindex-managed LanceDB: AST chunks + embeddings + identity hashes
-  cocoindex.db/             — cocoindex internal memoization state (resumes interrupted indexing)
-  tree/
-    _index.codoc            — single hierarchical document (auto-generated, human-editable)
-    _index.bindings.json    — bindings sidecar: {feature_uuid: [{file, symbol, fingerprint}]}
-    tree.meta.json          — sidecar: uuid↔slug mappings, diff-hunk→HLC line ranges
+  tree.codoc          — human-authored feature tree (commit with your code)
+  tree.bindings.json  — IDE sidecar: feature↔symbol index + dependency edges (v2)
+  status.json         — loop lifecycle: in_sync / code_drift / tree_dirty / realizing
+  inbox.json          — verdict channel: Accept/Reject writes here, daemon drains it
+  codoc.db            — features + bindings + event log (SQLite WAL)
+  lancedb/            — cocoindex-managed chunk index: AST + embeddings + hashes
+  cocoindex.db/       — cocoindex internal memoization (resumes interrupted indexing)
 ```
 
-`_index.bindings.json` keeps bindings out of the human file while still making them available to the VSCode extension (CodeLens, hover, definition) without an API call.
+Commit `tree.codoc` (and optionally `codoc.db`) alongside source so the intent
+map is versioned with the code.
 
-## Feature status lifecycle
+## Architecture — two loops
 
-| Status | Meaning |
-|---|---|
-| `placeholder` | `* Title` authored; no purpose/rationale/scenario yet |
-| `feedforward_pending` | Feedforward proposal emitted; awaiting user accept |
-| `realized` | Full spec present (default for bootstrap-accepted features) |
+**Loop A (code → codoc):** diff the chunk index → auto-apply safe ops (REFRESH,
+ATTACH, DETACH, small AMEND) → one LLM pass for anything structural →
+structural ops become pending Events (proposals).
+
+**Loop B (codoc → code):** drain `inbox.json` verdicts → parse `tree.codoc`,
+diff against store → apply user edits immediately → build a coding directive
+from each code-implying op → spawn `claude -p` once → re-run Loop A on what
+was written.
+
+A single LLM pass with the full change set plus every existing node title
+prevents duplicates. `UNIQUE(file, symbol_path)` in the store ensures a chunk
+binds to at most one feature.
+
+## Sidecar schema (v2)
+
+```json
+{
+  "version": 2,
+  "by_feature": { "f-id": [{"file": "path.py", "symbol": "path.py::Class.method"}] },
+  "by_file":    { "path.py": [{"symbol": "...", "feature_id": "f-id", "feature_title": "Title"}] },
+  "features":   { "f-id": {"title": "Title", "parent_id": null} },
+  "feature_edges": { "f-id": [{"to": "f-other", "weight": 4, "kinds": ["call"]}] }
+}
+```
+
+`feature_edges` aggregates `code_edges` (call/import) into feature-level coupling;
+the VS Code extension uses it to dim unrelated features when the cursor rests on a
+node that has dependency edges.
 
 ## Environment variables
 
-| Variable | Default | Description |
+| Var | Default | Description |
 |---|---|---|
 | `CODOC_PROVIDER` | `openai` | LLM provider (`openai` or `ollama`) |
-| `CODOC_MODEL` | `gpt-4o-mini` | LLM model name |
+| `CODOC_MODEL` | `gpt-4o` | LLM model name |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
-| `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider (used for dedup / proposal similarity; chunk embeddings live in cocoindex) |
-| `CODOC_EMBEDDER_MODEL` | `all-MiniLM-L6-v2` | Embedder model |
-| `COCOINDEX_DB` | `.codoc/cocoindex.db` | Cocoindex internal memoization state path (auto-set) |
-| `CODOC_LANCE_PATH` | `.codoc/lancedb` | LanceDB directory holding the `code_chunks` table |
-| `CODOC_ROOT_DIR` | cwd | Root directory for API server |
-| `CODOC_LOG_PROMPTS` | `0` | Set to `1` to log LLM prompts to stderr |
-
-## FastAPI server
-
-```bash
-codoc server --port 8001
-```
-
-Key endpoints: `POST /bootstrap`, `POST /bootstrap/finish`, `POST /reflect`, `POST /reflect/file`, `POST /plan`, `GET /tx/pending`, `POST /tx/accept-all`, `POST /tx/reject-all`, `GET /tree.codoc`, `POST /sync`.
+| `CODOC_EMBEDDER_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformer model for embeddings |
+| `CODOC_LOG_PROMPTS` | — | Set to `1` to log LLM prompt+response to stderr |
 
 ## Tests
 
@@ -211,17 +170,10 @@ Key endpoints: `POST /bootstrap`, `POST /bootstrap/finish`, `POST /reflect`, `PO
 python3.11 -m pytest tests/
 ```
 
-Fixtures: `test/draco/` (small Python), `test/requests/` (real-world Python), `test/mosaic/` (TypeScript), `test/altair/`, `test/gofish-python/`, `test/nanochat/`.
-
-## Phase plan
-
-- **Phases A–C (complete):** syntax cleanup (no binds in human file, bindings sidecar, `@symbol` refs, `needs:` CSV, `* placeholder` marker, `~ retire` in-file, no alignment padding), `Feature.status` field, citations fixed (stale-clearing, `@symbol` tracked)
-- **Phase D (complete):** feedforward pipeline — placeholder → LLM fills spec + plan → FEEDFORWARD_FILL proposals render as in-file diff hunks → accept triggers realize
-- **Phase E (complete):** feedback pipeline — after realize, compares modified files against feedforward plan → FEEDBACK_RECONCILE proposals for divergences
-- **Phase F (complete):** bootstrap hierarchy — `cluster_into_parents` post-pass prevents wide-flat output (>6 top-level groups merged to ≤5 parent clusters)
-- **Phase 1.5:** VSCode CodeLens for bindings sidecar + realize button on placeholders
-- **Phase 2+:** SPLIT/MERGE/RESTRUCTURE/REWIND, branching, constraints
+Fixtures: `test/draco/` (small Python), `test/requests/` (real-world Python),
+`test/mosaic/` (TypeScript), `test/altair/`, `test/gofish-python/`, `test/nanochat/`.
 
 ---
 
-See [docs/getting-started-claude-code.md](docs/getting-started-claude-code.md) for the full workflow guide.
+See [docs/getting-started-claude-code.md](docs/getting-started-claude-code.md) for the full workflow guide and
+[docs/how-codoc-works.html](docs/how-codoc-works.html) for the architectural deep-dive.

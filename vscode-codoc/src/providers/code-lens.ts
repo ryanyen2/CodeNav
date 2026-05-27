@@ -11,13 +11,13 @@ export class CodocCodeLensProvider implements vscode.CodeLensProvider {
         const relPath = vscode.workspace.asRelativePath(document.fileName);
         const entries = entriesForFile(this.state.sidecar, relPath);
 
-        // Build a symbol → feature_title map for fast lookup by symbol name.
+        // Build a symbol → feature map for fast lookup by symbol name.
         // Symbol path format: "file.py::ClassName.method_name" — the leaf is
         // what we match against declaration lines.
-        const byLeaf = new Map<string, string>();
+        const byLeaf = new Map<string, { title: string; id: string }>();
         for (const e of entries) {
             const leaf = e.symbol.includes('::') ? e.symbol.split('::')[1] : e.symbol;
-            byLeaf.set(leaf, e.feature_title);
+            byLeaf.set(leaf, { title: e.feature_title, id: e.feature_id });
         }
 
         const lenses: vscode.CodeLens[] = [];
@@ -26,32 +26,26 @@ export class CodocCodeLensProvider implements vscode.CodeLensProvider {
             const isDecl = /^\s*(def |class |function |async def |export\s+(function|class|default))/.test(line);
             if (!isDecl) continue;
 
-            const range = new vscode.Range(i, 0, i, line.length);
-            const featureTitle = _findFeatureTitle(byLeaf, line);
+            const entry = _findFeature(byLeaf, line);
+            if (!entry) continue;
 
-            if (featureTitle) {
-                lenses.push(new vscode.CodeLens(range, {
-                    title: `codoc: ${featureTitle}`,
-                    command: 'codoc.open',
-                    tooltip: 'Open feature in codoc tree',
-                }));
-            } else {
-                lenses.push(new vscode.CodeLens(range, {
-                    title: 'codoc: unattributed',
-                    command: 'codoc.open',
-                    tooltip: 'Open codoc — this symbol is not attributed to a feature',
-                }));
-            }
+            const range = new vscode.Range(i, 0, i, line.length);
+            lenses.push(new vscode.CodeLens(range, {
+                title: `codoc: ${entry.title}`,
+                command: 'codoc.navigateToFeature',
+                arguments: [entry.id],
+                tooltip: 'Reveal this feature in the codoc tree',
+            }));
         }
         return lenses;
     }
 }
 
 /**
- * Identify the feature title for a declaration line by matching the declared
- * name against the symbol leaf names we know from the sidecar.
+ * Identify the feature for a declaration line by matching the declared name
+ * against the symbol leaf names we know from the sidecar.
  */
-function _findFeatureTitle(byLeaf: Map<string, string>, line: string): string | null {
+function _findFeature(byLeaf: Map<string, { title: string; id: string }>, line: string): { title: string; id: string } | null {
     // Extract the declared name from common patterns.
     const m = /(?:def |class |function |async def )\s*(\w+)/.exec(line);
     if (!m) return null;

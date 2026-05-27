@@ -13,17 +13,22 @@ line. Code is cited inline with markdown links — ``[label](codoc:file.py#symbo
 Loop A) are NOT written into the text; they ride in ``tree.bindings.json`` and
 the IDE renders them as inlay-hint chips.
 
-Pending structural proposals render last, as a git-style diff block under a
-``# ── pending changes`` sentinel: ``+`` add, ``-`` retire, ``~`` move/amend,
-each carrying a hidden ``⟨e-id⟩``. There is no accept/reject *syntax*; the IDE's
+Pending structural proposals render **in situ** — each at the tree position it
+would take effect: an add appears under its parent, a retire/amend right beneath
+the node it concerns, a move at its destination. Each proposal line carries the
+diff op char in column 0 (``+`` add, ``-`` retire, ``~`` move/amend) followed by
+the node indented to its tree depth, and a hidden ``⟨e-id⟩``. So the file reads
+like a diff laid over the tree. There is no accept/reject *syntax*; the IDE's
 Accept/Reject actions write verdicts to ``.codoc/inbox.json`` (see
-:mod:`codoc.loop.inbox`). The parser ignores everything past the sentinel, so
+:mod:`codoc.loop.inbox`). The parser skips each proposal block (identified by its
+``⟨e-id⟩`` — live nodes carry ``⟨f-id⟩`` — and terminated by a blank line), so
 render→parse→diff stays a no-op (the round-trip invariant).
 """
 from __future__ import annotations
 
 import json
 import os
+from collections import defaultdict
 from pathlib import Path
 
 from codoc.model.event import PLAN_SOURCE, Event, NodeOpKind
@@ -32,13 +37,10 @@ from codoc.store.db import Store
 TREE_FILENAME = "tree.codoc"
 BINDINGS_FILENAME = "tree.bindings.json"
 
-# Sentinel that opens the pending-changes diff block. The parser stops collecting
-# features once it sees this, so proposal hunks never leak into the live tree.
+# Legacy sentinel that opened the old bottom-of-file pending-changes block.
+# Proposals now render in situ, but the parser still honours this sentinel so it
+# can read trees written by older versions of codoc.
 PENDING_SENTINEL = "# ── pending changes"
-_PENDING_HEADER = (
-    "# ── pending changes ─────────────────────────────────────────────\n"
-    "# Proposed by codoc — use the Accept / Reject actions above each change.\n"
-)
 
 _HEADER = (
     "# codoc feature tree — edit titles and descriptions freely; this file is the source of truth.\n"
@@ -64,6 +66,26 @@ def _description_lines(description: str, indent: str) -> list[str]:
 def render_tree(store: Store) -> str:
     lines: list[str] = [_HEADER.rstrip("\n"), ""]
 
+    pending = store.pending_events()
+    # Anchor each proposal to where it should render: adds/moves under their
+    # (destination) parent; retires/amends beneath the node they concern.
+    adds_by_parent: dict[str | None, list[Event]] = defaultdict(list)
+    on_feature: dict[str | None, list[Event]] = defaultdict(list)
+    for e in pending:
+        kind = e.op.kind
+        if kind in (NodeOpKind.ADD_NODE, NodeOpKind.MOVE_NODE):
+            adds_by_parent[e.op.parent_id].append(e)
+        elif kind in (NodeOpKind.RETIRE_NODE, NodeOpKind.AMEND):
+            on_feature[e.op.feature_id].append(e)
+        else:
+            adds_by_parent[None].append(e)
+    emitted: set[str] = set()
+
+    def emit_proposal(e: Event, depth: int) -> None:
+        lines.extend(_render_proposal(e, store, depth))
+        lines.append("")
+        emitted.add(e.id)
+
     def walk(parent_id: str | None, depth: int) -> None:
         indent = "  " * depth
         for f in store.children(parent_id):
@@ -72,17 +94,18 @@ def render_tree(store: Store) -> str:
             if f.description:
                 lines.extend(_description_lines(f.description, indent))
             lines.append("")
+            for e in on_feature.get(f.id, []):
+                emit_proposal(e, depth)
             walk(f.id, depth + 1)
+        for e in adds_by_parent.get(parent_id, []):
+            emit_proposal(e, depth)
 
     walk(None, 0)
-
-    pending = store.pending_events()
-    if pending:
-        lines.append(_PENDING_HEADER.rstrip("\n"))
-        lines.append("")
-        for e in pending:
-            lines.extend(_render_proposal(e, store))
-            lines.append("")
+    # Proposals whose anchor isn't in the live tree (stale ref) still surface,
+    # at the root, so a verdict is always reachable.
+    for e in pending:
+        if e.id not in emitted:
+            emit_proposal(e, 0)
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -99,49 +122,42 @@ def _title_of(store: Store, feature_id: str | None) -> str:
     return f.title if f else feature_id
 
 
-def _proposal_desc(op_char: str, description: str) -> list[str]:
-    return [f"{op_char}     {dl}" for dl in description.split("\n") if dl.strip()]
+def _render_proposal(e: Event, store: Store, depth: int) -> list[str]:
+    """One proposal as an in-situ diff hunk.
 
-
-def _render_proposal(e: Event, store: Store) -> list[str]:
-    """One proposal as a diff hunk. Col-0 op char (``+``/``-``/``~``) + a normal
-    feature line ``- Title  ⟨e-id⟩``, so the IDE colours it like a git diff and
-    can recover the event id from the hidden marker."""
+    Column 0 is the diff op char (``+``/``-``/``~``); a single space follows;
+    then the node rendered at its tree ``depth`` (``{indent}{marker} Title  ⟨e-id⟩``),
+    so the IDE colours the block like a git diff *in place* and can recover the
+    event id from the hidden marker. Continuation lines repeat the op char so the
+    parser can skip the whole block; a blank line terminates it.
+    """
     op = e.op
     eid = e.id
     tag = _source_tag(e)
+    indent = "  " * depth
+
+    def title_line(o: str, marker: str, title: str) -> str:
+        return f"{o} {indent}{marker} {title}  ⟨{eid}⟩"
+
+    def cont(o: str, text: str) -> list[str]:
+        return [f"{o} {indent}    {dl}" for dl in text.split("\n") if dl.strip()]
+
     if op.kind is NodeOpKind.ADD_NODE:
-        out = [f"+ - {op.title or 'Untitled'}  ⟨{eid}⟩"]
-        out.extend(_proposal_desc("+", op.description or ""))
-        meta = f"under {_title_of(store, op.parent_id)} · {tag}"
-        if op.rationale:
-            meta += f" · {op.rationale}"
-        out.append(f"+     {meta}")
-        return out
+        meta = f"{tag} · {op.rationale}" if op.rationale else tag
+        return [title_line("+", "-", op.title or "Untitled"),
+                *cont("+", op.description or ""), *cont("+", meta)]
     if op.kind is NodeOpKind.RETIRE_NODE:
-        out = [f"- ~ {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
-        meta = f"retire · {tag}"
-        if op.rationale:
-            meta += f" · {op.rationale}"
-        out.append(f"-     {meta}")
-        return out
+        meta = f"retire · {tag}" + (f" · {op.rationale}" if op.rationale else "")
+        return [title_line("-", "~", _title_of(store, op.feature_id)), *cont("-", meta)]
     if op.kind is NodeOpKind.MOVE_NODE:
-        out = [f"~ - {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
-        meta = f"move → {_title_of(store, op.parent_id)} · {tag}"
-        if op.rationale:
-            meta += f" · {op.rationale}"
-        out.append(f"~     {meta}")
-        return out
+        meta = f"move → {_title_of(store, op.parent_id)} · {tag}" + (f" · {op.rationale}" if op.rationale else "")
+        return [title_line("~", "-", _title_of(store, op.feature_id)), *cont("~", meta)]
     if op.kind is NodeOpKind.AMEND:
-        out = [f"~ - {_title_of(store, op.feature_id)}  ⟨{eid}⟩"]
-        out.extend(_proposal_desc("~", op.description or ""))
-        amend_meta = f"amend · {tag}"
-        if op.rationale:
-            amend_meta += f" · {op.rationale}"
-        out.append(f"~     {amend_meta}")
-        return out
+        meta = f"amend · {tag}" + (f" · {op.rationale}" if op.rationale else "")
+        return [title_line("~", "-", _title_of(store, op.feature_id)),
+                *cont("~", op.description or ""), *cont("~", meta)]
     # safe ops are never pending, but render a generic hunk just in case
-    return [f"~ - {op.kind.value}  ⟨{eid}⟩"]
+    return [title_line("~", "-", op.kind.value)]
 
 
 def _compute_feature_edges(store: Store) -> dict[str, list[dict]]:

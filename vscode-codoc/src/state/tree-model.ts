@@ -3,9 +3,11 @@
  *
  *   feature      "  - Title  ⟨f-id⟩"  (marker '-' live, '~' retired; id hidden by the IDE)
  *   description  indented prose beneath a feature; blank lines are paragraph
- *                breaks (kept). A node ends only at the next feature line, the
- *                "# ── pending changes" sentinel, or EOF — never at a blank line.
- *   proposals    everything past the sentinel is a display-only diff block.
+ *                breaks (kept). A node ends only at the next feature line, an
+ *                in-situ proposal hunk, or EOF — never at a blank line.
+ *   proposals    in-situ diff hunks: a col-0 op char (+/-/~) then a node bearing
+ *                a hidden ⟨e-id⟩, terminated by a blank line. Display-only here;
+ *                harvested with their line range for the gutter/lens.
  *   comment      "# …" — ignored.
  *
  * Indentation depth determines parent. Inline "[label](codoc:file#symbol)" refs
@@ -32,6 +34,7 @@ export interface ParsedFeature {
 
 export interface ProposalHunk {
     line: number;        // 0-based line of the hunk's title row
+    endLine: number;     // last line of the hunk block (for whole-block colouring)
     eventId: string;     // recovered from the hidden ⟨e-id⟩
     op: 'add' | 'retire' | 'move' | 'amend';
 }
@@ -45,6 +48,9 @@ export interface ParseResult {
 const FEATURE_RE = /^(?<indent>\s*)(?<marker>[-~])\s+(?<rest>.*\S)\s*$/;
 const ID_RE = /⟨(f-[0-9a-f]+|new)⟩/;
 const EVENT_ID_RE = /⟨(e-[0-9a-f]+)⟩/;
+// In-situ proposal title: col-0 op char, space, optional tree indent, marker.
+const PROPOSAL_TITLE_RE = /^[+\-~] \s*[-~] /;
+// Legacy depth-0 hunk for trees written before in-situ proposals.
 const DIFF_HUNK_RE = /^[+\-~] [-~] /;
 const REF_RE = /\[([^\]]*)\]\(codoc:([^)#]+)(?:#([^)]+))?\)/g;
 
@@ -66,6 +72,8 @@ export function parseTreeCodoc(text: string): ParseResult {
     let descOwner: ParsedFeature | null = null;
     let descBuf: string[] = [];
     let inPending = false;
+    let inProposal = false;                 // inside an in-situ proposal block
+    let curProposal: ProposalHunk | null = null;
 
     function flushDesc(): void {
         if (descOwner !== null) {
@@ -85,16 +93,36 @@ export function parseTreeCodoc(text: string): ParseResult {
         const s = line.trim();
 
         if (inPending) {
-            // Display-only diff block: harvest proposal hunks for the CodeLens.
+            // Legacy bottom block: harvest hunk titles for the CodeLens.
             const ev = EVENT_ID_RE.exec(line);
             if (DIFF_HUNK_RE.test(line) && ev) {
                 const head = line[0];
                 const op = head === '+' ? 'add' : head === '-' ? 'retire' : 'move';
-                proposals.push({ line: i, eventId: ev[1], op });
+                proposals.push({ line: i, endLine: i, eventId: ev[1], op });
             }
             continue;
         }
         if (s.startsWith(PENDING_SENTINEL)) { flushDesc(); inPending = true; continue; }
+
+        // In-situ proposal block: skip lines until the terminating blank,
+        // extending the harvested hunk's range over each continuation line.
+        if (inProposal) {
+            if (!s) { inProposal = false; curProposal = null; continue; }
+            if (curProposal) curProposal.endLine = i;
+            continue;
+        }
+        if (PROPOSAL_TITLE_RE.test(line)) {
+            const ev = EVENT_ID_RE.exec(line);
+            if (ev) {
+                flushDesc();
+                const head = line[0];
+                const op = head === '+' ? 'add' : head === '-' ? 'retire' : 'move';
+                curProposal = { line: i, endLine: i, eventId: ev[1], op };
+                proposals.push(curProposal);
+                inProposal = true;
+                continue;
+            }
+        }
 
         if (!s) { if (descOwner) descBuf.push(''); continue; }
         if (DIFF_HUNK_RE.test(line)) continue;

@@ -37,17 +37,35 @@ export class CodocInlayHintsProvider implements vscode.InlayHintsProvider {
             const binds = bindingsForFeature(this.state.sidecar, f.id);
             if (binds.length === 0) continue;
 
-            const labels = binds.map(b => `${b.file}:${leaf(b.symbol)}`);
-            const shown = labels.slice(0, MAX_CHIPS);
-            const extra = labels.length - shown.length;
-            let text = '  ↪ ' + shown.join('  ');
-            if (extra > 0) text += `  +${extra}`;
+            const shown = binds.slice(0, MAX_CHIPS);
+            const extra = binds.length - shown.length;
+
+            // Build clickable label parts: prefix + one part per chip + overflow count.
+            const parts: vscode.InlayHintLabelPart[] = [];
+            const prefix = new vscode.InlayHintLabelPart('  ↪ ');
+            parts.push(prefix);
+            for (let i = 0; i < shown.length; i++) {
+                const b = shown[i];
+                const chipText = `${b.file}:${leaf(b.symbol)}`;
+                const part = new vscode.InlayHintLabelPart(chipText);
+                // Clicking a chip opens the file beside and scrolls to the symbol.
+                part.command = {
+                    command: 'codoc.openRef',
+                    title: `Open ${chipText}`,
+                    arguments: [b.file, b.symbol],
+                };
+                part.tooltip = `Open ${b.file} › ${b.symbol}`;
+                parts.push(part);
+                if (i < shown.length - 1) parts.push(new vscode.InlayHintLabelPart('  '));
+            }
+            if (extra > 0) parts.push(new vscode.InlayHintLabelPart(`  +${extra}`));
 
             const lineLen = document.lineAt(f.line).text.length;
-            const hint = new vscode.InlayHint(new vscode.Position(f.line, lineLen), text);
+            const hint = new vscode.InlayHint(new vscode.Position(f.line, lineLen), parts);
             hint.paddingLeft = true;
             hint.tooltip = new vscode.MarkdownString(
-                `**Code bindings** (${binds.length})\n\n` + labels.map(l => `- \`${l}\``).join('\n'),
+                `**Code bindings** (${binds.length})\n\n` +
+                binds.map(b => `- \`${b.file}:${leaf(b.symbol)}\``).join('\n'),
             );
             hints.push(hint);
         }

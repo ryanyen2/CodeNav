@@ -20,11 +20,10 @@ export class CodocFoldingProvider implements vscode.FoldingRangeProvider {
             const start = titles[k].line;
             const nextTitle = k + 1 < titles.length ? titles[k + 1].line : document.lineCount;
 
-            // Attribute block = (start, nextTitle); trim trailing blank lines so
-            // the blank separator before the next title stays visible when folded.
-            let end = nextTitle - 1;
-            while (end > start && document.lineAt(end).text.trim() === '') end--;
-
+            // Fold from the title line through everything up to (but not including)
+            // the next title — including trailing blank separators. This keeps the
+            // folded TOC view compact (no stray blank lines between titles).
+            const end = nextTitle - 1;
             if (end > start) {
                 ranges.push(new vscode.FoldingRange(start, end, vscode.FoldingRangeKind.Region));
             }

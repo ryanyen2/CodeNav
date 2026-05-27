@@ -61,7 +61,7 @@ export class CodocTreeLensProvider implements vscode.CodeLensProvider {
         const st = this.state.status.state;
         if (st === 'realizing') return '$(loading~spin) codoc: implementing tree edits…';
         if (st === 'tree_dirty') return '$(pencil) codoc: applying tree edits…';
-        if (pending > 0 || st === 'code_drift') return `$(bell) codoc: ${pending} proposed change${pending === 1 ? '' : 's'} — review below`;
+        if (pending > 0 || st === 'code_drift') return `$(bell) codoc: ${pending} proposed change${pending === 1 ? '' : 's'} — shown in the tree`;
         return '$(check) codoc: in sync';
     }
 }

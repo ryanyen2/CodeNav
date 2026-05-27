@@ -15,6 +15,7 @@ const DEBOUNCE_MS = 120;
 export class DependencyFocus {
     private _timer: ReturnType<typeof setTimeout> | null = null;
     private _disposables: vscode.Disposable[] = [];
+    private _lastEditAt = 0;
 
     constructor(
         private state: WorkspaceState,
@@ -29,13 +30,17 @@ export class DependencyFocus {
         const blurListener = vscode.window.onDidChangeActiveTextEditor(ed => {
             if (!ed || ed.document.languageId !== 'codoc') this._clearAll();
         });
-        this._disposables = [listener, blurListener];
+        const editListener = vscode.workspace.onDidChangeTextDocument(e => {
+            if (e.document.languageId === 'codoc') this._lastEditAt = Date.now();
+        });
+        this._disposables = [listener, blurListener, editListener];
         context.subscriptions.push(...this._disposables);
     }
 
     private _update(editor: vscode.TextEditor): void {
         const enabled = vscode.workspace.getConfiguration('codoc').get<boolean>('focusDependencies', true);
         if (!enabled) { this._clearAll(editor); return; }
+        if (Date.now() - this._lastEditAt < 400) { this._clearAll(editor); return; }
 
         const adj = this.state.featureEdges;
         const features = this.state.features;

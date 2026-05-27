@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
 
 from codoc.agent.propose import propose_plan
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import PENDING_SENTINEL
 from codoc.loop import inbox
 from codoc.loop.loop_b import run_loop_b
 from codoc.model.event import PLAN_SOURCE
@@ -55,8 +55,8 @@ def test_propose_renders_pending_block(repo):
     propose_plan(root, kind="add_node", title="Auth flow",
                  description="OAuth login flow.")
     text = _tree_text(codoc_dir)
-    assert PENDING_SENTINEL in text
-    assert "Auth flow" in text
+    # in-situ add hunk: col-0 '+' op char + the proposed node + agent-plan tag
+    assert re.search(r"(?m)^\+ \s*- Auth flow", text)
     assert "agent plan" in text
 
 

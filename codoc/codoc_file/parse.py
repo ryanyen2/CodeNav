@@ -5,9 +5,11 @@ Lines:
   * description  indented prose lines beneath a feature; blank lines are kept as
                  paragraph breaks. A description ends only at the next feature
                  line, the pending-changes sentinel, or EOF — never at a blank.
-  * comment      ``# …`` (ignored, except the pending-changes sentinel)
-  * proposals    everything past ``# ── pending changes`` is display-only and is
-                 ignored here (verdicts arrive via ``.codoc/inbox.json``).
+  * comment      ``# …`` (ignored, except the legacy pending-changes sentinel)
+  * proposals    in-situ diff hunks — a col-0 op char (``+``/``-``/``~``) then a
+                 node carrying a hidden ``⟨e-id⟩`` (live nodes carry ``⟨f-id⟩``),
+                 terminated by a blank line. They are display-only and skipped
+                 here (verdicts arrive via ``.codoc/inbox.json``).
 
 Indentation depth gives the parent. Identity comes from ``⟨f-id⟩``; the IDE hides
 it from the human but it stays on disk so renames never lose attribution.
@@ -27,8 +29,12 @@ _ID_RE = re.compile(r"⟨(f-[0-9a-f]+|new)⟩")
 # Detects a line that looks like a feature line (indented non-space + space + text)
 # but uses an unrecognized marker — e.g. "    * Title ⟨f-id⟩".
 _BAD_MARKER_RE = re.compile(r"^(?P<indent>\s*)(?P<marker>[^\s\-~#])[ \t]+\S")
-# A diff hunk: col-0 op char, space, then a feature marker. Distinguishes a
-# proposal line (``- ~ Title``) from a live feature line (``- Title``).
+# An in-situ proposal title: col-0 op char, space, optional tree indent, a
+# feature marker, space. Combined with an ``⟨e-id⟩`` (live nodes carry ``⟨f-id⟩``)
+# this is unambiguous against a live feature line like ``- Title``.
+_PROPOSAL_TITLE_RE = re.compile(r"^[+\-~] \s*[-~] ")
+_EVENT_ID_RE = re.compile(r"⟨e-[0-9a-f]+⟩")
+# Legacy depth-0 hunk (``- ~ Title``) for trees written before in-situ proposals.
 _DIFF_HUNK_RE = re.compile(r"^[+\-~] [-~] ")
 # Inline code citation: [label](codoc:file.py#symbol)  — symbol part optional.
 _REF_RE = re.compile(r"\[(?P<label>[^\]]*)\]\(codoc:(?P<file>[^)#]+)(?:#(?P<symbol>[^)]+))?\)")
@@ -71,6 +77,7 @@ def parse_text(text: str) -> ParsedTree:
     desc_owner: ParsedNode | None = None
     desc_buf: list[str] = []
     in_pending = False
+    in_proposal = False  # inside an in-situ proposal block (until the next blank)
     skip_desc = False  # True after a bad-marker line; cleared on next valid feature
 
     def flush_desc() -> None:
@@ -90,12 +97,22 @@ def parse_text(text: str) -> ParsedTree:
         line = raw.rstrip()
         s = line.strip()
 
-        # Everything past the sentinel is display-only proposal diff.
+        # Everything past the legacy sentinel is display-only proposal diff.
         if in_pending:
             continue
         if s.startswith(PENDING_SENTINEL):
             flush_desc()
             in_pending = True
+            continue
+
+        # In-situ proposal block: skip its lines until the terminating blank.
+        if in_proposal:
+            if not s:
+                in_proposal = False
+            continue
+        if _PROPOSAL_TITLE_RE.match(line) and _EVENT_ID_RE.search(line):
+            flush_desc()
+            in_proposal = True
             continue
 
         if not s:
