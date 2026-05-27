@@ -8,7 +8,7 @@ import pytest
 
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import _compute_feature_edges, render_tree
+from codoc.codoc_file.render import _compute_feature_edges, _proposals_map, render_tree
 from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
@@ -165,16 +165,65 @@ def test_proposals_never_appear_as_live_nodes(store):
 
 def test_retire_and_move_proposals_render(store):
     root, child, *_ = _tree(store)
-    store.append_event(Event(source="loop_a", applied=False,
-                             op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=child.id, rationale="gone")))
+    retire = Event(source="loop_a", applied=False,
+                   op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=child.id, rationale="gone"))
+    store.append_event(retire)
     store.append_event(Event(source="loop_a", applied=False,
                              op=NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=child.id, parent_id=root.id)))
     text = render_tree(store)
-    # hunks render in situ at the node's tree depth, so allow leading indent.
-    assert re.search(r"(?m)^- \s*~ Index snapshot diff", text)  # retire hunk
-    assert re.search(r"(?m)^~ \s*- Index snapshot diff", text)  # move hunk (at destination)
-    assert "retire · code drift" in text
+    # Retire decorates the live node in place (no text ghost): it rides in the
+    # sidecar, and the live node text still reads "Index snapshot diff" once.
+    assert "retire · code drift" not in text
+    proposals = _proposals_map(store)
+    assert proposals["by_feature"][child.id] == {
+        "op": "retire", "event_id": retire.id, "tag": "code drift", "rationale": "gone",
+    }
+    # Move still emits a destination ghost hunk in text.
+    assert re.search(r"(?m)^~ \s*- Index snapshot diff", text)
     assert "move → Indexing layer" in text
+
+
+def test_retire_amend_overlay_not_in_text_roundtrip_noop(store):
+    """RETIRE/AMEND leave the live node's text untouched → render→parse→diff no-op."""
+    root, child, *_ = _tree(store)
+    store.append_event(Event(source="loop_a", applied=False,
+                             op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=child.id)))
+    store.append_event(Event(source="loop_a", applied=False,
+                             op=NodeOp(kind=NodeOpKind.AMEND, feature_id=root.id,
+                                       description="Reworded intent.")))
+    text = render_tree(store)
+    # No proposal text leaked for retire/amend.
+    assert "retire" not in text and "amend" not in text
+    parsed = parse_text(text)
+    assert diff_codoc(parsed, store).is_empty()
+    # The text is identical to a clean render with no pending events.
+    for e in store.pending_events():
+        store.delete_event(e.id)
+    assert text == render_tree(store)
+
+
+def test_sidecar_proposals_map_shape(store):
+    root, child, *_ = _tree(store)
+    retire = Event(source="loop_a_agent", applied=False,
+                   op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=child.id, rationale="gone"))
+    amend = Event(source="plan", applied=False,
+                  op=NodeOp(kind=NodeOpKind.AMEND, feature_id=root.id,
+                            title="New title", description="New prose."))
+    add = Event(source="loop_a", applied=False,
+                op=NodeOp(kind=NodeOpKind.ADD_NODE, parent_id=root.id, title="New child",
+                          description="child prose"))
+    for e in (retire, amend, add):
+        store.append_event(e)
+
+    m = _proposals_map(store)
+    assert m["by_feature"][child.id]["op"] == "retire"
+    assert m["by_feature"][child.id]["tag"] == "agent reflection"  # loop_a_agent
+    assert m["by_feature"][root.id] == {
+        "op": "amend", "event_id": amend.id, "tag": "agent plan", "rationale": "",
+        "title": "New title", "description": "New prose.",
+    }
+    assert m["by_event"][add.id]["op"] == "add"
+    assert m["by_event"][add.id]["parent_id"] == root.id
 
 
 # -- feature_edges sidecar helper -----------------------------------------

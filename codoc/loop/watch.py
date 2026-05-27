@@ -209,15 +209,19 @@ def process_batch(
     if codoc_touched and _hash(tp) == state.last_tree_hash:
         codoc_touched = False
 
-    # ── Step 3: While an epoch is open, suppress independent Loop A. ───────────
+    # ── Step 3: While an epoch is open, suppress independent Loop A AND Loop B. ──
     if state.epoch_open:
         if code_files:
             state.suppressed_files |= code_files  # accumulate; agent owns these
-        # tree.codoc changes during an epoch (e.g. codoc propose re-render) are
-        # codoc's own writes and are absorbed by the hash guard above.  A genuine
-        # human tree edit mid-epoch (rare) is allowed through to Loop B below.
-        if not (codoc_touched or inbox_touched):
-            return None  # pure code churn during epoch → suppressed
+        # A tree.codoc change mid-epoch is the agent's own reflection (it calls the
+        # codoc MCP tools, which `write_tree` directly — NOT through this daemon, so
+        # the hash guard above can't catch it). Routing it to Loop B would spawn a
+        # nested coding agent to "implement" what the agent just reflected. Suppress
+        # it; the epoch-close scoped Loop A reconciles everything. (A genuine human
+        # tree edit mid-session is rare and is deferred to epoch close.)
+        codoc_touched = False
+        if not inbox_touched:
+            return None  # code churn / agent reflection during epoch → suppressed
 
     # ── Step 4: Normal routing (unchanged). ────────────────────────────────────
     # A tree edit or an Accept/Reject verdict both drive Loop B (codoc → code).

@@ -24,34 +24,51 @@ export class CodocTreeLensProvider implements vscode.CodeLensProvider {
         const lenses: vscode.CodeLens[] = [];
         const top = new vscode.Range(0, 0, 0, 0);
 
-        const { proposals } = parseTreeCodoc(document.getText());
-        const ids = proposals.map(p => p.eventId);
+        const { features, proposals } = parseTreeCodoc(document.getText());
+
+        // RETIRE/AMEND emit no text; they ride in the sidecar and decorate the
+        // live node in place. Surface their Accept/Reject on that node's line.
+        const overlay = this.state.sidecar.proposals?.by_feature ?? {};
+        const lineById = new Map<string, number>();
+        for (const f of features) if (f.id) lineById.set(f.id, f.line);
+
+        type Entry = { line: number; eventId: string; verb: string };
+        const entries: Entry[] = [];
+        for (const p of proposals) {  // ADD/MOVE ghosts (text hunks)
+            entries.push({ line: p.line, eventId: p.eventId, verb: p.op });
+        }
+        for (const [fid, prop] of Object.entries(overlay)) {  // RETIRE/AMEND on the node
+            const line = lineById.get(fid);
+            if (line !== undefined) entries.push({ line, eventId: prop.event_id, verb: prop.op });
+        }
+
+        const ids = entries.map(e => e.eventId);
+        const count = entries.length;
 
         // Row-0 status + bulk actions.
-        lenses.push(new vscode.CodeLens(top, { title: this._statusTitle(proposals.length), command: '' }));
+        lenses.push(new vscode.CodeLens(top, { title: this._statusTitle(count), command: '' }));
         lenses.push(new vscode.CodeLens(top, { title: '$(sync) Sync', command: 'codoc.sync' }));
-        if (proposals.length > 1) {
+        if (count > 1) {
             lenses.push(new vscode.CodeLens(top, {
-                title: `$(check-all) Accept all (${proposals.length})`,
+                title: `$(check-all) Accept all (${count})`,
                 command: 'codoc.acceptAll', arguments: [ids],
             }));
             lenses.push(new vscode.CodeLens(top, {
-                title: `$(close-all) Reject all (${proposals.length})`,
+                title: `$(close-all) Reject all (${count})`,
                 command: 'codoc.rejectAll', arguments: [ids],
             }));
         }
 
-        // Per-proposal Accept / Reject.
-        for (const p of proposals) {
-            const range = new vscode.Range(p.line, 0, p.line, 0);
-            const verb = p.op === 'retire' ? 'retire' : p.op === 'move' ? 'move' : p.op === 'amend' ? 'amend' : 'add';
+        // Per-proposal Accept / Reject (on the ghost line, or on the live node).
+        for (const e of entries) {
+            const range = new vscode.Range(e.line, 0, e.line, 0);
             lenses.push(new vscode.CodeLens(range, {
-                title: '$(check) Accept', tooltip: `Accept this ${verb}`,
-                command: 'codoc.acceptProposal', arguments: [p.eventId],
+                title: '$(check) Accept', tooltip: `Accept this ${e.verb}`,
+                command: 'codoc.acceptProposal', arguments: [e.eventId],
             }));
             lenses.push(new vscode.CodeLens(range, {
-                title: '$(x) Reject', tooltip: `Reject this ${verb}`,
-                command: 'codoc.rejectProposal', arguments: [p.eventId],
+                title: '$(x) Reject', tooltip: `Reject this ${e.verb}`,
+                command: 'codoc.rejectProposal', arguments: [e.eventId],
             }));
         }
         return lenses;

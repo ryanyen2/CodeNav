@@ -16,7 +16,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
-import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
+import { SidecarData, ProposalsMap, emptySidecar, featureAdjacency } from './bindings-model';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
 
 export { ParsedFeature, SidecarData };
@@ -179,6 +179,7 @@ export class WorkspaceState {
     get features(): ParsedFeature[] { return this._features; }
     get proposals(): ProposalHunk[] { return this._proposals; }
     get sidecar(): SidecarData { return this._sidecar; }
+    get proposalOverlays(): ProposalsMap { return this._sidecar.proposals ?? { by_feature: {}, by_event: {} }; }
     get status(): CodocStatus { return this._status; }
     get pendingCount(): number { return this._status.pending; }
     get activity(): ActivityData { return this._activity; }

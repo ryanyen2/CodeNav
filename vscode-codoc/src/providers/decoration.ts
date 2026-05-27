@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { parseTreeCodoc } from '../state/tree-model';
+import { SidecarData, emptySidecar } from '../state/bindings-model';
 
 // Identity / event markers ⟨f-…⟩ ⟨e-…⟩ (plus the two spaces before them) are
 // collapsed to nothing — the human never sees or types an id.
@@ -15,6 +16,10 @@ export interface CodocDecorations {
     retired: vscode.TextEditorDecorationType;
     activeFeature: vscode.TextEditorDecorationType;
     dimmed: vscode.TextEditorDecorationType;
+    // In-place overlays for sidecar-driven proposals on the *live* node.
+    retireStrike: vscode.TextEditorDecorationType;   // proposed retire (node not yet retired)
+    amendInline: vscode.TextEditorDecorationType;     // proposed title/description edit
+    unrealizedPlaceholder: vscode.TextEditorDecorationType;  // accepted plan node, no code yet
 }
 
 export function createDecorations(_context: vscode.ExtensionContext): CodocDecorations {
@@ -63,6 +68,34 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
         dimmed: vscode.window.createTextEditorDecorationType({
             opacity: '0.6',
         }),
+        // Proposed retire: strike the live node where it stands (it is NOT yet
+        // retired in the store), tinted red so it reads as "going away".
+        retireStrike: vscode.window.createTextEditorDecorationType({
+            textDecoration: 'line-through',
+            opacity: '0.7',
+            overviewRulerColor: 'rgba(200,80,80,0.7)',
+            overviewRulerLane: vscode.OverviewRulerLane.Right,
+            borderColor: 'rgba(200,80,80,0.7)',
+            borderWidth: '0 0 0 2px',
+            borderStyle: 'solid',
+        }),
+        // Proposed amend: a blue left-border marker; the proposed title/description
+        // ride in a per-range hover + trailing "→ New title" hint.
+        amendInline: vscode.window.createTextEditorDecorationType({
+            overviewRulerColor: 'rgba(80,120,200,0.7)',
+            overviewRulerLane: vscode.OverviewRulerLane.Right,
+            borderColor: 'rgba(80,120,200,0.7)',
+            borderWidth: '0 0 0 2px',
+            borderStyle: 'solid',
+        }),
+        // Accepted plan placeholder with no code yet: muted + italic + dashed rule.
+        unrealizedPlaceholder: vscode.window.createTextEditorDecorationType({
+            fontStyle: 'italic',
+            opacity: '0.7',
+            borderColor: new vscode.ThemeColor('charts.purple'),
+            borderWidth: '0 0 0 2px',
+            borderStyle: 'dashed',
+        }),
     };
 }
 
@@ -70,6 +103,7 @@ export function applyDecorations(
     editor: vscode.TextEditor,
     dec: CodocDecorations,
     activeFeatureLines: number[] = [],
+    sidecar: SidecarData = emptySidecar(),
 ): void {
     if (editor.document.languageId !== 'codoc') return;
     const hiddenId: vscode.Range[] = [];
@@ -78,16 +112,48 @@ export function applyDecorations(
     const moveHunk: vscode.Range[] = [];
     const retired: vscode.Range[] = [];
 
-    // Colour each in-situ proposal block by op, using the parser's line ranges.
-    // Their lines are excluded from the retired-strike scan below (a move/amend
-    // hunk title starts with '~', which RETIRED_RE would otherwise match).
-    const { proposals } = parseTreeCodoc(editor.document.getText());
+    // Colour each ADD/MOVE ghost hunk by op, using the parser's line ranges.
+    // Their lines are excluded from the retired-strike scan below (a move ghost
+    // title starts with '~', which RETIRED_RE would otherwise match).
+    const { features, proposals } = parseTreeCodoc(editor.document.getText());
     const proposalLines = new Set<number>();
     for (const p of proposals) {
         const bucket = p.op === 'add' ? addHunk : p.op === 'retire' ? retireHunk : moveHunk;
         for (let ln = p.line; ln <= p.endLine; ln++) {
             bucket.push(new vscode.Range(ln, 0, ln, 0));
             proposalLines.add(ln);
+        }
+    }
+
+    // In-place overlays on the *live* node, driven by the sidecar (RETIRE/AMEND
+    // emit no text, so they reach us only here). Also mark unrealized placeholders.
+    const overlay = sidecar.proposals?.by_feature ?? {};
+    const retireStrike: vscode.Range[] = [];
+    const amendInline: vscode.DecorationOptions[] = [];
+    const unrealized: vscode.Range[] = [];
+    for (const f of features) {
+        if (!f.id) continue;
+        const line = editor.document.lineAt(f.line).text;
+        const prop = overlay[f.id];
+        if (prop?.op === 'retire') {
+            retireStrike.push(new vscode.Range(f.line, 0, f.line, line.length));
+        } else if (prop?.op === 'amend') {
+            const newTitle = prop.title && prop.title !== f.title ? prop.title : null;
+            const md = new vscode.MarkdownString(
+                `**Proposed amend** · ${prop.tag}\n\n` +
+                (newTitle ? `**Title →** ${newTitle}\n\n` : '') +
+                (prop.description ? `${prop.description}` : ''),
+            );
+            amendInline.push({
+                range: new vscode.Range(f.line, 0, f.line, line.length),
+                hoverMessage: md,
+                renderOptions: newTitle ? {
+                    after: { contentText: `  ✎ → ${newTitle}`, color: 'rgba(120,150,220,0.9)', fontStyle: 'italic' },
+                } : undefined,
+            });
+        }
+        if (sidecar.features[f.id]?.realized === false) {
+            unrealized.push(new vscode.Range(f.line, 0, f.line, line.length));
         }
     }
 
@@ -110,6 +176,9 @@ export function applyDecorations(
     editor.setDecorations(dec.retireHunk, retireHunk);
     editor.setDecorations(dec.moveHunk, moveHunk);
     editor.setDecorations(dec.retired, retired);
+    editor.setDecorations(dec.retireStrike, retireStrike);
+    editor.setDecorations(dec.amendInline, amendInline);
+    editor.setDecorations(dec.unrealizedPlaceholder, unrealized);
 
     const activeRanges = activeFeatureLines.map(
         line => new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER)

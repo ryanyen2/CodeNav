@@ -20,5 +20,9 @@ class Feature(BaseModel):
     description: str = ""  # the one prose field: what the feature does + why; newlines preserved
     parent_id: str | None = None  # None = top-level
     retired: bool = False  # tombstoned; never hard-deleted
+    # Lifecycle bit parallel to `retired` (NOT a status taxonomy): False marks an
+    # accepted plan placeholder with no code yet; Loop A flips it True on the first
+    # binding. Born True for every code-derived / bootstrap node.
+    realized: bool = True
     created_at: HLC = Field(default_factory=HLC.now)
     updated_at: HLC = Field(default_factory=HLC.now)  # advances on any field mutation

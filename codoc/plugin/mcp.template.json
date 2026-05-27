@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codoc": {
+      "type": "stdio",
+      "command": "codoc-mcp",
+      "args": []
+    }
+  }
+}

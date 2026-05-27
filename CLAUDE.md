@@ -92,6 +92,15 @@ codoc/
   agent/          # base.py (load_prompt/format_prompt/parse_solution/run_agent)
                   # tree_update.py     — the single incremental LLM call
                   # bootstrap_agent.py — propose_file_features, propose_organization (bootstrap-only LLM calls)
+                  # paths.py           — shared find_codoc_dir (hooks + MCP)
+                  # hook.py / install_hooks.py — CC hooks + .claude/.mcp.json installer
+                  # propose.py         — `codoc propose` CLI plumbing (human/test path)
+  mcp/            # codoc MCP server (FastMCP, stdio) — agent-driven reflection:
+                  #   tools.py  — plain functions (open store → apply_op → write_tree):
+                  #               read_tree/read_status, propose_add/amend/move/retire,
+                  #               attach, reflect (bulk), plan_add/plan_status
+                  #   server.py — @mcp.tool wrappers (codoc_tree, codoc_reflect, codoc_plan_add, …);
+                  #               main() = `codoc-mcp` console script. Resolves .codoc from cwd.
   codoc_file/     # render.py (store → tree.codoc + tree.bindings.json sidecar; hidden ⟨f-id⟩;
                   #            proposals as a diff block under "# ── pending changes"),
                   # parse.py (text → ParsedTree; multi-paragraph descriptions, extract_refs,
@@ -108,7 +117,7 @@ codoc/
 
 ### Data model key types
 
-- **`Feature`** (`model/feature.py`): `{id, title, description, parent_id, retired, created_at, updated_at}`. `id` is a stable short id (`f-xxxxxxxx`) rendered into `tree.codoc` as `⟨f-id⟩`. ONE prose field, `description` — no slug, no intent/purpose/rationale/scenario, no status, no derived FeatureState.
+- **`Feature`** (`model/feature.py`): `{id, title, description, parent_id, retired, realized, created_at, updated_at}`. `id` is a stable short id (`f-xxxxxxxx`) rendered into `tree.codoc` as `⟨f-id⟩`. ONE prose field, `description`. `retired` and `realized` are the only lifecycle bits (no status taxonomy): `realized=False` marks an accepted `/codoc:plan` placeholder with no code yet; the first binding (ATTACH/REFRESH in `loop/apply._mutate`) flips it True. Exposed in the sidecar's `features{}` but never written into `tree.codoc` text.
 - **`Binding`** (`model/binding.py`): `{id, feature_id, file, symbol_path, fingerprint, updated_at}`. The anchor is inlined as `(file, symbol_path)` — the index join key. `fingerprint` is the chunk's `tokens_hash`.
 - **`NodeOp`** (`model/event.py`): `{kind, feature_id?, parent_id?, title?, description?, bindings, rationale}`.
 - **`Event`** (`model/event.py`): `{id, at, source, op, applied, accepted_at}`. A *proposal* is an Event with `applied=False`; accepting flips it and runs the op.
@@ -117,7 +126,7 @@ codoc/
 ### NodeOp kinds
 
 Safe (auto-applied): `ATTACH DETACH REFRESH AMEND` (AMEND only when the edit is small — `AMEND_SAFE_RATIO`, the sole threshold).
-Structural (surfaced as a diff block in `tree.codoc`, accepted/rejected via `.codoc/inbox.json`): `ADD_NODE MOVE_NODE RETIRE_NODE`.
+Structural (accepted/rejected via `.codoc/inbox.json`): `ADD_NODE MOVE_NODE RETIRE_NODE`. **Rendering is an in-place overlay** (not a bottom diff block): ADD/MOVE emit a ghost hunk in `tree.codoc` text at the destination parent; RETIRE/AMEND emit NO text and instead ride in the sidecar `proposals` map so the IDE decorates the live node in place (strike for retire, inline title/desc diff for amend) — keeping the live node's text byte-identical to a clean render preserves the round-trip. `NodeOp` carries an optional `realized` (ADD_NODE realization; None ⇒ True).
 
 ### Storage schema
 
@@ -179,8 +188,8 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 `codoc_file/render.py` writes two files on every `write_tree` call:
 
-- **`.codoc/tree.codoc`** — human-authored feature tree. `- Title  ⟨f-id⟩` (id hidden by the IDE decoration; minted on save for hand-added nodes). Descriptions are free prose and may span multiple paragraphs — blank lines are *kept* (a node ends only at the next feature-marker line / the pending sentinel / EOF, never at a blank). Code is cited inline as `[label](codoc:file.py#symbol)` markdown links; `parse.extract_refs` pulls them out. **No `↪ refs:` line** — derived bindings are not printed into the text; they ride in the sidecar and the IDE renders them as inlay-hint chips. Pending structural proposals render last as a git-style diff block under `# ── pending changes`: `+` add / `-` retire / `~` move·amend, each carrying a hidden `⟨e-id⟩`. The parser ignores everything past that sentinel, so render→parse→diff stays a no-op.
-- **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE. Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id}}}`. Written atomically (tmp → rename). Drives inlay chips, `@`-completion, code lens, and the feature panel.
+- **`.codoc/tree.codoc`** — human-authored feature tree. `- Title  ⟨f-id⟩` (id hidden by the IDE decoration; minted on save for hand-added nodes). Descriptions are free prose and may span multiple paragraphs — blank lines are *kept* (a node ends only at the next feature-marker line / the pending sentinel / EOF, never at a blank). Code is cited inline as `[label](codoc:file.py#symbol)` markdown links; `parse.extract_refs` pulls them out. **No `↪ refs:` line** — derived bindings are not printed into the text; they ride in the sidecar and the IDE renders them as inlay-hint chips. Pending proposals render as an **in-place overlay**: ADD/MOVE emit a ghost hunk (`+`/`~` op char in col 0, node at its tree depth, hidden `⟨e-id⟩`) at the destination parent; RETIRE/AMEND emit no text (they're carried in the sidecar). The parser skips any line matching both the proposal shape and a `⟨e-id⟩` marker, so render→parse→diff stays a no-op. (The legacy `# ── pending changes` sentinel is still honored on read.)
+- **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE (now **version 3**). Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id,realized}}, feature_edges{}, proposals{by_feature{fid:{op,event_id,tag,…}}, by_event{eid:{op,…}}}}`. `proposals.by_feature` drives the in-place retire/amend overlays + Accept/Reject on the live node; `realized` drives the unrealized-placeholder decoration. Written atomically (tmp → rename).
 - **`.codoc/status.json`** (written by the loops, not `write_tree`) — `{version, state, pending, detail, at}`; `state ∈ {in_sync, code_drift, tree_dirty, realizing}` drives the IDE status bar + the tree.codoc header CodeLens.
 - **`.codoc/inbox.json`** (written by the IDE) — `{version, verdicts:[{event_id, accept}]}`; drained by Loop B / `codoc sync`, then cleared. The watch daemon watches it so an Accept/Reject wakes the loop.
 
@@ -209,6 +218,13 @@ The pre-rewrite HTTP-era providers (`state/server.ts`, `live-activity.ts`, `sync
 Two-loop system fully implemented and tested (141 Python unit tests pass; TypeScript `tsc --noEmit` + esbuild clean; the TS parser is parity-tested against `parse.py` on the real 28-feature `test/requests` tree). The cocoindex integration test for `compute_changeset` is gated to skip when the embedding model can't load.
 
 **Format redesign (2026-05-25):** `↪ refs:`/`›` removed (inline `[label](codoc:file#symbol)` markdown links + sidecar inlay chips instead); `⟨f-id⟩` hidden by an IDE decoration (still on disk for stable identity); `?`→`+`/`-` accept/reject syntax removed (proposals render as a diff block, verdicts flow through `.codoc/inbox.json` via IDE Accept/Reject); descriptions now support multi-paragraph prose (blank lines preserved); lifecycle surfaced via `.codoc/status.json`.
+
+**Workflow overhaul (2026-05-26):** two cohesive loops + honest diff view + agent-driven reflection.
+- **In-place overlay rendering** — RETIRE/AMEND no longer render as separate ghost lines (the "duplicate deletion node" confusion); they decorate the live node via the sidecar `proposals` map (strike / inline diff), with Accept/Reject on the node. Only ADD/MOVE remain as text ghosts. (`codoc_file/render.py::_proposals_map`; VS Code `decoration.ts` retireStrike/amendInline, `codoc-tree-lens.ts`, `code-actions.ts`.)
+- **codoc MCP server** (`codoc/mcp/`, FastMCP stdio, registered in `.mcp.json` by `install_hooks`) — the code-first loop's primary reflection path: the agent calls `codoc_reflect`/`codoc_propose_*`/`codoc_attach` (carrying real intent) instead of relying on Loop A's blind index-diff. All tools route through `apply_op`. Loop A is now a **verification net**: `loop_a._pending_coverage` dedups so the agent's proposals + automatic Loop A never double-propose (and Loop A skips the LLM entirely when the agent covered everything).
+- **`realized` lifecycle + `/codoc:plan`** — `/codoc:plan <task>` (command at `.claude/commands/codoc/plan.md`) proposes plan nodes via `codoc_plan_add` (source=plan, realized=False); accepted, they're unrealized placeholders that flip realized when code binds; unplanned work surfaces as new proposals. SKILL.md rewritten MCP-first. `codoc propose` CLI / `propose.py` kept for humans/tests (bind-string bug fixed: symbol_path keeps the full `file::symbol`).
+- **Watch daemon**: a `tree.codoc` write during an open epoch (agent MCP reflection) is no longer routed to Loop B (`watch.process_batch` step 3 suppresses it; epoch-close Loop A reconciles).
+- Tests: 211 Python pass; VS Code `tsc`/esbuild clean + a new `vitest` harness (`vscode-codoc/src/test/`, 6 tests) guarding Python↔TS overlay parity.
 
 Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); ego-graph context for Loop A subtree selection; may-impact propagation in the LLM prompt; trim `minhash` from the index schema.
 

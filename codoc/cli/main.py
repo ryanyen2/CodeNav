@@ -48,6 +48,8 @@ def init(
             from codoc.agent.install_hooks import install_hooks
             install_hooks(root)
             typer.echo("  ✓ Claude Code hooks installed in .claude/settings.json")
+            typer.echo("  ✓ codoc MCP server registered in .mcp.json (codoc_tree, codoc_reflect, …)")
+            typer.echo("  ✓ /codoc:plan command + codoc-intent skill installed in .claude/")
         except Exception as exc:
             typer.echo(f"  ⚠  Could not install hooks: {exc}", err=True)
 

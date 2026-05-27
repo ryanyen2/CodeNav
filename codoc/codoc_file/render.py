@@ -13,16 +13,20 @@ line. Code is cited inline with markdown links — ``[label](codoc:file.py#symbo
 Loop A) are NOT written into the text; they ride in ``tree.bindings.json`` and
 the IDE renders them as inlay-hint chips.
 
-Pending structural proposals render **in situ** — each at the tree position it
-would take effect: an add appears under its parent, a retire/amend right beneath
-the node it concerns, a move at its destination. Each proposal line carries the
-diff op char in column 0 (``+`` add, ``-`` retire, ``~`` move/amend) followed by
-the node indented to its tree depth, and a hidden ``⟨e-id⟩``. So the file reads
-like a diff laid over the tree. There is no accept/reject *syntax*; the IDE's
-Accept/Reject actions write verdicts to ``.codoc/inbox.json`` (see
-:mod:`codoc.loop.inbox`). The parser skips each proposal block (identified by its
-``⟨e-id⟩`` — live nodes carry ``⟨f-id⟩`` — and terminated by a blank line), so
-render→parse→diff stays a no-op (the round-trip invariant).
+Pending proposals render as an **in-place overlay**. ADD and MOVE proposals emit
+a ghost hunk in the text at their destination parent — a line carrying the diff op
+char in column 0 (``+`` add, ``~`` move) followed by the node indented to its tree
+depth, and a hidden ``⟨e-id⟩`` — because an add has no live node and a move shows
+where the node will land. RETIRE and AMEND, by contrast, modify an *existing*
+node, so they emit NO text: they ride in the sidecar's ``proposals`` map
+(``_proposals_map``) and the IDE decorates the live node in place (strike-through
+for retire, an inline title/description diff for amend). Keeping the live node's
+text byte-identical to a clean render is what makes render→parse→diff a no-op for
+retire/amend; the ADD/MOVE ghost hunks stay round-trip-safe because the parser
+skips any block whose first line matches both the proposal shape and a ``⟨e-id⟩``
+marker (live nodes carry ``⟨f-id⟩``). There is no accept/reject *syntax*; the
+IDE's Accept/Reject actions write verdicts to ``.codoc/inbox.json`` (see
+:mod:`codoc.loop.inbox`).
 """
 from __future__ import annotations
 
@@ -31,7 +35,7 @@ import os
 from collections import defaultdict
 from pathlib import Path
 
-from codoc.model.event import PLAN_SOURCE, Event, NodeOpKind
+from codoc.model.event import LOOP_A_AGENT_SOURCE, PLAN_SOURCE, Event, NodeOpKind
 from codoc.store.db import Store
 
 TREE_FILENAME = "tree.codoc"
@@ -67,18 +71,15 @@ def render_tree(store: Store) -> str:
     lines: list[str] = [_HEADER.rstrip("\n"), ""]
 
     pending = store.pending_events()
-    # Anchor each proposal to where it should render: adds/moves under their
-    # (destination) parent; retires/amends beneath the node they concern.
-    adds_by_parent: dict[str | None, list[Event]] = defaultdict(list)
-    on_feature: dict[str | None, list[Event]] = defaultdict(list)
+    # Only ADD/MOVE proposals emit *text* (a ghost node at the destination parent):
+    # an ADD has no live node to anchor to, and a MOVE shows where the node will
+    # land. RETIRE/AMEND mutate an existing node, so they ride in the sidecar
+    # (`_proposals_map`) and the IDE decorates the live node in place — keeping the
+    # node's text identical to a clean render, which preserves render→parse→diff.
+    ghosts_by_parent: dict[str | None, list[Event]] = defaultdict(list)
     for e in pending:
-        kind = e.op.kind
-        if kind in (NodeOpKind.ADD_NODE, NodeOpKind.MOVE_NODE):
-            adds_by_parent[e.op.parent_id].append(e)
-        elif kind in (NodeOpKind.RETIRE_NODE, NodeOpKind.AMEND):
-            on_feature[e.op.feature_id].append(e)
-        else:
-            adds_by_parent[None].append(e)
+        if e.op.kind in (NodeOpKind.ADD_NODE, NodeOpKind.MOVE_NODE):
+            ghosts_by_parent[e.op.parent_id].append(e)
     emitted: set[str] = set()
 
     def emit_proposal(e: Event, depth: int) -> None:
@@ -94,25 +95,64 @@ def render_tree(store: Store) -> str:
             if f.description:
                 lines.extend(_description_lines(f.description, indent))
             lines.append("")
-            for e in on_feature.get(f.id, []):
-                emit_proposal(e, depth)
             walk(f.id, depth + 1)
-        for e in adds_by_parent.get(parent_id, []):
+        for e in ghosts_by_parent.get(parent_id, []):
             emit_proposal(e, depth)
 
     walk(None, 0)
-    # Proposals whose anchor isn't in the live tree (stale ref) still surface,
-    # at the root, so a verdict is always reachable.
+    # ADD/MOVE ghosts whose destination parent isn't in the live tree (stale ref)
+    # still surface at the root so a verdict is always reachable.
     for e in pending:
-        if e.id not in emitted:
+        if e.id not in emitted and e.op.kind in (NodeOpKind.ADD_NODE, NodeOpKind.MOVE_NODE):
             emit_proposal(e, 0)
 
     return "\n".join(lines).rstrip() + "\n"
 
 
 def _source_tag(e: Event) -> str:
-    """Human-readable label for the origin of a proposal hunk."""
-    return "agent plan" if e.source == PLAN_SOURCE else "code drift"
+    """Human-readable label for the origin of a proposal."""
+    if e.source == PLAN_SOURCE:
+        return "agent plan"
+    if e.source == LOOP_A_AGENT_SOURCE:
+        return "agent reflection"
+    return "code drift"
+
+
+def _proposals_map(store: Store) -> dict[str, dict]:
+    """Sidecar payload describing pending proposals for the IDE to render in place.
+
+    ``by_feature`` keys RETIRE/AMEND (and the *source* annotation of a MOVE) by
+    the live ``feature_id`` they decorate; ``by_event`` keys ADD/MOVE *ghosts*
+    (the text hunks) by ``event_id`` so the IDE can show details + Accept/Reject
+    without re-parsing. Both halves carry the origin ``tag`` and ``rationale``.
+    """
+    by_feature: dict[str, dict] = {}
+    by_event: dict[str, dict] = {}
+    for e in store.pending_events():
+        op = e.op
+        tag = _source_tag(e)
+        if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
+            by_feature[op.feature_id] = {
+                "op": "retire", "event_id": e.id, "tag": tag, "rationale": op.rationale,
+            }
+        elif op.kind is NodeOpKind.AMEND and op.feature_id:
+            by_feature[op.feature_id] = {
+                "op": "amend", "event_id": e.id, "tag": tag, "rationale": op.rationale,
+                "title": op.title, "description": op.description,
+            }
+        elif op.kind is NodeOpKind.ADD_NODE:
+            by_event[e.id] = {
+                "op": "add", "parent_id": op.parent_id, "tag": tag, "rationale": op.rationale,
+                "title": op.title, "description": op.description,
+            }
+        elif op.kind is NodeOpKind.MOVE_NODE:
+            # The destination ghost (text) conveys the move; the IDE can dim the
+            # source node by scanning `by_event` for op=="move" and its feature_id.
+            by_event[e.id] = {
+                "op": "move", "feature_id": op.feature_id, "parent_id": op.parent_id,
+                "tag": tag, "rationale": op.rationale,
+            }
+    return {"by_feature": by_feature, "by_event": by_event}
 
 
 def _title_of(store: Store, feature_id: str | None) -> str:
@@ -123,13 +163,14 @@ def _title_of(store: Store, feature_id: str | None) -> str:
 
 
 def _render_proposal(e: Event, store: Store, depth: int) -> list[str]:
-    """One proposal as an in-situ diff hunk.
+    """An ADD/MOVE proposal as an in-situ ghost hunk (the only proposals in text).
 
-    Column 0 is the diff op char (``+``/``-``/``~``); a single space follows;
-    then the node rendered at its tree ``depth`` (``{indent}{marker} Title  ⟨e-id⟩``),
-    so the IDE colours the block like a git diff *in place* and can recover the
-    event id from the hidden marker. Continuation lines repeat the op char so the
-    parser can skip the whole block; a blank line terminates it.
+    Column 0 is the diff op char (``+`` add, ``~`` move); a single space follows;
+    then the ghost node rendered at its tree ``depth`` (``{indent}- Title  ⟨e-id⟩``),
+    so the IDE colours the block like a git diff and can recover the event id from
+    the hidden marker. Continuation lines repeat the op char so the parser can skip
+    the whole block; a blank line terminates it. (RETIRE/AMEND never reach here —
+    they decorate the live node via the sidecar ``_proposals_map``.)
     """
     op = e.op
     eid = e.id
@@ -146,17 +187,10 @@ def _render_proposal(e: Event, store: Store, depth: int) -> list[str]:
         meta = f"{tag} · {op.rationale}" if op.rationale else tag
         return [title_line("+", "-", op.title or "Untitled"),
                 *cont("+", op.description or ""), *cont("+", meta)]
-    if op.kind is NodeOpKind.RETIRE_NODE:
-        meta = f"retire · {tag}" + (f" · {op.rationale}" if op.rationale else "")
-        return [title_line("-", "~", _title_of(store, op.feature_id)), *cont("-", meta)]
     if op.kind is NodeOpKind.MOVE_NODE:
         meta = f"move → {_title_of(store, op.parent_id)} · {tag}" + (f" · {op.rationale}" if op.rationale else "")
         return [title_line("~", "-", _title_of(store, op.feature_id)), *cont("~", meta)]
-    if op.kind is NodeOpKind.AMEND:
-        meta = f"amend · {tag}" + (f" · {op.rationale}" if op.rationale else "")
-        return [title_line("~", "-", _title_of(store, op.feature_id)),
-                *cont("~", op.description or ""), *cont("~", meta)]
-    # safe ops are never pending, but render a generic hunk just in case
+    # RETIRE/AMEND/safe ops are not emitted as text; render a generic hunk just in case.
     return [title_line("~", "-", op.kind.value)]
 
 
@@ -197,13 +231,13 @@ def _write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     for f in features:
         bindings = store.bindings_for_feature(f.id)
         by_feature[f.id] = [{"file": b.file, "symbol": b.symbol_path} for b in bindings]
-        feats_meta[f.id] = {"title": f.title, "parent_id": f.parent_id}
+        feats_meta[f.id] = {"title": f.title, "parent_id": f.parent_id, "realized": f.realized}
         for b in bindings:
             by_file.setdefault(b.file, []).append(
                 {"symbol": b.symbol_path, "feature_id": f.id, "feature_title": f.title}
             )
 
-    sidecar = {"version": 2, "by_feature": by_feature, "by_file": by_file, "features": feats_meta, "feature_edges": _compute_feature_edges(store)}
+    sidecar = {"version": 3, "by_feature": by_feature, "by_file": by_file, "features": feats_meta, "feature_edges": _compute_feature_edges(store), "proposals": _proposals_map(store)}
     dest = Path(codoc_dir) / BINDINGS_FILENAME
     tmp = dest.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(sidecar, indent=2))

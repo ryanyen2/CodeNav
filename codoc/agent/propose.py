@@ -82,14 +82,15 @@ def propose_plan(
         valid = ", ".join(k.value for k in NodeOpKind)
         raise ValueError(f"Unknown proposal kind {kind!r}. Valid kinds: {valid}") from None
 
+    # symbol_path is the FULL "file::qualified" form the indexer emits (see
+    # codoc/lang/python.py), so the binding matches a real chunk. `file` is the
+    # prefix before the first "::".
     parsed_binds: list[tuple[str, str]] = []
     for b in (binds or []):
         if "::" in b:
-            file, sym = b.split("::", 1)
-            parsed_binds.append((file, sym))
+            parsed_binds.append((b.split("::", 1)[0], b))
         else:
-            # No symbol separator — treat as file-only binding with empty symbol
-            parsed_binds.append((b, ""))
+            parsed_binds.append((b, b))
 
     op = NodeOp(
         kind=op_kind,

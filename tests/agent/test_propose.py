@@ -92,7 +92,8 @@ def test_propose_with_binds(repo):
     pending = s.pending_events()
     s.close()
     assert len(pending) == 1
-    assert ("ui/widget.py", "Widget") in pending[0].op.bindings
+    # symbol_path keeps the full "file::symbol" form (matches the indexer).
+    assert ("ui/widget.py", "ui/widget.py::Widget") in pending[0].op.bindings
 
 
 def test_propose_amend(repo):

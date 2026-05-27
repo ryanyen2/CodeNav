@@ -1,9 +1,11 @@
-"""Install the codoc CC hooks into a target repo's ``.claude/settings.json``.
+"""Install the codoc CC integration into a target repo's ``.claude`` + ``.mcp.json``.
 
 Called by ``codoc init`` (the default).  Deep-merges the hook block from
-``codoc/plugin/hooks/hooks.json`` into ``<root>/.claude/settings.json`` and
-copies the skill file into ``<root>/.claude/skills/codoc-intent/SKILL.md`` so
-Claude Code loads it automatically for any session in that repo.
+``codoc/plugin/hooks/hooks.json`` into ``<root>/.claude/settings.json``, copies
+the skill into ``<root>/.claude/skills/codoc-intent/SKILL.md`` and the plugin
+commands into ``<root>/.claude/commands/`` (e.g. ``/codoc:plan``), and registers
+the codoc MCP server in ``<root>/.mcp.json`` — so Claude Code loads all of it
+automatically for any session in that repo.
 
 **Merge semantics** (append-not-clobber):
 
@@ -102,6 +104,42 @@ def _write_settings(settings_path: Path, data: dict) -> None:
     os.replace(tmp, settings_path)
 
 
+def _resolve_mcp_command() -> dict:
+    """Resolve the codoc MCP server launch command for this interpreter.
+
+    Prefer the ``codoc-mcp`` console script alongside the running interpreter (so
+    a venv / uv install works); fall back to ``python -m codoc.mcp.server``.
+    """
+    script = Path(sys.executable).parent / "codoc-mcp"
+    if script.exists():
+        return {"type": "stdio", "command": str(script), "args": []}
+    return {"type": "stdio", "command": sys.executable, "args": ["-m", "codoc.mcp.server"]}
+
+
+def install_mcp(root_dir: str) -> None:
+    """Register the codoc MCP server in ``<root_dir>/.mcp.json`` (idempotent).
+
+    Deep-merges a ``mcpServers.codoc`` entry; any other servers are left intact,
+    and a stale ``codoc`` entry is replaced (handles a moved interpreter path).
+    """
+    mcp_path = Path(root_dir) / ".mcp.json"
+    data: dict = {}
+    if mcp_path.exists():
+        try:
+            data = json.loads(mcp_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers["codoc"] = _resolve_mcp_command()
+    data["mcpServers"] = servers
+
+    tmp = mcp_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, mcp_path)
+
+
 def install_hooks(root_dir: str) -> None:
     """Install codoc CC hooks into ``<root_dir>/.claude/settings.json``.
 
@@ -127,3 +165,16 @@ def install_hooks(root_dir: str) -> None:
     if skill_src.exists():
         skill_dest.parent.mkdir(parents=True, exist_ok=True)
         skill_dest.write_text(skill_src.read_text())
+
+    # 3. Copy plugin commands into the local commands dir, preserving subdirs so
+    #    `.claude/commands/codoc/plan.md` becomes the namespaced `/codoc:plan`.
+    cmd_src_dir = _plugin_dir() / "commands"
+    if cmd_src_dir.is_dir():
+        cmd_dest_dir = Path(root_dir) / ".claude" / "commands"
+        for cmd in cmd_src_dir.rglob("*.md"):
+            dest = cmd_dest_dir / cmd.relative_to(cmd_src_dir)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(cmd.read_text())
+
+    # 4. Register the codoc MCP server in <root>/.mcp.json.
+    install_mcp(root_dir)

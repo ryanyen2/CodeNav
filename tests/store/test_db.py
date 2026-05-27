@@ -28,6 +28,50 @@ def test_feature_roundtrip(store):
     assert got.retired is False
 
 
+def test_realized_defaults_true_and_roundtrips(store):
+    f = Feature(title="Placeholder", realized=False)
+    store.upsert_feature(f)
+    assert store.get_feature(f.id).realized is False
+    store.mark_realized(f.id)
+    assert store.get_feature(f.id).realized is True
+    # default for a plain feature is realized
+    g = Feature(title="Plain")
+    store.upsert_feature(g)
+    assert store.get_feature(g.id).realized is True
+
+
+def test_realized_column_migrates_on_legacy_db(tmp_path):
+    """A pre-`realized` features table gains the column (default 1) on reopen."""
+    import sqlite3
+
+    from codoc.model.hlc import HLC
+
+    now = HLC.now().to_str()
+    db = tmp_path / "codoc.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE features (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT, retired INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO features VALUES ('f-legacy','Old','',NULL,0,?,?)", (now, now)
+    )
+    conn.commit()
+    conn.close()
+
+    s = Store(db).open()
+    try:
+        got = s.get_feature("f-legacy")
+        assert got is not None and got.realized is True
+    finally:
+        s.close()
+
+
 def test_feature_ids_are_prefixed_and_unique():
     a = Feature(title="A")
     b = Feature(title="B")

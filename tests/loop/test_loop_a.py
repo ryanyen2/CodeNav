@@ -6,7 +6,7 @@ import pytest
 from codoc.loop.diff import ChangeSet, ChunkRef
 from codoc.loop.loop_a import apply_changeset
 from codoc.model.binding import Binding
-from codoc.model.event import NodeOp, NodeOpKind
+from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
 
@@ -84,6 +84,42 @@ def test_removed_binding_empties_feature_triggers_llm_retire(store):
     assert store.get_feature(f.id).retired is False
     assert len(store.pending_events()) == 1
     assert res.proposed[0].kind is NodeOpKind.RETIRE_NODE
+
+
+def test_loop_a_does_not_duplicate_pending_add_proposal(store):
+    """A chunk already claimed by a pending ADD_NODE (e.g. the agent reflected via
+    MCP) is not re-proposed, and the LLM is not called for it (verification net)."""
+    pending_add = Event(
+        source="loop_a_agent", applied=False,
+        op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Query cache", description="caches",
+                  bindings=[("a.py", "a.py::cache")]),
+    )
+    store.append_event(pending_add)
+    cs = ChangeSet(added=[ChunkRef("a.py", "a.py::cache", "h", "def cache(): ...")])
+
+    res = apply_changeset(cs, store, propose=_raising)
+
+    assert not res.llm_called          # agent already covered it → no LLM
+    assert not res.proposed            # no duplicate proposal
+    assert len(store.pending_events()) == 1  # the original agent proposal only
+
+
+def test_loop_a_does_not_duplicate_pending_retire(store):
+    """A feature emptied of code is not re-retired when a pending RETIRE already
+    exists for it (e.g. the agent proposed it)."""
+    f = _feature(store, title="Lonely")
+    _bind(store, f.id, "a.py", "a.py::foo")
+    store.append_event(Event(
+        source="loop_a_agent", applied=False,
+        op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id, rationale="code gone"),
+    ))
+    cs = ChangeSet(removed=[ChunkRef("a.py", "a.py::foo")])
+
+    res = apply_changeset(cs, store, propose=_raising)
+
+    assert not res.llm_called          # emptied feature already has a pending retire
+    assert res.auto == {"detach": 1}   # the binding still detaches
+    assert len(store.pending_events()) == 1
 
 
 def test_added_unbound_attach_is_safe(store):

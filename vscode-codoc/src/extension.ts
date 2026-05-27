@@ -306,7 +306,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // ── tree.codoc language providers ─────────────────────────────────────────
     context.subscriptions.push(
         vscode.languages.registerCodeLensProvider(codocSelector, new CodocTreeLensProvider(state)),
-        vscode.languages.registerCodeActionsProvider(codocSelector, new CodocCodeActionProvider(),
+        vscode.languages.registerCodeActionsProvider(codocSelector, new CodocCodeActionProvider(state),
             { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
         vscode.languages.registerCompletionItemProvider(codocSelector, new CodocCompletionProvider(state), '[', '#', ':'),
         vscode.languages.registerDocumentLinkProvider(codocSelector, new CodocDocumentLinkProvider()),
@@ -319,7 +319,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const decorations = createDecorations(context);
     const refreshDecorations = (editor?: vscode.TextEditor): void => {
         const ed = editor ?? vscode.window.activeTextEditor;
-        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines);
+        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines, state.sidecar);
     };
     refreshDecorations();
     context.subscriptions.push(
@@ -328,6 +328,8 @@ export function activate(context: vscode.ExtensionContext): void {
             const ed = vscode.window.activeTextEditor;
             if (ed && ed.document === e.document) refreshDecorations(ed);
         }),
+        // Sidecar reload (proposals / realized) must repaint the in-place overlays.
+        state.onDidChange(() => refreshDecorations()),
     );
 
     // ── Dependency focus (opacity dimming on cursor) ───────────────────────────

@@ -1,0 +1,140 @@
+"""codoc MCP server (FastMCP, stdio).
+
+Registered with Claude Code via ``<root>/.mcp.json`` (written by ``codoc init`` /
+``install_hooks``). The agent in the code-first loop calls these tools to reflect
+what it just did into the feature tree — carrying real intent that Loop A's blind
+index-diff can only guess at. Every mutation routes through
+:mod:`codoc.mcp.tools`, which uses the same ``apply_op`` + ``write_tree`` seam as
+the rest of codoc, so identity/dedup/validation/rendering are reused.
+
+The ``.codoc`` directory is resolved from the agent's cwd (where ``claude`` runs)
+by walking up to the first ancestor containing ``.codoc`` — the same discovery
+the hooks use. Tools return structured dicts; on a missing ``.codoc`` they return
+``{"ok": False, "error": …}`` rather than raising, so the agent gets a clear
+message instead of a tool crash.
+"""
+from __future__ import annotations
+
+import os
+
+from fastmcp import FastMCP
+
+from codoc.agent.paths import find_codoc_dir
+from codoc.mcp import tools
+
+mcp = FastMCP("codoc")
+
+
+def _dir() -> str | None:
+    return find_codoc_dir(os.getcwd())
+
+
+def _need_dir() -> tuple[str | None, dict | None]:
+    cd = _dir()
+    if cd is None:
+        return None, {"ok": False, "error": "no .codoc directory found from cwd — run `codoc init` first"}
+    return cd, None
+
+
+@mcp.tool
+def codoc_tree() -> dict:
+    """Read the live feature tree (id, title, description, parent, realized,
+    bindings) plus pending proposals. Read-only. Call this before proposing."""
+    cd, err = _need_dir()
+    return err or tools.read_tree(cd)
+
+
+@mcp.tool
+def codoc_status() -> dict:
+    """Counts of features / pending proposals / unrealized plan nodes, and the
+    current pipeline state (in_sync | code_drift | tree_dirty | realizing)."""
+    cd, err = _need_dir()
+    return err or tools.read_status(cd)
+
+
+@mcp.tool
+def codoc_reflect(ops: list[dict], rationale: str = "") -> dict:
+    """Submit the whole set of tree changes implied by code you just wrote, in one
+    call. This is the primary code-first reflection entrypoint.
+
+    Each op: {kind, feature_id?, parent_id?, title?, description?, binds?,
+    rationale?}. kind ∈ attach|detach|refresh|amend|add_node|move_node|retire_node.
+    binds are "file.py::symbol_path" strings. Safe ops (attach/refresh/detach and
+    small amends) apply immediately; structural ops become proposals the user
+    reviews. Prefer `attach` to an existing feature over `add_node`."""
+    cd, err = _need_dir()
+    return err or tools.reflect(cd, ops=ops, rationale=rationale)
+
+
+@mcp.tool
+def codoc_propose_add(title: str, description: str = "", parent_id: str | None = None,
+                      binds: list[str] | None = None, rationale: str = "") -> dict:
+    """Propose a NEW feature for code no existing node covers (a reviewable
+    proposal). Set parent_id from `codoc_tree` to nest it; binds are
+    "file.py::symbol_path"."""
+    cd, err = _need_dir()
+    return err or tools.propose_add(cd, title=title, description=description,
+                                    parent_id=parent_id, binds=binds, rationale=rationale)
+
+
+@mcp.tool
+def codoc_propose_amend(feature_id: str, title: str | None = None,
+                        description: str | None = None, rationale: str = "") -> dict:
+    """Propose editing a feature's title and/or description (e.g. its meaning
+    shifted). Small description edits apply immediately; larger ones are reviewed."""
+    cd, err = _need_dir()
+    return err or tools.propose_amend(cd, feature_id=feature_id, title=title,
+                                      description=description, rationale=rationale)
+
+
+@mcp.tool
+def codoc_propose_move(feature_id: str, parent_id: str | None, rationale: str = "") -> dict:
+    """Propose reparenting a feature (restructure). parent_id=null moves it to the
+    top level. Reviewable."""
+    cd, err = _need_dir()
+    return err or tools.propose_move(cd, feature_id=feature_id, parent_id=parent_id,
+                                     rationale=rationale)
+
+
+@mcp.tool
+def codoc_propose_retire(feature_id: str, rationale: str = "") -> dict:
+    """Propose retiring a feature whose code is gone. Reviewable."""
+    cd, err = _need_dir()
+    return err or tools.propose_retire(cd, feature_id=feature_id, rationale=rationale)
+
+
+@mcp.tool
+def codoc_attach(feature_id: str, binds: list[str], rationale: str = "") -> dict:
+    """Bind code chunks ("file.py::symbol_path") to an EXISTING feature. ATTACH is
+    safe → applied immediately (no review). Binding the first code to a plan
+    placeholder flips it to realized."""
+    cd, err = _need_dir()
+    return err or tools.attach(cd, feature_id=feature_id, binds=binds, rationale=rationale)
+
+
+@mcp.tool
+def codoc_plan_add(title: str, description: str = "", parent_id: str | None = None,
+                   binds: list[str] | None = None, rationale: str = "") -> dict:
+    """Propose a PLAN placeholder node (used by /codoc:plan, before writing code).
+    Accepted, it enters the tree as an unrealized placeholder until code binds to
+    it. Do NOT edit code in the planning step."""
+    cd, err = _need_dir()
+    return err or tools.plan_add(cd, title=title, description=description,
+                                 parent_id=parent_id, binds=binds, rationale=rationale)
+
+
+@mcp.tool
+def codoc_plan_status() -> dict:
+    """Report which plan placeholders are still unrealized vs realized — the
+    plan-satisfaction check after implementing."""
+    cd, err = _need_dir()
+    return err or tools.plan_status(cd)
+
+
+def main() -> None:
+    """Console entrypoint (``codoc-mcp``). Runs the stdio server."""
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

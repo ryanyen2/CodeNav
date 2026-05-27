@@ -5,7 +5,7 @@ import pytest
 
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_text
-from codoc.codoc_file.render import render_tree
+from codoc.codoc_file.render import _proposals_map, render_tree
 from codoc.model.event import PLAN_SOURCE, Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -53,8 +53,12 @@ def test_retire_node_plan_tag(store):
     op = NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id)
     e = Event(source=PLAN_SOURCE, applied=False, op=op)
     store.append_event(e)
-    text = render_tree(store)
-    assert "agent plan" in text
+    # Retire decorates the live node in place → sidecar, not text.
+    entry = _proposals_map(store)["by_feature"][f.id]
+    assert entry["op"] == "retire"
+    assert entry["tag"] == "agent plan"
+    # The live node renders exactly once (no duplicate "ghost" retire line).
+    assert render_tree(store).count("Old feature") == 1
 
 
 def test_move_node_plan_tag(store):
@@ -75,8 +79,11 @@ def test_amend_plan_tag(store):
     op = NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id, description="New description.")
     e = Event(source=PLAN_SOURCE, applied=False, op=op)
     store.append_event(e)
-    text = render_tree(store)
-    assert "agent plan" in text
+    # Amend decorates the live node in place → sidecar, with the proposed prose.
+    entry = _proposals_map(store)["by_feature"][f.id]
+    assert entry["op"] == "amend"
+    assert entry["tag"] == "agent plan"
+    assert entry["description"] == "New description."
 
 
 # ── Round-trip invariant still holds with plan proposals ──────────────────────

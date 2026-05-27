@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS features (
     description TEXT NOT NULL DEFAULT '',
     parent_id   TEXT,
     retired     INTEGER NOT NULL DEFAULT 0,
+    realized    INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -81,8 +82,19 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
         return self
+
+    def _migrate(self) -> None:
+        """Idempotent additive migrations. ``CREATE TABLE IF NOT EXISTS`` never
+        alters an existing table, so new columns are added here PRAGMA-guarded."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(features)")}
+        if "realized" not in cols:
+            # Default 1 ⇒ every pre-existing node is realized (preserves behavior).
+            self.conn.execute(
+                "ALTER TABLE features ADD COLUMN realized INTEGER NOT NULL DEFAULT 1"
+            )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -105,13 +117,14 @@ class Store:
     def upsert_feature(self, f: Feature) -> None:
         self.conn.execute(
             """
-            INSERT INTO features (id, title, description, parent_id, retired, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO features (id, title, description, parent_id, retired, realized, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title,
                 description=excluded.description,
                 parent_id=excluded.parent_id,
                 retired=excluded.retired,
+                realized=excluded.realized,
                 updated_at=excluded.updated_at
             """,
             (
@@ -120,6 +133,7 @@ class Store:
                 f.description,
                 f.parent_id,
                 int(f.retired),
+                int(f.realized),
                 f.created_at.to_str(),
                 f.updated_at.to_str(),
             ),
@@ -152,6 +166,14 @@ class Store:
     def retire_feature(self, feature_id: str) -> None:
         self.conn.execute(
             "UPDATE features SET retired=1, updated_at=? WHERE id=?",
+            (HLC.now().to_str(), feature_id),
+        )
+        self.conn.commit()
+
+    def mark_realized(self, feature_id: str) -> None:
+        """Flip a plan placeholder to realized (code now binds to it)."""
+        self.conn.execute(
+            "UPDATE features SET realized=1, updated_at=? WHERE id=?",
             (HLC.now().to_str(), feature_id),
         )
         self.conn.commit()
@@ -301,6 +323,7 @@ def _row_to_feature(r: sqlite3.Row) -> Feature:
         description=r["description"],
         parent_id=r["parent_id"],
         retired=bool(r["retired"]),
+        realized=bool(r["realized"]),
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )

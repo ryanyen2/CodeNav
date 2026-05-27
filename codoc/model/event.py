@@ -35,8 +35,9 @@ class NodeOpKind(str, Enum):
 
 
 # Event.source constants — plain strings (no Pydantic enum so no migration needed)
-PLAN_SOURCE = "plan"          # agent-authored intent proposal (plan before code)
-AGENT_SOURCES = frozenset({"plan"})  # sources that originate from an AI agent
+PLAN_SOURCE = "plan"                  # agent-authored intent proposal (plan before code)
+LOOP_A_AGENT_SOURCE = "loop_a_agent"  # agent-driven reflection via MCP (code-first loop)
+AGENT_SOURCES = frozenset({PLAN_SOURCE, LOOP_A_AGENT_SOURCE})  # sources from an AI agent
 
 SAFE_OPS: frozenset[NodeOpKind] = frozenset(
     {NodeOpKind.ATTACH, NodeOpKind.DETACH, NodeOpKind.REFRESH, NodeOpKind.AMEND}
@@ -54,6 +55,7 @@ class NodeOp(BaseModel):
     description: str | None = None  # for ADD_NODE / AMEND
     bindings: list[tuple[str, str]] = Field(default_factory=list)  # (file, symbol_path)
     rationale: str = ""            # one-line justification, shown in proposal hunks
+    realized: bool | None = None   # ADD_NODE realization (None ⇒ default True); False = plan placeholder
 
 
 class Event(BaseModel):

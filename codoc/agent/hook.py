@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codoc.agent.paths import find_codoc_dir as _find_codoc_dir
+
 ACTIVITY_FILENAME = "activity.json"
 BINDINGS_FILENAME = "tree.bindings.json"
 
@@ -37,15 +39,6 @@ _MAX_RECENT = 20
 
 
 # ─── Filesystem helpers ───────────────────────────────────────────────────────
-
-def _find_codoc_dir(cwd: str) -> str | None:
-    """Walk up from *cwd* to find the first ancestor that contains ``.codoc``."""
-    p = Path(cwd).resolve()
-    for candidate in [p, *p.parents]:
-        if (candidate / ".codoc").is_dir():
-            return str(candidate / ".codoc")
-    return None
-
 
 def _root_dir(codoc_dir: str) -> str:
     return str(Path(codoc_dir).parent)

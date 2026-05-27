@@ -25,12 +25,30 @@
     },
     "menus": {
       "commandPalette": [
-        { "command": "codoc.navigateToFeature", "when": "false" },
-        { "command": "codoc.acceptProposal", "when": "false" },
-        { "command": "codoc.rejectProposal", "when": "false" },
-        { "command": "codoc.acceptAll", "when": "false" },
-        { "command": "codoc.rejectAll", "when": "false" },
-        { "command": "codoc.openRef", "when": "false" }
+        {
+          "command": "codoc.navigateToFeature",
+          "when": "false"
+        },
+        {
+          "command": "codoc.acceptProposal",
+          "when": "false"
+        },
+        {
+          "command": "codoc.rejectProposal",
+          "when": "false"
+        },
+        {
+          "command": "codoc.acceptAll",
+          "when": "false"
+        },
+        {
+          "command": "codoc.rejectAll",
+          "when": "false"
+        },
+        {
+          "command": "codoc.openRef",
+          "when": "false"
+        }
       ],
       "view/title": [
         {
@@ -72,8 +90,13 @@
     "languages": [
       {
         "id": "codoc",
-        "aliases": ["Codoc", "codoc"],
-        "extensions": [".codoc"],
+        "aliases": [
+          "Codoc",
+          "codoc"
+        ],
+        "extensions": [
+          ".codoc"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -257,11 +280,13 @@
     "@types/node": "^25.6.2",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.24.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.7"
   },
   "scripts": {
     "build": "node esbuild.config.mjs",
     "compile": "npm run build",
-    "watch": "node esbuild.config.mjs --watch"
+    "watch": "node esbuild.config.mjs --watch",
+    "test": "vitest run"
   }
 }

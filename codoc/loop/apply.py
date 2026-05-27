@@ -88,6 +88,12 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str]) -> None:
         for file, symbol in op.bindings:
             store.upsert_binding(Binding(feature_id=op.feature_id, file=file,
                                          symbol_path=symbol, fingerprint=fp.get((file, symbol), "")))
+        # Realization transition: the first code bound to a plan placeholder makes
+        # it a real, implemented feature.
+        if op.bindings and op.feature_id:
+            owner = store.get_feature(op.feature_id)
+            if owner and not owner.realized:
+                store.mark_realized(op.feature_id)
     elif k is NodeOpKind.DETACH:
         for file, symbol in op.bindings:
             store.delete_binding(file, symbol)
@@ -102,7 +108,8 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str]) -> None:
             store.upsert_feature(f)
     elif k is NodeOpKind.ADD_NODE:
         f = Feature(title=op.title or "Untitled", description=op.description or "",
-                    parent_id=op.parent_id)
+                    parent_id=op.parent_id,
+                    realized=(op.realized if op.realized is not None else True))
         if op.feature_id:
             f.id = op.feature_id
         store.upsert_feature(f)

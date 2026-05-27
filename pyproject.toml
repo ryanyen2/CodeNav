@@ -35,6 +35,7 @@ dependencies = [
     "watchfiles>=0.21.0",
     "lark>=1.1.0",
     "transformers>=5.9.0",
+    "fastmcp>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,7 @@ dev = [
 
 [project.scripts]
 codoc = "codoc.cli.main:app"
+codoc-mcp = "codoc.mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=61", "wheel"]

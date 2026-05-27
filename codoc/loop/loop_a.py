@@ -78,6 +78,31 @@ def _detect_relocations(
     return out
 
 
+def _pending_coverage(store: Store) -> tuple[set[tuple[str, str]], set[str]]:
+    """What the *pending proposals* already cover, so Loop A doesn't duplicate them.
+
+    Returns ``(claimed_chunks, claimed_features)``:
+    - ``claimed_chunks`` — every ``(file, symbol_path)`` named in a pending op's
+      bindings (e.g. an agent-submitted ADD_NODE or a prior proposal). Re-proposing
+      a home for these would create a duplicate node.
+    - ``claimed_features`` — feature ids with a pending RETIRE/AMEND/MOVE. The agent
+      (or an earlier pass) already raised that structural change.
+
+    This is the dedup that lets agent-driven MCP reflection and the automatic Loop A
+    verification net coexist without double proposals.
+    """
+    claimed_chunks: set[tuple[str, str]] = set()
+    claimed_features: set[str] = set()
+    for e in store.pending_events():
+        op = e.op
+        for b in op.bindings:
+            claimed_chunks.add((b[0], b[1]))
+        if op.kind in (NodeOpKind.RETIRE_NODE, NodeOpKind.AMEND, NodeOpKind.MOVE_NODE) \
+                and op.feature_id:
+            claimed_features.add(op.feature_id)
+    return claimed_chunks, claimed_features
+
+
 def _compute_impacted(cs: ChangeSet, store: Store) -> dict[str, list[str]]:
     """Phase 4: upstream dependents of changed/removed symbols.
 
@@ -184,6 +209,14 @@ def apply_changeset(
         if store.binding_at(a.file, a.symbol_path) is None
         and (a.file, a.symbol_path) not in relocated_added
     ]
+
+    # Verification-net dedup: drop anything a pending proposal already covers
+    # (e.g. the agent reflected via MCP just before this pass). This makes Loop A
+    # a safety net that only surfaces the GAPS, never a second proposal for the
+    # same change — and lets it skip the LLM entirely when the agent covered all.
+    claimed_chunks, claimed_features = _pending_coverage(store)
+    added_unbound = [a for a in added_unbound if (a.file, a.symbol_path) not in claimed_chunks]
+    emptied = {fid for fid in emptied if fid not in claimed_features}
 
     # Phase 4: compute upstream dependents before early return (observability).
     dep_features = _compute_impacted(cs, store)

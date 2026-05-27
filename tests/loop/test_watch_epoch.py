@@ -106,6 +106,27 @@ def test_epoch_open_accumulates_suppressed_files(dirs):
     assert state.suppressed_files == {"a.py", "b.py"}
 
 
+def test_tree_write_during_epoch_does_not_spawn_loop_b(dirs):
+    """An agent MCP reflection re-renders tree.codoc mid-epoch; the daemon must NOT
+    route that to Loop B (it would spawn a nested coding agent)."""
+    root, codoc_dir, tp = dirs
+    ap = _write_activity(codoc_dir, epoch_id="ep-1", origin="interactive", open=True)
+    state = WatchState(last_tree_hash=_hash(tp))
+    process_batch([ap], root, codoc_dir, state,
+                  loop_a=_spy(LoopAResult()), loop_b=_spy(LoopBResult()), render=_noop_render)
+
+    # The MCP write changed tree.codoc out-of-band (hash no longer matches).
+    tp.write_text("# tree\n- Root  ⟨f-1⟩\n- New from agent  ⟨f-2⟩\n")
+    a = _spy(LoopAResult())
+    b = _spy(LoopBResult())
+    out = process_batch([str(tp)], root, codoc_dir, state,
+                        loop_a=a, loop_b=b, render=_noop_render)
+
+    assert out is None
+    assert "called" not in b.seen  # Loop B suppressed during the epoch
+    assert "called" not in a.seen
+
+
 # ── Falling edge — interactive epoch close ────────────────────────────────────
 
 def test_epoch_close_interactive_runs_one_scoped_loop_a(dirs):
