@@ -17,6 +17,7 @@ import { bindingsForFeature } from './state/bindings-model';
 import { DependencyFocus } from './providers/focus';
 import { AgentGutter } from './providers/agent';
 import { CodocFileDecorationProvider } from './providers/file-decoration';
+import { CodocTreeEditorProvider } from './providers/tree-editor';
 
 export function activate(context: vscode.ExtensionContext): void {
     const state = new WorkspaceState(context);
@@ -362,6 +363,15 @@ export function activate(context: vscode.ExtensionContext): void {
     // ── File decoration provider (Explorer badges) ────────────────────────────
     const fileDecProvider = new CodocFileDecorationProvider(state);
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(fileDecProvider));
+
+    // ── Custom GUI editor for tree.codoc (opens by default; ⇄ text drops out) ─
+    context.subscriptions.push(
+        vscode.window.registerCustomEditorProvider(
+            CodocTreeEditorProvider.viewType,
+            new CodocTreeEditorProvider(context, state),
+            { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false },
+        ),
+    );
 
     state.onDidChange(() => {
         refreshDecorations();

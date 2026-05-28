@@ -111,6 +111,16 @@
         "path": "./syntaxes/codoc.tmLanguage.json"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "codoc.tree-editor",
+        "displayName": "Codoc Tree",
+        "selector": [
+          { "filenamePattern": "**/.codoc/tree.codoc" }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "codoc.sync",
