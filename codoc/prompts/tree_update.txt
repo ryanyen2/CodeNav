@@ -63,8 +63,14 @@ Every op may carry a one-line `rationale`.
 4. Choose `parent_id` from the subtree/titles so the new node sits under the most
    related parent. Keep the tree shallow and balanced (aim for 3–7 children per
    parent); top-level nodes are broad themes.
-5. Only `amend` a description when modified code genuinely changed what the
-   feature does — not for every edit.
+5. Keep each feature's description an accurate summary of everything it now does.
+   `amend` it when it has gone stale — EITHER because modified code changed what
+   the feature does, OR because you `attach`ed new chunks that add a capability
+   the current description doesn't mention (e.g. you attach table/visualization
+   helpers to a feature whose description only says "formatting" → amend it to
+   mention the richer rendering). When you both attach new capability and the
+   description no longer covers it, emit BOTH the `attach` and an `amend`. Do not
+   amend for trivial private helpers or cosmetic edits.
 6. A `title` is a 3–6 word sentence-case noun phrase ("Index snapshot diff").
    A `description` is 1–3 sentences: what the feature does and why it exists. No
    code-location lists in the prose — bindings carry that.
@@ -76,6 +82,8 @@ Return ONLY this, inside solution tags:
 <solution>
 {"ops": [
   {"kind": "attach", "feature_id": "f-1a2b", "bindings": [["codoc/loop/diff.py", "codoc/loop/diff.py::compute_changeset"]], "rationale": "same snapshot-diff behavior as the existing node"},
+  {"kind": "attach", "feature_id": "f-7e8f", "bindings": [["metrics_utils.py", "metrics_utils.py::print_metrics_table"], ["metrics_utils.py", "metrics_utils.py::format_delta"]], "rationale": "rich terminal rendering belongs to the metrics summary feature"},
+  {"kind": "amend", "feature_id": "f-7e8f", "description": "Helpers for evaluating and presenting scalar metrics across checkpoints: aggregation, baseline comparison, threshold checks, and rich terminal display (box-drawing tables, colored deltas, range bars).", "rationale": "new table/visualization helpers attached — description was display-formatting-only"},
   {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Picks the minimal set of features the tree-update LLM needs, using binding file-locality.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
 ]}
 </solution>

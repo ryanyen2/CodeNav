@@ -33,6 +33,11 @@ from codoc.store.db import open_store
 CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".cpp", ".c", ".h"}
 _SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".mypy_cache", ".codoc"}
 
+# An epoch with no activity.json write in this long is treated as dead (the agent
+# was hard-killed without firing the Stop hook), so the daemon recovers instead of
+# suppressing forever.
+EPOCH_STALE_SECONDS = 900
+
 
 @dataclass
 class WatchState:
@@ -95,6 +100,50 @@ def _classify(
     return codoc_touched, inbox_touched, activity_touched, code_files
 
 
+def _pidfile(codoc_dir: str) -> Path:
+    return Path(codoc_dir) / "watch.pid"
+
+
+def write_pidfile(codoc_dir: str) -> None:
+    import os
+    _pidfile(codoc_dir).write_text(str(os.getpid()))
+
+
+def clear_pidfile(codoc_dir: str) -> None:
+    try:
+        _pidfile(codoc_dir).unlink()
+    except OSError:
+        pass
+
+
+def daemon_running(codoc_dir: str) -> bool:
+    """True if a live ``codoc watch`` daemon owns this repo (pidfile + live pid).
+
+    Lets the Stop hook decide whether to reflect itself (no daemon) or defer to the
+    daemon's epoch-close reconcile — so the two never double-run on one epoch."""
+    import os
+    try:
+        pid = int(_pidfile(codoc_dir).read_text().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)  # signal 0 = liveness probe, doesn't actually signal
+        return True
+    except OSError:
+        return False  # stale pidfile → no live daemon
+
+
+def _epoch_stale(codoc_dir: str, now: float, *, threshold: float = EPOCH_STALE_SECONDS) -> bool:
+    """True if activity.json hasn't been written in ``threshold`` seconds.
+
+    A live agent epoch writes activity.json on every tool call (and at least at
+    SessionStart); silence this long means the session died without a clean Stop."""
+    try:
+        return (now - activity_path(codoc_dir).stat().st_mtime) > threshold
+    except OSError:
+        return False
+
+
 def _read_epoch(codoc_dir: str) -> dict | None:
     """Read the ``epoch`` block from activity.json, or None if absent / corrupt."""
     path = activity_path(codoc_dir)
@@ -128,11 +177,12 @@ def watch_filter(codoc_dir: str):
 
 
 def _render(codoc_dir: str) -> None:
-    from codoc.codoc_file.render import write_tree
+    """Non-destructive render: never overwrite un-applied human edits (H1)."""
+    from codoc.loop.reconcile import safe_write_tree
 
     store = open_store(codoc_dir)
     try:
-        write_tree(store, codoc_dir)
+        safe_write_tree(store, codoc_dir)
     finally:
         store.close()
 
@@ -148,12 +198,33 @@ def process_batch(
     loop_a=run_loop_a,
     loop_b=run_loop_b,
     render=_render,
+    has_user_edits=None,
+    now=None,
 ) -> tuple[str, str] | None:
     """Handle one debounced change batch. Returns (label, summary) or None."""
+    if has_user_edits is None:
+        from codoc.loop.reconcile import has_pending_user_edits as has_user_edits
+    if now is None:
+        import time as _time
+        now = _time.time
     tp = tree_path(codoc_dir)
     codoc_touched, inbox_touched, activity_touched, code_files = _classify(
         paths, root_dir, codoc_dir
     )
+
+    # ── Step 0: Stale-epoch recovery. A hard-killed agent (no Stop hook) leaves
+    # the epoch open, which would suppress all loops forever. Detect silence and
+    # recover by closing it; for an interactive epoch, fold its suppressed +
+    # touched files into this batch so the normal Loop A routing reconciles them. ─
+    if state.epoch_open and _epoch_stale(codoc_dir, now()):
+        if state.epoch_origin == "interactive" and not no_realize:
+            code_files |= state.suppressed_files | set(epoch_touched_files(codoc_dir))
+        state.epoch_open = False
+        state.epoch_origin = ""
+        state.suppressed_files.clear()
+        stale_ep = _read_epoch(codoc_dir)
+        if stale_ep:  # don't let step 1 reprocess this dead epoch
+            state.last_epoch_id = stale_ep.get("id", state.last_epoch_id)
 
     # ── Step 1: Epoch transitions from activity.json (control only; never starts
     # a loop directly). ─────────────────────────────────────────────────────────
@@ -205,9 +276,15 @@ def process_batch(
         if not (codoc_touched or inbox_touched or code_files):
             return None
 
-    # ── Step 2: Content-hash self-render guard (unchanged). ────────────────────
-    if codoc_touched and _hash(tp) == state.last_tree_hash:
-        codoc_touched = False
+    # ── Step 2: Ignore codoc's own / the agent's MCP re-renders. ───────────────
+    # The real question isn't "did the bytes change" (a hash can't see an MCP write
+    # done by another process) but "does the file hold un-applied USER intent". If
+    # diff_codoc is empty, this tree.codoc write came from codoc rendering the store
+    # (daemon render or an agent MCP reflection) → not a human edit → don't route to
+    # Loop B. The hash is kept only as a cheap fast-path for the unchanged case.
+    if codoc_touched:
+        if _hash(tp) == state.last_tree_hash or not has_user_edits(codoc_dir):
+            codoc_touched = False
 
     # ── Step 3: While an epoch is open, suppress independent Loop A AND Loop B. ──
     if state.epoch_open:
@@ -241,6 +318,33 @@ def process_batch(
     return label, summary
 
 
+def safe_process_batch(
+    paths: list[str],
+    root_dir: str,
+    codoc_dir: str,
+    state: WatchState,
+    *,
+    no_realize: bool = False,
+    dry_run: bool = False,
+    printer=print,
+    _process=None,
+) -> tuple[str, str] | None:
+    """Run one batch but never let an exception kill the daemon.
+
+    A failing cycle (an LLM error, a transient index read, a bad tree edit) must
+    log and be survived — otherwise the watch loop unwinds and the daemon dies
+    silently, which is exactly how a code change can vanish with no trace."""
+    proc = _process or process_batch
+    try:
+        return proc(paths, root_dir, codoc_dir, state,
+                    no_realize=no_realize, dry_run=dry_run)
+    except Exception as e:  # noqa: BLE001 — resilience over correctness for one cycle
+        import traceback
+        printer(f"⚠ codoc cycle error (daemon continues): {e}")
+        traceback.print_exc()
+        return None
+
+
 def run_watch(
     root_dir: str,
     codoc_dir: str,
@@ -249,13 +353,32 @@ def run_watch(
     dry_run: bool = False,
     printer=print,
 ) -> None:  # pragma: no cover - blocking I/O loop
+    import atexit
+
     import watchfiles
+
+    from codoc.loop.loop_a import reconcile_drift
+
+    write_pidfile(codoc_dir)  # let the Stop hook know a daemon owns this repo
+    atexit.register(clear_pidfile, codoc_dir)
 
     _render(codoc_dir)
     state = WatchState(last_tree_hash=_hash(tree_path(codoc_dir)))
+
+    # Startup drift reconcile: catch any code↔tree divergence that accumulated
+    # while the daemon was down (or that a previously-crashed cycle missed). This
+    # is what makes a (re)started daemon self-heal instead of sitting blind.
+    if not no_realize:
+        try:
+            res = reconcile_drift(root_dir, codoc_dir)
+            if res.proposed or res.applied_structural or res.auto:
+                printer(f"▸ startup reconcile  {res.summary()}")
+        except Exception as e:  # noqa: BLE001
+            printer(f"⚠ startup reconcile failed (continuing to watch): {e}")
+
     printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop)")
     for changes in watchfiles.watch(root_dir, watch_filter=watch_filter(codoc_dir), debounce=600):
-        out = process_batch([p for _, p in changes], root_dir, codoc_dir, state,
-                            no_realize=no_realize, dry_run=dry_run)
+        out = safe_process_batch([p for _, p in changes], root_dir, codoc_dir, state,
+                                 no_realize=no_realize, dry_run=dry_run, printer=printer)
         if out:
             printer(f"▸ {out[0]}  {out[1]}")

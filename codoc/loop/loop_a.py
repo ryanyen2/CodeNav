@@ -334,3 +334,69 @@ def run_loop_a(
         return result
     finally:
         store.close()
+
+
+def _state_changeset(rows, store: Store, file_scope: set[str] | None) -> ChangeSet:
+    """Build a change set by comparing the index to the store's BINDINGS, not to a
+    prior index snapshot. State-based ⇒ idempotent and self-healing.
+
+    - a chunk with no binding → ``added`` (an attribution gap to close);
+    - a bound chunk whose ``tokens_hash`` ≠ the binding's fingerprint → ``modified``;
+    - a binding whose ``(file, symbol)`` is gone from the index → ``removed``.
+
+    Unlike :func:`compute_changeset` (which diffs the index over time and so goes
+    blind once the index advances without a reflection), this recovers a missed
+    cycle: it always re-derives the full divergence between code and the tree."""
+    scoped = rows if file_scope is None else [r for r in rows if r.file in file_scope]
+    index_keys = {(r.file, r.symbol_path) for r in scoped}
+
+    added, modified = [], []
+    for r in scoped:
+        b = store.binding_at(r.file, r.symbol_path)
+        ref = ChunkRef(r.file, r.symbol_path, r.tokens_hash, r.source, r.types_hash)
+        if b is None:
+            added.append(ref)
+        elif b.fingerprint and b.fingerprint != r.tokens_hash:
+            modified.append(ref)
+
+    bindings = (store.bindings_in_files(file_scope) if file_scope is not None
+                else store.all_bindings())
+    removed = [
+        ChunkRef(b.file, b.symbol_path, b.fingerprint)
+        for b in bindings if (b.file, b.symbol_path) not in index_keys
+    ]
+    return ChangeSet(added=added, removed=removed, modified=modified, rows=rows)
+
+
+def reconcile_drift(
+    root_dir: str,
+    codoc_dir: str,
+    *,
+    file_scope: set[str] | None = None,
+    source: str = "loop_a",
+    repo_name: str = "codebase",
+    config=None,
+) -> LoopAResult:
+    """Reflect code → tree by reconciling the index against the store's bindings.
+
+    The recovery-grade counterpart to :func:`run_loop_a`: where the latter relies
+    on the temporal index diff (and so silently no-ops if a cycle was missed and
+    the index already advanced), this re-derives the full code↔tree divergence
+    from current state. Idempotent — safe to run on daemon startup, from the Stop
+    hook, and from ``codoc sync`` without producing duplicate work."""
+    from codoc.graph.query import update_graph
+    from codoc.loop.status import refresh_status
+    from codoc.pipelines.indexing.reader import read_all_chunks
+    from codoc.pipelines.indexing.runner import update_index
+
+    update_index(root_dir, codoc_dir)
+    rows = read_all_chunks(codoc_dir)
+    store = open_store(codoc_dir)
+    try:
+        cs = _state_changeset(rows, store, file_scope)
+        update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
+        result = apply_changeset(cs, store, source=source, repo_name=repo_name, config=config)
+        refresh_status(codoc_dir, store)
+        return result
+    finally:
+        store.close()

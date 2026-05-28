@@ -68,7 +68,8 @@ def _description_lines(description: str, indent: str) -> list[str]:
 
 
 def render_tree(store: Store) -> str:
-    lines: list[str] = [_HEADER.rstrip("\n"), ""]
+    # lines: list[str] = [_HEADER.rstrip("\n"), ""]
+    lines: list[str] = []
 
     pending = store.pending_events()
     # Only ADD/MOVE proposals emit *text* (a ghost node at the destination parent):

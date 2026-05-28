@@ -75,6 +75,41 @@ def test_self_render_is_ignored(dirs):
     assert "called" not in a.seen and "called" not in b.seen
 
 
+def test_safe_process_batch_survives_a_failing_cycle(dirs):
+    """F2: an exception in a cycle is logged and swallowed — the daemon lives."""
+    from codoc.loop.watch import safe_process_batch
+
+    root, codoc_dir, tp = dirs
+    state = WatchState()
+    logs: list[str] = []
+
+    def boom(*a, **k):
+        raise RuntimeError("LLM exploded")
+
+    out = safe_process_batch([str(tp)], root, codoc_dir, state,
+                             printer=logs.append, _process=boom)
+    assert out is None
+    assert any("cycle error" in m for m in logs)
+
+
+def test_mcp_render_with_stale_hash_does_not_route_to_loop_b(dirs):
+    """H2: a tree.codoc write that matches the store (e.g. an agent MCP reflection
+    in another process) has no user ops → must NOT spawn Loop B, even though the
+    daemon's hash is stale (it never saw the external write)."""
+    root, codoc_dir, tp = dirs
+    a = _spy(LoopAResult())
+    b = _spy(LoopBResult())
+    state = WatchState(last_tree_hash="stale")  # daemon didn't produce this write
+    tp.write_text("# tree\n- Root  ⟨f-1⟩\n- Agent proposal  ⟨f-2⟩\n")
+
+    out = process_batch([str(tp)], root, codoc_dir, state,
+                        loop_a=a, loop_b=b, render=_noop_render,
+                        has_user_edits=lambda _cd: False)  # store already matches
+
+    assert out is None
+    assert "called" not in b.seen and "called" not in a.seen
+
+
 def test_skip_dir_and_noncode_filtered(dirs):
     root, codoc_dir, tp = dirs
     a = _spy(LoopAResult())

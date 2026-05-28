@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codoc.codoc_file.render import write_tree
 from codoc.loop.apply import apply_op, should_auto_apply
+from codoc.loop.reconcile import safe_write_tree
 from codoc.model.event import (
     LOOP_A_AGENT_SOURCE,
     PLAN_SOURCE,
@@ -126,9 +126,9 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str) -> dict:
 
         applied = should_auto_apply(op, store)
         ev = apply_op(op, store, source=source, applied=applied)
-        write_tree(store, codoc_dir)
+        wrote = safe_write_tree(store, codoc_dir)
         return {"ok": True, "event_id": ev.id, "applied": applied,
-                "summary": _op_summary(op, store)}
+                "rendered": wrote, "summary": _op_summary(op, store)}
     finally:
         store.close()
 
@@ -218,8 +218,9 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
             proposed_n += int(not applied)
             results.append({"ok": True, "event_id": ev.id, "applied": applied,
                             "summary": _op_summary(op, store)})
-        write_tree(store, codoc_dir)
-        return {"ok": True, "applied": applied_n, "proposed": proposed_n, "results": results}
+        wrote = safe_write_tree(store, codoc_dir)
+        return {"ok": True, "applied": applied_n, "proposed": proposed_n,
+                "rendered": wrote, "results": results}
     finally:
         store.close()
 

@@ -40,7 +40,11 @@ Guidance:
 - **Strongly prefer `attach`** to an existing feature over `add_node`. Only add a
   node when no existing feature covers the new code (check `codoc_tree` first).
 - Group related new chunks under ONE `add_node`, not one node per function.
-- `amend` a description only when the code's *meaning* shifted.
+- `amend` a feature's description when you change what it does — including when
+  you **add new capability** to it. If you add table/visualization helpers to a
+  feature whose description only mentions "formatting", `amend` that description
+  to reflect the richer behavior. Pair the `attach` and the `amend` in one
+  `codoc_reflect` call. (Skip amends for trivial private helpers.)
 - Safe ops (attach/refresh/detach, small amends) apply immediately; structural
   ops (add_node / move_node / retire_node, large amends) become proposals the
   user Accepts/Rejects in the IDE. Tell the user when you've left proposals.

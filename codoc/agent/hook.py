@@ -140,13 +140,55 @@ def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
 
 
 def handle_stop(payload: dict[str, Any], codoc_dir: str) -> None:
-    """Close the epoch; keep ``touched`` so the reconciler can read it."""
+    """Close the epoch; keep ``touched`` so the reconciler can read it. Then, for
+    an interactive session with no running daemon, spawn a detached reflection so
+    code→tree sync happens even without ``codoc watch``."""
     data = _read_activity(codoc_dir)
     ep = data.get("epoch") or {}
     ep["open"] = False
     ep["ended_at"] = _now_iso()
     data["epoch"] = ep
     _write_activity(codoc_dir, data)
+    _maybe_spawn_reflect(codoc_dir, data, ep)
+
+
+def _maybe_spawn_reflect(codoc_dir: str, data: dict, ep: dict) -> None:
+    """Fire-and-forget a ``codoc reflect`` on the files this session wrote.
+
+    Skipped when: a Loop B-owned epoch (Loop B reflects itself), a live ``codoc
+    watch`` daemon owns the repo (it reconciles on epoch close — avoids a double
+    run / index race), the user opted out, or nothing was written."""
+    import os
+    import subprocess
+    import sys
+
+    if os.environ.get("CODOC_NO_STOP_REFLECT"):
+        return
+    if ep.get("origin") == "loop_b":
+        return
+    try:
+        from codoc.loop.watch import daemon_running
+        if daemon_running(codoc_dir):
+            return
+    except Exception:  # noqa: BLE001
+        pass  # if we can't tell, err toward reflecting
+
+    touched: dict = data.get("touched") or {}
+    write_files = [rel for rel, e in touched.items() if (e or {}).get("mode") == "write"]
+    if not write_files:
+        return
+
+    root = _root_dir(codoc_dir)
+    cmd = [sys.executable, "-m", "codoc.cli.main", "reflect",
+           "--root", root, "--scope", ",".join(write_files)]
+    try:
+        subprocess.Popen(  # detached: outlives this hook + the agent session
+            cmd, cwd=root,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:  # noqa: BLE001 — never block the agent's stop
+        pass
 
 
 def _handle_tool(

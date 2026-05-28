@@ -4,13 +4,14 @@ import { parseTreeCodoc } from '../state/tree-model';
 import { bindingsForFeature } from '../state/bindings-model';
 
 /**
- * Derived code bindings (computed by Loop A) ride in tree.bindings.json, not in
- * the text. We surface them as subtle inlay-hint chips at the end of each
- * feature's title line — "where the feature touches code" without polluting the
- * authored prose. Authored citations are different: they live inline as
- * [label](codoc:file#symbol) markdown links (see doc-links / completion).
+ * One small chip per feature: `9 refs`. Mirrors the Feature Tree panel's pill
+ * so the editor row stays scannable. Click → quick pick of bindings; hover →
+ * full list. (Earlier behaviour was N inline chips per feature, which wrapped
+ * onto a second line on long ref lists and broke the visual title row.)
+ *
+ * Authored citations live inline as [label](codoc:file#symbol) markdown links
+ * — those are a different surface (see doc-links / completion).
  */
-const MAX_CHIPS = 3;
 
 function leaf(symbol: string): string {
     const i = symbol.indexOf('::');
@@ -37,36 +38,29 @@ export class CodocInlayHintsProvider implements vscode.InlayHintsProvider {
             const binds = bindingsForFeature(this.state.sidecar, f.id);
             if (binds.length === 0) continue;
 
-            const shown = binds.slice(0, MAX_CHIPS);
-            const extra = binds.length - shown.length;
+            const label = binds.length === 1 ? '1 ref' : `${binds.length} refs`;
+            const part = new vscode.InlayHintLabelPart(label);
+            part.command = {
+                command: 'codoc.pickBinding',
+                title: 'Open a code binding',
+                arguments: [f.id],
+            };
 
-            // Build clickable label parts: prefix + one part per chip + overflow count.
-            const parts: vscode.InlayHintLabelPart[] = [];
-            const prefix = new vscode.InlayHintLabelPart('  ↪ ');
-            parts.push(prefix);
-            for (let i = 0; i < shown.length; i++) {
-                const b = shown[i];
-                const chipText = `${b.file}:${leaf(b.symbol)}`;
-                const part = new vscode.InlayHintLabelPart(chipText);
-                // Clicking a chip opens the file beside and scrolls to the symbol.
-                part.command = {
-                    command: 'codoc.openRef',
-                    title: `Open ${chipText}`,
-                    arguments: [b.file, b.symbol],
-                };
-                part.tooltip = `Open ${b.file} › ${b.symbol}`;
-                parts.push(part);
-                if (i < shown.length - 1) parts.push(new vscode.InlayHintLabelPart('  '));
-            }
-            if (extra > 0) parts.push(new vscode.InlayHintLabelPart(`  +${extra}`));
+            // Hover lists every binding as a clickable command link.
+            const lines = binds.map(b => {
+                const args = encodeURIComponent(JSON.stringify([b.file, b.symbol]));
+                return `- [\`${b.file}:${leaf(b.symbol)}\`](command:codoc.openRef?${args})`;
+            });
+            const md = new vscode.MarkdownString(
+                `**${binds.length} code binding${binds.length === 1 ? '' : 's'}**\n\n` + lines.join('\n'),
+                true,
+            );
+            md.isTrusted = true;
+            part.tooltip = md;
 
             const lineLen = document.lineAt(f.line).text.length;
-            const hint = new vscode.InlayHint(new vscode.Position(f.line, lineLen), parts);
+            const hint = new vscode.InlayHint(new vscode.Position(f.line, lineLen), [part]);
             hint.paddingLeft = true;
-            hint.tooltip = new vscode.MarkdownString(
-                `**Code bindings** (${binds.length})\n\n` +
-                binds.map(b => `- \`${b.file}:${leaf(b.symbol)}\``).join('\n'),
-            );
             hints.push(hint);
         }
         return hints;

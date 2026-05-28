@@ -222,6 +222,51 @@ def test_missed_loop_b_epoch_suppresses_code_files(dirs):
     assert state.last_epoch_id == "ep-missed"
 
 
+# ── Stale-epoch recovery (hard-killed agent) ─────────────────────────────────
+
+def test_stale_epoch_recovers_and_reconciles_suppressed_files(dirs):
+    """A hard-killed agent leaves the epoch open; after EPOCH_STALE_SECONDS the
+    daemon recovers and reconciles the suppressed/touched files via Loop A."""
+    root, codoc_dir, tp = dirs
+    _write_activity(codoc_dir, epoch_id="ep-1", origin="interactive", open=True)
+    state = WatchState(last_tree_hash=_hash(tp), epoch_open=True,
+                       epoch_origin="interactive", last_epoch_id="ep-1")
+    state.suppressed_files.add("half_written.py")
+
+    a = _spy(LoopAResult(auto={"refresh": 1}))
+    b = _spy(LoopBResult())
+    # A new code change arrives "much later" — now() far past the activity mtime.
+    out = process_batch(
+        [str(root) + "/another.py"], root, codoc_dir, state,
+        loop_a=a, loop_b=b, render=_noop_render, now=lambda: 9_999_999_999.0,
+    )
+
+    assert state.epoch_open is False           # recovered
+    assert out is not None and out[0] == "code→codoc"
+    assert a.seen["called"]
+    scope = a.seen["file_scope"]
+    assert "half_written.py" in scope and "another.py" in scope
+
+
+def test_fresh_epoch_not_treated_as_stale(dirs):
+    """An epoch whose activity.json was just written is NOT recovered."""
+    root, codoc_dir, tp = dirs
+    import os
+    ap = _write_activity(codoc_dir, epoch_id="ep-1", origin="interactive", open=True)
+    state = WatchState(last_tree_hash=_hash(tp), epoch_open=True,
+                       epoch_origin="interactive", last_epoch_id="ep-1")
+
+    a = _spy(LoopAResult())
+    # now() just after the file's mtime → not stale.
+    out = process_batch([str(root) + "/x.py"], root, codoc_dir, state,
+                        loop_a=a, loop_b=_spy(LoopBResult()), render=_noop_render,
+                        now=lambda: os.path.getmtime(ap) + 1.0)
+
+    assert state.epoch_open is True            # still live
+    assert out is None                         # code churn suppressed during epoch
+    assert "x.py" in state.suppressed_files
+
+
 # ── Pure activity churn → no-op ───────────────────────────────────────────────
 
 def test_activity_churn_alone_is_noop(dirs):

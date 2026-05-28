@@ -119,6 +119,25 @@ def sync(
 
 
 @app.command()
+def reflect(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    scope: str = typer.Option(None, "--scope", help="Comma-separated repo-relative files to reflect (default: whole repo)."),
+):
+    """Reflect code → tree by reconciling the index against the store (idempotent).
+
+    The recovery-grade reflection: unlike the watch daemon's temporal diff, it
+    re-derives the full code↔tree divergence from current state, so it catches
+    changes a missed/crashed cycle dropped. Spawned by the Stop hook when no
+    daemon is running; also runnable by hand.
+    """
+    from codoc.loop.loop_a import reconcile_drift
+
+    file_scope = {s.strip() for s in scope.split(",") if s.strip()} if scope else None
+    res = reconcile_drift(root, _codoc_dir(root), file_scope=file_scope)
+    typer.echo(f"▸ reflect  {res.summary()}")
+
+
+@app.command()
 def propose(
     kind: str = typer.Argument(..., help="add_node | amend | retire_node | move_node"),
     root: str = typer.Option(".", "--root", help="Repository root."),

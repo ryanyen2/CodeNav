@@ -48,6 +48,10 @@
         {
           "command": "codoc.openRef",
           "when": "false"
+        },
+        {
+          "command": "codoc.pickBinding",
+          "when": "false"
         }
       ],
       "view/title": [
@@ -190,6 +194,10 @@
       {
         "command": "codoc.openFirstBinding",
         "title": "codoc: Open First Code Binding"
+      },
+      {
+        "command": "codoc.pickBinding",
+        "title": "codoc: Pick code binding to open"
       }
     ],
     "keybindings": [

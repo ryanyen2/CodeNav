@@ -45,6 +45,20 @@ def _payload(cwd: str, **extra) -> dict:
     return {"session_id": "sess-1", "cwd": cwd, **extra}
 
 
+@pytest.fixture(autouse=True)
+def no_real_spawn(monkeypatch):
+    """Capture (and never actually launch) the Stop hook's detached reflect."""
+    import subprocess
+    calls: list[list[str]] = []
+
+    def fake_popen(cmd, *a, **k):
+        calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    return calls
+
+
 # ── Unit helpers ──────────────────────────────────────────────────────────────
 
 def test_find_codoc_dir_finds_parent(tmp_path):
@@ -147,6 +161,60 @@ def test_stop_preserves_touched(repo):
 
     data = read_activity(str(codoc_dir))
     assert "src/app.py" in data["touched"]  # kept after close
+
+
+def test_stop_spawns_reflect_when_no_daemon(repo, no_real_spawn):
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(
+        _payload(str(root), tool_name="Edit", tool_input={"file_path": str(root / "src/app.py")}),
+        str(codoc_dir),
+    )
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    assert len(no_real_spawn) == 1
+    cmd = no_real_spawn[0]
+    assert "reflect" in cmd and "--scope" in cmd
+    assert "src/app.py" in cmd[cmd.index("--scope") + 1]
+
+
+def test_stop_skips_reflect_when_daemon_running(repo, no_real_spawn):
+    import os
+    root, codoc_dir = repo
+    (codoc_dir / "watch.pid").write_text(str(os.getpid()))  # a "live" daemon
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(
+        _payload(str(root), tool_name="Edit", tool_input={"file_path": str(root / "src/app.py")}),
+        str(codoc_dir),
+    )
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    assert no_real_spawn == []  # daemon owns the epoch-close reconcile
+
+
+def test_stop_skips_reflect_for_loop_b_origin(repo, no_real_spawn, monkeypatch):
+    root, codoc_dir = repo
+    monkeypatch.setenv("CODOC_EPOCH_ORIGIN", "loop_b")
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(
+        _payload(str(root), tool_name="Edit", tool_input={"file_path": str(root / "src/app.py")}),
+        str(codoc_dir),
+    )
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    assert no_real_spawn == []  # Loop B reflects its own epoch
+
+
+def test_stop_skips_reflect_with_no_writes(repo, no_real_spawn):
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(  # a Read, not a write
+        _payload(str(root), tool_name="Read", tool_input={"file_path": str(root / "src/app.py")}),
+        str(codoc_dir),
+    )
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    assert no_real_spawn == []
 
 
 # ── pre-tool / post-tool ──────────────────────────────────────────────────────

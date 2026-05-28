@@ -66,7 +66,7 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
             overviewRulerLane: vscode.OverviewRulerLane.Left,
         }),
         dimmed: vscode.window.createTextEditorDecorationType({
-            opacity: '0.6',
+            opacity: '0.8',
         }),
         // Proposed retire: strike the live node where it stands (it is NOT yet
         // retired in the store), tinted red so it reads as "going away".

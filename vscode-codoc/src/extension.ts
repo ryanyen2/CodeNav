@@ -153,6 +153,27 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
     );
 
+    // ── codoc.pickBinding — chip click: quick-pick a binding to open ──────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.pickBinding', async (featureId: string) => {
+            const binds = bindingsForFeature(state.sidecar, featureId);
+            if (binds.length === 0) return;
+            if (binds.length === 1) {
+                await vscode.commands.executeCommand('codoc.openRef', binds[0].file, binds[0].symbol);
+                return;
+            }
+            const picked = await vscode.window.showQuickPick(
+                binds.map(b => {
+                    const sym = b.symbol.split('::').pop() ?? b.symbol;
+                    const tail = sym === '__module__' ? '‹module›' : sym;
+                    return { label: `$(symbol-method) ${tail}`, description: b.file, b };
+                }),
+                { placeHolder: `${binds.length} bindings — pick one to open`, matchOnDescription: true },
+            );
+            if (picked) await vscode.commands.executeCommand('codoc.openRef', picked.b.file, picked.b.symbol);
+        }),
+    );
+
     // ── codoc.openFirstBinding — Alt+B: jump from tree node to its first bound symbol ──
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.openFirstBinding', async () => {
