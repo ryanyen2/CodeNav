@@ -10,6 +10,7 @@ it to the real index + store.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -103,6 +104,72 @@ def _pending_coverage(store: Store) -> tuple[set[tuple[str, str]], set[str]]:
     return claimed_chunks, claimed_features
 
 
+def _norm_title(t: str | None) -> str:
+    return re.sub(r"\s+", " ", (t or "").strip().lower())
+
+
+def _unbound_features_by_title(store: Store) -> dict[str, str]:
+    """``normalized title → feature_id`` for every live feature that owns NO code.
+
+    These are adoptable: an ADD_NODE the LLM/coverage net would mint with the
+    same title is the SAME concept (e.g. a hand-added empty node the model
+    re-proposed), so we bind into the existing node instead of minting a
+    duplicate-titled sibling.
+    """
+    out: dict[str, str] = {}
+    for f in store.list_features():
+        if f.retired or store.bindings_for_feature(f.id):
+            continue
+        out.setdefault(_norm_title(f.title), f.id)
+    return out
+
+
+def _placeholder_owner(store: Store, symbol_path: str, *, sole_ok: bool) -> str | None:
+    """An unrealized, still-unbound plan placeholder that should ADOPT this new
+    symbol rather than have a duplicate node minted for it.
+
+    Prefers a placeholder whose title/description names the symbol; falls back to
+    the *sole* placeholder when ``sole_ok`` (a Loop B post-implementation reflect,
+    where the agent wrote this code expressly for the one accepted plan node).
+    Adopting flips the placeholder ``realized`` via the ATTACH in ``_mutate``.
+    """
+    placeholders = [
+        f for f in store.list_features()
+        if not f.realized and not f.retired and not store.bindings_for_feature(f.id)
+    ]
+    if not placeholders:
+        return None
+    leaf = symbol_path.split("::", 1)[-1].split(".")[-1].lower()
+    leaf_compact = leaf.replace("_", "")
+    for f in placeholders:
+        hay = f"{f.title} {f.description or ''}".lower()
+        hay_compact = re.sub(r"[\s_]+", "", hay)
+        if leaf and (leaf in hay or (leaf_compact and leaf_compact in hay_compact)):
+            return f.id
+    if sole_ok and len(placeholders) == 1:
+        return placeholders[0].id
+    return None
+
+
+def _gc_superseded_proposals(store: Store) -> int:
+    """Drop pending ADD_NODE proposals whose every chunk is now bound elsewhere.
+
+    Without this a duplicate/obsolete proposal lingers forever, pinning status at
+    ``code_drift`` so a no-op ``codoc sync`` never converges to ``in_sync``. A
+    proposal is superseded once a live feature already owns all the code it would
+    have introduced.
+    """
+    dropped = 0
+    for e in store.pending_events():
+        op = e.op
+        if op.kind is NodeOpKind.ADD_NODE and op.bindings and all(
+            store.binding_at(f, s) is not None for f, s in op.bindings
+        ):
+            store.delete_event(e.id)
+            dropped += 1
+    return dropped
+
+
 def _compute_impacted(cs: ChangeSet, store: Store) -> dict[str, list[str]]:
     """Phase 4: upstream dependents of changed/removed symbols.
 
@@ -160,11 +227,16 @@ def apply_changeset(
     propose=propose_tree_update,
     repo_name: str = "codebase",
     config=None,
+    adopt_placeholders: bool = False,
 ) -> LoopAResult:
+    # GC stale proposals first so a no-op pass can converge to in_sync even when
+    # there is no change set to process.
+    gc = _gc_superseded_proposals(store)
     if cs.is_empty():
-        return LoopAResult()
+        return LoopAResult(auto={"gc": gc} if gc else {})
 
     fp = cs.fingerprints()
+    th = cs.types_hashes()
 
     # Which feature did each removed chunk belong to (captured before detach)?
     removed_owner: dict[tuple[str, str], str] = {}
@@ -177,8 +249,10 @@ def apply_changeset(
     #    chunks DETACH here, freeing their (file, symbol) so a relocation can rebind.
     auto_ops = derive_auto_ops(cs, store)
     for op in auto_ops:
-        apply_op(op, store, source=source, applied=True, fp_lookup=fp)
+        apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th)
     result = LoopAResult(auto=dict(Counter(op.kind.value for op in auto_ops)))
+    if gc:
+        result.auto["gc"] = gc
 
     # 1b. Correspondence: a remove+add of the same code is a move/rename, not new
     #     work. Carry the existing feature attribution to the new location with a
@@ -193,7 +267,7 @@ def apply_changeset(
             bindings=[(added_ref.file, added_ref.symbol_path)],
             rationale=f"{_kind}: {removed_ref.symbol_path} → {added_ref.symbol_path}",
         )
-        apply_op(reloc, store, source=source, applied=True, fp_lookup=fp)
+        apply_op(reloc, store, source=source, applied=True, fp_lookup=fp, th_lookup=th)
         relocated_added.add((added_ref.file, added_ref.symbol_path))
     if relocations:
         result.auto["relocate"] = result.auto.get("relocate", 0) + len(relocations)
@@ -217,6 +291,27 @@ def apply_changeset(
     claimed_chunks, claimed_features = _pending_coverage(store)
     added_unbound = [a for a in added_unbound if (a.file, a.symbol_path) not in claimed_chunks]
     emptied = {fid for fid in emptied if fid not in claimed_features}
+
+    # 2b. Placeholder adoption (deterministic, no LLM): a new unbound chunk that
+    #     an unrealized plan placeholder was created to host binds to THAT
+    #     placeholder — not a fresh duplicate node. This is what stops the
+    #     "accepted plan node ends with 0 bindings while Loop A mints function_v2"
+    #     desync. ``adopt_placeholders`` (set by Loop B's post-implement reflect)
+    #     lets the SOLE placeholder adopt code even without a name match.
+    still_unbound = []
+    for a in added_unbound:
+        owner = _placeholder_owner(store, a.symbol_path, sole_ok=adopt_placeholders)
+        if owner:
+            apply_op(
+                NodeOp(kind=NodeOpKind.ATTACH, feature_id=owner,
+                       bindings=[(a.file, a.symbol_path)],
+                       rationale="adopt: bound to the plan placeholder it implements"),
+                store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+            )
+            result.auto["adopt"] = result.auto.get("adopt", 0) + 1
+        else:
+            still_unbound.append(a)
+    added_unbound = still_unbound
 
     # Phase 4: compute upstream dependents before early return (observability).
     dep_features = _compute_impacted(cs, store)
@@ -259,20 +354,41 @@ def apply_changeset(
 
     ops = propose(changes, subtree, all_titles, repo_name=repo_name, config=config)
 
-    # 4. Apply: safe → now; structural → pending proposal.
+    # 4. Apply: safe → now; structural → pending proposal. An ADD_NODE whose
+    #    (title) already names a live, still-unbound feature is the SAME concept
+    #    (e.g. a hand-added empty node the model re-proposed) — rewrite it to an
+    #    ATTACH onto that node so we never mint a duplicate-titled sibling.
+    unbound_titles = _unbound_features_by_title(store)
     for op in ops:
+        if op.kind is NodeOpKind.ADD_NODE and op.bindings:
+            existing = unbound_titles.get(_norm_title(op.title))
+            if existing:
+                apply_op(
+                    NodeOp(kind=NodeOpKind.ATTACH, feature_id=existing,
+                           bindings=op.bindings,
+                           rationale="dedup: bound to existing same-title node"),
+                    store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+                )
+                result.auto["attach"] = result.auto.get("attach", 0) + 1
+                continue
         applied = should_auto_apply(op, store)
-        apply_op(op, store, source=source, applied=applied, fp_lookup=fp)
+        apply_op(op, store, source=source, applied=applied, fp_lookup=fp, th_lookup=th)
         if not applied:
             result.proposed.append(op)
         elif op.kind not in SAFE_OPS:
             result.applied_structural.append(op)
+        else:
+            # An applied safe op (e.g. an LLM AMEND/ATTACH small enough to
+            # auto-apply) is a real tree mutation — surface it in the summary so
+            # the user is never told "nothing changed" while a description was
+            # silently rewritten.
+            result.auto[op.kind.value] = result.auto.get(op.kind.value, 0) + 1
 
     # 5. Coverage net: never silently drop an added chunk the LLM failed to place.
     #    A chunk named in any op (applied ATTACH/ADD_NODE *or* a pending ADD_NODE
     #    proposal) is already placed; only genuinely unplaced chunks fall through.
     covered_by_ops = {b for op in ops for b in op.bindings}
-    _cover_uncovered_adds(added_unbound, covered_by_ops, store, result, fp, source)
+    _cover_uncovered_adds(added_unbound, covered_by_ops, store, result, fp, th, source)
     return result
 
 
@@ -282,6 +398,7 @@ def _cover_uncovered_adds(
     store: Store,
     result: LoopAResult,
     fp: dict[tuple[str, str], str],
+    th: dict[tuple[str, str], str],
     source: str,
 ) -> None:
     from codoc.graph.query import neighbor_feature
@@ -299,7 +416,8 @@ def _cover_uncovered_adds(
                 bindings=[(a.file, a.symbol_path)],
                 rationale="coverage: attached to graph-neighbor feature",
             )
-            apply_op(op, store, source=source, applied=True, fp_lookup=fp)
+            apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th)
+            result.auto["attach"] = result.auto.get("attach", 0) + 1
         else:
             op = NodeOp(
                 kind=NodeOpKind.ADD_NODE,
@@ -308,7 +426,7 @@ def _cover_uncovered_adds(
                 bindings=[(a.file, a.symbol_path)],
                 rationale="coverage: unplaced added chunk — needs a home",
             )
-            apply_op(op, store, source=source, applied=False, fp_lookup=fp)
+            apply_op(op, store, source=source, applied=False, fp_lookup=fp, th_lookup=th)
             result.proposed.append(op)
 
 
@@ -320,6 +438,7 @@ def run_loop_a(
     source: str = "loop_a",
     repo_name: str = "codebase",
     config=None,
+    adopt_placeholders: bool = False,
 ) -> LoopAResult:
     from codoc.graph.query import update_graph
 
@@ -327,7 +446,8 @@ def run_loop_a(
     store = open_store(codoc_dir)
     try:
         update_graph(store, cs.rows, cs.touched_files())
-        result = apply_changeset(cs, store, source=source, repo_name=repo_name, config=config)
+        result = apply_changeset(cs, store, source=source, repo_name=repo_name,
+                                 config=config, adopt_placeholders=adopt_placeholders)
         from codoc.loop.status import refresh_status
 
         refresh_status(codoc_dir, store)
@@ -362,7 +482,9 @@ def _state_changeset(rows, store: Store, file_scope: set[str] | None) -> ChangeS
     bindings = (store.bindings_in_files(file_scope) if file_scope is not None
                 else store.all_bindings())
     removed = [
-        ChunkRef(b.file, b.symbol_path, b.fingerprint)
+        # carry the binding's stored types_hash so a rename (shape match, new
+        # name) is still recognised after the old symbol left the index.
+        ChunkRef(b.file, b.symbol_path, b.fingerprint, types_hash=b.types_hash)
         for b in bindings if (b.file, b.symbol_path) not in index_keys
     ]
     return ChangeSet(added=added, removed=removed, modified=modified, rows=rows)
@@ -376,6 +498,7 @@ def reconcile_drift(
     source: str = "loop_a",
     repo_name: str = "codebase",
     config=None,
+    adopt_placeholders: bool = False,
 ) -> LoopAResult:
     """Reflect code → tree by reconciling the index against the store's bindings.
 
@@ -395,7 +518,8 @@ def reconcile_drift(
     try:
         cs = _state_changeset(rows, store, file_scope)
         update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
-        result = apply_changeset(cs, store, source=source, repo_name=repo_name, config=config)
+        result = apply_changeset(cs, store, source=source, repo_name=repo_name,
+                                 config=config, adopt_placeholders=adopt_placeholders)
         refresh_status(codoc_dir, store)
         return result
     finally:

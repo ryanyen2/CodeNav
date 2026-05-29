@@ -224,6 +224,9 @@ def test_sidecar_proposals_map_shape(store):
     }
     assert m["by_event"][add.id]["op"] == "add"
     assert m["by_event"][add.id]["parent_id"] == root.id
+    # by_parent anchors the ADD ghost under its destination parent so the IDE can
+    # offer Accept/Reject at the parent node, not only on the ghost line.
+    assert add.id in m["by_parent"][root.id]
 
 
 # -- feature_edges sidecar helper -----------------------------------------

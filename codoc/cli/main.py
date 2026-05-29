@@ -80,6 +80,20 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
         st = refresh_status(_codoc_dir(root), store)
         state = json.loads(st.read_text()).get("state", "in_sync")
         typer.echo(f"codoc · {len(feats)} features · {len(pending)} pending · state: {state}")
+
+        # Coverage invariant: every indexed chunk should be attributed to a
+        # feature. A gap means code is silently unbound (a Loop A drop) — surface
+        # it so it can't hide behind an "in_sync" status.
+        try:
+            from codoc.pipelines.indexing.reader import read_all_chunks
+            n_chunks = len(read_all_chunks(_codoc_dir(root)))
+            n_bound = len(store.all_bindings())
+            gap = n_chunks - n_bound
+            if n_chunks and gap / n_chunks > 0.05:
+                typer.echo(f"  ⚠ coverage: {n_bound}/{n_chunks} chunks bound "
+                           f"({gap} unattributed) — run `codoc reflect`")
+        except Exception:
+            pass  # index not built yet / unreadable — coverage check is best-effort
         if pending:
             typer.echo("\nPending proposals (review in tree.codoc, Accept/Reject in the IDE):")
             for e in pending:
@@ -102,15 +116,75 @@ def sync(
 ):
     """One-shot: apply tree.codoc edits (Loop B), then reflect code (Loop A)."""
     from codoc.codoc_file.render import write_tree
-    from codoc.loop.loop_a import run_loop_a
+    from codoc.loop.loop_a import reconcile_drift
     from codoc.loop.loop_b import run_loop_b
+    from codoc.loop.status import refresh_status
     from codoc.store.db import open_store
 
     cd = _codoc_dir(root)
     rb = run_loop_b(root, cd, dry_run=dry)
     typer.echo(f"▸ codoc→code  {rb.summary()}")
-    ra = run_loop_a(root, cd)
+    if rb.directives:
+        label = "would implement (dry run)" if dry else "implementing"
+        typer.echo(f"  {label}:")
+        for d in rb.directives:
+            typer.echo(f"    · {d.splitlines()[0]}")
+    # Reflect with the recovery-grade, state-based reconciler (not the temporal
+    # diff) so a missed/crashed cycle self-heals and a no-op sync converges.
+    ra = reconcile_drift(root, cd)
     typer.echo(f"▸ code→codoc  {ra.summary()}")
+    store = open_store(cd)
+    try:
+        write_tree(store, cd)
+        st = refresh_status(cd, store)
+        state = json.loads(st.read_text()).get("state", "in_sync")
+        typer.echo(f"▸ state       {state}")
+    finally:
+        store.close()
+
+
+@app.command()
+def accept(
+    event_id: str = typer.Argument(..., help="Proposal event id (⟨e-…⟩, with or without the ⟨⟩)."),
+    root: str = typer.Option(".", "--root", help="Repository root."),
+):
+    """Accept a pending proposal from the CLI (no IDE needed).
+
+    Writes the verdict to inbox.json and drains it through Loop B — the same path
+    the IDE's Accept action uses — so an accepted plan node gets implemented and a
+    code-drift proposal is applied.
+    """
+    _verdict(root, event_id, accept=True)
+
+
+@app.command()
+def reject(
+    event_id: str = typer.Argument(..., help="Proposal event id (⟨e-…⟩, with or without the ⟨⟩)."),
+    root: str = typer.Option(".", "--root", help="Repository root."),
+):
+    """Reject (drop) a pending proposal from the CLI (no IDE needed)."""
+    _verdict(root, event_id, accept=False)
+
+
+def _verdict(root: str, event_id: str, *, accept: bool) -> None:
+    from codoc.codoc_file.render import write_tree
+    from codoc.loop import inbox
+    from codoc.loop.loop_b import run_loop_b
+    from codoc.store.db import open_store
+
+    eid = event_id.strip().strip("⟨⟩")
+    cd = _codoc_dir(root)
+    store = open_store(cd)
+    try:
+        if store.get_event(eid) is None:
+            typer.echo(f"Error: no pending proposal ⟨{eid}⟩", err=True)
+            raise typer.Exit(code=1)
+    finally:
+        store.close()
+    inbox.append_verdict(cd, eid, accept=accept)
+    rb = run_loop_b(root, cd)
+    verb = "accepted" if accept else "rejected"
+    typer.echo(f"✓ {verb} ⟨{eid}⟩  ·  {rb.summary()}")
     store = open_store(cd)
     try:
         write_tree(store, cd)

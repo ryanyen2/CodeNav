@@ -85,6 +85,7 @@ def bootstrap_from_chunks(
         }
         subtree, all_titles = _tree_snapshot(store)
         fps = {(r.file, r.symbol_path): r.tokens_hash for r in batch}
+        ths = {(r.file, r.symbol_path): r.types_hash for r in batch}
         ops = propose(changes, subtree, all_titles, repo_name=repo_name, config=config)
 
         # Robustness: ensure every added chunk is covered, even if the LLM
@@ -96,7 +97,7 @@ def bootstrap_from_chunks(
             ops = list(ops) + _fallback_ops(uncovered, batch)
 
         for op in ops:
-            apply_op(op, store, source="bootstrap", applied=True, fp_lookup=fps)
+            apply_op(op, store, source="bootstrap", applied=True, fp_lookup=fps, th_lookup=ths)
     return BootstrapResult(chunks=len(rows), features=len(store.list_features()), batches=batches)
 
 
@@ -127,6 +128,10 @@ def run_bootstrap(
             config=config, organize=organize,
         )
         write_tree(store, codoc_dir)
+        # Write status so the IDE shows a real state (in_sync) on a freshly
+        # bootstrapped repo instead of "not initialized".
+        from codoc.loop.status import refresh_status
+        refresh_status(codoc_dir, store)
         return res
     finally:
         store.close()

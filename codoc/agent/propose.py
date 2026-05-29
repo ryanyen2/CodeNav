@@ -100,6 +100,11 @@ def propose_plan(
         description=description,
         bindings=parsed_binds,
         rationale=rationale,
+        # A plan ADD_NODE is an explicit, not-yet-built placeholder: born
+        # unrealized (parity with mcp.tools.plan_add) so the lifecycle flips it
+        # realized only when code first binds, and so Loop B treats accepting it
+        # as a build request. A plan that already cites code stays realized.
+        realized=False if (op_kind is NodeOpKind.ADD_NODE and not parsed_binds) else None,
     )
 
     store = open_store(codoc_dir)

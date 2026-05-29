@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS bindings (
     file        TEXT NOT NULL,
     symbol_path TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
+    types_hash  TEXT NOT NULL DEFAULT '',
     updated_at  TEXT NOT NULL,
     UNIQUE(file, symbol_path)
 );
@@ -94,6 +95,13 @@ class Store:
             # Default 1 ⇒ every pre-existing node is realized (preserves behavior).
             self.conn.execute(
                 "ALTER TABLE features ADD COLUMN realized INTEGER NOT NULL DEFAULT 1"
+            )
+        bcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(bindings)")}
+        if "types_hash" not in bcols:
+            # Default '' ⇒ pre-existing bindings have no recorded AST shape; rename
+            # detection degrades gracefully for them until they are next refreshed.
+            self.conn.execute(
+                "ALTER TABLE bindings ADD COLUMN types_hash TEXT NOT NULL DEFAULT ''"
             )
 
     def close(self) -> None:
@@ -184,14 +192,18 @@ class Store:
         updates the owning feature + fingerprint (keeps the original row id)."""
         self.conn.execute(
             """
-            INSERT INTO bindings (id, feature_id, file, symbol_path, fingerprint, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO bindings (id, feature_id, file, symbol_path, fingerprint, types_hash, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(file, symbol_path) DO UPDATE SET
                 feature_id=excluded.feature_id,
                 fingerprint=excluded.fingerprint,
+                -- keep a known shape if a re-bind (mcp/propose/accept) carries none
+                types_hash=CASE WHEN excluded.types_hash != ''
+                           THEN excluded.types_hash ELSE bindings.types_hash END,
                 updated_at=excluded.updated_at
             """,
-            (b.id, b.feature_id, b.file, b.symbol_path, b.fingerprint, b.updated_at.to_str()),
+            (b.id, b.feature_id, b.file, b.symbol_path, b.fingerprint,
+             b.types_hash, b.updated_at.to_str()),
         )
         self.conn.commit()
 
@@ -330,12 +342,14 @@ def _row_to_feature(r: sqlite3.Row) -> Feature:
 
 
 def _row_to_binding(r: sqlite3.Row) -> Binding:
+    keys = r.keys()
     return Binding(
         id=r["id"],
         feature_id=r["feature_id"],
         file=r["file"],
         symbol_path=r["symbol_path"],
         fingerprint=r["fingerprint"],
+        types_hash=(r["types_hash"] if "types_hash" in keys else ""),
         updated_at=HLC.from_str(r["updated_at"]),
     )
 

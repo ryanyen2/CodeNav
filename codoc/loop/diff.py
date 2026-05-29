@@ -52,6 +52,18 @@ class ChangeSet:
             out[(c.file, c.symbol_path)] = c.fingerprint
         return out
 
+    def types_hashes(self) -> dict[tuple[str, str], str]:
+        """(file, symbol_path) → types_hash for every added/modified chunk.
+
+        Recorded onto the binding at attribution time so the state-based
+        reconciler can still recognise a later RENAME (same AST shape, new name)
+        after the old symbol has left the index."""
+        out: dict[tuple[str, str], str] = {}
+        for c in self.added + self.modified:
+            if c.types_hash:
+                out[(c.file, c.symbol_path)] = c.types_hash
+        return out
+
 
 def _scope(rows: list[ChunkRow], file_scope: set[str] | None) -> list[ChunkRow]:
     if file_scope is None:

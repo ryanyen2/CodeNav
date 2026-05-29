@@ -60,6 +60,9 @@ export interface EventProposal {
 export interface ProposalsMap {
     by_feature: Record<string, FeatureProposal>;
     by_event: Record<string, EventProposal>;
+    /** parent_id ("" = top level) → ADD/MOVE event ids landing under it, so an
+     *  Accept/Reject affordance can be anchored at the destination parent node. */
+    by_parent?: Record<string, string[]>;
 }
 
 export interface SidecarData {

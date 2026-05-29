@@ -72,22 +72,31 @@ def apply_op(
     source: str,
     applied: bool,
     fp_lookup: dict[tuple[str, str], str] | None = None,
+    th_lookup: dict[tuple[str, str], str] | None = None,
 ) -> Event:
-    """Log an Event for ``op``; if ``applied``, mutate the store accordingly."""
+    """Log an Event for ``op``; if ``applied``, mutate the store accordingly.
+
+    ``fp_lookup`` / ``th_lookup`` supply the chunk's ``tokens_hash`` /
+    ``types_hash`` for any binding the op creates — recorded so staleness and
+    rename detection have an anchor. Callers without the hashes pass neither;
+    the binding stores empty strings (a re-bind that does have them backfills).
+    """
     event = Event(source=source, op=op, applied=applied)
     store.append_event(event)
     if applied:
-        _mutate(op, store, fp_lookup or {})
+        _mutate(op, store, fp_lookup or {}, th_lookup or {})
         store.mark_applied(event.id)  # stamp accepted_at for the audit log
     return event
 
 
-def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str]) -> None:
+def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
+            th: dict[tuple[str, str], str]) -> None:
     k = op.kind
     if k in (NodeOpKind.ATTACH, NodeOpKind.REFRESH):
         for file, symbol in op.bindings:
             store.upsert_binding(Binding(feature_id=op.feature_id, file=file,
-                                         symbol_path=symbol, fingerprint=fp.get((file, symbol), "")))
+                                         symbol_path=symbol, fingerprint=fp.get((file, symbol), ""),
+                                         types_hash=th.get((file, symbol), "")))
         # Realization transition: the first code bound to a plan placeholder makes
         # it a real, implemented feature.
         if op.bindings and op.feature_id:
@@ -107,6 +116,12 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str]) -> None:
             f.updated_at = HLC.now()
             store.upsert_feature(f)
     elif k is NodeOpKind.ADD_NODE:
+        # ``realized`` defaults True: a node is a real feature unless an explicit
+        # plan path (propose.propose_plan / mcp.tools.plan_add) marks it a
+        # placeholder with realized=False. We deliberately do NOT infer
+        # "unrealized" from empty bindings — org-pass theme PARENTS are
+        # legitimately binding-less yet fully real, and marking them placeholders
+        # would mis-fire the IDE's unrealized decoration on every theme node.
         f = Feature(title=op.title or "Untitled", description=op.description or "",
                     parent_id=op.parent_id,
                     realized=(op.realized if op.realized is not None else True))
@@ -115,7 +130,8 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str]) -> None:
         store.upsert_feature(f)
         for file, symbol in op.bindings:
             store.upsert_binding(Binding(feature_id=f.id, file=file, symbol_path=symbol,
-                                         fingerprint=fp.get((file, symbol), "")))
+                                         fingerprint=fp.get((file, symbol), ""),
+                                         types_hash=th.get((file, symbol), "")))
     elif k is NodeOpKind.MOVE_NODE:
         f = store.get_feature(op.feature_id)
         if f:

@@ -125,10 +125,14 @@ def _proposals_map(store: Store) -> dict[str, dict]:
     ``by_feature`` keys RETIRE/AMEND (and the *source* annotation of a MOVE) by
     the live ``feature_id`` they decorate; ``by_event`` keys ADD/MOVE *ghosts*
     (the text hunks) by ``event_id`` so the IDE can show details + Accept/Reject
-    without re-parsing. Both halves carry the origin ``tag`` and ``rationale``.
+    without re-parsing. ``by_parent`` lists the ADD/MOVE event ids landing under
+    each destination parent (``""`` = top level) so the IDE can anchor an
+    Accept/Reject affordance at the parent node, not only on the ghost line. Both
+    halves carry the origin ``tag`` and ``rationale``.
     """
     by_feature: dict[str, dict] = {}
     by_event: dict[str, dict] = {}
+    by_parent: dict[str, list[str]] = {}
     for e in store.pending_events():
         op = e.op
         tag = _source_tag(e)
@@ -146,6 +150,7 @@ def _proposals_map(store: Store) -> dict[str, dict]:
                 "op": "add", "parent_id": op.parent_id, "tag": tag, "rationale": op.rationale,
                 "title": op.title, "description": op.description,
             }
+            by_parent.setdefault(op.parent_id or "", []).append(e.id)
         elif op.kind is NodeOpKind.MOVE_NODE:
             # The destination ghost (text) conveys the move; the IDE can dim the
             # source node by scanning `by_event` for op=="move" and its feature_id.
@@ -153,7 +158,8 @@ def _proposals_map(store: Store) -> dict[str, dict]:
                 "op": "move", "feature_id": op.feature_id, "parent_id": op.parent_id,
                 "tag": tag, "rationale": op.rationale,
             }
-    return {"by_feature": by_feature, "by_event": by_event}
+            by_parent.setdefault(op.parent_id or "", []).append(e.id)
+    return {"by_feature": by_feature, "by_event": by_event, "by_parent": by_parent}
 
 
 def _title_of(store: Store, feature_id: str | None) -> str:

@@ -16,6 +16,7 @@ class Row:
     symbol_path: str
     source: str = ""
     tokens_hash: str = "h"
+    types_hash: str = "t"
 
 
 @pytest.fixture

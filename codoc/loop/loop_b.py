@@ -9,6 +9,7 @@ as a refinement proposal. That re-run is the loop closure.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -17,9 +18,9 @@ from codoc.agent.base import format_prompt, load_prompt
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_tree_file
 from codoc.loop import inbox, status
-from codoc.loop.activity import epoch_touched_files
+from codoc.loop.activity import epoch_written_files
 from codoc.loop.apply import apply_op
-from codoc.loop.loop_a import LoopAResult, run_loop_a
+from codoc.loop.loop_a import LoopAResult, reconcile_drift
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.store.db import Store, open_store
 
@@ -48,10 +49,71 @@ class LoopBResult:
         return " · ".join(parts)
 
 
-def _implies_code(op: NodeOp) -> bool:
-    if op.kind in (NodeOpKind.ADD_NODE, NodeOpKind.RETIRE_NODE):
-        return True
-    return op.kind is NodeOpKind.AMEND and bool(op.description)
+# Obligation/directive phrases that mark a description as a REQUEST for code
+# rather than a description of code that already exists. Case-insensitive.
+_IMPERATIVE_CUES = (
+    r"\bshould\b", r"\bmust\b", r"\bshall\b", r"\bneeds?\s+to\b", r"\bhas\s+to\b",
+    r"\bhave\s+to\b", r"\bought\s+to\b", r"\bTODO\b", r"\bFIXME\b",
+)
+# Base-form (imperative-mood) verbs. Descriptive prose uses the 3rd person
+# ("Adds", "Validates", "Provides") or a noun phrase; a directive opens a
+# sentence with the bare verb ("Add …", "Validate …"). We only match these at a
+# sentence start so they don't fire mid-prose.
+_IMPERATIVE_VERBS = frozenset({
+    "add", "implement", "create", "make", "support", "remove", "delete",
+    "rename", "refactor", "introduce", "replace", "extend", "build", "write",
+    "change", "update", "allow", "enable", "handle", "wire", "hook", "expose",
+    "validate", "ensure", "raise", "split", "merge", "move", "rewrite", "fix",
+})
+
+
+def _is_imperative(text: str | None) -> bool:
+    """Heuristic: does this description REQUEST a code change (imperative mood)
+    rather than DESCRIBE existing code?
+
+    Two signals: (1) an obligation cue ("should", "must", "needs to", "TODO");
+    (2) a sentence that opens with a bare base-form verb ("Add …", "Validate …")
+    — descriptive prose uses the 3rd person ("Adds", "Validates") or a noun
+    phrase. Intentionally a cheap, deterministic gate; an LLM classifier can
+    replace it later if precision matters.
+    """
+    if not text or not text.strip():
+        return False
+    for cue in _IMPERATIVE_CUES:
+        if re.search(cue, text, re.IGNORECASE):
+            return True
+    for sentence in re.split(r"(?:[.\n!?]+)", text):
+        s = sentence.strip()
+        if not s:
+            continue
+        first = re.split(r"[\s,;:]+", s, maxsplit=1)[0].lower()
+        if first in _IMPERATIVE_VERBS:
+            return True
+    return False
+
+
+def _implies_code(op: NodeOp, store: Store) -> bool:
+    """Does this tree edit REQUEST a code change (→ spawn the coding agent)?
+
+    The contract is *imperative detection*: documenting existing code never
+    writes code. A tree edit only realizes into code when intent is explicit.
+      - AMEND: spawn iff the new description is imperative ("should validate …").
+        A descriptive edit ("validates …") just persists the prose, no spawn.
+      - ADD_NODE: spawn iff it is an explicit plan placeholder (``realized`` is
+        False) or its description is imperative. A title-only / descriptive
+        hand-added node is a node, not a build request.
+      - RETIRE_NODE: spawn iff the feature actually owns code to remove.
+    """
+    k = op.kind
+    if k is NodeOpKind.AMEND:
+        return _is_imperative(op.description)
+    if k is NodeOpKind.ADD_NODE:
+        if op.realized is False:
+            return True
+        return _is_imperative(op.description)
+    if k is NodeOpKind.RETIRE_NODE:
+        return bool(op.feature_id and store.bindings_for_feature(op.feature_id))
+    return False
 
 
 def build_directive(op: NodeOp, store: Store) -> str:
@@ -62,13 +124,29 @@ def build_directive(op: NodeOp, store: Store) -> str:
         title = op.title or (f.title if f else op.feature_id)
         binds = [b.symbol_path for b in store.bindings_for_feature(op.feature_id)] if f else []
         loc = ", ".join(binds) if binds else "(no bound code yet)"
-        return f'UPDATE FEATURE: "{title}"\n  New intent: {op.description}\n  Bound code: {loc}\n  Align the bound code with the new intent.'
+        files = _bound_files(op.feature_id, store)
+        scope = ", ".join(files) if files else "(none yet — create where it fits)"
+        return (f'UPDATE FEATURE: "{title}"\n  New intent: {op.description}\n'
+                f'  Bound code: {loc}\n  Edit only: {scope}\n  Align the bound code with the new intent.')
     if op.kind is NodeOpKind.RETIRE_NODE:
         f = store.get_feature(op.feature_id)
         binds = [b.symbol_path for b in store.bindings_for_feature(op.feature_id)] if f else []
         loc = ", ".join(binds) if binds else "(no bound code)"
-        return f'RETIRE FEATURE: "{f.title if f else op.feature_id}"\n  Bound code: {loc}\n  Remove or refactor this code so the feature no longer exists.'
+        files = _bound_files(op.feature_id, store)
+        scope = ", ".join(files) if files else "(none)"
+        return (f'RETIRE FEATURE: "{f.title if f else op.feature_id}"\n  Bound code: {loc}\n'
+                f'  Edit only: {scope}\n  Remove or refactor this code so the feature no longer exists.')
     return ""
+
+
+def _bound_files(feature_id: str | None, store: Store) -> list[str]:
+    """Distinct repo-relative files owned by a feature — the agent's edit scope."""
+    if not feature_id:
+        return []
+    seen: dict[str, None] = {}
+    for b in store.bindings_for_feature(feature_id):
+        seen.setdefault(b.file, None)
+    return list(seen.keys())
 
 
 def build_realize_prompt(directives: list[str], root_dir: str) -> str:
@@ -107,7 +185,7 @@ def run_loop_b(
     *,
     dry_run: bool = False,
     spawn=_spawn_claude,
-    refine=run_loop_a,
+    refine=reconcile_drift,
     config=None,
 ) -> LoopBResult:
     store = open_store(codoc_dir)
@@ -130,7 +208,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
             apply_op(e.op, store, source="user", applied=True)
             store.delete_event(e.id)
             res.accepted += 1
-            if _implies_code(e.op):
+            if _implies_code(e.op, store):
                 directive_ops.append(e.op)
         else:
             store.delete_event(e.id)
@@ -149,7 +227,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
     for op in diff.user_ops:
         apply_op(op, store, source="user", applied=True)
         res.user_edits += 1
-        if _implies_code(op):
+        if _implies_code(op, store):
             directive_ops.append(op)
 
     res.directives = [build_directive(op, store) for op in directive_ops]
@@ -170,12 +248,17 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
         status.refresh_status(codoc_dir, store)
         return res
     res.spawned = True
-    # Prefer the precise touched-file list from activity.json (populated by hooks);
-    # fall back to the mtime walk when hooks are not installed.
-    res.files_written = epoch_touched_files(codoc_dir) or _files_modified_since(root_dir, started)
+    # Prefer the precise WRITTEN-file list from activity.json (populated by hooks);
+    # fall back to the mtime walk when hooks are not installed. Counting only
+    # mode=="write" keeps "agent wrote N files" honest (reads are not writes) and
+    # scopes the reflection to files the agent actually changed.
+    res.files_written = epoch_written_files(codoc_dir) or _files_modified_since(root_dir, started)
 
-    # 4. Reflect on what was written — closes the loop.
+    # 4. Reflect on what was written — closes the loop. ``adopt_placeholders``
+    #    lets the reflection bind the agent's new code to the accepted plan
+    #    placeholder it was written for, instead of minting a duplicate node.
     if res.files_written:
-        res.refinement = refine(root_dir, codoc_dir, file_scope=set(res.files_written), source="loop_b", config=config)
+        res.refinement = refine(root_dir, codoc_dir, file_scope=set(res.files_written),
+                                source="loop_b", config=config, adopt_placeholders=True)
     status.refresh_status(codoc_dir, store)
     return res

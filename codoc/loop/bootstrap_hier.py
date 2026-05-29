@@ -46,6 +46,7 @@ def _apply_ops_with_local_ids(
     fps: dict[tuple[str, str], str],
     *,
     source: str,
+    ths: dict[tuple[str, str], str] | None = None,
 ) -> None:
     """Mint real ids for new nodes, remap temporary parent references, apply.
 
@@ -81,7 +82,7 @@ def _apply_ops_with_local_ids(
     add_nodes = [o for o in ops if o.kind is NodeOpKind.ADD_NODE]
     others = [o for o in ops if o.kind is not NodeOpKind.ADD_NODE]
     for op in add_nodes + others:
-        apply_op(op, store, source=source, applied=True, fp_lookup=fps)
+        apply_op(op, store, source=source, applied=True, fp_lookup=fps, th_lookup=ths or {})
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +194,11 @@ def bootstrap_hier_from_chunks(
         edges = _file_edges(file_rows, store)
         existing_titles = [f.title for f in store.list_features()]
         fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
+        ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
 
         ops = propose_file(file, chunks, edges, existing_titles, repo_name=repo_name, config=config)
         ops = _ensure_file_coverage(ops, file_rows, file)
-        _apply_ops_with_local_ids(ops, store, fps, source="bootstrap")
+        _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
         calls += 1
 
     top_level = store.children(None)

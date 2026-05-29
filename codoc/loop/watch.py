@@ -26,7 +26,7 @@ from codoc.codoc_file.render import tree_path
 from codoc.loop import status
 from codoc.loop.activity import ACTIVITY_FILENAME, activity_path, epoch_touched_files
 from codoc.loop.inbox import inbox_path
-from codoc.loop.loop_a import run_loop_a
+from codoc.loop.loop_a import reconcile_drift
 from codoc.loop.loop_b import run_loop_b
 from codoc.store.db import open_store
 
@@ -195,13 +195,19 @@ def process_batch(
     *,
     no_realize: bool = False,
     dry_run: bool = False,
-    loop_a=run_loop_a,
+    loop_a=reconcile_drift,
     loop_b=run_loop_b,
     render=_render,
     has_user_edits=None,
     now=None,
 ) -> tuple[str, str] | None:
-    """Handle one debounced change batch. Returns (label, summary) or None."""
+    """Handle one debounced change batch. Returns (label, summary) or None.
+
+    The ``loop_a`` slot (code→codoc reflection) defaults to the state-based
+    :func:`reconcile_drift`, not the temporal index diff: a watch cycle already
+    knows which files changed (it supplies ``file_scope``), so the temporal diff
+    is only a scoping hint — the authority for *what diverged* is the index↔store
+    reconciliation, which self-heals a missed/crashed cycle."""
     if has_user_edits is None:
         from codoc.loop.reconcile import has_pending_user_edits as has_user_edits
     if now is None:

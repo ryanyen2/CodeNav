@@ -89,6 +89,67 @@ def test_propose_invalid_kind_exits_nonzero(tmp_path):
     assert r.exit_code != 0
 
 
+def test_accept_applies_proposal_from_cli(tmp_path):
+    """``codoc accept`` drains the verdict and applies a code-drift proposal
+    (no IDE, no agent spawn for an already-bound/descriptive ADD)."""
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    from codoc.codoc_file.render import write_tree
+    s = open_store(cd)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Widget",
+                        description="A small UI widget.",
+                        bindings=[("ui.py", "ui.py::Widget")]))
+    s.append_event(e)
+    write_tree(s, str(cd))
+    s.close()
+
+    r = runner.invoke(app, ["accept", e.id, "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+    assert "accepted" in r.output
+
+    s2 = open_store(cd)
+    try:
+        assert s2.pending_events() == []
+        assert any(f.title == "Widget" for f in s2.list_features())
+    finally:
+        s2.close()
+
+
+def test_reject_drops_proposal_from_cli(tmp_path):
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    from codoc.codoc_file.render import write_tree
+    s = open_store(cd)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Doomed", description="x"))
+    s.append_event(e)
+    write_tree(s, str(cd))
+    s.close()
+
+    r = runner.invoke(app, ["reject", e.id, "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+    assert "rejected" in r.output
+
+    s2 = open_store(cd)
+    try:
+        assert s2.pending_events() == []
+        assert not any(f.title == "Doomed" for f in s2.list_features())
+    finally:
+        s2.close()
+
+
+def test_accept_unknown_event_exits_nonzero(tmp_path):
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    from codoc.codoc_file.render import write_tree
+    s = open_store(cd)
+    write_tree(s, str(cd))
+    s.close()
+    r = runner.invoke(app, ["accept", "e-deadbeef", "--root", str(tmp_path)])
+    assert r.exit_code != 0
+
+
 def test_install_hooks_writes_settings_json(tmp_path):
     """install-hooks command should write .claude/settings.json."""
     r = runner.invoke(app, ["install-hooks", "--root", str(tmp_path)])

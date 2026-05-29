@@ -38,7 +38,7 @@ def test_accept_proposal_applies_and_builds_directive(dirs):
     s = open_store(codoc_dir)
     e = Event(source="loop_a", applied=False,
               op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Theme system",
-                        description="Switches light/dark theme.", rationale="no node fits"))
+                        description="Add a light/dark theme switcher.", rationale="no node fits"))
     s.append_event(e)
     write_tree(s, codoc_dir)
     s.close()
@@ -82,7 +82,8 @@ def test_user_amend_builds_directive_with_bindings(dirs):
     write_tree(s, codoc_dir)
     s.close()
 
-    _edit_file(tree_path(codoc_dir), "Holds brand colors.", "Holds brand colors and dark-mode variants.")
+    _edit_file(tree_path(codoc_dir), "Holds brand colors.",
+               "Holds brand colors. Should also expose dark-mode variants.")
     res = run_loop_b(root, codoc_dir, dry_run=True)
 
     assert res.user_edits >= 1
@@ -90,11 +91,45 @@ def test_user_amend_builds_directive_with_bindings(dirs):
                and "dark-mode variants" in d for d in res.directives)
 
 
+def test_descriptive_amend_on_bound_feature_does_not_spawn(dirs):
+    """The core WS1 fix: documenting existing code (descriptive prose) never
+    builds a directive / spawns the agent — only imperative intent does."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    f = Feature(title="Color palette", description="Holds brand colors.")
+    s.upsert_feature(f)
+    s.upsert_binding(Binding(feature_id=f.id, file="colors.py",
+                             symbol_path="colors.py::PALETTE", fingerprint="h"))
+    write_tree(s, codoc_dir)
+    s.close()
+
+    # A purely descriptive elaboration — no "should/must/add/implement…".
+    _edit_file(tree_path(codoc_dir), "Holds brand colors.",
+               "Holds brand colors and their dark-mode variants for the UI.")
+    spawned = {"called": False}
+
+    def boom(prompt, root_dir, **kw):
+        spawned["called"] = True
+        return 0, ""
+
+    res = run_loop_b(root, codoc_dir, dry_run=False, spawn=boom)
+
+    assert res.user_edits >= 1          # the prose edit IS applied
+    assert res.directives == []         # …but it does not imply code
+    assert res.spawned is False
+    assert spawned["called"] is False
+    # And the prose persisted to the store.
+    s2 = open_store(codoc_dir)
+    assert "dark-mode variants" in (s2.get_feature(f.id).description or "")
+    s2.close()
+
+
 def test_spawn_and_refine_loop_closure(dirs):
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     e = Event(source="loop_a", applied=False,
-              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="New mod", description="adds new.py"))
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="New mod",
+                        description="Add a new.py module with a new() helper."))
     s.append_event(e)
     write_tree(s, codoc_dir)
     s.close()
@@ -109,9 +144,10 @@ def test_spawn_and_refine_loop_closure(dirs):
 
     sentinel = LoopAResult(auto={"refresh": 0})
 
-    def fake_refine(root_dir, codoc_dir, *, file_scope=None, source="loop_b", config=None):
+    def fake_refine(root_dir, codoc_dir, *, file_scope=None, source="loop_b", config=None, **kw):
         calls["refine_scope"] = file_scope
         calls["refine_source"] = source
+        calls["adopt"] = kw.get("adopt_placeholders")
         return sentinel
 
     res = run_loop_b(root, codoc_dir, dry_run=False, spawn=fake_spawn, refine=fake_refine)
@@ -120,6 +156,7 @@ def test_spawn_and_refine_loop_closure(dirs):
     assert "NEW FEATURE" in calls["prompt"]
     assert "new.py" in res.files_written
     assert calls["refine_scope"] == {"new.py"} and calls["refine_source"] == "loop_b"
+    assert calls["adopt"] is True
     assert res.refinement is sentinel
 
 
@@ -139,7 +176,7 @@ def test_precise_reflect_uses_activity_json(dirs):
     from codoc.model.event import PLAN_SOURCE
     from codoc.loop.apply import apply_op
     s2 = open_store(codoc_dir)
-    op = NodeOp(kind=NodeOpKind.ADD_NODE, title="New", description="d.")
+    op = NodeOp(kind=NodeOpKind.ADD_NODE, title="New", description="Implement d.")
     e = apply_op(op, s2, source=PLAN_SOURCE, applied=False)
     wt(s2, codoc_dir)
     s2.close()
@@ -162,7 +199,7 @@ def test_precise_reflect_uses_activity_json(dirs):
         Path(root_dir, "from_mtime.py").write_text("x = 1\n")
         return 0, "ok"
 
-    def fake_refine(root_dir, codoc_dir, *, file_scope=None, source="loop_b", config=None):
+    def fake_refine(root_dir, codoc_dir, *, file_scope=None, source="loop_b", config=None, **kw):
         calls["file_scope"] = file_scope
         return LoopAResult()
 
@@ -171,6 +208,23 @@ def test_precise_reflect_uses_activity_json(dirs):
     # Activity.json file should be used, not the mtime-discovered file.
     assert "from_activity.py" in (calls.get("file_scope") or set()), \
         f"Expected activity.json path in file_scope, got {calls.get('file_scope')}"
+
+
+def test_epoch_written_files_excludes_reads(tmp_path):
+    """'agent wrote N files' must count writes only — reads are not writes."""
+    from codoc.loop.activity import ACTIVITY_FILENAME, epoch_written_files
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    (cd / ACTIVITY_FILENAME).write_text(json.dumps({
+        "version": 1,
+        "epoch": {"id": "ep-x", "origin": "loop_b", "open": False},
+        "touched": {
+            "wrote.py": {"mode": "write"},
+            "only_read.py": {"mode": "read"},
+        },
+        "recent": [],
+    }))
+    assert epoch_written_files(cd) == ["wrote.py"]
 
 
 def test_spawn_claude_sets_loop_b_origin_env(tmp_path):
@@ -196,7 +250,7 @@ def test_spawn_failure_is_captured(dirs):
     f = Feature(title="X", description="d")
     s.upsert_feature(f)
     write_tree(s, codoc_dir)
-    _edit_file(tree_path(codoc_dir), "    d", "    a brand new much longer intent description here")
+    _edit_file(tree_path(codoc_dir), "    d", "    Implement a brand new helper for this.")
     s.close()
 
     def boom(prompt, root_dir, **kw):

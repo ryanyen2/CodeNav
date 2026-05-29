@@ -19,4 +19,9 @@ class Binding(BaseModel):
     file: str  # repo-relative posix path
     symbol_path: str  # "pkg/mod.py::Class.method" — joins to the index
     fingerprint: str  # tokens_hash at attribution time; staleness signal
+    # AST-shape identity (name-invariant) at attribution time. Stored so the
+    # state-based reconciler can detect a RENAME (same shape, new name) even when
+    # the symbol vanished from the index — the index no longer carries the old
+    # symbol's types_hash, so the binding is the only place it survives.
+    types_hash: str = ""
     updated_at: HLC = Field(default_factory=HLC.now)

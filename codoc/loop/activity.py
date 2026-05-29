@@ -81,3 +81,15 @@ def epoch_touched_files(codoc_dir: str | Path) -> list[str]:
     data = read_activity(codoc_dir)
     touched: dict = data.get("touched") or {}
     return list(touched.keys())
+
+
+def epoch_written_files(codoc_dir: str | Path) -> list[str]:
+    """Files the last epoch actually WROTE (``mode == "write"``).
+
+    Distinct from :func:`epoch_touched_files`, which also counts reads — reporting
+    a read as "written" overstates what an agent did and mis-scopes the post-write
+    reflection. Loop B uses this so "agent wrote N files" counts only writes.
+    """
+    data = read_activity(codoc_dir)
+    touched: dict = data.get("touched") or {}
+    return [f for f, meta in touched.items() if (meta or {}).get("mode") == "write"]

@@ -1,10 +1,12 @@
 """Phase 2 — Loop A routing + apply logic (real store, mocked LLM)."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from codoc.loop.diff import ChangeSet, ChunkRef
-from codoc.loop.loop_a import apply_changeset
+from codoc.loop.loop_a import _state_changeset, apply_changeset
 from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
@@ -250,3 +252,111 @@ def test_coverage_proposes_for_isolated_add(store):
     res = apply_changeset(cs, store, propose=_propose([]))
     assert store.binding_at("x.py", "x.py::lonely") is None     # proposal, not applied
     assert res.proposed and res.proposed[0].kind is NodeOpKind.ADD_NODE
+
+
+# ── WS2: duplicate prevention + convergence ─────────────────────────────────
+
+def test_add_node_same_title_as_unbound_node_attaches_not_duplicates(store):
+    """An LLM ADD_NODE whose title matches a live, still-unbound node binds into
+    that node instead of minting a duplicate-titled sibling (the hand-added node
+    vs re-proposed node desync the audit found)."""
+    parent = _feature(store, title="Demo runtime entrypoint")
+    empty = _feature(store, title="CLI argument parsing", parent_id=parent.id)  # no bindings
+    cs = ChangeSet(added=[ChunkRef("main.py", "main.py::parse_args", "h", "def parse_args(): ...")])
+
+    # LLM independently proposes the SAME title (it saw it in all_titles).
+    res = apply_changeset(cs, store, propose=_propose([
+        NodeOp(kind=NodeOpKind.ADD_NODE, title="CLI argument parsing",
+               parent_id=parent.id, bindings=[("main.py", "main.py::parse_args")]),
+    ]))
+
+    # parse_args bound to the EXISTING empty node; no duplicate created.
+    b = store.binding_at("main.py", "main.py::parse_args")
+    assert b is not None and b.feature_id == empty.id
+    titles = [f.title for f in store.list_features()]
+    assert titles.count("CLI argument parsing") == 1
+    assert not res.proposed
+
+
+def test_unrealized_placeholder_adopts_new_code(store):
+    """A new unbound chunk an unrealized plan placeholder names in its description
+    binds to that placeholder (flipping it realized), not a fresh node."""
+    plan = _feature(store, title="Input validation helpers",
+                    description="Add a validate_positive(x) helper in utils.py.",
+                    realized=False)
+    cs = ChangeSet(added=[ChunkRef("utils.py", "utils.py::validate_positive", "h",
+                                   "def validate_positive(x): ...")])
+
+    res = apply_changeset(cs, store, propose=_raising)  # adopted deterministically, no LLM
+
+    b = store.binding_at("utils.py", "utils.py::validate_positive")
+    assert b is not None and b.feature_id == plan.id
+    assert store.get_feature(plan.id).realized is True       # first binding realized it
+    assert not res.llm_called and not res.proposed
+    assert res.auto.get("adopt") == 1
+
+
+def test_sole_placeholder_adopts_only_with_flag(store):
+    """Without a name match, the SOLE placeholder adopts new code only when
+    adopt_placeholders=True (Loop B post-implement reflect)."""
+    plan = _feature(store, title="Dark mode", description="Theme toggle.", realized=False)
+    cs = ChangeSet(added=[ChunkRef("ui.py", "ui.py::persist_pref", "h", "def persist_pref(): ...")])
+
+    # Default Loop A: no name match → does NOT adopt, surfaces a proposal.
+    res = apply_changeset(cs, store, propose=_propose([]))
+    assert store.binding_at("ui.py", "ui.py::persist_pref") is None
+    assert res.proposed
+
+    # Reflect as Loop B would: the sole live placeholder adopts the new code even
+    # without a name match.
+    cs2 = ChangeSet(added=[ChunkRef("ui2.py", "ui2.py::persist_pref2", "h", "def persist_pref2(): ...")])
+    res2 = apply_changeset(cs2, store, propose=_raising, adopt_placeholders=True)
+    b = store.binding_at("ui2.py", "ui2.py::persist_pref2")
+    assert b is not None and b.feature_id == plan.id
+
+
+def test_gc_drops_superseded_pending_add(store):
+    """A pending ADD_NODE whose chunk is now bound elsewhere is GC'd so status can
+    converge to in_sync."""
+    owner = _feature(store, title="Owner")
+    _bind(store, owner.id, "a.py", "a.py::foo", fp="h")
+    # A stale pending ADD proposing a home for the already-bound chunk.
+    stale = Event(source="loop_a", applied=False,
+                  op=NodeOp(kind=NodeOpKind.ADD_NODE, title="foo",
+                            bindings=[("a.py", "a.py::foo")]))
+    store.append_event(stale)
+    assert len(store.pending_events()) == 1
+
+    # Any pass (even empty) GCs it.
+    res = apply_changeset(ChangeSet(), store, propose=_raising)
+    assert store.pending_events() == []
+    assert res.auto.get("gc") == 1
+
+
+# ── WS4: rename detection survives in the state-based path ───────────────────
+
+def test_state_path_rename_carries_attribution_via_binding_types_hash(store):
+    """A rename detected entirely from state (daemon was down): the old symbol
+    left the index, but the binding stored its types_hash, so the state-based
+    reconciler still recognises the rename and carries attribution — no LLM, no
+    duplicate node, no dropped binding."""
+    f = _feature(store, title="Auth login")
+    store.upsert_binding(Binding(feature_id=f.id, file="auth.py",
+                                 symbol_path="auth.py::login",
+                                 fingerprint="tok_old", types_hash="shape1"))
+    # Index now holds the RENAMED symbol: new name + new tokens, SAME AST shape.
+    rows = [SimpleNamespace(file="auth.py", symbol_path="auth.py::signin",
+                            tokens_hash="tok_new", types_hash="shape1",
+                            source="def signin(): ...")]
+    cs = _state_changeset(rows, store, None)
+    # The removed side carries the binding's stored types_hash (the enabler).
+    assert cs.removed and cs.removed[0].types_hash == "shape1"
+
+    res = apply_changeset(cs, store, propose=_raising)  # deterministic — LLM must NOT run
+
+    assert not res.llm_called
+    assert store.binding_at("auth.py", "auth.py::login") is None       # old detached
+    b = store.binding_at("auth.py", "auth.py::signin")
+    assert b is not None and b.feature_id == f.id                      # attribution carried
+    assert len(store.list_features()) == 1                             # no duplicate node
+    assert b.types_hash == "shape1"                                    # shape recorded onward
