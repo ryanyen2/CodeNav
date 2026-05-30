@@ -5,13 +5,15 @@ codoc keeps a **feature tree** — a small, navigable map of what your code is
 
 - **code → codoc:** when code changes, codoc detects what changed and makes the
   minimal tree update — attach new code to a node, tweak a description, add a
-  child, reparent, or retire. Safe updates apply automatically; structural ones
-  appear as reviewable proposals.
-- **codoc → code:** when you (or Claude Code) edit the tree, codoc has a coding
-  agent make the matching code change, then re-reads the result to refine the tree
-  if intent was under-specified.
+  child, reparent, retire, or carry attribution across a move/rename. Safe updates
+  apply automatically; structural ones appear as reviewable proposals.
+- **codoc → code:** when you (or Claude Code) edit the tree, codoc builds the
+  matching coding directive and **queues it for your live Claude Code session** —
+  you run `/codoc:realize` to implement it, then codoc re-reads the result to
+  refine the tree if intent was under-specified. codoc never writes code itself
+  and never runs a headless model.
 
-There is **one file** you ever look at — `.codoc/tree.codoc` — and **four commands**.
+There is **one file** you ever look at — `.codoc/tree.codoc`.
 
 ---
 
@@ -30,18 +32,14 @@ cd ~/code/my-project
 codoc init
 ```
 
-`codoc init` does four things:
+`codoc init` does three things:
 
 1. **Indexes the repo** — AST chunks + embeddings via cocoindex/LanceDB.
    Incremental; a killed run resumes from the last completed file.
-2. **Proposes a feature tree** in one LLM pass and writes `.codoc/tree.codoc`.
-3. **Installs Claude Code hooks** into `.claude/settings.json` —
-   `SessionStart`, `Stop`, `PreToolUse`, `PostToolUse` hooks that maintain
-   `.codoc/activity.json` (the live agent-touch log used by the VS Code extension
-   for gutter decorations and file badges).
-4. **Installs the `codoc-intent` skill** into `.claude/skills/codoc-intent/SKILL.md` —
-   a context file Claude Code auto-loads that teaches it the propose-then-implement
-   workflow for this repo.
+2. **Proposes a feature tree** and writes `.codoc/tree.codoc`.
+3. **Installs the codoc Claude Code plugin** — hooks, the MCP server, the
+   `codoc-intent` skill, and the `/codoc:plan` + `/codoc:realize` slash commands
+   (see §3). No server, no port.
 
 Open `tree.codoc` in VS Code. Each indented line is a feature:
 
@@ -61,42 +59,58 @@ it. Indentation is the tree structure.
 
 ## 3. How Claude Code is wired in
 
-codoc integrates with Claude Code through **hooks and a skill file** — not MCP,
-not a VS Code plugin, not an SDK. There is no server process; no port to configure.
+codoc ships as a **Claude Code plugin** — hooks, an MCP server, a skill, and slash
+commands, all installed into the repo by `codoc init`. There is no server process
+and no port to configure; everything is file-based.
 
 **Two roles for Claude:**
 
 | Role | How invoked | What it does |
 |---|---|---|
-| Interactive planning | You open Claude Code and ask a question | Reads `codoc-intent` skill → proposes changes to `tree.codoc` via `codoc propose` CLI; no code is touched yet |
-| Headless implementation | Loop B spawns `claude -p` after you Accept | Implements the code change described by the accepted intent |
+| Planning | You ask Claude Code a question; it loads the `codoc-intent` skill | Proposes changes to `tree.codoc` via the codoc MCP tools (`codoc_plan_add` / `codoc_propose_*`) or the `/codoc:plan` command. No code is touched yet. |
+| Implementation | You run `/codoc:realize` in your session (nudged by a hook) | Reads the directive codoc queued, writes the code, calls `codoc_reflect` to bind it. Runs **in your interactive session, with your permissions** — never a headless `claude -p`. |
+
+**The MCP server** (`codoc`, registered in `.mcp.json` as the `codoc-mcp` console
+script, FastMCP over stdio) is the agent's primary reflection path. Instead of
+relying on Loop A's blind index-diff, Claude calls tools that carry real intent
+straight into the store:
+
+- `codoc_tree` / `codoc_status` — read the current tree + lifecycle state.
+- `codoc_propose_add` / `_amend` / `_move` / `_retire` — author a structural proposal.
+- `codoc_attach` — bind code to an existing feature.
+- `codoc_reflect` — bulk-reconcile after writing code.
+- `codoc_plan_add` — author an unrealized **plan** node (realized only once code binds).
 
 **The hooks** (auto-installed into `.claude/settings.json`):
 
 ```json
 "hooks": {
-  "SessionStart": [{ "command": "python -m codoc.agent.hook session-start" }],
-  "Stop":         [{ "command": "python -m codoc.agent.hook stop" }],
-  "PreToolUse":   [{ "matcher": "Edit|Write|MultiEdit|Read",
-                     "command": "python -m codoc.agent.hook pre-tool" }],
-  "PostToolUse":  [{ "matcher": "Edit|Write|MultiEdit",
-                     "command": "python -m codoc.agent.hook post-tool" }]
+  "SessionStart":     [{ "command": "python -m codoc.agent.hook session-start" }],
+  "Stop":             [{ "command": "python -m codoc.agent.hook stop" }],
+  "PreToolUse":       [{ "matcher": "Edit|Write|MultiEdit|Read",
+                         "command": "python -m codoc.agent.hook pre-tool" }],
+  "PostToolUse":      [{ "matcher": "Edit|Write|MultiEdit",
+                         "command": "python -m codoc.agent.hook post-tool" }],
+  "UserPromptSubmit": [{ "command": "python -m codoc.agent.hook user-prompt" }]
 }
 ```
 
-These hooks write `.codoc/activity.json` as Claude reads and modifies files —
-which files it touched, in which mode (read vs write), and which features those
-files belong to (resolved from the sidecar). The VS Code extension watches this
-file and shows live gutter markers in `tree.codoc` and file badges in Explorer.
-The hooks never block the agent; they're fire-and-forget with a 10 s timeout.
+- `PreToolUse` / `PostToolUse` write `.codoc/activity.json` as Claude reads and
+  modifies files — which files it touched, in which mode (read vs write), and which
+  features those files belong to. The VS Code extension watches this file and shows
+  live gutter markers in `tree.codoc` and file badges in Explorer.
+- `Stop` runs a recovery-grade reflection (Loop A) on what the session changed, so
+  the tree stays current even with no daemon running.
+- `UserPromptSubmit` nudges you to run `/codoc:realize` when Loop B has queued work
+  (`status = awaiting_impl`).
+
+The hooks never block the agent; they're fire-and-forget with a short timeout.
 
 **The skill** (auto-installed into `.claude/skills/codoc-intent/SKILL.md`):
 Claude Code loads this automatically for every session in the repo. It instructs
-Claude to:
-
-1. **Read** `tree.codoc` and `tree.bindings.json` to understand what exists.
-2. **Propose** changes via `codoc propose` CLI before touching any code.
-3. **Wait** — tell the user to Accept in the VS Code IDE, then stop.
+Claude to (1) read `tree.codoc` + the sidecar to understand what exists, (2) propose
+changes via the MCP tools / `/codoc:plan` before touching code, and (3) wait for
+your Accept in the IDE.
 
 ## 4. The propose-then-implement loop
 
@@ -110,18 +124,11 @@ You: Add rate limiting to the auth module — cap requests per user per minute.
 
 ### Step 2 — Claude proposes (no code touched)
 
-Claude Code reads the skill, scans `tree.codoc`, and runs:
-
-```bash
-codoc propose add_node \
-  --title "Rate limiting" \
-  --description "Caps API requests per user per minute using a token-bucket per user_id." \
-  --parent f-3a9c2e \
-  --bind "auth/rate_limit.py::check_rate_limit"
-```
-
-This creates an `applied=False` event in the store and re-renders `tree.codoc`
-with an in-situ proposal block at the target position:
+Claude loads the skill, reads `tree.codoc`, and authors a plan proposal via the MCP
+server (equivalently, the `/codoc:plan` command), e.g. `codoc_plan_add` with the
+title, description, target parent, and intended binding. This creates an
+`applied=False` event and re-renders `tree.codoc` with an in-situ proposal block at
+the target position:
 
 ```
 - Authentication flow  ⟨f-3a9c2e⟩
@@ -134,36 +141,52 @@ with an in-situ proposal block at the target position:
 ```
 
 Claude then tells you: *"I've proposed Rate limiting as a codoc plan. Accept it in
-VS Code to trigger implementation."*
+VS Code to queue implementation."*
 
 ### Step 3 — You review and Accept
 
-In VS Code, the green `+` block appears at the exact tree position. You can
-refine the description before accepting — just edit the proposal text (it's in
-the file). When ready, click **Accept** in the CodeLens.
+In VS Code, the green `+` block appears at the exact tree position. You can refine
+the description before accepting — just edit the proposal text. When ready, click
+**Accept** in the CodeLens.
 
-### Step 4 — Loop B implements
+### Step 4 — Loop B queues the work
 
-Accepting writes a verdict to `.codoc/inbox.json`. Loop B (`codoc watch`) picks
-it up and:
+Accepting writes a verdict to `.codoc/inbox.json`. Loop B (`codoc watch`, or the
+next `codoc sync`) picks it up and:
 
-1. Applies the op to the store (marks the event as accepted).
-2. Builds a coding directive from the accepted description + any bound symbols.
-3. Writes `status.json = realizing`, then spawns `claude -p --dangerously-skip-permissions` once with the directive.
-4. `claude -p` creates/modifies the code files.
+1. Applies the op to the store (marks the event accepted).
+2. Builds a coding directive from the accepted description + any bound symbols,
+   scoped to the files the feature owns (`Edit only: …`).
+3. Writes the directive to `.codoc/realize.md` and sets `status.json = awaiting_impl`.
 
-### Step 5 — Loop A re-reflects
+Only edits that *request* code reach this step. A purely descriptive edit
+("Holds brand colors and their dark-mode variants") just records intent and queues
+nothing — documenting existing code never writes code.
 
-After the coding agent exits, Loop A runs scoped to the files it wrote:
+### Step 5 — You run `/codoc:realize`
 
-- If the code matches the intent cleanly → bindings are updated, status goes
-  back to `in_sync`.
-- If the implementation revealed something the description didn't capture fully
-  → Loop A may surface additional proposals (e.g., a helper function that warrants
-  its own node). These appear in `tree.codoc` as new in-situ hunks for your
-  review.
+The `UserPromptSubmit` hook nudges you that work is queued. In your session:
 
-This closes the loop: intent → plan → accept → code → reflect → refined tree.
+```
+/codoc:realize
+```
+
+This reads `.codoc/realize.md`, implements each directive **in your interactive
+session** (with your normal permissions), calls `codoc_reflect` to bind the new
+code to the accepted feature, and deletes the file.
+
+### Step 6 — Loop A re-reflects
+
+The `Stop`-hook reflection (or `codoc watch`'s Loop A) runs scoped to the files you
+wrote:
+
+- If the code matches the intent cleanly → bindings are updated, status returns to
+  `in_sync`.
+- If the implementation revealed something the description didn't capture (e.g. a
+  helper that warrants its own node) → Loop A surfaces additional proposals as new
+  in-situ hunks for your review.
+
+This closes the loop: intent → plan → accept → queue → implement → reflect → refined tree.
 
 ## 5. Watch
 
@@ -173,12 +196,14 @@ codoc watch
 
 One daemon runs both loops. Leave it running while you work. It reacts to both:
 - **Code file changes** → Loop A re-checks affected bindings, surfaces proposals.
-- **`tree.codoc` changes** (your edits, Claude's proposals, your Accepts) →
-  Loop B applies ops and, if needed, invokes the coding agent.
+- **`tree.codoc` changes** and **`inbox.json` verdicts** → Loop B applies ops and,
+  for code-implying edits, queues a directive in `.codoc/realize.md` for you to
+  implement with `/codoc:realize`.
 
 ## 6. Reviewing proposals
 
-Proposals render in-situ at their target tree position:
+Add/move proposals render in-situ at their target tree position; retire/amend
+decorate the live node in place (strike / inline diff):
 
 ```
 - Authentication flow  ⟨f-3a9c2e⟩
@@ -193,12 +218,13 @@ Proposals render in-situ at their target tree position:
 | Op | Color | Meaning |
 |---|---|---|
 | `+` | green | add a new node here |
-| `-` | red | retire this node |
 | `~` | blue | move or amend this node |
+| strike | red | retire this node |
 
 Use the **Accept** / **Reject** CodeLens buttons above each block, or **Accept
 all** / **Reject all** from the header. Verdicts go to `.codoc/inbox.json`; the
-daemon applies them.
+loop applies them. (From the shell you can also `codoc accept <e-id>` /
+`codoc reject <e-id>`.)
 
 ## 7. Editing the tree yourself
 
@@ -210,30 +236,35 @@ You don't have to go through Claude. Edit `tree.codoc` directly:
 - **Retire a node** — change `-` to `~`.
 - **Adjust a description** — edit the prose below any title.
 
-Save. `codoc watch` detects the change and runs Loop B. If the description
-change implies code work (the node has bound symbols), Loop B builds a directive
-and invokes the coding agent.
+Save. `codoc watch` detects the change and runs Loop B. If the edit *requests* code
+(an imperative description on a node with bound symbols — "should validate…",
+"Add…"), Loop B queues a directive in `.codoc/realize.md` for you to implement with
+`/codoc:realize`. A descriptive edit just updates the prose.
 
-## 8. The four commands
+## 8. The commands
 
 | Command | What it does |
 |---|---|
-| `codoc init` | Index repo, propose tree, install CC hooks + skill. |
+| `codoc init` | Index repo, propose tree, install the CC plugin (hooks + MCP + skill + commands). |
 | `codoc watch` | The daemon — runs both loops as you edit. |
-| `codoc status` | Feature count, pending proposals, recent activity. |
-| `codoc sync` | One-shot (no daemon): apply tree edits, then reflect code. |
+| `codoc status` | Feature count, pending proposals, code↔binding coverage. |
+| `codoc sync` | One-shot (no daemon): apply tree edits (Loop B), then reflect code (Loop A). |
+| `codoc accept <e-id>` / `codoc reject <e-id>` | Shell verdict path — mirrors the IDE Accept/Reject. |
 
-`codoc watch --dry` reflects and builds directives but doesn't spawn the coding
-agent; `codoc watch --no-realize` syncs the tree but skips the agent entirely.
+`codoc watch --dry` reflects and builds directives but doesn't queue them;
+`codoc watch --no-realize` syncs the tree but never queues directives. (`codoc
+reflect` and `codoc propose` exist for scripts/tests — the everyday path is the
+agent reflecting via MCP and you Accepting in the IDE.)
 
 ## 9. Where things live
 
 ```
 .codoc/
   tree.codoc          # the one human surface (commit with your code)
-  tree.bindings.json  # IDE sidecar: feature↔symbol index + dependency edges
-  status.json         # loop lifecycle: in_sync / code_drift / tree_dirty / realizing
-  inbox.json          # verdict channel: Accept/Reject writes here, daemon reads it
+  tree.bindings.json  # IDE sidecar: feature↔symbol index + dependency edges + proposals (v3)
+  status.json         # loop lifecycle: in_sync / code_drift / tree_dirty / awaiting_impl / realizing
+  inbox.json          # verdict channel: Accept/Reject writes here, the loop drains it
+  realize.md          # realization queue: directives the live session implements via /codoc:realize
   activity.json       # agent touch log: hooks write here, VS Code extension reads it
   codoc.db            # features + bindings + event log (SQLite)
   lancedb/            # incremental code-chunk index (cocoindex)
@@ -243,11 +274,17 @@ agent; `codoc watch --no-realize` syncs the tree but skips the agent entirely.
   skills/
     codoc-intent/
       SKILL.md        # the propose-then-implement workflow for this repo
+  commands/
+    codoc/
+      plan.md         # /codoc:plan  — propose plan nodes before coding
+      realize.md      # /codoc:realize — implement the queued directives
+
+.mcp.json             # registers the codoc MCP server (codoc-mcp, stdio)
 ```
 
 Commit `.codoc/tree.codoc` (and optionally `codoc.db`) alongside your code so
-the intent map is versioned with it. The `.claude/` directory is already
-committed in most Claude Code repos.
+the intent map is versioned with it. The `.claude/` directory and `.mcp.json` are
+normally committed too, so the integration travels with the repo.
 
 ## 10. Re-installing after a fresh clone
 
@@ -255,7 +292,8 @@ committed in most Claude Code repos.
 codoc init
 ```
 
-`codoc init` is idempotent — it re-indexes only changed files and deep-merges
-the hook block into `.claude/settings.json` without clobbering existing hooks.
-Run it after cloning a repo that has a `.codoc/` directory to wire up the CC
-integration for the new machine.
+`codoc init` is idempotent — it re-indexes only changed files and deep-merges the
+plugin (hooks into `.claude/settings.json`, the MCP entry into `.mcp.json`, the
+skill + commands into `.claude/`) without clobbering existing entries. Run it after
+cloning a repo that has a `.codoc/` directory to wire up the integration on the new
+machine.

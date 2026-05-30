@@ -9,7 +9,10 @@ reads `.codoc/tree.codoc` and the sidecar `.codoc/tree.bindings.json` from disk 
 - A codoc-initialized repo: run `codoc init` in your project root (Python package required)
 - The extension activates automatically when VS Code finds a `.codoc/` directory in the workspace
 
-`codoc init` also installs the **Claude Code hooks and skill** into `.claude/` so that Claude Code sessions in this repo follow the propose-then-implement workflow (see §Claude Code below).
+`codoc init` also installs the **codoc Claude Code plugin** into `.claude/` and
+`.mcp.json` — hooks, the MCP server, the `codoc-intent` skill, and the
+`/codoc:plan` + `/codoc:realize` commands — so Claude Code sessions in this repo
+follow the propose-then-implement workflow (see §Claude Code below).
 
 ## How to run the extension (development)
 
@@ -33,19 +36,25 @@ plus `.codoc/tree.bindings.json`.
 
 ### 2. Open the feature tree
 
-`Cmd+K Cmd+C` — opens `tree.codoc` in the editor, or use the command palette:
-**codoc: Open**.
+`Cmd+K Cmd+C` — opens `tree.codoc`, or use the command palette: **codoc: Open**.
+
+There are **two viewers**, both for the same file:
+
+- The **Codoc Tree** webview (the default editor for `tree.codoc`) — an outline +
+  detail pane that renders **every** proposal type inline (see §7).
+- The **raw-text `tree.codoc` editor** — the file itself, with decorations,
+  CodeLens, ghost hunks, and the lightbulb. Switch to it with *Open With → Text
+  Editor*.
+
+There is no Explorer "codoc Features" sidebar — the webview *is* the tree browser.
 
 ### 3. Browse features
 
-The **codoc Features** panel in the Explorer sidebar shows the full feature
-hierarchy. Click any feature to jump to its exact line in `tree.codoc`. The panel
-shows the binding count (e.g. `3 refs`) as each item's description, and uses
-state-aware icons:
-
-- `$(symbol-module)` — live feature
-- `$(circle-slash)` — retired feature
-- `$(bell)` — feature with a pending proposal
+In either viewer, indentation is the hierarchy. Jump to any feature with
+**codoc: Navigate to feature** (by title or id), or click a CodeLens label in a
+source file to land on the feature that owns that symbol. Inlay-hint chips at the
+end of each title line show the derived bindings (from the sidecar `by_feature`
+index) — no HTTP calls.
 
 ### 4. Dependency focus
 
@@ -63,9 +72,6 @@ CodeLens labels on every `def`/`class`/`function` in Python and TypeScript files
 show which feature owns each symbol. Click the label to navigate to that feature
 in `tree.codoc`.
 
-Inlay-hint chips at the end of each feature title line show the derived bindings
-(from the sidecar `by_feature` index) without any HTTP calls.
-
 ### 6. Edit `tree.codoc` directly
 
 ```
@@ -79,7 +85,8 @@ Inlay-hint chips at the end of each feature title line show the derived bindings
     Lets a user reset a forgotten password via emailed token.
 ```
 
-- Add, rename, or reorganize features (indentation = hierarchy)
+- Add, rename, or reorganize features (indentation = hierarchy; the webview also
+  supports drag-and-drop reparenting)
 - Cite code with markdown links: `[label](codoc:file.py#symbol)` — clickable,
   opens the code **beside** the tree editor, focus stays in the tree
 - Retire a node: change `-` → `~` (appears struck-through)
@@ -89,8 +96,17 @@ Save. `codoc watch` picks up the change and runs Loop B.
 
 ### 7. Reviewing proposals
 
-When codoc proposes a structural change it renders a **diff block in-situ** at
-the target position:
+Proposals are a **single inline surface** — no separate panel. Both viewers show
+them in place, at the tree position where the change would land:
+
+- **Codoc Tree webview** — ADD/MOVE render as ghost rows in the tree pane, RETIRE
+  as a strike on the live row, and AMEND as a word-level inline diff *inside the
+  description*. Each row has inline `✓` / `✗`, plus toolbar **Accept all** /
+  **Reject all**.
+- **Raw-text editor** — ADD/MOVE render as `+` / `~` ghost hunks at column 0;
+  RETIRE/AMEND decorate the live node (strike / inline diff). Accept/Reject via the
+  CodeLens above each hunk, the lightbulb, or **Accept Change at Cursor** /
+  **Reject Change at Cursor**.
 
 ```
 - Authentication flow  ⟨f-3a9c2e⟩
@@ -102,24 +118,22 @@ the target position:
   - Token rotation  ⟨f-7b1d04⟩
 ```
 
-| Op | Color | Meaning |
-|---|---|---|
-| `+` | green | add a new node here |
-| `-` | red | retire this node |
-| `~` | blue | move or amend this node |
+| Marker | Meaning |
+|---|---|
+| `+` (green) | add a new node here |
+| `~` (blue) | move or amend this node |
+| strike (red) | retire this node (decorated in place, not a separate line) |
 
-Each block is blank-line terminated. Use the **Accept** / **Reject** CodeLens
-buttons that appear above each block. For bulk decisions, use the **Accept all**
-/ **Reject all** buttons in the row-0 header CodeLens. Verdicts are written to
-`.codoc/inbox.json`; the daemon applies them and removes the blocks.
+Verdicts are written to `.codoc/inbox.json`; the loop applies them and removes the
+blocks.
 
 ### 8. Agent activity
 
-While `codoc watch` is running and the coding agent is active:
+While a Claude Code session is active in the repo (driven by the codoc hooks):
 
-- **Gutter markers** appear on `tree.codoc` feature lines the agent is touching.
-- **Explorer file badges** (`●`) appear on source files the agent has written.
-- Both clear when the agent epoch closes.
+- **Gutter markers** appear on `tree.codoc` feature lines the session is touching.
+- **Explorer file badges** (`●`) appear on source files the session has written.
+- Both clear when the activity epoch closes.
 
 Toggle gutter markers with `codoc.agentGutter` (default: on).
 
@@ -136,13 +150,15 @@ codoc sync    # one-shot: apply tree edits, reflect code once, exit
 
 | Command | Description |
 |---|---|
-| `codoc: Open` | Open `tree.codoc` in the editor |
+| `codoc: Open` | Open `tree.codoc` |
 | `codoc: Sync` | Run `codoc sync` in a new terminal |
-| `codoc: Navigate to feature` | Jump to a feature line by title or ID |
-| `codoc: Collapse all (table of contents)` | Fold all features to title-only view |
-| `codoc: Expand all features` | Unfold everything |
-| `codoc: Collapse feature subtree` | Fold the subtree under the cursor |
-| `codoc: Expand feature subtree` | Unfold the subtree under the cursor |
+| `codoc: Navigate to feature` | Jump to a feature line by title or id |
+| `codoc: Accept / Reject proposed change` | Verdict on one proposal |
+| `codoc: Accept / Reject all proposed changes` | Bulk verdict |
+| `codoc: Accept / Reject Change at Cursor` | Verdict on the hunk under the cursor (raw editor) |
+| `codoc: Open code reference` / `Open First Code Binding` / `Pick code binding to open` | Jump to bound code |
+| `codoc: Collapse all (table of contents)` / `Expand all features` | Fold / unfold the whole tree |
+| `codoc: Collapse / Expand feature subtree` | Fold / unfold under the cursor |
 
 ---
 
@@ -165,15 +181,17 @@ normal arrow-key text editing intact.
 
 ## Status bar
 
-The `codoc` status bar item (bottom-left) reflects the current loop state:
+The `codoc` status bar item (bottom-left) reflects the current loop state
+(`status.json`):
 
-| Status | Meaning |
-|---|---|
-| `$(sync) codoc: not initialized` | No `.codoc/` directory — run `codoc init` |
-| `$(loading~spin) codoc: implementing…` | Loop B is running the coding agent |
-| `$(pencil) codoc: applying tree edits…` | Loop B is processing tree changes |
-| `$(bell) codoc: N proposed changes` | N pending proposals in the tree |
-| `$(check) codoc: in sync` | All clean |
+| Status | State | Meaning |
+|---|---|---|
+| `$(sync) codoc: not initialized` | — | No `.codoc/` directory — run `codoc init` |
+| `$(loading~spin) codoc: implementing…` | `realizing` | Your session is implementing tree edits |
+| `$(pencil) codoc: applying tree edits…` | `tree_dirty` | Loop B is processing tree changes |
+| `$(play) codoc: N to implement` | `awaiting_impl` | N directives queued in `realize.md` — run `/codoc:realize` |
+| `$(bell) codoc: N proposals` | `code_drift` | N pending proposals to review |
+| `$(check) codoc: N` | `in_sync` | All clean (N live features) |
 
 Click the status bar item to open `tree.codoc`.
 
@@ -185,7 +203,7 @@ Click the status bar item to open `tree.codoc`.
 |---|---|---|
 | `codoc.rootDir` | `` | Root of the codoc-initialized repo. Auto-detected from workspace if empty. |
 | `codoc.focusDependencies` | `true` | Dim unrelated features when the cursor is on a node with dependency edges. |
-| `codoc.agentGutter` | `true` | Show gutter markers on features the agent is actively editing. |
+| `codoc.agentGutter` | `true` | Show gutter markers on features the session is actively editing. |
 
 ---
 
@@ -200,7 +218,7 @@ Click the status bar item to open `tree.codoc`.
       Manages connection pooling and default headers/auth across requests.
 
   ~ Legacy urllib2 adapter  ⟨f-0d1e2f3a⟩
-      Removed in v2.0; see migration guide.
+      Deprecated in favour of the Session adapter.
 
 + - Cookie jar helpers  ⟨e-0190ffaa⟩
 +     Utilities for reading and writing HTTP cookies.
@@ -209,11 +227,13 @@ Click the status bar item to open `tree.codoc`.
 **Markers:**
 - `-` — live feature
 - `~` — retired feature (struck-through in the IDE)
-- `+`/`-`/`~` at column 0 — in-situ proposal block (green/red/blue tint)
+- `+` / `~` at column 0 — in-situ ADD / MOVE proposal hunk (green / blue tint).
+  RETIRE and AMEND proposals are not separate lines — they decorate the live node
+  (strike / inline description diff).
 
 **IDs:**
 - `⟨f-…⟩` — stable feature id (hidden by the IDE, never type or edit)
-- `⟨e-…⟩` — event id on a proposal block (identifies the pending change)
+- `⟨e-…⟩` — event id on a proposal hunk (identifies the pending change)
 
 **Refs:** `[label](codoc:file.py#symbol)` — clickable; opens code Beside the
 tree with focus preserved in the tree editor.
@@ -230,35 +250,39 @@ makes network requests:
 | `.codoc/tree.codoc` | Human-readable feature tree; parsed on every change |
 | `.codoc/tree.bindings.json` | Machine-readable sidecar (see schema below) |
 | `.codoc/status.json` | Loop lifecycle state — drives status bar + CodeLens header |
-| `.codoc/inbox.json` | Verdict channel — Accept/Reject writes here, daemon drains it |
+| `.codoc/inbox.json` | Verdict channel — Accept/Reject writes here, the loop drains it |
+| `.codoc/activity.json` | Agent touch log — drives gutter markers + file badges |
 
-**Sidecar schema (v2):**
+**Sidecar schema (v3):**
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "by_feature": { "f-id": [{"file": "path.py", "symbol": "path.py::Class.method"}] },
   "by_file":    { "path.py": [{"symbol": "...", "feature_id": "f-id", "feature_title": "Title"}] },
-  "features":   { "f-id": {"title": "Title", "parent_id": null} },
-  "feature_edges": { "f-id": [{"to": "f-other", "weight": 4, "kinds": ["call"]}] }
+  "features":   { "f-id": {"title": "Title", "parent_id": null, "realized": true} },
+  "feature_edges": { "f-id": [{"to": "f-other", "weight": 4, "kinds": ["call"]}] },
+  "proposals":  { "by_feature": {"f-id": {"op": "amend", "event_id": "e-id"}},
+                  "by_event": {"e-id": {"op": "add_node", "title": "…"}} }
 }
 ```
 
-`feature_edges` is new in v2 — aggregated call/import coupling between features,
-used to determine which nodes to keep opaque during dependency dimming. The
-extension tolerates its absence (v1 sidecars have no dependency dimming).
+- `feature_edges` — aggregated call/import coupling between features; drives the
+  dependency dimming (tolerated absent on older sidecars).
+- `features[].realized` — `false` marks an accepted-but-unimplemented plan node;
+  the extension decorates it as a placeholder.
+- `proposals` — drives the in-place retire/amend overlays + Accept/Reject on the
+  live node (`by_feature`) and the ADD/MOVE ghost hunks (`by_event`).
 
-File watchers on all four paths trigger an automatic reload whenever codoc writes
-new output.
-
----
+File watchers on all paths trigger an automatic reload whenever codoc writes new
+output.
 
 ---
 
 ## Claude Code integration
 
-codoc integrates with Claude Code through **hooks and a skill file** — not MCP,
-not a plugin. `codoc init` installs both automatically.
+codoc ships as a **Claude Code plugin** — hooks, an MCP server, a skill, and slash
+commands — all installed by `codoc init`. (No MCP-free / `claude -p` path anymore.)
 
 ### How it works
 
@@ -266,44 +290,44 @@ not a plugin. `codoc init` installs both automatically.
 
 ```json
 "hooks": {
-  "SessionStart": [{ "command": "python -m codoc.agent.hook session-start" }],
-  "Stop":         [{ "command": "python -m codoc.agent.hook stop" }],
-  "PreToolUse":   [{ "matcher": "Edit|Write|MultiEdit|Read",
-                     "command": "python -m codoc.agent.hook pre-tool" }],
-  "PostToolUse":  [{ "matcher": "Edit|Write|MultiEdit",
-                     "command": "python -m codoc.agent.hook post-tool" }]
+  "SessionStart":     [{ "command": "python -m codoc.agent.hook session-start" }],
+  "Stop":             [{ "command": "python -m codoc.agent.hook stop" }],
+  "PreToolUse":       [{ "matcher": "Edit|Write|MultiEdit|Read",
+                         "command": "python -m codoc.agent.hook pre-tool" }],
+  "PostToolUse":      [{ "matcher": "Edit|Write|MultiEdit",
+                         "command": "python -m codoc.agent.hook post-tool" }],
+  "UserPromptSubmit": [{ "command": "python -m codoc.agent.hook user-prompt" }]
 }
 ```
 
-These write `.codoc/activity.json` as Claude reads and modifies files — which
-files it touched, which features they belong to (resolved from the sidecar). The
-extension watches this file to drive:
-- **Gutter markers** on feature lines Claude is currently editing in `tree.codoc`
-- **Explorer file badges** on source files Claude has written
+`PreToolUse` / `PostToolUse` write `.codoc/activity.json` as Claude reads and
+modifies files (driving the gutter markers + file badges); `Stop` reflects the
+session's changes back into the tree; `UserPromptSubmit` nudges `/codoc:realize`
+when work is queued.
 
-**Skill** (written to `.claude/skills/codoc-intent/SKILL.md`):
+**MCP server** (`codoc`, registered in `.mcp.json`): the agent's reflection API —
+`codoc_tree`, `codoc_status`, `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`,
+`codoc_attach`, `codoc_plan_add`.
 
-Claude Code auto-loads this file for every session in the repo. It instructs
-Claude to:
-1. Read `tree.codoc` to understand existing features.
-2. **Propose** changes via `codoc propose` CLI — no code files are touched.
-3. Wait and tell you to Accept in the VS Code IDE.
+**Skill + commands** (`.claude/skills/codoc-intent/`, `.claude/commands/codoc/`):
+the skill teaches Claude the MCP-first propose-then-implement workflow; `/codoc:plan`
+proposes plan nodes before coding, `/codoc:realize` implements the queued directives.
 
 ### The loop
 
 ```
 You: "add rate limiting to the auth module"
-  → Claude proposes via codoc propose add_node …
-  → green + block appears in tree.codoc (no code touched)
-  → you Accept in VS Code (CodeLens button)
-  → Loop B builds directive + spawns claude -p (headless, for implementation)
-  → Loop A re-reflects on written files → may surface follow-up proposals
+  → Claude proposes via /codoc:plan (codoc_plan_add) — green + block in tree.codoc, no code touched
+  → you Accept in VS Code (CodeLens / inline ✓)
+  → Loop B queues a directive in .codoc/realize.md (status: awaiting_impl)
+  → you run /codoc:realize in your session → it writes the code + binds it
+  → Loop A re-reflects on the written files → may surface follow-up proposals
 ```
 
 ### Re-run after a fresh clone
 
 ```bash
-codoc init   # idempotent: merges hooks, re-installs skill, re-indexes only changed files
+codoc init   # idempotent: merges hooks + MCP + skill + commands, re-indexes only changed files
 ```
 
 ---
