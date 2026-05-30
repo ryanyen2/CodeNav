@@ -10,7 +10,6 @@ import { CodocDocumentLinkProvider } from './providers/doc-links';
 import { CodocInlayHintsProvider } from './providers/inlay';
 import { CodocFoldingProvider } from './providers/folding';
 import { CodocSymbolProvider } from './providers/symbol';
-import { FeatureTreeProvider } from './providers/feature-tree-view';
 import { applyDecorations, createDecorations } from './providers/decoration';
 import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
 import { bindingsForFeature } from './state/bindings-model';
@@ -22,30 +21,6 @@ import { CodocTreeEditorProvider } from './providers/tree-editor';
 export function activate(context: vscode.ExtensionContext): void {
     const state = new WorkspaceState(context);
     const codocSelector: vscode.DocumentSelector = { language: 'codoc' };
-
-    // ── Feature tree panel ───────────────────────────────────────────────────
-    const featureTreeProvider = new FeatureTreeProvider(state);
-    const treeView = vscode.window.createTreeView('codoc.featureTree', { treeDataProvider: featureTreeProvider, showCollapseAll: true });
-    context.subscriptions.push(
-        treeView,
-        vscode.commands.registerCommand('codoc.refreshFeatureTree', () => featureTreeProvider.refresh()),
-        // Sync sidebar selection to the cursor in tree.codoc.
-        vscode.window.onDidChangeTextEditorSelection(e => {
-            if (e.textEditor.document.languageId !== 'codoc') return;
-            const line = e.selections[0]?.active.line;
-            if (line === undefined) return;
-            const features = state.features;
-            // Find the feature at/above cursor.
-            let best: typeof features[0] | undefined;
-            for (const f of features) {
-                if (f.line <= line && (!best || f.line > best.line)) best = f;
-            }
-            if (best) {
-                const item = featureTreeProvider.itemForId(best.id ?? '');
-                if (item) treeView.reveal(item, { select: true, focus: false }).then(undefined, () => {});
-            }
-        }),
-    );
 
     // ── codoc.open ───────────────────────────────────────────────────────────
     context.subscriptions.push(
@@ -375,7 +350,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
     state.onDidChange(() => {
         refreshDecorations();
-        featureTreeProvider.refresh();
         focusController.refresh();
         agentGutter.update();
         fileDecProvider.update();

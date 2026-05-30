@@ -7,6 +7,8 @@
  * Status bar reflects .codoc/status.json's lifecycle state:
  *   $(loading~spin) implementing…   – realizing  (agent writing code)
  *   $(pencil) applying tree edits…  – tree_dirty (codoc edited, code pending)
+ *   $(play) N to implement          – awaiting_impl (accepted edits queued in
+ *                                      .codoc/realize.md for the live session)
  *   $(bell) N proposals             – code_drift (code changed, review pending)
  *   $(check) N                      – in_sync
  *   $(sync) not initialized         – no .codoc dir
@@ -22,7 +24,7 @@ import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines }
 export { ParsedFeature, SidecarData };
 
 export interface CodocStatus {
-    state: 'in_sync' | 'code_drift' | 'tree_dirty' | 'realizing';
+    state: 'in_sync' | 'code_drift' | 'tree_dirty' | 'awaiting_impl' | 'realizing';
     pending: number;
     detail: string;
 }
@@ -146,6 +148,11 @@ export class WorkspaceState {
         } else if (state === 'tree_dirty') {
             bar.text = '$(pencil) codoc: applying tree edits…';
             bar.tooltip = this._status.detail || 'tree.codoc was edited — realizing the code change';
+        } else if (state === 'awaiting_impl') {
+            bar.text = `$(play) codoc: ${pending} to implement`;
+            bar.tooltip = this._status.detail
+                || 'Accepted tree edits are queued in .codoc/realize.md — run /codoc:realize in your Claude Code session';
+            bar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         } else if (state === 'code_drift' || pending > 0) {
             bar.text = `$(bell) codoc: ${pending} proposal${pending === 1 ? '' : 's'}`;
             bar.tooltip = 'Code changed — review proposed tree updates (Accept / Reject in the editor)';

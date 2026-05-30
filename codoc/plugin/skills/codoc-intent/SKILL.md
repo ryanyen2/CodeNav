@@ -5,6 +5,8 @@ description: |
   - you just changed code and should reflect that into the feature tree
   - the user asks to add, change, or remove a feature
   - proposing a plan for a code change before implementing (see /codoc:plan)
+  - accepted tree edits are queued for you to implement (see /codoc:realize and
+    .codoc/realize.md)
   - understanding what features exist and which code they own
   - the user mentions "codoc", "feature tree", or "propose"
 ---
@@ -64,6 +66,24 @@ When asked to plan before implementing (or via the `/codoc:plan` command):
    the plan nodes (binding flips them from placeholder to realized) and to surface
    any work you did that wasn't in the plan as new proposals.
 5. Call `codoc_plan_status` to confirm every plan node is realized.
+
+## The realize loop (`/codoc:realize` — tree edit → code)
+
+When the user **accepts a code-implying tree edit** in the IDE (an imperative
+amend like "should validate…", an accepted plan node, or a retire of a feature
+that owns code), codoc does **not** spawn a separate agent — it queues the work
+for *you* by writing `.codoc/realize.md` and setting status `awaiting_impl`. On
+your next prompt you'll see a reminder that changes are queued.
+
+To implement them (or when the user runs `/codoc:realize`):
+1. Read `.codoc/realize.md` — a numbered list of `NEW FEATURE` / `UPDATE FEATURE`
+   / `RETIRE FEATURE` directives, each with its intent and an `Edit only:` scope.
+2. Apply the **minimum** code change per directive. Edit **only** the files in its
+   `Edit only:` line; **never** touch anything under `.codoc/`.
+3. `codoc_reflect` to bind the code you wrote/changed to the features (flips
+   accepted plan placeholders to realized).
+4. Delete `.codoc/realize.md`, then `codoc_status` to confirm the pipeline
+   returned to `in_sync` / `code_drift`.
 
 ## The tree format (for reading)
 

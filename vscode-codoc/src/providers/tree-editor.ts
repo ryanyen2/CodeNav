@@ -34,6 +34,10 @@ interface UINode {
         title?: string | null;
         description?: string | null;
     };
+    // Ghost rows for ADD/MOVE proposals (rendered inline in the tree, not real
+    // features). `proposalOp` is set; `id` is the event id; not editable.
+    isProposal?: boolean;
+    proposalOp?: 'add' | 'move';
     line: number;
     depth: number;
     children: string[];
@@ -44,6 +48,9 @@ interface TreePayload {
     roots: string[];
     status: { state: string; pending: number };
     rootName: string;
+    // Every pending proposal event id (ADD/MOVE ghosts + RETIRE/AMEND overlays),
+    // for the toolbar Accept-all / Reject-all.
+    pendingEventIds: string[];
 }
 
 export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider {
@@ -99,9 +106,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await vscode.commands.executeCommand('codoc.openRef', msg.file, sym);
                     return;
                 }
-                case 'verdict':
-                    this.state.writeVerdict([msg.eventId], !!msg.accept);
+                case 'verdict': {
+                    const ids: string[] = Array.isArray(msg.eventIds)
+                        ? msg.eventIds
+                        : (msg.eventId ? [msg.eventId] : []);
+                    if (ids.length) this.state.writeVerdict(ids, !!msg.accept);
                     return;
+                }
             }
         });
     }
@@ -152,9 +163,46 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 roots.push(f.id);
             }
         }
+        // ── Inject ADD/MOVE proposals as inline ghost rows at their destination
+        //    parent (RETIRE/AMEND already decorate their live node via `proposal`). ─
+        const byEvent = sidecar.proposals?.by_event ?? {};
+        for (const [eventId, p] of Object.entries(byEvent)) {
+            const parentId = p.parent_id ?? null;
+            const depth = parentId && depthOf[parentId] !== undefined ? depthOf[parentId] + 1 : 0;
+            depthOf[eventId] = depth;
+            const movedTitle = p.op === 'move' && p.feature_id ? (nodes[p.feature_id]?.title ?? p.title ?? '') : '';
+            nodes[eventId] = {
+                id: eventId,
+                title: p.op === 'move' ? (movedTitle || p.title || '(moved)') : (p.title || '(new feature)'),
+                description: p.description ?? '',
+                parent_id: parentId,
+                retired: false,
+                realized: true,
+                refCount: 0,
+                bindings: [],
+                proposal: { op: p.op, eventId, tag: p.tag, title: p.title ?? null, description: p.description ?? null },
+                isProposal: true,
+                proposalOp: p.op,
+                line: -1,
+                depth,
+                children: [],
+            };
+            if (parentId && nodes[parentId]) {
+                (childrenOf[parentId] ??= []).push(eventId);
+            } else {
+                roots.push(eventId);
+            }
+        }
+
         for (const [pid, kids] of Object.entries(childrenOf)) {
             if (nodes[pid]) nodes[pid].children = kids;
         }
+
+        // All pending proposal event ids → toolbar Accept-all / Reject-all.
+        const pendingEventIds = [
+            ...Object.values(sidecar.proposals?.by_feature ?? {}).map(p => p.event_id),
+            ...Object.keys(byEvent),
+        ];
 
         const rootName = (this.state.rootDir ?? '').split('/').filter(Boolean).pop() ?? 'workspace';
 
@@ -163,6 +211,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             roots,
             status: { state: status.state, pending: status.pending },
             rootName,
+            pendingEventIds,
         };
     }
 
@@ -673,17 +722,13 @@ body.dragging * { cursor: grabbing !important; }
     margin: 0 2px;
 }
 
-/* AMEND description preview */
-.detail .desc-proposed {
-    max-width: 70ch;
-    margin-top: 10px;
-    font: 13.5px/1.7 var(--vscode-font-family);
-    color: var(--vscode-foreground);
-    padding: 12px 16px;
-    border-left: 2px solid var(--accent-amend);
-    background: color-mix(in srgb, var(--accent-amend) 6%, transparent);
-    border-radius: 0 4px 4px 0;
-    white-space: pre-wrap;
+/* Inline description diff (amend): old struck, new added — shown in-place. */
+.detail .desc.desc-diff .d-same { }
+.detail .desc.desc-diff .d-del  { text-decoration: line-through; color: var(--accent-retire); opacity: 0.7; }
+.detail .desc.desc-diff .d-ins  {
+    color: var(--accent-add);
+    background: color-mix(in srgb, var(--accent-add) 14%, transparent);
+    border-radius: 2px;
 }
 
 .detail h3.section {
@@ -718,40 +763,77 @@ body.dragging * { cursor: grabbing !important; }
     white-space: nowrap;
 }
 
-.proposal-panel {
-    margin-top: 36px;
-    padding: 14px 18px;
-    border-left: 2px solid var(--accent-amend);
-    background: color-mix(in srgb, var(--accent-amend) 5%, transparent);
-    border-radius: 0 4px 4px 0;
+/* ── Inline proposal rendering ─────────────────────────────────────────────
+   ADD/MOVE ghosts render as rows in the tree; RETIRE/AMEND decorate the live
+   row. Accept/Reject is inline (✓/✗) on the row — no separate panel. */
+
+/* Ghost rows for pending ADD/MOVE at their destination parent. */
+.row.proposal      { background: color-mix(in srgb, var(--accent-add) 7%, transparent); }
+.row.proposal:hover{ background: color-mix(in srgb, var(--accent-add) 12%, transparent); }
+.row.proposal.move      { background: color-mix(in srgb, var(--accent-blue) 7%, transparent); }
+.row.proposal.move:hover{ background: color-mix(in srgb, var(--accent-blue) 12%, transparent); }
+.row.proposal .pglyph {
+    width: 14px;
+    text-align: center;
+    flex-shrink: 0;
+    font: 12px var(--vscode-editor-font-family);
 }
-.proposal-panel.retire {
-    border-left-color: var(--accent-retire);
-    background: color-mix(in srgb, var(--accent-retire) 5%, transparent);
-}
-.proposal-panel .head {
-    font: 500 10.5px var(--vscode-font-family);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--accent-amend);
-    margin-bottom: 6px;
-}
-.proposal-panel.retire .head { color: var(--accent-retire); }
-.proposal-panel .body {
-    font: 13px/1.6 var(--vscode-font-family);
-    color: var(--vscode-foreground);
-}
-.proposal-panel .tag {
-    margin-top: 8px;
-    font: 11px var(--vscode-font-family);
+.row.proposal.add  .pglyph,
+.row.proposal.add  .ghost-title { color: var(--accent-add); }
+.row.proposal.move .pglyph,
+.row.proposal.move .ghost-title { color: var(--accent-blue); }
+.row .ghost-tag {
+    font: 10px var(--vscode-font-family);
     color: var(--fg-muted);
+    margin-left: 10px;
+    opacity: 0.7;
+    flex-shrink: 0;
 }
-.proposal-panel .actions {
-    margin-top: 14px;
+
+/* Inline ✓/✗ accept-reject on a row (hover/selected/ghost reveal). */
+.row .verdict {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 12px;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 100ms ease;
+}
+.row:hover .verdict, .row.selected .verdict, .row.proposal .verdict { opacity: 1; }
+.row .verdict button {
+    font: 11px var(--vscode-font-family);
+    width: 20px; height: 18px; line-height: 1; padding: 0;
+    border-radius: 3px;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+    background: transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+}
+.row .verdict .v-accept:hover { background: color-mix(in srgb, var(--accent-add) 30%, transparent); border-color: var(--accent-add); }
+.row .verdict .v-reject:hover { background: color-mix(in srgb, var(--accent-retire) 30%, transparent); border-color: var(--accent-retire); }
+
+/* Toolbar Accept-all / Reject-all + awaiting_impl dot. */
+.toolbar button.bulk { color: var(--vscode-foreground); }
+.toolbar .status.awaiting_impl .dot { background: var(--accent-add); opacity: 1; }
+
+/* Thin inline accept/reject row in the detail (RETIRE/AMEND), not a boxed panel. */
+.detail .retire-note {
+    margin-top: 22px;
+    font: 12.5px/1.6 var(--vscode-font-family);
+    color: var(--accent-retire);
+}
+.detail .inline-verdict {
+    margin-top: 16px;
     display: flex;
     gap: 8px;
+    align-items: center;
 }
-.proposal-panel button {
+.detail .inline-verdict .iv-tag {
+    font: 11px var(--vscode-font-family);
+    color: var(--fg-muted);
+    margin-right: 4px;
+}
+.detail .inline-verdict button {
     font: 12px var(--vscode-font-family);
     padding: 5px 14px;
     border-radius: 3px;
@@ -761,21 +843,21 @@ body.dragging * { cursor: grabbing !important; }
     cursor: pointer;
     transition: background 100ms ease, border-color 100ms ease;
 }
-.proposal-panel button:hover { background: var(--hover-bg); }
-.proposal-panel button.primary {
+.detail .inline-verdict button:hover { background: var(--hover-bg); }
+.detail .inline-verdict button.primary {
     background: var(--accent-blue);
     color: var(--vscode-editor-background);
     border-color: var(--accent-blue);
     font-weight: 500;
 }
-.proposal-panel button.primary:hover { opacity: 0.92; }
+.detail .inline-verdict button.primary:hover { opacity: 0.92; }
 `;
 
 // ─── Webview script ───────────────────────────────────────────────────────
 const JS = `
 const vscode = acquireVsCodeApi();
 
-let payload = { nodes: {}, roots: [], status: { state: 'in_sync', pending: 0 }, rootName: '' };
+let payload = { nodes: {}, roots: [], status: { state: 'in_sync', pending: 0 }, rootName: '', pendingEventIds: [] };
 const expanded = new Set();
 let selectedId = null;
 let editingTitle = null;
@@ -799,11 +881,45 @@ function leafSym(s) {
 }
 
 function statusLabel(s, n) {
-    if (s === 'in_sync')    return 'in sync';
-    if (s === 'code_drift') return n + ' proposal' + (n === 1 ? '' : 's');
-    if (s === 'tree_dirty') return 'applying tree edits…';
-    if (s === 'realizing')  return 'implementing…';
+    if (s === 'in_sync')       return 'in sync';
+    if (s === 'code_drift')    return n + ' proposal' + (n === 1 ? '' : 's');
+    if (s === 'tree_dirty')    return 'applying tree edits…';
+    if (s === 'awaiting_impl') return n + ' to implement';
+    if (s === 'realizing')     return 'implementing…';
     return s;
+}
+
+// Inline ✓/✗ accept-reject buttons for a proposal event (used on tree rows).
+function verdictButtons(eventId) {
+    const wrap = el('span', 'verdict');
+    const acc = el('button', 'v-accept', '✓');
+    acc.title = 'Accept';
+    acc.onclick = ev => { ev.stopPropagation(); vscode.postMessage({ kind: 'verdict', eventIds: [eventId], accept: true }); };
+    const rej = el('button', 'v-reject', '✗');
+    rej.title = 'Reject';
+    rej.onclick = ev => { ev.stopPropagation(); vscode.postMessage({ kind: 'verdict', eventIds: [eventId], accept: false }); };
+    wrap.append(rej, acc);
+    return wrap;
+}
+
+// Word-level inline diff of two strings → a fragment of d-same/d-del/d-ins spans.
+function renderInlineDiff(oldStr, newStr) {
+    const a = String(oldStr).split(/(\\s+)/), b = String(newStr).split(/(\\s+)/);
+    const n = a.length, m = b.length;
+    const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    const frag = document.createDocumentFragment();
+    const push = (txt, cls) => { if (txt !== '') frag.append(el('span', cls, txt)); };
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+        if (a[i] === b[j]) { push(a[i], 'd-same'); i++; j++; }
+        else if (dp[i + 1][j] >= dp[i][j + 1]) { push(a[i], 'd-del'); i++; }
+        else { push(b[j], 'd-ins'); j++; }
+    }
+    while (i < n) push(a[i++], 'd-del');
+    while (j < m) push(b[j++], 'd-ins');
+    return frag;
 }
 
 function isDescendant(ancestorId, candidateId) {
@@ -857,6 +973,19 @@ function renderToolbar() {
 
     t.append(el('div', 'spacer'));
 
+    // Accept-all / Reject-all — the one global action (you asked for it); the
+    // toolbar already exists, so this is not a new panel.
+    const ids = payload.pendingEventIds || [];
+    if (ids.length) {
+        const accAll = el('button', 'toggle bulk', '✓ Accept all (' + ids.length + ')');
+        accAll.title = 'Accept every pending change';
+        accAll.onclick = () => vscode.postMessage({ kind: 'verdict', eventIds: ids.slice(), accept: true });
+        const rejAll = el('button', 'toggle bulk', '✗ Reject all (' + ids.length + ')');
+        rejAll.title = 'Reject every pending change';
+        rejAll.onclick = () => vscode.postMessage({ kind: 'verdict', eventIds: ids.slice(), accept: false });
+        t.append(accAll, rejAll);
+    }
+
     const btn = el('button', 'toggle');
     btn.textContent = '⇄ text';
     btn.title = 'Open this file in the plain text editor';
@@ -877,9 +1006,27 @@ function renderTree() {
     return wrap;
 }
 
+// A pending ADD/MOVE rendered inline at its destination parent (+ / ~ glyph,
+// inline ✓/✗). Not editable, no children.
+function appendGhostRow(parent, n) {
+    const row = el('div', 'row proposal ' + (n.proposalOp || 'add'));
+    row.dataset.id = n.id;
+    row.style.setProperty('--depth', n.depth);
+    if (selectedId === n.id) row.classList.add('selected');
+    row.append(el('span', 'pglyph', n.proposalOp === 'move' ? '~' : '+'));
+    const t = el('span', 'title ghost-title');
+    t.textContent = (n.proposalOp === 'move' ? '→ ' : '') + (n.title || '(untitled)');
+    row.append(t);
+    if (n.proposal && n.proposal.tag) row.append(el('span', 'ghost-tag', n.proposal.tag));
+    if (n.proposal) row.append(verdictButtons(n.proposal.eventId));
+    row.onclick = () => setSelected(n.id);
+    parent.append(row);
+}
+
 function appendRow(parent, id) {
     const n = payload.nodes[id];
     if (!n) return;
+    if (n.isProposal) { appendGhostRow(parent, n); return; }
 
     const row = el('div', 'row');
     row.dataset.id = id;
@@ -950,6 +1097,11 @@ function appendRow(parent, id) {
         pill.title = n.bindings.map(b => b.file + ' › ' + leafSym(b.symbol)).join('\\n');
         pill.onclick = ev => { ev.stopPropagation(); setSelected(id); };
         row.append(pill);
+    }
+
+    // Inline accept/reject for an in-place RETIRE/AMEND on this live node.
+    if (n.proposal && (n.proposal.op === 'amend' || n.proposal.op === 'retire')) {
+        row.append(verdictButtons(n.proposal.eventId));
     }
 
     row.onclick = () => { if (!editingTitle && !editingDesc) setSelected(id); };
@@ -1083,18 +1235,20 @@ function renderDetail() {
         wrap.append(hint);
         d.append(wrap);
         queueMicrotask(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
+    } else if (n.proposal && n.proposal.op === 'amend' && n.proposal.description != null && n.proposal.description !== n.description) {
+        // The amend renders as an inline diff IN the description (old struck,
+        // new added) — no separate "Proposed description" block.
+        const dd = el('div', 'desc desc-diff');
+        dd.append(renderInlineDiff(n.description || '', n.proposal.description || ''));
+        dd.title = 'Proposed description change · double-click to edit the live text';
+        dd.ondblclick = () => startEditDesc();
+        d.append(dd);
     } else {
         const dd = el('div', 'desc' + (n.description ? '' : ' empty'));
         dd.textContent = n.description || 'No description — double-click to add one.';
         dd.title = 'Double-click to edit  ·  ⌘Enter on selected row';
         dd.ondblclick = () => startEditDesc();
         d.append(dd);
-    }
-
-    // AMEND description preview
-    if (n.proposal && n.proposal.op === 'amend' && n.proposal.description && n.proposal.description !== n.description) {
-        d.append(el('h3', 'section', 'Proposed description'));
-        d.append(el('div', 'desc-proposed', n.proposal.description));
     }
 
     // Bindings list
@@ -1112,24 +1266,21 @@ function renderDetail() {
         d.append(list);
     }
 
-    // Proposal panel (accept/reject)
-    if (n.proposal) {
-        const p = el('div', 'proposal-panel ' + n.proposal.op);
-        const headLabel = n.proposal.op === 'amend' ? 'Amend proposed'
-                        : n.proposal.op === 'retire' ? 'Retire proposed' : 'Pending change';
-        p.append(el('div', 'head', headLabel));
+    // Inline accept/reject for the selected node's in-place RETIRE/AMEND — a thin
+    // action row, not a boxed panel. ADD/MOVE ghosts act on their tree row.
+    if (n.proposal && (n.proposal.op === 'amend' || n.proposal.op === 'retire')) {
         if (n.proposal.op === 'retire') {
-            p.append(el('div', 'body', 'Mark this feature as retired and detach its bindings.'));
+            d.append(el('div', 'retire-note',
+                'Retire proposed — accepting marks this feature retired and detaches its bindings.'));
         }
-        p.append(el('div', 'tag', n.proposal.tag));
-        const acts = el('div', 'actions');
+        const acts = el('div', 'inline-verdict');
+        if (n.proposal.tag) acts.append(el('span', 'iv-tag', n.proposal.tag));
         const rej = el('button', null, 'Reject');
-        rej.onclick = () => vscode.postMessage({ kind: 'verdict', eventId: n.proposal.eventId, accept: false });
+        rej.onclick = () => vscode.postMessage({ kind: 'verdict', eventIds: [n.proposal.eventId], accept: false });
         const acc = el('button', 'primary', 'Accept');
-        acc.onclick = () => vscode.postMessage({ kind: 'verdict', eventId: n.proposal.eventId, accept: true });
+        acc.onclick = () => vscode.postMessage({ kind: 'verdict', eventIds: [n.proposal.eventId], accept: true });
         acts.append(rej, acc);
-        p.append(acts);
-        d.append(p);
+        d.append(acts);
     }
 
     return d;

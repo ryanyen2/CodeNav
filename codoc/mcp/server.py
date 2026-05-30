@@ -47,7 +47,9 @@ def codoc_tree() -> dict:
 @mcp.tool
 def codoc_status() -> dict:
     """Counts of features / pending proposals / unrealized plan nodes, and the
-    current pipeline state (in_sync | code_drift | tree_dirty | realizing)."""
+    current pipeline state (in_sync | code_drift | tree_dirty | awaiting_impl |
+    realizing). ``awaiting_impl`` means accepted tree edits are queued in
+    ``.codoc/realize.md`` for you to implement via ``/codoc:realize``."""
     cd, err = _need_dir()
     return err or tools.read_status(cd)
 

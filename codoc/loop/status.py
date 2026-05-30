@@ -1,14 +1,16 @@
 """``.codoc/status.json`` — the pipeline state the IDE surfaces in its status bar.
 
-Four states answer "where are code and intent relative to each other right now?":
+Five states answer "where are code and intent relative to each other right now?":
 
-  ``in_sync``    no pending proposals; tree and code agree.
-  ``code_drift`` code changed and Loop A raised proposals awaiting review.
-  ``tree_dirty`` tree.codoc was edited; the code change has not been realized yet.
-  ``realizing``  the coding agent is implementing tree edits right now.
+  ``in_sync``       no pending proposals; tree and code agree.
+  ``code_drift``    code changed and Loop A raised proposals awaiting review.
+  ``tree_dirty``    tree.codoc was edited; the code change has not been realized yet.
+  ``awaiting_impl`` tree edits were accepted and queued in ``.codoc/realize.md``
+                    for the live Claude Code session to implement (``/codoc:realize``).
+  ``realizing``     a coding agent is implementing tree edits right now.
 
-The loops write this file at the end of each pass (and ``realizing`` around the
-agent spawn). The IDE watches the file and never has to poll.
+The loops write this file at the end of each pass (``awaiting_impl`` when Loop B
+queues directives for the session). The IDE watches the file and never has to poll.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ STATUS_FILENAME = "status.json"
 IN_SYNC = "in_sync"
 CODE_DRIFT = "code_drift"
 TREE_DIRTY = "tree_dirty"
+AWAITING_IMPL = "awaiting_impl"
 REALIZING = "realizing"
 
 
@@ -40,13 +43,30 @@ def write_status(codoc_dir: str | Path, state: str, *, pending: int = 0, detail:
     return dest
 
 
-def refresh_status(codoc_dir: str | Path, store, *, realizing: bool = False, detail: str = "") -> Path:
-    """Derive state from pending proposals and write it. ``realizing`` overrides."""
-    pending = len(store.pending_events())
-    if realizing:
+def refresh_status(
+    codoc_dir: str | Path,
+    store,
+    *,
+    realizing: bool = False,
+    awaiting_impl: bool = False,
+    pending: int | None = None,
+    detail: str = "",
+) -> Path:
+    """Derive state from pending proposals and write it.
+
+    ``awaiting_impl`` wins over ``realizing`` wins over the proposal-count
+    default. ``pending`` overrides the displayed count (Loop B passes the
+    directive count for ``awaiting_impl``); when ``None`` it is the number of
+    pending proposals.
+    """
+    n_proposals = len(store.pending_events())
+    count = n_proposals if pending is None else pending
+    if awaiting_impl:
+        state = AWAITING_IMPL
+    elif realizing:
         state = REALIZING
-    elif pending:
+    elif n_proposals:
         state = CODE_DRIFT
     else:
         state = IN_SYNC
-    return write_status(codoc_dir, state, pending=pending, detail=detail)
+    return write_status(codoc_dir, state, pending=count, detail=detail)

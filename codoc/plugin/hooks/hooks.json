@@ -45,6 +45,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m codoc.agent.hook user-prompt",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

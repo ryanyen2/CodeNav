@@ -21,8 +21,8 @@ codoc status              # feature count, pending proposals, recent activity
 codoc sync                # one-shot escape hatch: apply tree edits (Loop B), then reflect code (Loop A)
 
 # watch flags
-codoc watch --dry         # reflect + build coding directives, but don't spawn the agent
-codoc watch --no-realize  # sync the tree but never spawn the coding agent
+codoc watch --dry         # reflect + apply tree edits, but don't queue realization directives
+codoc watch --no-realize  # sync the tree but never queue directives for the session
 
 # Tests (run with Python 3.11)
 python3.11 -m pytest tests/
@@ -55,7 +55,10 @@ secondary index. The system is two loops:
   structural ops (add/move/retire) are logged as pending proposals.
 - **Loop B — codoc → code** (`codoc/loop/loop_b.py`): parse `tree.codoc` edits →
   apply user edits + proposal verdicts → for edits that imply code change, build a
-  directive and spawn `claude -p` once → re-run Loop A on what was written.
+  directive and **queue it for the live session** in `.codoc/realize.md` (status
+  `awaiting_impl`). The session implements it via `/codoc:realize`; the existing
+  Stop-hook reflection / watch-daemon Loop A then closes the loop. No headless
+  `claude -p` is spawned.
 
 A single LLM pass with full change + whole-tree-title context (plus a
 `UNIQUE(file, symbol_path)` binding constraint) is what prevents duplicate nodes —
@@ -73,14 +76,14 @@ codoc/
                   #                  topological_order, entry_points, neighbor_feature(store, symbol)
   loop/           # the two loops + their pieces:
                   #   inbox.py       — .codoc/inbox.json verdict channel (IDE Accept/Reject → loops)
-                  #   status.py      — .codoc/status.json lifecycle (in_sync/code_drift/tree_dirty/realizing)
+                  #   status.py      — .codoc/status.json lifecycle (in_sync/code_drift/tree_dirty/awaiting_impl/realizing)
                   #   diff.py        — compute_changeset; ChunkRef carries tokens_hash + types_hash
                   #   apply.py       — derive_auto_ops, apply_op, AMEND_SAFE_RATIO (the one threshold)
                   #   subtree.py     — select_relevant_subtree (file-locality seeds)
                   #   loop_a.py      — run_loop_a / apply_changeset (code → codoc);
                   #                    _detect_relocations (move via tokens_hash, rename via types_hash);
                   #                    _cover_uncovered_adds (coverage net: neighbor_feature or ADD_NODE proposal)
-                  #   loop_b.py      — run_loop_b (codoc → code; build directive, spawn claude -p, reflect back)
+                  #   loop_b.py      — run_loop_b (codoc → code; build directive, queue .codoc/realize.md for the live session)
                   #   bootstrap.py   — run_bootstrap / run_init (thin shim; organize=True by default)
                   #   bootstrap_hier.py — two-phase bootstrap:
                   #                       per-file pass (propose_file_features, one LLM call per file) +
@@ -167,7 +170,7 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 ### Loop B in detail (codoc → code)
 
-`run_loop_b` first drains `.codoc/inbox.json` (proposal verdicts written by the IDE's Accept/Reject actions: accept → `apply_op` + delete event; reject → delete event), then parses `tree.codoc` and diffs against the store (`codoc_file/diff.py`) into user ops (verdicts no longer come from the text), applies them (user edits are intentional → applied immediately), builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`), writes `status.json` = `realizing`, spawns `claude -p … --dangerously-skip-permissions` once, then re-runs Loop A scoped to the files the agent wrote — surfacing any refinement the under-specified intent missed.
+`run_loop_b` first drains `.codoc/inbox.json` (proposal verdicts written by the IDE's Accept/Reject actions: accept → `apply_op` + delete event; reject → delete event), then parses `tree.codoc` and diffs against the store (`codoc_file/diff.py`) into user ops (verdicts no longer come from the text), applies them (user edits are intentional → applied immediately), and builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`). Instead of spawning a headless agent, it **hands the work to the live session**: it writes the assembled directives to `.codoc/realize.md` and sets `status.json` = `awaiting_impl`. The user's interactive Claude Code session (nudged by the `UserPromptSubmit` hook) runs `/codoc:realize` — read the file → implement each directive → `codoc_reflect` to bind → delete `.codoc/realize.md`. The loop is then closed by the existing Stop-hook reflection (`agent/hook._maybe_spawn_reflect`) or the watch daemon's epoch-close Loop A pass. `--dry`/`--no-realize` skip the queue write.
 
 ### Environment variables
 
@@ -190,12 +193,22 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 - **`.codoc/tree.codoc`** — human-authored feature tree. `- Title  ⟨f-id⟩` (id hidden by the IDE decoration; minted on save for hand-added nodes). Descriptions are free prose and may span multiple paragraphs — blank lines are *kept* (a node ends only at the next feature-marker line / the pending sentinel / EOF, never at a blank). Code is cited inline as `[label](codoc:file.py#symbol)` markdown links; `parse.extract_refs` pulls them out. **No `↪ refs:` line** — derived bindings are not printed into the text; they ride in the sidecar and the IDE renders them as inlay-hint chips. Pending proposals render as an **in-place overlay**: ADD/MOVE emit a ghost hunk (`+`/`~` op char in col 0, node at its tree depth, hidden `⟨e-id⟩`) at the destination parent; RETIRE/AMEND emit no text (they're carried in the sidecar). The parser skips any line matching both the proposal shape and a `⟨e-id⟩` marker, so render→parse→diff stays a no-op. (The legacy `# ── pending changes` sentinel is still honored on read.)
 - **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE (now **version 3**). Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id,realized}}, feature_edges{}, proposals{by_feature{fid:{op,event_id,tag,…}}, by_event{eid:{op,…}}}}`. `proposals.by_feature` drives the in-place retire/amend overlays + Accept/Reject on the live node; `realized` drives the unrealized-placeholder decoration. Written atomically (tmp → rename).
-- **`.codoc/status.json`** (written by the loops, not `write_tree`) — `{version, state, pending, detail, at}`; `state ∈ {in_sync, code_drift, tree_dirty, realizing}` drives the IDE status bar + the tree.codoc header CodeLens.
+- **`.codoc/status.json`** (written by the loops, not `write_tree`) — `{version, state, pending, detail, at}`; `state ∈ {in_sync, code_drift, tree_dirty, awaiting_impl, realizing}` drives the IDE status bar + the tree.codoc header CodeLens. `awaiting_impl` means Loop B queued code-implying tree edits in `.codoc/realize.md` for the live session (`pending` = directive count).
+- **`.codoc/realize.md`** (written by Loop B) — the realization queue: the assembled directive prompt the live session implements via `/codoc:realize`, then deletes. Replaces the old headless `claude -p` spawn.
 - **`.codoc/inbox.json`** (written by the IDE) — `{version, verdicts:[{event_id, accept}]}`; drained by Loop B / `codoc sync`, then cleared. The watch daemon watches it so an Accept/Reject wakes the loop.
 
 ### VSCode extension (`vscode-codoc/`)
 
-File-based; no HTTP server, no port. `WorkspaceState` watches `**/.codoc/{tree.codoc, tree.bindings.json, status.json, inbox.json}`; reparses on change; fires `onDidChange`. Status bar follows `status.json`: `$(loading~spin) implementing…` (realizing) | `$(pencil) applying tree edits…` (tree_dirty) | `$(bell) N proposals` (code_drift) | `$(check) N` (in_sync) | `$(sync) not initialized`.
+File-based; no HTTP server, no port. `WorkspaceState` watches `**/.codoc/{tree.codoc, tree.bindings.json, status.json, inbox.json}`; reparses on change; fires `onDidChange`. Status bar follows `status.json`: `$(loading~spin) implementing…` (realizing) | `$(pencil) applying tree edits…` (tree_dirty) | `$(play) N to implement` (awaiting_impl) | `$(bell) N proposals` (code_drift) | `$(check) N` (in_sync) | `$(sync) not initialized`.
+
+**Proposals are a single inline surface.** Two viewers, no separate proposal UI:
+the **`tree.codoc` raw-text editor** keeps the `+`/`~` ghost hunks + decorations +
+CodeLens + lightbulb; the **`Codoc Tree` webview** (`tree-editor.ts`, the default
+editor for `tree.codoc`) renders **every** proposal type inline — ADD/MOVE as ghost
+rows in the tree pane, RETIRE as a strike on the live row, AMEND as a word-level
+inline diff *inside the description* — each with inline `✓`/`✗` Accept/Reject, plus
+toolbar Accept-all / Reject-all. There is **no** Explorer "codoc Features" sidebar
+(removed) and **no** detail-pane proposal panel (removed).
 
 Key source files:
 - `src/state/workspace-state.ts` — root detection, reload, status bar; `writeVerdict()` appends to `inbox.json`
@@ -208,7 +221,8 @@ Key source files:
 - `src/providers/completion.ts` — `[`-triggered autocomplete inserting `[label](codoc:file#symbol)`
 - `src/providers/doc-links.ts` — makes `[..](codoc:file#symbol)` clickable via the `codoc.openRef` command
 - `src/providers/code-lens.ts` — source-file CodeLens (which feature owns a symbol), reads `sidecar.by_file`
-- `src/providers/{folding,symbol,feature-tree-view,feature-lines}.ts` — outline / fold / panel
+- `src/providers/{folding,symbol,feature-lines}.ts` — outline / fold / nav helpers (the Explorer-sidebar `feature-tree-view.ts` was removed)
+- `src/providers/tree-editor.ts` — the `Codoc Tree` webview (default editor for `tree.codoc`): outline + detail pane; renders all proposals inline (ghost rows / strike / inline desc diff) with inline + toolbar Accept/Reject
 - `src/extension.ts` — activates `WorkspaceState`, registers providers + commands (`codoc.open/sync/openRef`, `codoc.{accept,reject}Proposal`, `codoc.{accept,reject}All`, fold/expand)
 
 The pre-rewrite HTTP-era providers (`state/server.ts`, `live-activity.ts`, `sync-on-save.ts`, old `codelens.ts`/`hover.ts`/`definition.ts`, `api/client.ts`) were **deleted** in the format redesign.
@@ -225,6 +239,25 @@ Two-loop system fully implemented and tested (141 Python unit tests pass; TypeSc
 - **`realized` lifecycle + `/codoc:plan`** — `/codoc:plan <task>` (command at `.claude/commands/codoc/plan.md`) proposes plan nodes via `codoc_plan_add` (source=plan, realized=False); accepted, they're unrealized placeholders that flip realized when code binds; unplanned work surfaces as new proposals. SKILL.md rewritten MCP-first. `codoc propose` CLI / `propose.py` kept for humans/tests (bind-string bug fixed: symbol_path keeps the full `file::symbol`).
 - **Watch daemon**: a `tree.codoc` write during an open epoch (agent MCP reflection) is no longer routed to Loop B (`watch.process_batch` step 3 suppresses it; epoch-close Loop A reconciles).
 - Tests: 211 Python pass; VS Code `tsc`/esbuild clean + a new `vitest` harness (`vscode-codoc/src/test/`, 6 tests) guarding Python↔TS overlay parity.
+
+**Proposal-surface unification + live-session realize (2026-05-29):** collapsed the
+multiple proposal surfaces onto one inline model and removed the headless coding agent.
+- **One inline proposal surface in the webview** — `tree-editor.ts` now renders ADD/MOVE
+  as ghost rows in the tree pane, RETIRE as a strike on the live row, and AMEND as a
+  word-level inline diff *inside the description*; inline `✓`/`✗` on every row + toolbar
+  Accept-all / Reject-all. The separate detail-pane "PROPOSED DESCRIPTION" block and the
+  Accept/Reject panel were deleted (`buildPayload` injects `proposals.by_event` ghosts +
+  `pendingEventIds`; verdict messages carry `eventIds[]`). Raw-text editor keeps the
+  `+`/`~` ghosts + decorations + CodeLens + lightbulb unchanged.
+- **No headless `claude -p`** — Loop B writes code-implying directives to `.codoc/realize.md`
+  and sets status `awaiting_impl`; the live session implements them via the new
+  `/codoc:realize` command (nudged by a `UserPromptSubmit` hook). `_spawn_claude` /
+  `_files_modified_since` / the `spawn=`/`refine=` params and `LoopBResult.{spawned,
+  files_written,refinement}` were removed; `run_loop_b(root, codoc_dir, *, dry_run)` now.
+- **Removed** the Explorer "codoc Features" sidebar (`feature-tree-view.ts` deleted,
+  `codoc.featureTree` view + `refreshFeatureTree` command/menus gone; `navigateToFeature`
+  kept for source-file CodeLens) and the dead legacy `codoc-plugin/` directory (HTTP hooks
+  to the deleted `localhost:8001` + stale `/codoc-accept|reject|status|proposals`).
 
 Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); ego-graph context for Loop A subtree selection; may-impact propagation in the LLM prompt; trim `minhash` from the index schema.
 

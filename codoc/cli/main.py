@@ -112,9 +112,14 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
 @app.command()
 def sync(
     root: str = typer.Option(".", "--root", help="Repository root."),
-    dry: bool = typer.Option(False, "--dry", help="Don't spawn the coding agent for tree edits."),
+    dry: bool = typer.Option(False, "--dry", help="Don't queue tree-edit directives for the session."),
 ):
-    """One-shot: apply tree.codoc edits (Loop B), then reflect code (Loop A)."""
+    """One-shot: apply tree.codoc edits (Loop B), then reflect code (Loop A).
+
+    Loop B no longer spawns a coding agent — code-implying tree edits are queued
+    in ``.codoc/realize.md`` for the live Claude Code session to implement via
+    ``/codoc:realize``.
+    """
     from codoc.codoc_file.render import write_tree
     from codoc.loop.loop_a import reconcile_drift
     from codoc.loop.loop_b import run_loop_b
@@ -125,7 +130,7 @@ def sync(
     rb = run_loop_b(root, cd, dry_run=dry)
     typer.echo(f"▸ codoc→code  {rb.summary()}")
     if rb.directives:
-        label = "would implement (dry run)" if dry else "implementing"
+        label = "would queue (dry run)" if dry else "queued for the session (run /codoc:realize)"
         typer.echo(f"  {label}:")
         for d in rb.directives:
             typer.echo(f"    · {d.splitlines()[0]}")

@@ -1,8 +1,8 @@
 """Claude Code hook handler for the codoc agent-epoch system.
 
 Invoked by CC hooks as ``python -m codoc.agent.hook <event>``, where ``<event>``
-is one of ``session-start``, ``stop``, ``pre-tool``, ``post-tool``.  CC passes
-the hook payload as JSON on **stdin**.
+is one of ``session-start``, ``stop``, ``pre-tool``, ``post-tool``,
+``user-prompt``.  CC passes the hook payload as JSON on **stdin**.
 
 This handler:
 
@@ -16,8 +16,11 @@ This handler:
   that exits non-zero blocks the agent.
 * Never opens the SQLite store (``codoc.db``) — uses the sidecar only, to avoid
   WAL contention with the running daemon.
-* The ``CODOC_EPOCH_ORIGIN`` env var is set to ``"loop_b"`` when CC is spawned
-  by Loop B (``loop_b._spawn_claude``), and absent / ``"interactive"`` otherwise.
+* The ``CODOC_EPOCH_ORIGIN`` env var, if set to ``"loop_b"``, marks a
+  non-interactive agent-owned epoch so the watch daemon skips independent
+  reconciliation; codoc sessions are ``"interactive"`` by default. (Loop B no
+  longer spawns a headless agent — it queues directives in ``.codoc/realize.md``
+  for the live session, surfaced by the ``user-prompt`` handler below.)
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ from codoc.agent.paths import find_codoc_dir as _find_codoc_dir
 
 ACTIVITY_FILENAME = "activity.json"
 BINDINGS_FILENAME = "tree.bindings.json"
+REALIZE_FILENAME = "realize.md"
 
 # Maximum recent-events to keep in the rolling log.
 _MAX_RECENT = 20
@@ -250,6 +254,33 @@ def handle_post_tool(payload: dict[str, Any], codoc_dir: str) -> None:
     _handle_tool(payload, codoc_dir, phase="post")
 
 
+def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
+    """Nudge the live session when accepted tree edits are queued for realization.
+
+    Loop B hands code-implying tree edits to the session by writing
+    ``.codoc/realize.md`` (instead of spawning a headless agent). On each user
+    prompt, if that file exists, inject a one-line ``additionalContext`` reminder
+    so the session knows to run ``/codoc:realize``. Emits the UserPromptSubmit
+    hook JSON on stdout; stays silent (no output) when nothing is queued.
+    """
+    realize = Path(codoc_dir) / REALIZE_FILENAME
+    if not realize.exists():
+        return
+    try:
+        n = sum(1 for line in realize.read_text().splitlines() if line.lstrip().startswith("### "))
+    except OSError:
+        n = 0
+    count = f"{n} change(s)" if n else "changes"
+    msg = (
+        f"codoc: {count} from accepted tree edits are queued in .codoc/realize.md. "
+        "Run /codoc:realize to implement them — read the file, apply each directive "
+        "(respecting its `Edit only:` scope and never touching .codoc/), call "
+        "codoc_reflect to bind the code, then delete .codoc/realize.md."
+    )
+    out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}
+    print(json.dumps(out))
+
+
 # ─── Entrypoint ──────────────────────────────────────────────────────────────
 
 _HANDLERS = {
@@ -257,6 +288,7 @@ _HANDLERS = {
     "stop": handle_stop,
     "pre-tool": handle_pre_tool,
     "post-tool": handle_post_tool,
+    "user-prompt": handle_user_prompt,
 }
 
 

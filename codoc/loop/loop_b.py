@@ -2,29 +2,30 @@
 
 Parse the edited ``tree.codoc`` → apply proposal verdicts + direct user edits →
 for edits that imply a code change, build a directive from the feature's
-description + bound symbols and spawn a coding agent (``claude -p``) once → then
-re-run Loop A on the files the agent wrote so any under-specified intent surfaces
-as a refinement proposal. That re-run is the loop closure.
+description + bound symbols and **queue it for the live Claude Code session** by
+writing ``.codoc/realize.md`` (set status ``awaiting_impl``). The session
+implements the queued directives via ``/codoc:realize`` (Read → implement →
+``codoc_reflect`` → delete the file); the loop is then closed by the existing
+Stop-hook reflection (``agent/hook._maybe_spawn_reflect``) or the watch daemon's
+epoch-close Loop A pass — both reflect the freshly written code back into the
+tree. Loop B no longer spawns a headless ``claude -p``.
 """
 from __future__ import annotations
 
 import os
 import re
-import subprocess
-import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_tree_file
 from codoc.loop import inbox, status
-from codoc.loop.activity import epoch_written_files
 from codoc.loop.apply import apply_op
-from codoc.loop.loop_a import LoopAResult, reconcile_drift
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.store.db import Store, open_store
 
-_SKIP_DIRS = {".git", ".codoc", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".mypy_cache"}
+REALIZE_FILENAME = "realize.md"
 
 
 @dataclass
@@ -33,17 +34,13 @@ class LoopBResult:
     rejected: int = 0
     user_edits: int = 0
     directives: list[str] = field(default_factory=list)
-    spawned: bool = False
-    files_written: list[str] = field(default_factory=list)
-    refinement: LoopAResult | None = None
+    queued: bool = False  # directives written to .codoc/realize.md for the session
     error: str = ""
 
     def summary(self) -> str:
         parts = [f"accepted {self.accepted}", f"rejected {self.rejected}", f"edits {self.user_edits}"]
-        if self.spawned:
-            parts.append(f"agent wrote {len(self.files_written)} files")
-        if self.refinement and (self.refinement.proposed or self.refinement.auto):
-            parts.append(f"reflect: {self.refinement.summary()}")
+        if self.queued:
+            parts.append(f"queued {len(self.directives)} directive(s) for the session")
         if self.error:
             parts.append(f"error: {self.error}")
         return " · ".join(parts)
@@ -154,48 +151,28 @@ def build_realize_prompt(directives: list[str], root_dir: str) -> str:
     return format_prompt(load_prompt("realize"), root_dir=root_dir, directives=body)
 
 
-def _spawn_claude(prompt: str, root_dir: str, *, timeout: int = 300) -> tuple[int, str]:
-    # CODOC_EPOCH_ORIGIN=loop_b tells the SessionStart hook to record this as a
-    # Loop B-owned epoch so the watch daemon skips independent reconciliation.
-    env = {**os.environ, "CODOC_EPOCH_ORIGIN": "loop_b"}
-    proc = subprocess.run(
-        ["claude", "-p", prompt, "--dangerously-skip-permissions"],
-        cwd=root_dir, capture_output=True, text=True, timeout=timeout, env=env,
-    )
-    return proc.returncode, (proc.stdout or "")[:2000]
+def realize_path(codoc_dir: str | os.PathLike) -> Path:
+    return Path(codoc_dir) / REALIZE_FILENAME
 
 
-def _files_modified_since(root_dir: str, since: float) -> list[str]:
-    out: list[str] = []
-    for dirpath, dirs, files in os.walk(root_dir):
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
-        for fn in files:
-            p = os.path.join(dirpath, fn)
-            try:
-                if os.path.getmtime(p) >= since:
-                    out.append(os.path.relpath(p, root_dir))
-            except OSError:
-                pass
-    return out
+def _write_realize(codoc_dir: str, prompt: str) -> None:
+    """Queue the realization directives for the live session (atomic write)."""
+    dest = realize_path(codoc_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".md.tmp")
+    tmp.write_text(prompt)
+    os.replace(tmp, dest)
 
 
-def run_loop_b(
-    root_dir: str,
-    codoc_dir: str,
-    *,
-    dry_run: bool = False,
-    spawn=_spawn_claude,
-    refine=reconcile_drift,
-    config=None,
-) -> LoopBResult:
+def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False) -> LoopBResult:
     store = open_store(codoc_dir)
     try:
-        return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run, spawn=spawn, refine=refine, config=config)
+        return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
     finally:
         store.close()
 
 
-def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) -> LoopBResult:
+def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     res = LoopBResult()
     directive_ops: list[NodeOp] = []
 
@@ -237,28 +214,15 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, spawn, refine, config) 
         status.refresh_status(codoc_dir, store)
         return res
 
-    # 3. Spawn the coding agent once with all directives.
-    status.refresh_status(codoc_dir, store, realizing=True, detail="implementing tree edits")
+    # 3. Hand the directives to the live session: write .codoc/realize.md and set
+    #    status `awaiting_impl`. No headless `claude -p`. The session implements
+    #    via /codoc:realize; the loop closes when the Stop-hook reflection (or the
+    #    watch daemon's epoch-close Loop A) reflects the written code back.
     prompt = build_realize_prompt(res.directives, root_dir)
-    started = time.time()
-    try:
-        code, _ = spawn(prompt, root_dir)
-    except Exception as e:  # subprocess failure, claude missing, timeout
-        res.error = str(e)
-        status.refresh_status(codoc_dir, store)
-        return res
-    res.spawned = True
-    # Prefer the precise WRITTEN-file list from activity.json (populated by hooks);
-    # fall back to the mtime walk when hooks are not installed. Counting only
-    # mode=="write" keeps "agent wrote N files" honest (reads are not writes) and
-    # scopes the reflection to files the agent actually changed.
-    res.files_written = epoch_written_files(codoc_dir) or _files_modified_since(root_dir, started)
-
-    # 4. Reflect on what was written — closes the loop. ``adopt_placeholders``
-    #    lets the reflection bind the agent's new code to the accepted plan
-    #    placeholder it was written for, instead of minting a duplicate node.
-    if res.files_written:
-        res.refinement = refine(root_dir, codoc_dir, file_scope=set(res.files_written),
-                                source="loop_b", config=config, adopt_placeholders=True)
-    status.refresh_status(codoc_dir, store)
+    _write_realize(codoc_dir, prompt)
+    res.queued = True
+    status.refresh_status(
+        codoc_dir, store, awaiting_impl=True, pending=len(res.directives),
+        detail=f"{len(res.directives)} change(s) ready to implement — run /codoc:realize",
+    )
     return res

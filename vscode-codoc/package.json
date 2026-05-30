@@ -15,14 +15,6 @@
     "onStartupFinished"
   ],
   "contributes": {
-    "views": {
-      "explorer": [
-        {
-          "id": "codoc.featureTree",
-          "name": "codoc Features"
-        }
-      ]
-    },
     "menus": {
       "commandPalette": [
         {
@@ -52,18 +44,6 @@
         {
           "command": "codoc.pickBinding",
           "when": "false"
-        }
-      ],
-      "view/title": [
-        {
-          "command": "codoc.refreshFeatureTree",
-          "when": "view == codoc.featureTree",
-          "group": "navigation"
-        },
-        {
-          "command": "codoc.open",
-          "when": "view == codoc.featureTree",
-          "group": "navigation"
         }
       ],
       "editor/title": [
@@ -153,11 +133,6 @@
       {
         "command": "codoc.openRef",
         "title": "codoc: Open code reference"
-      },
-      {
-        "command": "codoc.refreshFeatureTree",
-        "title": "codoc: Refresh feature tree",
-        "icon": "$(refresh)"
       },
       {
         "command": "codoc.collapseAllFeatures",
