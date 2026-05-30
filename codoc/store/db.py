@@ -12,7 +12,7 @@ dedup pass is needed anywhere downstream.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from codoc.model.binding import Binding
@@ -272,7 +272,7 @@ class Store:
     def mark_applied(self, event_id: str) -> None:
         self.conn.execute(
             "UPDATE events SET applied=1, accepted_at=? WHERE id=?",
-            (datetime.utcnow().isoformat(), event_id),
+            (datetime.now(timezone.utc).isoformat(), event_id),
         )
         self.conn.commit()
 

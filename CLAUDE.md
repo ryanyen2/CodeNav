@@ -229,7 +229,7 @@ The pre-rewrite HTTP-era providers (`state/server.ts`, `live-activity.ts`, `sync
 
 ### Status / next
 
-Two-loop system fully implemented and tested (141 Python unit tests pass; TypeScript `tsc --noEmit` + esbuild clean; the TS parser is parity-tested against `parse.py` on the real 28-feature `test/requests` tree). The cocoindex integration test for `compute_changeset` is gated to skip when the embedding model can't load.
+Two-loop system fully implemented and tested (Python unit + BDD scenario suites pass; TypeScript `tsc --noEmit` + esbuild clean; the TS parser is parity-tested against `parse.py` on the real 28-feature `test/requests` tree). The cocoindex/real-LLM integration tests are gated to skip when no `OPENAI_API_KEY` is set / the embedding model can't load.
 
 **Format redesign (2026-05-25):** `↪ refs:`/`›` removed (inline `[label](codoc:file#symbol)` markdown links + sidecar inlay chips instead); `⟨f-id⟩` hidden by an IDE decoration (still on disk for stable identity); `?`→`+`/`-` accept/reject syntax removed (proposals render as a diff block, verdicts flow through `.codoc/inbox.json` via IDE Accept/Reject); descriptions now support multi-paragraph prose (blank lines preserved); lifecycle surfaced via `.codoc/status.json`.
 
@@ -259,8 +259,49 @@ multiple proposal surfaces onto one inline model and removed the headless coding
   kept for source-file CodeLens) and the dead legacy `codoc-plugin/` directory (HTTP hooks
   to the deleted `localhost:8001` + stale `/codoc-accept|reject|status|proposals`).
 
+**Loop-audit fixes landed + BDD/E2E round-trip harness (2026-05-30):** the five
+audit workstreams (Loop-B imperative gate, `realized=False` plan default +
+proposal GC, status-on-init/sync + honest summaries + `reconcile_drift` +
+`codoc accept/reject`, state-based reconciliation as authority with `types_hash`
+on bindings, ADD-proposal render parity) are all committed on `transactions`. Code
+tidy: `store/db.py` audit stamp moved off the deprecated `datetime.utcnow()`.
+
+A new **BDD scenario suite** (`tests/bdd/`) makes the code↔tree round-trip
+assertable as Given/When/Then userflows:
+- `world.py` — a dependency-free harness wrapping a real repo dir + `.codoc` store,
+  driving Loop A through `apply_changeset` with an *injected* `propose` (the single
+  LLM pass) so placement is deterministic, and Loop B through real `tree.codoc`
+  edits + `inbox.json` verdicts. Every verb narrates a Given/When/Then transcript.
+- `test_code_to_codoc_position.py` — added code attaches to the owning feature or
+  is proposed under the right parent; modify→refresh; small vs. large description
+  amend; delete→detach+retire; move/rename carry attribution to the new position
+  with no duplicate node; same-title re-proposal binds into the existing node;
+  placeholder adoption flips `realized`.
+- `test_partial_verdicts.py` — accept-some/reject-some across a batch of proposals:
+  only accepted nodes land (in position), rejected vanish, the store converges to
+  `in_sync`, and only accepted *imperative* edits queue a realize directive.
+- `test_dependencies.py` — the code graph drives placement (a new caller lands with
+  the feature it calls; strongest dependency wins; import edges count) and impact
+  (`LoopAResult.impacted` flags upstream dependents of a changed symbol).
+- `e2e_report.py` + `test_e2e_userflows.py` — the **non-deterministic** real-LLM
+  counterpart: bootstraps a tiny repo with the real index + LLM, walks add → modify
+  → dependency-add → rename → delete, and prints a position report (which feature
+  owns each change, under which parent) for **manual inspection**, asserting only
+  LLM-agnostic invariants (nothing dropped, no duplicate titles, modify refreshes,
+  delete detaches). Runs in a subprocess (cocoindex's index is a per-process
+  singleton). Run it standalone with `python -m tests.bdd.e2e_report`.
+
 Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); ego-graph context for Loop A subtree selection; may-impact propagation in the LLM prompt; trim `minhash` from the index schema.
 
-## Test fixtures
+## Tests
 
-`test/draco/` (small Python), `test/requests/` (real-world Python library), `test/mosaic/` (TypeScript), `test/small_python_repo/` (toy Python), `test/altair/`, `test/gofish-python/`, `test/nanochat/` (additional Python codebases).
+- `tests/` — Python unit + integration suites (`tests/loop/`, `tests/store/`,
+  `tests/graph/`, `tests/codoc_file/`, `tests/agent/`, `tests/mcp/`, `tests/cli/`).
+- `tests/bdd/` — Given/When/Then userflows for the code↔tree round-trip (see the
+  2026-05-30 status note): deterministic Loop A/B scenarios via an injected
+  `propose`, plus a subprocess-isolated real-LLM E2E that prints a position report
+  for manual inspection.
+- `tests/loop/test_end_to_end.py` and `tests/bdd/test_e2e_userflows.py` are gated
+  on `OPENAI_API_KEY` (real index + real LLM); everything else is deterministic.
+
+Code fixtures: `test/draco/` (small Python), `test/requests/` (real-world Python library), `test/mosaic/` (TypeScript), `test/small_python_repo/` (toy Python), `test/altair/`, `test/gofish-python/`, `test/nanochat/` (additional Python codebases).
