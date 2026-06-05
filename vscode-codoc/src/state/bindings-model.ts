@@ -114,3 +114,33 @@ export function featureAdjacency(sidecar: SidecarData): Map<string, Set<string>>
     }
     return adj;
 }
+
+/**
+ * Directed view of the feature graph, keeping edge direction + kinds (which
+ * `featureAdjacency` discards). `feature_edges[src] = [{to, …}]` means src
+ * call/imports `to`, i.e. src *depends on* `to`. So:
+ *   out[src] = features src depends on   (rel 'depends')
+ *   in[dst]  = features that depend on dst (rel 'used by'), with `to` = the dependant
+ */
+export interface DirectedEdges {
+    out: Map<string, FeatureEdge[]>;
+    in: Map<string, FeatureEdge[]>;
+}
+
+export function directedEdges(sidecar: SidecarData): DirectedEdges {
+    const out = new Map<string, FeatureEdge[]>();
+    const inn = new Map<string, FeatureEdge[]>();
+    const push = (m: Map<string, FeatureEdge[]>, key: string, edge: FeatureEdge): void => {
+        const list = m.get(key);
+        if (list) list.push(edge);
+        else m.set(key, [edge]);
+    };
+    for (const [src, edges] of Object.entries(sidecar.feature_edges ?? {})) {
+        for (const e of edges) {
+            if (e.to === src) continue; // drop self-loops
+            push(out, src, { to: e.to, weight: e.weight, kinds: e.kinds });
+            push(inn, e.to, { to: src, weight: e.weight, kinds: e.kinds });
+        }
+    }
+    return { out, in: inn };
+}

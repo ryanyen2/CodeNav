@@ -31,10 +31,22 @@ export interface RecentEntry {
     phase: string;
 }
 
+/** Per-feature reflection phase, written by the hook (editing) + MCP reflect/attach
+ *  (reflecting → done). Drives the doc view's skeleton → fill-in animation. */
+export type FeaturePhase = 'editing' | 'reflecting' | 'done';
+
+export interface FeaturePhaseEntry {
+    phase: FeaturePhase;
+    at?: string | null;
+}
+
 export interface ActivityData {
     epoch?: ActivityEpoch;
     touched?: Record<string, TouchedEntry>;
     recent?: RecentEntry[];
+    // Per-feature streaming phase (activity.json schema ≥ 2). Optional for
+    // backward compat — absent ⇒ derive liveness from `touched` modes only.
+    features?: Record<string, FeaturePhaseEntry>;
 }
 
 /** Parse the text content of activity.json into ActivityData. Returns {} on any error. */
@@ -103,4 +115,44 @@ export function computeActiveFeatureLines(
     }
 
     return lines;
+}
+
+/**
+ * Map each actively-touched feature id to whether it is being written or only
+ * read right now. Empty when no epoch is open. `write` wins over `read` when a
+ * feature appears in both (an agent writing a file it also read is "writing").
+ *
+ * Feature ids come from (a) the touched entry's explicit `feature_ids` and
+ * (b) sidecar resolution of the touched file path — same union as
+ * `computeActiveFeatureLines`, but preserving the read/write mode.
+ */
+export function activeFeatureModes(
+    data: ActivityData,
+    sidecar: SidecarData | null,
+): Map<string, 'write' | 'read'> {
+    const modes = new Map<string, 'write' | 'read'>();
+    if (!isAgentActive(data)) return modes;
+
+    const mark = (fid: string, mode: 'write' | 'read'): void => {
+        if (modes.get(fid) === 'write') return; // write wins, never downgrade
+        modes.set(fid, mode);
+    };
+
+    for (const [filePath, entry] of Object.entries(data.touched ?? {})) {
+        const mode: 'write' | 'read' = entry.mode === 'write' ? 'write' : 'read';
+        for (const fid of entry.feature_ids) mark(fid, mode);
+        if (sidecar) {
+            for (const fe of entriesForFile(sidecar, filePath)) mark(fe.feature_id, mode);
+        }
+    }
+    return modes;
+}
+
+/** Per-feature reflection phase from activity.json (empty if absent). */
+export function featurePhases(data: ActivityData): Map<string, FeaturePhase> {
+    const m = new Map<string, FeaturePhase>();
+    for (const [fid, entry] of Object.entries(data.features ?? {})) {
+        if (entry && entry.phase) m.set(fid, entry.phase);
+    }
+    return m;
 }
