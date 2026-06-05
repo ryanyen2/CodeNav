@@ -367,12 +367,27 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .prose.revealing p:nth-child(4) { animation-delay: 120ms; }
 @keyframes fadeup { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
-/* enter/exit for reconciler (Phase 3) */
+/* enter / content-changed for the reconciler (Phase 3) */
 .section.entering { animation: sectionIn 240ms var(--ease) both; }
 @keyframes sectionIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.section.changed { animation: changedFlash 600ms var(--ease); }
+@keyframes changedFlash {
+    from { background: color-mix(in srgb, var(--accent-amend) 13%, transparent); }
+    to { background: transparent; }
+}
+
+/* live agent activity: a pulsing dot trailing the heading (write) / quiet dot (read) */
+.section.active-write > .h::after,
+.section.active-read > .h::after {
+    content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-left: 10px; vertical-align: middle;
+}
+.section.active-write > .h::after { background: var(--accent-amend); animation: pulse 1.4s ease-in-out infinite; }
+.section.active-read > .h::after { background: var(--fg-muted); opacity: 0.55; }
 
 @media (prefers-reduced-motion: reduce) {
     .doc { scroll-behavior: auto; }
-    .doc-accent, .section.entering, .prose.revealing p, .skeleton .bar,
-    .toolbar .status.realizing .dot, .badge.active-write { transition: none !important; animation: none !important; }
+    .doc-accent, .section.entering, .section.changed, .prose.revealing p, .skeleton .bar,
+    .section.active-write > .h::after, .toolbar .status.realizing .dot,
+    .badge.active-write { transition: none !important; animation: none !important; }
 }

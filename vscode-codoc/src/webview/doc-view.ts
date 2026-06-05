@@ -40,7 +40,9 @@ let lastRev = -1;
 let programmaticScroll = 0;                 // timestamp until which scroll-spy is muted
 let observer: IntersectionObserver | null = null;
 let didFocusTree = false;
+let mounted = false;                         // first payload builds the shell; rest reconcile
 const sectionById = new Map<string, HTMLElement>();
+const reduceMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function focusTree(): void {
     (document.querySelector('.tree') as HTMLElement | null)?.focus({ preventScroll: true });
@@ -145,6 +147,109 @@ function renderAll(): void {
     wireObserver();
     if (selectedId) syncToSection(selectedId, false);
     if (!didFocusTree) { didFocusTree = true; queueMicrotask(focusTree); }
+}
+
+// ─── Reconcile (subsequent payloads — keep scroll, animate only what changed) ─
+function reconcile(): void {
+    document.querySelector('.toolbar')?.replaceWith(renderToolbar());
+    reconcileTree();
+    reconcileDoc();
+    if (selectedId) syncToSection(selectedId, false);
+}
+
+function reconcileTree(): void {
+    const tree = document.querySelector('.tree') as HTMLElement | null;
+    if (!tree) return;
+    const scroll = tree.scrollTop;
+    const had = treeHasFocus();
+    const next = renderTree();
+    tree.replaceWith(next);
+    next.scrollTop = scroll;
+    if (had) next.focus({ preventScroll: true });
+}
+
+/** Topmost section currently in view — used to hold the reading position steady
+ *  while sections above it change height. */
+function pickScrollAnchor(doc: HTMLElement): { id: string; offset: number } | null {
+    const top = doc.scrollTop;
+    let best: { id: string; o: number } | null = null;
+    for (const [id, e] of sectionById) {
+        if (e.offsetTop + e.offsetHeight > top + 4 && (!best || e.offsetTop < best.o)) {
+            best = { id, o: e.offsetTop };
+        }
+    }
+    return best ? { id: best.id, offset: best.o - top } : null;
+}
+
+function reconcileDoc(): void {
+    const doc = document.querySelector('.doc') as HTMLElement | null;
+    const accent = document.getElementById('doc-accent');
+    // Empty↔non-empty transitions or a missing host → rebuild the host wholesale.
+    if (!doc || !accent || payload.sections.length === 0 || doc.classList.contains('empty')) {
+        document.querySelector('.doc-host')?.replaceWith(renderDocHost());
+        wireObserver();
+        return;
+    }
+
+    const reduce = reduceMotion();
+    const firstTop = new Map<string, number>();
+    for (const [id, e] of sectionById) firstTop.set(id, e.getBoundingClientRect().top);
+    const anchor = pickScrollAnchor(doc);
+    const newSet = new Set(payload.sections.map(s => s.id));
+
+    // Exits — features that vanished.
+    for (const [id, e] of [...sectionById]) {
+        if (!newSet.has(id)) { sectionById.delete(id); e.remove(); }
+    }
+
+    // Create / update (crossfade on content change) / reorder.
+    let prev: ChildNode = accent;
+    for (const sec of payload.sections) {
+        const existing = sectionById.get(sec.id);
+        let node: HTMLElement;
+        if (!existing) {
+            node = renderSection(sec);
+            if (!reduce) node.classList.add('entering');
+            sectionById.set(sec.id, node);
+            observer?.observe(node);
+        } else if (existing.dataset.hash !== sec.contentHash && editingDesc !== sec.id && editingTitle !== sec.id) {
+            node = renderSection(sec);
+            sectionById.set(sec.id, node);
+            observer?.observe(node);
+            existing.replaceWith(node);
+            if (!reduce) node.classList.add('changed');
+        } else {
+            node = existing;                 // unchanged content (or being edited) → keep DOM
+            applyLiveFlags(node, sec);       // but reflect live agent activity
+        }
+        if (prev.nextSibling !== node) doc.insertBefore(node, prev.nextSibling);
+        prev = node;
+    }
+
+    // Hold the reading position: keep the anchor section where it was on screen.
+    if (anchor) {
+        const a = sectionById.get(anchor.id);
+        if (a) doc.scrollTop = a.offsetTop - anchor.offset;
+    }
+
+    // FLIP: animate any section that moved to its new resting place.
+    if (!reduce) {
+        requestAnimationFrame(() => {
+            for (const [id, node] of sectionById) {
+                const before = firstTop.get(id);
+                if (before == null) continue;          // freshly entered → handled by .entering
+                const dy = before - node.getBoundingClientRect().top;
+                if (Math.abs(dy) < 1) continue;
+                node.style.transition = 'none';
+                node.style.transform = `translateY(${dy}px)`;
+                requestAnimationFrame(() => {
+                    node.style.transition = 'transform 260ms var(--ease)';
+                    node.style.transform = '';
+                    node.addEventListener('transitionend', () => { node.style.transition = ''; node.style.transform = ''; }, { once: true });
+                });
+            }
+        });
+    }
 }
 
 function renderToolbar(): HTMLElement {
@@ -472,7 +577,6 @@ function renderSection(sec: DocSection): HTMLElement {
     if (!sec.flags.realized) meta.append(el('span', 'pill plan', 'unrealized'));
     if (sec.proposal?.op === 'amend') meta.append(el('span', 'pill amend', 'amend pending'));
     if (sec.proposal?.op === 'retire') meta.append(el('span', 'pill retire', 'retire pending'));
-    if (sec.flags.activeMode === 'write') meta.append(el('span', 'pill amend', 'editing now'));
     if (meta.children.length) s.append(meta);
 
     // AMEND title diff.
@@ -515,7 +619,17 @@ function renderSection(sec: DocSection): HTMLElement {
     }
 
     s.onclick = () => { if (!editingTitle && !editingDesc) setSelected(sec.id, false); };
+    s.dataset.hash = sec.contentHash;
+    applyLiveFlags(s, sec);
     return s;
+}
+
+/** Toggle live agent-activity classes on an existing section node without a
+ *  content rebuild (so the reconciler can update "editing/reading now" cheaply).
+ *  contentHash deliberately excludes active state, so these never crossfade. */
+function applyLiveFlags(node: HTMLElement, sec: DocSection): void {
+    node.classList.toggle('active-write', sec.flags.activeMode === 'write');
+    node.classList.toggle('active-read', sec.flags.activeMode === 'read');
 }
 
 function renderDescEditor(sec: DocSection): HTMLElement {
@@ -724,9 +838,13 @@ window.addEventListener('message', ev => {
         for (const r of payload.roots) expanded.add(r);
         if (selectedId == null) selectedId = payload.roots[0] ?? payload.sections[0]?.id ?? null;
     }
-    editingTitle = null;
-    editingDesc = null;
-    renderAll();
+    // Preserve an in-flight inline edit across reflections elsewhere; only drop
+    // it if the edited feature itself disappeared from the payload.
+    const stillThere = (id: string | null): boolean => !!id && payload.sections.some(s => s.id === id);
+    if (!stillThere(editingTitle)) editingTitle = null;
+    if (!stillThere(editingDesc)) editingDesc = null;
+
+    if (!mounted) { mounted = true; renderAll(); } else { reconcile(); }
 });
 
 vscode.postMessage({ kind: 'ready' });
