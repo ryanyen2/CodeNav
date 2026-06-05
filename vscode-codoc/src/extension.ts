@@ -10,7 +10,7 @@ import { CodocDocumentLinkProvider } from './providers/doc-links';
 import { CodocInlayHintsProvider } from './providers/inlay';
 import { CodocFoldingProvider } from './providers/folding';
 import { CodocSymbolProvider } from './providers/symbol';
-import { applyDecorations, createDecorations } from './providers/decoration';
+import { applyDecorations, applyPendingCodeDecorations, createDecorations } from './providers/decoration';
 import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
 import { bindingsForFeature } from './state/bindings-model';
 import { DependencyFocus } from './providers/focus';
@@ -316,7 +316,11 @@ export function activate(context: vscode.ExtensionContext): void {
     const decorations = createDecorations(context);
     const refreshDecorations = (editor?: vscode.TextEditor): void => {
         const ed = editor ?? vscode.window.activeTextEditor;
-        if (ed) applyDecorations(ed, decorations, state.activeFeatureLines, state.sidecar);
+        if (!ed) return;
+        applyDecorations(ed, decorations, state.activeFeatureLines, state.sidecar);
+        // Reverse direction: mark the code a queued tree edit will rework.
+        const rel = vscode.workspace.asRelativePath(ed.document.fileName);
+        applyPendingCodeDecorations(ed, decorations, state.pendingCodeForFile(rel));
     };
     refreshDecorations();
     context.subscriptions.push(
@@ -325,8 +329,9 @@ export function activate(context: vscode.ExtensionContext): void {
             const ed = vscode.window.activeTextEditor;
             if (ed && ed.document === e.document) refreshDecorations(ed);
         }),
-        // Sidecar reload (proposals / realized) must repaint the in-place overlays.
-        state.onDidChange(() => refreshDecorations()),
+        // Sidecar / realize.md reload must repaint overlays + pending-code marks
+        // across every visible editor (the changed file may not be active).
+        state.onDidChange(() => vscode.window.visibleTextEditors.forEach(refreshDecorations)),
     );
 
     // ── Dependency focus (opacity dimming on cursor) ───────────────────────────

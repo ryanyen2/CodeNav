@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
 import { SidecarData, ProposalsMap, emptySidecar, featureAdjacency } from './bindings-model';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
+import { parseRealize, pendingCodeByFile, PendingChange } from './realize-model';
 
 export { ParsedFeature, SidecarData };
 
@@ -37,6 +38,7 @@ export class WorkspaceState {
     private _sidecar: SidecarData = emptySidecar();
     private _status: CodocStatus = { state: 'in_sync', pending: 0, detail: '' };
     private _activity: ActivityData = {};
+    private _pendingCode: Map<string, PendingChange[]> = new Map();
 
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
@@ -62,6 +64,7 @@ export class WorkspaceState {
             '**/.codoc/status.json',
             '**/.codoc/inbox.json',
             '**/.codoc/activity.json',
+            '**/.codoc/realize.md',
         ]) {
             const w = vscode.workspace.createFileSystemWatcher(glob);
             this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));
@@ -88,6 +91,7 @@ export class WorkspaceState {
             this._proposals = [];
             this._sidecar = emptySidecar();
             this._status = { state: 'in_sync', pending: 0, detail: '' };
+            this._pendingCode = new Map();
             this._updateStatusBar();
             this._onDidChange.fire();
             return;
@@ -120,6 +124,14 @@ export class WorkspaceState {
         let activityText = '';
         try { activityText = fs.readFileSync(this._codocPath('activity.json'), 'utf-8'); } catch { /* file absent → no active agent */ }
         this._activity = parseActivity(activityText);
+
+        // .codoc/realize.md → which code the queued tree edits will touch (reverse
+        // direction: codoc → codebase placeholders). Absent when nothing queued.
+        try {
+            this._pendingCode = pendingCodeByFile(parseRealize(fs.readFileSync(this._codocPath('realize.md'), 'utf-8')));
+        } catch {
+            this._pendingCode = new Map();
+        }
 
         this._updateStatusBar();
         this._onDidChange.fire();
@@ -191,6 +203,9 @@ export class WorkspaceState {
     get pendingCount(): number { return this._status.pending; }
     get activity(): ActivityData { return this._activity; }
     get agentActive(): boolean { return isAgentActive(this._activity); }
+    /** Code the queued tree edits (.codoc/realize.md) will touch, by repo-relative file. */
+    get pendingCode(): Map<string, PendingChange[]> { return this._pendingCode; }
+    pendingCodeForFile(relPath: string): PendingChange[] { return this._pendingCode.get(relPath) ?? []; }
     get activeFeatureLines(): number[] {
         return computeActiveFeatureLines(this._activity, this._features, this._sidecar);
     }

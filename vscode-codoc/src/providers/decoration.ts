@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { parseTreeCodoc } from '../state/tree-model';
 import { SidecarData, emptySidecar } from '../state/bindings-model';
+import { PendingChange } from '../state/realize-model';
 
 // Identity / event markers ⟨f-…⟩ ⟨e-…⟩ (plus the two spaces before them) are
 // collapsed to nothing — the human never sees or types an id.
@@ -20,6 +21,7 @@ export interface CodocDecorations {
     retireStrike: vscode.TextEditorDecorationType;   // proposed retire (node not yet retired)
     amendInline: vscode.TextEditorDecorationType;     // proposed title/description edit
     unrealizedPlaceholder: vscode.TextEditorDecorationType;  // accepted plan node, no code yet
+    pendingCodeChange: vscode.TextEditorDecorationType;  // source code a queued tree edit will rework
 }
 
 export function createDecorations(_context: vscode.ExtensionContext): CodocDecorations {
@@ -96,7 +98,64 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
             borderWidth: '0 0 0 2px',
             borderStyle: 'dashed',
         }),
+        // Reverse direction: source code a queued tree edit will rework. Dashed
+        // purple (matches the "planned, not yet done" language of unrealized),
+        // calm — no animation on the code side.
+        pendingCodeChange: vscode.window.createTextEditorDecorationType({
+            isWholeLine: true,
+            overviewRulerColor: new vscode.ThemeColor('charts.purple'),
+            overviewRulerLane: vscode.OverviewRulerLane.Left,
+            borderColor: new vscode.ThemeColor('charts.purple'),
+            borderWidth: '0 0 0 2px',
+            borderStyle: 'dashed',
+        }),
     };
+}
+
+/**
+ * Decorate a SOURCE editor (python/ts/js, not the codoc tree) with the lines a
+ * queued tree edit will rework, so the reverse direction (codoc → codebase) is
+ * visible before the agent touches the code. Matches declaration lines by the
+ * leaf name of each pending symbol; falls back to a file-level marker on line 0
+ * for file-scoped (no-symbol) changes.
+ */
+export function applyPendingCodeDecorations(
+    editor: vscode.TextEditor,
+    dec: CodocDecorations,
+    pending: PendingChange[],
+): void {
+    if (editor.document.languageId === 'codoc' || pending.length === 0) {
+        editor.setDecorations(dec.pendingCodeChange, []);
+        return;
+    }
+    const leaves = new Map<string, string>();   // leaf symbol → driving title
+    let fileLevel: string | null = null;
+    for (const c of pending) {
+        if (c.symbol) leaves.set(c.symbol.split('::').pop()!, c.title);
+        else if (fileLevel === null) fileLevel = c.title;
+    }
+
+    const ranges: vscode.DecorationOptions[] = [];
+    if (leaves.size) {
+        for (let i = 0; i < editor.document.lineCount; i++) {
+            const line = editor.document.lineAt(i).text;
+            if (!/^\s*(def |class |function |async def |export\s+(function|class|default))/.test(line)) continue;
+            const name = (/(?:def |class |function |async def )\s*(\w+)/.exec(line) ?? [])[1];
+            const title = name ? leaves.get(name) : undefined;
+            if (!title) continue;
+            ranges.push({
+                range: new vscode.Range(i, 0, i, line.length),
+                hoverMessage: new vscode.MarkdownString(`**codoc** — a queued tree edit (“${title}”) will rework this. Run \`/codoc:realize\`.`),
+            });
+        }
+    }
+    if (ranges.length === 0 && fileLevel) {
+        ranges.push({
+            range: new vscode.Range(0, 0, 0, editor.document.lineAt(0).text.length),
+            hoverMessage: new vscode.MarkdownString(`**codoc** — a queued tree edit (“${fileLevel}”) will add code to this file. Run \`/codoc:realize\`.`),
+        });
+    }
+    editor.setDecorations(dec.pendingCodeChange, ranges);
 }
 
 export function applyDecorations(

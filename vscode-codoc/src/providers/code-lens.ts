@@ -20,34 +20,51 @@ export class CodocCodeLensProvider implements vscode.CodeLensProvider {
             byLeaf.set(leaf, { title: e.feature_title, id: e.feature_id });
         }
 
+        // Reverse direction: symbols a queued tree edit will rework (only while
+        // the pipeline is awaiting implementation), keyed by leaf name.
+        const willChange = this._pendingByLeaf(relPath);
+
         const lenses: vscode.CodeLens[] = [];
         for (let i = 0; i < document.lineCount; i++) {
             const line = document.lineAt(i).text;
             const isDecl = /^\s*(def |class |function |async def |export\s+(function|class|default))/.test(line);
             if (!isDecl) continue;
 
-            const entry = _findFeature(byLeaf, line);
-            if (!entry) continue;
-
+            const declName = (/(?:def |class |function |async def )\s*(\w+)/.exec(line) ?? [])[1];
             const range = new vscode.Range(i, 0, i, line.length);
-            lenses.push(new vscode.CodeLens(range, {
-                title: `codoc: ${entry.title}`,
-                command: 'codoc.navigateToFeature',
-                arguments: [entry.id],
-                tooltip: 'Reveal this feature in the codoc tree',
-            }));
+
+            const entry = declName ? byLeaf.get(declName) : undefined;
+            if (entry) {
+                lenses.push(new vscode.CodeLens(range, {
+                    title: `codoc: ${entry.title}`,
+                    command: 'codoc.navigateToFeature',
+                    arguments: [entry.id],
+                    tooltip: 'Reveal this feature in the codoc tree',
+                }));
+            }
+
+            const pending = declName ? willChange.get(declName) : undefined;
+            if (pending) {
+                lenses.push(new vscode.CodeLens(range, {
+                    title: `codoc: ⟳ will change · ${pending.title}`,
+                    command: 'codoc.open',
+                    tooltip: `A queued tree edit ("${pending.title}") will rework this — run /codoc:realize to implement it`,
+                }));
+            }
         }
         return lenses;
     }
-}
 
-/**
- * Identify the feature for a declaration line by matching the declared name
- * against the symbol leaf names we know from the sidecar.
- */
-function _findFeature(byLeaf: Map<string, { title: string; id: string }>, line: string): { title: string; id: string } | null {
-    // Extract the declared name from common patterns.
-    const m = /(?:def |class |function |async def )\s*(\w+)/.exec(line);
-    if (!m) return null;
-    return byLeaf.get(m[1]) ?? null;
+    /** Leaf symbol name → the queued change touching it (awaiting_impl/tree_dirty only). */
+    private _pendingByLeaf(relPath: string): Map<string, { title: string }> {
+        const map = new Map<string, { title: string }>();
+        const state = this.state.status.state;
+        if (state !== 'awaiting_impl' && state !== 'tree_dirty') return map;
+        for (const change of this.state.pendingCodeForFile(relPath)) {
+            if (!change.symbol) continue;
+            const leaf = change.symbol.includes('::') ? change.symbol.split('::').pop()! : change.symbol;
+            map.set(leaf, { title: change.title });
+        }
+        return map;
+    }
 }
