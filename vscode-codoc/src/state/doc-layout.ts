@@ -62,6 +62,7 @@ export interface DocSection {
     title: string;
     level: number;               // tree depth (0 = root)
     parentId: string | null;
+    raw: string;                 // unprocessed description text (for the editor)
     blocks: InlineRun[][];       // paragraphs → inline runs
     bindings: SymbolEntry[];     // binding rail (deduped against authored refs)
     crossRefs: CrossRef[];       // sorted by weight desc; renderer slices top-K
@@ -299,6 +300,7 @@ export function layoutDoc(
             title: f.title,
             level: 0,
             parentId: f.parent_id,
+            raw: f.description,
             blocks: weaveBlocks(f.description),
             bindings: bindingRail(bindings, f),
             crossRefs: crossRefsFor(f.id, dir, titleOf),
@@ -330,6 +332,7 @@ export function layoutDoc(
             title,
             level: 0,
             parentId,
+            raw: p.description ?? '',
             blocks: weaveBlocks(p.description ?? ''),
             bindings: [],
             crossRefs: [],

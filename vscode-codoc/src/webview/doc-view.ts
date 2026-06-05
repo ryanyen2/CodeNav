@@ -576,8 +576,12 @@ function renderSection(sec: DocSection): HTMLElement {
         if (sec.flags.isGhost && sec.flags.proposalOp === 'move') h.append(el('span', 'crumb', '→ moved'));
         h.append(document.createTextNode(sec.title || '(untitled)'));
         if (!sec.flags.isGhost) {
-            h.title = 'Double-click to edit';
+            h.title = 'Double-click to edit the title';
             h.ondblclick = () => { setSelected(sec.id, false); startEditTitle(sec.id); };
+            const pencil = el('button', 'edit-pencil', '✎');
+            pencil.title = 'Edit description';
+            pencil.onclick = ev => { ev.stopPropagation(); setSelected(sec.id, false); startEditDesc(sec.id); };
+            h.append(pencil);
         }
         s.append(h);
     }
@@ -655,10 +659,9 @@ function applyLiveFlags(node: HTMLElement, sec: DocSection): void {
 
 function renderDescEditor(sec: DocSection): HTMLElement {
     const wrap = el('div');
-    const raw = sec.blocks.map(b => b.map(r => r.t === 'text' ? r.s : `[${r.label}](codoc:${r.file}${r.symbol ? '#' + r.symbol : ''})`).join('')).join('\n\n');
     const ta = document.createElement('textarea');
     ta.className = 'd-edit';
-    ta.value = raw;
+    ta.value = sec.raw;     // exact stored text → lossless round-trip
     ta.onkeydown = ev => {
         ev.stopPropagation();
         if (ev.key === 'Escape') { ev.preventDefault(); cancelDesc(); }
@@ -681,11 +684,28 @@ function renderDescEditor(sec: DocSection): HTMLElement {
 // ─── Selection + two-way scroll sync ────────────────────────────────────────
 function setSelected(id: string | null, scrollDoc: boolean): void {
     selectedId = id;
+    // Explicit navigation (tree click, keyboard, xref) reveals a node whose
+    // ancestors are collapsed; scroll-spy (scrollDoc=false) leaves the tree alone.
+    if (id && scrollDoc) revealAncestors(id);
     document.querySelectorAll('.row.selected').forEach(r => r.classList.remove('selected'));
     if (id) {
         const rowEl = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(id) + '"]');
         if (rowEl) { rowEl.classList.add('selected'); rowEl.scrollIntoView({ block: 'nearest' }); }
         syncToSection(id, scrollDoc);
+    }
+}
+
+/** Expand every ancestor of `id` so its tree row becomes visible. */
+function revealAncestors(id: string): void {
+    let changed = false;
+    let n: UINode | undefined = payload.nodes[id];
+    while (n && n.parent_id) {
+        if (!expanded.has(n.parent_id)) { expanded.add(n.parent_id); changed = true; }
+        n = payload.nodes[n.parent_id];
+    }
+    if (changed) {
+        const tree = document.querySelector('.tree');
+        if (tree) { const next = renderTree(); tree.replaceWith(next); }
     }
 }
 

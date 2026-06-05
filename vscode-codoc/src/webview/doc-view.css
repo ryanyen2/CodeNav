@@ -225,6 +225,13 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .section[data-level="3"] .h,
 .section[data-level="4"] .h { font: 600 13px/1.3 var(--vscode-editor-font-family); color: var(--fg-muted); }
 .section .h .crumb { font: 11px var(--vscode-font-family); color: var(--fg-muted); margin-right: 8px; }
+.section .h .edit-pencil {
+    font: 12px var(--vscode-font-family); margin-left: 10px; padding: 0 4px;
+    background: none; border: none; color: var(--fg-muted); cursor: pointer;
+    opacity: 0; vertical-align: middle; transition: opacity 100ms ease, color 100ms ease;
+}
+.section:hover .h .edit-pencil { opacity: 0.55; }
+.section .h .edit-pencil:hover { opacity: 1; color: var(--accent-blue); }
 
 .section.retired .h { text-decoration: line-through; opacity: 0.55; color: var(--accent-retire); }
 .section.unrealized .h { font-style: italic; opacity: 0.85; }
