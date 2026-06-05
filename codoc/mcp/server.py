@@ -115,6 +115,15 @@ def codoc_attach(feature_id: str, binds: list[str], rationale: str = "") -> dict
 
 
 @mcp.tool
+def codoc_realize_progress(done: int, total: int, current: str = "") -> dict:
+    """Report progress while implementing ``.codoc/realize.md`` directives so the
+    IDE shows "implementing N of M". Call it as you start each directive: pass the
+    number completed so far, the total directive count, and the current title."""
+    cd, err = _need_dir()
+    return err or tools.realize_progress(cd, done=done, total=total, current=current)
+
+
+@mcp.tool
 def codoc_plan_add(title: str, description: str = "", parent_id: str | None = None,
                    binds: list[str] | None = None, rationale: str = "") -> dict:
     """Propose a PLAN placeholder node (used by /codoc:plan, before writing code).

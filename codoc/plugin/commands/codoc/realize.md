@@ -15,19 +15,29 @@ codoc exposes the `codoc` MCP server. Follow these steps exactly.
   `New intent:` line, the currently-`Bound code:`, and an `Edit only:` scope.
 - If the file does not exist, there is nothing to realize — tell the user and stop.
 
-## 2. Implement each directive (minimum surgical change)
-- Apply the **smallest** code change that satisfies each item's intent.
+## 2. Implement each directive (minimum surgical change), one at a time
+Work through the directives **sequentially**, and reflect each one before moving to
+the next — this lets the IDE's documentation view fill in each feature as you finish
+it (a skeleton placeholder resolves into the realized content), rather than all at
+once at the end.
+
+For directive *i* of *N*:
+- Call `codoc_realize_progress(done=i-1, total=N, current="<feature title>")` as you
+  **start** it, so the IDE shows "implementing i of N".
+- Apply the **smallest** code change that satisfies its intent.
 - **Edit ONLY the files named in that item's `Edit only:` line.** If an item names
   no files, create the smallest new file/symbol that fits — do not refactor
   unrelated code to host it.
 - **NEVER edit anything under `.codoc/`** — that is codoc's own state. In particular
   do not touch `.codoc/tree.codoc`; codoc maintains feature descriptions itself.
 - Do not rename or reword features/symbols no directive asked you to change.
+- Immediately `codoc_reflect(ops, rationale)` for **that directive's** code (see §3),
+  before starting the next one.
 
-## 3. Bind the code back to the tree
+## 3. Bind the code back to the tree (per directive)
 - Call `codoc_reflect(ops, rationale)` to attach the code you wrote/changed to the
-  features it realizes (`attach` with `binds` of `"file.py::symbol"`). Binding flips
-  an accepted plan placeholder to **realized**.
+  feature it realizes (`attach` with `binds` of `"file.py::symbol"`). Binding flips
+  an accepted plan placeholder to **realized** and resolves its skeleton in the IDE.
 - If you implemented anything beyond the queued directives, include `add_node` ops in
   the same `codoc_reflect` call so it surfaces as a new proposal for the user.
 

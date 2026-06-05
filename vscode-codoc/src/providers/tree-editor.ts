@@ -94,7 +94,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const status = this.state.status;
         const activity = this.state.activity;
         const activeModes = activeFeatureModes(activity, sidecar);
+        // Effective phase: an explicit signal (editing/reflecting/done) wins;
+        // otherwise a feature whose bound file is being written reads as 'editing'
+        // so it shimmers immediately, before the hook's explicit mark lands.
         const phases = featurePhases(activity);
+        for (const [fid, mode] of activeModes) {
+            if (mode === 'write' && !phases.has(fid)) phases.set(fid, 'editing');
+        }
 
         const nodes: Record<string, UINode> = {};
         const roots: string[] = [];

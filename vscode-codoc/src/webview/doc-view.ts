@@ -206,20 +206,31 @@ function reconcileDoc(): void {
     let prev: ChildNode = accent;
     for (const sec of payload.sections) {
         const existing = sectionById.get(sec.id);
+        const editingThis = editingDesc === sec.id || editingTitle === sec.id;
+        const phaseChanged = existing && existing.dataset.phase !== (sec.flags.phase ?? '');
+        const contentChanged = existing && existing.dataset.hash !== sec.contentHash;
         let node: HTMLElement;
         if (!existing) {
             node = renderSection(sec);
             if (!reduce) node.classList.add('entering');
             sectionById.set(sec.id, node);
             observer?.observe(node);
-        } else if (existing.dataset.hash !== sec.contentHash && editingDesc !== sec.id && editingTitle !== sec.id) {
+        } else if ((contentChanged || phaseChanged) && !editingThis) {
+            const wasEditing = existing.dataset.phase === 'editing';
             node = renderSection(sec);
             sectionById.set(sec.id, node);
             observer?.observe(node);
             existing.replaceWith(node);
-            if (!reduce) node.classList.add('changed');
+            if (!reduce) {
+                if (wasEditing && sec.flags.phase !== 'editing') {
+                    // skeleton → real content: staggered paragraph fade-up
+                    node.querySelector('.prose')?.classList.add('revealing');
+                } else if (contentChanged) {
+                    node.classList.add('changed');
+                }
+            }
         } else {
-            node = existing;                 // unchanged content (or being edited) → keep DOM
+            node = existing;                 // unchanged (or being edited) → keep DOM
             applyLiveFlags(node, sec);       // but reflect live agent activity
         }
         if (prev.nextSibling !== node) doc.insertBefore(node, prev.nextSibling);
@@ -589,9 +600,12 @@ function renderSection(sec: DocSection): HTMLElement {
         s.append(dx);
     }
 
-    // Prose (or inline desc editor).
+    // Prose (or inline desc editor, or skeleton while the agent reworks it).
     if (editingDesc === sec.id) {
         s.append(renderDescEditor(sec));
+    } else if (sec.flags.phase === 'editing' && !sec.flags.isGhost) {
+        s.classList.add('streaming');
+        s.append(renderSkeleton());
     } else {
         s.append(renderProse(sec));
     }
@@ -620,8 +634,15 @@ function renderSection(sec: DocSection): HTMLElement {
 
     s.onclick = () => { if (!editingTitle && !editingDesc) setSelected(sec.id, false); };
     s.dataset.hash = sec.contentHash;
+    s.dataset.phase = sec.flags.phase ?? '';
     applyLiveFlags(s, sec);
     return s;
+}
+
+function renderSkeleton(): HTMLElement {
+    const sk = el('div', 'skeleton');
+    sk.append(el('div', 'bar'), el('div', 'bar'), el('div', 'bar'));
+    return sk;
 }
 
 /** Toggle live agent-activity classes on an existing section node without a

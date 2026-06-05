@@ -152,6 +152,9 @@ def handle_stop(payload: dict[str, Any], codoc_dir: str) -> None:
     ep["open"] = False
     ep["ended_at"] = _now_iso()
     data["epoch"] = ep
+    # The agent stopped → no feature is "being edited now"; clear phases so the
+    # doc view settles (any content updates already flowed through the sidecar).
+    data["features"] = {}
     _write_activity(codoc_dir, data)
     _maybe_spawn_reflect(codoc_dir, data, ep)
 
@@ -240,6 +243,16 @@ def _handle_tool(
     })
     if len(recent) > _MAX_RECENT:
         recent = recent[-_MAX_RECENT:]
+
+    # A write to a bound file means the agent is reworking that feature now →
+    # phase "editing" so the IDE doc view shows a skeleton until reflection lands.
+    if mode == "write" and feature_ids:
+        feats = data.get("features")
+        if not isinstance(feats, dict):
+            feats = {}
+        for fid in feature_ids:
+            feats[fid] = {"phase": "editing", "at": _now_iso()}
+        data["features"] = feats
 
     data["touched"] = touched
     data["recent"] = recent

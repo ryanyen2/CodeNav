@@ -42,9 +42,19 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 ACTIVITY_FILENAME = "activity.json"
+
+# Per-feature reflection phases surfaced to the IDE doc view (skeleton → fill-in):
+#   "editing"    — an agent is writing code bound to this feature right now
+#   "reflecting" — the agent is binding the change into the tree
+#   "done"       — reflection landed (content just updated); overrides the
+#                  "editing" the watch/touched signal would otherwise imply
+PHASE_EDITING = "editing"
+PHASE_REFLECTING = "reflecting"
+PHASE_DONE = "done"
 
 _EMPTY: dict = {
     "version": 1,
@@ -81,6 +91,52 @@ def epoch_touched_files(codoc_dir: str | Path) -> list[str]:
     data = read_activity(codoc_dir)
     touched: dict = data.get("touched") or {}
     return list(touched.keys())
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def mark_feature_phase(codoc_dir: str | Path, feature_ids: list[str], phase: str) -> None:
+    """Set the reflection ``phase`` for ``feature_ids`` in ``activity.json``.
+
+    Merges into the existing file under a lock so concurrent writers (the hook
+    process marking ``editing`` and the MCP server marking ``done``) don't clobber
+    each other. Best-effort: any failure is swallowed — this only drives an
+    animation, never correctness.
+    """
+    if not feature_ids:
+        return
+    codoc_dir = Path(codoc_dir)
+    try:
+        from filelock import FileLock
+        lock = FileLock(str(codoc_dir / (ACTIVITY_FILENAME + ".lock")), timeout=5)
+    except ImportError:
+        lock = None  # type: ignore[assignment]
+
+    def _do() -> None:
+        data = read_activity(codoc_dir)
+        feats = data.get("features")
+        if not isinstance(feats, dict):
+            feats = {}
+        now = _now_iso()
+        for fid in feature_ids:
+            feats[fid] = {"phase": phase, "at": now}
+        data["features"] = feats
+        dest = activity_path(codoc_dir)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        os.replace(tmp, dest)
+
+    try:
+        if lock is not None:
+            with lock:
+                _do()
+        else:
+            _do()
+    except Exception:  # noqa: BLE001 — never break a tool/hook over an animation hint
+        pass
 
 
 def epoch_written_files(codoc_dir: str | Path) -> list[str]:

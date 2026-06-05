@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codoc.loop.activity import PHASE_DONE, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
 from codoc.loop.reconcile import safe_write_tree
 from codoc.model.event import (
@@ -27,6 +28,20 @@ from codoc.model.event import (
     NodeOpKind,
 )
 from codoc.store.db import Store, open_store
+
+# Ops that update an existing live feature's content/bindings — marking these
+# "done" resolves the IDE doc view's skeleton into the reflected content.
+_LIVE_FEATURE_KINDS = {
+    NodeOpKind.ATTACH, NodeOpKind.DETACH, NodeOpKind.REFRESH,
+    NodeOpKind.AMEND, NodeOpKind.MOVE_NODE, NodeOpKind.RETIRE_NODE,
+}
+
+
+def _mark_reflected(codoc_dir: str, ops: list[NodeOp]) -> None:
+    """Best-effort: flag the live features these ops touched as reflection-done."""
+    fids = [op.feature_id for op in ops
+            if op.kind in _LIVE_FEATURE_KINDS and op.feature_id]
+    mark_feature_phase(codoc_dir, fids, PHASE_DONE)
 
 
 def _parse_binds(binds: list[str] | None) -> list[tuple[str, str]]:
@@ -127,6 +142,7 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str) -> dict:
         applied = should_auto_apply(op, store)
         ev = apply_op(op, store, source=source, applied=applied)
         wrote = safe_write_tree(store, codoc_dir)
+        _mark_reflected(codoc_dir, [op])
         return {"ok": True, "event_id": ev.id, "applied": applied,
                 "rendered": wrote, "summary": _op_summary(op, store)}
     finally:
@@ -183,6 +199,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
     """
     store = open_store(codoc_dir)
     results: list[dict] = []
+    applied_ops: list[NodeOp] = []
     applied_n = proposed_n = 0
     try:
         for raw in ops:
@@ -214,15 +231,32 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
 
             applied = should_auto_apply(op, store)
             ev = apply_op(op, store, source=source, applied=applied)
+            applied_ops.append(op)
             applied_n += int(applied)
             proposed_n += int(not applied)
             results.append({"ok": True, "event_id": ev.id, "applied": applied,
                             "summary": _op_summary(op, store)})
         wrote = safe_write_tree(store, codoc_dir)
+        _mark_reflected(codoc_dir, applied_ops)
         return {"ok": True, "applied": applied_n, "proposed": proposed_n,
                 "rendered": wrote, "results": results}
     finally:
         store.close()
+
+
+# ─── realize progress ────────────────────────────────────────────────────────
+
+def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = "") -> dict:
+    """Stamp ``done/total`` realize progress into ``status.json`` so the IDE shows
+    "implementing M of N" while the live session works through ``.codoc/realize.md``.
+    """
+    from codoc.loop.status import REALIZING, write_status
+    detail = f"{done}/{total}" + (f": {current}" if current else "")
+    try:
+        write_status(codoc_dir, REALIZING, pending=max(0, total - done), detail=detail)
+    except Exception:  # noqa: BLE001 — progress is advisory
+        return {"ok": False}
+    return {"ok": True, "done": done, "total": total}
 
 
 # ─── plan loop ──────────────────────────────────────────────────────────────────
