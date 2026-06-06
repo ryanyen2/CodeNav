@@ -172,10 +172,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             }
         }
 
-        for (const [pid, kids] of Object.entries(childrenOf)) {
-            if (nodes[pid]) nodes[pid].children = kids;
-        }
-
         // All pending proposal event ids → toolbar Accept-all / Reject-all.
         const pendingEventIds = [
             ...Object.values(sidecar.proposals?.by_feature ?? {}).map(p => p.event_id),
@@ -188,6 +184,19 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             .get<'dependency' | 'tree'>('docSiblingOrder', 'dependency');
         const sections = layoutDoc(features, sidecar, { siblingOrder, activeModes, phases });
 
+        // The doc article is the authoritative order (dependency-aware sibling
+        // topo-sort + ghost placement). Mirror that exact order onto the tree pane
+        // so navigating either side lines up 1:1 — otherwise the tree shows siblings
+        // in parse order while the doc shows them dependency-ordered, and scroll-spy
+        // selects the wrong row.
+        const orderedRoots: string[] = [];
+        const orderedChildren: Record<string, string[]> = {};
+        for (const sec of sections) {
+            if (sec.parentId && nodes[sec.parentId]) (orderedChildren[sec.parentId] ??= []).push(sec.id);
+            else orderedRoots.push(sec.id);
+        }
+        for (const id of Object.keys(nodes)) nodes[id].children = orderedChildren[id] ?? [];
+
         const sync: SyncState = {
             state: status.state,
             pending: status.pending,
@@ -199,7 +208,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
 
         return {
             nodes,
-            roots,
+            roots: orderedRoots,
             sections,
             status: { state: status.state, pending: status.pending },
             sync,

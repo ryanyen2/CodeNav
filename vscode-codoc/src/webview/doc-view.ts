@@ -684,9 +684,12 @@ function renderDescEditor(sec: DocSection): HTMLElement {
 // ─── Selection + two-way scroll sync ────────────────────────────────────────
 function setSelected(id: string | null, scrollDoc: boolean): void {
     selectedId = id;
-    // Explicit navigation (tree click, keyboard, xref) reveals a node whose
-    // ancestors are collapsed; scroll-spy (scrollDoc=false) leaves the tree alone.
-    if (id && scrollDoc) revealAncestors(id);
+    // Always reveal a selected node's ancestors so its tree row exists and can be
+    // marked .selected — whether selection came from a tree click, keyboard, an
+    // xref jump, a doc-heading click, or scroll-spy. revealAncestors only re-renders
+    // when an ancestor was actually collapsed, so scroll-spy within an already-open
+    // subtree stays cheap (no per-tick re-render).
+    if (id) revealAncestors(id);
     document.querySelectorAll('.row.selected').forEach(r => r.classList.remove('selected'));
     if (id) {
         const rowEl = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(id) + '"]');
