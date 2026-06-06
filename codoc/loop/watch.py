@@ -47,6 +47,9 @@ class WatchState:
     epoch_origin: str = ""       # "interactive" | "loop_b"
     last_epoch_id: str = ""      # prevents double-processing the same closed epoch
     suppressed_files: set[str] = field(default_factory=set)
+    # --auto-realize: a headless `claude -p /codoc:realize` we launched and that
+    # hasn't finished draining realize.md yet (prevents stacking duplicate passes).
+    realize_proc: object = None
 
 
 def _hash(path: Path) -> str:
@@ -351,12 +354,34 @@ def safe_process_batch(
         return None
 
 
+def maybe_auto_realize(state: WatchState, root_dir: str, codoc_dir: str, *, printer=print) -> None:
+    """Headless fallback (``--auto-realize``): implement a queued realize.md when
+    no interactive session is around to do it. Reaps a finished pass, then launches
+    a new one only when :func:`autorealize.should_spawn` agrees (queue present, none
+    in flight, no live epoch)."""
+    from codoc.loop import autorealize
+
+    proc = state.realize_proc
+    if proc is not None and proc.poll() is not None:  # previous pass finished
+        state.realize_proc = None
+        proc = None
+    if not autorealize.should_spawn(codoc_dir, in_flight=proc is not None):
+        return
+    launched = autorealize.spawn_realize(root_dir, codoc_dir)
+    if launched is None:
+        printer("⚠ --auto-realize: `claude` CLI not found on PATH; leaving realize.md queued")
+        return
+    state.realize_proc = launched
+    printer("▸ auto-realize  spawned headless /codoc:realize")
+
+
 def run_watch(
     root_dir: str,
     codoc_dir: str,
     *,
     no_realize: bool = False,
     dry_run: bool = False,
+    auto_realize: bool = False,
     printer=print,
 ) -> None:  # pragma: no cover - blocking I/O loop
     import atexit
@@ -382,9 +407,12 @@ def run_watch(
         except Exception as e:  # noqa: BLE001
             printer(f"⚠ startup reconcile failed (continuing to watch): {e}")
 
-    printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop)")
+    suffix = "  (--auto-realize: headless implement when unattended)" if auto_realize else ""
+    printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop){suffix}")
     for changes in watchfiles.watch(root_dir, watch_filter=watch_filter(codoc_dir), debounce=600):
         out = safe_process_batch([p for _, p in changes], root_dir, codoc_dir, state,
                                  no_realize=no_realize, dry_run=dry_run, printer=printer)
         if out:
             printer(f"▸ {out[0]}  {out[1]}")
+        if auto_realize:
+            maybe_auto_realize(state, root_dir, codoc_dir, printer=printer)

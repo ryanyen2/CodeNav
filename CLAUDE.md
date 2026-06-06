@@ -21,8 +21,10 @@ codoc status              # feature count, pending proposals, recent activity
 codoc sync                # one-shot escape hatch: apply tree edits (Loop B), then reflect code (Loop A)
 
 # watch flags
-codoc watch --dry         # reflect + apply tree edits, but don't queue realization directives
-codoc watch --no-realize  # sync the tree but never queue directives for the session
+codoc watch --dry           # reflect + apply tree edits, but don't queue realization directives
+codoc watch --no-realize    # sync the tree but never queue directives for the session
+codoc watch --auto-realize  # unattended fallback: spawn a headless `claude -p /codoc:realize`
+                            #   to implement queued tree edits when no interactive session is open
 
 # Tests (run with Python 3.11)
 python3.11 -m pytest tests/
@@ -171,6 +173,8 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 ### Loop B in detail (codoc → code)
 
 `run_loop_b` first drains `.codoc/inbox.json` (proposal verdicts written by the IDE's Accept/Reject actions: accept → `apply_op` + delete event; reject → delete event), then parses `tree.codoc` and diffs against the store (`codoc_file/diff.py`) into user ops (verdicts no longer come from the text), applies them (user edits are intentional → applied immediately), and builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`). Instead of spawning a headless agent, it **hands the work to the live session**: it writes the assembled directives to `.codoc/realize.md` and sets `status.json` = `awaiting_impl`. The user's interactive Claude Code session (nudged by the `UserPromptSubmit` hook) runs `/codoc:realize` — read the file → implement each directive → `codoc_reflect` to bind → delete `.codoc/realize.md`. The loop is then closed by the existing Stop-hook reflection (`agent/hook._maybe_spawn_reflect`) or the watch daemon's epoch-close Loop A pass. `--dry`/`--no-realize` skip the queue write.
+
+**Realization trigger + fallbacks.** The primary path is *in-session*: `/codoc:plan` proposes nodes then calls the **blocking** `codoc_await_verdicts(event_ids)` MCP tool (modeled on plannotator's blocking review hook) — it polls `inbox.json`, applies each verdict as it lands (recovering an ADD's freshly-minted feature id by diffing the feature set), marks accepted nodes `phase=editing`, and returns so the *same turn* implements + binds. No daemon, no idle gap. Two fallbacks reuse `realize.md` for when no session is waiting on that tool: (1) the `UserPromptSubmit` hook (`agent/hook._drain_inbox_fallback`) drains the inbox via Loop B when **no `codoc watch` daemon** owns the repo, so a plan accepted with no daemon still queues `realize.md` on the next prompt; (2) `codoc watch --auto-realize` (`loop/autorealize.py`: `should_spawn`/`spawn_realize`, driven by `watch.maybe_auto_realize`) spawns a **headless** `claude -p /codoc:realize` when a queue exists and no interactive epoch is open — the only path that lands code with nobody at the keyboard. The unified `/codoc:sync` command reads `status.json` and dispatches direction (awaiting_impl/tree_dirty → realize, code_drift → reflect).
 
 ### Environment variables
 

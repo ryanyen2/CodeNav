@@ -275,7 +275,13 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     prompt, if that file exists, inject a one-line ``additionalContext`` reminder
     so the session knows to run ``/codoc:realize``. Emits the UserPromptSubmit
     hook JSON on stdout; stays silent (no output) when nothing is queued.
-    """
+
+    Daemon-free fallback: if proposal verdicts are sitting unprocessed in the inbox
+    (the user accepted a plan but no ``codoc watch`` daemon is draining it), run
+    Loop B here first so the acceptance is applied and ``realize.md`` is queued —
+    making "accept a plan, then keep working in Claude" close the loop with no
+    daemon. When a daemon *is* running we defer to it (it owns the drain)."""
+    _drain_inbox_fallback(codoc_dir)
     realize = Path(codoc_dir) / REALIZE_FILENAME
     if not realize.exists():
         return
@@ -292,6 +298,24 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     )
     out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}
     print(json.dumps(out))
+
+
+def _drain_inbox_fallback(codoc_dir: str) -> None:
+    """Apply any pending inbox verdicts via Loop B when no daemon owns this repo.
+
+    Best-effort and silent: a hook must never fail the user's turn, so all errors
+    are swallowed. No-ops when the inbox is empty or a live ``codoc watch`` daemon
+    is already responsible for draining it."""
+    from codoc.loop import inbox
+    from codoc.loop.watch import daemon_running
+
+    try:
+        if daemon_running(codoc_dir) or not inbox.read_verdicts(codoc_dir):
+            return
+        from codoc.loop.loop_b import run_loop_b
+        run_loop_b(str(Path(codoc_dir).parent), codoc_dir)
+    except Exception:  # noqa: BLE001 — fallback is advisory; never break the prompt
+        pass
 
 
 # ─── Entrypoint ──────────────────────────────────────────────────────────────

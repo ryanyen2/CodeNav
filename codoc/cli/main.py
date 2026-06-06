@@ -59,11 +59,17 @@ def watch(
     root: str = typer.Option(".", "--root", help="Repository root."),
     no_realize: bool = typer.Option(False, "--no-realize", help="Reflect + sync, but don't spawn the coding agent."),
     dry: bool = typer.Option(False, "--dry", help="Build coding directives but don't spawn the agent."),
+    auto_realize: bool = typer.Option(
+        False, "--auto-realize",
+        help="Unattended fallback: spawn a headless `claude -p /codoc:realize` to "
+             "implement queued tree edits when no interactive session is around.",
+    ),
 ):
     """Watch code + tree.codoc and run both loops continuously."""
     from codoc.loop.watch import run_watch
 
-    run_watch(_root := root, _codoc_dir(root), no_realize=no_realize, dry_run=dry, printer=typer.echo)
+    run_watch(_root := root, _codoc_dir(root), no_realize=no_realize, dry_run=dry,
+              auto_realize=auto_realize, printer=typer.echo)
 
 
 @app.command()

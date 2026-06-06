@@ -297,3 +297,47 @@ def test_atomic_write_no_tmp_left(repo):
 
     tmp = codoc_dir / (ACTIVITY_FILENAME + ".tmp")
     assert not tmp.exists(), "tmp file should have been renamed to final dest"
+
+
+# ── Layer-1 fallback: user-prompt hook drains the inbox with no daemon ─────────
+
+def test_user_prompt_drains_inbox_when_no_daemon(tmp_path, capsys):
+    """Accepting a code-implying plan with no `codoc watch` running should still
+    queue realize.md on the next prompt (the daemon-free fallback)."""
+    from codoc.agent.hook import handle_user_prompt
+    from codoc.loop import inbox
+    from codoc.mcp import tools
+
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+
+    # A plan placeholder (realized=False ⇒ code-implying) accepted in the IDE.
+    eid = tools.plan_add(cd, title="New thing", description="do the thing")["event_id"]
+    inbox.append_verdict(cd, eid, accept=True)
+
+    with patch("codoc.loop.watch.daemon_running", return_value=False):
+        handle_user_prompt({}, cd)
+
+    # Verdict drained, placeholder applied, and realize.md queued + nudged.
+    assert inbox.read_verdicts(cd) == []
+    assert (root / ".codoc" / "realize.md").exists()
+    assert "realize" in capsys.readouterr().out
+
+
+def test_user_prompt_defers_to_running_daemon(tmp_path):
+    """When a daemon owns the repo, the hook must NOT drain the inbox itself."""
+    from codoc.agent.hook import handle_user_prompt
+    from codoc.loop import inbox
+    from codoc.mcp import tools
+
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+    eid = tools.plan_add(cd, title="New thing", description="do the thing")["event_id"]
+    inbox.append_verdict(cd, eid, accept=True)
+
+    with patch("codoc.loop.watch.daemon_running", return_value=True):
+        handle_user_prompt({}, cd)
+
+    assert [v.event_id for v in inbox.read_verdicts(cd)] == [eid]  # left for the daemon
