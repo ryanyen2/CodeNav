@@ -109,7 +109,7 @@ codoc/
                   # parse.py (text → ParsedTree; multi-paragraph descriptions, extract_refs,
                   #           ignores everything past the pending sentinel), diff.py (→ user ops only)
   lang/           # Tree-sitter adapters: python.py + typescript.py; get_adapter(), detect_language()  [KEPT]
-  core/           # tree_walk.py (tokens_hash/types_hash/minhash) + chunk_matching/minhash.py  [KEPT substrate]
+  core/           # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT substrate]
   pipelines/
     indexing/     # cocoindex_app.py, runner.update_index(), reader.read_all_chunks()  [KEPT]
   prompts/        # tree_update.txt, realize.txt (Loop B directive template)
@@ -139,13 +139,13 @@ SQLite WAL at `.codoc/codoc.db`. **Three authoritative tables + one derived grap
 
 No transactions/constraints/obligations/binding_resolutions/citations tables, no JSONL audit lane.
 
-The chunk index is owned by **cocoindex** and lives outside `codoc.db`: AST chunks + embeddings + identity hashes (tokens_hash / types_hash / minhash) are written to `.codoc/lancedb/code_chunks.lance` (LanceDB, embedded). Cocoindex's own memoization state lives in `.codoc/cocoindex.db/`. Together these provide durable, incremental, crash-resumable indexing — a killed `codoc init` resumes from the last completed file rather than re-embedding from scratch.
+The chunk index is owned by **cocoindex** and lives outside `codoc.db`: AST chunks + embeddings + identity hashes (tokens_hash / types_hash) are written to `.codoc/lancedb/code_chunks.lance` (LanceDB, embedded). Cocoindex's own memoization state lives in `.codoc/cocoindex.db/`. Together these provide durable, incremental, crash-resumable indexing — a killed `codoc init` resumes from the last completed file rather than re-embedding from scratch.
 
 ### Indexing layer (cocoindex + LanceDB)
 
 `codoc/pipelines/indexing/` owns the chunk + embedding substrate. `update_index(root_dir, codoc_dir)` runs the cocoindex App once: walks the repo, parses each supported file via the existing tree-sitter adapters, embeds each AST chunk via sentence-transformers, and upserts to LanceDB. Memoized per-file: unchanged files cost nothing. Killed mid-run, the next call resumes from the last completed component.
 
-Bootstrap and both loops call `update_index` first, then read from LanceDB via `read_all_chunks(codoc_dir)`. LanceDB rows carry `tokens_hash` (fingerprint), `types_hash` (AST-shape identity), and `minhash`. `tokens_hash` and `types_hash` are now both actively used (move/rename detection in Loop A); `minhash` remains computed-but-unread.
+Bootstrap and both loops call `update_index` first, then read from LanceDB via `read_all_chunks(codoc_dir)`. LanceDB rows carry `tokens_hash` (fingerprint) and `types_hash` (AST-shape identity), both actively used for move/rename detection in Loop A.
 
 ### Loop A in detail (code → codoc)
 
@@ -291,7 +291,7 @@ assertable as Given/When/Then userflows:
   delete detaches). Runs in a subprocess (cocoindex's index is a per-process
   singleton). Run it standalone with `python -m tests.bdd.e2e_report`.
 
-Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); ego-graph context for Loop A subtree selection; may-impact propagation in the LLM prompt; trim `minhash` from the index schema.
+Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); ego-graph context for Loop A subtree selection; may-impact propagation in the LLM prompt.
 
 ## Tests
 

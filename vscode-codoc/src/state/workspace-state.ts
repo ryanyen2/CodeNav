@@ -18,7 +18,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
-import { SidecarData, ProposalsMap, emptySidecar, featureAdjacency } from './bindings-model';
+import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
 import { parseRealize, pendingCodeByFile, PendingChange } from './realize-model';
 
@@ -42,9 +42,6 @@ export class WorkspaceState {
 
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
-
-    /** Compatibility shim: always file-based, never "offline". */
-    get connected(): boolean { return this._rootDir !== null; }
 
     constructor(private context: vscode.ExtensionContext) {
         this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -189,18 +186,11 @@ export class WorkspaceState {
         fs.writeFileSync(inboxPath, JSON.stringify({ version: 1, verdicts }, null, 2));
     }
 
-    async refreshState(): Promise<void> {
-        this._rootDir = this.detectRootDir();
-        this._reload();
-    }
-
     get rootDir(): string | null { return this._rootDir; }
     get features(): ParsedFeature[] { return this._features; }
     get proposals(): ProposalHunk[] { return this._proposals; }
     get sidecar(): SidecarData { return this._sidecar; }
-    get proposalOverlays(): ProposalsMap { return this._sidecar.proposals ?? { by_feature: {}, by_event: {} }; }
     get status(): CodocStatus { return this._status; }
-    get pendingCount(): number { return this._status.pending; }
     get activity(): ActivityData { return this._activity; }
     get agentActive(): boolean { return isAgentActive(this._activity); }
     /** Code the queued tree edits (.codoc/realize.md) will touch, by repo-relative file. */

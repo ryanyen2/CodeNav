@@ -84,7 +84,6 @@ async def _process_chunk(
             source=source,
             tokens_hash=walk_result.tokens_hash,
             types_hash=walk_result.types_hash,
-            minhash=walk_result.minhash,
             start_byte=start_byte,
             end_byte=end_byte,
             embedding=embedding,

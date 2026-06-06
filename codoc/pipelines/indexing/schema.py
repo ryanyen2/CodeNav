@@ -28,7 +28,7 @@ class CodeChunk:
     ``id`` is derived from ``(file, symbol_path)`` via ``generate_id`` so the
     primary key is stable across runs as long as the chunk's location is
     stable. A moved chunk is delete+insert at the indexing layer; codoc's
-    reconciler detects moves at a higher level via ``types_hash``/``minhash``.
+    reconciler detects moves at a higher level via ``tokens_hash``/``types_hash``.
     """
 
     id: int
@@ -38,7 +38,6 @@ class CodeChunk:
     source: str
     tokens_hash: str
     types_hash: str
-    minhash: bytes
     start_byte: int
     end_byte: int
     embedding: Annotated[NDArray, EMBEDDER]

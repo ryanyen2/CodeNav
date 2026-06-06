@@ -35,7 +35,6 @@ class ChunkRow:
     source: str
     tokens_hash: str
     types_hash: str
-    minhash: bytes
     start_byte: int
     end_byte: int
     embedding: np.ndarray | None = None
@@ -53,7 +52,6 @@ class ChunkRow:
             source=raw["source"],
             tokens_hash=raw["tokens_hash"],
             types_hash=raw["types_hash"],
-            minhash=raw["minhash"],
             start_byte=raw["start_byte"],
             end_byte=raw["end_byte"],
             embedding=emb,

@@ -22,7 +22,6 @@ class FakeRow:
     id: int = 0
     tokens_hash: str = "h"
     types_hash: str = "t"
-    minhash: bytes = b""
     start_byte: int = 0
     end_byte: int = 0
     embedding: object = None

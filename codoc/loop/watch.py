@@ -24,7 +24,7 @@ from pathlib import Path
 
 from codoc.codoc_file.render import tree_path
 from codoc.loop import status
-from codoc.loop.activity import ACTIVITY_FILENAME, activity_path, epoch_touched_files
+from codoc.loop.activity import activity_path, epoch_touched_files
 from codoc.loop.inbox import inbox_path
 from codoc.loop.loop_a import reconcile_drift
 from codoc.loop.loop_b import run_loop_b

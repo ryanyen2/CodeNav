@@ -1,3 +1,3 @@
 """Deterministic core. Post-rewrite this holds only the indexing substrate's
-dependencies: ``tree_walk`` (fingerprint) and ``chunk_matching.minhash``.
-Import those submodules directly."""
+dependency: ``tree_walk`` (the tokens_hash / types_hash identity signals).
+Import the submodule directly."""

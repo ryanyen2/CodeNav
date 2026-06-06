@@ -9,6 +9,28 @@ const HIDDEN_ID_RE = /\s*⟨(?:f|e)-[0-9a-f]+⟩/g;
 // A retired *live* feature line: '~ Title' (3rd char is a letter, not a marker).
 const RETIRED_RE = /^\s*~\s+\S/;
 
+// Proposal hunk accents. Literal rgba (VS Code decoration colors don't resolve CSS
+// vars), centralized here so each colour is defined once: `tint` is the whole-line
+// wash, `rule` the 2px left border + overview-ruler tick.
+const HUNK = {
+    add: { tint: 'rgba(60,180,80,0.10)', rule: 'rgba(60,180,80,0.7)' },      // green
+    retire: { tint: 'rgba(200,80,80,0.10)', rule: 'rgba(200,80,80,0.7)' },   // red
+    move: { tint: 'rgba(80,120,200,0.10)', rule: 'rgba(80,120,200,0.7)' },   // blue
+} as const;
+
+/** A whole-line proposal hunk: tinted background + 2px left border + ruler tick. */
+function hunkDecoration(c: { tint: string; rule: string }): vscode.TextEditorDecorationType {
+    return vscode.window.createTextEditorDecorationType({
+        isWholeLine: true,
+        backgroundColor: c.tint,
+        overviewRulerColor: c.rule,
+        overviewRulerLane: vscode.OverviewRulerLane.Right,
+        borderColor: c.rule,
+        borderWidth: '0 0 0 2px',
+        borderStyle: 'solid',
+    });
+}
+
 export interface CodocDecorations {
     hiddenId: vscode.TextEditorDecorationType;
     addHunk: vscode.TextEditorDecorationType;
@@ -30,33 +52,9 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
         hiddenId: vscode.window.createTextEditorDecorationType({
             textDecoration: 'none; display: none;',
         }),
-        addHunk: vscode.window.createTextEditorDecorationType({
-            isWholeLine: true,
-            backgroundColor: 'rgba(60,180,80,0.10)',
-            overviewRulerColor: 'rgba(60,180,80,0.7)',
-            overviewRulerLane: vscode.OverviewRulerLane.Right,
-            borderColor: 'rgba(60,180,80,0.7)',
-            borderWidth: '0 0 0 2px',
-            borderStyle: 'solid',
-        }),
-        retireHunk: vscode.window.createTextEditorDecorationType({
-            isWholeLine: true,
-            backgroundColor: 'rgba(200,80,80,0.10)',
-            overviewRulerColor: 'rgba(200,80,80,0.7)',
-            overviewRulerLane: vscode.OverviewRulerLane.Right,
-            borderColor: 'rgba(200,80,80,0.7)',
-            borderWidth: '0 0 0 2px',
-            borderStyle: 'solid',
-        }),
-        moveHunk: vscode.window.createTextEditorDecorationType({
-            isWholeLine: true,
-            backgroundColor: 'rgba(80,120,200,0.10)',
-            overviewRulerColor: 'rgba(80,120,200,0.7)',
-            overviewRulerLane: vscode.OverviewRulerLane.Right,
-            borderColor: 'rgba(80,120,200,0.7)',
-            borderWidth: '0 0 0 2px',
-            borderStyle: 'solid',
-        }),
+        addHunk: hunkDecoration(HUNK.add),
+        retireHunk: hunkDecoration(HUNK.retire),
+        moveHunk: hunkDecoration(HUNK.move),
         retired: vscode.window.createTextEditorDecorationType({
             textDecoration: 'line-through',
             opacity: '0.55',
@@ -75,18 +73,18 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
         retireStrike: vscode.window.createTextEditorDecorationType({
             textDecoration: 'line-through',
             opacity: '0.7',
-            overviewRulerColor: 'rgba(200,80,80,0.7)',
+            overviewRulerColor: HUNK.retire.rule,
             overviewRulerLane: vscode.OverviewRulerLane.Right,
-            borderColor: 'rgba(200,80,80,0.7)',
+            borderColor: HUNK.retire.rule,
             borderWidth: '0 0 0 2px',
             borderStyle: 'solid',
         }),
         // Proposed amend: a blue left-border marker; the proposed title/description
         // ride in a per-range hover + trailing "→ New title" hint.
         amendInline: vscode.window.createTextEditorDecorationType({
-            overviewRulerColor: 'rgba(80,120,200,0.7)',
+            overviewRulerColor: HUNK.move.rule,
             overviewRulerLane: vscode.OverviewRulerLane.Right,
-            borderColor: 'rgba(80,120,200,0.7)',
+            borderColor: HUNK.move.rule,
             borderWidth: '0 0 0 2px',
             borderStyle: 'solid',
         }),

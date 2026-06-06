@@ -16,8 +16,6 @@ the user reviews in the IDE.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from codoc.loop.activity import PHASE_DONE, PHASE_EDITING, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
 from codoc.loop.inbox import drop_verdicts as _inbox_drop
