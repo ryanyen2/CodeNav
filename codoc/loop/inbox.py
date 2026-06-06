@@ -54,6 +54,19 @@ def clear(codoc_dir: str | Path) -> None:
         pass
 
 
+def drop_verdicts(codoc_dir: str | Path, event_ids: set[str]) -> None:
+    """Remove only the named verdicts, leaving any others for the daemon/loop.
+
+    Used by the blocking ``codoc_await_verdicts`` tool so it consumes just the
+    proposals it is waiting on without clobbering unrelated verdicts in the inbox.
+    """
+    remaining = [v for v in read_verdicts(codoc_dir) if v.event_id not in event_ids]
+    if remaining:
+        _write(codoc_dir, remaining)
+    else:
+        clear(codoc_dir)
+
+
 def append_verdict(codoc_dir: str | Path, event_id: str, accept: bool) -> Path:
     """Append a verdict (used by the CLI/tests; the IDE writes this file too)."""
     verdicts = read_verdicts(codoc_dir)

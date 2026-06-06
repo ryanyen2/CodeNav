@@ -60,11 +60,18 @@ For a single change you can also call the focused tools directly:
 When asked to plan before implementing (or via the `/codoc:plan` command):
 1. Read `codoc_tree` / `codoc_status`.
 2. Decompose the task into features and call `codoc_plan_add` for each — these are
-   **placeholders** (`realized=false`). **Do NOT edit code yet.**
-3. Ask the user to Accept the plan in the IDE.
-4. After acceptance, implement the code, then `codoc_reflect` to bind the code to
-   the plan nodes (binding flips them from placeholder to realized) and to surface
-   any work you did that wasn't in the plan as new proposals.
+   **placeholders** (`realized=false`). **Do NOT edit code yet.** Keep the
+   `event_id` each call returns.
+3. Ask the user to Accept the plan in the IDE, then call
+   `codoc_await_verdicts(event_ids=[…])`. **This blocks your turn** until the user
+   clicks Accept/Reject — it applies each verdict and returns
+   `{accepted:[{event_id, feature_id, title}], rejected, pending}`. (It also marks
+   accepted nodes "editing" so the IDE doc view shimmers them as in-progress.)
+4. In the **same turn**, implement each accepted node one at a time: call
+   `codoc_realize_progress(done, total, current)` as you start it, write the code,
+   then `codoc_attach`/`codoc_reflect` to bind it (binding flips the placeholder to
+   realized and resolves its skeleton in the doc view). Surface any unplanned work
+   via `add_node` ops.
 5. Call `codoc_plan_status` to confirm every plan node is realized.
 
 ## The realize loop (`/codoc:realize` — tree edit → code)
@@ -84,6 +91,18 @@ To implement them (or when the user runs `/codoc:realize`):
    accepted plan placeholders to realized).
 4. Delete `.codoc/realize.md`, then `codoc_status` to confirm the pipeline
    returned to `in_sync` / `code_drift`.
+
+## The unified sync (`/codoc:sync`)
+
+One command that reads `codoc_status` and acts in whichever direction is stale —
+use it when you're unsure which loop applies:
+- `awaiting_impl` → run the realize loop above (codoc → code).
+- `tree_dirty` → tree edits aren't queued yet; let `codoc watch` / terminal
+  `codoc sync` drain them to `awaiting_impl`, then realize.
+- `code_drift` → reconcile the tree to code: `codoc_attach` what belongs to existing
+  features, `codoc_reflect` with `add_node` for genuinely new intent.
+- `realizing` → a pass is already running; report progress and stop.
+- `in_sync` → nothing to do.
 
 ## The tree format (for reading)
 

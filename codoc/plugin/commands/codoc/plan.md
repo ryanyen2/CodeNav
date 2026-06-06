@@ -26,19 +26,31 @@ any code until the user accepts the plan.**
     (`"file.py::symbol"`); the binding will mark it realized once that code exists.
 - For changes to existing features, use `codoc_propose_amend` / `codoc_propose_move`.
 
-## 3. Hand the plan to the user
+## 3. Hand the plan to the user and wait for their verdict
 - Summarize the plan you proposed (the placeholder nodes + any amendments).
 - Tell the user: **"Accept the plan in the codoc tree (Accept on each node, or
-  Accept all) to approve it, or Reject to discard. I'll implement once accepted."**
-- Stop here. Do not write code yet.
+  Accept all) to approve it, or Reject to discard. I'll implement what you accept."**
+- Then call `codoc_await_verdicts(event_ids=[…])` with the `event_id`s returned by
+  your `codoc_plan_add` / `codoc_propose_*` calls. **This blocks your turn** until
+  the user clicks Accept/Reject in the IDE — do not write any code while it waits.
+  It returns `{accepted:[{event_id, feature_id, title}], rejected, pending}`.
+  - If everything was rejected (or it timed out with nothing accepted), report that
+    and stop — there is nothing to implement.
 
-## 4. After acceptance — implement
-Once the user accepts (the placeholder nodes are now live but unrealized):
-- Implement the code for each planned feature.
-- Then call `codoc_reflect(ops, rationale)` to bind the code you wrote to the plan
-  nodes (`attach` with `binds`). Binding flips each placeholder to **realized**.
-- If you implemented anything that wasn't in the plan, include `add_node` ops for
-  it in the same `codoc_reflect` call so it surfaces as a new proposal.
+## 4. Implement the accepted nodes (same turn, one at a time)
+For each entry in `accepted` (now live but **unrealized** placeholders), implement
+it and reflect it **before** starting the next — this makes the IDE doc view fill
+in each feature as you finish, one skeleton resolving at a time, rather than all at
+once:
+- Call `codoc_realize_progress(done=i-1, total=N, current="<title>")` as you start
+  feature *i*, so the IDE shows "implementing i of N".
+- Write the smallest code change that satisfies the node's intent.
+- Immediately call `codoc_attach(feature_id, binds=["file.py::symbol", …])` (or
+  `codoc_reflect`) to bind that code to the accepted node. **Binding flips the
+  placeholder to realized** and resolves its skeleton in the doc view.
+- If you implemented anything that wasn't in the plan, include `add_node` ops via
+  `codoc_reflect` so it surfaces as a new proposal for the user.
+- After the last one, call `codoc_realize_progress(done=N, total=N)`.
 
 ## 5. Verify the plan was satisfied
 - Call `codoc_plan_status`. If any nodes are still unrealized, either implement

@@ -113,3 +113,78 @@ def test_server_guard_surfaces_structured_error_without_codoc_dir(monkeypatch):
     cd, err = server._need_dir()
     assert cd is None
     assert err == {"ok": False, "error": "no .codoc directory found from cwd — run `codoc init` first"}
+
+
+# ─── codoc_await_verdicts (blocking realization trigger) ──────────────────────
+
+def test_await_verdicts_accept_makes_placeholder_live(codoc_dir):
+    """Accept verdict applies the plan node and returns its now-live feature id."""
+    from codoc.loop import inbox
+
+    res = tools.plan_add(codoc_dir, title="Dark mode", description="theme toggle")
+    eid = res["event_id"]
+    # User accepts in the IDE → verdict lands in inbox.json.
+    inbox.append_verdict(codoc_dir, eid, accept=True)
+
+    out = tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=5, poll_interval=0.01)
+    assert out["timed_out"] is False
+    assert out["rejected"] == [] and out["pending"] == []
+    assert len(out["accepted"]) == 1
+    acc = out["accepted"][0]
+    assert acc["event_id"] == eid and acc["title"] == "Dark mode"
+    assert acc["feature_id"]
+
+    s = open_store(codoc_dir)
+    try:
+        live = next(f for f in s.list_features() if f.title == "Dark mode")
+        assert live.id == acc["feature_id"]
+        assert live.realized is False          # accepted but not yet implemented
+        assert s.get_event(eid) is None        # event consumed
+    finally:
+        s.close()
+    # inbox was cleared of the consumed verdict
+    assert inbox.read_verdicts(codoc_dir) == []
+    # the accepted node is flagged "editing" so the IDE shimmers it as in-progress
+    from codoc.loop.activity import read_activity
+    feats = read_activity(codoc_dir).get("features", {})
+    assert feats.get(acc["feature_id"], {}).get("phase") == "editing"
+
+
+def test_await_verdicts_reject_discards(codoc_dir):
+    from codoc.loop import inbox
+
+    res = tools.plan_add(codoc_dir, title="Throwaway", description="nope")
+    eid = res["event_id"]
+    inbox.append_verdict(codoc_dir, eid, accept=False)
+
+    out = tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=5, poll_interval=0.01)
+    assert out["accepted"] == [] and out["rejected"] == [eid]
+    s = open_store(codoc_dir)
+    try:
+        assert all(f.title != "Throwaway" for f in s.list_features())
+        assert s.get_event(eid) is None
+    finally:
+        s.close()
+
+
+def test_await_verdicts_drains_only_its_own(codoc_dir):
+    """A verdict for an unrelated event is left in the inbox for the daemon."""
+    from codoc.loop import inbox
+
+    mine = tools.plan_add(codoc_dir, title="Mine")["event_id"]
+    inbox.append_verdict(codoc_dir, mine, accept=True)
+    inbox.append_verdict(codoc_dir, "e-someone-else", accept=True)
+
+    out = tools.await_verdicts(codoc_dir, event_ids=[mine], timeout=5, poll_interval=0.01)
+    assert [a["event_id"] for a in out["accepted"]] == [mine]
+    leftover = inbox.read_verdicts(codoc_dir)
+    assert [v.event_id for v in leftover] == ["e-someone-else"]
+
+
+def test_await_verdicts_times_out_when_no_verdict(codoc_dir):
+    res = tools.plan_add(codoc_dir, title="Pending forever")
+    eid = res["event_id"]
+    out = tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=0.05, poll_interval=0.01)
+    assert out["timed_out"] is True
+    assert out["pending"] == [eid]
+    assert out["accepted"] == [] and out["rejected"] == []

@@ -18,8 +18,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codoc.loop.activity import PHASE_DONE, mark_feature_phase
+from codoc.loop.activity import PHASE_DONE, PHASE_EDITING, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
+from codoc.loop.inbox import drop_verdicts as _inbox_drop
+from codoc.loop.inbox import read_verdicts as inbox_read
 from codoc.loop.reconcile import safe_write_tree
 from codoc.model.event import (
     LOOP_A_AGENT_SOURCE,
@@ -272,6 +274,90 @@ def plan_add(codoc_dir: str, *, title: str, description: str = "",
     return propose_add(codoc_dir, title=title, description=description,
                        parent_id=parent_id, binds=binds, rationale=rationale,
                        source=PLAN_SOURCE, realized=False)
+
+
+def await_verdicts(codoc_dir: str, *, event_ids: list[str],
+                   timeout: float = 86400.0, poll_interval: float = 1.0) -> dict:
+    """Block until the user Accepts/Rejects the given proposals in the IDE.
+
+    This is the in-session realization trigger (modeled on plannotator's blocking
+    review hook): instead of ending the turn at "stop here", ``/codoc:plan`` calls
+    this after proposing nodes. It polls ``.codoc/inbox.json`` — the same verdict
+    channel Loop B drains — applying each verdict as it arrives (accept → ``apply_op``
+    + delete event; reject → delete event), and returns once every ``event_ids``
+    proposal is resolved (or the timeout elapses). The same turn then continues to
+    implement the accepted nodes, so there is no idle gap and no daemon dependency.
+
+    Returns ``{accepted:[{event_id, feature_id, title}], rejected:[event_id], pending:[event_id], timed_out}``.
+    ``feature_id`` is the now-live node (ADD mints a fresh id on accept, recovered
+    by diffing the feature set) so the caller can bind code to it.
+    """
+    import time as _time
+
+    targets = list(dict.fromkeys(event_ids))  # de-dupe, preserve order
+    accepted: list[dict] = []
+    rejected: list[str] = []
+    resolved: set[str] = set()
+    deadline = _time.monotonic() + max(0.0, timeout)
+
+    def _resolve_once() -> None:
+        verdicts = {v.event_id: v.accept for v in inbox_read(codoc_dir)}
+        consumed: set[str] = set()
+        store = open_store(codoc_dir)
+        try:
+            for eid in targets:
+                if eid in resolved:
+                    continue
+                ev = store.get_event(eid)
+                if eid in verdicts:
+                    accept = verdicts[eid]
+                    consumed.add(eid)
+                    if ev is None:        # already drained elsewhere — treat as done
+                        resolved.add(eid)
+                        continue
+                    if accept:
+                        before = {f.id for f in store.list_features()}
+                        apply_op(ev.op, store, source="user", applied=True)
+                        after = {f.id for f in store.list_features()}
+                        new = after - before
+                        fid = ev.op.feature_id or (next(iter(new)) if new else None)
+                        feat = store.get_feature(fid) if fid else None
+                        store.delete_event(eid)
+                        accepted.append({"event_id": eid, "feature_id": fid,
+                                         "title": (feat.title if feat else ev.op.title) or ""})
+                    else:
+                        store.delete_event(eid)
+                        rejected.append(eid)
+                    resolved.add(eid)
+                elif ev is None:
+                    # No verdict for us, yet the event is gone → the watch daemon
+                    # drained it. Infer the outcome from whether the node went live.
+                    resolved.add(eid)
+            if consumed:
+                _inbox_drop(codoc_dir, consumed)
+            if resolved >= set(targets):
+                safe_write_tree(store, codoc_dir)
+                from codoc.loop.status import refresh_status
+                refresh_status(codoc_dir, store)
+        finally:
+            store.close()
+
+    while True:
+        _resolve_once()
+        if resolved >= set(targets) or _time.monotonic() >= deadline:
+            break
+        _time.sleep(poll_interval)
+
+    # Mark accepted (unrealized) placeholders as "editing" now so the IDE doc view
+    # shimmers them as being-implemented immediately — each resolves to realized
+    # content when §4's codoc_reflect/attach marks it PHASE_DONE.
+    fids = [a["feature_id"] for a in accepted if a.get("feature_id")]
+    if fids:
+        mark_feature_phase(codoc_dir, fids, PHASE_EDITING)
+
+    pending = [e for e in targets if e not in resolved]
+    return {"ok": True, "accepted": accepted, "rejected": rejected,
+            "pending": pending, "timed_out": bool(pending)}
 
 
 def plan_status(codoc_dir: str) -> dict:

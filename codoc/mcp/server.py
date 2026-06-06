@@ -135,6 +135,20 @@ def codoc_plan_add(title: str, description: str = "", parent_id: str | None = No
 
 
 @mcp.tool
+def codoc_await_verdicts(event_ids: list[str], timeout: float = 86400.0) -> dict:
+    """BLOCK until the user Accepts/Rejects the given proposals in the codoc IDE.
+
+    The realization trigger for /codoc:plan: after proposing plan nodes, call this
+    with their event_ids instead of ending the turn. It waits (polling the IDE's
+    inbox) and applies each verdict as it lands — accept makes the placeholder live,
+    reject discards it — then returns {accepted:[{event_id,feature_id,title}],
+    rejected, pending, timed_out}. Continue the SAME turn to implement the accepted
+    nodes and bind code via codoc_attach/codoc_reflect."""
+    cd, err = _need_dir()
+    return err or tools.await_verdicts(cd, event_ids=event_ids, timeout=timeout)
+
+
+@mcp.tool
 def codoc_plan_status() -> dict:
     """Report which plan placeholders are still unrealized vs realized — the
     plan-satisfaction check after implementing."""
