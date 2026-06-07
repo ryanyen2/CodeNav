@@ -182,3 +182,80 @@ def test_epoch_written_files_excludes_reads(tmp_path):
         "recent": [],
     }))
     assert epoch_written_files(cd) == ["wrote.py"]
+
+
+def test_accepted_auto_retire_is_detach_only_no_directive(dirs):
+    """Accepting a Loop-A-raised RETIRE untracks the feature (retired + detached)
+    but must NOT queue a code-deletion directive — a false auto-retire can no
+    longer destroy live code on accept."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    f = Feature(title="Doc retrieval index", description="Builds a search index.")
+    s.upsert_feature(f)
+    s.upsert_binding(Binding(feature_id=f.id, file="retrieval.py",
+                             symbol_path="retrieval.py::Retriever", fingerprint="h"))
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id, rationale="lost binding"))
+    s.append_event(e)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.accepted == 1
+    assert res.directives == []                       # no "remove this code" directive
+    s2 = open_store(codoc_dir)
+    assert s2.get_feature(f.id).retired is True        # untracked on accept
+    assert s2.bindings_for_feature(f.id) == []         # detached, not orphaned under a hidden feature
+    assert s2.binding_at("retrieval.py", "retrieval.py::Retriever") is None
+    s2.close()
+
+
+def test_human_tilde_retire_still_builds_directive(dirs):
+    """A human retire (changing the marker to `~` in tree.codoc) is the one path
+    that DOES request code removal — it still queues a directive."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    f = Feature(title="Legacy export", description="Old CSV export path.")
+    s.upsert_feature(f)
+    s.upsert_binding(Binding(feature_id=f.id, file="export.py",
+                             symbol_path="export.py::to_csv", fingerprint="h"))
+    write_tree(s, codoc_dir)
+    s.close()
+
+    # Flip the live node's marker "- " → "~ " (a human retire edit).
+    p = tree_path(codoc_dir)
+    p.write_text(p.read_text().replace("- Legacy export", "~ Legacy export"))
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.user_edits >= 1
+    assert any("RETIRE FEATURE" in d and "Legacy export" in d for d in res.directives)
+
+
+def test_accepted_delete_code_retire_queues_removal_directive(dirs):
+    """An explicit delete-code retire (op.delete_code, e.g. an agent via MCP) is the
+    parity for a human `~`: accepting keeps its bindings and queues a code-removal
+    directive — unlike the detach-only default."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    f = Feature(title="Legacy thing", description="Old path.")
+    s.upsert_feature(f)
+    s.upsert_binding(Binding(feature_id=f.id, file="legacy.py",
+                             symbol_path="legacy.py::run", fingerprint="h"))
+    e = Event(source="loop_a_agent", applied=False,
+              op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id, delete_code=True))
+    s.append_event(e)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.accepted == 1
+    assert any("RETIRE FEATURE" in d and "legacy.py::run" in d for d in res.directives)
+    s2 = open_store(codoc_dir)
+    # delete_code keeps bindings (the agent removes the code; reconcile detaches then)
+    assert s2.get_feature(f.id).retired is True
+    assert s2.binding_at("legacy.py", "legacy.py::run") is not None
+    s2.close()

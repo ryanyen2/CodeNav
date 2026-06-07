@@ -97,8 +97,10 @@ def test_rejecting_every_proposal_queues_no_work_and_converges(world):
 
 
 def test_accept_a_retire_while_rejecting_a_doc_add(world):
-    """Mixed verdicts of different kinds: a RETIRE on bound code is accepted (and
-    queues a removal directive), while an unrelated documentation ADD is rejected."""
+    """Mixed verdicts of different kinds. Accepting an auto-raised RETIRE on bound
+    code is DETACH-ONLY: the feature is untracked (retired=True) but NO code-removal
+    directive is queued — a false auto-retire can never destroy live code on accept
+    (only a human `~` edit removes code). The unrelated documentation ADD is rejected."""
     deprecated = world.given_feature("Deprecated API", binds=[("old.py", "old.py::legacy")])
     retire = world.given_pending(
         NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=deprecated, rationale="superseded"),
@@ -109,8 +111,8 @@ def test_accept_a_retire_while_rejecting_a_doc_add(world):
     world.when_reject(doc_add)
     res = world.when_loop_b(dry_run=True)
 
-    world.then_retired(deprecated, True)
-    world.then_directive_mentions("RETIRE FEATURE", "old.py::legacy")  # removal scoped to bound code
+    world.then_retired(deprecated, True)        # untracked on accept …
+    world.then_no_directives()                  # … but no "remove this code" directive
     assert [f for f in world.features() if f.title == "Notes"] == []
     assert (res.accepted, res.rejected) == (1, 1)
     world.then_proposal_count(0)

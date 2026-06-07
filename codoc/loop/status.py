@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
+from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.model.hlc import HLC
 
 STATUS_FILENAME = "status.json"
@@ -31,6 +33,21 @@ REALIZING = "realizing"
 
 def status_path(codoc_dir: str | Path) -> Path:
     return Path(codoc_dir) / STATUS_FILENAME
+
+
+def _realize_queue_size(codoc_dir: str | Path) -> int:
+    """Directive count in a queued ``realize.md`` (0 if absent/empty).
+
+    Loop B writes one ``### N.`` heading per directive; we count them so the
+    status can report how many changes are awaiting implementation.
+    """
+    try:
+        text = (Path(codoc_dir) / REALIZE_FILENAME).read_text()
+    except OSError:
+        return 0
+    if not text.strip():
+        return 0
+    return len(re.findall(r"(?m)^### ", text)) or 1
 
 
 def write_status(codoc_dir: str | Path, state: str, *, pending: int = 0, detail: str = "") -> Path:
@@ -65,6 +82,18 @@ def refresh_status(
         state = AWAITING_IMPL
     elif realizing:
         state = REALIZING
+    elif (queued := _realize_queue_size(codoc_dir)):
+        # A realize.md queued by Loop B is an active obligation and outranks
+        # code_drift (matching the documented awaiting_impl > code_drift order): a
+        # later code-side pass that passes no awaiting_impl flag must not report
+        # in_sync/code_drift and orphan the directive — the IDE would stop prompting
+        # /codoc:realize. The file self-clears when /codoc:realize finishes, so this
+        # is transient; pending proposals still render inline in the tree regardless.
+        state = AWAITING_IMPL
+        if pending is None:
+            count = queued
+        if not detail:
+            detail = f"{queued} change(s) ready to implement — run /codoc:realize"
     elif n_proposals:
         state = CODE_DRIFT
     else:

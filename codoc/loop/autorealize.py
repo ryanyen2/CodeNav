@@ -20,7 +20,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from codoc.agent.hook import REALIZE_FILENAME
+from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop import status
 from codoc.loop.activity import activity_path
 

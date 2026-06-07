@@ -99,10 +99,16 @@ def codoc_propose_move(feature_id: str, parent_id: str | None, rationale: str = 
 
 
 @mcp.tool
-def codoc_propose_retire(feature_id: str, rationale: str = "") -> dict:
-    """Propose retiring a feature whose code is gone. Reviewable."""
+def codoc_propose_retire(feature_id: str, rationale: str = "", delete_code: bool = False) -> dict:
+    """Propose retiring a feature. Reviewable.
+
+    delete_code=False (default): detach-only — accepting untracks the feature but
+    keeps its code. delete_code=True: also queue a code-removal directive on accept
+    (the agent-side parity for a human `~` retire) — use only when the bound code
+    should genuinely be deleted, not merely untracked."""
     cd, err = _need_dir()
-    return err or tools.propose_retire(cd, feature_id=feature_id, rationale=rationale)
+    return err or tools.propose_retire(cd, feature_id=feature_id, rationale=rationale,
+                                       delete_code=delete_code)
 
 
 @mcp.tool

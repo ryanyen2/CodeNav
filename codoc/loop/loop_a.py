@@ -151,23 +151,71 @@ def _placeholder_owner(store: Store, symbol_path: str, *, sole_ok: bool) -> str 
     return None
 
 
-def _gc_superseded_proposals(store: Store) -> int:
-    """Drop pending ADD_NODE proposals whose every chunk is now bound elsewhere.
+def _gc_superseded_proposals(
+    store: Store, removed_keys: frozenset[tuple[str, str]] = frozenset()
+) -> int:
+    """Drop pending proposals whose premise is no longer true.
 
-    Without this a duplicate/obsolete proposal lingers forever, pinning status at
-    ``code_drift`` so a no-op ``codoc sync`` never converges to ``in_sync``. A
-    proposal is superseded once a live feature already owns all the code it would
-    have introduced.
+    - ``ADD_NODE``: every chunk it would introduce is already bound elsewhere.
+    - ``RETIRE_NODE``: the target feature still owns code that THIS change set is
+      not removing. A retire is only ever raised when a feature lost its *last*
+      binding; once code rebinds (a mid-implementation lull, or the agent
+      reflected the code in) the proposal is a false positive. ``removed_keys`` is
+      the set of ``(file, symbol)`` being detached this pass — they don't count as
+      "still owns code", so a retire raised by the very removal in flight is NOT
+      GC'd (the dedup path still suppresses a duplicate retire for it). Human ``~``
+      retires never sit pending here (Loop B applies them immediately), so every
+      pending retire is an auto proposal safe to clear this way.
+
+    Without this a stale proposal lingers forever, pinning status at
+    ``code_drift`` so a no-op ``codoc sync`` never converges to ``in_sync`` — and,
+    for a stale retire, lets the user wrongly retire a feature that still owns
+    live code.
     """
     dropped = 0
     for e in store.pending_events():
         op = e.op
+        superseded = False
         if op.kind is NodeOpKind.ADD_NODE and op.bindings and all(
             store.binding_at(f, s) is not None for f, s in op.bindings
         ):
+            superseded = True
+        elif op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
+            f = store.get_feature(op.feature_id)
+            if f and not f.retired and any(
+                (b.file, b.symbol_path) not in removed_keys
+                for b in store.bindings_for_feature(op.feature_id)
+            ):
+                superseded = True
+        if superseded:
             store.delete_event(e.id)
             dropped += 1
     return dropped
+
+
+def _has_modified_realized(cs: ChangeSet, store: Store, claimed_features: set[str]) -> bool:
+    """True if any in-place `modified` chunk is owned by a realized feature with prose
+    whose description may now be stale (an amend-on-change LLM trigger candidate).
+
+    Batched: one ``bindings_in_files`` lookup over the modified files + one
+    ``get_feature`` per distinct owning feature — instead of a ``binding_at`` +
+    ``get_feature`` round-trip per modified chunk. Features that already carry a
+    pending amend/retire/move (``claimed_features``) are skipped so repeated
+    reconcile passes don't queue duplicate AMEND proposals.
+    """
+    if not cs.modified:
+        return False
+    mod_keys = {(m.file, m.symbol_path) for m in cs.modified}
+    owners = {
+        b.feature_id
+        for b in store.bindings_in_files({m.file for m in cs.modified})
+        if (b.file, b.symbol_path) in mod_keys and b.feature_id not in claimed_features
+    }
+    return any(
+        (f := store.get_feature(fid)) is not None
+        and f.realized and not f.retired and (f.description or "").strip()
+        for fid in owners
+    )
 
 
 def _compute_impacted(cs: ChangeSet, store: Store) -> dict[str, list[str]]:
@@ -228,10 +276,21 @@ def apply_changeset(
     repo_name: str = "codebase",
     config=None,
     adopt_placeholders: bool = False,
+    # Two orthogonal authority knobs with DIFFERENT defaults — kept separate, not
+    # collapsed into one "authoritative" flag, precisely because the defaults differ:
+    # bare callers (the BDD world harness, most unit tests) rely on allow_retire=True
+    # (retires may be proposed) AND amend_on_change=False (no amend LLM trigger). The
+    # two production entrypoints happen to pair them (run_loop_a → both off;
+    # reconcile_drift → both on), but a single flag couldn't preserve both defaults.
+    allow_retire: bool = True,       # False ⇒ drop LLM-proposed RETIRE ops (twitchy temporal pass)
+    amend_on_change: bool = False,   # True ⇒ in-place modifications can trigger a description-amend LLM pass
 ) -> LoopAResult:
     # GC stale proposals first so a no-op pass can converge to in_sync even when
-    # there is no change set to process.
-    gc = _gc_superseded_proposals(store)
+    # there is no change set to process. Bindings this pass is about to remove
+    # don't count as "still owns code" — so a retire driven by the in-flight
+    # removal survives GC (the dedup path handles it instead).
+    removed_keys = frozenset((r.file, r.symbol_path) for r in cs.removed)
+    gc = _gc_superseded_proposals(store, removed_keys)
     if cs.is_empty():
         return LoopAResult(auto={"gc": gc} if gc else {})
 
@@ -273,10 +332,13 @@ def apply_changeset(
         result.auto["relocate"] = result.auto.get("relocate", 0) + len(relocations)
 
     # 2. Features that just lost their last binding (after relocations rebind).
+    #    Exclude unrealized plan placeholders: a placeholder that loses a transient
+    #    binding mid-implementation reverts to awaiting-impl — it never "lost code",
+    #    so it is never a retire candidate (guards the plan→implement window).
     emptied = {
         fid for fid in set(removed_owner.values())
         if not store.bindings_for_feature(fid)
-        and (f := store.get_feature(fid)) and not f.retired
+        and (f := store.get_feature(fid)) and not f.retired and f.realized
     }
     added_unbound = [
         a for a in cs.added
@@ -317,7 +379,14 @@ def apply_changeset(
     dep_features = _compute_impacted(cs, store)
     result.impacted = list(dep_features.keys())
 
-    if not (added_unbound or emptied):
+    # Amend-on-change: when an authoritative pass (reconcile_drift) sees in-place
+    # edits to code owned by a realized feature with real prose, run the LLM so it
+    # can propose a description AMEND if the change made the prose stale — even
+    # when nothing was added or emptied. Gated by amend_on_change so the frequent
+    # temporal pass (run_loop_a) never pays for an LLM call on every edit.
+    modified_realized = amend_on_change and _has_modified_realized(cs, store, claimed_features)
+
+    if not (added_unbound or emptied or modified_realized):
         return result
 
     # 3. The single LLM pass.
@@ -360,6 +429,12 @@ def apply_changeset(
     #    ATTACH onto that node so we never mint a duplicate-titled sibling.
     unbound_titles = _unbound_features_by_title(store)
     for op in ops:
+        # The temporal index diff (run_loop_a) is twitchy — a feature can look
+        # "emptied" mid-edit and rebind a save later. Never let that path surface a
+        # destructive RETIRE; only the authoritative state pass (reconcile_drift,
+        # allow_retire=True) may. Stale retires are also GC'd once code rebinds.
+        if op.kind is NodeOpKind.RETIRE_NODE and not allow_retire:
+            continue
         if op.kind is NodeOpKind.ADD_NODE and op.bindings:
             existing = unbound_titles.get(_norm_title(op.title))
             if existing:
@@ -446,8 +521,11 @@ def run_loop_a(
     store = open_store(codoc_dir)
     try:
         update_graph(store, cs.rows, cs.touched_files())
+        # Temporal index diff: never retire (a mid-edit "emptied" can rebind on the
+        # next save). Retires are the authoritative state pass's job (reconcile_drift).
         result = apply_changeset(cs, store, source=source, repo_name=repo_name,
-                                 config=config, adopt_placeholders=adopt_placeholders)
+                                 config=config, adopt_placeholders=adopt_placeholders,
+                                 allow_retire=False)
         from codoc.loop.status import refresh_status
 
         refresh_status(codoc_dir, store)
@@ -518,8 +596,12 @@ def reconcile_drift(
     try:
         cs = _state_changeset(rows, store, file_scope)
         update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
+        # Authoritative full-state reconciliation — the only pass allowed to raise
+        # retires (a feature empty *in current state* genuinely lost its code) and
+        # to propose description amends when bound code changed in place.
         result = apply_changeset(cs, store, source=source, repo_name=repo_name,
-                                 config=config, adopt_placeholders=adopt_placeholders)
+                                 config=config, adopt_placeholders=adopt_placeholders,
+                                 allow_retire=True, amend_on_change=True)
         refresh_status(codoc_dir, store)
         return result
     finally:

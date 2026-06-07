@@ -56,6 +56,8 @@ class NodeOp(BaseModel):
     bindings: list[tuple[str, str]] = Field(default_factory=list)  # (file, symbol_path)
     rationale: str = ""            # one-line justification, shown in proposal hunks
     realized: bool | None = None   # ADD_NODE realization (None ⇒ default True); False = plan placeholder
+    delete_code: bool = False      # RETIRE_NODE: True ⇒ also remove the bound code (explicit intent —
+                                   #   an agent via MCP, or a human `~`); False ⇒ detach-only untrack
 
 
 class Event(BaseModel):

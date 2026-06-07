@@ -228,8 +228,15 @@ def _compute_feature_edges(store: Store) -> dict[str, list[dict]]:
     return out
 
 
-def _write_sidecar(store: Store, codoc_dir: str | Path) -> None:
-    """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename)."""
+def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
+    """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
+
+    The sidecar is *pure derived state* (bindings, feature meta, proposals) — it is
+    never hand-edited, so it is always safe to regenerate. ``safe_write_tree``
+    refreshes it on every pass even when the ``tree.codoc`` *text* render is held
+    back to preserve a human edit, so the IDE always sees current proposal/binding
+    state (an accepted verdict reflects immediately rather than appearing to do
+    nothing)."""
     features = store.list_features()
     by_feature: dict[str, list[dict]] = {}
     by_file: dict[str, list[dict]] = {}
@@ -255,5 +262,5 @@ def write_tree(store: Store, codoc_dir: str | Path) -> Path:
     path = tree_path(codoc_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_tree(store))
-    _write_sidecar(store, codoc_dir)
+    write_sidecar(store, codoc_dir)
     return path

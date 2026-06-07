@@ -75,3 +75,62 @@ def test_status_realizing_override(codoc_dir):
         store.close()
     payload = json.loads(status.status_path(codoc_dir).read_text())
     assert payload["state"] == status.REALIZING and payload["detail"] == "implementing"
+
+
+def test_status_awaiting_impl_when_realize_md_present(codoc_dir):
+    """A queued realize.md is an active obligation: refresh_status must report
+    awaiting_impl (not in_sync) even with zero pending proposals, so a later
+    code-side pass cannot orphan the directive."""
+    from pathlib import Path
+    Path(codoc_dir, "realize.md").write_text(
+        "preamble\n\n### 1. RETIRE FEATURE: \"x\"\n\n### 2. NEW FEATURE: \"y\"\n")
+    store = open_store(codoc_dir)
+    try:
+        status.refresh_status(codoc_dir, store)  # no awaiting_impl flag passed
+    finally:
+        store.close()
+    payload = json.loads(status.status_path(codoc_dir).read_text())
+    assert payload["state"] == status.AWAITING_IMPL
+    assert payload["pending"] == 2  # one per ### directive heading
+
+
+def test_status_ignores_empty_realize_md(codoc_dir):
+    from pathlib import Path
+    Path(codoc_dir, "realize.md").write_text("   \n")
+    store = open_store(codoc_dir)
+    try:
+        status.refresh_status(codoc_dir, store)
+    finally:
+        store.close()
+    assert _state(codoc_dir) == status.IN_SYNC
+
+
+def test_code_side_pass_does_not_orphan_queued_realize_md(codoc_dir):
+    """The regression the fix targets: a code-side reflection (which calls
+    refresh_status with no awaiting_impl flag and zero pending proposals) must NOT
+    clobber a queued realize.md back to in_sync — it stays awaiting_impl."""
+    from pathlib import Path
+    Path(codoc_dir, "realize.md").write_text("### 1. RETIRE FEATURE: \"x\"\n")
+    store = open_store(codoc_dir)
+    try:
+        # simulate the tail of a Loop A / reconcile pass: no proposals, no flags
+        status.refresh_status(codoc_dir, store)
+    finally:
+        store.close()
+    assert _state(codoc_dir) == status.AWAITING_IMPL
+
+
+def test_realize_md_outranks_code_drift(codoc_dir):
+    """A queued realize.md outranks pending proposals: status reports awaiting_impl
+    (not code_drift), so the IDE keeps prompting /codoc:realize even when new
+    proposals coexist. Proposals still render inline in the tree regardless."""
+    from pathlib import Path
+    Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")
+    store = open_store(codoc_dir)
+    try:
+        store.append_event(Event(source="loop_a", applied=False,
+                                 op=NodeOp(kind=NodeOpKind.ADD_NODE, title="x", description="y")))
+        status.refresh_status(codoc_dir, store)
+    finally:
+        store.close()
+    assert _state(codoc_dir) == status.AWAITING_IMPL

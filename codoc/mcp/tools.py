@@ -175,8 +175,13 @@ def propose_move(codoc_dir: str, *, feature_id: str, parent_id: str | None,
 
 
 def propose_retire(codoc_dir: str, *, feature_id: str, rationale: str = "",
-                   source: str = LOOP_A_AGENT_SOURCE) -> dict:
-    op = NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=feature_id, rationale=rationale)
+                   delete_code: bool = False, source: str = LOOP_A_AGENT_SOURCE) -> dict:
+    """Propose retiring a feature. ``delete_code=False`` (default) is detach-only:
+    accepting untracks the feature without removing code. ``delete_code=True`` is the
+    agent-side parity for a human ``~`` retire — accepting queues a code-removal
+    directive (use only when the code should genuinely be deleted)."""
+    op = NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=feature_id, rationale=rationale,
+                delete_code=delete_code)
     return _apply_single(codoc_dir, op, source=source)
 
 

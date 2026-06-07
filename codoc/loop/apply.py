@@ -140,4 +140,8 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
             store.upsert_feature(f)
     elif k is NodeOpKind.RETIRE_NODE:
         if op.feature_id:
+            # Mark retired only. Binding detach is a PATH decision, not a property of
+            # the op: an inbox/auto retire detaches (untrack — Loop B does it), while
+            # a human `~` retire keeps its bindings so Loop B can build the code-removal
+            # directive (the code is deleted by the agent, and reconcile detaches then).
             store.retire_feature(op.feature_id)

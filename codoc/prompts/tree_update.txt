@@ -69,8 +69,10 @@ Every op may carry a one-line `rationale`.
    the current description doesn't mention (e.g. you attach table/visualization
    helpers to a feature whose description only says "formatting" → amend it to
    mention the richer rendering). When you both attach new capability and the
-   description no longer covers it, emit BOTH the `attach` and an `amend`. Do not
-   amend for trivial private helpers or cosmetic edits.
+   description no longer covers it, emit BOTH the `attach` and an `amend`. A
+   description-only `amend` (no attach/add) is the correct, expected output when
+   code in `modified` changed a feature's behavior in place and its prose no
+   longer fits. Do not amend for trivial private helpers or cosmetic edits.
 6. A `title` is a 3–6 word sentence-case noun phrase ("Index snapshot diff").
    A `description` is 1–3 sentences: what the feature does and why it exists. No
    code-location lists in the prose — bindings carry that.

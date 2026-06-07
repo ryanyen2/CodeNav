@@ -360,3 +360,90 @@ def test_state_path_rename_carries_attribution_via_binding_types_hash(store):
     assert b is not None and b.feature_id == f.id                      # attribution carried
     assert len(store.list_features()) == 1                             # no duplicate node
     assert b.types_hash == "shape1"                                    # shape recorded onward
+
+
+# ── False-retire hardening (plan→implement window robustness) ────────────────
+
+def test_gc_drops_stale_retire_when_feature_rebinds(store):
+    """A pending RETIRE is dropped once the feature has bindings again: its premise
+    ("lost its last binding") is now false. This is the core fix for a retire raised
+    while a feature was momentarily empty mid-implementation."""
+    f = _feature(store, title="Retriever")
+    _bind(store, f.id, "r.py", "r.py::search", fp="h")   # code rebound
+    store.append_event(Event(source="loop_a", applied=False,
+                             op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id)))
+    assert len(store.pending_events()) == 1
+
+    res = apply_changeset(ChangeSet(), store, propose=_raising)  # even an empty pass GCs it
+
+    assert store.pending_events() == []
+    assert store.get_feature(f.id).retired is False
+    assert res.auto.get("gc") == 1
+
+
+def test_allow_retire_false_suppresses_llm_retire(store):
+    """The twitchy temporal pass (allow_retire=False) never surfaces a RETIRE, even
+    when the LLM proposes one for an emptied feature."""
+    f = _feature(store, title="Lonely")
+    _bind(store, f.id, "a.py", "a.py::foo")
+    cs = ChangeSet(removed=[ChunkRef("a.py", "a.py::foo")])
+    ops = [NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id, rationale="all code gone")]
+
+    res = apply_changeset(cs, store, propose=_propose(ops), allow_retire=False)
+
+    assert not res.proposed
+    assert store.get_feature(f.id).retired is False
+    assert store.pending_events() == []
+    assert res.auto == {"detach": 1}   # the binding still detaches
+
+
+def test_unrealized_placeholder_not_retire_candidate(store):
+    """A realized=False plan placeholder that loses a transient binding is excluded
+    from the emptied set → never retire-proposed (it reverts to awaiting-impl)."""
+    plan = _feature(store, title="Future thing", realized=False)
+    _bind(store, plan.id, "a.py", "a.py::stub")
+    cs = ChangeSet(removed=[ChunkRef("a.py", "a.py::stub")])
+
+    res = apply_changeset(cs, store, propose=_raising)  # placeholder excluded → no LLM
+
+    assert not res.llm_called
+    assert res.auto == {"detach": 1}
+    assert store.get_feature(plan.id).retired is False
+
+
+def test_amend_on_change_runs_llm_only_when_enabled(store):
+    """A pure in-place modification to a realized feature's code triggers the LLM
+    (for a possible description amend) only when amend_on_change=True."""
+    f = _feature(store, title="Engine", description="Runs the token generation loop.")
+    _bind(store, f.id, "engine.py", "engine.py::run", fp="old")
+
+    # Off (the temporal pass): modified-only → REFRESH, no LLM.
+    cs0 = ChangeSet(modified=[ChunkRef("engine.py", "engine.py::run", "new", "def run(): ...")])
+    res0 = apply_changeset(cs0, store, propose=_raising, amend_on_change=False)
+    assert not res0.llm_called and res0.auto == {"refresh": 1}
+
+    # On (the authoritative pass): the LLM runs and can propose an amend.
+    cs1 = ChangeSet(modified=[ChunkRef("engine.py", "engine.py::run", "new2", "def run(): ... retrieval ...")])
+    amend = NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id,
+                   description="Runs the token generation loop with a retrieval-augmented branch.")
+    res1 = apply_changeset(cs1, store, propose=_propose([amend]), amend_on_change=True)
+    assert res1.llm_called
+    # the amend actually lands — proposed (large edit) or auto-applied (small)
+    assert res1.proposed or store.get_feature(f.id).description != "Runs the token generation loop."
+
+
+def test_gc_preserves_retire_driven_by_in_flight_removal(store):
+    """Symmetric to the rebind case: a pending RETIRE whose feature's ONLY binding is
+    being removed THIS pass must NOT be GC'd — the removal genuinely empties it, and
+    the dedup path (not GC) handles suppressing a duplicate retire."""
+    f = _feature(store, title="Lonely")
+    _bind(store, f.id, "a.py", "a.py::foo")
+    store.append_event(Event(source="loop_a", applied=False,
+                             op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id)))
+    cs = ChangeSet(removed=[ChunkRef("a.py", "a.py::foo")])
+
+    res = apply_changeset(cs, store, propose=_raising)  # binding in removed_keys → retire survives GC
+
+    assert res.auto.get("gc") is None                 # not GC'd
+    assert len(store.pending_events()) == 1            # the retire is still pending
+    assert not res.llm_called                          # dedup path suppressed a duplicate

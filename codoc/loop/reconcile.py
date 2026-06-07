@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from codoc.codoc_file.diff import CodocDiff, diff_codoc
 from codoc.codoc_file.parse import parse_tree_file
-from codoc.codoc_file.render import write_tree
+from codoc.codoc_file.render import write_sidecar, write_tree
 from codoc.store.db import Store, open_store
 
 
@@ -40,8 +40,16 @@ def has_pending_user_edits(codoc_dir: str) -> bool:
 
 
 def safe_write_tree(store: Store, codoc_dir: str) -> bool:
-    """Render the store to ``tree.codoc`` only if the file has no pending human
-    edits. Returns True if it wrote, False if it skipped to preserve an edit."""
+    """Refresh ``tree.codoc`` non-destructively.
+
+    The sidecar (``tree.bindings.json``) is pure derived state and is ALWAYS
+    rewritten — so applied verdicts, new bindings, and proposal changes surface in
+    the IDE immediately (an accept/reject is never a dead click). The ``tree.codoc``
+    *text* is regenerated only when the on-disk file has no un-applied human edits;
+    when it diverges the text write is skipped so the edit survives until Loop B
+    absorbs it. Returns True if the text was (re)written, False if it was skipped.
+    """
+    write_sidecar(store, codoc_dir)
     if not pending_user_edits(store, codoc_dir).is_empty():
         return False
     write_tree(store, codoc_dir)

@@ -22,10 +22,9 @@ from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import parse_tree_file
 from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
+from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.store.db import Store, open_store
-
-REALIZE_FILENAME = "realize.md"
 
 
 @dataclass
@@ -185,7 +184,26 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
             apply_op(e.op, store, source="user", applied=True)
             store.delete_event(e.id)
             res.accepted += 1
-            if _implies_code(e.op, store):
+            # RETIRE accepted from the inbox is detach-only by default: mark retired
+            # (apply_op) AND detach its bindings here, so the code isn't left bound to
+            # a now-hidden feature (which all_bindings still returns → reconcile treats
+            # it as covered → silently orphaned). Detaching frees the chunks for the
+            # next state pass to re-home, making a false retire self-healing. It must
+            # NEVER queue a code-deletion directive by default — a retire Loop A
+            # proposed off transient drift could be a false positive, and deleting
+            # code on accept is the most destructive failure mode.
+            #   EXCEPTION: an explicit delete-code retire (op.delete_code — set by an
+            #   agent via codoc_propose_retire(delete_code=True), the MCP-side parity
+            #   for a human `~` edit) keeps its bindings and queues a removal directive,
+            #   exactly like the human text path (step 2). The code is removed by the
+            #   agent and reconcile detaches then.
+            if e.op.kind is NodeOpKind.RETIRE_NODE:
+                if e.op.delete_code and _implies_code(e.op, store):
+                    directive_ops.append(e.op)
+                else:
+                    for b in store.bindings_for_feature(e.op.feature_id):
+                        store.delete_binding(b.file, b.symbol_path)
+            elif _implies_code(e.op, store):
                 directive_ops.append(e.op)
         else:
             store.delete_event(e.id)

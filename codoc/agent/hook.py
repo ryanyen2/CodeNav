@@ -34,9 +34,10 @@ from typing import Any
 
 from codoc.agent.paths import find_codoc_dir as _find_codoc_dir
 
+from codoc.loop.filenames import REALIZE_FILENAME
+
 ACTIVITY_FILENAME = "activity.json"
 BINDINGS_FILENAME = "tree.bindings.json"
-REALIZE_FILENAME = "realize.md"
 
 # Maximum recent-events to keep in the rolling log.
 _MAX_RECENT = 20
