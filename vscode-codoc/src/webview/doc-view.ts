@@ -42,6 +42,12 @@ let observer: IntersectionObserver | null = null;
 let didFocusTree = false;
 let mounted = false;                         // first payload builds the shell; rest reconcile
 const sectionById = new Map<string, HTMLElement>();
+// Structural TOC rail: one tick per section, plus a marker that glides between
+// ticks. Content snaps instantly to a section; the rail carries the "from→to"
+// journey so navigation keeps spatial orientation without scrolling through text.
+const tickById = new Map<string, HTMLElement>();
+let tocMarker: HTMLElement | null = null;
+let railOrderKey = '';                        // section-order fingerprint → rebuild rail only on change
 const reduceMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function focusTree(): void {
@@ -86,12 +92,46 @@ function postVerdict(eventIds: string[], accept: boolean): void {
     vscode.postMessage({ kind: 'verdict', eventIds, accept });
 }
 
+// ── Optimistic verdict feedback ──────────────────────────────────────────────
+// A verdict only writes inbox.json; the authoritative update arrives async when a
+// loop drains it and the sidecar refreshes. Without immediate feedback the click
+// looks dead. beginApplying() disables the affected controls + shows "applying…";
+// endApplying() clears it when the next payload lands. A safety timer reverts the
+// state if nothing drains the inbox (e.g. no daemon) so controls never stick.
+let applyingTimer = 0;
+function beginApplying(group: HTMLElement | null): void {
+    document.body.classList.add('applying');
+    if (group) {
+        group.classList.add('applying');
+        group.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
+    }
+    if (applyingTimer) clearTimeout(applyingTimer);
+    applyingTimer = window.setTimeout(endApplying, 5000);
+}
+function endApplying(): void {
+    if (applyingTimer) { clearTimeout(applyingTimer); applyingTimer = 0; }
+    document.body.classList.remove('applying');
+    document.querySelectorAll('.applying').forEach(e => e.classList.remove('applying'));
+}
+
+/** After a DOM rebuild (section re-render, tree toggle/reveal) re-disable verdict
+ *  controls inside `root` if a verdict is still in-flight (body.applying). Without
+ *  this, freshly-built buttons carry no disabled state and silently become clickable
+ *  again mid-apply — letting a duplicate verdict fire and flickering the row. */
+function reapplyApplyingTo(root: ParentNode): void {
+    if (!document.body.classList.contains('applying')) return;
+    root.querySelectorAll('.verdict, .inline-verdict').forEach(g => {
+        g.classList.add('applying');
+        g.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
+    });
+}
+
 function verdictButtons(eventId: string): HTMLElement {
     const wrap = el('span', 'verdict');
     const acc = el('button', 'v-accept', '✓'); acc.title = 'Accept';
-    acc.onclick = ev => { ev.stopPropagation(); postVerdict([eventId], true); };
+    acc.onclick = ev => { ev.stopPropagation(); beginApplying(wrap); postVerdict([eventId], true); };
     const rej = el('button', 'v-reject', '✗'); rej.title = 'Reject';
-    rej.onclick = ev => { ev.stopPropagation(); postVerdict([eventId], false); };
+    rej.onclick = ev => { ev.stopPropagation(); beginApplying(wrap); postVerdict([eventId], false); };
     wrap.append(rej, acc);
     return wrap;
 }
@@ -243,6 +283,10 @@ function reconcileDoc(): void {
         if (a) doc.scrollTop = a.offsetTop - anchor.offset;
     }
 
+    // Rebuild the TOC rail only if the section set/order changed (marker is then
+    // repositioned by the trailing syncToSection in reconcile()).
+    reconcileRail();
+
     // FLIP: animate any section that moved to its new resting place.
     if (!reduce) {
         requestAnimationFrame(() => {
@@ -282,9 +326,9 @@ function renderToolbar(): HTMLElement {
     const ids = payload.pendingEventIds;
     if (ids.length) {
         const accAll = el('button', 'toggle bulk', `✓ Accept all (${ids.length})`);
-        accAll.onclick = () => postVerdict(ids.slice(), true);
+        accAll.onclick = () => { beginApplying(null); postVerdict(ids.slice(), true); };
         const rejAll = el('button', 'toggle bulk', `✗ Reject all (${ids.length})`);
-        rejAll.onclick = () => postVerdict(ids.slice(), false);
+        rejAll.onclick = () => { beginApplying(null); postVerdict(ids.slice(), false); };
         t.append(accAll, rejAll);
     }
 
@@ -434,7 +478,57 @@ function renderDocHost(): HTMLElement {
         doc.append(node);
     }
     host.append(doc);
+    host.append(renderTocRail());
     return host;
+}
+
+// ─── TOC rail (structural minimap + gliding marker) ──────────────────────────
+/** Build the right-edge rail: one depth-indented tick per section (in article
+ *  order) and the absolutely-positioned marker. Cheap — a tiny node per section. */
+function renderTocRail(): HTMLElement {
+    const rail = el('div', 'toc-rail');
+    tickById.clear();
+    const marker = el('div', 'toc-marker');
+    tocMarker = marker;
+    rail.append(marker);
+    for (const sec of payload.sections) {
+        const tick = el('div', 'toc-tick');
+        tick.dataset.id = sec.id;
+        tick.style.setProperty('--d', String(Math.min(sec.level, 4)));
+        if (sec.flags.isGhost) tick.classList.add('ghost', sec.flags.proposalOp === 'move' ? 'move' : 'add');
+        if (sec.flags.retired) tick.classList.add('retired');
+        if (!sec.flags.realized) tick.classList.add('unrealized');
+        if (sec.proposal?.op === 'amend') tick.classList.add('has-amend');
+        if (sec.proposal?.op === 'retire') tick.classList.add('has-retire');
+        tick.title = sec.title || '(untitled)';
+        tick.onclick = () => setSelected(sec.id, true);
+        tickById.set(sec.id, tick);
+        rail.append(tick);
+    }
+    railOrderKey = payload.sections.map(s => s.id).join('\x00');
+    return rail;
+}
+
+/** Glide the marker to a section's tick and highlight it. Position is the tick's
+ *  own offset within the rail (not doc scroll) — so the journey is structural. */
+function moveTocMarker(id: string): void {
+    const tick = tickById.get(id);
+    if (!tick || !tocMarker) return;
+    for (const [tid, t] of tickById) t.classList.toggle('active', tid === id);
+    // Center the (fixed-height) marker on the tick; CSS margin-top offsets half.
+    tocMarker.style.transform = `translateY(${tick.offsetTop + tick.offsetHeight / 2}px)`;
+    tocMarker.style.opacity = '1';
+}
+
+/** Rebuild the rail only when the section set / order changed — otherwise keep
+ *  the existing ticks (and the marker's glide state) untouched. */
+function reconcileRail(): void {
+    const host = document.querySelector('.doc-host');
+    if (!host) return;
+    if (payload.sections.map(s => s.id).join('\x00') === railOrderKey) return;
+    const old = host.querySelector('.toc-rail');
+    const next = renderTocRail();
+    if (old) old.replaceWith(next); else host.append(next);
 }
 
 function renderRuns(runs: InlineRun[]): DocumentFragment {
@@ -624,14 +718,14 @@ function renderSection(sec: DocSection): HTMLElement {
     // Inline verdict for a proposal on this section.
     if (sec.proposal) {
         if (sec.proposal.op === 'retire') {
-            s.append(el('div', 'retire-note', 'Retire proposed — accepting marks this feature retired and detaches its bindings.'));
+            s.append(el('div', 'retire-note', 'Retire proposed — accepting untracks this feature and detaches its bindings. The code itself is kept; to remove it, edit tree.codoc and mark the node with ~.'));
         }
         const acts = el('div', 'inline-verdict');
         if (sec.proposal.tag) acts.append(el('span', 'iv-tag', sec.proposal.tag));
         const rej = el('button', undefined, 'Reject');
-        rej.onclick = () => postVerdict([sec.proposal!.eventId], false);
+        rej.onclick = () => { beginApplying(acts); postVerdict([sec.proposal!.eventId], false); };
         const acc = el('button', 'primary', 'Accept');
-        acc.onclick = () => postVerdict([sec.proposal!.eventId], true);
+        acc.onclick = () => { beginApplying(acts); postVerdict([sec.proposal!.eventId], true); };
         acts.append(rej, acc);
         s.append(acts);
     }
@@ -708,21 +802,35 @@ function revealAncestors(id: string): void {
     }
     if (changed) {
         const tree = document.querySelector('.tree');
-        if (tree) { const next = renderTree(); tree.replaceWith(next); }
+        if (tree) { const next = renderTree(); tree.replaceWith(next); reapplyApplyingTo(next); }
     }
 }
 
-/** Move the accent bar to a section and optionally scroll the doc to it. */
+/** Mark a section active: glide the TOC marker + accent bar to it, and — when
+ *  navigating — SNAP the doc to it (no smooth scroll-through) with a brief
+ *  landing cue. The journey is carried by the gliding rail marker, not by
+ *  scrolling every intermediate section past the eye. */
 function syncToSection(id: string, scrollDoc: boolean): void {
     const sec = sectionById.get(id);
     const accent = document.getElementById('doc-accent');
+    moveTocMarker(id);
     if (!sec || !accent) return;
     accent.style.top = sec.offsetTop + 'px';
     accent.style.height = sec.offsetHeight + 'px';
     accent.style.opacity = '1';
     if (scrollDoc) {
-        programmaticScroll = Date.now() + 450;
-        sec.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        // Instant snap (mute scroll-spy just long enough to not re-fight the target).
+        programmaticScroll = Date.now() + 120;
+        sec.scrollIntoView({ block: 'start', behavior: 'auto' });
+        if (!reduceMotion()) {
+            const h = sec.querySelector('.h') as HTMLElement | null;
+            if (h) {
+                h.classList.remove('landed');
+                void h.offsetWidth;                       // reflow → restart the cue on re-landing
+                h.classList.add('landed');
+                h.addEventListener('animationend', () => h.classList.remove('landed'), { once: true });
+            }
+        }
     }
 }
 
@@ -759,6 +867,7 @@ function toggle(id: string): void {
     if (tree) {
         const replacement = renderTree();
         tree.replaceWith(replacement);
+        reapplyApplyingTo(replacement);
         (replacement as HTMLElement).focus({ preventScroll: true });
     }
 }
@@ -806,6 +915,7 @@ function rerenderSection(id: string): void {
     const next = renderSection(sec);
     sectionById.set(id, next);
     old.replaceWith(next);
+    reapplyApplyingTo(next);
     observer?.observe(next);
 }
 
@@ -874,6 +984,9 @@ window.addEventListener('message', ev => {
     if (msg.payload.rev < lastRev) return;   // ignore stale posts
     lastRev = msg.payload.rev;
     payload = msg.payload;
+    // endApplying MUST stay after the stale-rev guard above — a stale (dropped)
+    // post must not clear the optimistic applying state for a verdict still in flight.
+    endApplying();   // authoritative state arrived → clear optimistic "applying…"
 
     if (selectedId && !payload.nodes[selectedId] && !payload.sections.some(s => s.id === selectedId)) selectedId = null;
     for (const id of [...expanded]) if (!payload.nodes[id]) expanded.delete(id);

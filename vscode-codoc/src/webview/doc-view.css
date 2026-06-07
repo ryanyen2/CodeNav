@@ -192,11 +192,12 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .verdict .v-reject:hover { background: color-mix(in srgb, var(--accent-retire) 30%, transparent); border-color: var(--accent-retire); }
 
 /* ── Doc pane (the one-page article) ─────────────────────────────────────── */
-.doc-host { overflow: hidden; position: relative; }
+.doc-host { display: flex; overflow: hidden; position: relative; }
 .doc {
+    flex: 1 1 auto; min-width: 0;
     overflow: auto; height: 100%;
     padding: 28px 40px 60vh 30px;     /* big bottom pad so last sections can scroll to top */
-    scroll-behavior: smooth;
+    scroll-behavior: auto;            /* programmatic nav SNAPS — the TOC rail carries the journey */
     position: relative;
 }
 .doc.empty { display: flex; align-items: center; justify-content: center; color: var(--fg-muted); font-size: 12px; }
@@ -208,6 +209,47 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     opacity: 0; top: 0; height: 0;
     transition: top 300ms var(--ease), height 300ms var(--ease), opacity 200ms ease;
     pointer-events: none;
+}
+
+/* ── TOC rail (structural minimap on the right edge) ─────────────────────────
+   One depth-indented tick per section; a marker glides between ticks to carry
+   the navigation journey while the article content snaps instantly. Auto-hides
+   like a scrollbar — raised on hover. */
+.toc-rail {
+    flex: 0 0 22px; position: relative; align-self: stretch;
+    display: flex; flex-direction: column; justify-content: safe center; gap: 6px;
+    padding: 12px 4px; box-sizing: border-box;
+    overflow-y: auto; overflow-x: hidden;
+    border-left: var(--rule);
+    opacity: 0.5; transition: opacity 160ms ease;
+    scrollbar-width: none;            /* the rail is itself the scroll affordance */
+}
+.toc-rail::-webkit-scrollbar { width: 0; height: 0; }
+.toc-rail:hover { opacity: 1; }
+
+.toc-tick {
+    flex: 0 0 auto; height: 2px;
+    width: calc(14px - var(--d, 0) * 2px);
+    margin-left: calc(var(--d, 0) * 2px);
+    border-radius: 1px; cursor: pointer;
+    background: color-mix(in srgb, var(--vscode-foreground) 32%, transparent);
+    transition: background 120ms ease, transform 120ms ease;
+}
+.toc-tick:hover { background: var(--vscode-foreground); transform: scaleY(2.5); }
+.toc-tick.active { background: var(--accent-blue); }
+.toc-tick.unrealized { background: color-mix(in srgb, var(--accent-plan) 60%, transparent); }
+.toc-tick.has-amend { background: color-mix(in srgb, var(--accent-amend) 70%, transparent); }
+.toc-tick.has-retire,
+.toc-tick.retired { background: color-mix(in srgb, var(--accent-retire) 55%, transparent); }
+.toc-tick.ghost.add { background: var(--accent-add); }
+.toc-tick.ghost.move { background: var(--accent-blue); }
+
+/* the gliding "you are here" marker — centered on the active tick by JS transform */
+.toc-marker {
+    position: absolute; left: 3px; top: 0; margin-top: -7px;
+    width: 3px; height: 14px; border-radius: 2px;
+    background: var(--accent-blue); opacity: 0; pointer-events: none;
+    transition: transform 320ms var(--ease), opacity 200ms ease;
 }
 
 .section { scroll-margin-top: 14px; padding: 4px 0 10px; position: relative; }
@@ -349,6 +391,15 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 }
 .section .inline-verdict button:hover { background: var(--hover-bg); }
 .section .inline-verdict button.primary { background: var(--accent-blue); color: var(--vscode-editor-background); border-color: var(--accent-blue); font-weight: 500; }
+
+/* optimistic "applying…" feedback while a verdict round-trips through a loop */
+.verdict button:disabled, .inline-verdict button:disabled { opacity: 0.45; cursor: default; }
+.verdict.applying { opacity: 0.6; }
+.section .inline-verdict.applying::after {
+    content: 'applying…'; font: 11px var(--vscode-font-family);
+    color: var(--fg-muted); margin-left: 6px; align-self: center;
+}
+body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
 .section .retire-note { margin-top: 14px; font: 12.5px/1.6 var(--vscode-font-family); color: var(--accent-retire); }
 
 /* ── Skeleton / streaming (Phase 4) ──────────────────────────────────────── */
@@ -383,6 +434,14 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     to { background: transparent; }
 }
 
+/* arrival cue: a brief heading highlight when content snaps to a section, so the
+   eye locks onto where it landed (the journey itself is shown on the TOC rail) */
+.section .h.landed { animation: landFlash 520ms var(--ease); border-radius: 4px; }
+@keyframes landFlash {
+    0% { background: color-mix(in srgb, var(--accent-blue) 22%, transparent); }
+    100% { background: transparent; }
+}
+
 /* live agent activity: a pulsing dot trailing the heading (write) / quiet dot (read) */
 .section.active-write > .h::after,
 .section.active-read > .h::after {
@@ -396,5 +455,7 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     .doc { scroll-behavior: auto; }
     .doc-accent, .section.entering, .section.changed, .prose.revealing p, .skeleton .bar,
     .section.active-write > .h::after, .toolbar .status.realizing .dot,
-    .badge.active-write { transition: none !important; animation: none !important; }
+    .badge.active-write, .toc-marker, .toc-tick, .section .h.landed {
+        transition: none !important; animation: none !important;
+    }
 }
