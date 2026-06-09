@@ -131,6 +131,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let settleTimer = 0;
     let suppressUpdate = false;          // true while we programmatically setContent
     let mode: EditMode = 'editing';      // editing settles; suggesting captures diffs
+    // ⌥ momentary override (U2 tail / H3a): when Alt is held during an edit, that settle is
+    // captured as a suggestion even in editing mode. Latched at keystroke time because
+    // settleNow fires ~1200ms later, long after Alt is released.
+    let altDown = false;
+    let forceSuggest = false;
     let baselineDoc: PMNode | null = null; // last settled doc (Suggesting diff base)
     let currentSuggestions: Suggestion[] = [];
     let currentThreads: Record<string, ThreadsData> = {};
@@ -157,6 +162,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         onUpdate: () => {
             if (suppressUpdate) return;
             dirty = true;
+            if (altDown) forceSuggest = true; // ⌥-held edit → suggest this settle (H3a)
             scheduleSettle();
             scheduleRail();
         },
@@ -225,7 +231,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         // text suggestions, so capturing them in Suggesting mode would silently
         // revert them. Only title/description prose respects Suggesting mode.
         const structural = baselineDoc !== null && headingSignature(edited) !== headingSignature(baselineDoc);
-        if (mode === 'suggesting' && baselineDoc && !structural) {
+        const suggesting = mode === 'suggesting' || forceSuggest; // visible toggle OR ⌥ override
+        forceSuggest = false;
+        if (suggesting && baselineDoc && !structural) {
             // Capture the edit as doc-ahead suggestions; DON'T settle the text.
             // Revert the inline edit immediately to the baseline — the change then
             // re-appears as a persistent tracked diff (via the host repost) awaiting
@@ -400,6 +408,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         railTimer = window.setTimeout(rebuildRail, 250);
     }
     surface.addEventListener('scroll', updateSpy, { passive: true });
+
+    // ⌥ momentary "suggest this edit" override — track whether Alt is held during input.
+    // Listeners live on the editor DOM, so they're torn down with editor.destroy().
+    editor.view.dom.addEventListener('keydown', ev => { altDown = ev.altKey; }, true);
+    editor.view.dom.addEventListener('keyup', ev => { altDown = ev.altKey; }, true);
 
     // Code-ref chip click → navigate.
     editor.view.dom.addEventListener('click', ev => {
