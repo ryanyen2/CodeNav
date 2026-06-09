@@ -26,13 +26,12 @@
     --space-1: 4px;  --space-2: 8px;  --space-3: 12px;  --space-4: 16px;  --space-6: 24px;
     --radius-ctrl: 4px;  --radius-card: 6px;
 
-    /* legacy op-type accents — retired by U3 (kind→shape); kept so the in-between
-       build renders until the rainbow is re-pointed. */
+    /* remaining non-grammar accents: refs = code-ref chips + status default; amend =
+       highlight / comment marks; add / retire = the accept/reject action affordances.
+       The op-type rainbow (the old blue/purple proposal hues) was fully retired by U3/U5. */
     --accent-refs: var(--vscode-charts-foreground, var(--vscode-foreground));
-    --accent-plan: var(--vscode-charts-purple, #b58fff);
     --accent-amend: var(--vscode-charts-yellow, #e6c200);
     --accent-retire: var(--vscode-charts-red, #d96666);
-    --accent-blue: var(--vscode-charts-blue, #6aa9ff);
     --accent-add: var(--vscode-charts-green, #66bb6a);
     --ease: cubic-bezier(.2, .7, .2, 1);
 }
