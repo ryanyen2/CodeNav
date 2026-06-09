@@ -40,7 +40,16 @@ function elc(tag: string, cls?: string, text?: string): HTMLElement {
 
 function diffSpans(oldStr: string, newStr: string): HTMLElement {
     const wrap = elc('span', 'ce-wd');
-    for (const r of compactRuns(wordDiff(oldStr, newStr))) {
+    const runs = wordDiff(oldStr, newStr);
+    // A heavy rewrite (many separate change regions) makes a word-diff noisy and
+    // illegible — show the new text compactly instead (the live prose below still shows
+    // the current settled text, so nothing is lost).
+    if (runs.filter(r => r.t !== 'same').length > 8) {
+        const words = newStr.split(/\s+/).filter(Boolean);
+        wrap.append(elc('span', 'wd-ins', words.length > 16 ? words.slice(0, 16).join(' ') + ' …' : newStr));
+        return wrap;
+    }
+    for (const r of compactRuns(runs)) {
         wrap.append(elc('span', r.t === 'same' ? 'wd-same' : r.t === 'del' ? 'wd-del' : 'wd-ins', r.s));
     }
     return wrap;

@@ -462,6 +462,8 @@ body.vscode-using-screen-reader * {
 /* kind = shape, colourblind-safe: delete strikes, insert underlines (the change pops). */
 .ce-wd .wd-del { text-decoration: line-through; color: var(--fg-muted); opacity: 0.8; }
 .ce-wd .wd-ins { text-decoration: underline; text-decoration-thickness: 1px; color: var(--vscode-foreground); }
+/* a replace renders as adjacent strike+underline — keep them from mashing into one word */
+.ce-wd .wd-del + .wd-ins, .ce-wd .wd-ins + .wd-del { margin-left: 0.35em; }
 
 .ce-diff-actions { flex: 0 0 auto; display: inline-flex; gap: 4px; align-items: center; opacity: 0.55; transition: opacity 100ms ease; }
 .ce-diff:hover .ce-diff-actions, .ce-diff-actions.applying { opacity: 1; }

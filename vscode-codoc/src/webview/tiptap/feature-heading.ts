@@ -7,11 +7,14 @@
  * serializer can project it to `tree.codoc`. Rendered as a `div[data-feature-heading]`
  * styled by CSS per level (a custom outliner, not h1–h6 semantics).
  */
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node, mergeAttributes, textblockTypeInputRule } from '@tiptap/core';
 
 export interface FeatureHeadingOptions {
     HTMLAttributes: Record<string, unknown>;
 }
+
+/** H1–H4 ⇄ feature level 0–3. `#` = top-level feature, `####` = depth-3. */
+export const MAX_HEADING_LEVEL = 4;
 
 export const FeatureHeading = Node.create<FeatureHeadingOptions>({
     name: 'featureHeading',
@@ -46,6 +49,20 @@ export const FeatureHeading = Node.create<FeatureHeadingOptions>({
                 renderHTML: attrs => (attrs.realized === false ? { 'data-realized': 'false' } : {}),
             },
         };
+    },
+
+    addInputRules() {
+        // Markdown `#`..`####` + space at the start of a block → a feature heading at
+        // level 0..3 (H1–H4). Converting a description paragraph this way splits the
+        // feature (a new heading mid-description = a new feature, minted on settle).
+        return Array.from({ length: MAX_HEADING_LEVEL }, (_unused, idx) => {
+            const hashes = idx + 1;
+            return textblockTypeInputRule({
+                find: new RegExp(`^#{${hashes}}\\s$`),
+                type: this.type,
+                getAttributes: () => ({ fid: null, level: hashes - 1, retired: false, realized: true }),
+            });
+        });
     },
 
     parseHTML() {
