@@ -57,11 +57,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
     return e;
 }
 
-function leafSym(s: string): string {
-    const i = s.indexOf('::');
-    const tail = i >= 0 ? s.slice(i + 2) : s;
-    return tail === '__module__' ? '‹module›' : tail.split('::').pop() ?? tail;
-}
+// leafSym moved to suggestion-decorations.ts (used by the threads line — U4)
 
 function cssEsc(s: string): string {
     return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&');
@@ -165,7 +161,7 @@ function reconcile(): void {
     if (payload.doc && wholeEditor) {
         wholeEditor.setDoc(payload.doc);
         wholeEditor.setSuggestions(payload.suggestions ?? []);
-        wholeEditor.setDeps(payload.deps ?? {});
+        wholeEditor.setThreads(payload.threads ?? {});
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
     }
@@ -305,12 +301,7 @@ function appendRow(parent: HTMLElement, id: string): void {
     if (n.proposal?.op === 'amend') row.append(el('span', 'badge amend'));
     if (n.proposal?.op === 'retire') row.append(el('span', 'badge retire'));
 
-    if (n.refCount > 0) {
-        const pill = el('span', 'refs-pill', n.refCount + (n.refCount === 1 ? ' ref' : ' refs'));
-        pill.title = n.bindings.map(b => b.file + ' › ' + leafSym(b.symbol)).join('\n');
-        pill.onclick = ev => { ev.stopPropagation(); setSelected(id, true); };
-        row.append(pill);
-    }
+    // (code refs moved into the document's inline "threads" line under each heading — U4)
 
     if (n.proposal && (n.proposal.op === 'amend' || n.proposal.op === 'retire')) {
         row.append(verdictButtons(n.proposal.eventId));
@@ -367,7 +358,7 @@ function renderDocHost(): HTMLElement {
     });
     wholeEditor.setDoc(payload.doc);
     wholeEditor.setSuggestions(payload.suggestions ?? []);
-    wholeEditor.setDeps(payload.deps ?? {});
+    wholeEditor.setThreads(payload.threads ?? {});
     return host;
 }
 

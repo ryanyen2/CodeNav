@@ -28,7 +28,7 @@ import { diffDocsToSuggestions } from '../../state/suggestion-model';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { PMNode } from '../../state/pm-doc';
-import type { FeatureDep } from '../protocol';
+import type { ThreadsData } from '../protocol';
 
 export type EditMode = 'editing' | 'suggesting';
 
@@ -54,8 +54,8 @@ export interface WholeDocEditorHandle {
     setDoc: (doc: PMNode) => void;
     /** Update the pending diff list (re-renders the inline diff decorations). */
     setSuggestions: (suggestions: Suggestion[]) => void;
-    /** Update the per-feature "see also" dependency chips. */
-    setDeps: (deps: Record<string, FeatureDep[]>) => void;
+    /** Update the per-feature dependency threads (reads / used-by / code refs). */
+    setThreads: (threads: Record<string, ThreadsData>) => void;
     scrollToFeature: (fid: string) => void;
     isDirty: () => boolean;
     destroy: () => void;
@@ -133,7 +133,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let mode: EditMode = 'editing';      // editing settles; suggesting captures diffs
     let baselineDoc: PMNode | null = null; // last settled doc (Suggesting diff base)
     let currentSuggestions: Suggestion[] = [];
-    let currentDeps: Record<string, FeatureDep[]> = {};
+    let currentThreads: Record<string, ThreadsData> = {};
 
     const editor = new Editor({
         element: surface,
@@ -146,8 +146,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw, apply: opts.onApply },
             }),
             DependencyDecorations.configure({
-                getDeps: () => currentDeps,
+                getThreads: () => currentThreads,
                 onNavigate: fid => scrollToFeatureInternal(fid, true),
+                onOpenBinding: opts.onOpenBinding,
             }),
             makeKeymap(),
         ],
@@ -477,8 +478,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             currentSuggestions = list;
             editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true));
         },
-        setDeps: (depsMap: Record<string, FeatureDep[]>) => {
-            currentDeps = depsMap;
+        setThreads: (threadsMap: Record<string, ThreadsData>) => {
+            currentThreads = threadsMap;
             editor.view.dispatch(editor.state.tr.setMeta(DEPS_UPDATED, true));
         },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),

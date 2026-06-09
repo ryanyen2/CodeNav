@@ -23,8 +23,9 @@ import { renderTreeFromDoc } from '../state/doc-serialize';
 import { blocksToDescriptionText, PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
 import { directedEdges } from '../state/bindings-model';
+import { assembleThreads } from '../state/threads';
 import type { SidecarData } from '../state/bindings-model';
-import type { DocPayload, UINode, SyncState, RefSymbol, FeatureDep } from '../webview/protocol';
+import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData } from '../webview/protocol';
 
 const DOC_FILENAME = 'tree.doc.json';
 
@@ -261,16 +262,22 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             fid => descOf.get(fid) ?? '',
         );
 
-        // Per-feature "see also" dependencies (feature_edges → top depends/used-by).
+        // Per-feature unified dependency threads (U4): reads / used-by (feature_edges) +
+        // code refs (by_feature bindings). Full lists — the inline line truncates to a
+        // few, the peek shows all. reads/usedBy dedup within their own strand (a mutual
+        // dependency can legitimately appear in both).
         const dir = directedEdges(sidecar);
-        const deps: Record<string, FeatureDep[]> = {};
+        const threads: Record<string, ThreadsData> = {};
         for (const f of features) {
             if (!f.id) continue;
-            const out = (dir.out.get(f.id) ?? []).map(e => ({ toId: e.to, toTitle: sidecar.features[e.to]?.title ?? '', rel: 'depends' as const }));
-            const inn = (dir.in.get(f.id) ?? []).map(e => ({ toId: e.to, toTitle: sidecar.features[e.to]?.title ?? '', rel: 'usedby' as const }));
-            const seen = new Set<string>();
-            const all = [...out, ...inn].filter(d => d.toTitle && d.toId !== f.id && !seen.has(d.toId) && seen.add(d.toId)).slice(0, 5);
-            if (all.length) deps[f.id] = all;
+            const t = assembleThreads({
+                out: dir.out.get(f.id) ?? [],
+                in: dir.in.get(f.id) ?? [],
+                bindings: sidecar.by_feature[f.id] ?? [],
+                titleOf: fid => sidecar.features[fid]?.title ?? '',
+                selfId: f.id,
+            });
+            if (t) threads[f.id] = t;
         }
 
         return {
@@ -283,7 +290,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             doc,
             symbols: this.buildSymbols(sidecar),
             suggestions,
-            deps,
+            threads,
             rev: ++this.rev,
         };
     }

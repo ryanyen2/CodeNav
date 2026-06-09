@@ -13,7 +13,7 @@ import { Node as PMModelNode } from '@tiptap/pm/model';
 import { wordDiff } from '../../state/doc-diff';
 import { directionLabel, directionActions } from '../../state/grammar';
 import type { Suggestion } from '../../state/suggestion-model';
-import type { FeatureDep } from '../protocol';
+import type { ThreadsData } from '../protocol';
 
 export interface SuggestionHandlers {
     accept: (s: Suggestion) => void;
@@ -140,38 +140,118 @@ function buildDecorations(doc: PMModelNode, suggestions: Suggestion[], handlers:
     return DecorationSet.create(doc, decos);
 }
 
-// ── Dependency ("see also") chips under each heading ──────────────────────────
+// ── Unified dependency "threads" under each heading + on-demand peek (U4) ──────
+// One quiet in-flow line per feature: `↳ reads … · ↰ used by … · ⟢ code refs …`,
+// replacing the old ce-deps chips, the legacy xrefs, AND the tree-pane refs pill.
+// Each strand shows a few named items + a "+N" that opens a peek popover with the full
+// neighbourhood (client-side from the same payload — no extra round-trip; KTD5/H1).
 export interface DependencyDecorationsOptions {
-    getDeps: () => Record<string, FeatureDep[]>;
+    getThreads: () => Record<string, ThreadsData>;
     onNavigate: (fid: string) => void;
+    onOpenBinding: (file: string, symbol: string) => void;
 }
-export const DEPS_UPDATED = 'codocDepsUpdated';
-const depKey = new PluginKey('codocDepDecorations');
+export const DEPS_UPDATED = 'codocThreadsUpdated';
+const depKey = new PluginKey('codocThreadDecorations');
 
-function makeDepsRow(deps: FeatureDep[], onNavigate: (fid: string) => void): HTMLElement {
-    const row = elc('div', 'ce-deps');
+const THREAD_MAX = 3; // named items per strand before a "+N" peek
+
+function leafSym(symbol: string): string {
+    const i = symbol.indexOf('::');
+    const tail = i >= 0 ? symbol.slice(i + 2) : symbol;
+    return tail === '__module__' ? '‹module›' : (tail.split('::').pop() ?? tail);
+}
+
+function threadsEmpty(t: ThreadsData): boolean {
+    return !t.reads.length && !t.usedBy.length && !t.refs.length;
+}
+
+function threadLink(text: string, title: string, onClick: () => void): HTMLElement {
+    const a = elc('span', 'ce-thread', text || '(untitled)');
+    a.title = title;
+    a.addEventListener('mousedown', ev => ev.preventDefault());
+    a.addEventListener('click', ev => { ev.preventDefault(); onClick(); });
+    return a;
+}
+
+// ── peek popover (the full neighbourhood, client-side) ────────────────────────
+let openPeekEl: HTMLElement | null = null;
+function closePeek(): void { openPeekEl?.remove(); openPeekEl = null; }
+
+function openThreadsPeek(
+    anchor: HTMLElement, t: ThreadsData,
+    onNavigate: (fid: string) => void, onOpenBinding: (file: string, symbol: string) => void,
+): void {
+    closePeek();
+    const pop = elc('div', 'ce-peek');
+    const section = (label: string, items: HTMLElement[]): void => {
+        if (!items.length) return;
+        const sec = elc('div', 'ce-peek-sec');
+        sec.append(elc('div', 'ce-peek-label', label));
+        const list = elc('div', 'ce-peek-list');
+        items.forEach(i => list.append(i));
+        sec.append(list);
+        pop.append(sec);
+    };
+    section('reads', t.reads.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); })));
+    section('used by', t.usedBy.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); })));
+    section('code refs', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => { closePeek(); onOpenBinding(r.file, r.symbol); })));
+    document.body.append(pop);
+    const rect = anchor.getBoundingClientRect();
+    pop.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
+    pop.style.left = `${Math.min(rect.left, window.innerWidth - pop.offsetWidth - 8)}px`;
+    openPeekEl = pop;
+    // dismiss on outside click / Esc (registered next tick so the opening click doesn't close it)
+    const cleanup = (): void => {
+        document.removeEventListener('mousedown', onDoc, true);
+        document.removeEventListener('keydown', onKey, true);
+    };
+    const onDoc = (e: MouseEvent): void => { if (!pop.contains(e.target as Node)) { closePeek(); cleanup(); } };
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { closePeek(); cleanup(); } };
+    setTimeout(() => {
+        document.addEventListener('mousedown', onDoc, true);
+        document.addEventListener('keydown', onKey, true);
+    }, 0);
+}
+
+function makeThreadsRow(
+    t: ThreadsData,
+    onNavigate: (fid: string) => void, onOpenBinding: (file: string, symbol: string) => void,
+): HTMLElement {
+    const row = elc('div', 'ce-threads');
     row.contentEditable = 'false';
-    for (const d of deps) {
-        const chip = elc('span', 'ce-dep ' + d.rel);
-        chip.append(elc('span', 'ce-dep-rel', d.rel === 'depends' ? '↳' : '↰'), document.createTextNode(' ' + (d.toTitle || '(untitled)')));
-        chip.title = d.rel === 'depends' ? 'depends on' : 'used by';
-        chip.addEventListener('mousedown', ev => ev.preventDefault());
-        chip.addEventListener('click', ev => { ev.preventDefault(); onNavigate(d.toId); });
-        row.append(chip);
-    }
+    const strand = (glyph: string, glyphTitle: string, items: HTMLElement[], moreLabel: string): void => {
+        if (!items.length) return;
+        const s = elc('span', 'ce-strand');
+        const g = elc('span', 'ce-strand-glyph', glyph); g.title = glyphTitle; s.append(g);
+        items.slice(0, THREAD_MAX).forEach((el, i) => { if (i) s.append(document.createTextNode(', ')); s.append(el); });
+        if (items.length > THREAD_MAX) {
+            const more = elc('span', 'ce-more', `+${items.length - THREAD_MAX}`);
+            more.title = `Show all ${items.length} ${moreLabel}`;
+            more.addEventListener('mousedown', ev => ev.preventDefault());
+            more.addEventListener('click', ev => { ev.preventDefault(); openThreadsPeek(row, t, onNavigate, onOpenBinding); });
+            s.append(more);
+        }
+        row.append(s);
+    };
+    strand('↳', 'reads', t.reads.map(d => threadLink(d.toTitle, 'reads ' + d.toTitle + ' — go to it', () => onNavigate(d.toId))), 'reads');
+    strand('↰', 'used by', t.usedBy.map(d => threadLink(d.toTitle, 'used by ' + d.toTitle + ' — go to it', () => onNavigate(d.toId))), 'used by');
+    strand('⟢', 'code refs', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => onOpenBinding(r.file, r.symbol))), 'code refs');
     return row;
 }
 
-function buildDepDecorations(doc: PMModelNode, depsMap: Record<string, FeatureDep[]>, onNavigate: (fid: string) => void): DecorationSet {
+function buildThreadDecorations(
+    doc: PMModelNode, threadsMap: Record<string, ThreadsData>,
+    onNavigate: (fid: string) => void, onOpenBinding: (file: string, symbol: string) => void,
+): DecorationSet {
     const decos: Decoration[] = [];
     doc.forEach((node, pos) => {
         if (node.type.name !== 'featureHeading') return;
         const fid = node.attrs.fid as string | null;
         if (!fid) return;
-        const deps = depsMap[fid];
-        if (!deps || !deps.length) return;
+        const t = threadsMap[fid];
+        if (!t || threadsEmpty(t)) return;
         const after = pos + node.nodeSize;
-        decos.push(Decoration.widget(after, () => makeDepsRow(deps, onNavigate), { side: -1, key: 'dep-' + fid }));
+        decos.push(Decoration.widget(after, () => makeThreadsRow(t, onNavigate, onOpenBinding), { side: -1, key: 'thr-' + fid }));
     });
     return DecorationSet.create(doc, decos);
 }
@@ -179,18 +259,19 @@ function buildDepDecorations(doc: PMModelNode, depsMap: Record<string, FeatureDe
 export const DependencyDecorations = Extension.create<DependencyDecorationsOptions>({
     name: 'dependencyDecorations',
     addOptions() {
-        return { getDeps: () => ({}), onNavigate: () => {} };
+        return { getThreads: () => ({}), onNavigate: () => {}, onOpenBinding: () => {} };
     },
     addProseMirrorPlugins() {
-        const getDeps = (): Record<string, FeatureDep[]> => this.options.getDeps();
+        const getThreads = (): Record<string, ThreadsData> => this.options.getThreads();
         const onNavigate = this.options.onNavigate;
+        const onOpenBinding = this.options.onOpenBinding;
         return [
             new Plugin({
                 key: depKey,
                 state: {
-                    init: (_c, state) => buildDepDecorations(state.doc, getDeps(), onNavigate),
+                    init: (_c, state) => buildThreadDecorations(state.doc, getThreads(), onNavigate, onOpenBinding),
                     apply: (tr, old, _o, newState) => {
-                        if (tr.getMeta(DEPS_UPDATED) || tr.docChanged) return buildDepDecorations(newState.doc, getDeps(), onNavigate);
+                        if (tr.getMeta(DEPS_UPDATED) || tr.docChanged) return buildThreadDecorations(newState.doc, getThreads(), onNavigate, onOpenBinding);
                         return old.map(tr.mapping, tr.doc);
                     },
                 },

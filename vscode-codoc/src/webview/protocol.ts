@@ -19,11 +19,27 @@ export interface RefSymbol {
     detail?: string; // `file · feature title`
 }
 
-/** A feature→feature dependency edge for the "see also" chips under a heading. */
+/** A feature→feature dependency edge (host-internal; folded into ThreadsData). */
 export interface FeatureDep {
     toId: string;
     toTitle: string;
     rel: 'depends' | 'usedby';
+}
+
+/** A feature→feature thread target (a reads / used-by edge). */
+export interface ThreadTarget { toId: string; toTitle: string }
+/** A code-ref thread target (a binding). */
+export interface ThreadRef { file: string; symbol: string }
+
+/** The unified dependency "threads" for one feature (U4): the three strands of the
+ *  inline threads line under a heading — what it `reads`, what `usedBy` it, and the
+ *  code `refs` it binds. The full (un-truncated) data, so the on-demand peek renders
+ *  client-side with no extra round-trip. Assembled host-side from `feature_edges`
+ *  (deps) + `by_feature` (bindings). */
+export interface ThreadsData {
+    reads: ThreadTarget[];
+    usedBy: ThreadTarget[];
+    refs: ThreadRef[];
 }
 
 /** A node in the left tree pane (navigation). Mirrors the live feature tree
@@ -77,9 +93,9 @@ export interface DocPayload {
      *  (human → agent, awaiting implementation). Rendered as persistent inline
      *  word-level diffs that only clear on resolution by the correct party. */
     suggestions?: Suggestion[];
-    /** Per-feature "see also" dependency edges (feature_edges), for chips under
-     *  each heading. */
-    deps?: Record<string, FeatureDep[]>;
+    /** Per-feature unified dependency threads (reads / used-by / code refs) for the
+     *  inline threads line under each heading + the on-demand peek (U4). */
+    threads?: Record<string, ThreadsData>;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }
