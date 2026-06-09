@@ -6,6 +6,28 @@
     --fg-muted: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
     --hover-bg: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
     --select-bg: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 35%, transparent);
+
+    /* ── Design-system tokens (U1) ──────────────────────────────────────────────
+       Scoped palette: ONE structural accent + TWO directional hues + role-ink tints.
+       Lifecycle (unrealized) and live agent activity ride the non-color STATUS axis
+       (U3/H4), never a hue. The legacy --accent-* below are kept until U3 re-points
+       the op-type rainbow (kind→shape); new code reaches for the semantic tokens. */
+    --accent:     var(--vscode-focusBorder, var(--vscode-charts-blue, #6aa9ff));
+    --dir-review: var(--vscode-charts-blue, #6aa9ff);    /* code-ahead — you resolve   */
+    --dir-await:  var(--vscode-charts-green, #66bb6a);   /* doc-ahead  — agent resolves */
+    /* authorship ink: the human is the DEFAULT author → neutral, no hue. This frees
+       blue for the code-ahead direction and resolves the ink-vs-direction collision (H5). */
+    --ink-human:  var(--vscode-foreground);
+    --ink-claude: var(--vscode-charts-purple, #b58fff);
+    --ink-codex:  var(--vscode-charts-green,  #66bb6a);
+    --ink-gemini: var(--vscode-charts-yellow, #e6c200);
+    --ink-cursor: var(--vscode-charts-orange, #e08f4f);
+    /* spacing — 8px base grid — and the radius scale */
+    --space-1: 4px;  --space-2: 8px;  --space-3: 12px;  --space-4: 16px;  --space-6: 24px;
+    --radius-ctrl: 4px;  --radius-card: 6px;
+
+    /* legacy op-type accents — retired by U3 (kind→shape); kept so the in-between
+       build renders until the rainbow is re-pointed. */
     --accent-refs: var(--vscode-charts-foreground, var(--vscode-foreground));
     --accent-plan: var(--vscode-charts-purple, #b58fff);
     --accent-amend: var(--vscode-charts-yellow, #e6c200);
@@ -13,6 +35,22 @@
     --accent-blue: var(--vscode-charts-blue, #6aa9ff);
     --accent-add: var(--vscode-charts-green, #66bb6a);
     --ease: cubic-bezier(.2, .7, .2, 1);
+}
+
+/* ── High-contrast themes (U1 a11y) ─────────────────────────────────────────────
+   HC erases low-% color-mix washes, so state that leans on a faint tint vanishes.
+   Raise the floors to borders / stronger fills. VS Code sets `vscode-high-contrast`
+   and, for the light HC variant, ALSO `vscode-high-contrast-light` on <body>. */
+body.vscode-high-contrast {
+    --rule: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+    --hover-bg: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+    --select-bg: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 70%, transparent);
+}
+body.vscode-high-contrast .row.selected,
+body.vscode-high-contrast .ce-diff,
+body.vscode-high-contrast .refs-pill,
+body.vscode-high-contrast .ce-dep {
+    outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
 }
 
 * { box-sizing: border-box; }
@@ -133,7 +171,8 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .disclosure.leaf { visibility: visible; color: color-mix(in srgb, var(--vscode-foreground) 22%, transparent); cursor: default; font-size: 8px; }
 
 .title {
-    font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+    /* editorial sans for the navigator label — a document outline, not a code listing (U1) */
+    font-family: var(--vscode-font-family, system-ui);
     font-size: 12.5px; margin-left: 8px;
     flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
     letter-spacing: -0.005em;
@@ -466,6 +505,21 @@ body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
     }
 }
 
+/* AUTHORITATIVE reduced-motion gate (U1 / KTD4). VS Code relays the user's
+   "Reduce Motion" preference to a webview as a BODY CLASS, not as the
+   `prefers-reduced-motion` media query above (which is unreliable inside the
+   webview host) — so without this the @media block silently never fires. Blanket
+   the whole surface so no animation/transition/auto-scroll is missed as later
+   units add motion. `vscode-using-screen-reader` is handled the same way. */
+body.vscode-reduce-motion .doc,
+body.vscode-using-screen-reader .doc { scroll-behavior: auto; }
+body.vscode-reduce-motion *,
+body.vscode-using-screen-reader * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
    Rich description editor (TipTap) — replaces the textarea (U3/U5/U6/U7).
    Themed entirely via VS Code tokens; opacity = commitment, tint = role.
@@ -581,9 +635,11 @@ body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }
 .codoc-feature-heading[data-level="2"] { font-size: 1.04rem; font-weight: 640; margin: 1.2em 0 0.35em; }
+/* L3 is a quiet small heading — NOT an all-caps eyebrow (U1: kills the
+   "eyebrow on every section" templated tell; depth already reads from size + weight). */
 .codoc-feature-heading[data-level="3"] {
-    font-size: 0.82rem; font-weight: 700; margin: 1em 0 0.3em;
-    color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em;
+    font-size: 0.9rem; font-weight: 650; margin: 1em 0 0.3em;
+    color: var(--fg-muted); letter-spacing: 0;
 }
 .codoc-feature-heading[data-level="4"],
 .codoc-feature-heading[data-level="5"],
