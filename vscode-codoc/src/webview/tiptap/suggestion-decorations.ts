@@ -11,6 +11,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import { wordDiff } from '../../state/doc-diff';
+import { directionLabel, directionActions } from '../../state/grammar';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { FeatureDep } from '../protocol';
 
@@ -61,8 +62,7 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
     box.setAttribute('data-suggestion', s.id);
 
     const head = elc('div', 'ce-diff-head');
-    const dir = s.direction === 'code-ahead' ? '▲ from code' : '▼ your edit';
-    head.append(elc('span', 'ce-diff-dir', dir));
+    head.append(elc('span', 'ce-diff-dir', directionLabel(s.direction)));
     if (s.tag) head.append(elc('span', 'ce-diff-tag', s.tag));
     box.append(head);
 
@@ -94,18 +94,19 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
         actions.classList.add('applying');
         fn(s);
     };
+    // One action pair per direction (grammar): code-ahead → Reject/Accept (human resolves);
+    // doc-ahead → Withdraw/Apply (agent resolves).
+    const [secondary, primary] = directionActions(s.direction);
     if (s.direction === 'code-ahead' && s.eventId) {
-        // Agent → human: the human resolves.
         actions.append(
-            actionButton('Reject', 'reject', once(handlers.reject)),
-            actionButton('Accept', 'accept', once(handlers.accept)),
+            actionButton(secondary, 'reject', once(handlers.reject)),
+            actionButton(primary, 'accept', once(handlers.accept)),
         );
     } else {
-        // Human → agent: Apply settles + sends the directive; Withdraw discards.
         actions.append(
             elc('span', 'ce-diff-await', 'your suggestion'),
-            actionButton('Withdraw', 'withdraw', once(handlers.withdraw)),
-            actionButton('Apply', 'accept', once(handlers.apply)),
+            actionButton(secondary, 'withdraw', once(handlers.withdraw)),
+            actionButton(primary, 'accept', once(handlers.apply)),
         );
     }
     box.append(actions);

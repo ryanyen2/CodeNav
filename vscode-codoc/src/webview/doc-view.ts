@@ -11,6 +11,7 @@
 import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
 import { AuthorController } from './tiptap/author-plugin';
+import { kindGlyph } from '../state/grammar';
 import type { DocPayload, UINode, WebviewMessage } from './protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: WebviewMessage): void };
@@ -231,9 +232,10 @@ function appendGhostRow(parent: HTMLElement, n: UINode): void {
     row.dataset.id = n.id;
     row.style.setProperty('--depth', String(n.depth));
     if (selectedId === n.id) row.classList.add('selected');
-    row.append(el('span', 'pglyph', n.proposalOp === 'move' ? '~' : '+'));
+    // colour = direction (code-ahead; CSS), shape = kind via the lead glyph (U3 grammar)
+    row.append(el('span', 'pglyph', kindGlyph(n.proposalOp || 'add')));
     const t = el('span', 'title ghost-title');
-    t.textContent = (n.proposalOp === 'move' ? '→ ' : '') + (n.title || '(untitled)');
+    t.textContent = n.title || '(untitled)';
     row.append(t);
     if (n.proposal?.tag) row.append(el('span', 'ghost-tag', n.proposal.tag));
     if (n.proposal) row.append(verdictButtons(n.proposal.eventId));

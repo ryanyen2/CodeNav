@@ -135,7 +135,7 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     content: "";
     position: absolute;
     left: 0; top: 4px; bottom: 4px;
-    width: 2px; background: var(--accent-blue); border-radius: 1px;
+    width: 2px; background: var(--accent); border-radius: 1px;
 }
 
 .drag-handle {
@@ -152,10 +152,10 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .drag-handle:active { cursor: grabbing; }
 
 .row.drop-target {
-    background: color-mix(in srgb, var(--accent-blue) 16%, transparent) !important;
-    box-shadow: inset 2px 0 0 var(--accent-blue), inset 0 -1px 0 var(--accent-blue), inset 0 1px 0 var(--accent-blue);
+    background: color-mix(in srgb, var(--accent) 16%, transparent) !important;
+    box-shadow: inset 2px 0 0 var(--accent), inset 0 -1px 0 var(--accent), inset 0 1px 0 var(--accent);
 }
-.row.drop-target::before { background: var(--accent-blue) !important; }
+.row.drop-target::before { background: var(--accent) !important; }
 
 .disclosure {
     width: 16px; text-align: center; color: var(--fg-muted);
@@ -165,7 +165,7 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .disclosure.empty { visibility: hidden; }
 /* a COLLAPSED parent (hidden children) gets an accented, bolder arrow so it's
    obvious there's more beneath it; an expanded one stays quiet. */
-.disclosure.collapsed { color: var(--accent-blue); font-size: 12px; opacity: 0.95; }
+.disclosure.collapsed { color: var(--accent); font-size: 12px; opacity: 0.95; }
 .disclosure.expanded { color: var(--fg-muted); }
 /* leaf rows: a faint mid-dot so depth reads, but clearly not a toggle */
 .disclosure.leaf { visibility: visible; color: color-mix(in srgb, var(--vscode-foreground) 22%, transparent); cursor: default; font-size: 8px; }
@@ -178,25 +178,27 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     letter-spacing: -0.005em;
 }
 .row.retired .title { text-decoration: line-through; opacity: 0.55; }
-.row.has-retire .title { text-decoration: line-through; color: var(--accent-retire); opacity: 0.7; }
+.row.has-retire .title { text-decoration: line-through; color: var(--fg-muted); opacity: 0.7; }
 .row.unrealized .title { font-style: italic; opacity: 0.78; }
 
 .amend-inline {
     font-family: var(--vscode-editor-font-family); font-size: 11.5px;
-    color: var(--accent-amend); margin-left: 12px; opacity: 0.88;
+    color: var(--dir-review); margin-left: 12px; opacity: 0.88;
     flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%;
 }
-.row.has-amend { background: color-mix(in srgb, var(--accent-amend) 5%, transparent); }
-.row.has-amend:hover { background: color-mix(in srgb, var(--accent-amend) 9%, transparent); }
-.row.has-retire { background: color-mix(in srgb, var(--accent-retire) 4%, transparent); }
+/* code-ahead change on a live row → direction tint (kind shown by shape: ✎ inline / strike) */
+.row.has-amend { background: color-mix(in srgb, var(--dir-review) 5%, transparent); }
+.row.has-amend:hover { background: color-mix(in srgb, var(--dir-review) 9%, transparent); }
+.row.has-retire { background: color-mix(in srgb, var(--dir-review) 4%, transparent); }
 
 .badge { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-left: 10px; }
-.badge.unrealized { background: var(--accent-plan); }
-.badge.amend { background: var(--accent-amend); }
-.badge.retire { background: var(--accent-retire); }
+/* lifecycle = STATUS axis (no hue, U3/H4): unrealized = hollow dashed ring */
+.badge.unrealized { background: transparent; border: 1px dashed var(--fg-muted); box-sizing: border-box; }
+/* pending code-ahead change → direction colour (kind is shown by shape, not the dot) */
+.badge.amend, .badge.retire { background: var(--dir-review); }
 
-/* live agent activity dot on a tree row */
-.badge.active-write { background: var(--accent-amend); animation: pulse 1.4s ease-in-out infinite; }
+/* live agent activity = STATUS axis: MOTION distinguishes write (pulsing) from read (steady), not hue */
+.badge.active-write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }
 .badge.active-read { background: var(--fg-muted); }
 
 .refs-pill {
@@ -209,13 +211,11 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .refs-pill:hover { opacity: 1; }
 
 /* Ghost rows for pending ADD/MOVE */
-.row.proposal { background: color-mix(in srgb, var(--accent-add) 7%, transparent); }
-.row.proposal:hover { background: color-mix(in srgb, var(--accent-add) 12%, transparent); }
-.row.proposal.move { background: color-mix(in srgb, var(--accent-blue) 7%, transparent); }
-.row.proposal.move:hover { background: color-mix(in srgb, var(--accent-blue) 12%, transparent); }
+/* tree-pane ghosts are code-ahead proposals → ONE direction colour; the glyph (+ / →) is the kind */
+.row.proposal { background: color-mix(in srgb, var(--dir-review) 7%, transparent); }
+.row.proposal:hover { background: color-mix(in srgb, var(--dir-review) 12%, transparent); }
 .row.proposal .pglyph { width: 14px; text-align: center; flex-shrink: 0; font: 12px var(--vscode-editor-font-family); }
-.row.proposal.add .pglyph, .row.proposal.add .ghost-title { color: var(--accent-add); }
-.row.proposal.move .pglyph, .row.proposal.move .ghost-title { color: var(--accent-blue); }
+.row.proposal .pglyph, .row.proposal .ghost-title { color: var(--dir-review); }
 .row .ghost-tag { font: 10px var(--vscode-font-family); color: var(--fg-muted); margin-left: 10px; opacity: 0.7; flex-shrink: 0; }
 
 .row .verdict { display: inline-flex; gap: 4px; margin-left: 12px; flex-shrink: 0; opacity: 0; transition: opacity 100ms ease; }
@@ -378,8 +378,9 @@ body.vscode-using-screen-reader * {
     scroll-margin-top: 12px; position: relative;
 }
 .codoc-feature-heading:first-child { margin-top: 0.1em; }
-.codoc-feature-heading[data-retired="true"] { text-decoration: line-through; color: var(--accent-retire); opacity: 0.7; }
-.codoc-feature-heading[data-realized="false"] { color: var(--accent-plan); }
+/* status axis (no hue): retired = strike + muted; unrealized = italic + muted */
+.codoc-feature-heading[data-retired="true"] { text-decoration: line-through; color: var(--fg-muted); opacity: 0.7; }
+.codoc-feature-heading[data-realized="false"] { color: var(--fg-muted); font-style: italic; }
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }
@@ -400,7 +401,7 @@ body.vscode-using-screen-reader * {
 /* the heading the reader is currently on (scroll-spy) — a subtle accent tick */
 .codoc-feature-heading.ce-current::before {
     content: ""; position: absolute; left: -16px; top: 0.18em; bottom: 0.18em; width: 3px;
-    border-radius: 2px; background: var(--accent-blue); opacity: 0.85;
+    border-radius: 2px; background: var(--accent); opacity: 0.85;
 }
 
 /* descriptions — flush, readable measure, body tone (no indent) */
@@ -425,16 +426,17 @@ body.vscode-using-screen-reader * {
     margin-left: calc(var(--d, 0) * 3px); transition: background 120ms ease, transform 120ms ease;
 }
 .ce-tick:hover { background: color-mix(in srgb, var(--vscode-foreground) 45%, transparent); }
-.ce-tick.active { background: var(--accent-blue); transform: scaleY(1.6); }
-.ce-tick.retired { background: color-mix(in srgb, var(--accent-retire) 50%, transparent); }
-.ce-tick.unrealized { background: color-mix(in srgb, var(--accent-plan) 50%, transparent); }
+.ce-tick.active { background: var(--accent); transform: scaleY(1.6); }
+/* status axis on the rail (no hue): retired = muted, unrealized = hollow dashed */
+.ce-tick.retired { background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent); opacity: 0.6; }
+.ce-tick.unrealized { background: transparent; outline: 1px dashed color-mix(in srgb, var(--vscode-foreground) 45%, transparent); }
 
 /* ── Editing / Suggesting mode toggle ─────────────────────────────────────── */
 .ce-modeseg .ce-editmode.active { background: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
-.ce-modeseg .ce-sugmode.active { background: color-mix(in srgb, var(--accent-add) 24%, transparent); color: var(--vscode-foreground); }
+.ce-modeseg .ce-sugmode.active { background: color-mix(in srgb, var(--dir-await) 24%, transparent); color: var(--vscode-foreground); }
 /* a subtle banner tint while Suggesting */
 .codoc-whole-editor[data-editmode="suggesting"] .ce-whole-surface {
-    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent-add) 60%, transparent);
+    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--dir-await) 60%, transparent);
 }
 
 /* ── Persistent diff cards (suggestions) ──────────────────────────────────── */
@@ -444,20 +446,21 @@ body.vscode-using-screen-reader * {
     background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent);
     font: 12px/1.55 var(--vscode-font-family); user-select: none;
 }
-.ce-diff.code-ahead { border-left-color: var(--accent-blue); }
-.ce-diff.doc-ahead  { border-left-color: var(--accent-add); }
+.ce-diff.code-ahead { border-left-color: var(--dir-review); }
+.ce-diff.doc-ahead  { border-left-color: var(--dir-await); }
 .ce-diff-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 5px; }
 .ce-diff-dir { font-weight: 650; font-size: 11px; letter-spacing: 0.02em; color: var(--vscode-foreground); }
-.ce-diff.code-ahead .ce-diff-dir { color: var(--accent-blue); }
-.ce-diff.doc-ahead .ce-diff-dir { color: var(--accent-add); }
+.ce-diff.code-ahead .ce-diff-dir { color: var(--dir-review); }
+.ce-diff.doc-ahead .ce-diff-dir { color: var(--dir-await); }
 .ce-diff-tag { font-size: 10.5px; color: var(--fg-muted); }
 .ce-diff-row { margin: 2px 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .ce-diff-label { flex: 0 0 auto; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-muted); padding-top: 1px; }
 .ce-diff-desc { color: var(--fg-muted); }
 .ce-wd { white-space: pre-wrap; }
 .ce-wd .wd-same { color: color-mix(in srgb, var(--vscode-foreground) 78%, transparent); }
-.ce-wd .wd-del { text-decoration: line-through; color: var(--accent-retire); opacity: 0.8; }
-.ce-wd .wd-ins { color: var(--accent-add); background: color-mix(in srgb, var(--accent-add) 14%, transparent); border-radius: 2px; }
+/* kind = shape, colourblind-safe: delete strikes, insert underlines — no red/green */
+.ce-wd .wd-del { text-decoration: line-through; color: var(--fg-muted); opacity: 0.85; }
+.ce-wd .wd-ins { text-decoration: underline; text-decoration-thickness: 1px; }
 .ce-diff-actions { display: flex; gap: 7px; align-items: center; margin-top: 7px; }
 .ce-diff-await { font-size: 10.5px; color: var(--fg-muted); margin-right: auto; font-style: italic; }
 .ce-diff-btn {
@@ -469,7 +472,8 @@ body.vscode-using-screen-reader * {
 .ce-diff-btn.accept:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
 
 /* a feature whose retire is proposed (code-ahead) — struck heading */
-.codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--accent-retire); opacity: 0.75; }
+/* proposed retire (code-ahead) — strike is the SHAPE, direction is the colour */
+.codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
 
 /* ── "see also" dependency chips under a heading ──────────────────────────── */
 .ce-deps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0.1em 0 0.5em; user-select: none; }
@@ -481,6 +485,6 @@ body.vscode-using-screen-reader * {
     transition: color 120ms ease, border-color 120ms ease;
     white-space: nowrap; max-width: 30ch; overflow: hidden; text-overflow: ellipsis;
 }
-.ce-dep:hover { color: var(--vscode-foreground); border-color: color-mix(in srgb, var(--accent-blue) 50%, transparent); }
+.ce-dep:hover { color: var(--vscode-foreground); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .ce-dep .ce-dep-rel { opacity: 0.7; }
 .ce-dep.usedby .ce-dep-rel { color: var(--accent-refs); }
