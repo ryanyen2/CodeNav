@@ -436,10 +436,45 @@ touch `suggestion-decorations.ts` so they sequence rather than parallelize.
   all four themes attached to the PR; reduced-motion verified by toggling VS Code
   "Reduce Motion".
 
-### U2. The Stance — collapse the 2×2 into ink + gesture
+### U1b. Remove the dead legacy read-view CSS
 
-- **Goal** — Remove the pen/pencil and Editing/Suggesting segmented controls; make the
-  text's ink the primary authorship signal and "suggest" a held gesture + secondary pill.
+*(Surfaced while implementing U1 — 2026-06-09.)*
+
+- **Goal** — Delete the ~300 lines of unrendered legacy read-view CSS (a pre-whole-doc
+  per-section design the TipTap whole-doc editor replaced). The largest *literal* declutter
+  available; shrinks the surface U3/U4/U6 touch (removes a second, duplicate TOC rail and a
+  second rainbow-usage set).
+- **Requirements** — supports R4, R7 (overall declutter).
+- **Dependencies** — none (independent of U2; land any time before U3/U6).
+- **Files** — `vscode-codoc/src/webview/doc-view.css` only.
+- **Approach** — Delete the dead blocks: `.doc` (article scroller; keep only what
+  `.doc.empty` needs), `.doc-accent`, the legacy `.toc-rail`/`.toc-tick`/`.toc-marker`
+  (NOT the live `.ce-toc-rail`/`.ce-tick`), the entire `.section*` read-view (`.meta`,
+  `.pill`, `.prose`, `.cite`, `.amend-title`, `.rail*`/`.rsym`, `.xrefs`/`.xref`,
+  `.t-edit*`/`.d-edit`/`.edit-hint`, `.inline-verdict`, `.retire-note`), the
+  `.skeleton`/streaming/`revealing`/`entering`/`changed`/`landed` animations, and the
+  legacy per-section `.codoc-editor` wrapper. **Preserve the SHARED primitives** the
+  whole-doc editor uses: `.doc-host`, `.doc.empty`, `.ce-toolbar`/`.ce-btn`/`.ce-seg`/
+  `.ce-marks`/`.ce-surface`/`.ce-structure`/`.ce-spacer`, `.codoc-feature-heading`,
+  `.codoc-code-ref`, `.codoc-highlight`/`.codoc-comment`,
+  `.codoc-author`/`.codoc-mode-*`/`.codoc-role-*`, `.cr-popup`/`.cr-item`, `.ce-diff*`,
+  `.ce-deps`/`.ce-dep`, `.ce-toc-rail`/`.ce-tick`. Prune any now-dangling selectors inside
+  the motion blocks that name deleted classes.
+- **Verification** — `npm run build` clean; `vitest run` green; the webview renders
+  identically (the deleted CSS was never matched); a grep confirms no `.ts` renders the
+  deleted classes.
+- **Test expectation: none** — dead-code removal, guarded by build + the live render path.
+
+### U2. The Stance — pen/pencil into ink, editing/suggesting stays visible
+
+- **Goal** — Make the text's ink the primary authorship signal (per D2); collapse
+  *pen/pencil* into ink + a per-span affordance; keep *editing/suggesting* as one small
+  visible persistent control. **Sliced (D2):** **U2a** — re-point ink rendering to the
+  neutral `--ink-*` tokens (the H5 collision fix, regression-free); **U2b** — remove the
+  pen/pencil toolbar control + add the per-span "hand to AI" affordance + the optional ⌥
+  override + conflict-queue. *Coupling:* U2 and U5 both touch the editor toolbar
+  (`whole-doc-editor.ts`) — U2 owns the stance controls, U5 owns structure/`⇄ text`
+  removal; sequence so they don't clobber.
 - **Requirements** — R2; supports R6.
 - **Dependencies** — U1.
 - **Files** — `vscode-codoc/src/webview/tiptap/whole-doc-editor.ts` (toolbar assembly
