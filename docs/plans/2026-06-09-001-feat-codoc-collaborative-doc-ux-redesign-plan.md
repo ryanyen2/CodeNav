@@ -101,7 +101,7 @@ are listed for completeness but are **out of scope** — see Scope Boundaries.)
 | **Tree pane** (left navigator: rows, drag `⋮⋮`, disclosures, badges, pills, ✓/✗) | Feature tree structure from the store (sidecar) | `doc-view.ts` `renderTree`/`appendRow` | **Keep as navigator**; strip duplicated proposal signals, adopt unified grammar; calmer density (U6) |
 | **Whole-doc editor** (center: headings = features, body = description) | `tree.doc.json` ↔ `tree.codoc`; Loop B authoring round-trip | `webview/tiptap/whole-doc-editor.ts` | Core surface — keep; re-home toolbar (U5), apply design system (U1) |
 | **Structure gestures** (rename=AMEND, indent=MOVE, new=ADD, retire=RETIRE) | Loop B structural ops via `renderTreeFromDoc` → parse→diff→apply | `tiptap/structure-commands.ts` | Move from toolbar buttons to **contextual** affordances (block handle / keys) (U5) |
-| **Authorship ink** (pen/pencil opacity + role tint) | `tree.doc.json` `author` marks (U6 model) | `tiptap/author-plugin.ts`, css `:525-535` | Promote to the **primary** stance signal; drop the toolbar instrument toggle (U2) |
+| **Authorship ink** (pen/pencil opacity + role tint) | `tree.doc.json` `author` marks (authorship-mark model; redesigned in U2) | `tiptap/author-plugin.ts`, css `:525-535` | Promote to the **primary** stance signal; drop the toolbar instrument toggle (U2) |
 | **Editing / Suggesting** (settle vs capture diff) | doc-ahead capture → `realize.md`; settle → `tree.codoc` | `whole-doc-editor.ts` settle logic; `state/suggestion-model.ts` | Collapse into a **gesture** (hold-⌥ to suggest) + transient indicator (U2) |
 | **Suggestion diff cards** (inline, beneath heading) | code-ahead → `inbox.json` verdicts; doc-ahead → `realize.md` | `tiptap/suggestion-decorations.ts`, css `:635-667` | Become the **single** disagreement grammar for prose *and* structure (U3) |
 | **Tree ghost rows / badges** (ADD/MOVE/amend/retire) | Sidecar `proposals` map | `doc-view.ts` `appendGhostRow`; css `:162-187` | Fold into the unified grammar; color→direction, kind→shape (U3) |
@@ -136,10 +136,11 @@ the text expresses itself**, plus a single momentary gesture:
   - *doc-ahead ▼* — you changed intent; the **agent** owes code (your suggestion awaits
     implementation).
   - *code-ahead ▲* — the agent changed code or proposed; **you** owe a verdict.
-- **Editing vs Suggesting collapses to a gesture.** You just write — that commits. Hold
-  **⌥/Alt while typing** to suggest instead. A small, clearly-secondary "Suggest" pill
-  remains for discoverability and non-keyboard users; a transient banner confirms the
-  active stance. No persistent 2×2 to memorize.
+- **Editing vs Suggesting stays one small visible control** (decided — D2). Your current
+  stance is always shown; switching it is one click. The ⌥-hold is an *optional* momentary
+  "suggest just this edit" shortcut on top. *Pen/pencil* is gone as a toolbar mode — it
+  lives in the text's ink (above) + a per-span "hand to AI" affordance. Net: one visible
+  stance control + ink, replacing the old four-button 2×2.
 
 This is not invented from scratch — it *promotes* the `author` mark model that already
 exists (`author-plugin.ts`, css `:525-535`) from a buried decoration to the primary
@@ -204,12 +205,24 @@ correct, future-proof foundation — codoc already does this).
 | Structural accent | `--vscode-focusBorder` (fallback `--vscode-charts-blue`) | focus ring, active section tick, selection bar, current-heading marker |
 | code-ahead (review) | `--vscode-charts-blue` | pending changes **you** resolve |
 | doc-ahead (awaiting) | `--vscode-charts-green` | pending changes the **agent** resolves |
-| role: human | `--vscode-charts-blue` | authorship ink tint only |
-| role: claude-code / codex / gemini / cursor | charts purple / green / yellow / fg | authorship ink tint only |
+| role: human (default author) | **neutral** `--vscode-foreground` (no tint) | authorship ink — the human is the default author and needs no hue, freeing blue for code-ahead |
+| role: claude-code / codex / gemini / cursor / other | `--vscode-charts-purple` / `-green` / `-yellow` / `-orange` / deterministic-hash slot | authorship ink tint only; an unknown agent hashes to a chart slot, never `fg` |
+| status: unrealized · agent-active | shape / opacity only (no hue) — see status axis below | lifecycle + live activity, **not** pending-change |
 | surfaces | `--vscode-editor-background`, `…-input-background` | flat; cards only for diffs |
 | hairline | `color-mix(--vscode-foreground 12%)` | dividers |
 
-Retire/amend/move/unrealized **no longer own colors** — they are decoration shapes.
+**Precedence when ink and direction co-occur on one span:** the diff decoration owns the
+foreground treatment; authorship ink is the settled text beneath it. Because human ink is
+neutral, a human-authored span inside a code-ahead diff shows blue *for the diff* — no
+ink-vs-direction color collision.
+
+**Status axis (separate from the disagreement grammar).** `unrealized` placeholders and
+`activeWrite`/`activeRead` agent activity are **not** pending `Suggestion`s and carry **no
+hue**: unrealized = italic title + dashed/hollow tick (existing); active-write = pulsing
+glyph, active-read = steady glyph. This keeps R4 honest — color is spent only on the
+structural accent + two directional hues + authorship role tints.
+
+Retire/amend/move **no longer own colors** — they are decoration shapes (see U3).
 One accent locked per concern; no color used for two meanings.
 
 ### Spacing, surface, shape
@@ -252,9 +265,9 @@ Directional guidance for review — not implementation specification.
 
 ```mermaid
 flowchart TD
-  W[User types in the document] -->|default| C{Alt / Suggest held?}
-  C -->|no| COMMIT[Commit: settle text → tree.codoc<br/>ink = current authorship]
-  C -->|yes| SUG[Suggest: capture doc-ahead diff<br/>nothing settles]
+  W[User types in the document] --> C{Stance = suggesting?<br/>visible toggle · ⌥ momentary override}
+  C -->|editing| COMMIT[Commit: settle text → tree.codoc<br/>ink = current authorship]
+  C -->|suggesting| SUG[Suggest: capture doc-ahead diff<br/>nothing settles]
   COMMIT -->|edit implies code| DA[doc-ahead ▼ raised → realize.md]
   SUG --> DA
 
@@ -291,29 +304,33 @@ sequenceDiagram
   participant U as User (⌥-hover heading)
   participant WV as Webview (doc-view / decorations)
   participant Host as Host (tree-editor.ts)
-  participant G as graph/query.py (ego_graph / neighbor)
+  participant SC as Sidecar (tree.bindings.json, on disk)
   U->>WV: hover threads line / heading
   WV->>Host: postMessage {kind:'peek-deps', featureId}
-  Host->>G: ego_graph(feature) → neighbors + bound symbols
-  Host-->>WV: {kind:'deps-peek', featureId, nodes, edges, refs}
+  Host->>SC: read feature_edges + by_feature (already loaded)
+  Host-->>WV: {kind:'deps-peek', featureId, reads, usedBy, refs}
   WV->>U: in-place popover (neighborhood, anchored to section)
 ```
 
-Reuses the existing graph layer (`codoc/graph/query.py`); the threads line itself is fed
-by the `deps` already in `DocPayload` (`protocol.ts:82`) — only the *peek* needs a new
-message round-trip.
+The neighborhood is assembled **host-side from the sidecar** — there is **no host→Python
+call path** in the extension (KTD5). A symbol-level `ego_graph` peek is a deferred,
+separately-budgeted transport. The always-on threads line draws from the same two sidecar
+sources (`feature_edges` + `by_feature`); the *peek* (U4b) is the lazy, richer view.
 
 ---
 
 ## Requirements
 
 - **R1** — Keep the three-pane topology (tree · document · TOC rail); no pane is removed.
-- **R2** — Collapse pen/pencil × editing/suggesting into one stance: ink in the text +
-  one gesture; remove the two segmented toolbar controls.
+- **R2** — Collapse *pen/pencil* into the text's ink + a per-span "hand to AI" affordance
+  (it is **not** removed; see U2/H2). Keep *editing/suggesting* as one small **visible,
+  persistent** stance control (decided D2) — not a hidden gesture; ⌥-hold is an optional
+  momentary shortcut. Net: the old four-button 2×2 → one visible stance control + ink.
 - **R3** — Render every pending change in one grammar: direction = color (2 hues),
   kind = shape; one action pair per direction, identical in body and tree pane.
 - **R4** — Reduce the pending-state palette from 6 accent colors to 1 structural + 2
-  directional + role-tints-for-ink-only.
+  directional + role-tints-for-ink-only. Lifecycle (`unrealized`) and live agent activity
+  move to a non-color **status axis** (shape / opacity / glyph), not a hue.
 - **R5** — Merge the four dependency homes (`ce-deps`, `xrefs`, `N refs`, dimming-in-doc)
   into one inline threads line + an on-demand local graph peek.
 - **R6** — One de-cluttered header; structure actions (new/indent/outdent/retire) move to
@@ -321,8 +338,11 @@ message round-trip.
 - **R7** — TOC rail and tree pane each carry a distinct, legible role (minimap vs
   navigator), not a third/fourth re-draw of the outline.
 - **R8** — Accessibility: reduced-motion via `body.vscode-reduce-motion`; all four theme
-  classes incl. high-contrast tint floors; `:focus-visible` everywhere; keyboard parity
-  for the stance gesture.
+  classes incl. high-contrast tint floors; a required **non-color direction signal** on
+  every diff (the `▲ from code` / `▼ your edit` label) for colorblind parity; `aria-live`
+  + post-verdict focus management on diff cards; `:focus-visible` on the interactive
+  elements these units touch (rows, chips, diff buttons, ticks); keyboard parity for the
+  stance gesture via one command. (Broad webview-wide focus-ring hardening is deferred.)
 - **R9** — No regressions to the settle / suggest / verdict round-trip; the vitest
   parity + roundtrip suites stay green; no framework migration.
 
@@ -336,11 +356,17 @@ existing token approach is correct and future-proof. *If* VS Code-native chrome
 components are ever wanted, `@vscode-elements/elements` is the live community option —
 noted as a deferred possibility, not adopted here.
 
-**KTD2 — Stance surfaced as text appearance + one gesture; data model unchanged.**
-Keep `author` marks (`pm-doc`) and `Suggestion.direction` exactly as they are — the
-redesign is presentation-only at the model layer, so the loops, `inbox.json`,
-`realize.md`, and the parity tests are untouched (de-risks R9). Rationale: the two axes
-are genuinely orthogonal and correct in data; only their *UI conflation* was the problem.
+**KTD2 — Stance surfaced as text appearance + one gesture; *serialization* layer unchanged.**
+Keep `author` marks (`pm-doc`) and `Suggestion.direction` exactly as they are. The
+*serialization* layer is untouched — `tree.doc.json`, `tree.codoc`, the sidecar,
+`inbox.json`, `realize.md`, and the parity/roundtrip tests don't change (de-risks R9).
+Two honest caveats — this is **not** "presentation-only": (a) U2 moves the
+editing/suggesting *classification* from a persisted `mode` read at debounce-time to a
+per-edit latch set at keystroke time — a change inside the settle path (see U2/H3); (b)
+U4b adds a webview↔host message pair (`peek-deps`/`deps-peek`) + a `DepsPeek` type to
+`protocol.ts`. Both are budgeted; neither touches the serialized formats. Rationale: the
+two axes are genuinely orthogonal and correct in data; only their *UI conflation* was the
+problem.
 
 **KTD3 — Color by direction, shape by kind (CKEditor/Word convention).**
 Research §2–3 confirms the durable convention: color = who/direction, decoration = kind.
@@ -351,10 +377,16 @@ The current `@media (prefers-reduced-motion)` (`css:460`) is unreliable in webvi
 (research §1). Keep it as a fallback, add the body-class selector as the authoritative
 gate. This is a latent-bug fix, not just polish.
 
-**KTD5 — Threads line from existing `deps` payload; graph peek adds one message.**
-The inline threads line needs no new transport (`DocPayload.deps` exists). Only the
-on-demand peek adds a `peek-deps`/`deps-peek` round-trip backed by `graph/query.py`,
-keeping the always-on cost zero and the richer view lazy.
+**KTD5 — Threads line and peek both assemble host-side from on-disk sidecar data; no Python call.**
+The threads line's three strands come from **two** sidecar sources, not one:
+`reads`/`usedBy` from `feature_edges` (the `deps` payload) and `refs` from `by_feature`
+bindings — so merging the `N refs` pill in needs the deps payload **extended** with
+per-feature binding data (host-side, already available), not "no new transport." The
+on-demand peek (U4b) assembles the same neighborhood **host-side in `tree-editor.ts`**
+from the sidecar — there is **no host→Python path** in the extension (no `child_process`;
+`query.py` needs a live in-process `Store`). A symbol-level `ego_graph` peek, if ever
+wanted, is a separately-budgeted transport (a daemon-written `feature_graph.json` sidecar,
+or a new `codoc_neighborhood` MCP tool) — explicitly deferred, not assumed.
 
 **KTD6 — Raw-text editor parity is deferred.** The confirmed scope is the webview (the
 named "Notion-like doc"). Dragging the `providers/*.ts` stack in doubles the surface and
@@ -415,12 +447,14 @@ touch `suggestion-decorations.ts` so they sequence rather than parallelize.
   `vscode-codoc/src/webview/tiptap/author-plugin.ts` (ink application — unchanged logic,
   confirm the single-affordance path still stamps); `vscode-codoc/src/webview/doc-view.css`
   (ink styles `:525-535`, new stance pill + transient banner).
-- **Approach** — Delete `modeSeg`/`seg` segmented controls from the toolbar; keep the
-  `AuthorController` and `mode` state but drive `editing↔suggesting` from a held modifier
-  (read `ev.altKey` in the keymap / a transient state) plus one secondary "Suggest" pill.
-  Surface the active stance as a brief banner (reuse the `data-editmode` attribute and the
-  `css:631-633` suggesting tint, demoted to transient). Keep `setEditMode`/`setMode` as
-  internal API so the settle logic (`diffDocsToSuggestions`) is untouched (de-risks R9).
+- **Approach** — Delete the *pen/pencil* `seg` segmented control (pen/pencil → ink, H2);
+  replace the `modeSeg` editing/suggesting segmented pair with **one compact persistent
+  stance control** (decided D2) that shows the current mode. `settleNow` reads the persisted
+  `mode` at debounce time as today — **no latch on the primary path.** Keep the
+  `AuthorController` + `mode` state. Relocate *pen↔pencil* to a per-span / block-handle
+  affordance (H2). *Optionally* add the ⌥ momentary override (keystroke latch, H3a) + the
+  `codoc.toggleSuggestStance` command + the conflict-queue rule. Keep `setEditMode`/`setMode`
+  as internal API so the settle logic (`diffDocsToSuggestions`) is untouched (de-risks R9).
 - **Patterns to follow** — existing `wrap.dataset.editmode` / `dataset.mode` hooks; the
   existing transient `markSaving` save-state pattern for the stance banner.
 - **Execution note** — Start from a characterization test on the current settle/suggest
@@ -495,12 +529,17 @@ touch `suggestion-decorations.ts` so they sequence rather than parallelize.
   handler calling the graph layer); `vscode-codoc/src/state/doc-layout.ts` (assemble the
   neighborhood from `deps` + bindings if a host-side helper is cleaner than a Python
   round-trip).
-- **Approach** — Build a `threadsFor(featureId)` model merging `deps` (`FeatureDep[]`) +
-  bindings (`UINode.bindings`) into `{ reads, usedBy, refs }`. Render one quiet line
-  under each heading (replacing both `ce-deps` and `xrefs`). On ⌥-hover/click, post
-  `peek-deps`; host answers with the ego-graph neighborhood (reuse
-  `codoc/graph/query.py` `ego_graph`/`neighbor_feature`); render an anchored popover
-  (card surface, `--radius-card`). Lazy: no peek cost until invoked.
+- **Approach** — *Split into U4a (threads line, ships now) and U4b (peek, host-side).*
+  **U4a:** build a `ThreadsData` model (H6) — `reads`/`usedBy` feature-keyed from
+  `feature_edges`, `refs` symbol-keyed from `by_feature`; render one quiet line under each
+  heading (replacing `ce-deps`, `xrefs`, **and** the `N refs` pill), ≤3 per strand + "+N
+  more", empty-strand omission, and the zero-state line. The `threadsFor` helper lives in a
+  webview `threads.ts` (not `doc-layout.ts`). **U4b:** on ⌥-hover/click, post `peek-deps`;
+  the host assembles the neighborhood **from the sidecar in `tree-editor.ts`**
+  (`feature_edges` + `by_feature`) — **no `ego_graph`, no Python** (H1) — and replies
+  `deps-peek`; render an anchored popover (card surface, `--radius-card`) with the content
+  schema in H-design. Lazy: no peek cost until invoked. A symbol-level `ego_graph` peek is
+  deferred behind a budgeted transport (H1).
 - **Patterns to follow** — existing `DependencyDecorations` plugin structure
   (`:178-200`); existing webview↔host `postMessage` contract in `protocol.ts`; the
   `@`-popup positioning (`css:537-549`) as the popover model.
@@ -533,12 +572,14 @@ touch `suggestion-decorations.ts` so they sequence rather than parallelize.
   (toolbar `:30-71`, status dot `:44-53`); `vscode-codoc/src/state/workspace-state.ts`
   (status-bar item `:137-175`: distinct glyph/color per state, reserve background-color
   emphasis for the one state that needs attention).
-- **Approach** — Collapse the editor toolbar to: stance pill (from U2) · marks
-  (`B I H ❝`) · save-state. Remove `＋ ⇥ ⇤ ~` buttons; expose new-feature via Enter-on-
-  empty / a `+` block handle on hover, indent/outdent via Tab/Shift-Tab (already bound),
-  retire via a block-handle menu or the unified grammar. Define a single `statusLanguage`
-  map (state → {glyph, label, emphasis}) shared in spirit between the status bar and the
-  webview dot so they never disagree.
+- **Approach** — Collapse the editor toolbar to: the persistent stance control (D2/U2) ·
+  marks (`B I H ❝`) · save-state. Remove the `＋ ⇥ ⇤ ~` buttons (new-feature via
+  Enter-on-empty / a `+` block handle on hover; indent/outdent via Tab/Shift-Tab, already
+  bound; retire via a block-handle item with an inline popconfirm). **Remove the `⇄ text`
+  button + its `open-text` message (D1)** — the webview is the single surface. Status: the
+  minimal fix only (H7) — drop the redundant `warningBackground` from the `code_drift`
+  branch in `workspace-state.ts`; keep the webview's existing `statusLabel`, no shared
+  abstraction.
 - **Patterns to follow** — the existing keymap (`makeKeymap` already implements
   Tab/Shift-Tab/Enter); the existing `statusLabel` (`doc-view.ts:69-79`) as the seed for
   one shared status language.
@@ -586,6 +627,94 @@ touch `suggestion-decorations.ts` so they sequence rather than parallelize.
 
 ---
 
+## Review hardening (2026-06-09)
+
+A multi-persona review (data-structure / algorithm focus) tightened the mechanics that
+were named but under-specified. These resolve the concrete findings; two genuine product
+calls are in Open Questions below.
+
+**H1 — The graph peek is host-side, and U4 splits (resolves the P0).** There is **no
+host→Python path** in the extension. **U4a** (threads line) and **U4b** (peek) split: U4a
+ships with the redesign from on-disk sidecar data; U4b assembles the neighborhood
+host-side in `tree-editor.ts` from `feature_edges` + `by_feature` — no `ego_graph`, no
+subprocess. A symbol-level peek is deferred (needs a daemon-written `feature_graph.json`
+or a new MCP tool). The `threadsFor` helper lives in a webview `threads.ts`, not
+`doc-layout.ts`.
+
+**H2 — Pen/pencil keeps an affordance (resolves the dropped-quadrant P0).** Only the
+*editing/suggesting* axis becomes a gesture. The *pen↔pencil* instrument relocates to a
+per-span affordance — a block-handle / selection-toolbar item ("Hand to AI (pencil) /
+Take back (pen)") — so model flow 6 (a human invites the AI to revise a span directly)
+stays reachable. U2's "switching to pencil" test now has a real affordance to exercise.
+
+**H3 — Stance mechanics + discoverability (per D2).** The primary editing/suggesting
+control is a **persistent visible** toggle, so `settleNow` reads the persisted `mode` at
+debounce time exactly as today — **no latch on the primary path** (D2 dissolves the
+feasibility bug). (a) *Optional ⌥ override:* if the momentary "suggest just this edit"
+shortcut is built, a `keydown` listener on `editor.view.dom` latches a per-edit
+`pendingSuggest` flag (consumed by `settleNow`) — never a live modifier read 1200 ms late.
+(b) *Conflict:* an incoming code-ahead proposal on a section with unsettled (dirty) human
+text is queued and rendered only after that edit settles (reuse the existing `setDoc`
+dirty-guard). (c) *Keyboard:* command `codoc.toggleSuggestStance`, when-clause
+`codocDocEditorActive`, default `Ctrl/Cmd+Shift+S`. (d) *Indicator:* the persistent stance
+control shows the current mode inline; the suggesting tint (`css:631-633`) marks the
+surface while suggesting. (e) New U2 test: an agent edit to a *pencil* span settles with no
+code-ahead diff (exercises the HTD pencil path).
+
+**H4 — The disagreement grammar is provably lossless.** `kindToShape` covers only the
+four `SuggestionKind`s. `unrealized` and `activeWrite`/`activeRead` are a **separate status
+axis**: unrealized = italic + dashed/hollow tick; active-write = pulsing glyph,
+active-read = steady glyph — shape / opacity, never a hue. Every diff carries the required
+non-color direction label (`▲ from code` / `▼ your edit`) for colorblind parity. Diff
+cards get `role="region"`, an `aria-label`, post-verdict focus move, and an `aria-live`
+outcome announcement.
+
+**H5 — Color + the honest scope.** Human ink is neutral (`--vscode-foreground`),
+reserving blue for code-ahead — no two-meanings collision (see the Color table). KTD2 is
+reworded to scope "unchanged" to the *serialization* layer: U2 changes the settle-path
+classification and U4b adds a protocol message pair — budgeted, not "presentation-only."
+
+**H6 — The ThreadsData model.** `ThreadsData { reads: FeatureRef[], usedBy: FeatureRef[],
+refs: SymbolRef[] }`: `reads`/`usedBy` feature-keyed (by `toId`) from `feature_edges`;
+`refs` symbol-keyed (by `file#symbol`) from `by_feature`. Dedup: drop a `ref` whose
+`file#symbol` is already reached through a thread (resolve each edge's `toId` → its
+bindings); if that proves heavy, declare the three strands disjoint and **drop the dedup
+test** rather than keep a vacuous one. Render ≤3 named per strand + "+N more" (opens the
+peek); omit empty strands; when all empty and no bindings, show "⟢ no code refs yet"
+(muted).
+
+**H7 — Scope tightening.** U5's `workspace-state.ts` change is the minimal fix only — drop
+the redundant `warningBackground` from the `code_drift` branch (it already has a bell
+glyph); no shared `statusLanguage` abstraction. Retire (via the block handle) shows an
+inline popconfirm ("Retire X? Its code bindings detach."). Broad webview focus-ring
+hardening and the first-run callout are deferred.
+
+---
+
+## Resolved decisions (2026-06-09)
+
+Both open product calls are decided (author).
+
+**D1 (was OQ1) — Hide the `⇄ text` entry point.** The webview is the single human surface
+for the redesign's lifetime; the `⇄ text` toolbar button + its `open-text` message are
+removed (the raw-text editor stays reachable from the command palette as a power-user
+escape hatch, just not one click away). This kills the split-brain with zero raw-text work,
+consistent with KTD6. **Impact:** U5 removes the `⇄ text` button (`doc-view.ts`
+`renderToolbar`).
+
+**D2 (was OQ2) — Keep editing/suggesting visible; collapse only pen/pencil into ink.** The
+novel move stands: *pen/pencil* stops being a toolbar mode and becomes the text's own ink
+(+ a per-span "hand to AI" affordance, H2). But *editing/suggesting* stays a **single,
+small, persistent, visible** stance control — not a hidden gesture — so the high-stakes
+commit-vs-suggest choice is always discoverable. The ⌥-hold becomes an **optional momentary
+"suggest just this edit" shortcut** layered on top, not the primary path. Net de-clutter:
+four toolbar controls (two segmented pairs) → **one** visible stance control + ink-in-the-
+text. **Bonus:** this *simplifies* H3 — the primary settle path reads the persisted visible
+mode exactly as today (no debounce/latch bug); the keystroke latch is needed only *if* the
+optional ⌥ momentary override is built.
+
+---
+
 ## Scope Boundaries
 
 **In scope.** The `Codoc Tree` webview (`vscode-codoc/src/webview/**`) — its visual
@@ -603,7 +732,14 @@ system, interaction model, dependency surfacing, and the status-bar language
 - **Restructuring the three panes into one surface** — explicitly declined for this round
   (the user chose "polish the 3-pane"); the design system here would also make a future
   single-surface move cheaper if ever pursued.
-- **Python/loop changes** — none; this is presentation-only (KTD2).
+- **Python / loop / serialization changes** — none; the serialized formats and the
+  loops are untouched (KTD2). (Webview↔host transport *does* gain a `peek-deps` pair — H1.)
+- **U4b symbol-level graph peek** via a real `ego_graph` transport (daemon-written
+  `feature_graph.json` or a `codoc_neighborhood` MCP tool) — U4a's host-side feature-level
+  peek ships first; the symbol-level version is deferred (H1).
+- **The one-time first-run stance callout** and **broad webview-wide `:focus-visible`
+  hardening** — the Suggest pill + keyboard command + the touched-element focus rings ship
+  now; the rest is deferred (H3/H7).
 
 ---
 
@@ -612,12 +748,18 @@ system, interaction model, dependency surfacing, and the status-bar language
 - **Risk: stance gesture is less discoverable than a toggle.** Mitigation: keep a
   secondary "Suggest" pill + a transient banner + a keyboard command + first-run
   affordance; the ink in the text continuously signals state. (R2/R8)
-- **Risk: removing per-op colors loses information.** Mitigation: kind is fully preserved
-  as *shape* (decision matrix), and the `kindToShape` totality test prevents silent
-  collapse. (R3)
-- **Risk: graph-peek round-trip latency / host coupling.** Mitigation: the always-on
-  threads line uses only the existing `deps` payload; the peek is lazy and degrades to
-  the threads line if the host is slow/unavailable. (R5/KTD5)
+- **Risk: removing per-op colors loses information.** Mitigation: kind is preserved as
+  *shape* (decision matrix) with a `kindToShape` totality test; the *non*-pending signals
+  (`unrealized`, agent activity) move to the separate status axis (H4) so nothing goes
+  invisible. (R3/R4)
+- **Risk: the graph peek assumes infrastructure that doesn't exist.** Mitigation: there is
+  no host→Python path, so both the threads line and the U4b peek assemble **host-side from
+  the sidecar** (`feature_edges` + `by_feature`); a symbol-level `ego_graph` peek is
+  deferred behind a budgeted transport, never assumed (H1/KTD5).
+- **Risk: split-brain between the new webview grammar and the unchanged raw-text editor**
+  (both register on `tree.codoc`). Mitigation: resolve OQ1 before shipping — hide the
+  `⇄ text` entry point for the redesign's lifetime, or pull in a minimal raw-text
+  color-by-direction slice. (OQ1/KTD6)
 - **Risk: high-contrast theme regressions from the color refactor.** Mitigation: explicit
   HC tint-floor overrides + a manual four-theme screenshot gate in U1's verification. (R8)
 - **Risk: webview reduced-motion behavior is environment-specific.** Mitigation: gate on
