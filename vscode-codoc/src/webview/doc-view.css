@@ -293,9 +293,13 @@ body.vscode-using-screen-reader * {
 .ce-btn.primary:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
 .ce-seg { display: inline-flex; border: 1px solid color-mix(in srgb, var(--vscode-foreground) 14%, transparent); border-radius: 5px; overflow: hidden; }
 .ce-seg .ce-btn { border-radius: 0; border: none; }
-.ce-seg .ce-pen.active { background: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
-.ce-seg .ce-pencil.active { background: color-mix(in srgb, var(--accent-plan) 22%, transparent); }
 .ce-marks { display: inline-flex; gap: 2px; padding-left: 4px; border-left: var(--rule); }
+/* per-span authorship group (D2/H2): "hand to AI" (pencil) / "take back" (pen).
+   Acts on the current selection — no persistent active state, unlike the old mode toggle.
+   The buttons are tinted toward the ink they apply (AI role tint vs neutral human). */
+.ce-author { display: inline-flex; gap: 2px; padding-left: 4px; border-left: var(--rule); }
+.ce-author .ce-toai { color: color-mix(in srgb, var(--ink-claude) 80%, var(--vscode-foreground)); }
+.ce-author .ce-takeback { color: var(--ink-human); }
 
 .ce-surface { padding: 12px 14px; }
 .ce-surface .ProseMirror { outline: none; font: 13.5px/1.7 var(--vscode-font-family); color: var(--vscode-input-foreground); min-height: 60px; }

@@ -14,7 +14,7 @@
 import { Editor, Extension } from '@tiptap/core';
 import { TextSelection } from '@tiptap/pm/state';
 import { codocExtensions } from './schema';
-import { AuthorStamp, AuthorController, REFLECT_META } from './author-plugin';
+import { AuthorStamp, AuthorController, REFLECT_META, AUTHOR_META } from './author-plugin';
 import { CodeRefSuggestion, RefSymbol } from './code-ref-suggestion';
 import {
     indentHeading,
@@ -256,19 +256,33 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         suppressUpdate = false;
     }
 
-    // ── toolbar: instrument + marks + structure ───────────────────────────────
-    const seg = document.createElement('div');
-    seg.className = 'ce-seg';
-    const penBtn = iconButton('✒ pen', 'Solid — AI may only propose changes', () => setMode('pen'), 'ce-pen');
-    const pencilBtn = iconButton('✏ pencil', 'Tentative — AI may revise directly', () => setMode('pencil'), 'ce-pencil');
-    seg.append(penBtn, pencilBtn);
-    function setMode(mode: 'pen' | 'pencil'): void {
-        opts.controller.setMode(mode);
-        penBtn.classList.toggle('active', mode === 'pen');
-        pencilBtn.classList.toggle('active', mode === 'pencil');
-        wrap.dataset.mode = mode;
+    // ── toolbar: per-span authorship + marks + structure ──────────────────────
+    // pen/pencil is no longer a future-typing MODE toggle (D2/H2). The human writes
+    // in pen by default; this group re-stamps the SELECTED span's authorship ink:
+    // "hand to AI" (pencil — AI may revise it directly) / "take back" (pen — committed,
+    // AI may only propose). It acts on the selection, like the mark buttons.
+    function setSpanMode(mode: 'pen' | 'pencil'): void {
+        const { from, to, empty } = editor.state.selection;
+        if (empty) { editor.commands.focus(); return; } // needs a selection to re-stamp
+        const id = opts.controller.get();
+        const markType = editor.state.schema.marks.author;
+        if (!markType) return;
+        const mark = markType.create({ authorId: id.authorId, role: 'human', mode, ts: Date.now() });
+        // removeMark FIRST: the author mark has `excludes: ''` (so distinct-author spans
+        // never merge), which means a bare addMark over an already-stamped span would
+        // STACK a second author mark instead of replacing it. Strip the old one, then add.
+        // Tag AUTHOR_META so the auto-stamp plugin treats this as an explicit re-stamp.
+        editor.view.dispatch(
+            editor.state.tr.removeMark(from, to, markType).addMark(from, to, mark).setMeta(AUTHOR_META, true),
+        );
         editor.commands.focus();
     }
+    const authorGrp = document.createElement('div');
+    authorGrp.className = 'ce-author';
+    authorGrp.append(
+        iconButton('✋ to AI', 'Hand this selection to AI — mark it pencil (AI may revise it directly)', () => setSpanMode('pencil'), 'ce-toai'),
+        iconButton('↩ take back', 'Take back — mark this selection pen (committed; AI may only propose)', () => setSpanMode('pen'), 'ce-takeback'),
+    );
 
     const marks = document.createElement('div');
     marks.className = 'ce-marks';
@@ -310,11 +324,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     saveState.className = 'ce-savestate';
     function markSaving(text: string): void { saveState.textContent = text; }
 
-    toolbar.append(modeSeg, seg, marks, structure, spacer, saveState);
+    toolbar.append(modeSeg, marks, authorGrp, structure, spacer, saveState);
     wrap.append(toolbar, body);
     container.append(wrap);
 
-    setMode(opts.controller.get().mode);
     setEditMode('editing');
 
     // ── TOC rail + scroll-spy (rehomed scroll indicator) ──────────────────────
