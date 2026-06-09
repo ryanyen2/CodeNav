@@ -409,20 +409,25 @@ body.vscode-using-screen-reader * {
 
 /* whole-doc editor body: scrolling surface + a thin TOC rail (scroll indicator) */
 .ce-body { flex: 1; min-height: 0; display: flex; }
+/* The rail is a position MINIMAP (a distinct role from the labelled tree pane, R7/U6):
+   one tick per section, width tapered by depth so nesting reads at a glance, a clear
+   "you are here" active tick. Hover shows the section title (native tooltip set in JS). */
 .ce-toc-rail {
-    flex: 0 0 auto; width: 22px; padding: 14px 6px; overflow: hidden;
-    display: flex; flex-direction: column; gap: 5px; align-items: stretch;
-    border-left: var(--rule);
+    flex: 0 0 auto; width: 24px; padding: var(--space-3) 6px;
+    display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+    border-left: var(--rule); overflow-y: auto; overflow-x: hidden; scrollbar-width: none;
 }
+.ce-toc-rail::-webkit-scrollbar { width: 0; }
 .ce-tick {
-    height: 3px; border-radius: 2px; cursor: pointer;
-    background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
-    margin-left: calc(var(--d, 0) * 3px); transition: background 120ms ease, transform 120ms ease;
+    flex: 0 0 auto; height: 3px; border-radius: 2px; cursor: pointer;
+    width: calc(14px - var(--d, 0) * 2px); margin-left: calc(var(--d, 0) * 2px);
+    background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
+    transition: background 120ms ease, transform 120ms ease, width 120ms ease;
 }
-.ce-tick:hover { background: color-mix(in srgb, var(--vscode-foreground) 45%, transparent); }
-.ce-tick.active { background: var(--accent); transform: scaleY(1.6); }
+.ce-tick:hover { background: var(--vscode-foreground); transform: scaleY(2.2); }
+.ce-tick.active { background: var(--accent); width: 16px; height: 4px; }
 /* status axis on the rail (no hue): retired = muted, unrealized = hollow dashed */
-.ce-tick.retired { background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent); opacity: 0.6; }
+.ce-tick.retired { background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent); opacity: 0.5; }
 .ce-tick.unrealized { background: transparent; outline: 1px dashed color-mix(in srgb, var(--vscode-foreground) 45%, transparent); }
 
 /* ── Editing / Suggesting mode toggle ─────────────────────────────────────── */
