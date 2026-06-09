@@ -204,10 +204,8 @@ function renderToolbar(): HTMLElement {
         t.append(accAll, rejAll);
     }
 
-    const btn = el('button', 'toggle', '⇄ text');
-    btn.title = 'Open this file in the plain text editor';
-    btn.onclick = () => vscode.postMessage({ kind: 'open-text' });
-    t.append(btn);
+    // (the "⇄ text" toggle was removed — the webview is the single surface, D1; the
+    //  raw-text editor is still reachable via "Reopen Editor With… → Text Editor".)
     return t;
 }
 

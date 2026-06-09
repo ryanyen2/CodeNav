@@ -146,7 +146,6 @@ export class WorkspaceState {
         if (this.agentActive) {
             const n = Object.keys(this._activity.touched ?? {}).length;
             bar.text = `$(zap) codoc: agent working… (${n} files)`;
-            bar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
             bar.show();
             return;
         }
@@ -165,7 +164,8 @@ export class WorkspaceState {
         } else if (state === 'code_drift' || pending > 0) {
             bar.text = `$(bell) codoc: ${pending} proposal${pending === 1 ? '' : 's'}`;
             bar.tooltip = 'Code changed — review proposed tree updates (Accept / Reject in the editor)';
-            bar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+            // status language (U5/H7): the warning background is reserved for the ONE "you
+            // owe an action" state (awaiting_impl); the bell glyph already signals review.
         } else {
             const count = this._features.filter(f => !f.retired).length;
             bar.text = `$(check) codoc: ${count}`;

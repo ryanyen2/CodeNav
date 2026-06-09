@@ -300,8 +300,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     structure.className = 'ce-structure';
     structure.append(
         iconButton('＋ feature', 'New feature (sibling)', () => { newFeatureHeading(editor); }, 'ce-new'),
-        iconButton('⇥', 'Indent (Tab) — nest under previous sibling', () => { indentHeading(editor); editor.commands.focus(); }, 'ce-indent'),
-        iconButton('⇤', 'Outdent (Shift-Tab)', () => { outdentHeading(editor); editor.commands.focus(); }, 'ce-outdent'),
+        // indent / outdent are Tab / Shift-Tab (makeKeymap) — no redundant toolbar buttons (U5).
         iconButton('~ retire', 'Toggle retire on this feature', () => { toggleRetireHeading(editor); editor.commands.focus(); }, 'ce-retire'),
     );
 

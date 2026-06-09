@@ -83,10 +83,12 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     background: var(--accent-refs); opacity: 0.55;
     transition: background 200ms ease, opacity 200ms ease;
 }
-.toolbar .status.code_drift .dot,
-.toolbar .status.tree_dirty .dot { background: var(--accent-amend); opacity: 1; }
-.toolbar .status.realizing .dot { background: var(--accent-plan); opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
-.toolbar .status.awaiting_impl .dot { background: var(--accent-add); opacity: 1; }
+/* status language (U5): code-ahead review → review hue, doc-ahead implement → await hue,
+   in-progress (applying / realizing) → structural accent. Same two hues as the U3 grammar. */
+.toolbar .status.code_drift .dot { background: var(--dir-review); opacity: 1; }
+.toolbar .status.awaiting_impl .dot { background: var(--dir-await); opacity: 1; }
+.toolbar .status.tree_dirty .dot { background: var(--accent); opacity: 1; }
+.toolbar .status.realizing .dot { background: var(--accent); opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 
 .toolbar .spacer { flex: 1; }
