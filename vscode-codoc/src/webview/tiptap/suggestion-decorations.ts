@@ -10,7 +10,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
-import { wordDiff } from '../../state/doc-diff';
+import { wordDiff, compactRuns } from '../../state/doc-diff';
 import { directionLabel, directionActions } from '../../state/grammar';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { ThreadsData } from '../protocol';
@@ -40,7 +40,7 @@ function elc(tag: string, cls?: string, text?: string): HTMLElement {
 
 function diffSpans(oldStr: string, newStr: string): HTMLElement {
     const wrap = elc('span', 'ce-wd');
-    for (const r of wordDiff(oldStr, newStr)) {
+    for (const r of compactRuns(wordDiff(oldStr, newStr))) {
         wrap.append(elc('span', r.t === 'same' ? 'wd-same' : r.t === 'del' ? 'wd-del' : 'wd-ins', r.s));
     }
     return wrap;
@@ -61,32 +61,30 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
     box.contentEditable = 'false';
     box.setAttribute('data-suggestion', s.id);
 
-    const head = elc('div', 'ce-diff-head');
-    head.append(elc('span', 'ce-diff-dir', directionLabel(s.direction)));
-    if (s.tag) head.append(elc('span', 'ce-diff-tag', s.tag));
-    box.append(head);
+    // a tiny inline direction marker (▲ code-ahead / ▼ doc-ahead) — not a header line.
+    const mark = elc('span', 'ce-diff-mark', s.direction === 'code-ahead' ? '▲' : '▼');
+    mark.title = directionLabel(s.direction) + (s.tag ? ' · ' + s.tag : '');
+    box.append(mark);
 
+    // the change itself, in situ — compact (only the changed words + a little context),
+    // never the whole description restated (the live prose sits right below).
+    const body = elc('span', 'ce-diff-body');
     if (s.kind === 'add') {
-        box.append(elc('div', 'ce-diff-row', `New feature: ${s.titleNew || '(untitled)'}`));
-        if (s.descNew) box.append(elc('div', 'ce-diff-row ce-diff-desc', s.descNew));
+        body.append(elc('span', 'ce-diff-kind', '+ new'), document.createTextNode(' ' + (s.titleNew || '(untitled)')));
     } else if (s.kind === 'retire') {
-        box.append(elc('div', 'ce-diff-row', 'Retire this feature — detaches its bindings; the code itself is kept.'));
+        body.append(elc('span', 'ce-diff-kind', '~ retire'), document.createTextNode(' — detaches bindings; code kept'));
     } else if (s.kind === 'move') {
-        box.append(elc('div', 'ce-diff-row', 'Move this feature to a new parent.'));
+        body.append(elc('span', 'ce-diff-kind', '→ move'));
     } else {
-        if ((s.titleOld || '') !== (s.titleNew || '')) {
-            const row = elc('div', 'ce-diff-row');
-            row.append(elc('span', 'ce-diff-label', 'title'), diffSpans(s.titleOld || '', s.titleNew || ''));
-            box.append(row);
-        }
+        if ((s.titleOld || '') !== (s.titleNew || '')) body.append(diffSpans(s.titleOld || '', s.titleNew || ''));
         if ((s.descOld || '') !== (s.descNew || '')) {
-            const row = elc('div', 'ce-diff-row');
-            row.append(elc('span', 'ce-diff-label', 'desc'), diffSpans(s.descOld || '', s.descNew || ''));
-            box.append(row);
+            if (body.childNodes.length) body.append(elc('span', 'ce-diff-sep', ' · '));
+            body.append(diffSpans(s.descOld || '', s.descNew || ''));
         }
     }
+    box.append(body);
 
-    const actions = elc('div', 'ce-diff-actions');
+    const actions = elc('span', 'ce-diff-actions');
     // Disable the row after the first click so the card can't fire twice while it's
     // still on screen (the authoritative removal arrives with the next payload).
     const once = (fn: (s: Suggestion) => void) => () => {

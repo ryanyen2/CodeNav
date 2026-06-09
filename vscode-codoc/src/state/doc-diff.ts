@@ -59,3 +59,31 @@ export function wordDiff(oldStr: string, newStr: string): DiffRun[] {
 export function changed(oldStr: string, newStr: string): boolean {
     return String(oldStr) !== String(newStr);
 }
+
+/**
+ * Collapse long unchanged ("same") runs to a little context + "…", so a rendered diff
+ * shows just the CHANGE rather than restating the whole (already-visible) text. Pure
+ * display-shaping: del/ins runs pass through untouched; only leading/trailing/middle
+ * "same" runs longer than the kept context are trimmed.
+ */
+export function compactRuns(runs: DiffRun[]): DiffRun[] {
+    const KEEP = 6; // tokens (≈3 words) of context to keep beside a change
+    const out: DiffRun[] = [];
+    runs.forEach((run, idx) => {
+        if (run.t !== 'same') { out.push(run); return; }
+        const toks = run.s.split(/(\s+)/).filter(t => t.length > 0);
+        const first = idx === 0;
+        const last = idx === runs.length - 1;
+        if (first && last) { out.push(run); return; } // wholly unchanged — leave as-is
+        if (first) {
+            out.push(toks.length > KEEP ? { t: 'same', s: '… ' + toks.slice(-KEEP).join('') } : run);
+        } else if (last) {
+            out.push(toks.length > KEEP ? { t: 'same', s: toks.slice(0, KEEP).join('') + ' …' } : run);
+        } else {
+            out.push(toks.length > KEEP * 2 + 1
+                ? { t: 'same', s: toks.slice(0, KEEP).join('') + ' … ' + toks.slice(-KEEP).join('') }
+                : run);
+        }
+    });
+    return out;
+}
