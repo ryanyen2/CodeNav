@@ -17,7 +17,6 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
 import { parseTreeCodoc } from '../state/tree-model';
-import { layoutDoc } from '../state/doc-layout';
 import { activeFeatureModes, featurePhases } from '../state/activity-model';
 import { reconcileDoc, replaceFeatureBlocks } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
@@ -94,6 +93,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 case 'suggest-withdraw':
                     await this.withdrawSuggestion(document, msg.id);
+                    post();
+                    return;
+                case 'suggest-apply':
+                    await this.applySuggestion(document, msg.id);
                     post();
                     return;
                 case 'move':
@@ -213,13 +216,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
 
         const rootName = (this.state.rootDir ?? '').split('/').filter(Boolean).pop() ?? 'workspace';
 
-        // Sections are still computed for cross-ref/dependency context, but the tree
-        // pane now mirrors the EDITOR's order exactly — both are the parsed
-        // tree.codoc (store) order — so the tree and the doc line up 1:1 and
-        // scroll-spy selects the right row. (The whole-doc editor IS the doc surface;
-        // dependency re-ordering the editable doc would fight editing + isn't
-        // persisted, so parse order is the single source of truth for both.)
-        const sections = layoutDoc(features, sidecar, { siblingOrder: 'tree', activeModes, phases });
+        // The tree pane mirrors the EDITOR's order exactly — both are the parsed
+        // tree.codoc (store) order — so the two line up 1:1 and scroll-spy selects
+        // the right row. (Dependency re-ordering the editable doc would fight editing
+        // and isn't persisted, so parse order is the single source of truth.)
         for (const id of Object.keys(nodes)) nodes[id].children = childrenOf[id] ?? [];
 
         const sync: SyncState = {
@@ -244,9 +244,19 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         // (persisted). Old text for amend diffs comes from the parsed features.
         const titleOf = new Map(features.filter(f => f.id).map(f => [f.id as string, f.title]));
         const descOf = new Map(features.filter(f => f.id).map(f => [f.id as string, f.description]));
+
+        // Re-base each persisted doc-ahead suggestion against the CURRENT text so the
+        // card shows `current → proposed` (not a stale baseline), Apply can't clobber
+        // a change the loop made meanwhile, and a suggestion auto-clears once the
+        // text/code caught up to it (nothing left to change).
+        const liveDocAhead = this.rebaseDocAhead(docFile.suggestions, titleOf, descOf);
+        if (liveDocAhead.length !== docFile.suggestions.length) {
+            docFile.suggestions = liveDocAhead;
+            void this.persistDocFile(document, docFile); // auto-clear satisfied ones
+        }
         const suggestions = buildSuggestions(
             sidecar,
-            docFile.suggestions,
+            liveDocAhead,
             fid => titleOf.get(fid) ?? '',
             fid => descOf.get(fid) ?? '',
         );
@@ -266,7 +276,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         return {
             nodes,
             roots,
-            sections,
             status: { state: status.state, pending: status.pending },
             sync,
             rootName,
@@ -365,15 +374,48 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         await document.save();
     }
 
+    /** Re-base persisted doc-ahead suggestions onto the current text + drop the ones
+     *  whose change is already present (satisfied). A field with no intended change
+     *  tracks the current value so a drifting title can't manufacture a phantom diff. */
+    private rebaseDocAhead(
+        suggestions: Suggestion[],
+        titleOf: Map<string, string>,
+        descOf: Map<string, string>,
+    ): Suggestion[] {
+        const out: Suggestion[] = [];
+        for (const s of suggestions) {
+            if (s.direction !== 'doc-ahead') { out.push(s); continue; }
+            if (!s.featureId || !titleOf.has(s.featureId)) continue; // feature gone → drop
+            const curTitle = titleOf.get(s.featureId) ?? '';
+            const curDesc = descOf.get(s.featureId) ?? '';
+            const titleIntended = (s.titleNew ?? '') !== (s.titleOld ?? '');
+            const descIntended = (s.descNew ?? '') !== (s.descOld ?? '');
+            const r: Suggestion = {
+                ...s,
+                titleOld: curTitle,
+                titleNew: titleIntended ? s.titleNew : curTitle,
+                descOld: curDesc,
+                descNew: descIntended ? s.descNew : curDesc,
+            };
+            if ((r.titleNew ?? '') !== r.titleOld || (r.descNew ?? '') !== r.descOld) out.push(r); // still has a change
+        }
+        return out;
+    }
+
     /** Persist captured doc-ahead suggestions (Suggesting mode). They render as
-     *  persistent diffs awaiting the agent; tree.codoc is NOT touched (intent only). */
+     *  persistent diffs awaiting the agent; tree.codoc is NOT touched (intent only).
+     *  Title and description changes for the same feature are MERGED into one card. */
     private async createSuggestions(document: vscode.TextDocument, suggestions: Suggestion[]): Promise<void> {
         if (!suggestions.length) return;
         const df = this.docFileFor(document);
-        // Replace any prior doc-ahead suggestion for the same feature (latest wins).
-        const touched = new Set(suggestions.map(s => s.featureId));
-        df.suggestions = df.suggestions.filter(s => !(s.direction === 'doc-ahead' && touched.has(s.featureId)));
-        df.suggestions.push(...suggestions);
+        for (const s of suggestions) {
+            const existing = df.suggestions.find(x => x.direction === 'doc-ahead' && x.featureId === s.featureId);
+            if (!existing) { df.suggestions.push(s); continue; }
+            // Compose: a desc-only capture must not erase a prior title change.
+            if ((s.titleNew ?? '') !== (s.titleOld ?? '')) { existing.titleOld = s.titleOld; existing.titleNew = s.titleNew; }
+            if ((s.descNew ?? '') !== (s.descOld ?? '')) { existing.descOld = s.descOld; existing.descNew = s.descNew; }
+            existing.id = s.id;
+        }
         await this.persistDocFile(document, df);
     }
 
@@ -381,6 +423,32 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const df = this.docFileFor(document);
         df.suggestions = df.suggestions.filter(s => s.id !== id);
         await this.persistDocFile(document, df);
+    }
+
+    /**
+     * Apply a doc-ahead suggestion: settle its title/description change into
+     * tree.codoc through the EXISTING surgical edit path, then drop the suggestion.
+     * The settled change flows through the normal pipeline — and if it reads as an
+     * imperative intent change, Loop B queues a realize directive so the agent
+     * implements it (surfaced as the `awaiting_impl` status). The diff card clears
+     * because the change is now settled; the agent's progress shows in the status.
+     */
+    private async applySuggestion(document: vscode.TextDocument, id: string): Promise<void> {
+        const df = this.docFileFor(document);
+        const s = df.suggestions.find(x => x.id === id);
+        if (!s || !s.featureId) return;
+        // Drop it first so the rebuilt doc/payload doesn't re-show it.
+        df.suggestions = df.suggestions.filter(x => x.id !== id);
+        await this.persistDocFile(document, df);
+        // Apply against the CURRENT text (not the suggestion's stored baseline) so a
+        // field is only written when it actually differs from what's there now.
+        const cur = parseTreeCodoc(document.getText()).features.find(f => f.id === s.featureId);
+        if (s.titleNew != null && s.titleNew !== (cur?.title ?? '')) {
+            await this.editTitle(document, s.featureId, s.titleNew);
+        }
+        if (s.descNew != null && s.descNew !== (cur?.description ?? '')) {
+            await this.editDescription(document, s.featureId, s.descNew);
+        }
     }
 
     /** Loop B / realize may stamp "done/total" progress into status.detail

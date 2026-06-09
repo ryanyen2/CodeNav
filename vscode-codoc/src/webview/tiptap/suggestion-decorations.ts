@@ -18,6 +18,8 @@ export interface SuggestionHandlers {
     accept: (s: Suggestion) => void;
     reject: (s: Suggestion) => void;
     withdraw: (s: Suggestion) => void;
+    /** Apply a doc-ahead suggestion: settle the change + queue the agent. */
+    apply: (s: Suggestion) => void;
 }
 
 export interface SuggestionDecorationsOptions {
@@ -85,15 +87,25 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
     }
 
     const actions = elc('div', 'ce-diff-actions');
+    // Disable the row after the first click so the card can't fire twice while it's
+    // still on screen (the authoritative removal arrives with the next payload).
+    const once = (fn: (s: Suggestion) => void) => () => {
+        actions.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
+        actions.classList.add('applying');
+        fn(s);
+    };
     if (s.direction === 'code-ahead' && s.eventId) {
+        // Agent → human: the human resolves.
         actions.append(
-            actionButton('Reject', 'reject', () => handlers.reject(s)),
-            actionButton('Accept', 'accept', () => handlers.accept(s)),
+            actionButton('Reject', 'reject', once(handlers.reject)),
+            actionButton('Accept', 'accept', once(handlers.accept)),
         );
     } else {
+        // Human → agent: Apply settles + sends the directive; Withdraw discards.
         actions.append(
-            elc('span', 'ce-diff-await', 'awaiting implementation'),
-            actionButton('Withdraw', 'withdraw', () => handlers.withdraw(s)),
+            elc('span', 'ce-diff-await', 'your suggestion'),
+            actionButton('Withdraw', 'withdraw', once(handlers.withdraw)),
+            actionButton('Apply', 'accept', once(handlers.apply)),
         );
     }
     box.append(actions);
@@ -191,7 +203,7 @@ export const SuggestionDecorations = Extension.create<SuggestionDecorationsOptio
     name: 'suggestionDecorations',
 
     addOptions() {
-        return { getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {}, withdraw: () => {} } };
+        return { getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {}, withdraw: () => {}, apply: () => {} } };
     },
 
     addProseMirrorPlugins() {

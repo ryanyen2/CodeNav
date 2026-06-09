@@ -6,7 +6,7 @@
  * runtime code (or `vscode`) into the webview bundle.
  */
 
-import type { DocSection, FeaturePhase } from '../state/doc-layout';
+import type { FeaturePhase } from '../state/doc-layout';
 import type { PMNode } from '../state/pm-doc';
 import type { Suggestion } from '../state/suggestion-model';
 
@@ -63,14 +63,13 @@ export interface SyncState {
 export interface DocPayload {
     nodes: Record<string, UINode>;
     roots: string[];
-    sections: DocSection[];
     status: { state: string; pending: number };
     sync: SyncState;
     rootName: string;
     pendingEventIds: string[];
     /** The authoritative whole-tree rich doc (tree.doc.json, reconciled with the
-     *  current structure). The webview seeds the per-section editor from it so
-     *  authorship marks survive. Absent on legacy payloads. */
+     *  current structure). The webview mounts the editor from it so authorship
+     *  marks survive. Absent on legacy payloads. */
     doc?: PMNode;
     /** Bound-symbol autocomplete candidates for the `@` code-ref picker (U5). */
     symbols?: RefSymbol[];
@@ -101,6 +100,9 @@ export type WebviewMessage =
     | { kind: 'suggest-create'; suggestions: Suggestion[] }
     /** Withdraw a pending doc-ahead suggestion by id. */
     | { kind: 'suggest-withdraw'; id: string }
+    /** Apply a doc-ahead suggestion: settle its change into tree.codoc (the agent
+     *  then implements via the existing Loop B realize path). */
+    | { kind: 'suggest-apply'; id: string }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
     | { kind: 'open-text' }
     | { kind: 'open-binding'; file: string; symbol: string }

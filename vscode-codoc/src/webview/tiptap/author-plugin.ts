@@ -81,8 +81,15 @@ export const AuthorStamp = Extension.create<AuthorStampOptions>({
                     const { authorId, role, mode } = controller.get();
                     const mark = markType.create({ authorId, role, mode, ts: now() });
                     const tr = newState.tr.setMeta(AUTHOR_META, true);
-                    for (const [from, to] of ranges) tr.addMark(from, to, mark);
-                    return tr.docChanged || tr.steps.length ? tr : null;
+                    const size = newState.doc.content.size;
+                    for (const [from, to] of ranges) {
+                        // Clamp to the final doc bounds — with batched/IME transactions a
+                        // stale-mapped range could exceed bounds and make addMark throw.
+                        const f = Math.max(0, Math.min(from, size));
+                        const t = Math.max(f, Math.min(to, size));
+                        if (t > f) tr.addMark(f, t, mark);
+                    }
+                    return tr.steps.length ? tr : null;
                 },
             }),
         ];

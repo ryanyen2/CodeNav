@@ -40,9 +40,9 @@ function headingAttrs(node: PMNode): FeatureHeadingAttrs {
     };
 }
 
-/** Render one feature's title line, matching render.py:95. */
-function titleLine(attrs: FeatureHeadingAttrs, title: string): string {
-    const indent = '  '.repeat(Math.max(0, attrs.level));
+/** Render one feature's title line at the given depth, matching render.py:95. */
+function titleLine(attrs: FeatureHeadingAttrs, title: string, depth: number): string {
+    const indent = '  '.repeat(depth);
     const marker = attrs.retired ? '~' : '-';
     const head = `${indent}${marker} ${title}`;
     return attrs.fid ? `${head}  ⟨${attrs.fid}⟩` : head;
@@ -65,6 +65,11 @@ export function renderTreeFromDoc(doc: PMNode): string {
     const blocks = doc.content ?? [];
     const lines: string[] = [];
 
+    // Depth can step DOWN any amount but never UP by more than one — matching how
+    // parse.py derives depth from the parent chain. Clamping here keeps the
+    // text↔tree round-trip idempotent even if an editor edit left a level skip
+    // (which would otherwise snap to parent+1 on the next reconcile).
+    let prevDepth = -1;
     let i = 0;
     while (i < blocks.length) {
         const b = blocks[i];
@@ -74,9 +79,11 @@ export function renderTreeFromDoc(doc: PMNode): string {
             continue;
         }
         const attrs = headingAttrs(b);
-        const indent = '  '.repeat(Math.max(0, attrs.level));
+        const depth = Math.max(0, Math.min(attrs.level, prevDepth + 1));
+        prevDepth = depth;
+        const indent = '  '.repeat(depth);
         const title = inlineRunsToText(b.content).trim();
-        lines.push(titleLine(attrs, title));
+        lines.push(titleLine(attrs, title, depth));
 
         // Gather the description paragraphs belonging to this heading.
         const paras: string[] = [];

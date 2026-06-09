@@ -175,22 +175,18 @@ function indexByFid(doc: PMNode): Map<string, { title: string; desc: string }> {
  * agent, instead of settling. New headings (no fid) are handled by the structural
  * settle path, not here.
  */
-export function diffDocsToSuggestions(
-    baseline: PMNode,
-    edited: PMNode,
-    idFor: (index: number) => string,
-    originRole = 'human',
-): Suggestion[] {
+export function diffDocsToSuggestions(baseline: PMNode, edited: PMNode, originRole = 'human'): Suggestion[] {
     const base = indexByFid(baseline);
     const cur = indexByFid(edited);
     const out: Suggestion[] = [];
-    let i = 0;
     for (const [fid, c] of cur) {
         const b = base.get(fid);
         if (!b) continue;
         if (b.title !== c.title || b.desc !== c.desc) {
+            // Stable id per feature so a re-capture (and a Withdraw) targets the same
+            // card; the host merges title/description changes for the same feature.
             out.push({
-                id: idFor(i++), direction: 'doc-ahead', kind: 'amend', featureId: fid,
+                id: `d-${fid}`, direction: 'doc-ahead', kind: 'amend', featureId: fid,
                 originRole, tag: 'you', titleOld: b.title, titleNew: c.title, descOld: b.desc, descNew: c.desc,
             });
         }

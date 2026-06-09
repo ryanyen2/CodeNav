@@ -174,15 +174,19 @@ export class WorkspaceState {
         bar.show();
     }
 
-    /** Append an Accept/Reject verdict to .codoc/inbox.json; the daemon applies it. */
+    /** Append an Accept/Reject verdict to .codoc/inbox.json; the daemon applies it.
+     *  Dedups by event id (last write wins) so a double-click — common when no daemon
+     *  is draining and the card still shows — can't pile up duplicate verdicts. */
     writeVerdict(eventIds: string[], accept: boolean): void {
         if (!this._rootDir || eventIds.length === 0) return;
         const inboxPath = this._codocPath('inbox.json');
-        let verdicts: Array<{ event_id: string; accept: boolean }> = [];
+        const byEvent = new Map<string, boolean>();
         try {
-            verdicts = JSON.parse(fs.readFileSync(inboxPath, 'utf-8')).verdicts ?? [];
+            const existing: Array<{ event_id: string; accept: boolean }> = JSON.parse(fs.readFileSync(inboxPath, 'utf-8')).verdicts ?? [];
+            for (const v of existing) byEvent.set(v.event_id, v.accept);
         } catch { /* no inbox yet */ }
-        for (const id of eventIds) verdicts.push({ event_id: id, accept });
+        for (const id of eventIds) byEvent.set(id, accept);
+        const verdicts = [...byEvent].map(([event_id, a]) => ({ event_id, accept: a }));
         fs.writeFileSync(inboxPath, JSON.stringify({ version: 1, verdicts }, null, 2));
     }
 
