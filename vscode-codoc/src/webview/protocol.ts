@@ -7,6 +7,24 @@
  */
 
 import type { DocSection, FeaturePhase } from '../state/doc-layout';
+import type { PMNode } from '../state/pm-doc';
+import type { Suggestion } from '../state/suggestion-model';
+
+/** An autocomplete candidate for the `@`-triggered code-reference picker (U5).
+ *  Sourced from the sidecar `by_file` (bound symbols only). */
+export interface RefSymbol {
+    file: string;
+    label: string;   // leaf name, e.g. `parse_text` (matches completion.ts)
+    symbol: string;  // what goes after `#` in the link (kept == label)
+    detail?: string; // `file · feature title`
+}
+
+/** A feature→feature dependency edge for the "see also" chips under a heading. */
+export interface FeatureDep {
+    toId: string;
+    toTitle: string;
+    rel: 'depends' | 'usedby';
+}
 
 /** A node in the left tree pane (navigation). Mirrors the live feature tree
  *  plus injected ADD/MOVE ghost rows. */
@@ -50,6 +68,19 @@ export interface DocPayload {
     sync: SyncState;
     rootName: string;
     pendingEventIds: string[];
+    /** The authoritative whole-tree rich doc (tree.doc.json, reconciled with the
+     *  current structure). The webview seeds the per-section editor from it so
+     *  authorship marks survive. Absent on legacy payloads. */
+    doc?: PMNode;
+    /** Bound-symbol autocomplete candidates for the `@` code-ref picker (U5). */
+    symbols?: RefSymbol[];
+    /** Unified pending diffs: code-ahead (agent → human, accept/reject) + doc-ahead
+     *  (human → agent, awaiting implementation). Rendered as persistent inline
+     *  word-level diffs that only clear on resolution by the correct party. */
+    suggestions?: Suggestion[];
+    /** Per-feature "see also" dependency edges (feature_edges), for chips under
+     *  each heading. */
+    deps?: Record<string, FeatureDep[]>;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }
@@ -59,6 +90,17 @@ export type WebviewMessage =
     | { kind: 'ready' }
     | { kind: 'edit-title'; featureId: string; newTitle: string }
     | { kind: 'edit-description'; featureId: string; newDescription: string }
+    /** Rich description commit: paragraph blocks (with marks) for one feature. The
+     *  host persists them to tree.doc.json and derives the tree.codoc text (U4). */
+    | { kind: 'doc-commit'; featureId: string; blocks: PMNode[] }
+    /** Whole-doc settle (R3): the entire edited ProseMirror doc. The host persists
+     *  it to tree.doc.json and serializes it to canonical tree.codoc, driving the
+     *  existing parse→diff→apply pipeline (AMEND / MOVE / ADD / RETIRE). */
+    | { kind: 'doc-settle'; doc: PMNode }
+    /** Suggesting mode: persist captured doc-ahead suggestions (await the agent). */
+    | { kind: 'suggest-create'; suggestions: Suggestion[] }
+    /** Withdraw a pending doc-ahead suggestion by id. */
+    | { kind: 'suggest-withdraw'; id: string }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
     | { kind: 'open-text' }
     | { kind: 'open-binding'; file: string; symbol: string }

@@ -13,11 +13,21 @@
  */
 
 import * as vscode from 'vscode';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
 import { parseTreeCodoc } from '../state/tree-model';
 import { layoutDoc } from '../state/doc-layout';
 import { activeFeatureModes, featurePhases } from '../state/activity-model';
-import type { DocPayload, UINode, SyncState } from '../webview/protocol';
+import { reconcileDoc, replaceFeatureBlocks } from '../state/doc-reconcile';
+import { renderTreeFromDoc } from '../state/doc-serialize';
+import { blocksToDescriptionText, PMNode } from '../state/pm-doc';
+import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
+import { directedEdges } from '../state/bindings-model';
+import type { SidecarData } from '../state/bindings-model';
+import type { DocPayload, UINode, SyncState, RefSymbol, FeatureDep } from '../webview/protocol';
+
+const DOC_FILENAME = 'tree.doc.json';
 
 export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'codoc.tree-editor';
@@ -28,6 +38,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     ) {}
 
     private rev = 0;
+    /** The authoritative rich doc + persisted doc-ahead suggestions per open
+     *  tree.codoc (carries authorship marks). Loaded from tree.doc.json, reconciled
+     *  with the text on each payload, and persisted on a user doc-commit. */
+    private docFileByUri = new Map<string, DocFile>();
 
     async resolveCustomTextEditor(
         document: vscode.TextDocument,
@@ -39,6 +53,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
         };
         panel.webview.html = this.html(panel.webview);
+
+        // Seed the in-memory authoritative doc + suggestions from tree.doc.json
+        // (if any) so the first payload already carries authorship marks + diffs.
+        const saved = await this.loadDocFile(document);
+        if (saved) this.docFileByUri.set(document.uri.toString(), saved);
 
         const post = (): void => {
             panel.webview.postMessage({ kind: 'doc', payload: this.buildPayload(document) });
@@ -62,6 +81,20 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 case 'edit-description':
                     await this.editDescription(document, msg.featureId, msg.newDescription);
+                    return;
+                case 'doc-commit':
+                    await this.commitDoc(document, msg.featureId, msg.blocks);
+                    return;
+                case 'doc-settle':
+                    await this.settleDoc(document, msg.doc);
+                    return;
+                case 'suggest-create':
+                    await this.createSuggestions(document, msg.suggestions);
+                    post();
+                    return;
+                case 'suggest-withdraw':
+                    await this.withdrawSuggestion(document, msg.id);
+                    post();
                     return;
                 case 'move':
                     await this.editMove(document, msg.sourceId, msg.newParentId);
@@ -180,22 +213,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
 
         const rootName = (this.state.rootDir ?? '').split('/').filter(Boolean).pop() ?? 'workspace';
 
-        const siblingOrder = vscode.workspace.getConfiguration('codoc')
-            .get<'dependency' | 'tree'>('docSiblingOrder', 'dependency');
-        const sections = layoutDoc(features, sidecar, { siblingOrder, activeModes, phases });
-
-        // The doc article is the authoritative order (dependency-aware sibling
-        // topo-sort + ghost placement). Mirror that exact order onto the tree pane
-        // so navigating either side lines up 1:1 — otherwise the tree shows siblings
-        // in parse order while the doc shows them dependency-ordered, and scroll-spy
-        // selects the wrong row.
-        const orderedRoots: string[] = [];
-        const orderedChildren: Record<string, string[]> = {};
-        for (const sec of sections) {
-            if (sec.parentId && nodes[sec.parentId]) (orderedChildren[sec.parentId] ??= []).push(sec.id);
-            else orderedRoots.push(sec.id);
-        }
-        for (const id of Object.keys(nodes)) nodes[id].children = orderedChildren[id] ?? [];
+        // Sections are still computed for cross-ref/dependency context, but the tree
+        // pane now mirrors the EDITOR's order exactly — both are the parsed
+        // tree.codoc (store) order — so the tree and the doc line up 1:1 and
+        // scroll-spy selects the right row. (The whole-doc editor IS the doc surface;
+        // dependency re-ordering the editable doc would fight editing + isn't
+        // persisted, so parse order is the single source of truth for both.)
+        const sections = layoutDoc(features, sidecar, { siblingOrder: 'tree', activeModes, phases });
+        for (const id of Object.keys(nodes)) nodes[id].children = childrenOf[id] ?? [];
 
         const sync: SyncState = {
             state: status.state,
@@ -206,16 +231,156 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             realize: this.parseRealizeProgress(status.detail),
         };
 
+        // Authoritative rich doc: structure from the text, authorship marks borrowed
+        // from the in-memory saved doc by fid (re-anchored where text is unchanged).
+        const uri = document.uri.toString();
+        const realized = (fid: string): boolean => sidecar.features[fid]?.realized !== false;
+        const prevFile = this.docFileByUri.get(uri) ?? null;
+        const doc = reconcileDoc(document.getText(), prevFile?.doc ?? null, realized);
+        const docFile: DocFile = { version: 1, doc, suggestions: prevFile?.suggestions ?? [] };
+        this.docFileByUri.set(uri, docFile);
+
+        // Unified pending diffs: code-ahead (from sidecar proposals) + doc-ahead
+        // (persisted). Old text for amend diffs comes from the parsed features.
+        const titleOf = new Map(features.filter(f => f.id).map(f => [f.id as string, f.title]));
+        const descOf = new Map(features.filter(f => f.id).map(f => [f.id as string, f.description]));
+        const suggestions = buildSuggestions(
+            sidecar,
+            docFile.suggestions,
+            fid => titleOf.get(fid) ?? '',
+            fid => descOf.get(fid) ?? '',
+        );
+
+        // Per-feature "see also" dependencies (feature_edges → top depends/used-by).
+        const dir = directedEdges(sidecar);
+        const deps: Record<string, FeatureDep[]> = {};
+        for (const f of features) {
+            if (!f.id) continue;
+            const out = (dir.out.get(f.id) ?? []).map(e => ({ toId: e.to, toTitle: sidecar.features[e.to]?.title ?? '', rel: 'depends' as const }));
+            const inn = (dir.in.get(f.id) ?? []).map(e => ({ toId: e.to, toTitle: sidecar.features[e.to]?.title ?? '', rel: 'usedby' as const }));
+            const seen = new Set<string>();
+            const all = [...out, ...inn].filter(d => d.toTitle && d.toId !== f.id && !seen.has(d.toId) && seen.add(d.toId)).slice(0, 5);
+            if (all.length) deps[f.id] = all;
+        }
+
         return {
             nodes,
-            roots: orderedRoots,
+            roots,
             sections,
             status: { state: status.state, pending: status.pending },
             sync,
             rootName,
             pendingEventIds,
+            doc,
+            symbols: this.buildSymbols(sidecar),
+            suggestions,
+            deps,
             rev: ++this.rev,
         };
+    }
+
+    /** Bound-symbol autocomplete candidates from the sidecar `by_file` (deduped by
+     *  file + leaf name) — the same source as the plain-text completion provider. */
+    private buildSymbols(sidecar: SidecarData): RefSymbol[] {
+        const leaf = (s: string): string => { const i = s.indexOf('::'); return i >= 0 ? s.slice(i + 2) : s; };
+        const seen = new Set<string>();
+        const out: RefSymbol[] = [];
+        for (const [file, entries] of Object.entries(sidecar.by_file)) {
+            for (const e of entries) {
+                const name = leaf(e.symbol);
+                const key = `${file}#${name}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push({ file, label: name, symbol: name, detail: `${file} · ${e.feature_title}` });
+            }
+        }
+        return out;
+    }
+
+    private docUri(document: vscode.TextDocument): vscode.Uri {
+        return vscode.Uri.joinPath(document.uri, '..', DOC_FILENAME);
+    }
+
+    private async loadDocFile(document: vscode.TextDocument): Promise<DocFile | null> {
+        try {
+            const bytes = await vscode.workspace.fs.readFile(this.docUri(document));
+            return parseDocFile(JSON.parse(Buffer.from(bytes).toString('utf-8')));
+        } catch {
+            return null; // not created yet
+        }
+    }
+
+    /** Persist tree.doc.json (doc + doc-ahead suggestions) atomically (tmp →
+     *  rename). Watched by neither the VS Code WorkspaceState nor the Python
+     *  daemon, so this write never loops back. */
+    private async persistDocFile(document: vscode.TextDocument, docFile: DocFile): Promise<void> {
+        const target = this.docUri(document).fsPath;
+        const tmp = path.join(path.dirname(target), `.${DOC_FILENAME}.tmp`);
+        await fs.writeFile(tmp, JSON.stringify(docFile), 'utf-8');
+        await fs.rename(tmp, target);
+    }
+
+    private docFileFor(document: vscode.TextDocument): DocFile {
+        const uri = document.uri.toString();
+        let df = this.docFileByUri.get(uri);
+        if (!df) {
+            df = emptyDocFile(reconcileDoc(document.getText(), null));
+            this.docFileByUri.set(uri, df);
+        }
+        return df;
+    }
+
+    /**
+     * A rich description commit (U4): persist the new paragraph blocks (with marks)
+     * to tree.doc.json, then derive the description TEXT into tree.codoc through the
+     * existing surgical path — so the loops/store see exactly an AMEND and the header
+     * + pending ghost overlays are left intact.
+     */
+    private async commitDoc(document: vscode.TextDocument, featureId: string, blocks: PMNode[]): Promise<void> {
+        const df = this.docFileFor(document);
+        df.doc = replaceFeatureBlocks(df.doc, featureId, blocks);
+        await this.persistDocFile(document, df);
+        await this.editDescription(document, featureId, blocksToDescriptionText(blocks));
+    }
+
+    /**
+     * Whole-doc settle (R3): persist the entire edited doc (with marks) to
+     * tree.doc.json, then project it to canonical tree.codoc and write the whole
+     * file. The existing parse→diff→apply pipeline derives the AMEND / MOVE / ADD /
+     * RETIRE ops. Pending code-ahead ghosts are store-side; the daemon re-emits
+     * them on its next render (they're not authored doc content).
+     */
+    private async settleDoc(document: vscode.TextDocument, doc: PMNode): Promise<void> {
+        const df = this.docFileFor(document);
+        df.doc = doc;
+        await this.persistDocFile(document, df);
+
+        const next = renderTreeFromDoc(doc);
+        if (next === document.getText()) return; // no structural/text change → no write
+
+        const edit = new vscode.WorkspaceEdit();
+        const last = document.lineAt(document.lineCount - 1);
+        edit.replace(document.uri, new vscode.Range(0, 0, last.lineNumber, last.text.length), next);
+        await vscode.workspace.applyEdit(edit);
+        await document.save();
+    }
+
+    /** Persist captured doc-ahead suggestions (Suggesting mode). They render as
+     *  persistent diffs awaiting the agent; tree.codoc is NOT touched (intent only). */
+    private async createSuggestions(document: vscode.TextDocument, suggestions: Suggestion[]): Promise<void> {
+        if (!suggestions.length) return;
+        const df = this.docFileFor(document);
+        // Replace any prior doc-ahead suggestion for the same feature (latest wins).
+        const touched = new Set(suggestions.map(s => s.featureId));
+        df.suggestions = df.suggestions.filter(s => !(s.direction === 'doc-ahead' && touched.has(s.featureId)));
+        df.suggestions.push(...suggestions);
+        await this.persistDocFile(document, df);
+    }
+
+    private async withdrawSuggestion(document: vscode.TextDocument, id: string): Promise<void> {
+        const df = this.docFileFor(document);
+        df.suggestions = df.suggestions.filter(s => s.id !== id);
+        await this.persistDocFile(document, df);
     }
 
     /** Loop B / realize may stamp "done/total" progress into status.detail

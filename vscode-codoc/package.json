@@ -96,7 +96,9 @@
         "viewType": "codoc.tree-editor",
         "displayName": "Codoc Tree",
         "selector": [
-          { "filenamePattern": "**/.codoc/tree.codoc" }
+          {
+            "filenamePattern": "**/.codoc/tree.codoc"
+          }
         ],
         "priority": "default"
       }
@@ -259,7 +261,10 @@
         },
         "codoc.docSiblingOrder": {
           "type": "string",
-          "enum": ["dependency", "tree"],
+          "enum": [
+            "dependency",
+            "tree"
+          ],
           "default": "dependency",
           "enumDescriptions": [
             "Within a parent, order sibling sections so prerequisites (features a sibling depends on) read first.",
@@ -291,5 +296,11 @@
     "compile": "npm run build",
     "watch": "node esbuild.config.mjs --watch",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@tiptap/core": "^2.27.2",
+    "@tiptap/pm": "^2.27.2",
+    "@tiptap/starter-kit": "^2.27.2",
+    "@tiptap/suggestion": "^2.27.2"
   }
 }

@@ -14,6 +14,10 @@
 
 import './doc-view.css';
 import { groupBindings } from '../state/doc-layout';
+import { descriptionBlocksForFid, descriptionToBlocks, PMNode } from '../state/pm-doc';
+import { mountDescriptionEditor, DescEditorHandle } from './tiptap/editor';
+import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
+import { AuthorController } from './tiptap/author-plugin';
 import type { DocPayload, UINode, WebviewMessage } from './protocol';
 import type { DocSection, InlineRun, CrossRef } from '../state/doc-layout';
 
@@ -28,6 +32,17 @@ const EMPTY: DocPayload = {
 };
 
 let payload: DocPayload = EMPTY;
+// The active authoring instrument (pen/pencil + role). Persists across edits so
+// the user's chosen mode sticks. role=human at the keyboard; reflected agent text
+// is stamped pencil+<agent> by the host path.
+const authorController = new AuthorController();
+// The live rich-text description editor (at most one open at a time).
+let activeDescEditor: DescEditorHandle | null = null;
+// The whole-doc editor (R3) — one TipTap instance over the entire tree.
+let wholeEditor: WholeDocEditorHandle | null = null;
+// Guard: while the editor's own selection drives the tree highlight, don't scroll
+// the editor back (would fight the user's caret).
+let syncingFromEditor = false;
 const expanded = new Set<string>();
 let selectedId: string | null = null;
 let editingTitle: string | null = null;   // feature id whose title is being edited
@@ -184,17 +199,22 @@ function renderAll(): void {
     const main = el('div', 'main');
     main.append(renderTree(), renderDocHost());
     app.append(main);
-    wireObserver();
-    if (selectedId) syncToSection(selectedId, false);
     if (!didFocusTree) { didFocusTree = true; queueMicrotask(focusTree); }
 }
 
-// ─── Reconcile (subsequent payloads — keep scroll, animate only what changed) ─
+// ─── Reconcile (subsequent payloads) ─────────────────────────────────────────
 function reconcile(): void {
     document.querySelector('.toolbar')?.replaceWith(renderToolbar());
     reconcileTree();
-    reconcileDoc();
-    if (selectedId) syncToSection(selectedId, false);
+    // Feed the whole-doc editor the new settled doc (it ignores updates while the
+    // user has unsettled local edits, so typing isn't clobbered) + the latest diffs.
+    if (payload.doc && wholeEditor) {
+        wholeEditor.setDoc(payload.doc);
+        wholeEditor.setSuggestions(payload.suggestions ?? []);
+        wholeEditor.setDeps(payload.deps ?? {});
+    } else {
+        document.querySelector('.doc-host')?.replaceWith(renderDocHost());
+    }
 }
 
 function reconcileTree(): void {
@@ -404,13 +424,18 @@ function appendRow(parent: HTMLElement, id: string): void {
 
     const hasKids = n.children.length > 0;
     const isExp = expanded.has(id);
-    const disc = el('span', 'disclosure' + (hasKids ? '' : ' empty'), hasKids ? (isExp ? '▾' : '▸') : '·');
-    if (hasKids) disc.onclick = ev => { ev.stopPropagation(); toggle(id); };
+    const discCls = hasKids ? (isExp ? ' expanded' : ' collapsed') : ' leaf';
+    const disc = el('span', 'disclosure' + discCls, hasKids ? (isExp ? '▾' : '▸') : '·');
+    if (hasKids) {
+        disc.title = isExp ? 'Collapse' : `Expand ${n.children.length} child${n.children.length === 1 ? '' : 'ren'}`;
+        disc.onclick = ev => { ev.stopPropagation(); toggle(id); };
+    }
     row.append(disc);
 
     const titleWrap = el('span', 'title', n.title || '(untitled)');
-    titleWrap.title = 'Double-click to edit';
-    titleWrap.ondblclick = ev => { ev.stopPropagation(); setSelected(id, true); startEditTitle(id); };
+    titleWrap.title = 'Open in the document editor';
+    // Titles are edited in the whole-doc editor now — double-click just scrolls there.
+    titleWrap.ondblclick = ev => { ev.stopPropagation(); setSelected(id, true); };
     row.append(titleWrap);
 
     if (n.proposal?.op === 'amend' && n.proposal.title && n.proposal.title !== n.title) {
@@ -458,27 +483,34 @@ function appendRow(parent: HTMLElement, id: string): void {
     if (isExp) for (const c of n.children) appendRow(parent, c);
 }
 
-// ─── Doc pane (the article) ────────────────────────────────────────────────
+// ─── Doc pane — ONE whole-doc editor over the entire tree (R3) ───────────────
 function renderDocHost(): HTMLElement {
     const host = el('div', 'doc-host');
-    const doc = el('div', 'doc');
-    sectionById.clear();
-    if (payload.sections.length === 0) {
-        doc.classList.add('empty');
-        doc.textContent = 'No features yet.';
-        host.append(doc);
+    if (wholeEditor) { wholeEditor.destroy(); wholeEditor = null; }
+    if (!payload.doc) {
+        const empty = el('div', 'doc empty', 'No features yet. Run `codoc init` to bootstrap the tree.');
+        host.append(empty);
         return host;
     }
-    const accent = el('div', 'doc-accent');
-    accent.id = 'doc-accent';
-    doc.append(accent);
-    for (const sec of payload.sections) {
-        const node = renderSection(sec);
-        sectionById.set(sec.id, node);
-        doc.append(node);
-    }
-    host.append(doc);
-    host.append(renderTocRail());
+    wholeEditor = mountWholeDocEditor(host, {
+        controller: authorController,
+        getSymbols: () => payload.symbols ?? [],
+        onSettle: doc => vscode.postMessage({ kind: 'doc-settle', doc }),
+        onSuggest: suggestions => vscode.postMessage({ kind: 'suggest-create', suggestions }),
+        onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
+        onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
+        onWithdraw: s => vscode.postMessage({ kind: 'suggest-withdraw', id: s.id }),
+        onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
+        onActiveFeature: fid => {
+            if (!fid) return;
+            syncingFromEditor = true;
+            setSelected(fid, false);   // highlight the tree row, don't re-scroll the editor
+            syncingFromEditor = false;
+        },
+    });
+    wholeEditor.setDoc(payload.doc);
+    wholeEditor.setSuggestions(payload.suggestions ?? []);
+    wholeEditor.setDeps(payload.deps ?? {});
     return host;
 }
 
@@ -549,6 +581,64 @@ function renderRuns(runs: InlineRun[]): DocumentFragment {
     return frag;
 }
 
+/** Wrap a node in the DOM element for one ProseMirror mark (authorship/bold/etc).
+ *  Authorship marks carry opacity (mode) + tint (role) via class; the rest map to
+ *  semantic tags / themed spans matching the editor. */
+function wrapMark(inner: Node, mark: { type: string; attrs?: Record<string, unknown> }): Node {
+    switch (mark.type) {
+        case 'strong': case 'bold': { const e = el('strong'); e.append(inner); return e; }
+        case 'em': case 'italic': { const e = el('em'); e.append(inner); return e; }
+        case 'highlight': { const e = el('span', 'codoc-highlight'); e.append(inner); return e; }
+        case 'comment': { const e = el('span', 'codoc-comment'); e.append(inner); return e; }
+        case 'author': {
+            const role = String(mark.attrs?.role ?? 'human');
+            const mode = String(mark.attrs?.mode ?? 'pen');
+            const roleCls = role.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            const e = el('span', `codoc-author codoc-mode-${mode} codoc-role-${roleCls}`);
+            e.append(inner);
+            return e;
+        }
+        default: { const e = el('span'); e.append(inner); return e; }
+    }
+}
+
+/** Render a feature's description from the authoritative doc's marked paragraph
+ *  blocks (so authorship opacity/tint + bold/highlight show at rest, not only in
+ *  the editor). Returns null when the doc has nothing for this feature. */
+function renderMarkedProse(sec: DocSection): HTMLElement | null {
+    if (!payload.doc) return null;
+    const blocks = descriptionBlocksForFid(payload.doc, sec.id);
+    if (!blocks.length) return null;
+    const dd = el('div', 'prose');
+    let any = false;
+    for (const para of blocks) {
+        if (para.type !== 'paragraph') continue;
+        const p = el('p');
+        for (const inline of para.content ?? []) {
+            if (inline.type === 'text') {
+                any = any || !!(inline.text && inline.text.length);
+                let node: Node = document.createTextNode(inline.text ?? '');
+                for (const mark of inline.marks ?? []) node = wrapMark(node, mark);
+                p.append(node);
+            } else if (inline.type === 'codeRef' && inline.attrs) {
+                any = true;
+                const a = inline.attrs as { label?: string; file?: string; symbol?: string | null };
+                const chip = el('span', 'codoc-code-ref', a.label || a.symbol || a.file || '');
+                chip.title = (a.file ?? '') + (a.symbol ? ' › ' + a.symbol : '');
+                chip.onclick = ev => {
+                    ev.stopPropagation();
+                    vscode.postMessage({ kind: 'open-binding', file: a.file ?? '', symbol: a.symbol ?? '' });
+                };
+                p.append(chip);
+            }
+        }
+        dd.append(p);
+    }
+    if (!any) return null;          // empty doc blocks → let the text path show the placeholder
+    if (!sec.flags.isGhost) dd.ondblclick = () => startEditDesc(sec.id);
+    return dd;
+}
+
 function renderProse(sec: DocSection): HTMLElement {
     // Inline AMEND description diff (old struck → new added).
     if (sec.proposal?.op === 'amend' && sec.proposal.description != null) {
@@ -565,6 +655,12 @@ function renderProse(sec: DocSection): HTMLElement {
             : 'No description — double-click to add one.');
         if (!sec.flags.isGhost) dd.ondblclick = () => startEditDesc(sec.id);
         return dd;
+    }
+    // Prefer the authoritative doc's marked blocks (authorship/marks visible at
+    // rest); fall back to the text-derived runs when the doc has nothing.
+    if (!sec.flags.isGhost) {
+        const marked = renderMarkedProse(sec);
+        if (marked) return marked;
     }
     const dd = el('div', 'prose');
     for (const block of sec.blocks) {
@@ -751,44 +847,50 @@ function applyLiveFlags(node: HTMLElement, sec: DocSection): void {
     node.classList.toggle('active-read', sec.flags.activeMode === 'read');
 }
 
+/** Paragraph blocks to seed the editor: from the authoritative doc (marks intact)
+ *  when present, else freshly from the section's stored description text. */
+function descBlocksFor(sec: DocSection): PMNode[] {
+    if (payload.doc) {
+        const blocks = descriptionBlocksForFid(payload.doc, sec.id);
+        if (blocks.length) return blocks;
+    }
+    return descriptionToBlocks(sec.raw);
+}
+
 function renderDescEditor(sec: DocSection): HTMLElement {
-    const wrap = el('div');
-    const ta = document.createElement('textarea');
-    ta.className = 'd-edit';
-    ta.value = sec.raw;     // exact stored text → lossless round-trip
-    ta.onkeydown = ev => {
-        ev.stopPropagation();
-        if (ev.key === 'Escape') { ev.preventDefault(); cancelDesc(); }
-        else if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); commitDesc(sec.id, ta.value); }
-    };
-    ta.onblur = () => { if (editingDesc === sec.id) commitDesc(sec.id, ta.value); };
-    wrap.append(ta);
-    const hint = el('div', 'edit-hint');
-    hint.append(document.createTextNode('Commit with '));
-    hint.append(el('kbd', undefined, '⌘'));
-    hint.append(document.createTextNode(' '));
-    hint.append(el('kbd', undefined, 'Enter'));
-    hint.append(document.createTextNode('  ·  Cancel with '));
-    hint.append(el('kbd', undefined, 'Esc'));
-    wrap.append(hint);
-    queueMicrotask(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
-    return wrap;
+    destroyActiveEditor();
+    const handle = mountDescriptionEditor({
+        blocks: descBlocksFor(sec),
+        controller: authorController,
+        getSymbols: () => payload.symbols ?? [],
+        onCommit: blocks => commitDescBlocks(sec.id, blocks),
+        onCancel: () => cancelDesc(),
+        onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
+    });
+    activeDescEditor = handle;
+    return handle.element;
+}
+
+function destroyActiveEditor(): void {
+    if (activeDescEditor) { activeDescEditor.destroy(); activeDescEditor = null; }
 }
 
 // ─── Selection + two-way scroll sync ────────────────────────────────────────
 function setSelected(id: string | null, scrollDoc: boolean): void {
     selectedId = id;
-    // Always reveal a selected node's ancestors so its tree row exists and can be
-    // marked .selected — whether selection came from a tree click, keyboard, an
-    // xref jump, a doc-heading click, or scroll-spy. revealAncestors only re-renders
-    // when an ancestor was actually collapsed, so scroll-spy within an already-open
-    // subtree stays cheap (no per-tick re-render).
+    // Reveal a selected node's ancestors so its tree row exists and can be marked
+    // .selected (cheap — only re-renders when an ancestor was actually collapsed).
     if (id) revealAncestors(id);
     document.querySelectorAll('.row.selected').forEach(r => r.classList.remove('selected'));
     if (id) {
         const rowEl = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(id) + '"]');
         if (rowEl) { rowEl.classList.add('selected'); rowEl.scrollIntoView({ block: 'nearest' }); }
-        syncToSection(id, scrollDoc);
+        // Scroll the whole-doc editor to this feature — unless the selection was
+        // itself driven by the editor's caret (avoid fighting the cursor) or the id
+        // is a pending ghost (no live heading).
+        if (scrollDoc && !syncingFromEditor && wholeEditor && id.startsWith('f-')) {
+            wholeEditor.scrollToFeature(id);
+        }
     }
 }
 
@@ -898,13 +1000,21 @@ function restoreTreeTitle(id: string): void {
     if (rowEl) rowEl.textContent = payload.nodes[id]?.title || '(untitled)';
 }
 
-function startEditDesc(id: string): void { editingTitle = null; editingDesc = id; rerenderSection(id); }
-function cancelDesc(): void { const id = editingDesc; editingDesc = null; if (id) rerenderSection(id); }
-function commitDesc(id: string, newDesc: string): void {
+function startEditDesc(id: string): void { destroyActiveEditor(); editingTitle = null; editingDesc = id; rerenderSection(id); }
+function cancelDesc(): void {
+    const id = editingDesc;
+    editingDesc = null;
+    // Defer teardown so we don't destroy the ProseMirror view from inside its own
+    // key handler; rerender then shows the read-only prose.
+    queueMicrotask(() => { destroyActiveEditor(); if (id) rerenderSection(id); });
+}
+/** Commit the rich description as paragraph blocks (with marks): the host persists
+ *  them to tree.doc.json and derives the tree.codoc text. */
+function commitDescBlocks(id: string, blocks: PMNode[]): void {
     if (editingDesc !== id) return;
     editingDesc = null;
-    vscode.postMessage({ kind: 'edit-description', featureId: id, newDescription: newDesc });
-    rerenderSection(id);
+    vscode.postMessage({ kind: 'doc-commit', featureId: id, blocks });
+    queueMicrotask(() => { destroyActiveEditor(); rerenderSection(id); });
 }
 
 /** Re-render just one section in place (keeps scroll position stable). */
@@ -963,16 +1073,14 @@ document.addEventListener('keydown', ev => {
         return;
     }
     if (!treeHasFocus()) return;                         // doc focus → native scroll
-    if (ev.metaKey || ev.ctrlKey || ev.altKey) {         // leave modified chords to VS Code…
-        if (ev.key === 'Enter' && selectedId) { ev.preventDefault(); startEditDesc(selectedId); }
-        return;
-    }
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return; // leave modified chords to VS Code
     switch (ev.key) {
         case 'ArrowDown': ev.preventDefault(); moveCursor(+1); return;
         case 'ArrowUp': ev.preventDefault(); moveCursor(-1); return;
         case 'ArrowRight': ev.preventDefault(); expandOrDescend(); return;
         case 'ArrowLeft': ev.preventDefault(); collapseOrAscend(); return;
-        case 'Enter': if (selectedId) { ev.preventDefault(); startEditTitle(selectedId); } return;
+        // Enter scrolls the editor to the selected feature (titles are edited there).
+        case 'Enter': if (selectedId) { ev.preventDefault(); setSelected(selectedId, true); } return;
         case ' ': if (selectedId) { ev.preventDefault(); toggle(selectedId); } return;
     }
 });
@@ -992,14 +1100,18 @@ window.addEventListener('message', ev => {
     for (const id of [...expanded]) if (!payload.nodes[id]) expanded.delete(id);
     if (firstPayload) {
         firstPayload = false;
-        for (const r of payload.roots) expanded.add(r);
+        // Expand every parent so the whole tree is visible by default — hidden
+        // children were hard to spot. The user can collapse from there.
+        for (const id of Object.keys(payload.nodes)) {
+            if (payload.nodes[id].children.length) expanded.add(id);
+        }
         if (selectedId == null) selectedId = payload.roots[0] ?? payload.sections[0]?.id ?? null;
     }
     // Preserve an in-flight inline edit across reflections elsewhere; only drop
     // it if the edited feature itself disappeared from the payload.
     const stillThere = (id: string | null): boolean => !!id && payload.sections.some(s => s.id === id);
     if (!stillThere(editingTitle)) editingTitle = null;
-    if (!stillThere(editingDesc)) editingDesc = null;
+    if (!stillThere(editingDesc)) { editingDesc = null; destroyActiveEditor(); }
 
     if (!mounted) { mounted = true; renderAll(); } else { reconcile(); }
 });

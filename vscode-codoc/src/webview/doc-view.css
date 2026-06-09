@@ -120,11 +120,17 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .row.drop-target::before { background: var(--accent-blue) !important; }
 
 .disclosure {
-    width: 14px; text-align: center; color: var(--fg-muted);
-    font-size: 10px; flex-shrink: 0; cursor: pointer; transition: color 120ms ease;
+    width: 16px; text-align: center; color: var(--fg-muted);
+    font-size: 11px; flex-shrink: 0; cursor: pointer; transition: color 120ms ease;
 }
 .disclosure:hover { color: var(--vscode-foreground); }
 .disclosure.empty { visibility: hidden; }
+/* a COLLAPSED parent (hidden children) gets an accented, bolder arrow so it's
+   obvious there's more beneath it; an expanded one stays quiet. */
+.disclosure.collapsed { color: var(--accent-blue); font-size: 12px; opacity: 0.95; }
+.disclosure.expanded { color: var(--fg-muted); }
+/* leaf rows: a faint mid-dot so depth reads, but clearly not a toggle */
+.disclosure.leaf { visibility: visible; color: color-mix(in srgb, var(--vscode-foreground) 22%, transparent); cursor: default; font-size: 8px; }
 
 .title {
     font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
@@ -459,3 +465,217 @@ body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
         transition: none !important; animation: none !important;
     }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Rich description editor (TipTap) — replaces the textarea (U3/U5/U6/U7).
+   Themed entirely via VS Code tokens; opacity = commitment, tint = role.
+   ─────────────────────────────────────────────────────────────────────────── */
+.codoc-editor {
+    margin-top: 12px; max-width: 74ch;
+    border: 1px solid var(--vscode-focusBorder, var(--accent-blue));
+    border-radius: 6px; background: var(--vscode-input-background);
+    overflow: hidden;
+}
+.ce-toolbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; border-bottom: var(--rule);
+    background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent);
+}
+.ce-spacer { flex: 1; }
+.ce-btn {
+    font: 11.5px var(--vscode-font-family); color: var(--vscode-foreground);
+    background: transparent; border: 1px solid transparent; border-radius: 4px;
+    padding: 3px 8px; cursor: pointer; line-height: 1.4;
+}
+.ce-btn:hover { background: var(--hover-bg); }
+.ce-btn.active { background: var(--select-bg); border-color: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
+.ce-btn.ce-bold { font-weight: 700; }
+.ce-btn.ce-italic { font-style: italic; }
+.ce-btn.primary {
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    border-color: transparent; font-weight: 600;
+}
+.ce-btn.primary:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
+.ce-seg { display: inline-flex; border: 1px solid color-mix(in srgb, var(--vscode-foreground) 14%, transparent); border-radius: 5px; overflow: hidden; }
+.ce-seg .ce-btn { border-radius: 0; border: none; }
+.ce-seg .ce-pen.active { background: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
+.ce-seg .ce-pencil.active { background: color-mix(in srgb, var(--accent-plan) 22%, transparent); }
+.ce-marks { display: inline-flex; gap: 2px; padding-left: 4px; border-left: var(--rule); }
+
+.ce-surface { padding: 12px 14px; }
+.ce-surface .ProseMirror { outline: none; font: 13.5px/1.7 var(--vscode-font-family); color: var(--vscode-input-foreground); min-height: 60px; }
+.ce-surface .ProseMirror p { margin: 0 0 0.7em; white-space: pre-wrap; }
+.ce-surface .ProseMirror p:last-child { margin-bottom: 0; }
+.ce-surface .ProseMirror:focus { outline: none; }
+
+/* code-ref chip inside the editor — mirrors the read-view .cite chip */
+.codoc-code-ref {
+    font: 11.5px var(--vscode-editor-font-family);
+    color: var(--accent-refs);
+    background: color-mix(in srgb, var(--accent-refs) 12%, transparent);
+    border-radius: 3px; padding: 0 5px; white-space: nowrap; cursor: pointer;
+}
+.codoc-code-ref::before { content: "⟢ "; opacity: 0.6; }
+.codoc-code-ref:hover { background: color-mix(in srgb, var(--accent-refs) 22%, transparent); }
+
+/* inline marks (U7) */
+.codoc-highlight { background: color-mix(in srgb, var(--accent-amend) 30%, transparent); border-radius: 2px; }
+.codoc-comment { border-bottom: 2px dotted var(--accent-amend); }
+
+/* authorship (U6): opacity = commitment mode, tint + dotted underline = role.
+   pen = solid baseline (human-authored, no decoration); pencil = tentative. */
+.codoc-author { --role-tint: var(--fg-muted); }
+.codoc-mode-pen { opacity: 1; }
+.codoc-mode-pencil { opacity: 0.55; border-bottom: 1px dotted var(--role-tint); }
+.codoc-role-human { --role-tint: var(--accent-blue); }
+.codoc-role-claude-code { --role-tint: var(--accent-plan); }
+.codoc-role-codex { --role-tint: var(--accent-add); }
+.codoc-role-gemini { --role-tint: var(--accent-amend); }
+.codoc-role-cursor { --role-tint: var(--accent-refs); }
+.codoc-mode-pencil.codoc-author { color: color-mix(in srgb, var(--role-tint) 55%, var(--vscode-input-foreground)); }
+
+/* @-autocomplete popup (U5) */
+.cr-popup {
+    position: absolute; z-index: 50; min-width: 220px; max-width: 360px; max-height: 240px; overflow-y: auto;
+    background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-editorSuggestWidget-border, var(--rule)); border-radius: 5px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.3); padding: 3px;
+    font: 12px var(--vscode-font-family);
+}
+.cr-item { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-radius: 3px; cursor: pointer; }
+.cr-item.active { background: var(--vscode-editorSuggestWidget-selectedBackground, var(--select-bg)); }
+.cr-name { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
+.cr-detail { font-size: 10.5px; color: var(--fg-muted); margin-left: auto; white-space: nowrap; }
+.cr-empty { padding: 6px 8px; color: var(--fg-muted); font-style: italic; }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Whole-doc editor (R3) — one TipTap editor over the entire tree.
+   Headings ARE features; level = tree depth (shown via indent + scale).
+   ─────────────────────────────────────────────────────────────────────────── */
+.codoc-whole-editor {
+    flex: 1; min-width: 0; height: 100%;
+    display: flex; flex-direction: column;
+}
+.codoc-whole-editor .ce-toolbar {
+    position: sticky; top: 0; z-index: 5; flex-wrap: wrap;
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground));
+    border-bottom: var(--rule);
+}
+.ce-structure { display: inline-flex; gap: 2px; padding-left: 6px; border-left: var(--rule); }
+.ce-savestate { font: 10.5px var(--vscode-font-family); color: var(--fg-muted); min-width: 48px; text-align: right; }
+
+.ce-whole-surface { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 28px 90px; }
+.ce-whole-surface .ProseMirror { outline: none; max-width: 78ch; }
+.ce-whole-surface .ProseMirror:focus { outline: none; }
+
+/* feature headings — Notion-style: flush-left, hierarchy by a STRONG type scale
+   (size + weight + color), generous space above to break sections. No indent. */
+.codoc-feature-heading {
+    color: var(--vscode-foreground); line-height: 1.25; letter-spacing: -0.015em;
+    scroll-margin-top: 12px; position: relative;
+}
+.codoc-feature-heading:first-child { margin-top: 0.1em; }
+.codoc-feature-heading[data-retired="true"] { text-decoration: line-through; color: var(--accent-retire); opacity: 0.7; }
+.codoc-feature-heading[data-realized="false"] { color: var(--accent-plan); }
+
+.codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
+.codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }
+.codoc-feature-heading[data-level="2"] { font-size: 1.04rem; font-weight: 640; margin: 1.2em 0 0.35em; }
+.codoc-feature-heading[data-level="3"] {
+    font-size: 0.82rem; font-weight: 700; margin: 1em 0 0.3em;
+    color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em;
+}
+.codoc-feature-heading[data-level="4"],
+.codoc-feature-heading[data-level="5"],
+.codoc-feature-heading[data-level="6"] {
+    font-size: 0.78rem; font-weight: 650; margin: 0.85em 0 0.25em;
+    color: var(--fg-muted); letter-spacing: 0.03em;
+}
+
+/* the heading the reader is currently on (scroll-spy) — a subtle accent tick */
+.codoc-feature-heading.ce-current::before {
+    content: ""; position: absolute; left: -16px; top: 0.18em; bottom: 0.18em; width: 3px;
+    border-radius: 2px; background: var(--accent-blue); opacity: 0.85;
+}
+
+/* descriptions — flush, readable measure, body tone (no indent) */
+.ce-whole-surface .ProseMirror p {
+    margin: 0 0 0.6em; white-space: pre-wrap; max-width: 70ch;
+    color: color-mix(in srgb, var(--vscode-foreground) 82%, transparent);
+    font: 13.5px/1.7 var(--vscode-font-family);
+}
+
+/* the hidden ⟨f-id⟩ never reaches the editor (held as a node attr), so no id leaks. */
+
+/* whole-doc editor body: scrolling surface + a thin TOC rail (scroll indicator) */
+.ce-body { flex: 1; min-height: 0; display: flex; }
+.ce-toc-rail {
+    flex: 0 0 auto; width: 22px; padding: 14px 6px; overflow: hidden;
+    display: flex; flex-direction: column; gap: 5px; align-items: stretch;
+    border-left: var(--rule);
+}
+.ce-tick {
+    height: 3px; border-radius: 2px; cursor: pointer;
+    background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
+    margin-left: calc(var(--d, 0) * 3px); transition: background 120ms ease, transform 120ms ease;
+}
+.ce-tick:hover { background: color-mix(in srgb, var(--vscode-foreground) 45%, transparent); }
+.ce-tick.active { background: var(--accent-blue); transform: scaleY(1.6); }
+.ce-tick.retired { background: color-mix(in srgb, var(--accent-retire) 50%, transparent); }
+.ce-tick.unrealized { background: color-mix(in srgb, var(--accent-plan) 50%, transparent); }
+
+/* ── Editing / Suggesting mode toggle ─────────────────────────────────────── */
+.ce-modeseg .ce-editmode.active { background: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
+.ce-modeseg .ce-sugmode.active { background: color-mix(in srgb, var(--accent-add) 24%, transparent); color: var(--vscode-foreground); }
+/* a subtle banner tint while Suggesting */
+.codoc-whole-editor[data-editmode="suggesting"] .ce-whole-surface {
+    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent-add) 60%, transparent);
+}
+
+/* ── Persistent diff cards (suggestions) ──────────────────────────────────── */
+.ce-diff {
+    margin: 0.4em 0 0.8em; padding: 8px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); border-left-width: 3px;
+    background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent);
+    font: 12px/1.55 var(--vscode-font-family); user-select: none;
+}
+.ce-diff.code-ahead { border-left-color: var(--accent-blue); }
+.ce-diff.doc-ahead  { border-left-color: var(--accent-add); }
+.ce-diff-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 5px; }
+.ce-diff-dir { font-weight: 650; font-size: 11px; letter-spacing: 0.02em; color: var(--vscode-foreground); }
+.ce-diff.code-ahead .ce-diff-dir { color: var(--accent-blue); }
+.ce-diff.doc-ahead .ce-diff-dir { color: var(--accent-add); }
+.ce-diff-tag { font-size: 10.5px; color: var(--fg-muted); }
+.ce-diff-row { margin: 2px 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.ce-diff-label { flex: 0 0 auto; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-muted); padding-top: 1px; }
+.ce-diff-desc { color: var(--fg-muted); }
+.ce-wd { white-space: pre-wrap; }
+.ce-wd .wd-same { color: color-mix(in srgb, var(--vscode-foreground) 78%, transparent); }
+.ce-wd .wd-del { text-decoration: line-through; color: var(--accent-retire); opacity: 0.8; }
+.ce-wd .wd-ins { color: var(--accent-add); background: color-mix(in srgb, var(--accent-add) 14%, transparent); border-radius: 2px; }
+.ce-diff-actions { display: flex; gap: 7px; align-items: center; margin-top: 7px; }
+.ce-diff-await { font-size: 10.5px; color: var(--fg-muted); margin-right: auto; font-style: italic; }
+.ce-diff-btn {
+    font: 11px var(--vscode-font-family); padding: 3px 11px; border-radius: 4px; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent); background: transparent; color: var(--vscode-foreground);
+}
+.ce-diff-btn:hover { background: var(--hover-bg); }
+.ce-diff-btn.accept { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; font-weight: 600; }
+.ce-diff-btn.accept:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
+
+/* a feature whose retire is proposed (code-ahead) — struck heading */
+.codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--accent-retire); opacity: 0.75; }
+
+/* ── "see also" dependency chips under a heading ──────────────────────────── */
+.ce-deps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0.1em 0 0.5em; user-select: none; }
+.ce-dep {
+    font: 10.5px var(--vscode-font-family); cursor: pointer;
+    color: var(--fg-muted); padding: 1px 8px; border-radius: 9px;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+    background: color-mix(in srgb, var(--vscode-foreground) 3%, transparent);
+    transition: color 120ms ease, border-color 120ms ease;
+    white-space: nowrap; max-width: 30ch; overflow: hidden; text-overflow: ellipsis;
+}
+.ce-dep:hover { color: var(--vscode-foreground); border-color: color-mix(in srgb, var(--accent-blue) 50%, transparent); }
+.ce-dep .ce-dep-rel { opacity: 0.7; }
+.ce-dep.usedby .ce-dep-rel { color: var(--accent-refs); }
