@@ -581,11 +581,15 @@ body.vscode-using-screen-reader * {
 .codoc-author { --role-tint: var(--fg-muted); }
 .codoc-mode-pen { opacity: 1; }
 .codoc-mode-pencil { opacity: 0.55; border-bottom: 1px dotted var(--role-tint); }
-.codoc-role-human { --role-tint: var(--accent-blue); }
-.codoc-role-claude-code { --role-tint: var(--accent-plan); }
-.codoc-role-codex { --role-tint: var(--accent-add); }
-.codoc-role-gemini { --role-tint: var(--accent-amend); }
-.codoc-role-cursor { --role-tint: var(--accent-refs); }
+/* role = authorship-ink tint (U2a / H5). The human is the DEFAULT author → NEUTRAL ink
+   (no hue), so a human-authored span never collides with the code-ahead direction colour
+   (both were charts-blue before). Agent roles keep their --ink-* tint. Pen text is full
+   opacity + neutral (committed intent reads as normal document text); pencil fades + tints. */
+.codoc-role-human { --role-tint: var(--ink-human); }
+.codoc-role-claude-code { --role-tint: var(--ink-claude); }
+.codoc-role-codex { --role-tint: var(--ink-codex); }
+.codoc-role-gemini { --role-tint: var(--ink-gemini); }
+.codoc-role-cursor { --role-tint: var(--ink-cursor); }
 .codoc-mode-pencil.codoc-author { color: color-mix(in srgb, var(--role-tint) 55%, var(--vscode-input-foreground)); }
 
 /* @-autocomplete popup (U5) */

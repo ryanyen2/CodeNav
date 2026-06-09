@@ -69,3 +69,22 @@ describe('U1 — accessibility + editorial type', () => {
         expect(m![0]).not.toContain('text-transform: uppercase');
     });
 });
+
+describe('U2a — authorship ink (H5 collision fix)', () => {
+    it('human ink reads the NEUTRAL token, not the code-ahead blue', () => {
+        const m = css.match(/\.codoc-role-human\s*\{[^}]*\}/);
+        expect(m).not.toBeNull();
+        expect(m![0]).toContain('--ink-human');
+        expect(m![0]).not.toContain('--accent-blue'); // the old collision with code-ahead
+    });
+
+    it('agent roles carry their own ink tint', () => {
+        expect(css).toMatch(/\.codoc-role-claude-code\s*\{[^}]*--ink-claude/);
+        expect(css).toMatch(/\.codoc-role-codex\s*\{[^}]*--ink-codex/);
+    });
+
+    it('pencil ink fades + underlines; pen ink is full-opacity (commitment = appearance)', () => {
+        expect(css).toMatch(/\.codoc-mode-pencil\s*\{[^}]*opacity:\s*0\.55/);
+        expect(css).toMatch(/\.codoc-mode-pen\s*\{[^}]*opacity:\s*1/);
+    });
+});
