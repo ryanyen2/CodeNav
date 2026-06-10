@@ -103,11 +103,6 @@ export interface DocPayload {
 /** Messages the webview posts back to the host. */
 export type WebviewMessage =
     | { kind: 'ready' }
-    | { kind: 'edit-title'; featureId: string; newTitle: string }
-    | { kind: 'edit-description'; featureId: string; newDescription: string }
-    /** Rich description commit: paragraph blocks (with marks) for one feature. The
-     *  host persists them to tree.doc.json and derives the tree.codoc text (U4). */
-    | { kind: 'doc-commit'; featureId: string; blocks: PMNode[] }
     /** Whole-doc settle (R3): the entire edited ProseMirror doc. The host persists
      *  it to tree.doc.json and serializes it to canonical tree.codoc, driving the
      *  existing parse→diff→apply pipeline (AMEND / MOVE / ADD / RETIRE). */
@@ -120,6 +115,5 @@ export type WebviewMessage =
      *  then implements via the existing Loop B realize path). */
     | { kind: 'suggest-apply'; id: string }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
-    | { kind: 'open-text' }
     | { kind: 'open-binding'; file: string; symbol: string }
     | { kind: 'verdict'; eventIds: string[]; accept: boolean };

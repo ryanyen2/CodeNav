@@ -18,9 +18,9 @@ import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
 import { parseTreeCodoc } from '../state/tree-model';
 import { activeFeatureModes, featurePhases } from '../state/activity-model';
-import { reconcileDoc, replaceFeatureBlocks } from '../state/doc-reconcile';
+import { reconcileDoc } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
-import { blocksToDescriptionText, PMNode } from '../state/pm-doc';
+import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
 import { directedEdges } from '../state/bindings-model';
 import { assembleThreads } from '../state/threads';
@@ -76,15 +76,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 case 'ready':
                     post();
                     return;
-                case 'edit-title':
-                    await this.editTitle(document, msg.featureId, msg.newTitle);
-                    return;
-                case 'edit-description':
-                    await this.editDescription(document, msg.featureId, msg.newDescription);
-                    return;
-                case 'doc-commit':
-                    await this.commitDoc(document, msg.featureId, msg.blocks);
-                    return;
                 case 'doc-settle':
                     await this.settleDoc(document, msg.doc);
                     return;
@@ -102,9 +93,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 case 'move':
                     await this.editMove(document, msg.sourceId, msg.newParentId);
-                    return;
-                case 'open-text':
-                    await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
                     return;
                 case 'open-binding': {
                     // <module>-level bindings have no symbol to jump to — just open the file.
@@ -344,19 +332,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             this.docFileByUri.set(uri, df);
         }
         return df;
-    }
-
-    /**
-     * A rich description commit (U4): persist the new paragraph blocks (with marks)
-     * to tree.doc.json, then derive the description TEXT into tree.codoc through the
-     * existing surgical path — so the loops/store see exactly an AMEND and the header
-     * + pending ghost overlays are left intact.
-     */
-    private async commitDoc(document: vscode.TextDocument, featureId: string, blocks: PMNode[]): Promise<void> {
-        const df = this.docFileFor(document);
-        df.doc = replaceFeatureBlocks(df.doc, featureId, blocks);
-        await this.persistDocFile(document, df);
-        await this.editDescription(document, featureId, blocksToDescriptionText(blocks));
     }
 
     /**
