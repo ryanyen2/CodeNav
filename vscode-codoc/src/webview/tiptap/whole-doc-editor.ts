@@ -367,7 +367,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     function rebuildRail(): void {
         rail.replaceChildren();
         tickByFid.clear();
-        editor.state.doc.forEach((node, pos) => {
+        editor.state.doc.forEach(node => {
             if (node.type.name !== 'featureHeading') return;
             const fid = node.attrs.fid as string | null;
             if (!fid) return;

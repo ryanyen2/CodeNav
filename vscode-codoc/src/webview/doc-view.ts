@@ -385,21 +385,22 @@ function revealAncestors(id: string): void {
         if (!expanded.has(n.parent_id)) { expanded.add(n.parent_id); changed = true; }
         n = payload.nodes[n.parent_id];
     }
-    if (changed) {
-        const tree = document.querySelector('.tree');
-        if (tree) { const next = renderTree(); tree.replaceWith(next); reapplyApplyingTo(next); }
-    }
+    if (changed) rerenderTree();
 }
 
 function toggle(id: string): void {
     if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+    rerenderTree(true);
+}
+
+/** Re-render the tree pane in place (keeping the optimistic applying state); optionally re-focus. */
+function rerenderTree(focus = false): void {
     const tree = document.querySelector('.tree');
-    if (tree) {
-        const replacement = renderTree();
-        tree.replaceWith(replacement);
-        reapplyApplyingTo(replacement);
-        (replacement as HTMLElement).focus({ preventScroll: true });
-    }
+    if (!tree) return;
+    const next = renderTree();
+    tree.replaceWith(next);
+    reapplyApplyingTo(next);
+    if (focus) (next as HTMLElement).focus({ preventScroll: true });
 }
 
 // ─── Keyboard navigation (tree-focused) ──────────────────────────────────────

@@ -38,6 +38,8 @@ function elc(tag: string, cls?: string, text?: string): HTMLElement {
     return e;
 }
 
+const WD_CLASS = { same: 'wd-same', del: 'wd-del', ins: 'wd-ins' } as const;
+
 function diffSpans(oldStr: string, newStr: string): HTMLElement {
     const wrap = elc('span', 'ce-wd');
     const runs = wordDiff(oldStr, newStr);
@@ -46,11 +48,12 @@ function diffSpans(oldStr: string, newStr: string): HTMLElement {
     // the current settled text, so nothing is lost).
     if (runs.filter(r => r.t !== 'same').length > 8) {
         const words = newStr.split(/\s+/).filter(Boolean);
-        wrap.append(elc('span', 'wd-ins', words.length > 16 ? words.slice(0, 16).join(' ') + ' …' : newStr));
+        const preview = words.length > 16 ? words.slice(0, 16).join(' ') + ' …' : newStr;
+        wrap.append(elc('span', 'wd-ins', preview));
         return wrap;
     }
     for (const r of compactRuns(runs)) {
-        wrap.append(elc('span', r.t === 'same' ? 'wd-same' : r.t === 'del' ? 'wd-del' : 'wd-ins', r.s));
+        wrap.append(elc('span', WD_CLASS[r.t], r.s));
     }
     return wrap;
 }
