@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from codoc.agent.install_hooks import install_mcp
+from codoc.agent.install_hooks import install_hooks, install_mcp
 
 
 def test_install_mcp_writes_codoc_server(tmp_path):
@@ -23,3 +23,19 @@ def test_install_mcp_is_idempotent_and_preserves_others(tmp_path):
     data = json.loads(mcp_path.read_text())
     assert set(data["mcpServers"]) == {"other", "codoc"}
     assert data["mcpServers"]["other"] == {"command": "x"}
+
+
+def test_install_hooks_ships_two_commands_and_removes_stale(tmp_path):
+    """The plugin ships exactly /codoc:plan + /codoc:sync; a previously-installed
+    command the plugin no longer ships (the old /codoc:realize) is removed, while
+    non-codoc commands are left alone."""
+    cmd_dir = tmp_path / ".claude" / "commands" / "codoc"
+    cmd_dir.mkdir(parents=True)
+    (cmd_dir / "realize.md").write_text("stale")
+    other = tmp_path / ".claude" / "commands" / "mine.md"
+    other.write_text("user command")
+
+    install_hooks(str(tmp_path))
+
+    assert {p.name for p in cmd_dir.glob("*.md")} == {"plan.md", "sync.md"}
+    assert other.read_text() == "user command"

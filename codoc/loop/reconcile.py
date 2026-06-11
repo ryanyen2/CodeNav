@@ -32,11 +32,8 @@ def has_pending_user_edits(codoc_dir: str) -> bool:
 
     Opens the store itself (convenience for the watch daemon, which classifies a
     batch before deciding whether to run a loop)."""
-    store = open_store(codoc_dir)
-    try:
+    with open_store(codoc_dir) as store:
         return not pending_user_edits(store, codoc_dir).is_empty()
-    finally:
-        store.close()
 
 
 def safe_write_tree(store: Store, codoc_dir: str) -> bool:

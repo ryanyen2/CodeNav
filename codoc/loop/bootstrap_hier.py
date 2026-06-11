@@ -26,7 +26,7 @@ from collections import Counter
 
 from codoc.agent.bootstrap_agent import propose_file_features, propose_organization
 from codoc.loop.apply import apply_op
-from codoc.loop.bootstrap import BootstrapResult, _title_from_file, _tree_snapshot  # noqa: F401
+from codoc.loop.bootstrap import BootstrapResult, _title_from_file
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_feature_id
 from codoc.store.db import Store
@@ -185,6 +185,10 @@ def bootstrap_hier_from_chunks(
         by_file.setdefault(r.file, []).append(r)
 
     calls = 0
+    # One feature-table read up front; each file pass appends the titles it just
+    # minted, so later files still see them as dedup context without an
+    # O(files × features) re-scan.
+    existing_titles = [f.title for f in store.list_features()]
     for file in sorted(by_file):
         file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
         chunks = [
@@ -192,13 +196,14 @@ def bootstrap_hier_from_chunks(
             for r in file_rows
         ]
         edges = _file_edges(file_rows, store)
-        existing_titles = [f.title for f in store.list_features()]
         fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
         ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
 
         ops = propose_file(file, chunks, edges, existing_titles, repo_name=repo_name, config=config)
         ops = _ensure_file_coverage(ops, file_rows, file)
         _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
+        existing_titles.extend(
+            op.title for op in ops if op.kind is NodeOpKind.ADD_NODE and op.title)
         calls += 1
 
     top_level = store.children(None)

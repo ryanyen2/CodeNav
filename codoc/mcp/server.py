@@ -49,57 +49,67 @@ def codoc_status() -> dict:
     """Counts of features / pending proposals / unrealized plan nodes, and the
     current pipeline state (in_sync | code_drift | tree_dirty | awaiting_impl |
     realizing). ``awaiting_impl`` means accepted tree edits are queued in
-    ``.codoc/realize.md`` for you to implement via ``/codoc:realize``."""
+    ``.codoc/realize.md`` for you to implement via ``/codoc:sync``."""
     cd, err = _need_dir()
     return err or tools.read_status(cd)
 
 
 @mcp.tool
-def codoc_reflect(ops: list[dict], rationale: str = "") -> dict:
+def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str = "") -> dict:
     """Submit the whole set of tree changes implied by code you just wrote, in one
     call. This is the primary code-first reflection entrypoint.
 
     Each op: {kind, feature_id?, parent_id?, title?, description?, binds?,
-    rationale?}. kind ∈ attach|detach|refresh|amend|add_node|move_node|retire_node.
+    rationale?, caused_by?}. kind ∈ attach|detach|refresh|amend|add_node|move_node|retire_node.
     binds are "file.py::symbol_path" strings. Safe ops (attach/refresh/detach and
     small amends) apply immediately; structural ops become proposals the user
-    reviews. Prefer `attach` to an existing feature over `add_node`."""
+    reviews. Prefer `attach` to an existing feature over `add_node`.
+
+    When implementing a ``.codoc/realize.md`` directive, pass its ``⟨d-…⟩`` id as
+    ``caused_by`` — the IDE uses it to group your reflected changes under the doc
+    edit that requested them."""
     cd, err = _need_dir()
-    return err or tools.reflect(cd, ops=ops, rationale=rationale)
+    return err or tools.reflect(cd, ops=ops, rationale=rationale, caused_by=caused_by)
 
 
 @mcp.tool
 def codoc_propose_add(title: str, description: str = "", parent_id: str | None = None,
-                      binds: list[str] | None = None, rationale: str = "") -> dict:
+                      binds: list[str] | None = None, rationale: str = "",
+                      caused_by: str = "") -> dict:
     """Propose a NEW feature for code no existing node covers (a reviewable
     proposal). Set parent_id from `codoc_tree` to nest it; binds are
     "file.py::symbol_path"."""
     cd, err = _need_dir()
     return err or tools.propose_add(cd, title=title, description=description,
-                                    parent_id=parent_id, binds=binds, rationale=rationale)
+                                    parent_id=parent_id, binds=binds, rationale=rationale,
+                                    caused_by=caused_by)
 
 
 @mcp.tool
 def codoc_propose_amend(feature_id: str, title: str | None = None,
-                        description: str | None = None, rationale: str = "") -> dict:
+                        description: str | None = None, rationale: str = "",
+                        caused_by: str = "") -> dict:
     """Propose editing a feature's title and/or description (e.g. its meaning
     shifted). Small description edits apply immediately; larger ones are reviewed."""
     cd, err = _need_dir()
     return err or tools.propose_amend(cd, feature_id=feature_id, title=title,
-                                      description=description, rationale=rationale)
+                                      description=description, rationale=rationale,
+                                      caused_by=caused_by)
 
 
 @mcp.tool
-def codoc_propose_move(feature_id: str, parent_id: str | None, rationale: str = "") -> dict:
+def codoc_propose_move(feature_id: str, parent_id: str | None, rationale: str = "",
+                       caused_by: str = "") -> dict:
     """Propose reparenting a feature (restructure). parent_id=null moves it to the
     top level. Reviewable."""
     cd, err = _need_dir()
     return err or tools.propose_move(cd, feature_id=feature_id, parent_id=parent_id,
-                                     rationale=rationale)
+                                     rationale=rationale, caused_by=caused_by)
 
 
 @mcp.tool
-def codoc_propose_retire(feature_id: str, rationale: str = "", delete_code: bool = False) -> dict:
+def codoc_propose_retire(feature_id: str, rationale: str = "", delete_code: bool = False,
+                         caused_by: str = "") -> dict:
     """Propose retiring a feature. Reviewable.
 
     delete_code=False (default): detach-only — accepting untracks the feature but
@@ -108,16 +118,18 @@ def codoc_propose_retire(feature_id: str, rationale: str = "", delete_code: bool
     should genuinely be deleted, not merely untracked."""
     cd, err = _need_dir()
     return err or tools.propose_retire(cd, feature_id=feature_id, rationale=rationale,
-                                       delete_code=delete_code)
+                                       delete_code=delete_code, caused_by=caused_by)
 
 
 @mcp.tool
-def codoc_attach(feature_id: str, binds: list[str], rationale: str = "") -> dict:
+def codoc_attach(feature_id: str, binds: list[str], rationale: str = "",
+                 caused_by: str = "") -> dict:
     """Bind code chunks ("file.py::symbol_path") to an EXISTING feature. ATTACH is
     safe → applied immediately (no review). Binding the first code to a plan
     placeholder flips it to realized."""
     cd, err = _need_dir()
-    return err or tools.attach(cd, feature_id=feature_id, binds=binds, rationale=rationale)
+    return err or tools.attach(cd, feature_id=feature_id, binds=binds, rationale=rationale,
+                               caused_by=caused_by)
 
 
 @mcp.tool

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from codoc.codoc_file.render import tree_path
-from codoc.loop.activity import ACTIVITY_FILENAME, activity_path
+from codoc.loop.activity import activity_path
 from codoc.loop.loop_a import LoopAResult
 from codoc.loop.loop_b import LoopBResult
 from codoc.loop.watch import WatchState, _hash, process_batch

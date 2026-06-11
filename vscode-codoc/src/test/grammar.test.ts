@@ -21,8 +21,8 @@ describe('U3 — direction axis (colour + actions)', () => {
         expect(directionActions('code-ahead')).toEqual(['Reject', 'Accept']);
     });
 
-    it('doc-ahead is resolved by the agent (Withdraw/Apply)', () => {
-        expect(directionActions('doc-ahead')).toEqual(['Withdraw', 'Apply']);
+    it('doc-ahead offers the human only Withdraw — apply belongs to the AI side', () => {
+        expect(directionActions('doc-ahead')).toEqual(['Withdraw']);
     });
 
     it('carries a non-colour direction label for colourblind parity (R8)', () => {

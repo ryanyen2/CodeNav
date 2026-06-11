@@ -240,7 +240,8 @@ body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
     /* fallback gate (the body-class rule below is authoritative in webviews — KTD4).
        Only the live animated elements remain after the read-view CSS was removed. */
-    .toolbar .status.realizing .dot, .badge.active-write {
+    .toolbar .status.realizing .dot, .badge.active-write,
+    .codoc-feature-heading.ce-phase-editing::after {
         transition: none !important; animation: none !important;
     }
 }
@@ -258,6 +259,11 @@ body.vscode-using-screen-reader * {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+}
+/* `*` does not match pseudo-elements — gate the animated phase dot explicitly */
+body.vscode-reduce-motion .codoc-feature-heading.ce-phase-editing::after,
+body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
+    animation: none !important;
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -374,6 +380,21 @@ body.vscode-using-screen-reader * {
 /* status axis (no hue): retired = strike + muted; unrealized = italic + muted */
 .codoc-feature-heading[data-retired="true"] { text-decoration: line-through; color: var(--fg-muted); opacity: 0.7; }
 .codoc-feature-heading[data-realized="false"] { color: var(--fg-muted); font-style: italic; }
+/* live agent activity (STATUS axis — hooks → activity.json → sync.phase): a
+   small dot trails the title — pulsing while the agent edits this feature's
+   code, hollow while it reflects the work back. Same vocabulary as the tree
+   pane's active-write badge; the reduced-motion gates stop the pulse. */
+.codoc-feature-heading.ce-phase-editing::after,
+.codoc-feature-heading.ce-phase-reflecting::after {
+    content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    margin-left: 10px; vertical-align: middle; box-sizing: border-box;
+}
+.codoc-feature-heading.ce-phase-editing::after {
+    background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite;
+}
+.codoc-feature-heading.ce-phase-reflecting::after {
+    border: 1px solid var(--vscode-foreground); opacity: 0.7;
+}
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }
@@ -450,10 +471,23 @@ body.vscode-using-screen-reader * {
 }
 .ce-diff.code-ahead { border-left-color: var(--dir-review); }
 .ce-diff.doc-ahead  { border-left-color: var(--dir-await); }
+/* realization = TEXTURE (never a colour): a plan proposal describes code that
+   doesn't exist yet → dashed edge + hollow △ marker (set in markup), rhyming
+   with the unrealized node's hollow dashed ring. Landed-code reflections stay
+   solid ▲. */
+.ce-diff.planned { border-left-style: dashed; }
 .ce-diff-mark { flex: 0 0 auto; font-size: 9px; line-height: 1.7; }
 .ce-diff.code-ahead .ce-diff-mark { color: var(--dir-review); }
 .ce-diff.doc-ahead .ce-diff-mark { color: var(--dir-await); }
+/* cascade cue: this diff surfaced back from implementing the user's own edit */
+.ce-diff-cascade { flex: 0 0 auto; font-size: 10px; opacity: 0.75; }
+.ce-diff.code-ahead .ce-diff-cascade { color: var(--dir-review); }
 .ce-diff-body { flex: 1 1 auto; min-width: 0; color: var(--fg-muted); }
+/* authorship = INK OPACITY (the pen/pencil axis): your own suggestion reads at
+   full ink; an agent's proposal is pencil-faded until you accept it. */
+.ce-diff.by-agent .ce-diff-body { opacity: 0.72; }
+/* the agent awaits a doc-ahead suggestion — a quiet state label, not a button */
+.ce-diff-await { flex: 0 0 auto; font-size: 10px; color: var(--dir-await); opacity: 0.85; }
 .ce-diff-kind { color: var(--vscode-foreground); }
 .ce-diff-sep { opacity: 0.4; padding: 0 2px; }
 

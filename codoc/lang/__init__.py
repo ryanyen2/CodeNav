@@ -1,4 +1,4 @@
-from codoc.lang.base import Chunk, SymbolRef, LanguageAdapter
+from codoc.lang.base import LanguageAdapter
 from codoc.lang.python import PythonAdapter
 from codoc.lang.typescript import TypeScriptAdapter
 

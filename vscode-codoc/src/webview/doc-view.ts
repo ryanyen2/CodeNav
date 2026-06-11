@@ -162,6 +162,7 @@ function reconcile(): void {
         wholeEditor.setDoc(payload.doc);
         wholeEditor.setSuggestions(payload.suggestions ?? []);
         wholeEditor.setThreads(payload.threads ?? {});
+        wholeEditor.setPhases(payload.sync.phase ?? {});
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
     }
@@ -345,7 +346,6 @@ function renderDocHost(): HTMLElement {
         onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdraw: s => vscode.postMessage({ kind: 'suggest-withdraw', id: s.id }),
-        onApply: s => vscode.postMessage({ kind: 'suggest-apply', id: s.id }),
         onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
         onActiveFeature: fid => {
             if (!fid) return;
@@ -357,6 +357,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setDoc(payload.doc);
     wholeEditor.setSuggestions(payload.suggestions ?? []);
     wholeEditor.setThreads(payload.threads ?? {});
+    wholeEditor.setPhases(payload.sync.phase ?? {});
     return host;
 }
 

@@ -122,7 +122,7 @@ def test_code_side_pass_does_not_orphan_queued_realize_md(codoc_dir):
 
 def test_realize_md_outranks_code_drift(codoc_dir):
     """A queued realize.md outranks pending proposals: status reports awaiting_impl
-    (not code_drift), so the IDE keeps prompting /codoc:realize even when new
+    (not code_drift), so the IDE keeps prompting /codoc:sync even when new
     proposals coexist. Proposals still render inline in the tree regardless."""
     from pathlib import Path
     Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")

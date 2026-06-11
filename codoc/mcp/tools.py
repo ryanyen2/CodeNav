@@ -79,8 +79,7 @@ def _op_summary(op: NodeOp, store: Store) -> str:
 
 def read_tree(codoc_dir: str) -> dict:
     """The live feature tree (incl. ``realized``) + pending proposals."""
-    store = open_store(codoc_dir)
-    try:
+    with open_store(codoc_dir) as store:
         feats = []
         for f in store.list_features():
             feats.append({
@@ -98,8 +97,6 @@ def read_tree(codoc_dir: str) -> dict:
             for e in store.pending_events()
         ]
         return {"ok": True, "features": feats, "proposals": proposals}
-    finally:
-        store.close()
 
 
 def read_status(codoc_dir: str) -> dict:
@@ -107,8 +104,7 @@ def read_status(codoc_dir: str) -> dict:
     from codoc.loop.status import refresh_status
     import json
 
-    store = open_store(codoc_dir)
-    try:
+    with open_store(codoc_dir) as store:
         feats = store.list_features()
         pending = store.pending_events()
         unrealized = [f.id for f in feats if not f.realized]
@@ -121,15 +117,13 @@ def read_status(codoc_dir: str) -> dict:
             "ok": True, "features": len(feats), "pending": len(pending),
             "unrealized": len(unrealized), "state": state,
         }
-    finally:
-        store.close()
 
 
 # ─── single-op proposals / binds ───────────────────────────────────────────────
 
-def _apply_single(codoc_dir: str, op: NodeOp, *, source: str) -> dict:
-    store = open_store(codoc_dir)
-    try:
+def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
+                  caused_by: str = "", actor: str = "") -> dict:
+    with open_store(codoc_dir) as store:
         # Validation: targets must exist for ops that reference them.
         if op.kind in (NodeOpKind.AMEND, NodeOpKind.RETIRE_NODE, NodeOpKind.MOVE_NODE,
                        NodeOpKind.ATTACH):
@@ -140,73 +134,77 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str) -> dict:
                 return _err(f"unknown parent_id {op.parent_id!r}")
 
         applied = should_auto_apply(op, store)
-        ev = apply_op(op, store, source=source, applied=applied)
+        ev = apply_op(op, store, source=source, applied=applied,
+                      caused_by=caused_by, actor=actor)
         wrote = safe_write_tree(store, codoc_dir)
         _mark_reflected(codoc_dir, [op])
         return {"ok": True, "event_id": ev.id, "applied": applied,
                 "rendered": wrote, "summary": _op_summary(op, store)}
-    finally:
-        store.close()
 
 
 def propose_add(codoc_dir: str, *, title: str, description: str = "",
                 parent_id: str | None = None, binds: list[str] | None = None,
                 rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
-                realized: bool | None = None) -> dict:
+                realized: bool | None = None, caused_by: str = "",
+                actor: str = "") -> dict:
     op = NodeOp(kind=NodeOpKind.ADD_NODE, title=title, description=description,
                 parent_id=parent_id, bindings=_parse_binds(binds),
                 rationale=rationale, realized=realized)
-    return _apply_single(codoc_dir, op, source=source)
+    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
 def propose_amend(codoc_dir: str, *, feature_id: str, title: str | None = None,
                   description: str | None = None, rationale: str = "",
-                  source: str = LOOP_A_AGENT_SOURCE) -> dict:
+                  source: str = LOOP_A_AGENT_SOURCE, caused_by: str = "",
+                  actor: str = "") -> dict:
     op = NodeOp(kind=NodeOpKind.AMEND, feature_id=feature_id, title=title,
                 description=description, rationale=rationale)
-    return _apply_single(codoc_dir, op, source=source)
+    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
 def propose_move(codoc_dir: str, *, feature_id: str, parent_id: str | None,
-                 rationale: str = "", source: str = LOOP_A_AGENT_SOURCE) -> dict:
+                 rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
+                 caused_by: str = "", actor: str = "") -> dict:
     op = NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=feature_id,
                 parent_id=parent_id, rationale=rationale)
-    return _apply_single(codoc_dir, op, source=source)
+    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
 def propose_retire(codoc_dir: str, *, feature_id: str, rationale: str = "",
-                   delete_code: bool = False, source: str = LOOP_A_AGENT_SOURCE) -> dict:
+                   delete_code: bool = False, source: str = LOOP_A_AGENT_SOURCE,
+                   caused_by: str = "", actor: str = "") -> dict:
     """Propose retiring a feature. ``delete_code=False`` (default) is detach-only:
     accepting untracks the feature without removing code. ``delete_code=True`` is the
     agent-side parity for a human ``~`` retire — accepting queues a code-removal
     directive (use only when the code should genuinely be deleted)."""
     op = NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=feature_id, rationale=rationale,
                 delete_code=delete_code)
-    return _apply_single(codoc_dir, op, source=source)
+    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
 def attach(codoc_dir: str, *, feature_id: str, binds: list[str],
-           rationale: str = "", source: str = LOOP_A_AGENT_SOURCE) -> dict:
+           rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
+           caused_by: str = "", actor: str = "") -> dict:
     op = NodeOp(kind=NodeOpKind.ATTACH, feature_id=feature_id,
                 bindings=_parse_binds(binds), rationale=rationale)
-    return _apply_single(codoc_dir, op, source=source)
+    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
 # ─── bulk reflection ────────────────────────────────────────────────────────────
 
 def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
-            source: str = LOOP_A_AGENT_SOURCE) -> dict:
+            source: str = LOOP_A_AGENT_SOURCE, caused_by: str = "",
+            actor: str = "") -> dict:
     """Submit the whole change set the agent just made, in one call.
 
     Each op is ``{kind, feature_id?, parent_id?, title?, description?, binds?,
     rationale?, realized?}``. Safe ops apply immediately; structural ops become
     proposals. Returns per-op results plus applied/proposed counts.
     """
-    store = open_store(codoc_dir)
     results: list[dict] = []
     applied_ops: list[NodeOp] = []
     applied_n = proposed_n = 0
-    try:
+    with open_store(codoc_dir) as store:
         for raw in ops:
             try:
                 kind = NodeOpKind(raw["kind"])
@@ -235,7 +233,8 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
                 continue
 
             applied = should_auto_apply(op, store)
-            ev = apply_op(op, store, source=source, applied=applied)
+            ev = apply_op(op, store, source=source, applied=applied,
+                          caused_by=raw.get("caused_by") or caused_by, actor=actor)
             applied_ops.append(op)
             applied_n += int(applied)
             proposed_n += int(not applied)
@@ -245,8 +244,6 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
         _mark_reflected(codoc_dir, applied_ops)
         return {"ok": True, "applied": applied_n, "proposed": proposed_n,
                 "rendered": wrote, "results": results}
-    finally:
-        store.close()
 
 
 # ─── realize progress ────────────────────────────────────────────────────────
@@ -306,8 +303,7 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
     def _resolve_once() -> None:
         verdicts = {v.event_id: v.accept for v in inbox_read(codoc_dir)}
         consumed: set[str] = set()
-        store = open_store(codoc_dir)
-        try:
+        with open_store(codoc_dir) as store:
             for eid in targets:
                 if eid in resolved:
                     continue
@@ -342,8 +338,6 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
                 safe_write_tree(store, codoc_dir)
                 from codoc.loop.status import refresh_status
                 refresh_status(codoc_dir, store)
-        finally:
-            store.close()
 
     while True:
         _resolve_once()
@@ -365,11 +359,8 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
 
 def plan_status(codoc_dir: str) -> dict:
     """Which plan placeholders are still unrealized vs realized."""
-    store = open_store(codoc_dir)
-    try:
+    with open_store(codoc_dir) as store:
         unrealized = [{"id": f.id, "title": f.title}
                       for f in store.list_features() if not f.realized]
         return {"ok": True, "unrealized": unrealized,
                 "all_realized": len(unrealized) == 0}
-    finally:
-        store.close()

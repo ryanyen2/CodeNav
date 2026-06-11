@@ -14,7 +14,6 @@ store rows; only the LLM pass is injected).
 """
 from __future__ import annotations
 
-from codoc.model.event import NodeOp, NodeOpKind
 
 from tests.bdd.world import chunk, propose_nothing
 
@@ -39,7 +38,7 @@ def test_new_caller_lands_with_the_feature_it_calls(world):
 def test_placement_follows_the_strongest_dependency(world):
     """When a new chunk depends on two features, it lands with the one it has the
     most edges to — the dominant dependency decides the position."""
-    weak = world.given_feature("Formatting", binds=[("fmt.py", "fmt.py::indent")])
+    world.given_feature("Formatting", binds=[("fmt.py", "fmt.py::indent")])
     strong = world.given_feature("Parsing",
                                  binds=[("parse.py", "parse.py::tokenize"), ("parse.py", "parse.py::lex")])
     world.given_call_edge("app.py::compile", "fmt.py::indent")      # 1 edge → Formatting

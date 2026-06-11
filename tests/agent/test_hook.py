@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -17,7 +15,7 @@ from codoc.agent.hook import (
     handle_stop,
     main,
 )
-from codoc.loop.activity import ACTIVITY_FILENAME, activity_path, read_activity
+from codoc.loop.activity import ACTIVITY_FILENAME, read_activity
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

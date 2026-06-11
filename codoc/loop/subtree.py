@@ -22,11 +22,14 @@ def select_relevant_subtree(
     store: Store,
     *,
     hops: int = 1,
+    features=None,
 ) -> tuple[list[dict], list[dict], dict]:
     """Return ``(subtree, all_titles, context)`` as JSON-ready dicts.
 
     ``context`` is a dict with keys ``edges`` and ``recent``; callers should
     merge it into the ``changes`` dict under ``"graph"`` before calling propose.
+    ``features`` lets the caller pass the pass's already-loaded feature list so
+    the every-node-title context doesn't cost a second full table read.
     """
     from codoc.graph.query import ego_graph
 
@@ -80,7 +83,7 @@ def select_relevant_subtree(
 
     all_titles = [
         {"id": f.id, "title": f.title, "parent_id": f.parent_id}
-        for f in store.list_features()
+        for f in (features if features is not None else store.list_features())
     ]
 
     context = _build_context(changed_symbols, seed_features, store)

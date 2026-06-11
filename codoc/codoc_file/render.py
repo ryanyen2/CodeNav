@@ -46,11 +46,6 @@ BINDINGS_FILENAME = "tree.bindings.json"
 # can read trees written by older versions of codoc.
 PENDING_SENTINEL = "# ── pending changes"
 
-_HEADER = (
-    "# codoc feature tree — edit titles and descriptions freely; this file is the source of truth.\n"
-    "# Cite code inline with markdown links: [label](codoc:file.py#symbol).\n"
-)
-
 
 def tree_path(codoc_dir: str | Path) -> Path:
     return Path(codoc_dir) / TREE_FILENAME
@@ -68,7 +63,6 @@ def _description_lines(description: str, indent: str) -> list[str]:
 
 
 def render_tree(store: Store) -> str:
-    # lines: list[str] = [_HEADER.rstrip("\n"), ""]
     lines: list[str] = []
 
     pending = store.pending_events()
@@ -136,19 +130,21 @@ def _proposals_map(store: Store) -> dict[str, dict]:
     for e in store.pending_events():
         op = e.op
         tag = _source_tag(e)
+        prov = {"actor": e.actor, "mode": e.mode, "caused_by": e.caused_by}
         if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
             by_feature[op.feature_id] = {
                 "op": "retire", "event_id": e.id, "tag": tag, "rationale": op.rationale,
+                **prov,
             }
         elif op.kind is NodeOpKind.AMEND and op.feature_id:
             by_feature[op.feature_id] = {
                 "op": "amend", "event_id": e.id, "tag": tag, "rationale": op.rationale,
-                "title": op.title, "description": op.description,
+                "title": op.title, "description": op.description, **prov,
             }
         elif op.kind is NodeOpKind.ADD_NODE:
             by_event[e.id] = {
                 "op": "add", "parent_id": op.parent_id, "tag": tag, "rationale": op.rationale,
-                "title": op.title, "description": op.description,
+                "title": op.title, "description": op.description, **prov,
             }
             by_parent.setdefault(op.parent_id or "", []).append(e.id)
         elif op.kind is NodeOpKind.MOVE_NODE:
@@ -156,10 +152,36 @@ def _proposals_map(store: Store) -> dict[str, dict]:
             # source node by scanning `by_event` for op=="move" and its feature_id.
             by_event[e.id] = {
                 "op": "move", "feature_id": op.feature_id, "parent_id": op.parent_id,
-                "tag": tag, "rationale": op.rationale,
+                "tag": tag, "rationale": op.rationale, **prov,
             }
             by_parent.setdefault(op.parent_id or "", []).append(e.id)
     return {"by_feature": by_feature, "by_event": by_event, "by_parent": by_parent}
+
+
+_CHANGES_FEED_LIMIT = 50
+
+
+def _changes_feed(store: Store) -> list[dict]:
+    """The last N *applied* events as a provenance feed (newest first).
+
+    This is how the IDE learns WHO last changed each feature without reading the
+    event log itself: an agent-authored AMEND shows up here so the doc view can
+    re-stamp the new prose as pencil ink instead of resetting authorship, and a
+    ``caused_by`` directive id lets it group a reflection cascade under the doc
+    edit that triggered it. Legacy events carry empty strings — render as today.
+    """
+    out: list[dict] = []
+    for e in store.recent_events(_CHANGES_FEED_LIMIT * 2):
+        if not e.applied:
+            continue
+        out.append({
+            "event_id": e.id, "at": e.at.to_str(), "kind": e.op.kind.value,
+            "feature_id": e.op.feature_id or "", "actor": e.actor, "mode": e.mode,
+            "caused_by": e.caused_by,
+        })
+        if len(out) >= _CHANGES_FEED_LIMIT:
+            break
+    return out
 
 
 def _title_of(store: Store, feature_id: str | None) -> str:
@@ -251,7 +273,20 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
                 {"symbol": b.symbol_path, "feature_id": f.id, "feature_title": f.title}
             )
 
-    sidecar = {"version": 3, "by_feature": by_feature, "by_file": by_file, "features": feats_meta, "feature_edges": _compute_feature_edges(store), "proposals": _proposals_map(store)}
+    from codoc.loop.edits import hold_set
+
+    sidecar = {
+        "version": 4,
+        "by_feature": by_feature,
+        "by_file": by_file,
+        "features": feats_meta,
+        "feature_edges": _compute_feature_edges(store),
+        "proposals": _proposals_map(store),
+        # v4: the provenance ledger surfaced to the IDE — recent applied events
+        # (who/how/why-chained) + the doc-wins hold set.
+        "changes": _changes_feed(store),
+        "holds": sorted(hold_set(codoc_dir)),
+    }
     dest = Path(codoc_dir) / BINDINGS_FILENAME
     tmp = dest.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(sidecar, indent=2))

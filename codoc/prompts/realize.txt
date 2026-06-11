@@ -13,13 +13,20 @@ conflict with the new intent. Prefer small, surgical edits over large rewrites.
   unrelated code to host it.
 - NEVER edit anything under `.codoc/` — that is codoc's own state, not your
   target. In particular do not touch `.codoc/tree.codoc`; codoc maintains the
-  feature descriptions itself. Editing them will corrupt the tree.
+  feature descriptions itself. Editing them will corrupt the tree. (The single
+  exception: deleting `.codoc/realize.md` + `.codoc/realize.json` when the queue
+  is done.)
 - Do not rename, reword, or "tidy" features, descriptions, or symbols that no
   item asked you to change.
 
 ## Changes to apply
 
 {directives}
+
+Each item's heading carries its directive id (`⟨d-…⟩`). When you reflect an
+item's code via `codoc_reflect`, pass that id as `caused_by` so the change is
+attributed to the tree edit that requested it. When every item is implemented
+and reflected, delete `.codoc/realize.md` and `.codoc/realize.json`.
 
 When you are done, the code should faithfully reflect each item's intent — and
 nothing outside the listed scope should have changed.

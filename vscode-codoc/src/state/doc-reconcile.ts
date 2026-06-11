@@ -13,9 +13,11 @@
  */
 import {
     PMNode,
+    PMMark,
     NODE_FEATURE_HEADING,
     NODE_PARAGRAPH,
     FeatureHeadingAttrs,
+    MARK_AUTHOR,
     blocksToDescriptionText,
     makeDoc,
 } from './pm-doc';
@@ -45,14 +47,38 @@ function fidOf(heading: PMNode): string | null {
     return (heading.attrs as FeatureHeadingAttrs | undefined)?.fid ?? null;
 }
 
+/** Stamp every inline run of the given blocks with an agent pencil author mark
+ *  (replacing any author mark already on the run). */
+function stampAgentPencil(blocks: PMNode[], role: string, ts: number): PMNode[] {
+    const mark: PMMark = {
+        type: MARK_AUTHOR,
+        attrs: { authorId: role, role, mode: 'pencil', ts },
+    };
+    const restamp = (n: PMNode): PMNode => ({
+        ...n,
+        marks: [...(n.marks ?? []).filter(m => m.type !== MARK_AUTHOR), mark],
+    });
+    return blocks.map(b => ({
+        ...b,
+        content: (b.content ?? []).map(restamp),
+    }));
+}
+
 /**
  * Build the doc for the webview: structure from `treeText`, description marks
  * borrowed from `savedDoc` by fid where the description text is unchanged.
+ *
+ * `agentAmends` (fid → agent actor, from the sidecar v4 changes feed) closes the
+ * provenance gap on the *changed* branch: when a description differs from the
+ * saved doc because an AGENT amended it (Loop A LLM pass or MCP reflection), the
+ * fresh text is stamped as that agent's pencil ink instead of resetting to plain
+ * — AI prose looks like AI prose at rest, with zero new UI.
  */
 export function reconcileDoc(
     treeText: string,
     savedDoc: PMNode | null,
     realized?: RealizedLookup,
+    agentAmends?: Map<string, string>,
 ): PMNode {
     const fresh = parseTreeToDoc(treeText, realized);
     if (!savedDoc) return fresh;
@@ -71,7 +97,13 @@ export function reconcileDoc(
         if (saved && blocksToDescriptionText(saved) === blocksToDescriptionText(g.blocks)) {
             content.push(...saved); // text unchanged → keep marks
         } else {
-            content.push(...g.blocks); // changed (or new) → from text
+            const agent = fid ? agentAmends?.get(fid) : undefined;
+            if (agent && saved) {
+                // changed UNDER a saved doc by a known agent → pencil-stamp it
+                content.push(...stampAgentPencil(g.blocks, agent, Date.now()));
+            } else {
+                content.push(...g.blocks); // changed (or new) → from text
+            }
         }
     }
     return makeDoc(content);

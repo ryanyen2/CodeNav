@@ -44,6 +44,10 @@ export interface FeatureProposal {
     rationale?: string;
     title?: string | null;        // amend: proposed new title
     description?: string | null;  // amend: proposed new description
+    // v4 provenance ledger ("" / absent = legacy/unknown).
+    actor?: string;               // "human" | agent id | "loop"
+    mode?: string;                // "pen" | "suggest" | "auto"
+    caused_by?: string;           // directive (d-…) / event / suggestion id
 }
 
 /** Overlay for an ADD/MOVE ghost (also emitted as a text hunk). */
@@ -55,6 +59,23 @@ export interface EventProposal {
     feature_id?: string | null;   // move: the node being moved
     title?: string | null;
     description?: string | null;
+    // v4 provenance ledger ("" / absent = legacy/unknown).
+    actor?: string;
+    mode?: string;
+    caused_by?: string;
+}
+
+/** One entry of the v4 `changes` feed — a recent APPLIED event with provenance,
+ *  newest first. How the IDE learns who last changed each feature (pencil-stamp
+ *  AI prose) and which directive a reflection cascade implements. */
+export interface ChangeEntry {
+    event_id: string;
+    at: string;          // HLC string (lexicographically sortable)
+    kind: string;        // attach|detach|refresh|amend|add_node|move_node|retire_node
+    feature_id: string;  // "" when the op carried none
+    actor: string;
+    mode: string;
+    caused_by: string;
 }
 
 export interface ProposalsMap {
@@ -74,6 +95,28 @@ export interface SidecarData {
     feature_edges?: Record<string, FeatureEdge[]>;
     // Optional for backward compat — sidecar < v3 has no proposals overlay.
     proposals?: ProposalsMap;
+    // v4: recent applied events with provenance (newest first).
+    changes?: ChangeEntry[];
+    // v4: features with pending doc-ahead intent (doc-wins hold set).
+    holds?: string[];
+}
+
+/** Latest applied agent-authored AMEND per feature (fid → agent actor id), from
+ *  the v4 changes feed. Drives the pencil re-stamp: when a description changed
+ *  under the saved doc AND this map names an agent, the fresh text is inked as
+ *  that agent's pencil instead of resetting to plain. */
+export function agentAmendsByFeature(sidecar: SidecarData): Map<string, string> {
+    const out = new Map<string, string>();
+    const decided = new Set<string>();
+    for (const c of sidecar.changes ?? []) {  // newest first — the latest amend decides
+        if (c.kind !== 'amend' || !c.feature_id || decided.has(c.feature_id)) continue;
+        decided.add(c.feature_id);
+        // Any non-human machine actor counts: an MCP-reflecting agent
+        // ("claude-code", "codex", …) or Loop A's own LLM pass ("loop"). A newer
+        // HUMAN amend shadows an older agent one — the prose is theirs again.
+        if (c.actor && c.actor !== 'human') out.set(c.feature_id, c.actor);
+    }
+    return out;
 }
 
 /** Return an empty sidecar (used when the file hasn't been created yet). */

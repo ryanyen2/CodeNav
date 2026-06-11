@@ -174,6 +174,12 @@ def parse_tree_file(codoc_dir: str | Path) -> ParsedTree:
     from codoc.codoc_file.render import tree_path
 
     path = tree_path(codoc_dir)
-    if not path.exists():
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
         return ParsedTree()
-    return parse_text(path.read_text())
+    except OSError as exc:
+        # Unreadable (permissions, transient FS error) — degrade to "no edits"
+        # with a surfaced error rather than crashing the loop pass.
+        return ParsedTree(errors=[f"tree.codoc unreadable: {exc}"])
+    return parse_text(text)

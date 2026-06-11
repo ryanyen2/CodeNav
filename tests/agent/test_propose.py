@@ -1,7 +1,6 @@
 """Tests for the codoc propose script (codoc/agent/propose.py)."""
 from __future__ import annotations
 
-import json
 import os
 import re
 
@@ -86,7 +85,7 @@ def test_propose_plan_roundtrip_noop(repo):
 
 def test_propose_with_binds(repo):
     root, codoc_dir, _parent_id = repo
-    eid = propose_plan(root, kind="add_node", title="Widget",
+    propose_plan(root, kind="add_node", title="Widget",
                        description="A UI widget.", binds=["ui/widget.py::Widget"])
     s = open_store(codoc_dir)
     pending = s.pending_events()
@@ -98,7 +97,7 @@ def test_propose_with_binds(repo):
 
 def test_propose_amend(repo):
     root, codoc_dir, parent_id = repo
-    eid = propose_plan(root, kind="amend", feature_id=parent_id,
+    propose_plan(root, kind="amend", feature_id=parent_id,
                        description="Updated description for the parent feature.")
     s = open_store(codoc_dir)
     pending = s.pending_events()

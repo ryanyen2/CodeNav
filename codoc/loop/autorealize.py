@@ -1,9 +1,9 @@
 """Opt-in headless realize — the unattended fallback for ``codoc watch``.
 
 The default loop hands code-implying tree edits to the *live* Claude Code session
-(`.codoc/realize.md` + the ``/codoc:realize`` command). That requires a human to
+(`.codoc/realize.md` + the ``/codoc:sync`` command). That requires a human to
 be (or soon be) at the keyboard. With ``codoc watch --auto-realize`` the daemon
-instead spawns a **headless** ``claude -p "/codoc:realize"`` to implement the queue
+instead spawns a **headless** ``claude -p "/codoc:sync"`` to implement the queue
 when no interactive session is around — so accepting a plan with nobody watching
 still lands code.
 
@@ -15,7 +15,6 @@ deletes the file — at which point ``should_spawn`` goes quiet again.
 """
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -23,6 +22,7 @@ from pathlib import Path
 from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop import status
 from codoc.loop.activity import activity_path
+from codoc.loop.fsio import read_json
 
 
 def find_claude() -> str | None:
@@ -32,12 +32,8 @@ def find_claude() -> str | None:
 
 def _epoch_open(codoc_dir: str) -> bool:
     """True if a live agent session owns this repo (don't headless-spawn over it)."""
-    try:
-        data = json.loads(activity_path(codoc_dir).read_text())
-    except (OSError, json.JSONDecodeError):
-        return False
-    ep = data.get("epoch") or {}
-    return bool(ep.get("open"))
+    data = read_json(activity_path(codoc_dir), default={})
+    return bool((data.get("epoch") or {}).get("open"))
 
 
 def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:
@@ -54,7 +50,7 @@ def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:
 
 
 def spawn_realize(root_dir: str, codoc_dir: str) -> subprocess.Popen | None:
-    """Launch ``claude -p "/codoc:realize"`` detached in ``root_dir``.
+    """Launch ``claude -p "/codoc:sync"`` detached in ``root_dir``.
 
     Returns the Popen handle (so the daemon can track liveness), or None if the
     ``claude`` CLI isn't available. Sets status to ``realizing`` so the IDE reflects
@@ -63,7 +59,7 @@ def spawn_realize(root_dir: str, codoc_dir: str) -> subprocess.Popen | None:
     if claude is None:
         return None
     proc = subprocess.Popen(
-        [claude, "-p", "/codoc:realize"],
+        [claude, "-p", "/codoc:sync"],
         cwd=root_dir,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

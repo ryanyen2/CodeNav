@@ -190,6 +190,57 @@ def test_delete_event(store):
     assert store.pending_events() == []
 
 
+def test_event_provenance_roundtrip(store):
+    """Ledger fields (actor/mode/caused_by) persist and reload."""
+    op = NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1", description="new prose")
+    e = Event(source="user", op=op, applied=True,
+              actor="human", mode="pen", caused_by="d-ab12cd34")
+    store.append_event(e)
+    got = store.get_event(e.id)
+    assert (got.actor, got.mode, got.caused_by) == ("human", "pen", "d-ab12cd34")
+
+
+def test_event_ledger_columns_migrate_on_legacy_db(tmp_path):
+    """A pre-ledger events table gains actor/mode/caused_by (default '') on reopen."""
+    import sqlite3
+
+    from codoc.model.hlc import HLC
+
+    db = tmp_path / "codoc.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE events (
+            id TEXT PRIMARY KEY, at TEXT NOT NULL, source TEXT NOT NULL,
+            op_json TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 1,
+            accepted_at TEXT
+        );
+        """
+    )
+    op_json = NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1").model_dump_json()
+    conn.execute(
+        "INSERT INTO events VALUES ('e-legacy',?, 'user', ?, 1, NULL)",
+        (HLC.now().to_str(), op_json),
+    )
+    conn.commit()
+    conn.close()
+
+    s = Store(db).open()
+    try:
+        got = s.get_event("e-legacy")
+        assert got is not None
+        # Legacy rows carry no stored provenance; the model infers it from the
+        # source on load ("user" → human/pen). caused_by stays unknown.
+        assert (got.actor, got.mode, got.caused_by) == ("human", "pen", "")
+        # New events on the migrated db carry full provenance.
+        e = Event(source="user", op=NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1"),
+                  actor="human", mode="suggest")
+        s.append_event(e)
+        assert s.get_event(e.id).mode == "suggest"
+    finally:
+        s.close()
+
+
 def test_store_reopen_persists(tmp_path):
     s = open_store(tmp_path)
     f = Feature(title="Persisted")

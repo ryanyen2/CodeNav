@@ -1,0 +1,75 @@
+% ------------------------------------------------------------------------------
+% main.tex — standalone compile wrapper for the codoc method section.
+%
+% For the actual ICLR submission, copy the preamble block marked [ICLR] into the
+% ICLR template's main file and \input{method} where the method section goes;
+% everything here is template-compatible (algorithmicx, amsthm, booktabs,
+% tcolorbox are all available alongside iclr20xx.sty).
+%
+% Build:  pdflatex main && bibtex main && pdflatex main && pdflatex main
+% ------------------------------------------------------------------------------
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{times}
+\usepackage[hidelinks]{hyperref}
+\usepackage[numbers]{natbib}
+
+% ── [ICLR] packages required by method.tex ────────────────────────────────────
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+% Problem-statement box. Plain-LaTeX implementation (no tcolorbox dependency);
+% if your ICLR build has tcolorbox, feel free to swap in a tcolorbox variant.
+\newenvironment{problembox}[1]{%
+  \par\medskip\noindent
+  \begin{center}\begin{minipage}{0.96\linewidth}%
+  \hrule height 0.8pt \vspace{4pt}%
+  \noindent\textbf{#1.}\enspace\itshape
+}{%
+  \par\vspace{4pt}\hrule height 0.8pt
+  \end{minipage}\end{center}\medskip
+}
+
+% ── [ICLR] theorem environments ───────────────────────────────────────────────
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+% ── [ICLR] macros used by method.tex ──────────────────────────────────────────
+\newcommand{\codoc}{\textsc{codoc}}
+\newcommand{\C}{\mathcal{C}}
+\newcommand{\F}{\mathcal{F}}
+\newcommand{\T}{\mathcal{T}}
+\newcommand{\B}{\mathcal{B}}
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\V}{\mathcal{V}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+\newcommand{\R}{\mathcal{R}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+% mode / state names
+\newcommand{\pen}{\textsf{pen}}
+\newcommand{\suggest}{\textsf{suggest}}
+\newcommand{\auto}{\textsf{auto}}
+\newcommand{\synced}{\textsf{in\_sync}}
+\newcommand{\codedrift}{\textsf{code\_drift}}
+\newcommand{\treedirty}{\textsf{tree\_dirty}}
+\newcommand{\awaiting}{\textsf{awaiting\_impl}}
+\newcommand{\realizing}{\textsf{realizing}}
+
+\title{\codoc{}: Bidirectional Synchronization of a Human-Intent Feature Tree
+with Code\\ \large (method section draft)}
+\author{Anonymous}
+\date{}
+
+\begin{document}
+\maketitle
+
+\input{method}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

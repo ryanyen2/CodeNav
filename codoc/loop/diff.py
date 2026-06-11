@@ -65,12 +65,6 @@ class ChangeSet:
         return out
 
 
-def _scope(rows: list[ChunkRow], file_scope: set[str] | None) -> list[ChunkRow]:
-    if file_scope is None:
-        return rows
-    return [r for r in rows if r.file in file_scope]
-
-
 def compute_changeset(
     root_dir: str,
     codoc_dir: str,
@@ -81,12 +75,23 @@ def compute_changeset(
 
     ``file_scope`` restricts comparison to a set of repo-relative files (a watch
     cycle reports exactly which files changed) — the index update is still global
-    but cheap thanks to cocoindex per-file memoization.
+    but cheap thanks to cocoindex per-file memoization. The scope is pushed down
+    to LanceDB (``files=``) so a scoped pass reads only the touched files' rows;
+    embeddings are never read here (the loops don't use them). ``rows`` (the
+    graph's symbol table) still spans the whole index, but as a source-less,
+    embedding-less projection — the resolver only needs symbol identity, and
+    ``update_graph`` only re-extracts edges from the touched files, whose
+    sourced rows are merged in below.
     """
-    old_rows = _scope(read_all_chunks(codoc_dir), file_scope)
+    old_rows = read_all_chunks(codoc_dir, files=file_scope, with_embeddings=False)
     update_index(root_dir, codoc_dir)
-    all_new_rows = read_all_chunks(codoc_dir)
-    new_rows = _scope(all_new_rows, file_scope)
+    if file_scope is None:
+        all_new_rows = read_all_chunks(codoc_dir, with_embeddings=False)
+        new_rows = all_new_rows
+    else:
+        new_rows = read_all_chunks(codoc_dir, files=file_scope, with_embeddings=False)
+        light = read_all_chunks(codoc_dir, with_embeddings=False, with_source=False)
+        all_new_rows = [r for r in light if r.file not in file_scope] + new_rows
 
     old_by_key = {(r.file, r.symbol_path): r for r in old_rows}
     new_by_key = {(r.file, r.symbol_path): r for r in new_rows}

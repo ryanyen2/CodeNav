@@ -177,6 +177,7 @@ def test_retire_and_move_proposals_render(store):
     proposals = _proposals_map(store)
     assert proposals["by_feature"][child.id] == {
         "op": "retire", "event_id": retire.id, "tag": "code drift", "rationale": "gone",
+        "actor": "loop", "mode": "suggest", "caused_by": "",
     }
     # Move still emits a destination ghost hunk in text.
     assert re.search(r"(?m)^~ \s*- Index snapshot diff", text)
@@ -221,6 +222,7 @@ def test_sidecar_proposals_map_shape(store):
     assert m["by_feature"][root.id] == {
         "op": "amend", "event_id": amend.id, "tag": "agent plan", "rationale": "",
         "title": "New title", "description": "New prose.",
+        "actor": "claude-code", "mode": "suggest", "caused_by": "",
     }
     assert m["by_event"][add.id]["op"] == "add"
     assert m["by_event"][add.id]["parent_id"] == root.id

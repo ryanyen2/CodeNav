@@ -72,11 +72,12 @@ Structural (heading) states: `SETTLED` · `SUGGEST-ADD` (ghost heading) ·
 `SUGGEST-MOVE` (shown at destination) · `SUGGEST-RETIRE` (struck heading) ·
 `SUGGEST-AMEND` (title/desc diff). Each suggestion is code-ahead **or** doc-ahead.
 
-Lifecycle: `pending → accepted (folds into settled text) | rejected (removed)`.
-A code-ahead diff is resolved by the **human**; a doc-ahead diff is resolved when
-the **agent** lands the code (then it folds in, possibly spawning follow-up
-code-ahead diffs for details the human under-specified — "code is more precise
-than intent").
+Lifecycle: code-ahead `pending → accepted (folds into settled text) | rejected
+(removed)` — resolved by the **human**; doc-ahead `pending → applied (by the
+loop/agent) | withdrawn (by its author)` — never accepted/rejected by the human:
+it resolves when the **AI side** picks it up and lands the code (then it folds
+in, possibly spawning follow-up code-ahead diffs for details the human
+under-specified — "code is more precise than intent").
 
 ## Edit controls
 
@@ -102,8 +103,11 @@ diffs for the human.
 2. **Human restructures the tree** (rename heading / indent / new heading / delete).
    Same as (1) at the structural level (AMEND / MOVE / ADD / RETIRE).
 3. **Human suggests (suggesting mode).** Edits become doc-ahead diffs immediately,
-   nothing settles. On *apply*, directives queue → agent implements → agent resolves
-   the diffs, and proposes follow-up **code-ahead** diffs for unspecified details.
+   nothing settles. The human's only verb on their own suggestion is **Withdraw**;
+   *apply belongs to the AI side*: Loop B's intent drain picks the suggestion up
+   (applies it `mode=suggest`, `caused_by=` the suggestion id; imperative → queues a
+   directive) → agent implements → the diff resolves, and the agent proposes
+   follow-up **code-ahead** diffs for unspecified details.
 4. **Agent changes code (in the IDE / via a directive), reflects back.** Loop A
    raises **code-ahead** diffs on affected descriptions ("this prose is now stale →
    here's the update"). Human accepts/rejects inline. Accepted text settles as
@@ -130,6 +134,24 @@ diffs for the human.
   status }`; a structural diff is the existing proposal event surfaced inline.
 - Resolution reuses existing machinery: **code-ahead → `inbox.json`** verdicts;
   **doc-ahead → `realize.md`** directives. No new transport.
+
+### Grounded in the change ledger (2026-06-10 — see docs/codoc-change-ledger.md)
+
+Both axes are now persisted Python-side, not just rendered:
+
+- **Authorship axis** → every store `Event` carries `actor` (human / agent id / loop)
+  and `mode` (pen / suggest / auto). The IDE host annotates each settle via
+  `.codoc/edits.json` so Loop B stamps the right author; the sidecar v4 `changes`
+  feed carries it back, and `reconcileDoc` pencil-inks agent-amended prose instead
+  of resetting marks.
+- **Agreement axis** → `caused_by` chains a change to the directive/suggestion it
+  implements. Doc-ahead suggestions are registered as `intents` (the hold set);
+  applying one queues a `⟨d-id⟩` directive whose implementation reflects back with
+  `caused_by=d-id`, rendered inline as `↳ from your edit` on the code-ahead card.
+- **Conflict policy: doc always wins.** While a feature has pending doc-ahead intent
+  (a live suggestion or a queued directive), code drift on it never raises
+  AMEND/RETIRE/MOVE proposals — only binding maintenance runs. The hold releases
+  when the suggestion clears or `/codoc:sync` completes the queue.
 
 ## What changes from the current implementation
 

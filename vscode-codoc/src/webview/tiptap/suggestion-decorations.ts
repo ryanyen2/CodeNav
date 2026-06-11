@@ -19,8 +19,6 @@ export interface SuggestionHandlers {
     accept: (s: Suggestion) => void;
     reject: (s: Suggestion) => void;
     withdraw: (s: Suggestion) => void;
-    /** Apply a doc-ahead suggestion: settle the change + queue the agent. */
-    apply: (s: Suggestion) => void;
 }
 
 export interface SuggestionDecorationsOptions {
@@ -68,15 +66,40 @@ function actionButton(label: string, cls: string, onClick: () => void): HTMLButt
     return b;
 }
 
+/** A plan proposal describes code that does not exist yet (an unrealized
+ *  placeholder); a reflection/drift proposal describes code that already landed.
+ *  The two are encoded by TEXTURE (dashed vs solid) + marker fill (△ vs ▲) —
+ *  never by a new colour (colour stays direction). */
+function isPlanned(s: Suggestion): boolean {
+    return s.direction === 'code-ahead' && (s.tag ?? '').includes('plan');
+}
+
 function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
-    const box = elc('div', `ce-diff ${s.direction} ${s.kind}`);
+    // Authorship rides on INK OPACITY (the pen/pencil axis): a human's own words
+    // at full ink, an agent's proposal pencil-faded until accepted.
+    const author = s.originRole === 'human' ? 'by-human' : 'by-agent';
+    const planned = isPlanned(s) ? ' planned' : '';
+    const box = elc('div', `ce-diff ${s.direction} ${s.kind} ${author}${planned}`);
     box.contentEditable = 'false';
     box.setAttribute('data-suggestion', s.id);
 
-    // a tiny inline direction marker (▲ code-ahead / ▼ doc-ahead) — not a header line.
-    const mark = elc('span', 'ce-diff-mark', s.direction === 'code-ahead' ? '▲' : '▼');
-    mark.title = directionLabel(s.direction) + (s.tag ? ' · ' + s.tag : '');
+    // a tiny inline direction marker (▲ code-ahead / ▼ doc-ahead) — not a header
+    // line. A plan proposal (code not yet real) hollows the marker: △.
+    const glyph = s.direction === 'code-ahead' ? (planned ? '△' : '▲') : '▼';
+    const mark = elc('span', 'ce-diff-mark', glyph);
+    mark.title = directionLabel(s.direction)
+        + (planned ? ' · not yet in code' : '')
+        + (s.tag ? ' · ' + s.tag : '');
     box.append(mark);
+
+    // Cascade cue: a non-empty causedBy means this surfaced back from implementing
+    // one of the user's own doc edits — the lightest possible grouping (text only,
+    // existing direction colour, no new surface).
+    if (s.causedBy) {
+        const cascade = elc('span', 'ce-diff-cascade', '↳ from your edit');
+        cascade.title = `implements ${s.causedBy}`;
+        box.append(cascade);
+    }
 
     // the change itself, in situ — compact (only the changed words + a little context),
     // never the whole description restated (the live prose sits right below).
@@ -104,8 +127,10 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
         actions.classList.add('applying');
         fn(s);
     };
-    // One action pair per direction (grammar): code-ahead → Reject/Accept (human resolves);
-    // doc-ahead → Withdraw/Apply (agent resolves).
+    // Verdicts follow the grammar: code-ahead → Reject/Accept (the human is the
+    // authority over the doc); doc-ahead → Withdraw only (the AI side applies it
+    // — Loop B drains the intent, the agent implements; "accepting" your own
+    // suggestion would be meaningless).
     const [secondary, primary] = directionActions(s.direction);
     if (s.direction === 'code-ahead' && s.eventId) {
         actions.append(
@@ -114,9 +139,8 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
         );
     } else {
         actions.append(
-            elc('span', 'ce-diff-await', 'your suggestion'),
+            elc('span', 'ce-diff-await', '→ for agent'),
             actionButton(secondary, 'withdraw', once(handlers.withdraw)),
-            actionButton(primary, 'accept', once(handlers.apply)),
         );
     }
     box.append(actions);

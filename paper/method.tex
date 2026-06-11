@@ -1,0 +1,407 @@
+% ------------------------------------------------------------------------------
+% method.tex — the codoc method/algorithm section.
+%
+% Self-contained: \input{method} from the ICLR template main file.
+% Requires (all standard in the ICLR template ecosystem):
+%   amsmath, amssymb, amsthm, booktabs, algorithm, algpseudocode
+% plus the \newtheorem{definition}{Definition} declaration and the
+% `problembox` environment + notation macros defined in main.tex.
+% ------------------------------------------------------------------------------
+
+\section{The \codoc{} System}
+\label{sec:method}
+
+\codoc{} maintains a human-authored \emph{feature tree} --- a hierarchy of named
+units of intent --- bidirectionally synchronized with the code of a repository.
+Unlike repository-level code graphs built \emph{from} code as retrieval context
+for agents \citep{repograph2025,locagent2025,graphcoder2024,codexgraph2024}, the
+tree is first-class authored intent: it is never regenerated from code, and the
+attribution of code to features is a secondary, continuously repaired index.
+Synchronization is asymmetric --- code changes are \emph{reflected} into the tree
+(Loop~A, \S\ref{sec:loop-a}), while tree edits are \emph{realized} into code by a
+coding agent (Loop~B, \S\ref{sec:loop-b}) --- and conflict resolution is
+deterministic: pending document intent always wins over code-side observations
+(\S\ref{sec:conflicts}).
+
+\begin{problembox}{Problem statement}
+Given a repository whose indexed chunk set is $\C$ and a human-authored feature
+tree $\T = (\F, \prec)$, maintain (i)~a binding map
+$\B \colon \C \to \F \cup \{\bot\}$ attributing every chunk to at most one
+feature, and (ii)~the invariant that $\T$ expresses current human intent over
+the code, under concurrent edits to either side by humans and autonomous
+agents. Every mutation must be attributable (who, with what commitment, caused
+by what), and divergence must resolve to a synchronization state
+$\sigma = \synced$ without losing authored intent.
+\end{problembox}
+
+\subsection{Preliminaries}
+\label{sec:prelim}
+
+\begin{definition}[Chunk set]
+\label{def:chunks}
+The repository is indexed into a set of AST-level chunks
+$\C = \{c_1, \dots, c_n\}$, where each chunk
+$c = (\mathit{file},\, \mathit{sym},\, h^{\mathrm{tok}},\, h^{\mathrm{ast}})$
+carries its file path, its qualified symbol path within the file, a
+\emph{content hash} $h^{\mathrm{tok}}$ over the comment- and
+whitespace-normalized token stream, and an \emph{AST-shape hash}
+$h^{\mathrm{ast}}$ over the token-erased tree structure. The pair
+$(\mathit{file}, \mathit{sym})$ is the chunk's identity key; the two hashes are
+its relocation signals (Definition~\ref{def:reloc}).
+\end{definition}
+
+\begin{definition}[Feature tree]
+\label{def:tree}
+The feature tree is $\T = (\F, \prec)$, where $\F$ is a finite set of features
+$f = (\mathit{id},\, \mathit{title},\, \mathit{desc},\, \mathit{realized})$ and
+$\prec\, \subseteq \F \times \F$ is a forest-shaped parent relation. Titles and
+descriptions are free prose authored by humans (or proposed by agents and
+accepted by humans); $\mathit{realized} \in \{0,1\}$ marks whether the feature
+is backed by code yet ($\mathit{realized}=0$ denotes an accepted plan
+placeholder, flipped to $1$ by the first binding).
+\end{definition}
+
+\begin{definition}[Binding map]
+\label{def:binding}
+Attribution is a partial function $\B \colon \C \to \F \cup \{\bot\}$: each
+chunk binds to at most one feature (enforced as a uniqueness constraint on the
+chunk identity key), while one feature typically owns many chunks across many
+files. Each binding stores the bound chunk's $h^{\mathrm{tok}}$ as its
+\emph{fingerprint}, making staleness locally detectable. We write
+$\B^{-1}(f) \subseteq \C$ for the chunks a feature owns and define coverage
+$\mathrm{cov}(\B) = \lvert\{c : \B(c) \neq \bot\}\rvert / \lvert\C\rvert$.
+\end{definition}
+
+\begin{definition}[Code graph]
+\label{def:graph}
+Following the heterogeneous-graph convention of repository-level code
+representations \citep{locagent2025,graphcoder2024}, the dependency structure
+of the code is $\G = (\V, \E, \A, \R)$ with node-type map
+$\tau \colon \V \to \A$, $\A = \{\textit{file}, \textit{class},
+\textit{function}\}$, and edge-type map $\varphi \colon \E \to \R$,
+$\R = \{\textit{contain}, \textit{call}, \textit{import}, \textit{inherit}\}$.
+$\G$ is a derived cache, rebuildable from $\C$ at any time. The binding map
+lifts $\G$ to a feature-coupling graph and defines the placement heuristic
+\begin{equation}
+\label{eq:neighbor}
+\mathrm{nbf}(c) \;=\; \argmax_{f \in \F}\;
+\bigl\lvert \{\, (v, v') \in \E \;:\; v' = \mathrm{sym}(c),\;
+\B(\mathrm{chunk}(v)) = f \,\} \bigr\rvert ,
+\end{equation}
+the feature owning the most call/import edges incident to a new chunk $c$ ---
+the deterministic fallback of Loop~A's coverage net
+(Algorithm~\ref{alg:loop-a}, lines~\ref{line:covnet-start}--\ref{line:covnet-end}).
+\end{definition}
+
+\begin{definition}[Changeset]
+\label{def:changeset}
+A pass over the index yields $\Delta = (\Delta^{+}, \Delta^{-}, \Delta^{\sim})$:
+chunks \emph{added} (present, unbound), \emph{removed} (a binding whose key has
+left the index), and \emph{modified} (bound, but
+$h^{\mathrm{tok}} \neq$ fingerprint). \codoc{} computes $\Delta$ in two modes:
+a \emph{temporal} diff of consecutive index snapshots (cheap, runs on every
+save) and a \emph{state-based} reconciliation that compares the index directly
+against $\B$ (idempotent and self-healing; the authority pass). Only the latter
+may retire features or amend prose, so destructive judgments are never made
+from a transient mid-edit view.
+\end{definition}
+
+\begin{definition}[Relocation]
+\label{def:reloc}
+For $(r, a) \in \Delta^{-} \times \Delta^{+}$: $a$ is a \emph{move} of $r$ iff
+$h^{\mathrm{tok}}_a = h^{\mathrm{tok}}_r$ (identical content at a new key), and
+a \emph{rename} of $r$ iff $h^{\mathrm{ast}}_a = h^{\mathrm{ast}}_r$ uniquely
+within the same file (same shape, new name; $1{:}1$ matches only). Relocations
+re-attach attribution deterministically --- no model call, no risk of dropped
+or duplicated attribution.
+\end{definition}
+
+\begin{definition}[Change ledger]
+\label{def:ledger}
+Every mutation of $(\T, \B)$ is an event in an append-only ledger $L$. A ledger
+entry $\ell = (\mathit{op},\, f,\, \alpha,\, \mu,\, \delta)$ records the
+operation, its target, the \emph{actor}
+$\alpha \in \{\textsf{human}\} \cup \mathit{Agents} \cup \{\textsf{loop}\}$,
+the \emph{mode} $\mu \in \{\pen, \suggest, \auto\}$ (committed edit, reviewable
+proposal, or mechanical maintenance), and a \emph{causality link} $\delta$ ---
+the directive, suggestion, or event id this change implements ($\bot$ if
+spontaneous). A \emph{proposal} is an unapplied event; accepting it applies the
+operation and consumes the event.
+\end{definition}
+
+\begin{definition}[Hold set and synchronization state]
+\label{def:hold}
+$H \subseteq \F$ is the set of features with pending document-ahead intent: a
+live suggestion not yet drained, or a queued directive not yet implemented.
+The synchronization state is
+$\sigma \in \{\synced, \codedrift, \treedirty, \awaiting, \realizing\}$,
+derived (not stored): pending code-side proposals put $\sigma = \codedrift$, a
+non-empty directive queue forces $\sigma = \awaiting$ (a later code-side pass
+cannot silently clobber queued work), and an active implementation pass reports
+$\sigma = \realizing$.
+\end{definition}
+
+Table~\ref{tab:notation} summarizes the notation.
+
+\begin{table}[t]
+\centering
+\caption{Notation.}
+\label{tab:notation}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$\C$ & chunk set; $c = (\mathit{file}, \mathit{sym}, h^{\mathrm{tok}}, h^{\mathrm{ast}})$ \\
+$\T = (\F, \prec)$ & feature tree (features + forest parent relation) \\
+$\B \colon \C \to \F \cup \{\bot\}$ & binding map (each chunk owned by $\leq 1$ feature) \\
+$\G = (\V, \E, \A, \R)$ & heterogeneous code dependency graph (derived cache) \\
+$\Delta = (\Delta^{+}, \Delta^{-}, \Delta^{\sim})$ & changeset: added / removed / modified chunks \\
+$h^{\mathrm{tok}}, h^{\mathrm{ast}}$ & content hash (move-invariant), AST-shape hash (rename-invariant) \\
+$L$; $\ell = (\mathit{op}, f, \alpha, \mu, \delta)$ & append-only ledger; entry = op, target, actor, mode, cause \\
+$H \subseteq \F$ & hold set (features with pending doc-ahead intent) \\
+$\sigma$ & synchronization state \\
+$\mathrm{nbf}(c)$ & graph-neighbor feature of a chunk (Eq.~\ref{eq:neighbor}) \\
+$D$; $d$ & directive queue; a single realization directive \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Loop A: Reflecting Code into the Tree}
+\label{sec:loop-a}
+
+Loop~A (Algorithm~\ref{alg:loop-a}) closes the gap from code to intent. Its
+design principle is \emph{determinism first}: every change that can be resolved
+mechanically --- refreshing fingerprints, detaching deleted chunks, carrying
+attribution across moves and renames --- is resolved without a model
+(lines~\ref{line:auto-start}--\ref{line:reloc-end}). A single LLM pass
+(line~\ref{line:llm}) handles only the judgment calls that remain: placing
+genuinely new code, repairing features that lost their last binding, and (in
+the authority pass) refreshing prose whose code changed underneath it. The
+pass sees the residual changeset, a file-locality subtree of $\T$, and
+\emph{every} feature title; supplying the full title set to one call is what
+prevents duplicate features without any post-hoc deduplication machinery.
+
+Model output is not trusted with destructive authority. Proposed operations
+are split by safety: binding maintenance and small description amendments
+(bounded by an edit-distance ratio) auto-apply with $\mu = \auto$; structural
+operations (add / move / retire) become unapplied proposal events with
+$\mu = \suggest$ that a human accepts or rejects. Operations targeting held
+features are dropped (line~\ref{line:hold}; \S\ref{sec:conflicts}), and a
+\emph{coverage net}
+(lines~\ref{line:covnet-start}--\ref{line:covnet-end}) guarantees no added
+chunk is silently dropped: anything the model failed to place attaches to its
+graph-neighbor feature $\mathrm{nbf}(c)$ or surfaces as an explicit
+\textsf{add} proposal. Finally, stale-proposal garbage collection keeps the
+pass idempotent: a pending \textsf{add} whose chunks have since bound
+elsewhere, or a pending \textsf{retire} whose feature regained code, is
+dropped, so repeated passes converge to $\sigma = \synced$ instead of
+accumulating false positives.
+
+\begin{algorithm}[t]
+\caption{Loop A --- code $\to$ tree reflection (one pass)}
+\label{alg:loop-a}
+\begin{algorithmic}[1]
+\Require index snapshot of $\C$; store $(\T, \B, L)$; hold set $H$; authority flag $\mathit{auth}$
+\Ensure updated $(\T, \B, L)$; refreshed $\sigma$
+\State $\Delta \gets \textsc{Changeset}(\C, \B)$ \Comment{temporal diff, or state-based iff $\mathit{auth}$}
+\State \textsc{GcStaleProposals}$(L, \Delta)$ \Comment{drop superseded \textsf{add}/\textsf{retire} proposals}
+\For{$c \in \Delta^{\sim}$} \textsc{Apply}(\textsf{refresh}$(c)$, $\mu{=}\auto$) \EndFor \label{line:auto-start}
+\For{$c \in \Delta^{-}$} \textsc{Apply}(\textsf{detach}$(c)$, $\mu{=}\auto$) \EndFor
+\For{$(r, a) \in \textsc{Relocations}(\Delta^{-}, \Delta^{+})$} \Comment{Def.~\ref{def:reloc}: $h^{\mathrm{tok}}$ move / $h^{\mathrm{ast}}$ rename}
+    \State \textsc{Apply}(\textsf{attach}$(a, \B(r))$, $\mu{=}\auto$) \label{line:reloc-end}
+\EndFor
+\State $U \gets \{c \in \Delta^{+} : \B(c) = \bot\}$;\quad
+       $E \gets \{f : \B^{-1}(f) = \emptyset \wedge f \notin H\}$ \Comment{unbound adds; emptied features}
+\If{$U \neq \emptyset \,\vee\, E \neq \emptyset \,\vee\, (\mathit{auth} \wedge \textsc{StaleProse}(\Delta^{\sim}, H))$}
+    \State $\mathit{ops} \gets \textsc{LLM}\bigl(\Delta,\ \textsc{Subtree}(\T, \Delta),\ \textsc{Titles}(\T),\ \G\bigr)$ \Comment{one call per pass} \label{line:llm}
+    \State $\mathit{ops} \gets \{o \in \mathit{ops} : \neg\,\textsc{SuppressedByHold}(o, H)\}$ \label{line:hold}
+    \For{$o \in \mathit{ops}$}
+        \If{\textsc{Safe}$(o)$} \textsc{Apply}$(o, \mu{=}\auto)$
+        \Else\ \textsc{Propose}$(o, \mu{=}\suggest)$ \Comment{unapplied event; human verdict pending}
+        \EndIf
+    \EndFor
+\EndIf
+\For{$c \in U$ with $\B(c) = \bot$ still} \label{line:covnet-start} \Comment{coverage net: nothing is dropped}
+    \If{$\mathrm{nbf}(c) \neq \bot$} \textsc{Apply}(\textsf{attach}$(c, \mathrm{nbf}(c))$, $\mu{=}\auto$)
+    \Else\ \textsc{Propose}(\textsf{add}$(c)$, $\mu{=}\suggest$)
+    \EndIf
+\EndFor \label{line:covnet-end}
+\State \Return $(\T, \B, L)$, \textsc{RefreshState}$()$
+\end{algorithmic}
+\end{algorithm}
+
+Two authority levels share this pipeline. The \emph{temporal} pass (run on
+every save) computes $\Delta$ from consecutive snapshots and may never retire a
+feature or amend prose --- a feature that looks emptied mid-edit usually
+rebinds on the next save. The \emph{authority} pass (run at agent-session
+close, on daemon startup, and from explicit sync) computes $\Delta$ state-based
+against $\B$, is idempotent, recovers missed cycles, and is the only pass
+allowed to raise \textsf{retire} and stale-prose \textsf{amend} proposals.
+
+\subsection{Loop B: Realizing Tree Edits into Code}
+\label{sec:loop-b}
+
+Loop~B (Algorithm~\ref{alg:loop-b}) closes the opposite gap. Edits to the
+rendered tree document are parsed and diffed against the store; verdicts on
+pending proposals are drained from the review inbox; and live document-ahead
+suggestions are applied by the loop itself (the human's only verb on their own
+suggestion is \emph{withdraw} --- application is the agent side's
+acknowledgment, stamped $\mu = \suggest$ with $\delta$ = the suggestion id).
+
+Two ordering invariants keep text and store coherent
+(lines~\ref{line:snapshot} and~\ref{line:rerender}). The text diff is
+snapshotted \emph{before} any store mutation: verdict accepts move the store
+ahead of the on-disk text, and diffing afterwards would misread the stale text
+as a human edit that reverts the accepted change. Symmetrically, any pass that
+mutated the store re-renders the text before returning, so the next pass diffs
+a caught-up document.
+
+Not every tree edit means ``write code.'' The \emph{imperative gate}
+(line~\ref{line:imperative}) classifies each applied edit: descriptive prose
+(``validates the token'') merely persists, while imperative prose (``should
+validate the token'', ``Add retry logic''), an accepted unrealized plan node,
+or retiring a feature that owns code each mint a \emph{directive} $d$ --- a
+natural-language work order assembled from the feature's description and its
+bound symbols, scoped to the files the feature owns. Directives are queued for
+the user's \emph{live} coding-agent session rather than a headless model: the
+session implements each directive, reflects the new code back through the
+agent-side reflection API with $\delta = d$, and deletes the queue. Loop~A
+then closes the cycle, with every resulting ledger entry carrying the causal
+chain from the original document edit.
+
+Verdict semantics are deliberately asymmetric for the destructive case
+(line~\ref{line:retire}): accepting a machine-raised \textsf{retire} from the
+inbox is \emph{detach-only} --- the feature is hidden and its chunks freed for
+re-attribution, but no code-deletion directive is ever queued, because a retire
+raised from transient drift may be a false positive and deleting code on a
+single click is the most destructive failure mode. Only an explicit human
+retire edit in the document text (or an agent proposal explicitly flagged to
+delete code) queues removal work.
+
+\begin{algorithm}[t]
+\caption{Loop B --- tree $\to$ code realization (one pass)}
+\label{alg:loop-b}
+\begin{algorithmic}[1]
+\Require tree text $T_{\mathrm{txt}}$; inbox verdicts $V$; intents $I$; store $(\T, \B, L)$
+\Ensure updated $(\T, \B, L)$; directive queue $D$; refreshed $\sigma$
+\State $\mathit{ops}_{\mathrm{user}} \gets \textsc{Diff}(T_{\mathrm{txt}}, \T)$ \Comment{snapshot BEFORE mutations (invariant 1)} \label{line:snapshot}
+\State $D \gets \emptyset$
+\For{$(e, \mathit{accept}) \in V$} \Comment{drain human verdicts on pending proposals}
+    \If{$\mathit{accept}$}
+        \State \textsc{Apply}$(e.\mathit{op}, \alpha{=}\textsf{human}, \mu{=}\pen)$; \textsc{Consume}$(e)$
+        \If{$e.\mathit{op}$ is \textsf{retire} $\wedge\, \neg e.\mathit{op}.\mathit{deleteCode}$} \label{line:retire}
+            \State \textsc{DetachAll}$(\B^{-1}(e.\mathit{op}.f))$ \Comment{detach-only: never queue code deletion}
+        \ElsIf{\textsc{ImpliesCode}$(e.\mathit{op})$} $D \gets D \cup \{\textsc{Directive}(e.\mathit{op},\, \delta{=}e)\}$
+        \EndIf
+    \Else\ \textsc{Consume}$(e)$ \Comment{reject: delete the proposal}
+    \EndIf
+\EndFor
+\For{$o \in \mathit{ops}_{\mathrm{user}}$} \Comment{direct edits are intentional: apply immediately}
+    \State \textsc{Apply}$(o, \alpha, \mu \text{ from annotation channel (default \textsf{human}/\pen)})$
+    \If{\textsc{ImpliesCode}$(o)$} $D \gets D \cup \{\textsc{Directive}(o, \delta{=}\ell_o)\}$ \label{line:imperative}
+    \EndIf
+\EndFor
+\For{$i \in I$ with payload, fresh, unsatisfied} \Comment{doc-ahead suggestions: the loop applies them}
+    \State \textsc{Apply}(\textsf{amend}$(i)$, $\alpha{=}i.\alpha$, $\mu{=}\suggest$, $\delta{=}i.\mathit{id}$)
+    \If{\textsc{ImpliesCode}$(i)$} $D \gets D \cup \{\textsc{Directive}(i, \delta{=}i.\mathit{id})\}$
+    \EndIf
+\EndFor
+\If{store mutated} \textsc{Render}$(\T) \to T_{\mathrm{txt}}$ \Comment{invariant 2: text catches up} \label{line:rerender}
+\EndIf
+\If{$D \neq \emptyset$}
+    \State mint ids for $D$; queue $D$ for the live agent session; $H \gets H \cup \{d.f : d \in D\}$
+    \State $\sigma \gets \awaiting$ \Comment{the agent implements, reflects with $\delta = d$, clears the queue}
+\Else
+    \State $\sigma \gets \textsc{RefreshState}()$
+\EndIf
+\State \Return $(\T, \B, L)$, $D$, $\sigma$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Conflict Resolution: the Ledger and Doc-Wins Holds}
+\label{sec:conflicts}
+
+Both loops route every decision through one classification table
+(Table~\ref{tab:classify}): each detected change, from either side and by any
+actor, maps to exactly one reaction. Three properties follow.
+
+\paragraph{Provenance.} Every mutation is a ledger entry
+(Definition~\ref{def:ledger}). The actor/mode pair separates \emph{who} changed
+something from \emph{how committed} the change is, which drives both review
+routing (only $\mu = \suggest$ items need verdicts) and the interface's
+authorship rendering; $\delta$ threads causality across the realize cycle, so
+a code change surfaced back by Loop~A is grouped under the document edit that
+caused it.
+
+\paragraph{Doc-wins holds.} Conflict resolution is a deterministic priority
+rule rather than a merge heuristic. While $f \in H$ (a suggestion or queued
+directive is pending on $f$), code-side \emph{intent} operations on $f$ ---
+\textsf{amend}, \textsf{retire}, \textsf{move} --- are suppressed:
+\begin{equation}
+\label{eq:docwins}
+\mathrm{suppress}(o, H) \;\iff\;
+o.\mathit{kind} \in \{\textsf{amend}, \textsf{retire}, \textsf{move}\}
+\;\wedge\; o.f \in H .
+\end{equation}
+Binding maintenance (\textsf{attach}/\textsf{detach}/\textsf{refresh}) is never
+suppressed --- bindings are attribution, not intent, and must stay correct
+regardless of who is mid-edit. Holds release when the suggestion is drained or
+the directive queue completes, with a staleness backstop so an abandoned
+suggestion cannot hold a feature indefinitely. The rule is the
+tree-is-authoritative analogue of last-writer-wins: the side that expresses
+\emph{intent} (the document) always outranks the side that merely
+\emph{observes} (the code reflector).
+
+\paragraph{Verdict grammar.} Who resolves what is structural:
+accept/reject is exclusively a \emph{human} verb on \emph{code-ahead} items
+(machine proposals), while a \emph{doc-ahead} suggestion is applied by the
+machine side and offers its human author only \emph{withdraw}. No state is
+double-resolvable, which eliminates accept/revert races by construction.
+
+\begin{table}[t]
+\centering
+\caption{The change-classification table. Every change, from either side and by
+any actor, maps to one reaction. $\auto$ reactions apply immediately;
+$\suggest$ reactions await a human verdict; \textbf{D} marks reactions that
+mint a realization directive.}
+\label{tab:classify}
+\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}cllll@{}}
+\toprule
+\# & Side & Detected change & Origin & Reaction \\
+\midrule
+1 & code & modified bound chunk & any & \textsf{refresh} binding ($\auto$) \\
+2 & code & removed bound chunk & any & \textsf{detach} ($\auto$); emptied $\wedge\, f \notin H \Rightarrow$ \textsf{retire} ($\suggest$, auth.\ pass) \\
+3 & code & relocated chunk (Def.~\ref{def:reloc}) & any & deterministic \textsf{attach} to prior feature ($\auto$) \\
+4 & code & added unbound chunk & any & LLM placement ($\auto$/$\suggest$); fallback $\mathrm{nbf}$ / \textsf{add} ($\suggest$) \\
+5 & code & in-place modify, realized + prose & any & stale-prose \textsf{amend} (small $\to \auto$, large $\to \suggest$) \\
+6 & code & any change during realize epoch & agent & rows 1--5 with $\delta = $ directive id \\
+\midrule
+7 & doc & descriptive amend / title edit & human, $\pen$ & apply immediately; no directive \\
+8 & doc & imperative amend / plan add / retire-with-code & human, $\pen$ & apply + mint directive (\textbf{D}) \\
+9 & doc & any edit & human, $\suggest$ & pending intent (hold); applied by Loop B drain $\to$ rows 7/8 \\
+10 & doc & structural op via reflection API & agent & pending proposal ($\suggest$) \\
+11 & doc & safe op via reflection API & agent & auto-apply; ledger $\alpha = \textsf{agent}$, $\mu = \auto$ \\
+\midrule
+12 & verdict & accept / reject & human & apply+consume / delete (\textsf{retire} accept is detach-only) \\
+13 & code & drift on held feature ($f \in H$) & any & bindings maintained; \textsf{amend}/\textsf{retire}/\textsf{move} suppressed (Eq.~\ref{eq:docwins}) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Bootstrap}
+\label{sec:bootstrap}
+
+The initial tree is built by two scoped passes rather than one global
+clustering. A \emph{per-file} pass issues one model call per source file,
+seeing only that file's chunks and their incident graph edges --- making
+cross-file ``junk drawer'' features structurally impossible --- and a
+deterministic coverage step folds any chunk the model missed into the file's
+largest feature. An \emph{organization} pass then groups the resulting
+file-level features under a small number of thematic parents, using
+feature-to-feature coupling aggregated from $\G$ as evidence. Both passes emit
+ordinary ledger events through the same application seam as the loops, so
+bootstrap output is curated (and corrected) with exactly the same verdict
+machinery as any later change.

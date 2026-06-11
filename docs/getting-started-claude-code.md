@@ -9,7 +9,7 @@ codoc keeps a **feature tree** — a small, navigable map of what your code is
   apply automatically; structural ones appear as reviewable proposals.
 - **codoc → code:** when you (or Claude Code) edit the tree, codoc builds the
   matching coding directive and **queues it for your live Claude Code session** —
-  you run `/codoc:realize` to implement it, then codoc re-reads the result to
+  you run `/codoc:sync` to implement it, then codoc re-reads the result to
   refine the tree if intent was under-specified. codoc never writes code itself
   and never runs a headless model.
 
@@ -38,7 +38,7 @@ codoc init
    Incremental; a killed run resumes from the last completed file.
 2. **Proposes a feature tree** and writes `.codoc/tree.codoc`.
 3. **Installs the codoc Claude Code plugin** — hooks, the MCP server, the
-   `codoc-intent` skill, and the `/codoc:plan` + `/codoc:realize` slash commands
+   `codoc-intent` skill, and the `/codoc:plan` + `/codoc:sync` slash commands
    (see §3). No server, no port.
 
 Open `tree.codoc` in VS Code. Each indented line is a feature:
@@ -68,7 +68,7 @@ and no port to configure; everything is file-based.
 | Role | How invoked | What it does |
 |---|---|---|
 | Planning | You ask Claude Code a question; it loads the `codoc-intent` skill | Proposes changes to `tree.codoc` via the codoc MCP tools (`codoc_plan_add` / `codoc_propose_*`) or the `/codoc:plan` command. No code is touched yet. |
-| Implementation | You run `/codoc:realize` in your session (nudged by a hook) | Reads the directive codoc queued, writes the code, calls `codoc_reflect` to bind it. Runs **in your interactive session, with your permissions** — never a headless `claude -p`. |
+| Implementation | You run `/codoc:sync` in your session (nudged by a hook) | Reads the directive codoc queued, writes the code, calls `codoc_reflect` to bind it. Runs **in your interactive session, with your permissions** — never a headless `claude -p`. |
 
 **The MCP server** (`codoc`, registered in `.mcp.json` as the `codoc-mcp` console
 script, FastMCP over stdio) is the agent's primary reflection path. Instead of
@@ -101,7 +101,7 @@ straight into the store:
   live gutter markers in `tree.codoc` and file badges in Explorer.
 - `Stop` runs a recovery-grade reflection (Loop A) on what the session changed, so
   the tree stays current even with no daemon running.
-- `UserPromptSubmit` nudges you to run `/codoc:realize` when Loop B has queued work
+- `UserPromptSubmit` nudges you to run `/codoc:sync` when Loop B has queued work
   (`status = awaiting_impl`).
 
 The hooks never block the agent; they're fire-and-forget with a short timeout.
@@ -163,12 +163,12 @@ Only edits that *request* code reach this step. A purely descriptive edit
 ("Holds brand colors and their dark-mode variants") just records intent and queues
 nothing — documenting existing code never writes code.
 
-### Step 5 — You run `/codoc:realize`
+### Step 5 — You run `/codoc:sync`
 
 The `UserPromptSubmit` hook nudges you that work is queued. In your session:
 
 ```
-/codoc:realize
+/codoc:sync
 ```
 
 This reads `.codoc/realize.md`, implements each directive **in your interactive
@@ -198,7 +198,7 @@ One daemon runs both loops. Leave it running while you work. It reacts to both:
 - **Code file changes** → Loop A re-checks affected bindings, surfaces proposals.
 - **`tree.codoc` changes** and **`inbox.json` verdicts** → Loop B applies ops and,
   for code-implying edits, queues a directive in `.codoc/realize.md` for you to
-  implement with `/codoc:realize`.
+  implement with `/codoc:sync`.
 
 ## 6. Reviewing proposals
 
@@ -239,7 +239,7 @@ You don't have to go through Claude. Edit `tree.codoc` directly:
 Save. `codoc watch` detects the change and runs Loop B. If the edit *requests* code
 (an imperative description on a node with bound symbols — "should validate…",
 "Add…"), Loop B queues a directive in `.codoc/realize.md` for you to implement with
-`/codoc:realize`. A descriptive edit just updates the prose.
+`/codoc:sync`. A descriptive edit just updates the prose.
 
 ## 8. The commands
 
@@ -264,7 +264,7 @@ agent reflecting via MCP and you Accepting in the IDE.)
   tree.bindings.json  # IDE sidecar: feature↔symbol index + dependency edges + proposals (v3)
   status.json         # loop lifecycle: in_sync / code_drift / tree_dirty / awaiting_impl / realizing
   inbox.json          # verdict channel: Accept/Reject writes here, the loop drains it
-  realize.md          # realization queue: directives the live session implements via /codoc:realize
+  realize.md          # realization queue: directives the live session implements via /codoc:sync
   activity.json       # agent touch log: hooks write here, VS Code extension reads it
   codoc.db            # features + bindings + event log (SQLite)
   lancedb/            # incremental code-chunk index (cocoindex)
@@ -276,8 +276,8 @@ agent reflecting via MCP and you Accepting in the IDE.)
       SKILL.md        # the propose-then-implement workflow for this repo
   commands/
     codoc/
-      plan.md         # /codoc:plan  — propose plan nodes before coding
-      realize.md      # /codoc:realize — implement the queued directives
+      plan.md         # /codoc:plan — propose plan nodes before coding
+      sync.md         # /codoc:sync — reconcile whichever side is behind (incl. queued directives)
 
 .mcp.json             # registers the codoc MCP server (codoc-mcp, stdio)
 ```

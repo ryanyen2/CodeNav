@@ -1,12 +1,21 @@
-"""codoc CLI — four commands.
+"""codoc CLI.
 
-``init``   bootstrap a fresh repo into a feature tree + render tree.codoc
-``watch``  the daemon: run both loops as you edit code / tree.codoc
-``status`` tree size, pending proposals, recent activity
-``sync``   one-shot escape hatch: apply tree.codoc edits, then reflect code
+Core commands:
 
-Everything else is done by editing ``.codoc/tree.codoc`` and letting watch/sync
-react.
+``init``    bootstrap a fresh repo into a feature tree + render tree.codoc
+``watch``   the daemon: run both loops as you edit code / tree.codoc
+``status``  tree size, pending proposals, recent activity
+``sync``    one-shot escape hatch: apply tree.codoc edits, then reflect code
+
+Plumbing (agents / no-IDE workflows):
+
+``accept`` / ``reject``  resolve a pending proposal from the CLI
+``reflect``              recovery-grade code → tree reconciliation
+``propose``              author a plan proposal from the command line
+``install-hooks``        (re)install the Claude Code hooks + MCP registration
+
+Day to day, everything happens by editing ``.codoc/tree.codoc`` and letting
+watch/sync react.
 """
 from __future__ import annotations
 
@@ -57,18 +66,18 @@ def init(
 @app.command()
 def watch(
     root: str = typer.Option(".", "--root", help="Repository root."),
-    no_realize: bool = typer.Option(False, "--no-realize", help="Reflect + sync, but don't spawn the coding agent."),
-    dry: bool = typer.Option(False, "--dry", help="Build coding directives but don't spawn the agent."),
+    no_realize: bool = typer.Option(False, "--no-realize", help="Sync the tree but never queue realization directives."),
+    dry: bool = typer.Option(False, "--dry", help="Reflect + apply tree edits, but don't queue realization directives."),
     auto_realize: bool = typer.Option(
         False, "--auto-realize",
-        help="Unattended fallback: spawn a headless `claude -p /codoc:realize` to "
+        help="Unattended fallback: spawn a headless `claude -p /codoc:sync` to "
              "implement queued tree edits when no interactive session is around.",
     ),
 ):
     """Watch code + tree.codoc and run both loops continuously."""
     from codoc.loop.watch import run_watch
 
-    run_watch(_root := root, _codoc_dir(root), no_realize=no_realize, dry_run=dry,
+    run_watch(root, _codoc_dir(root), no_realize=no_realize, dry_run=dry,
               auto_realize=auto_realize, printer=typer.echo)
 
 
@@ -77,8 +86,7 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
     """Show feature count, pending proposals, and recent activity."""
     from codoc.store.db import open_store
 
-    store = open_store(_codoc_dir(root))
-    try:
+    with open_store(_codoc_dir(root)) as store:
         feats = store.list_features()
         pending = store.pending_events()
         from codoc.loop.status import refresh_status
@@ -92,7 +100,8 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
         # it so it can't hide behind an "in_sync" status.
         try:
             from codoc.pipelines.indexing.reader import read_all_chunks
-            n_chunks = len(read_all_chunks(_codoc_dir(root)))
+            n_chunks = len(read_all_chunks(_codoc_dir(root), with_embeddings=False,
+                                           with_source=False))
             n_bound = len(store.all_bindings())
             gap = n_chunks - n_bound
             if n_chunks and gap / n_chunks > 0.05:
@@ -111,8 +120,6 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
             for e in recent:
                 title = e.op.title or e.op.feature_id or ""
                 typer.echo(f"  · {e.source:9} {e.op.kind.value:11} {title}")
-    finally:
-        store.close()
 
 
 @app.command()
@@ -124,7 +131,7 @@ def sync(
 
     Loop B no longer spawns a coding agent — code-implying tree edits are queued
     in ``.codoc/realize.md`` for the live Claude Code session to implement via
-    ``/codoc:realize``.
+    ``/codoc:sync``.
     """
     from codoc.codoc_file.render import write_tree
     from codoc.loop.loop_a import reconcile_drift
@@ -136,7 +143,7 @@ def sync(
     rb = run_loop_b(root, cd, dry_run=dry)
     typer.echo(f"▸ codoc→code  {rb.summary()}")
     if rb.directives:
-        label = "would queue (dry run)" if dry else "queued for the session (run /codoc:realize)"
+        label = "would queue (dry run)" if dry else "queued for the session (run /codoc:sync)"
         typer.echo(f"  {label}:")
         for d in rb.directives:
             typer.echo(f"    · {d.splitlines()[0]}")
@@ -144,14 +151,11 @@ def sync(
     # diff) so a missed/crashed cycle self-heals and a no-op sync converges.
     ra = reconcile_drift(root, cd)
     typer.echo(f"▸ code→codoc  {ra.summary()}")
-    store = open_store(cd)
-    try:
+    with open_store(cd) as store:
         write_tree(store, cd)
         st = refresh_status(cd, store)
         state = json.loads(st.read_text()).get("state", "in_sync")
         typer.echo(f"▸ state       {state}")
-    finally:
-        store.close()
 
 
 @app.command()
@@ -185,22 +189,16 @@ def _verdict(root: str, event_id: str, *, accept: bool) -> None:
 
     eid = event_id.strip().strip("⟨⟩")
     cd = _codoc_dir(root)
-    store = open_store(cd)
-    try:
+    with open_store(cd) as store:
         if store.get_event(eid) is None:
             typer.echo(f"Error: no pending proposal ⟨{eid}⟩", err=True)
             raise typer.Exit(code=1)
-    finally:
-        store.close()
     inbox.append_verdict(cd, eid, accept=accept)
     rb = run_loop_b(root, cd)
     verb = "accepted" if accept else "rejected"
     typer.echo(f"✓ {verb} ⟨{eid}⟩  ·  {rb.summary()}")
-    store = open_store(cd)
-    try:
+    with open_store(cd) as store:
         write_tree(store, cd)
-    finally:
-        store.close()
 
 
 @app.command()
@@ -235,9 +233,10 @@ def propose(
 ):
     """Author an agent plan proposal in the codoc feature tree.
 
-    Creates a pending proposal (applied=False Event) tagged as an **agent plan**
-    in the ``# ── pending changes`` block of ``tree.codoc``.  The user can Accept
-    or Reject it in the VS Code IDE; acceptance triggers Loop B to implement.
+    Creates a pending proposal (applied=False Event) rendered as an in-place
+    overlay in ``tree.codoc``. The user can Accept or Reject it in the VS Code
+    IDE (or via ``codoc accept``/``codoc reject``); acceptance triggers Loop B
+    to implement.
 
     Example::
 
@@ -259,7 +258,7 @@ def propose(
             binds=list(bind) if bind else [],
         )
         typer.echo(f"✓ Proposal created  ⟨{eid}⟩")
-        typer.echo(f"  Accept it in the VS Code IDE (inline action on the diff block).")
+        typer.echo("  Accept it in the VS Code IDE (inline action on the diff block).")
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

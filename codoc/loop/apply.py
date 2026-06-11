@@ -14,7 +14,7 @@ from difflib import SequenceMatcher
 
 from codoc.loop.diff import ChangeSet
 from codoc.model.binding import Binding
-from codoc.model.event import SAFE_OPS, Event, NodeOp, NodeOpKind
+from codoc.model.event import SAFE_OPS, Event, NodeOp, NodeOpKind, default_provenance
 from codoc.model.feature import Feature
 from codoc.model.hlc import HLC
 from codoc.store.db import Store
@@ -73,6 +73,9 @@ def apply_op(
     applied: bool,
     fp_lookup: dict[tuple[str, str], str] | None = None,
     th_lookup: dict[tuple[str, str], str] | None = None,
+    actor: str = "",
+    mode: str = "",
+    caused_by: str = "",
 ) -> Event:
     """Log an Event for ``op``; if ``applied``, mutate the store accordingly.
 
@@ -80,8 +83,14 @@ def apply_op(
     ``types_hash`` for any binding the op creates — recorded so staleness and
     rename detection have an anchor. Callers without the hashes pass neither;
     the binding stores empty strings (a re-bind that does have them backfills).
+
+    ``actor`` / ``mode`` / ``caused_by`` stamp the change ledger. When the
+    caller carries no explicit provenance (legacy paths), actor/mode are
+    inferred from ``source`` via :func:`default_provenance`.
     """
-    event = Event(source=source, op=op, applied=applied)
+    d_actor, d_mode = default_provenance(source, applied)
+    event = Event(source=source, op=op, applied=applied,
+                  actor=actor or d_actor, mode=mode or d_mode, caused_by=caused_by)
     store.append_event(event)
     if applied:
         _mutate(op, store, fp_lookup or {}, th_lookup or {})

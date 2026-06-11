@@ -19,13 +19,6 @@ export interface RefSymbol {
     detail?: string; // `file · feature title`
 }
 
-/** A feature→feature dependency edge (host-internal; folded into ThreadsData). */
-export interface FeatureDep {
-    toId: string;
-    toTitle: string;
-    rel: 'depends' | 'usedby';
-}
-
 /** A feature→feature thread target (a reads / used-by edge). */
 export interface ThreadTarget { toId: string; toTitle: string }
 /** A code-ref thread target (a binding). */
@@ -111,9 +104,6 @@ export type WebviewMessage =
     | { kind: 'suggest-create'; suggestions: Suggestion[] }
     /** Withdraw a pending doc-ahead suggestion by id. */
     | { kind: 'suggest-withdraw'; id: string }
-    /** Apply a doc-ahead suggestion: settle its change into tree.codoc (the agent
-     *  then implements via the existing Loop B realize path). */
-    | { kind: 'suggest-apply'; id: string }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
     | { kind: 'open-binding'; file: string; symbol: string }
     | { kind: 'verdict'; eventIds: string[]; accept: boolean };

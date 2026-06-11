@@ -143,14 +143,14 @@ export function applyPendingCodeDecorations(
             if (!title) continue;
             ranges.push({
                 range: new vscode.Range(i, 0, i, line.length),
-                hoverMessage: new vscode.MarkdownString(`**codoc** — a queued tree edit (“${title}”) will rework this. Run \`/codoc:realize\`.`),
+                hoverMessage: new vscode.MarkdownString(`**codoc** — a queued tree edit (“${title}”) will rework this. Run \`/codoc:sync\`.`),
             });
         }
     }
     if (ranges.length === 0 && fileLevel) {
         ranges.push({
             range: new vscode.Range(0, 0, 0, editor.document.lineAt(0).text.length),
-            hoverMessage: new vscode.MarkdownString(`**codoc** — a queued tree edit (“${fileLevel}”) will add code to this file. Run \`/codoc:realize\`.`),
+            hoverMessage: new vscode.MarkdownString(`**codoc** — a queued tree edit (“${fileLevel}”) will add code to this file. Run \`/codoc:sync\`.`),
         });
     }
     editor.setDecorations(dec.pendingCodeChange, ranges);

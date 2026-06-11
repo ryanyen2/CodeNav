@@ -16,9 +16,12 @@ export function directionColorVar(d: Direction): string {
     return d === 'code-ahead' ? 'var(--dir-review)' : 'var(--dir-await)';
 }
 
-/** The resolution action pair for a direction, as `[secondary, primary]`. */
-export function directionActions(d: Direction): readonly [string, string] {
-    return d === 'code-ahead' ? ['Reject', 'Accept'] : ['Withdraw', 'Apply'];
+/** The resolution actions a direction offers the HUMAN. Code-ahead is the
+ *  human's verdict (`[Reject, Accept]`); a doc-ahead suggestion is applied by
+ *  the AI side (Loop B's intent drain → the agent), so the human's only verb
+ *  on their own suggestion is `[Withdraw]`. */
+export function directionActions(d: Direction): readonly string[] {
+    return d === 'code-ahead' ? ['Reject', 'Accept'] : ['Withdraw'];
 }
 
 /** The non-colour direction marker (REQUIRED for colourblind parity, R8 — the hue is

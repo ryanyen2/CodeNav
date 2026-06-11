@@ -18,19 +18,9 @@ LANGUAGE_NAME = "typescript"
 # ---------------------------------------------------------------------------
 
 def _load_language(name: str) -> ts.Language:
-    langs_so = (
-        pathlib.Path(__file__).parent.parent.parent
-        / ".venv"
-        / "lib"
-        / "python3.12"
-        / "site-packages"
-        / "tree_sitter_languages"
-        / "languages.so"
-    )
-    if not langs_so.exists():
-        import tree_sitter_languages as _tsl_pkg  # noqa: PLC0415
-        langs_so = pathlib.Path(_tsl_pkg.__file__).parent / "languages.so"
+    import tree_sitter_languages as _tsl_pkg  # noqa: PLC0415
 
+    langs_so = pathlib.Path(_tsl_pkg.__file__).parent / "languages.so"
     lib = ctypes.cdll.LoadLibrary(str(langs_so))
     fn = getattr(lib, f"tree_sitter_{name}")
     fn.restype = ctypes.c_void_p
@@ -385,7 +375,6 @@ class TypeScriptAdapter:
 
     def references_in_chunk(self, chunk_source: str, file: str) -> list[SymbolRef]:
         tree = self.parse(chunk_source)
-        source_bytes = chunk_source.encode("utf-8")
         refs: list[SymbolRef] = []
 
         def walk(node: ts.Node) -> None:

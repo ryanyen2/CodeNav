@@ -18,13 +18,14 @@ handled by Loop B's own reflect step).
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.codoc_file.render import tree_path
 from codoc.loop import status
 from codoc.loop.activity import activity_path, epoch_touched_files
+from codoc.loop.edits import edits_path
+from codoc.loop.fsio import read_json
 from codoc.loop.inbox import inbox_path
 from codoc.loop.loop_a import reconcile_drift
 from codoc.loop.loop_b import run_loop_b
@@ -38,6 +39,9 @@ _SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", "
 # suppressing forever.
 EPOCH_STALE_SECONDS = 900
 
+# Batch window for filesystem events: rapid-fire saves coalesce into one pass.
+DEBOUNCE_MS = 600
+
 
 @dataclass
 class WatchState:
@@ -47,7 +51,7 @@ class WatchState:
     epoch_origin: str = ""       # "interactive" | "loop_b"
     last_epoch_id: str = ""      # prevents double-processing the same closed epoch
     suppressed_files: set[str] = field(default_factory=set)
-    # --auto-realize: a headless `claude -p /codoc:realize` we launched and that
+    # --auto-realize: a headless `claude -p /codoc:sync` we launched and that
     # hasn't finished draining realize.md yet (prevents stacking duplicate passes).
     realize_proc: object = None
 
@@ -67,19 +71,23 @@ def _classify(
     paths: list[str],
     root_dir: str,
     codoc_dir: str,
-) -> tuple[bool, bool, bool, set[str]]:
+) -> tuple[bool, bool, bool, bool, set[str]]:
     """Classify a batch of changed paths.
 
-    Returns ``(codoc_touched, inbox_touched, activity_touched, code_files)``.
-    ``activity_touched`` is True when ``.codoc/activity.json`` changed — the
-    epoch-control signal consumed by :func:`process_batch` step 1.
+    Returns ``(codoc_touched, inbox_touched, edits_touched, activity_touched,
+    code_files)``. ``activity_touched`` is True when ``.codoc/activity.json``
+    changed — the epoch-control signal consumed by :func:`process_batch` step 1.
+    ``edits_touched`` is True when ``.codoc/edits.json`` changed — a doc-ahead
+    suggestion was created/withdrawn (payload intents are applied by Loop B).
     """
     tp = tree_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
+    ep = edits_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
     root = Path(root_dir).resolve()
     codoc_touched = False
     inbox_touched = False
+    edits_touched = False
     activity_touched = False
     code_files: set[str] = set()
     for p in paths:
@@ -89,6 +97,9 @@ def _classify(
             continue
         if rp == ip:
             inbox_touched = True
+            continue
+        if rp == ep:
+            edits_touched = True
             continue
         if rp == ap:
             activity_touched = True
@@ -100,7 +111,7 @@ def _classify(
                 code_files.add(str(rp.relative_to(root)))
             except ValueError:
                 pass
-    return codoc_touched, inbox_touched, activity_touched, code_files
+    return codoc_touched, inbox_touched, edits_touched, activity_touched, code_files
 
 
 def _pidfile(codoc_dir: str) -> Path:
@@ -149,28 +160,24 @@ def _epoch_stale(codoc_dir: str, now: float, *, threshold: float = EPOCH_STALE_S
 
 def _read_epoch(codoc_dir: str) -> dict | None:
     """Read the ``epoch`` block from activity.json, or None if absent / corrupt."""
-    path = activity_path(codoc_dir)
-    try:
-        data = json.loads(path.read_text())
-        ep = data.get("epoch")
-        if ep and ep.get("id"):
-            return ep
-    except (OSError, json.JSONDecodeError):
-        pass
-    return None
+    data = read_json(activity_path(codoc_dir), default={})
+    ep = data.get("epoch")
+    return ep if ep and ep.get("id") else None
 
 
 def watch_filter(codoc_dir: str):
-    """A watchfiles filter: allow tree.codoc, inbox.json, activity.json, and code
-    files; drop everything else (notably .codoc indexing artifacts that churn
-    during update_index, and codoc's own status.json/sidecar re-writes)."""
+    """A watchfiles filter: allow tree.codoc, inbox.json, edits.json,
+    activity.json, and code files; drop everything else (notably .codoc indexing
+    artifacts that churn during update_index, and codoc's own status.json/sidecar
+    re-writes)."""
     tp = tree_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
+    ep = edits_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
 
     def _f(_change, path: str) -> bool:
         rp = Path(path).resolve()
-        if rp in (tp, ip, ap):
+        if rp in (tp, ip, ep, ap):
             return True
         if any(part in _SKIP_DIRS for part in rp.parts):
             return False
@@ -183,11 +190,8 @@ def _render(codoc_dir: str) -> None:
     """Non-destructive render: never overwrite un-applied human edits (H1)."""
     from codoc.loop.reconcile import safe_write_tree
 
-    store = open_store(codoc_dir)
-    try:
+    with open_store(codoc_dir) as store:
         safe_write_tree(store, codoc_dir)
-    finally:
-        store.close()
 
 
 def process_batch(
@@ -217,7 +221,7 @@ def process_batch(
         import time as _time
         now = _time.time
     tp = tree_path(codoc_dir)
-    codoc_touched, inbox_touched, activity_touched, code_files = _classify(
+    codoc_touched, inbox_touched, edits_touched, activity_touched, code_files = _classify(
         paths, root_dir, codoc_dir
     )
 
@@ -282,7 +286,7 @@ def process_batch(
                 state.last_epoch_id = ep_id
 
         # If no other signal co-occurs, this was a pure activity churn → no-op.
-        if not (codoc_touched or inbox_touched or code_files):
+        if not (codoc_touched or inbox_touched or edits_touched or code_files):
             return None
 
     # ── Step 2: Ignore codoc's own / the agent's MCP re-renders. ───────────────
@@ -306,12 +310,13 @@ def process_batch(
         # it; the epoch-close scoped Loop A reconciles everything. (A genuine human
         # tree edit mid-session is rare and is deferred to epoch close.)
         codoc_touched = False
-        if not inbox_touched:
+        if not (inbox_touched or edits_touched):
             return None  # code churn / agent reflection during epoch → suppressed
 
     # ── Step 4: Normal routing (unchanged). ────────────────────────────────────
-    # A tree edit or an Accept/Reject verdict both drive Loop B (codoc → code).
-    if codoc_touched or inbox_touched:
+    # A tree edit, an Accept/Reject verdict, or a doc-ahead suggestion (payload
+    # intent in edits.json) all drive Loop B (codoc → code).
+    if codoc_touched or inbox_touched or edits_touched:
         if codoc_touched:
             status.write_status(codoc_dir, status.TREE_DIRTY, detail="applying tree edits")
         res = loop_b(root_dir, codoc_dir, dry_run=dry_run or no_realize)
@@ -372,7 +377,7 @@ def maybe_auto_realize(state: WatchState, root_dir: str, codoc_dir: str, *, prin
         printer("⚠ --auto-realize: `claude` CLI not found on PATH; leaving realize.md queued")
         return
     state.realize_proc = launched
-    printer("▸ auto-realize  spawned headless /codoc:realize")
+    printer("▸ auto-realize  spawned headless /codoc:sync")
 
 
 def run_watch(
@@ -409,7 +414,7 @@ def run_watch(
 
     suffix = "  (--auto-realize: headless implement when unattended)" if auto_realize else ""
     printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop){suffix}")
-    for changes in watchfiles.watch(root_dir, watch_filter=watch_filter(codoc_dir), debounce=600):
+    for changes in watchfiles.watch(root_dir, watch_filter=watch_filter(codoc_dir), debounce=DEBOUNCE_MS):
         out = safe_process_batch([p for _, p in changes], root_dir, codoc_dir, state,
                                  no_realize=no_realize, dry_run=dry_run, printer=printer)
         if out:

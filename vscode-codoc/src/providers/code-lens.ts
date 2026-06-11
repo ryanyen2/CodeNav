@@ -48,7 +48,7 @@ export class CodocCodeLensProvider implements vscode.CodeLensProvider {
                 lenses.push(new vscode.CodeLens(range, {
                     title: `codoc: ⟳ will change · ${pending.title}`,
                     command: 'codoc.open',
-                    tooltip: `A queued tree edit ("${pending.title}") will rework this — run /codoc:realize to implement it`,
+                    tooltip: `A queued tree edit ("${pending.title}") will rework this — run /codoc:sync to implement it`,
                 }));
             }
         }

@@ -22,7 +22,11 @@ import { reconcileDoc } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
-import { directedEdges } from '../state/bindings-model';
+import { directedEdges, agentAmendsByFeature } from '../state/bindings-model';
+import {
+    EditsFile, parseEditsFile, emptyEditsFile,
+    annotationsForSettle, intentsFromSuggestions,
+} from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import type { SidecarData } from '../state/bindings-model';
 import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData } from '../webview/protocol';
@@ -85,10 +89,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 case 'suggest-withdraw':
                     await this.withdrawSuggestion(document, msg.id);
-                    post();
-                    return;
-                case 'suggest-apply':
-                    await this.applySuggestion(document, msg.id);
                     post();
                     return;
                 case 'move':
@@ -225,7 +225,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const uri = document.uri.toString();
         const realized = (fid: string): boolean => sidecar.features[fid]?.realized !== false;
         const prevFile = this.docFileByUri.get(uri) ?? null;
-        const doc = reconcileDoc(document.getText(), prevFile?.doc ?? null, realized);
+        // v4 changes feed → descriptions an agent amended get pencil ink (instead
+        // of a mark reset) when their text drifted under the saved doc.
+        const doc = reconcileDoc(document.getText(), prevFile?.doc ?? null, realized,
+            agentAmendsByFeature(sidecar));
         const docFile: DocFile = { version: 1, doc, suggestions: prevFile?.suggestions ?? [] };
         this.docFileByUri.set(uri, docFile);
 
@@ -242,6 +245,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         if (liveDocAhead.length !== docFile.suggestions.length) {
             docFile.suggestions = liveDocAhead;
             void this.persistDocFile(document, docFile); // auto-clear satisfied ones
+            void this.syncIntents(document, docFile);    // …and release their holds
         }
         const suggestions = buildSuggestions(
             sidecar,
@@ -305,6 +309,62 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         return vscode.Uri.joinPath(document.uri, '..', DOC_FILENAME);
     }
 
+    // ── .codoc/edits.json — the provenance/intent channel to the loops ────────
+    //    (schema mirrored by codoc/loop/edits.py; see state/edits-channel.ts)
+
+    private editsUri(document: vscode.TextDocument): vscode.Uri {
+        return vscode.Uri.joinPath(document.uri, '..', 'edits.json');
+    }
+
+    private async readEditsFile(document: vscode.TextDocument): Promise<EditsFile> {
+        try {
+            const bytes = await vscode.workspace.fs.readFile(this.editsUri(document));
+            return parseEditsFile(JSON.parse(Buffer.from(bytes).toString('utf-8')));
+        } catch {
+            return emptyEditsFile();
+        }
+    }
+
+    private async writeEditsFile(document: vscode.TextDocument, file: EditsFile): Promise<void> {
+        const target = this.editsUri(document).fsPath;
+        const tmp = path.join(path.dirname(target), '.edits.json.tmp');
+        await fs.writeFile(tmp, JSON.stringify(file, null, 2), 'utf-8');
+        await fs.rename(tmp, target);
+    }
+
+    /** Append per-feature authorship annotations for a settle. Written BEFORE the
+     *  tree.codoc save so the daemon's Loop B pass (woken by that save) already
+     *  sees them. Loop B drains `edits`; `intents` stay host-owned. */
+    private async annotateSettle(
+        document: vscode.TextDocument,
+        prevText: string,
+        nextText: string,
+        opts: { actor?: string; mode?: string; suggestionId?: string } = {},
+    ): Promise<void> {
+        const anns = annotationsForSettle(
+            parseTreeCodoc(prevText).features,
+            parseTreeCodoc(nextText).features,
+            { actor: opts.actor ?? 'human', mode: opts.mode ?? 'pen',
+              suggestionId: opts.suggestionId, ts: Date.now() },
+        );
+        if (!anns.length) return;
+        const file = await this.readEditsFile(document);
+        file.edits.push(...anns);
+        await this.writeEditsFile(document, file);
+    }
+
+    /** Rewrite the intents list (the doc-wins hold set) from the current persisted
+     *  doc-ahead suggestions — create/withdraw/apply/auto-clear all converge here. */
+    private async syncIntents(document: vscode.TextDocument, df: DocFile): Promise<void> {
+        const file = await this.readEditsFile(document);
+        const next = intentsFromSuggestions(df.suggestions, Date.now());
+        const same = JSON.stringify(file.intents.map(i => [i.id, i.feature_id])) ===
+                     JSON.stringify(next.map(i => [i.id, i.feature_id]));
+        if (same) return;
+        file.intents = next;
+        await this.writeEditsFile(document, file);
+    }
+
     private async loadDocFile(document: vscode.TextDocument): Promise<DocFile | null> {
         try {
             const bytes = await vscode.workspace.fs.readFile(this.docUri(document));
@@ -348,6 +408,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
 
         const next = renderTreeFromDoc(doc);
         if (next === document.getText()) return; // no structural/text change → no write
+
+        // Tell the loops WHO authored this settle (per changed feature) before the
+        // save wakes the daemon. Webview settles are direct human edits (a
+        // Suggesting-mode capture goes through suggest-create, never here).
+        await this.annotateSettle(document, document.getText(), next);
 
         const edit = new vscode.WorkspaceEdit();
         const last = document.lineAt(document.lineCount - 1);
@@ -399,38 +464,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             existing.id = s.id;
         }
         await this.persistDocFile(document, df);
+        await this.syncIntents(document, df); // register the doc-wins holds
     }
 
     private async withdrawSuggestion(document: vscode.TextDocument, id: string): Promise<void> {
         const df = this.docFileFor(document);
         df.suggestions = df.suggestions.filter(s => s.id !== id);
         await this.persistDocFile(document, df);
-    }
-
-    /**
-     * Apply a doc-ahead suggestion: settle its title/description change into
-     * tree.codoc through the EXISTING surgical edit path, then drop the suggestion.
-     * The settled change flows through the normal pipeline — and if it reads as an
-     * imperative intent change, Loop B queues a realize directive so the agent
-     * implements it (surfaced as the `awaiting_impl` status). The diff card clears
-     * because the change is now settled; the agent's progress shows in the status.
-     */
-    private async applySuggestion(document: vscode.TextDocument, id: string): Promise<void> {
-        const df = this.docFileFor(document);
-        const s = df.suggestions.find(x => x.id === id);
-        if (!s || !s.featureId) return;
-        // Drop it first so the rebuilt doc/payload doesn't re-show it.
-        df.suggestions = df.suggestions.filter(x => x.id !== id);
-        await this.persistDocFile(document, df);
-        // Apply against the CURRENT text (not the suggestion's stored baseline) so a
-        // field is only written when it actually differs from what's there now.
-        const cur = parseTreeCodoc(document.getText()).features.find(f => f.id === s.featureId);
-        if (s.titleNew != null && s.titleNew !== (cur?.title ?? '')) {
-            await this.editTitle(document, s.featureId, s.titleNew);
-        }
-        if (s.descNew != null && s.descNew !== (cur?.description ?? '')) {
-            await this.editDescription(document, s.featureId, s.descNew);
-        }
+        await this.syncIntents(document, df); // release the hold
     }
 
     /** Loop B / realize may stamp "done/total" progress into status.detail
@@ -439,72 +480,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const m = /(\d+)\s*\/\s*(\d+)(?:\s*[:\-]\s*(.*))?/.exec(detail || '');
         if (!m) return undefined;
         return { done: Number(m[1]), total: Number(m[2]), current: (m[3] ?? '').trim() };
-    }
-
-    private async editTitle(document: vscode.TextDocument, featureId: string, newTitle: string): Promise<void> {
-        const { features } = parseTreeCodoc(document.getText());
-        const f = features.find(x => x.id === featureId);
-        if (!f) return;
-        const lineText = document.lineAt(f.line).text;
-        const m = /^(\s*[-~]\s+)(.*?)(\s*⟨f-[0-9a-f]+⟩)?\s*$/.exec(lineText);
-        if (!m) return;
-        const [, prefix, , idSuffix = ''] = m;
-        const replaced = prefix + newTitle.trim() + idSuffix;
-        if (replaced === lineText) return;
-
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(document.uri, document.lineAt(f.line).range, replaced);
-        await vscode.workspace.applyEdit(edit);
-        await document.save();
-    }
-
-    private async editDescription(document: vscode.TextDocument, featureId: string, newDescription: string): Promise<void> {
-        const { features } = parseTreeCodoc(document.getText());
-        const idx = features.findIndex(x => x.id === featureId);
-        if (idx < 0) return;
-        const f = features[idx];
-        const next = features[idx + 1];
-        const titleLine = document.lineAt(f.line).text;
-        const titleIndent = (/^(\s*)/.exec(titleLine) ?? ['', ''])[1].length;
-
-        const startLine = f.line + 1;
-        let endLine = next ? next.line - 1 : document.lineCount - 1;
-        for (let i = startLine; i <= endLine; i++) {
-            const txt = document.lineAt(i).text;
-            if (txt.startsWith('# ── pending changes')) { endLine = i - 1; break; }
-            if (/^[+\-~] \s*[-~] /.test(txt)) { endLine = i - 1; break; }
-        }
-
-        let descIndent = ' '.repeat(titleIndent + 4);
-        for (let i = startLine; i <= endLine; i++) {
-            const txt = document.lineAt(i).text;
-            if (txt.trim().length === 0) continue;
-            const lead = /^(\s*)/.exec(txt);
-            if (lead && lead[1].length > 0) { descIndent = lead[1]; break; }
-        }
-
-        const trimmedNew = newDescription.replace(/\s+$/g, '');
-        const newBody = trimmedNew.length === 0 ? '' : trimmedNew
-            .split('\n')
-            .map(l => l.trim().length === 0 ? '' : descIndent + l.trimStart())
-            .join('\n');
-
-        const edit = new vscode.WorkspaceEdit();
-        const hasExisting = startLine <= endLine;
-        if (hasExisting) {
-            const range = new vscode.Range(
-                new vscode.Position(startLine, 0),
-                new vscode.Position(endLine, document.lineAt(endLine).text.length),
-            );
-            edit.replace(document.uri, range, newBody);
-        } else if (newBody.length > 0) {
-            const pos = new vscode.Position(f.line, titleLine.length);
-            edit.insert(document.uri, pos, '\n' + newBody);
-        } else {
-            return;
-        }
-        await vscode.workspace.applyEdit(edit);
-        await document.save();
     }
 
     /** Move a feature (and its subtree) under a new parent (or to root if null). */

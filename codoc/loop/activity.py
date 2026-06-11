@@ -40,10 +40,10 @@ changed — it only reads the ``epoch.open`` transition.
 """
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+from codoc.loop.fsio import atomic_write_json, read_json
 
 ACTIVITY_FILENAME = "activity.json"
 
@@ -56,12 +56,15 @@ PHASE_EDITING = "editing"
 PHASE_REFLECTING = "reflecting"
 PHASE_DONE = "done"
 
-_EMPTY: dict = {
-    "version": 1,
-    "epoch": {"id": "", "origin": "interactive", "open": False, "started_at": None, "ended_at": None},
-    "touched": {},
-    "recent": [],
-}
+def _empty_activity() -> dict:
+    """A fresh empty document (fresh nested dicts — callers mutate in place)."""
+    return {
+        "version": 1,
+        "epoch": {"id": "", "origin": "interactive", "open": False,
+                  "started_at": None, "ended_at": None},
+        "touched": {},
+        "recent": [],
+    }
 
 
 def activity_path(codoc_dir: str | Path) -> Path:
@@ -69,12 +72,9 @@ def activity_path(codoc_dir: str | Path) -> Path:
 
 
 def read_activity(codoc_dir: str | Path) -> dict:
-    """Return the parsed activity.json or the empty sentinel if absent / corrupt."""
-    path = activity_path(codoc_dir)
-    try:
-        return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return dict(_EMPTY)
+    """Return the parsed activity.json or an empty document if absent / corrupt."""
+    data = read_json(activity_path(codoc_dir))
+    return data if isinstance(data, dict) else _empty_activity()
 
 
 def read_epoch(codoc_dir: str | Path) -> dict | None:
@@ -97,6 +97,20 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def write_activity(codoc_dir: str | Path, data: dict) -> None:
+    """Write activity.json atomically under the cross-process lock.
+
+    Concurrent writers (hook invocations within one CC session, the MCP server)
+    serialize on the lock file so the JSON is never corrupted."""
+    from filelock import FileLock
+
+    codoc_dir = Path(codoc_dir)
+    dest = activity_path(codoc_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(codoc_dir / (ACTIVITY_FILENAME + ".lock")), timeout=5):
+        atomic_write_json(dest, data)
+
+
 def mark_feature_phase(codoc_dir: str | Path, feature_ids: list[str], phase: str) -> None:
     """Set the reflection ``phase`` for ``feature_ids`` in ``activity.json``.
 
@@ -110,31 +124,19 @@ def mark_feature_phase(codoc_dir: str | Path, feature_ids: list[str], phase: str
     codoc_dir = Path(codoc_dir)
     try:
         from filelock import FileLock
-        lock = FileLock(str(codoc_dir / (ACTIVITY_FILENAME + ".lock")), timeout=5)
-    except ImportError:
-        lock = None  # type: ignore[assignment]
 
-    def _do() -> None:
-        data = read_activity(codoc_dir)
-        feats = data.get("features")
-        if not isinstance(feats, dict):
-            feats = {}
-        now = _now_iso()
-        for fid in feature_ids:
-            feats[fid] = {"phase": phase, "at": now}
-        data["features"] = feats
-        dest = activity_path(codoc_dir)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        os.replace(tmp, dest)
-
-    try:
-        if lock is not None:
-            with lock:
-                _do()
-        else:
-            _do()
+        with FileLock(str(codoc_dir / (ACTIVITY_FILENAME + ".lock")), timeout=5):
+            data = read_activity(codoc_dir)
+            feats = data.get("features")
+            if not isinstance(feats, dict):
+                feats = {}
+            now = _now_iso()
+            for fid in feature_ids:
+                feats[fid] = {"phase": phase, "at": now}
+            data["features"] = feats
+            dest = activity_path(codoc_dir)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(dest, data)
     except Exception:  # noqa: BLE001 — never break a tool/hook over an animation hint
         pass
 

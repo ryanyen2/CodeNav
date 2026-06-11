@@ -141,3 +141,21 @@ def test_render_called_and_hash_updated_after_cycle(dirs):
 
     assert rendered["done"]
     assert state.last_tree_hash == _hash(tp)  # guard now matches the freshly rendered file
+
+
+def test_edits_json_routes_to_loop_b(dirs):
+    """A doc-ahead suggestion (edits.json write) wakes Loop B — payload intents
+    are applied by the loop, so the daemon must watch the intent channel."""
+    from codoc.loop.edits import edits_path
+    root, codoc_dir, tp = dirs
+    ep = edits_path(codoc_dir)
+    ep.write_text('{"version":1,"edits":[],"intents":[{"id":"d-s","feature_id":"f-1","ts":0,"description":"Should X."}]}')
+    a = _spy(LoopAResult())
+    b = _spy(LoopBResult(user_edits=1))
+    state = WatchState(last_tree_hash=_hash(tp))
+
+    out = process_batch([str(ep)], root, codoc_dir, state, loop_a=a, loop_b=b, render=_noop_render)
+
+    assert out and out[0] == "codoc→code"
+    assert b.seen["called"]
+    assert "called" not in a.seen

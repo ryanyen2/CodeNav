@@ -310,7 +310,7 @@ def test_sole_placeholder_adopts_only_with_flag(store):
     # Reflect as Loop B would: the sole live placeholder adopts the new code even
     # without a name match.
     cs2 = ChangeSet(added=[ChunkRef("ui2.py", "ui2.py::persist_pref2", "h", "def persist_pref2(): ...")])
-    res2 = apply_changeset(cs2, store, propose=_raising, adopt_placeholders=True)
+    apply_changeset(cs2, store, propose=_raising, adopt_placeholders=True)
     b = store.binding_at("ui2.py", "ui2.py::persist_pref2")
     assert b is not None and b.feature_id == plan.id
 

@@ -61,7 +61,7 @@ def test_spawn_launches_claude_and_sets_status(codoc_dir):
         proc = autorealize.spawn_realize("/repo", codoc_dir)
     assert proc is fake
     args, kwargs = popen.call_args
-    assert args[0] == ["/usr/bin/claude", "-p", "/codoc:realize"]
+    assert args[0] == ["/usr/bin/claude", "-p", "/codoc:sync"]
     assert kwargs["cwd"] == "/repo"
     state = json.loads((__import__("pathlib").Path(codoc_dir) / "status.json").read_text())
     assert state["state"] == "realizing"

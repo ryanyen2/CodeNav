@@ -107,11 +107,8 @@ def propose_plan(
         realized=False if (op_kind is NodeOpKind.ADD_NODE and not parsed_binds) else None,
     )
 
-    store = open_store(codoc_dir)
-    try:
+    with open_store(codoc_dir) as store:
         event = apply_op(op, store, source=PLAN_SOURCE, applied=False)
         write_tree(store, codoc_dir)
-    finally:
-        store.close()
 
     return event.id

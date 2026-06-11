@@ -34,9 +34,11 @@ from typing import Any
 
 from codoc.agent.paths import find_codoc_dir as _find_codoc_dir
 
+from codoc.loop.activity import read_activity as _read_activity
+from codoc.loop.activity import write_activity as _write_activity
 from codoc.loop.filenames import REALIZE_FILENAME
+from codoc.loop.fsio import read_json
 
-ACTIVITY_FILENAME = "activity.json"
 BINDINGS_FILENAME = "tree.bindings.json"
 
 # Maximum recent-events to keep in the rolling log.
@@ -65,63 +67,16 @@ def _resolve_features(rel_path: str, codoc_dir: str) -> list[str]:
     Reads the sidecar rather than opening the SQLite store to avoid WAL
     contention with the running watch daemon.
     """
-    sidecar_path = Path(codoc_dir) / BINDINGS_FILENAME
-    try:
-        sidecar = json.loads(sidecar_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return []
+    sidecar = read_json(Path(codoc_dir) / BINDINGS_FILENAME, default={})
     by_file: dict = sidecar.get("by_file", {})
     entries = by_file.get(rel_path, [])
     return [e["feature_id"] for e in entries if "feature_id" in e]
 
 
-# ─── Activity.json atomic writer ─────────────────────────────────────────────
+# ─── Hook handlers ───────────────────────────────────────────────────────────
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _read_activity(codoc_dir: str) -> dict:
-    path = Path(codoc_dir) / ACTIVITY_FILENAME
-    try:
-        return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {
-            "version": 1,
-            "epoch": {"id": "", "origin": "interactive", "open": False,
-                      "started_at": None, "ended_at": None},
-            "touched": {},
-            "recent": [],
-        }
-
-
-def _write_activity(codoc_dir: str, data: dict) -> None:
-    """Write activity.json atomically (tmp → os.replace).
-
-    Uses a *lock file* so concurrent hook invocations within one CC session
-    don't corrupt the JSON.  ``filelock`` is already a project dependency.
-    """
-    try:
-        from filelock import FileLock
-        lock_path = Path(codoc_dir) / (ACTIVITY_FILENAME + ".lock")
-        lock = FileLock(str(lock_path), timeout=5)
-    except ImportError:
-        lock = None  # type: ignore[assignment]
-
-    def _do_write() -> None:
-        dest = Path(codoc_dir) / ACTIVITY_FILENAME
-        tmp = dest.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        os.replace(tmp, dest)
-
-    if lock is not None:
-        with lock:
-            _do_write()
-    else:
-        _do_write()
-
-
-# ─── Hook handlers ───────────────────────────────────────────────────────────
 
 def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
     """Open a new agent epoch, recording the origin (interactive vs loop_b)."""
@@ -274,7 +229,7 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     Loop B hands code-implying tree edits to the session by writing
     ``.codoc/realize.md`` (instead of spawning a headless agent). On each user
     prompt, if that file exists, inject a one-line ``additionalContext`` reminder
-    so the session knows to run ``/codoc:realize``. Emits the UserPromptSubmit
+    so the session knows to run ``/codoc:sync``. Emits the UserPromptSubmit
     hook JSON on stdout; stays silent (no output) when nothing is queued.
 
     Daemon-free fallback: if proposal verdicts are sitting unprocessed in the inbox
@@ -293,7 +248,7 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     count = f"{n} change(s)" if n else "changes"
     msg = (
         f"codoc: {count} from accepted tree edits are queued in .codoc/realize.md. "
-        "Run /codoc:realize to implement them — read the file, apply each directive "
+        "Run /codoc:sync to implement them — read the file, apply each directive "
         "(respecting its `Edit only:` scope and never touching .codoc/), call "
         "codoc_reflect to bind the code, then delete .codoc/realize.md."
     )

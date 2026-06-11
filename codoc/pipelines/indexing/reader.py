@@ -7,7 +7,6 @@ internals leak past this boundary.
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,12 +47,12 @@ class ChunkRow:
             id=raw["id"],
             file=raw["file"],
             symbol_path=raw["symbol_path"],
-            language=raw["language"],
-            source=raw["source"],
-            tokens_hash=raw["tokens_hash"],
-            types_hash=raw["types_hash"],
-            start_byte=raw["start_byte"],
-            end_byte=raw["end_byte"],
+            language=raw.get("language", ""),
+            source=raw.get("source", ""),
+            tokens_hash=raw.get("tokens_hash", ""),
+            types_hash=raw.get("types_hash", ""),
+            start_byte=raw.get("start_byte", 0),
+            end_byte=raw.get("end_byte", 0),
             embedding=emb,
         )
 
@@ -65,45 +64,51 @@ async def _open_table(codoc_dir: str | Path):
     return await conn.open_table(LANCE_TABLE_NAME)
 
 
-async def _read_all(codoc_dir: str | Path) -> list[ChunkRow]:
+_BASE_COLUMNS = ["id", "file", "symbol_path", "language", "tokens_hash",
+                 "types_hash", "start_byte", "end_byte"]
+
+
+async def _read_all(
+    codoc_dir: str | Path,
+    files: set[str] | None = None,
+    with_embeddings: bool = True,
+    with_source: bool = True,
+) -> list[ChunkRow]:
     try:
         tbl = await _open_table(codoc_dir)
     except (FileNotFoundError, ValueError):
         return []
-    rows = await tbl.query().to_list()
+    q = tbl.query()
+    if files is not None:
+        if not files:
+            return []
+        quoted = ", ".join("'" + f.replace("'", "''") + "'" for f in sorted(files))
+        q = q.where(f"file IN ({quoted})")
+    cols = list(_BASE_COLUMNS)
+    if with_source:
+        cols.append("source")
+    if with_embeddings:
+        cols.append("embedding")
+    rows = await q.select(cols).to_list()
     return [ChunkRow.from_raw(r) for r in rows]
 
 
-def read_all_chunks(codoc_dir: str | Path = ".codoc") -> list[ChunkRow]:
-    """Return every chunk currently in the index (synchronous)."""
-    return asyncio.run(_read_all(codoc_dir))
+def read_all_chunks(
+    codoc_dir: str | Path = ".codoc",
+    *,
+    files: set[str] | None = None,
+    with_embeddings: bool = True,
+    with_source: bool = True,
+) -> list[ChunkRow]:
+    """Read chunks from the index (synchronous).
+
+    ``files`` pushes a ``file IN (…)`` predicate down to LanceDB so a scoped
+    loop pass reads only the touched files instead of the whole table.
+    ``with_embeddings`` / ``with_source`` drop the two heavy columns when the
+    caller only needs identity hashes (the loops never need embeddings; the
+    graph symbol table doesn't even need source). Excluded columns come back as
+    ``None`` / ``""`` on the row.
+    """
+    return asyncio.run(_read_all(codoc_dir, files, with_embeddings, with_source))
 
 
-def chunks_by_file(rows: list[ChunkRow]) -> dict[str, list[ChunkRow]]:
-    """Group rows by file path. Order within each file follows ``start_byte``."""
-    grouped: dict[str, list[ChunkRow]] = defaultdict(list)
-    for r in rows:
-        grouped[r.file].append(r)
-    for chunks in grouped.values():
-        chunks.sort(key=lambda c: c.start_byte)
-    return grouped
-
-
-def per_file_mean_embeddings(
-    rows: list[ChunkRow],
-) -> dict[str, np.ndarray | None]:
-    """Mean of chunk embeddings per file. Files with no embeddings map to None."""
-    by_file = chunks_by_file(rows)
-    result: dict[str, np.ndarray | None] = {}
-    for file, chunks in by_file.items():
-        vecs = [c.embedding for c in chunks if c.embedding is not None]
-        if not vecs:
-            result[file] = None
-            continue
-        result[file] = np.mean(np.stack(vecs), axis=0)
-    return result
-
-
-def fingerprint_index(rows: list[ChunkRow]) -> dict[tuple[str, str], ChunkRow]:
-    """Index rows by (file, symbol_path) for fast lookup during reconciliation."""
-    return {(r.file, r.symbol_path): r for r in rows}

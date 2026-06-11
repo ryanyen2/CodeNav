@@ -6,7 +6,7 @@ Five states answer "where are code and intent relative to each other right now?"
   ``code_drift``    code changed and Loop A raised proposals awaiting review.
   ``tree_dirty``    tree.codoc was edited; the code change has not been realized yet.
   ``awaiting_impl`` tree edits were accepted and queued in ``.codoc/realize.md``
-                    for the live Claude Code session to implement (``/codoc:realize``).
+                    for the live Claude Code session to implement (``/codoc:sync``).
   ``realizing``     a coding agent is implementing tree edits right now.
 
 The loops write this file at the end of each pass (``awaiting_impl`` when Loop B
@@ -14,12 +14,11 @@ queues directives for the session). The IDE watches the file and never has to po
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 from pathlib import Path
 
 from codoc.loop.filenames import REALIZE_FILENAME
+from codoc.loop.fsio import atomic_write_json
 from codoc.model.hlc import HLC
 
 STATUS_FILENAME = "status.json"
@@ -53,10 +52,10 @@ def _realize_queue_size(codoc_dir: str | Path) -> int:
 def write_status(codoc_dir: str | Path, state: str, *, pending: int = 0, detail: str = "") -> Path:
     dest = status_path(codoc_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": 1, "state": state, "pending": pending, "detail": detail, "at": HLC.now().to_str()}
-    tmp = dest.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2))
-    os.replace(tmp, dest)
+    atomic_write_json(dest, {
+        "version": 1, "state": state, "pending": pending,
+        "detail": detail, "at": HLC.now().to_str(),
+    })
     return dest
 
 
@@ -87,13 +86,13 @@ def refresh_status(
         # code_drift (matching the documented awaiting_impl > code_drift order): a
         # later code-side pass that passes no awaiting_impl flag must not report
         # in_sync/code_drift and orphan the directive — the IDE would stop prompting
-        # /codoc:realize. The file self-clears when /codoc:realize finishes, so this
+        # /codoc:sync. The file self-clears when /codoc:sync finishes, so this
         # is transient; pending proposals still render inline in the tree regardless.
         state = AWAITING_IMPL
         if pending is None:
             count = queued
         if not detail:
-            detail = f"{queued} change(s) ready to implement — run /codoc:realize"
+            detail = f"{queued} change(s) ready to implement — run /codoc:sync"
     elif n_proposals:
         state = CODE_DRIFT
     else:

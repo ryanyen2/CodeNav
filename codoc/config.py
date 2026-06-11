@@ -10,7 +10,7 @@ Environment variables:
     OPENAI_API_KEY          API key for OpenAI (required when provider=openai)
     CODOC_BASE_URL          Override base URL (e.g. for local OpenAI-compatible servers)
     CODOC_TEMPERATURE       Float  (default 0.2)
-    CODOC_MAX_TOKENS        Int    (default 4096)
+    CODOC_MAX_TOKENS        Int    (default 16000)
     CODOC_LOG_PROMPTS       Set to "1" to log prompt+response to stderr
 
     CODOC_EMBEDDER_PROVIDER Embedder provider: "openai" | "sentence-transformers"  (default "sentence-transformers")
@@ -41,7 +41,9 @@ class LLMConfig(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     temperature: float = 0.2
-    max_tokens: int = 4096
+    # Reasoning models spend completion budget on hidden reasoning, so the
+    # budget must comfortably exceed the visible JSON we want back.
+    max_tokens: int = 16000
 
 
 def get_llm_config() -> LLMConfig:
@@ -52,8 +54,6 @@ def get_llm_config() -> LLMConfig:
         api_key=os.environ.get("OPENAI_API_KEY"),
         base_url=os.environ.get("CODOC_BASE_URL"),
         temperature=float(os.environ.get("CODOC_TEMPERATURE", "0.2")),
-        # GPT-5 reasoning models spend completion budget on hidden reasoning, so
-        # the budget must comfortably exceed the visible JSON we want back.
         max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "16000")),
     )
 

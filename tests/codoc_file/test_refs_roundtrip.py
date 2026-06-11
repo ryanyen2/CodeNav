@@ -115,11 +115,36 @@ def test_sidecar_structure(store, tmp_path):
     write_tree(store, tmp_path)
     sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
 
-    assert sidecar["version"] == 3
+    assert sidecar["version"] == 4
     assert "proposals" in sidecar and "realized" in sidecar["features"][auth.id]
     assert auth.id in sidecar["by_feature"] and util.id in sidecar["by_feature"]
     auth_syms = {e["symbol"] for e in sidecar["by_feature"][auth.id]}
     assert "auth.py::login" in auth_syms and "session.py::create_session" in auth_syms
+
+
+def test_sidecar_v4_changes_feed_and_holds(store, tmp_path):
+    """v4: a provenance feed of recent applied events + the doc-wins hold set."""
+    from codoc.loop.apply import apply_op
+    from codoc.loop import edits as edits_channel
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    auth, _, _, _ = _populate(store)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=auth.id, description="Reworded."),
+             store, source="loop_a_agent", applied=True,
+             actor="claude-code", mode="auto", caused_by="d-12345678")
+    edits_channel._write_edits_file(
+        tmp_path, edits=[],
+        intents=[{"id": "d-x", "feature_id": auth.id, "actor": "human", "ts": 0}])
+    write_tree(store, tmp_path)
+    sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
+
+    feed = sidecar["changes"]
+    amends = [c for c in feed if c["kind"] == "amend"]
+    assert amends and amends[0]["feature_id"] == auth.id
+    assert amends[0]["actor"] == "claude-code"
+    assert amends[0]["mode"] == "auto"
+    assert amends[0]["caused_by"] == "d-12345678"
+    assert sidecar["holds"] == [auth.id]
 
 
 def test_sidecar_by_file_index(store, tmp_path):

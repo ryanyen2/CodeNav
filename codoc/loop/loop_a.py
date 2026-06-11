@@ -15,7 +15,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.agent.tree_update import propose_tree_update
+from codoc.loop import edits as edits_channel
 from codoc.loop.apply import apply_op, derive_auto_ops, should_auto_apply
+from codoc.loop.classify import suppressed_by_hold
 from codoc.loop.diff import ChangeSet, ChunkRef, compute_changeset
 from codoc.loop.subtree import select_relevant_subtree
 from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
@@ -108,23 +110,24 @@ def _norm_title(t: str | None) -> str:
     return re.sub(r"\s+", " ", (t or "").strip().lower())
 
 
-def _unbound_features_by_title(store: Store) -> dict[str, str]:
+def _unbound_features_by_title(feats, bound_ids: set[str]) -> dict[str, str]:
     """``normalized title → feature_id`` for every live feature that owns NO code.
 
     These are adoptable: an ADD_NODE the LLM/coverage net would mint with the
     same title is the SAME concept (e.g. a hand-added empty node the model
     re-proposed), so we bind into the existing node instead of minting a
-    duplicate-titled sibling.
+    duplicate-titled sibling. Pure over the pass's preloaded feature list + the
+    one-query ``bound_feature_ids`` set (no per-feature binding lookups).
     """
     out: dict[str, str] = {}
-    for f in store.list_features():
-        if f.retired or store.bindings_for_feature(f.id):
+    for f in feats:
+        if f.retired or f.id in bound_ids:
             continue
         out.setdefault(_norm_title(f.title), f.id)
     return out
 
 
-def _placeholder_owner(store: Store, symbol_path: str, *, sole_ok: bool) -> str | None:
+def _placeholder_owner(placeholders: list, symbol_path: str, *, sole_ok: bool) -> str | None:
     """An unrealized, still-unbound plan placeholder that should ADOPT this new
     symbol rather than have a duplicate node minted for it.
 
@@ -132,11 +135,9 @@ def _placeholder_owner(store: Store, symbol_path: str, *, sole_ok: bool) -> str 
     the *sole* placeholder when ``sole_ok`` (a Loop B post-implementation reflect,
     where the agent wrote this code expressly for the one accepted plan node).
     Adopting flips the placeholder ``realized`` via the ATTACH in ``_mutate``.
+    ``placeholders`` is the pass's live candidate list (the caller removes a
+    placeholder once adopted, mirroring the old per-call unbound re-query).
     """
-    placeholders = [
-        f for f in store.list_features()
-        if not f.realized and not f.retired and not store.bindings_for_feature(f.id)
-    ]
     if not placeholders:
         return None
     leaf = symbol_path.split("::", 1)[-1].split(".")[-1].lower()
@@ -253,6 +254,7 @@ class LoopAResult:
     proposed: list[NodeOp] = field(default_factory=list)      # pending review hunks
     llm_called: bool = False
     impacted: list[str] = field(default_factory=list)         # feature IDs of upstream dependents
+    held_back: int = 0  # intent ops suppressed by a doc-wins hold (classify row 13)
 
     def summary(self) -> str:
         auto = ", ".join(f"{n} {k}" for k, n in sorted(self.auto.items())) or "none"
@@ -264,6 +266,8 @@ class LoopAResult:
             parts.append(f"applied {len(self.applied_structural)} structural")
         if self.impacted:
             parts.append(f"{len(self.impacted)} impacted features")
+        if self.held_back:
+            parts.append(f"held {self.held_back} op(s) — doc edit pending")
         return " · ".join(parts)
 
 
@@ -284,7 +288,23 @@ def apply_changeset(
     # reconcile_drift → both on), but a single flag couldn't preserve both defaults.
     allow_retire: bool = True,       # False ⇒ drop LLM-proposed RETIRE ops (twitchy temporal pass)
     amend_on_change: bool = False,   # True ⇒ in-place modifications can trigger a description-amend LLM pass
+    # Doc-wins + causality (classify rows 13 / 6). ``held`` = features with pending
+    # doc-ahead intent (live suggestion or queued directive): code-side
+    # AMEND/RETIRE/MOVE on them is deferred; binding maintenance still applies.
+    # ``caused_by_map`` (feature_id → directive id) + ``default_caused_by`` stamp
+    # ops produced while a realize queue is being implemented, so the IDE can group
+    # the surfaced-back changes under the doc edit that triggered them.
+    held: set[str] | None = None,
+    caused_by_map: dict[str, str] | None = None,
+    default_caused_by: str = "",
 ) -> LoopAResult:
+    held = held or set()
+
+    def _cause(op: NodeOp) -> str:
+        if caused_by_map and op.feature_id and op.feature_id in caused_by_map:
+            return caused_by_map[op.feature_id]
+        return default_caused_by
+
     # GC stale proposals first so a no-op pass can converge to in_sync even when
     # there is no change set to process. Bindings this pass is about to remove
     # don't count as "still owns code" — so a retire driven by the in-flight
@@ -297,6 +317,10 @@ def apply_changeset(
     fp = cs.fingerprints()
     th = cs.types_hashes()
 
+    # ONE feature-table read per pass — every helper below works off this list
+    # (plus one-query bound-id sets) instead of re-scanning the store.
+    feats = store.list_features()
+
     # Which feature did each removed chunk belong to (captured before detach)?
     removed_owner: dict[tuple[str, str], str] = {}
     for r in cs.removed:
@@ -308,7 +332,8 @@ def apply_changeset(
     #    chunks DETACH here, freeing their (file, symbol) so a relocation can rebind.
     auto_ops = derive_auto_ops(cs, store)
     for op in auto_ops:
-        apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th)
+        apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+                 caused_by=_cause(op))
     result = LoopAResult(auto=dict(Counter(op.kind.value for op in auto_ops)))
     if gc:
         result.auto["gc"] = gc
@@ -326,7 +351,8 @@ def apply_changeset(
             bindings=[(added_ref.file, added_ref.symbol_path)],
             rationale=f"{_kind}: {removed_ref.symbol_path} → {added_ref.symbol_path}",
         )
-        apply_op(reloc, store, source=source, applied=True, fp_lookup=fp, th_lookup=th)
+        apply_op(reloc, store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+                 caused_by=_cause(reloc))
         relocated_added.add((added_ref.file, added_ref.symbol_path))
     if relocations:
         result.auto["relocate"] = result.auto.get("relocate", 0) + len(relocations)
@@ -337,7 +363,8 @@ def apply_changeset(
     #    so it is never a retire candidate (guards the plan→implement window).
     emptied = {
         fid for fid in set(removed_owner.values())
-        if not store.bindings_for_feature(fid)
+        if fid not in held  # doc-wins: a held feature is being re-specified, not emptied
+        and not store.bindings_for_feature(fid)
         and (f := store.get_feature(fid)) and not f.retired and f.realized
     }
     added_unbound = [
@@ -361,15 +388,18 @@ def apply_changeset(
     #     desync. ``adopt_placeholders`` (set by Loop B's post-implement reflect)
     #     lets the SOLE placeholder adopt code even without a name match.
     still_unbound = []
+    bound_ids = store.bound_feature_ids()
+    placeholders = [f for f in feats
+                    if not f.realized and not f.retired and f.id not in bound_ids]
     for a in added_unbound:
-        owner = _placeholder_owner(store, a.symbol_path, sole_ok=adopt_placeholders)
+        owner = _placeholder_owner(placeholders, a.symbol_path, sole_ok=adopt_placeholders)
         if owner:
-            apply_op(
-                NodeOp(kind=NodeOpKind.ATTACH, feature_id=owner,
-                       bindings=[(a.file, a.symbol_path)],
-                       rationale="adopt: bound to the plan placeholder it implements"),
-                store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
-            )
+            placeholders = [f for f in placeholders if f.id != owner]
+            adopt = NodeOp(kind=NodeOpKind.ATTACH, feature_id=owner,
+                           bindings=[(a.file, a.symbol_path)],
+                           rationale="adopt: bound to the plan placeholder it implements")
+            apply_op(adopt, store, source=source, applied=True, fp_lookup=fp,
+                     th_lookup=th, caused_by=_cause(adopt))
             result.auto["adopt"] = result.auto.get("adopt", 0) + 1
         else:
             still_unbound.append(a)
@@ -384,7 +414,8 @@ def apply_changeset(
     # can propose a description AMEND if the change made the prose stale — even
     # when nothing was added or emptied. Gated by amend_on_change so the frequent
     # temporal pass (run_loop_a) never pays for an LLM call on every edit.
-    modified_realized = amend_on_change and _has_modified_realized(cs, store, claimed_features)
+    modified_realized = amend_on_change and _has_modified_realized(
+        cs, store, claimed_features | held)
 
     if not (added_unbound or emptied or modified_realized):
         return result
@@ -408,7 +439,7 @@ def apply_changeset(
             for m in cs.modified
         ],
     }
-    subtree, all_titles, graph_ctx = select_relevant_subtree(cs, store)
+    subtree, all_titles, graph_ctx = select_relevant_subtree(cs, store, features=feats)
     if graph_ctx.get("edges") or graph_ctx.get("recent"):
         changes["graph"] = graph_ctx
     if dep_features:
@@ -427,7 +458,7 @@ def apply_changeset(
     #    (title) already names a live, still-unbound feature is the SAME concept
     #    (e.g. a hand-added empty node the model re-proposed) — rewrite it to an
     #    ATTACH onto that node so we never mint a duplicate-titled sibling.
-    unbound_titles = _unbound_features_by_title(store)
+    unbound_titles = _unbound_features_by_title(feats, store.bound_feature_ids())
     for op in ops:
         # The temporal index diff (run_loop_a) is twitchy — a feature can look
         # "emptied" mid-edit and rebind a save later. Never let that path surface a
@@ -435,19 +466,25 @@ def apply_changeset(
         # allow_retire=True) may. Stale retires are also GC'd once code rebinds.
         if op.kind is NodeOpKind.RETIRE_NODE and not allow_retire:
             continue
+        # Doc-wins (classify row 13): a feature with pending doc-ahead intent is
+        # being re-specified by the user — defer code-side intent ops on it (even
+        # a small auto-applicable AMEND would rewrite the prose under their edit).
+        if suppressed_by_hold(op, held):
+            result.held_back += 1
+            continue
         if op.kind is NodeOpKind.ADD_NODE and op.bindings:
             existing = unbound_titles.get(_norm_title(op.title))
             if existing:
-                apply_op(
-                    NodeOp(kind=NodeOpKind.ATTACH, feature_id=existing,
-                           bindings=op.bindings,
-                           rationale="dedup: bound to existing same-title node"),
-                    store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
-                )
+                dedup = NodeOp(kind=NodeOpKind.ATTACH, feature_id=existing,
+                               bindings=op.bindings,
+                               rationale="dedup: bound to existing same-title node")
+                apply_op(dedup, store, source=source, applied=True, fp_lookup=fp,
+                         th_lookup=th, caused_by=_cause(dedup))
                 result.auto["attach"] = result.auto.get("attach", 0) + 1
                 continue
         applied = should_auto_apply(op, store)
-        apply_op(op, store, source=source, applied=applied, fp_lookup=fp, th_lookup=th)
+        apply_op(op, store, source=source, applied=applied, fp_lookup=fp, th_lookup=th,
+                 caused_by=_cause(op))
         if not applied:
             result.proposed.append(op)
         elif op.kind not in SAFE_OPS:
@@ -463,7 +500,8 @@ def apply_changeset(
     #    A chunk named in any op (applied ATTACH/ADD_NODE *or* a pending ADD_NODE
     #    proposal) is already placed; only genuinely unplaced chunks fall through.
     covered_by_ops = {b for op in ops for b in op.bindings}
-    _cover_uncovered_adds(added_unbound, covered_by_ops, store, result, fp, th, source)
+    _cover_uncovered_adds(added_unbound, covered_by_ops, store, result, fp, th, source,
+                          cause=_cause)
     return result
 
 
@@ -475,8 +513,11 @@ def _cover_uncovered_adds(
     fp: dict[tuple[str, str], str],
     th: dict[tuple[str, str], str],
     source: str,
+    cause=None,
 ) -> None:
     from codoc.graph.query import neighbor_feature
+
+    cause = cause or (lambda op: "")
 
     for a in added_unbound:
         if (a.file, a.symbol_path) in covered_by_ops:
@@ -491,7 +532,8 @@ def _cover_uncovered_adds(
                 bindings=[(a.file, a.symbol_path)],
                 rationale="coverage: attached to graph-neighbor feature",
             )
-            apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th)
+            apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+                     caused_by=cause(op))
             result.auto["attach"] = result.auto.get("attach", 0) + 1
         else:
             op = NodeOp(
@@ -501,7 +543,8 @@ def _cover_uncovered_adds(
                 bindings=[(a.file, a.symbol_path)],
                 rationale="coverage: unplaced added chunk — needs a home",
             )
-            apply_op(op, store, source=source, applied=False, fp_lookup=fp, th_lookup=th)
+            apply_op(op, store, source=source, applied=False, fp_lookup=fp, th_lookup=th,
+                     caused_by=cause(op))
             result.proposed.append(op)
 
 
@@ -518,20 +561,33 @@ def run_loop_a(
     from codoc.graph.query import update_graph
 
     cs = compute_changeset(root_dir, codoc_dir, file_scope=file_scope)
-    store = open_store(codoc_dir)
-    try:
+    held, cb_map, default_cb = _doc_intent(codoc_dir)
+    with open_store(codoc_dir) as store:
         update_graph(store, cs.rows, cs.touched_files())
         # Temporal index diff: never retire (a mid-edit "emptied" can rebind on the
         # next save). Retires are the authoritative state pass's job (reconcile_drift).
         result = apply_changeset(cs, store, source=source, repo_name=repo_name,
                                  config=config, adopt_placeholders=adopt_placeholders,
-                                 allow_retire=False)
+                                 allow_retire=False, held=held,
+                                 caused_by_map=cb_map, default_caused_by=default_cb)
         from codoc.loop.status import refresh_status
 
         refresh_status(codoc_dir, store)
         return result
-    finally:
-        store.close()
+
+
+def _doc_intent(codoc_dir: str) -> tuple[set[str], dict[str, str], str]:
+    """Pending doc-ahead intent for a pass: ``(held, caused_by_map, default_caused_by)``.
+
+    ``held`` (live suggestions ∪ queued directives) drives doc-wins suppression;
+    the manifest's feature→directive map (+ the sole directive id as the default)
+    stamps ``caused_by`` on ops produced while the realize queue is implemented.
+    Once ``/codoc:sync`` deletes the queue, all three are empty again."""
+    held = edits_channel.hold_set(codoc_dir)
+    manifest = edits_channel.read_manifest(codoc_dir)
+    cb_map = {d.feature_id: d.id for d in manifest if d.feature_id}
+    default_cb = manifest[0].id if len(manifest) == 1 else ""
+    return held, cb_map, default_cb
 
 
 def _state_changeset(rows, store: Store, file_scope: set[str] | None) -> ChangeSet:
@@ -591,9 +647,10 @@ def reconcile_drift(
     from codoc.pipelines.indexing.runner import update_index
 
     update_index(root_dir, codoc_dir)
-    rows = read_all_chunks(codoc_dir)
-    store = open_store(codoc_dir)
-    try:
+    # The authority pass walks the whole index, but never needs embeddings.
+    rows = read_all_chunks(codoc_dir, with_embeddings=False)
+    held, cb_map, default_cb = _doc_intent(codoc_dir)
+    with open_store(codoc_dir) as store:
         cs = _state_changeset(rows, store, file_scope)
         update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
         # Authoritative full-state reconciliation — the only pass allowed to raise
@@ -601,8 +658,7 @@ def reconcile_drift(
         # to propose description amends when bound code changed in place.
         result = apply_changeset(cs, store, source=source, repo_name=repo_name,
                                  config=config, adopt_placeholders=adopt_placeholders,
-                                 allow_retire=True, amend_on_change=True)
+                                 allow_retire=True, amend_on_change=True, held=held,
+                                 caused_by_map=cb_map, default_caused_by=default_cb)
         refresh_status(codoc_dir, store)
         return result
-    finally:
-        store.close()

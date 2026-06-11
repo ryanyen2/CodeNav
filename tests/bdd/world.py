@@ -30,9 +30,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from codoc.codoc_file.render import tree_path, write_tree
+from codoc.loop import edits as edits_channel
 from codoc.loop import inbox
 from codoc.loop.diff import ChangeSet, ChunkRef
-from codoc.loop.loop_a import apply_changeset
+from codoc.loop.loop_a import _doc_intent, apply_changeset
 from codoc.loop.loop_b import LoopBResult, realize_path, run_loop_b
 from codoc.loop.status import refresh_status, status_path
 from codoc.model.binding import Binding
@@ -141,6 +142,24 @@ class World:
         self._say("GIVEN", label or f"pending {op.kind.value} proposal")
         return e.id
 
+    def given_doc_suggestion(self, fid: str, *, sugg_id: str = "", ts: int | None = None) -> str:
+        """A live doc-ahead suggestion on a feature (the IDE host registers it as
+        an intent in ``edits.json``) — puts the feature on doc-wins hold."""
+        import time as _time
+
+        sid = sugg_id or f"d-{fid}"
+        data = {}
+        p = edits_channel.edits_path(self.codoc_dir)
+        if p.exists():
+            data = json.loads(p.read_text())
+        intents = data.get("intents") or []
+        intents.append({"id": sid, "feature_id": fid, "actor": "human",
+                        "ts": ts if ts is not None else int(_time.time() * 1000)})
+        edits_channel._write_edits_file(self.codoc_dir, edits=data.get("edits") or [],
+                                        intents=intents)
+        self._say("GIVEN", f"a live doc-ahead suggestion on {self.title_of(fid)!r} (hold)")
+        return sid
+
     def render(self) -> None:
         """Write the current store out to ``tree.codoc`` (the human surface)."""
         with self._store() as s:
@@ -152,8 +171,12 @@ class World:
                           propose=propose_nothing, adopt_placeholders: bool = False, label: str = ""):
         """Drive Loop A over a change set with an injected ``propose`` (the LLM)."""
         cs = ChangeSet(added=list(added), removed=list(removed), modified=list(modified))
+        # Pick up pending doc intent exactly as the production entrypoints do
+        # (run_loop_a / reconcile_drift): holds + the directive causality map.
+        held, cb_map, default_cb = _doc_intent(str(self.codoc_dir))
         with self._store() as s:
-            res = apply_changeset(cs, s, propose=propose, adopt_placeholders=adopt_placeholders)
+            res = apply_changeset(cs, s, propose=propose, adopt_placeholders=adopt_placeholders,
+                                  held=held, caused_by_map=cb_map, default_caused_by=default_cb)
             refresh_status(self.codoc_dir, s)
         self.last_a = res
         if not label:

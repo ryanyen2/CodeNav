@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from codoc.model.hlc import HLC
 from codoc.model.ids import new_event_id
@@ -38,6 +38,32 @@ class NodeOpKind(str, Enum):
 PLAN_SOURCE = "plan"                  # agent-authored intent proposal (plan before code)
 LOOP_A_AGENT_SOURCE = "loop_a_agent"  # agent-driven reflection via MCP (code-first loop)
 AGENT_SOURCES = frozenset({PLAN_SOURCE, LOOP_A_AGENT_SOURCE})  # sources from an AI agent
+
+# Provenance vocabulary — the change ledger (additive; "" = legacy/unknown).
+#   actor: WHO made the change. "human", an agent id ("claude-code", "codex", …),
+#          or "loop" (codoc's own deterministic machinery).
+#   mode:  HOW it landed. "pen" = direct authoritative edit; "suggest" = proposed,
+#          requires an accept verdict; "auto" = machine-applied safe maintenance.
+#   caused_by: the directive (d-…), event (e-…), or suggestion id this change
+#          implements — the causality chain that lets the IDE group a reflection
+#          cascade under the doc edit that triggered it.
+ACTOR_HUMAN = "human"
+ACTOR_LOOP = "loop"
+DEFAULT_AGENT_ACTOR = "claude-code"
+MODE_PEN = "pen"
+MODE_SUGGEST = "suggest"
+MODE_AUTO = "auto"
+
+
+def default_provenance(source: str, applied: bool) -> tuple[str, str]:
+    """(actor, mode) inferred from a legacy ``source`` string — the back-compat
+    bridge for call sites that don't (yet) carry explicit provenance."""
+    if source == "user":
+        return ACTOR_HUMAN, MODE_PEN
+    if source in AGENT_SOURCES:
+        return DEFAULT_AGENT_ACTOR, (MODE_AUTO if applied else MODE_SUGGEST)
+    # loop_a / loop_b / bootstrap — codoc's own machinery
+    return ACTOR_LOOP, (MODE_AUTO if applied else MODE_SUGGEST)
 
 SAFE_OPS: frozenset[NodeOpKind] = frozenset(
     {NodeOpKind.ATTACH, NodeOpKind.DETACH, NodeOpKind.REFRESH, NodeOpKind.AMEND}
@@ -67,6 +93,20 @@ class Event(BaseModel):
     op: NodeOp
     applied: bool = True  # False ⇒ pending proposal
     accepted_at: datetime | None = None
+    # Change-ledger provenance ("" = legacy/unknown; see vocabulary above).
+    actor: str = ""      # "human" | agent id | "loop"
+    mode: str = ""       # "pen" | "suggest" | "auto"
+    caused_by: str = ""  # directive/event/suggestion id this change implements
+
+    @model_validator(mode="after")
+    def _default_provenance(self) -> "Event":
+        # Any construction path (apply_op, tests, tools) gets a sensible ledger
+        # stamp; explicit actor/mode always win. Rows loaded from a legacy db
+        # also pass through here, which is fine — the inferred values are
+        # exactly what those events meant.
+        if not self.actor and not self.mode:
+            self.actor, self.mode = default_provenance(self.source, self.applied)
+        return self
 
     @property
     def is_proposal(self) -> bool:

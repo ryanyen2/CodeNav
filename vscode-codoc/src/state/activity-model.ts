@@ -64,17 +64,6 @@ export function isAgentActive(data: ActivityData): boolean {
     return data.epoch?.open === true;
 }
 
-/** Collect the union of all feature_ids mentioned in touched entries. */
-export function computeActiveFeatureIds(data: ActivityData): Set<string> {
-    const ids = new Set<string>();
-    for (const entry of Object.values(data.touched ?? {})) {
-        for (const fid of entry.feature_ids) {
-            ids.add(fid);
-        }
-    }
-    return ids;
-}
-
 /**
  * Compute the 0-based line numbers (in tree.codoc) of features that are
  * actively being edited by the agent.

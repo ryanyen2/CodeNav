@@ -31,24 +31,12 @@ export const NODE_TEXT = 'text';
 export const NODE_CODE_REF = 'codeRef';
 export const NODE_HARD_BREAK = 'hardBreak';
 
-export const MARK_STRONG = 'strong';
-export const MARK_EM = 'em';
-export const MARK_HIGHLIGHT = 'highlight';
-export const MARK_COMMENT = 'comment';
 export const MARK_AUTHOR = 'author';
 
 /** Commitment mode — drives OPACITY (pen solid, pencil faded). */
 export type AuthorMode = 'pen' | 'pencil';
 /** Who authored a span — drives COLOR/tint. Open-ended on purpose (new agents). */
 export type AuthorRole = 'human' | 'claude-code' | 'codex' | 'gemini' | 'cursor' | string;
-
-/** The `author` mark: per-character provenance the plain-text projection can't carry. */
-export interface AuthorMarkAttrs {
-    authorId: string;
-    role: AuthorRole;
-    mode: AuthorMode;
-    ts: number;
-}
 
 export interface PMMark {
     type: string;
@@ -99,10 +87,6 @@ export function featureHeadingNode(attrs: FeatureHeadingAttrs, content: PMNode[]
 
 export function makeDoc(content: PMNode[]): PMNode {
     return { type: NODE_DOC, content };
-}
-
-export function emptyDoc(): PMNode {
-    return makeDoc([]);
 }
 
 // ── inline ↔ text projection ─────────────────────────────────────────────────

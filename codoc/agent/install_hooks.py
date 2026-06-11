@@ -175,6 +175,14 @@ def install_hooks(root_dir: str) -> None:
             dest = cmd_dest_dir / cmd.relative_to(cmd_src_dir)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(cmd.read_text())
+        # Drop previously-installed codoc commands the plugin no longer ships
+        # (e.g. the old /codoc:realize, folded into /codoc:sync).
+        dest_ns = cmd_dest_dir / "codoc"
+        if dest_ns.is_dir():
+            shipped = {p.name for p in (cmd_src_dir / "codoc").glob("*.md")}
+            for installed in dest_ns.glob("*.md"):
+                if installed.name not in shipped:
+                    installed.unlink()
 
     # 4. Register the codoc MCP server in <root>/.mcp.json.
     install_mcp(root_dir)

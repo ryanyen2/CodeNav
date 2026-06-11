@@ -11,7 +11,7 @@ reads `.codoc/tree.codoc` and the sidecar `.codoc/tree.bindings.json` from disk 
 
 `codoc init` also installs the **codoc Claude Code plugin** into `.claude/` and
 `.mcp.json` — hooks, the MCP server, the `codoc-intent` skill, and the
-`/codoc:plan` + `/codoc:realize` commands — so Claude Code sessions in this repo
+`/codoc:plan` + `/codoc:sync` commands — so Claude Code sessions in this repo
 follow the propose-then-implement workflow (see §Claude Code below).
 
 ## How to run the extension (development)
@@ -189,7 +189,7 @@ The `codoc` status bar item (bottom-left) reflects the current loop state
 | `$(sync) codoc: not initialized` | — | No `.codoc/` directory — run `codoc init` |
 | `$(loading~spin) codoc: implementing…` | `realizing` | Your session is implementing tree edits |
 | `$(pencil) codoc: applying tree edits…` | `tree_dirty` | Loop B is processing tree changes |
-| `$(play) codoc: N to implement` | `awaiting_impl` | N directives queued in `realize.md` — run `/codoc:realize` |
+| `$(play) codoc: N to implement` | `awaiting_impl` | N directives queued in `realize.md` — run `/codoc:sync` |
 | `$(bell) codoc: N proposals` | `code_drift` | N pending proposals to review |
 | `$(check) codoc: N` | `in_sync` | All clean (N live features) |
 
@@ -251,19 +251,24 @@ makes network requests:
 | `.codoc/tree.bindings.json` | Machine-readable sidecar (see schema below) |
 | `.codoc/status.json` | Loop lifecycle state — drives status bar + CodeLens header |
 | `.codoc/inbox.json` | Verdict channel — Accept/Reject writes here, the loop drains it |
+| `.codoc/edits.json` | Provenance/intent channel — settle authorship + live doc-ahead suggestions |
 | `.codoc/activity.json` | Agent touch log — drives gutter markers + file badges |
+| `.codoc/realize.md` | Realization queue — surfaced as "N to implement" in the status bar |
 
-**Sidecar schema (v3):**
+**Sidecar schema (v4):**
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "by_feature": { "f-id": [{"file": "path.py", "symbol": "path.py::Class.method"}] },
   "by_file":    { "path.py": [{"symbol": "...", "feature_id": "f-id", "feature_title": "Title"}] },
   "features":   { "f-id": {"title": "Title", "parent_id": null, "realized": true} },
   "feature_edges": { "f-id": [{"to": "f-other", "weight": 4, "kinds": ["call"]}] },
-  "proposals":  { "by_feature": {"f-id": {"op": "amend", "event_id": "e-id"}},
-                  "by_event": {"e-id": {"op": "add_node", "title": "…"}} }
+  "proposals":  { "by_feature": {"f-id": {"op": "amend", "event_id": "e-id", "actor": "…", "mode": "…", "caused_by": "…"}},
+                  "by_event": {"e-id": {"op": "add_node", "title": "…"}} },
+  "changes":    [{"event_id": "e-id", "at": "…", "kind": "amend", "feature_id": "f-id",
+                  "actor": "agent", "mode": "auto", "caused_by": "d-…"}],
+  "holds":      ["f-id"]
 }
 ```
 
@@ -272,7 +277,12 @@ makes network requests:
 - `features[].realized` — `false` marks an accepted-but-unimplemented plan node;
   the extension decorates it as a placeholder.
 - `proposals` — drives the in-place retire/amend overlays + Accept/Reject on the
-  live node (`by_feature`) and the ADD/MOVE ghost hunks (`by_event`).
+  live node (`by_feature`) and the ADD/MOVE ghost hunks (`by_event`). The v4
+  provenance fields (`actor`/`mode`/`caused_by`) drive the authorship ink and the
+  "↳ from your edit" cascade cue.
+- `changes` — the last ~50 applied events (newest first); drives the agent-pencil
+  re-stamp in the doc view.
+- `holds` — the doc-wins hold set (features with pending doc-ahead intent).
 
 File watchers on all paths trigger an automatic reload whenever codoc writes new
 output.
@@ -302,7 +312,7 @@ commands — all installed by `codoc init`. (No MCP-free / `claude -p` path anym
 
 `PreToolUse` / `PostToolUse` write `.codoc/activity.json` as Claude reads and
 modifies files (driving the gutter markers + file badges); `Stop` reflects the
-session's changes back into the tree; `UserPromptSubmit` nudges `/codoc:realize`
+session's changes back into the tree; `UserPromptSubmit` nudges `/codoc:sync`
 when work is queued.
 
 **MCP server** (`codoc`, registered in `.mcp.json`): the agent's reflection API —
@@ -311,7 +321,7 @@ when work is queued.
 
 **Skill + commands** (`.claude/skills/codoc-intent/`, `.claude/commands/codoc/`):
 the skill teaches Claude the MCP-first propose-then-implement workflow; `/codoc:plan`
-proposes plan nodes before coding, `/codoc:realize` implements the queued directives.
+proposes plan nodes before coding, `/codoc:sync` implements the queued directives.
 
 ### The loop
 
@@ -320,7 +330,7 @@ You: "add rate limiting to the auth module"
   → Claude proposes via /codoc:plan (codoc_plan_add) — green + block in tree.codoc, no code touched
   → you Accept in VS Code (CodeLens / inline ✓)
   → Loop B queues a directive in .codoc/realize.md (status: awaiting_impl)
-  → you run /codoc:realize in your session → it writes the code + binds it
+  → you run /codoc:sync in your session → it writes the code + binds it
   → Loop A re-reflects on the written files → may surface follow-up proposals
 ```
 

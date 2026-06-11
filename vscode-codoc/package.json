@@ -258,19 +258,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show a gutter marker on features the coding agent is currently editing."
-        },
-        "codoc.docSiblingOrder": {
-          "type": "string",
-          "enum": [
-            "dependency",
-            "tree"
-          ],
-          "default": "dependency",
-          "enumDescriptions": [
-            "Within a parent, order sibling sections so prerequisites (features a sibling depends on) read first.",
-            "Mirror the tree/file order of siblings exactly."
-          ],
-          "description": "How sibling sections are ordered in the one-page documentation view."
         }
       }
     },

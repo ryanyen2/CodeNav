@@ -12,10 +12,10 @@ Schema (version 1)::
 """
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from codoc.loop.fsio import atomic_write_json, read_json
 
 INBOX_FILENAME = "inbox.json"
 
@@ -31,13 +31,7 @@ def inbox_path(codoc_dir: str | Path) -> Path:
 
 
 def read_verdicts(codoc_dir: str | Path) -> list[Verdict]:
-    path = inbox_path(codoc_dir)
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
+    data = read_json(inbox_path(codoc_dir), default={})
     out: list[Verdict] = []
     for v in data.get("verdicts", []):
         eid = v.get("event_id")
@@ -77,8 +71,7 @@ def append_verdict(codoc_dir: str | Path, event_id: str, accept: bool) -> Path:
 def _write(codoc_dir: str | Path, verdicts: list[Verdict]) -> Path:
     dest = inbox_path(codoc_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": 1, "verdicts": [{"event_id": v.event_id, "accept": v.accept} for v in verdicts]}
-    tmp = dest.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2))
-    os.replace(tmp, dest)
+    atomic_write_json(dest, {"version": 1, "verdicts": [
+        {"event_id": v.event_id, "accept": v.accept} for v in verdicts
+    ]})
     return dest

@@ -159,7 +159,7 @@ export class WorkspaceState {
         } else if (state === 'awaiting_impl') {
             bar.text = `$(play) codoc: ${pending} to implement`;
             bar.tooltip = this._status.detail
-                || 'Accepted tree edits are queued in .codoc/realize.md — run /codoc:realize in your Claude Code session';
+                || 'Accepted tree edits are queued in .codoc/realize.md — run /codoc:sync in your Claude Code session';
             bar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         } else if (state === 'code_drift' || pending > 0) {
             bar.text = `$(bell) codoc: ${pending} proposal${pending === 1 ? '' : 's'}`;

@@ -103,6 +103,14 @@ class Store:
             self.conn.execute(
                 "ALTER TABLE bindings ADD COLUMN types_hash TEXT NOT NULL DEFAULT ''"
             )
+        ecols = {r["name"] for r in self.conn.execute("PRAGMA table_info(events)")}
+        # Change-ledger provenance. Default '' ⇒ legacy events have unknown
+        # actor/mode and no causality link; readers treat '' as "render as today".
+        for col in ("actor", "mode", "caused_by"):
+            if col not in ecols:
+                self.conn.execute(
+                    f"ALTER TABLE events ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+                )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -238,10 +246,18 @@ class Store:
         rows = self.conn.execute("SELECT * FROM bindings").fetchall()
         return [_row_to_binding(r) for r in rows]
 
+    def bound_feature_ids(self) -> set[str]:
+        """Feature ids that own at least one binding — one indexed query, so the
+        loops can test "is unbound" over many features without a per-feature
+        ``bindings_for_feature`` round-trip."""
+        rows = self.conn.execute("SELECT DISTINCT feature_id FROM bindings").fetchall()
+        return {r["feature_id"] for r in rows}
+
     # -- events -----------------------------------------------------------
     def append_event(self, e: Event) -> None:
         self.conn.execute(
-            "INSERT INTO events (id, at, source, op_json, applied, accepted_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO events (id, at, source, op_json, applied, accepted_at, actor, mode, caused_by)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 e.id,
                 e.at.to_str(),
@@ -249,6 +265,9 @@ class Store:
                 e.op.model_dump_json(),
                 int(e.applied),
                 e.accepted_at.isoformat() if e.accepted_at else None,
+                e.actor,
+                e.mode,
+                e.caused_by,
             ),
         )
         self.conn.commit()
@@ -355,6 +374,7 @@ def _row_to_binding(r: sqlite3.Row) -> Binding:
 
 
 def _row_to_event(r: sqlite3.Row) -> Event:
+    keys = r.keys()
     return Event(
         id=r["id"],
         at=HLC.from_str(r["at"]),
@@ -362,6 +382,9 @@ def _row_to_event(r: sqlite3.Row) -> Event:
         op=NodeOp.model_validate_json(r["op_json"]),
         applied=bool(r["applied"]),
         accepted_at=datetime.fromisoformat(r["accepted_at"]) if r["accepted_at"] else None,
+        actor=(r["actor"] if "actor" in keys else ""),
+        mode=(r["mode"] if "mode" in keys else ""),
+        caused_by=(r["caused_by"] if "caused_by" in keys else ""),
     )
 
 

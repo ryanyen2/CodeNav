@@ -63,29 +63,30 @@ def test_python_adapter_fingerprint_stable_under_whitespace(fixtures_dir: Path) 
     assert fp_orig == fp_spaced
 
 
-def test_typescript_adapter_extracts_chunks(mosaic_dir: Path) -> None:
+def test_typescript_adapter_extracts_chunks(fixtures_dir: Path) -> None:
     adapter = get_adapter("typescript")
-    src_path = mosaic_dir / "src" / "Coordinator.ts"
-    src = src_path.read_text()
-    chunks = adapter.extract_chunks("test/mosaic/src/Coordinator.ts", src)
+    src = (fixtures_dir / "sample_app.ts").read_text()
+    chunks = adapter.extract_chunks("tests/fixtures/sample_app.ts", src)
     assert len(chunks) > 0
     paths = {c.symbol_path for c in chunks}
-    # Coordinator class should be present.
-    assert any("::Coordinator" in p for p in paths)
+    assert "tests/fixtures/sample_app.ts::Coordinator" in paths
+    assert "tests/fixtures/sample_app.ts::Coordinator.query" in paths
+    assert "tests/fixtures/sample_app.ts::makeOptions" in paths
+    assert "tests/fixtures/sample_app.ts::ClientOptions" in paths
 
 
-def test_typescript_adapter_chunk_anchor_uniqueness(mosaic_dir: Path) -> None:
+def test_typescript_adapter_chunk_anchor_uniqueness(fixtures_dir: Path) -> None:
     adapter = get_adapter("typescript")
-    src = (mosaic_dir / "src" / "Coordinator.ts").read_text()
-    chunks = adapter.extract_chunks("test/mosaic/src/Coordinator.ts", src)
+    src = (fixtures_dir / "sample_app.ts").read_text()
+    chunks = adapter.extract_chunks("tests/fixtures/sample_app.ts", src)
     paths = [c.symbol_path for c in chunks]
     assert len(paths) == len(set(paths))
 
 
-def test_typescript_adapter_fingerprint_stable_under_whitespace(mosaic_dir: Path) -> None:
+def test_typescript_adapter_fingerprint_stable_under_whitespace(fixtures_dir: Path) -> None:
     adapter = get_adapter("typescript")
-    src = (mosaic_dir / "src" / "Coordinator.ts").read_text()
-    chunks = adapter.extract_chunks("test/mosaic/src/Coordinator.ts", src)
+    src = (fixtures_dir / "sample_app.ts").read_text()
+    chunks = adapter.extract_chunks("tests/fixtures/sample_app.ts", src)
     assert chunks
     target = chunks[0]
     fp_orig = fingerprint_chunk(target.source, adapter)
@@ -94,14 +95,12 @@ def test_typescript_adapter_fingerprint_stable_under_whitespace(mosaic_dir: Path
     assert fp_orig == fp_spaced
 
 
-def test_python_adapter_index_ts_only_module_chunk(mosaic_dir: Path) -> None:
-    """The plan-required test: chunks > 0 for index.ts.
-
-    The mosaic index.ts is pure re-exports → produces one ``__module__`` chunk.
-    """
+def test_typescript_adapter_reexport_barrel_module_chunk(fixtures_dir: Path) -> None:
+    """A pure re-export barrel produces a single ``__module__`` chunk."""
     adapter = get_adapter("typescript")
-    src = (mosaic_dir / "src" / "index.ts").read_text()
-    chunks = adapter.extract_chunks("test/mosaic/src/index.ts", src)
+    src = (fixtures_dir / "sample_index.ts").read_text()
+    chunks = adapter.extract_chunks("tests/fixtures/sample_index.ts", src)
     assert len(chunks) > 0
     paths = [c.symbol_path for c in chunks]
     assert len(paths) == len(set(paths))
+    assert any(p.endswith("::__module__") for p in paths)

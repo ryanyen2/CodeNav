@@ -21,20 +21,9 @@ LANGUAGE_NAME = "python"
 # ---------------------------------------------------------------------------
 
 def _load_language(name: str) -> ts.Language:
-    langs_so = (
-        pathlib.Path(__file__).parent.parent.parent
-        / ".venv"
-        / "lib"
-        / "python3.12"
-        / "site-packages"
-        / "tree_sitter_languages"
-        / "languages.so"
-    )
-    if not langs_so.exists():
-        # Fallback: locate it relative to tree_sitter_languages package.
-        import tree_sitter_languages as _tsl_pkg  # noqa: PLC0415
-        langs_so = pathlib.Path(_tsl_pkg.__file__).parent / "languages.so"
+    import tree_sitter_languages as _tsl_pkg  # noqa: PLC0415
 
+    langs_so = pathlib.Path(_tsl_pkg.__file__).parent / "languages.so"
     lib = ctypes.cdll.LoadLibrary(str(langs_so))
     fn = getattr(lib, f"tree_sitter_{name}")
     fn.restype = ctypes.c_void_p
@@ -136,7 +125,6 @@ def _extract_chunks_recursive(
     children = node.children
 
     for child in children:
-        effective = child
         # decorated_definition wraps the real function/class — peel it.
         is_decorated = child.type == "decorated_definition"
         if is_decorated:
@@ -260,7 +248,6 @@ class PythonAdapter:
             qualified = symbol_path
 
         parts = qualified.split(".")
-        source_bytes = source.encode("utf-8")
         tree = self.parse(source)
 
         def search(node: ts.Node, remaining: list[str]) -> tuple[int, int] | None:
@@ -302,7 +289,6 @@ class PythonAdapter:
         self, source: str, query_str: str,
         scope: tuple[int, int] | None = None,
     ) -> list[tuple[int, int]]:
-        source_bytes = source.encode("utf-8")
         tree = self.parse(source)
         lang = _get_lang()
         query = ts.Query(lang, query_str)
@@ -321,7 +307,6 @@ class PythonAdapter:
         return results
 
     def references_in_chunk(self, chunk_source: str, file: str) -> list[SymbolRef]:
-        source_bytes = chunk_source.encode("utf-8")
         tree = self.parse(chunk_source)
         refs: list[SymbolRef] = []
 

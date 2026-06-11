@@ -23,3 +23,7 @@ def new_binding_id() -> str:
 
 def new_event_id() -> str:
     return _short("e")
+
+
+def new_directive_id() -> str:
+    return _short("d")

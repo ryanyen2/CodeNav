@@ -14,24 +14,32 @@ This repo contains the Python core (`codoc/`) and the VS Code extension (`vscode
 # Install (Python 3.11+ required; use pip or uv)
 pip install -e .
 
-# CLI — four commands, nothing more
+# CLI — four core commands
 codoc init                # index repo, propose initial tree, write .codoc/tree.codoc
 codoc watch               # the daemon: run both loops as you edit code / tree.codoc
 codoc status              # feature count, pending proposals, recent activity
 codoc sync                # one-shot escape hatch: apply tree edits (Loop B), then reflect code (Loop A)
 
+# plumbing commands (agents / no-IDE workflows)
+codoc accept <e-id>       # CLI verdict path — mirrors the IDE Accept (then runs Loop B)
+codoc reject <e-id>       # CLI verdict path — mirrors the IDE Reject
+codoc reflect             # recovery-grade state reconciliation (used by the Stop hook)
+codoc propose <kind>      # author a plan proposal from the shell (humans/tests)
+codoc install-hooks       # (re)install the CC hooks + MCP registration
+
 # watch flags
 codoc watch --dry           # reflect + apply tree edits, but don't queue realization directives
 codoc watch --no-realize    # sync the tree but never queue directives for the session
-codoc watch --auto-realize  # unattended fallback: spawn a headless `claude -p /codoc:realize`
+codoc watch --auto-realize  # unattended fallback: spawn a headless `claude -p /codoc:sync`
                             #   to implement queued tree edits when no interactive session is open
 
-# Tests (run with Python 3.11)
+# Tests (run with Python 3.11+; the project venv is .venv)
 python3.11 -m pytest tests/
 ```
 
 The only human surface is `.codoc/tree.codoc`. You edit titles/descriptions
-directly; structural proposals appear at the bottom as a git-style diff block and
+directly; structural proposals render as an in-place overlay (ADD/MOVE as ghost
+hunks at their destination, RETIRE/AMEND as decorations on the live node) and
 are accepted/rejected with the IDE's inline **Accept / Reject** actions (which
 write verdicts to `.codoc/inbox.json` — there is no accept/reject *syntax* to
 type). Feature ids (`⟨f-id⟩`) stay on disk for stable identity but the IDE hides
@@ -58,7 +66,7 @@ secondary index. The system is two loops:
 - **Loop B — codoc → code** (`codoc/loop/loop_b.py`): parse `tree.codoc` edits →
   apply user edits + proposal verdicts → for edits that imply code change, build a
   directive and **queue it for the live session** in `.codoc/realize.md` (status
-  `awaiting_impl`). The session implements it via `/codoc:realize`; the existing
+  `awaiting_impl`). The session implements it via `/codoc:sync`; the existing
   Stop-hook reflection / watch-daemon Loop A then closes the loop. No headless
   `claude -p` is spawned.
 
@@ -77,15 +85,25 @@ codoc/
                   #   query.py     — build_graph, update_graph (incremental), neighbors, ego_graph,
                   #                  topological_order, entry_points, neighbor_feature(store, symbol)
   loop/           # the two loops + their pieces:
+                  #   classify.py    — THE decision table (see docs/codoc-change-ledger.md): every change,
+                  #                    either side, any actor → one explicit reaction. is_imperative/implies_code
+                  #                    (rows 7/8) + suppressed_by_hold (row 13, doc-wins)
+                  #   edits.py       — .codoc/edits.json provenance channel (host annotations drained by Loop B +
+                  #                    host-owned intents) and .codoc/realize.json directive manifest; hold_set()
                   #   inbox.py       — .codoc/inbox.json verdict channel (IDE Accept/Reject → loops)
+                  #   fsio.py        — shared control-file IO: atomic writes (tmp→rename) + tolerant
+                  #                    JSON reads (missing/corrupt → default, logged) for every .codoc file
                   #   status.py      — .codoc/status.json lifecycle (in_sync/code_drift/tree_dirty/awaiting_impl/realizing)
-                  #   diff.py        — compute_changeset; ChunkRef carries tokens_hash + types_hash
-                  #   apply.py       — derive_auto_ops, apply_op, AMEND_SAFE_RATIO (the one threshold)
-                  #   subtree.py     — select_relevant_subtree (file-locality seeds)
+                  #   diff.py        — compute_changeset; ChunkRef carries tokens_hash + types_hash; scoped LanceDB
+                  #                    reads (files= pushdown, embeddings never read in the loops)
+                  #   apply.py       — derive_auto_ops, apply_op (stamps actor/mode/caused_by), AMEND_SAFE_RATIO
+                  #   subtree.py     — select_relevant_subtree (file-locality seeds; accepts the pass's feature list)
                   #   loop_a.py      — run_loop_a / apply_changeset (code → codoc);
                   #                    _detect_relocations (move via tokens_hash, rename via types_hash);
-                  #                    _cover_uncovered_adds (coverage net: neighbor_feature or ADD_NODE proposal)
-                  #   loop_b.py      — run_loop_b (codoc → code; build directive, queue .codoc/realize.md for the live session)
+                  #                    _cover_uncovered_adds (coverage net: neighbor_feature or ADD_NODE proposal);
+                  #                    held features (doc-wins) + caused_by stamping from the realize manifest
+                  #   loop_b.py      — run_loop_b (codoc → code; stamp user ops from edits.json annotations, mint
+                  #                    ⟨d-…⟩ directive ids, queue .codoc/realize.md + realize.json for the session)
                   #   bootstrap.py   — run_bootstrap / run_init (thin shim; organize=True by default)
                   #   bootstrap_hier.py — two-phase bootstrap:
                   #                       per-file pass (propose_file_features, one LLM call per file) +
@@ -125,7 +143,7 @@ codoc/
 - **`Feature`** (`model/feature.py`): `{id, title, description, parent_id, retired, realized, created_at, updated_at}`. `id` is a stable short id (`f-xxxxxxxx`) rendered into `tree.codoc` as `⟨f-id⟩`. ONE prose field, `description`. `retired` and `realized` are the only lifecycle bits (no status taxonomy): `realized=False` marks an accepted `/codoc:plan` placeholder with no code yet; the first binding (ATTACH/REFRESH in `loop/apply._mutate`) flips it True. Exposed in the sidecar's `features{}` but never written into `tree.codoc` text.
 - **`Binding`** (`model/binding.py`): `{id, feature_id, file, symbol_path, fingerprint, updated_at}`. The anchor is inlined as `(file, symbol_path)` — the index join key. `fingerprint` is the chunk's `tokens_hash`.
 - **`NodeOp`** (`model/event.py`): `{kind, feature_id?, parent_id?, title?, description?, bindings, rationale}`.
-- **`Event`** (`model/event.py`): `{id, at, source, op, applied, accepted_at}`. A *proposal* is an Event with `applied=False`; accepting flips it and runs the op.
+- **`Event`** (`model/event.py`): `{id, at, source, op, applied, accepted_at, actor, mode, caused_by}`. A *proposal* is an Event with `applied=False`; accepting flips it and runs the op. The last three fields are the **change ledger** (see `docs/codoc-change-ledger.md`): `actor` ∈ human | agent id | loop; `mode` ∈ pen | suggest | auto; `caused_by` = the directive (`d-…`) / event / suggestion id this change implements. A model validator infers actor/mode from `source` when absent, so legacy rows and direct constructions are always stamped.
 - **`HLC`** (`model/hlc.py`): Hybrid Logical Clock; `to_str()` is lexicographically sortable. Used as the monotonic `created_at`/`updated_at`/`at` clock. [KEPT]
 
 ### NodeOp kinds
@@ -147,7 +165,7 @@ The chunk index is owned by **cocoindex** and lives outside `codoc.db`: AST chun
 
 `codoc/pipelines/indexing/` owns the chunk + embedding substrate. `update_index(root_dir, codoc_dir)` runs the cocoindex App once: walks the repo, parses each supported file via the existing tree-sitter adapters, embeds each AST chunk via sentence-transformers, and upserts to LanceDB. Memoized per-file: unchanged files cost nothing. Killed mid-run, the next call resumes from the last completed component.
 
-Bootstrap and both loops call `update_index` first, then read from LanceDB via `read_all_chunks(codoc_dir)`. LanceDB rows carry `tokens_hash` (fingerprint) and `types_hash` (AST-shape identity), both actively used for move/rename detection in Loop A.
+Bootstrap and both loops call `update_index` first, then read from LanceDB via `read_all_chunks(codoc_dir, *, files=None, with_embeddings=True, with_source=True)`. LanceDB rows carry `tokens_hash` (fingerprint) and `types_hash` (AST-shape identity), both actively used for move/rename detection in Loop A. **The loops never read embeddings** (`with_embeddings=False`) and push their file scope down as a LanceDB `file IN (…)` predicate; a scoped `compute_changeset` reads only the touched files' rows plus one source-less/embedding-less full projection for the graph's symbol table. Only bootstrap reads embeddings.
 
 ### Loop A in detail (code → codoc)
 
@@ -163,6 +181,10 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 **Stale-proposal GC** (`_gc_superseded_proposals`, run first each pass): drops a pending `ADD_NODE` whose chunks are all bound elsewhere, AND a pending `RETIRE_NODE` whose feature still owns code *not* being removed by the current change set (`removed_keys`). A retire is only ever raised when a feature lost its last binding; once code rebinds (a mid-implementation lull, or the agent reflected it in) the proposal is a false positive and is cleared — so a no-op `codoc sync` converges to `in_sync` and a transiently-empty feature is never wrongly retired. The `emptied` retire-candidate set also excludes unrealized (`realized=False`) plan placeholders.
 
+**Doc-wins holds + causality (classify rows 13/6).** Both entrypoints read `_doc_intent(codoc_dir)` → (`held`, `caused_by_map`, `default_caused_by`) from `edits.py`. `held` (live doc-ahead intents ∪ queued realize directives) suppresses code-side AMEND/RETIRE/MOVE on those features — a held feature is excluded from `emptied` and the amend-on-change trigger, and LLM ops on it are dropped (`classify.suppressed_by_hold`, counted in `LoopAResult.held_back`). Binding maintenance (ATTACH/DETACH/REFRESH) is never suppressed — bindings are attribution, not intent. While `realize.json` exists, every op the pass applies is stamped `caused_by=⟨directive id⟩` (per-feature from the manifest, sole-directive fallback) so the IDE can group the surfaced-back changes under the doc edit that triggered them.
+
+**One feature read per pass:** `apply_changeset` loads `store.list_features()` once and threads it through subtree selection, title dedup, and placeholder adoption; `store.bound_feature_ids()` (one `SELECT DISTINCT`) replaces per-feature binding lookups.
+
 ### Bootstrap in detail
 
 `run_bootstrap` (thin shim in `bootstrap.py`) delegates to `bootstrap_hier_from_chunks` in `bootstrap_hier.py`. Two phases:
@@ -174,34 +196,39 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 ### Loop B in detail (codoc → code)
 
-`run_loop_b` first drains `.codoc/inbox.json` (proposal verdicts written by the IDE's Accept/Reject actions: accept → `apply_op` + delete event; reject → delete event), then parses `tree.codoc` and diffs against the store (`codoc_file/diff.py`) into user ops (verdicts no longer come from the text), applies them (user edits are intentional → applied immediately), and builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`). **RETIRE is path-asymmetric:** accepting an auto-raised RETIRE *from the inbox* is **detach-only** — it marks the feature retired and detaches its bindings (so the code isn't orphaned under a now-hidden feature) but NEVER queues a code-removal directive (a Loop-A retire off transient drift could be a false positive; deleting code on accept is the most destructive failure mode). Only a human `~` retire *in the text* (a `user_op`) keeps its bindings and queues a `RETIRE FEATURE` removal directive. Instead of spawning a headless agent, it **hands the work to the live session**: it writes the assembled directives to `.codoc/realize.md` and sets `status.json` = `awaiting_impl`. The user's interactive Claude Code session (nudged by the `UserPromptSubmit` hook) runs `/codoc:realize` — read the file → implement each directive → `codoc_reflect` to bind → delete `.codoc/realize.md`. The loop is then closed by the existing Stop-hook reflection (`agent/hook._maybe_spawn_reflect`) or the watch daemon's epoch-close Loop A pass. `--dry`/`--no-realize` skip the queue write.
+`run_loop_b` first drains the `edits.json` **annotations** and snapshots the text diff (`codoc_file/diff.py`) **against the pre-mutation store** (step 0 — diffing after verdicts would read the stale text as a human edit and revert the accepted change), then drains `.codoc/inbox.json` (proposal verdicts written by the IDE's Accept/Reject actions: accept → `apply_op` + delete event; reject → delete event), applies the snapshotted user ops (user edits are intentional → applied immediately) **stamped with the annotating actor/mode (default human/pen)**, then drains live **payload intents** (doc-ahead suggestions — applied as user ops `mode=suggest`/`caused_by=` suggestion id; the agent-side "apply"), **re-renders `tree.codoc`** when the pass mutated the store, and builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`). Each queued directive gets a minted `d-…` id, embedded as `⟨d-id⟩` in its `### N.` heading and recorded in the **`.codoc/realize.json` manifest** (`{id, feature_id, kind, caused_by}` — `caused_by` = the applying settle's suggestion id, else the user-op event id); the implementing agent passes the id back via `codoc_reflect(caused_by=…)`. **RETIRE is path-asymmetric:** accepting an auto-raised RETIRE *from the inbox* is **detach-only** — it marks the feature retired and detaches its bindings (so the code isn't orphaned under a now-hidden feature) but NEVER queues a code-removal directive (a Loop-A retire off transient drift could be a false positive; deleting code on accept is the most destructive failure mode). Only a human `~` retire *in the text* (a `user_op`) keeps its bindings and queues a `RETIRE FEATURE` removal directive. Instead of spawning a headless agent, it **hands the work to the live session**: it writes the assembled directives to `.codoc/realize.md` and sets `status.json` = `awaiting_impl`. The user's interactive Claude Code session (nudged by the `UserPromptSubmit` hook) runs `/codoc:sync` — read the file → implement each directive → `codoc_reflect` to bind → delete `.codoc/realize.md`. The loop is then closed by the existing Stop-hook reflection (`agent/hook._maybe_spawn_reflect`) or the watch daemon's epoch-close Loop A pass. `--dry`/`--no-realize` skip the queue write.
 
-**Realization trigger + fallbacks.** The primary path is *in-session*: `/codoc:plan` proposes nodes then calls the **blocking** `codoc_await_verdicts(event_ids)` MCP tool (modeled on plannotator's blocking review hook) — it polls `inbox.json`, applies each verdict as it lands (recovering an ADD's freshly-minted feature id by diffing the feature set), marks accepted nodes `phase=editing`, and returns so the *same turn* implements + binds. No daemon, no idle gap. Two fallbacks reuse `realize.md` for when no session is waiting on that tool: (1) the `UserPromptSubmit` hook (`agent/hook._drain_inbox_fallback`) drains the inbox via Loop B when **no `codoc watch` daemon** owns the repo, so a plan accepted with no daemon still queues `realize.md` on the next prompt; (2) `codoc watch --auto-realize` (`loop/autorealize.py`: `should_spawn`/`spawn_realize`, driven by `watch.maybe_auto_realize`) spawns a **headless** `claude -p /codoc:realize` when a queue exists and no interactive epoch is open — the only path that lands code with nobody at the keyboard. The unified `/codoc:sync` command reads `status.json` and dispatches direction (awaiting_impl/tree_dirty → realize, code_drift → reflect).
+**Realization trigger + fallbacks.** The primary path is *in-session*: `/codoc:plan` proposes nodes then calls the **blocking** `codoc_await_verdicts(event_ids)` MCP tool (modeled on plannotator's blocking review hook) — it polls `inbox.json`, applies each verdict as it lands (recovering an ADD's freshly-minted feature id by diffing the feature set), marks accepted nodes `phase=editing`, and returns so the *same turn* implements + binds. No daemon, no idle gap. Two fallbacks reuse `realize.md` for when no session is waiting on that tool: (1) the `UserPromptSubmit` hook (`agent/hook._drain_inbox_fallback`) drains the inbox via Loop B when **no `codoc watch` daemon** owns the repo, so a plan accepted with no daemon still queues `realize.md` on the next prompt; (2) `codoc watch --auto-realize` (`loop/autorealize.py`: `should_spawn`/`spawn_realize`, driven by `watch.maybe_auto_realize`) spawns a **headless** `claude -p /codoc:sync` when a queue exists and no interactive epoch is open — the only path that lands code with nobody at the keyboard. The unified `/codoc:sync` command reads `status.json` and dispatches direction (awaiting_impl/tree_dirty → realize, code_drift → reflect).
 
 ### Environment variables
 
 | Var | Default | Description |
 |---|---|---|
 | `CODOC_PROVIDER` | `openai` | LLM provider (`openai` or `ollama`) |
-| `CODOC_MODEL` | `gpt-4o` | LLM model name |
+| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
+| `CODOC_TEMPERATURE` | `0.2` | LLM sampling temperature |
+| `CODOC_MAX_TOKENS` | `16000` | LLM completion budget (reasoning models spend it on hidden reasoning too) |
 | `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider (used by dedup / proposal similarity; chunk embeddings live in cocoindex) |
 | `CODOC_EMBEDDER_MODEL` | `all-MiniLM-L6-v2` | Embedder model |
 | `COCOINDEX_DB` | `.codoc/cocoindex.db` | Path to cocoindex's internal memoization state (auto-set by `update_index`) |
 | `CODOC_LANCE_PATH` | `.codoc/lancedb` | Path to the LanceDB directory holding the `code_chunks` table |
-| `CODOC_ROOT_DIR` | cwd | Root directory for API server |
 | `CODOC_LOG_PROMPTS` | — | Set to `1` to log LLM prompt+response to stderr |
+| `CODOC_EPOCH_ORIGIN` | `interactive` | Set to `loop_b` to mark an agent-owned epoch (hooks) |
+| `CODOC_NO_STOP_REFLECT` | — | Set to disable the Stop-hook recovery reflection |
 
 ### Render + sidecar
 
 `codoc_file/render.py` writes two files on every `write_tree` call (the sidecar via the public `write_sidecar`). The sidecar is **pure derived state** and is also written *independently* by `reconcile.safe_write_tree` on every pass — even when the `tree.codoc` *text* render is held back to preserve an un-absorbed human edit — so applied verdicts / new bindings / proposal changes surface in the IDE immediately (an accept/reject is never a dead click):
 
 - **`.codoc/tree.codoc`** — human-authored feature tree. `- Title  ⟨f-id⟩` (id hidden by the IDE decoration; minted on save for hand-added nodes). Descriptions are free prose and may span multiple paragraphs — blank lines are *kept* (a node ends only at the next feature-marker line / the pending sentinel / EOF, never at a blank). Code is cited inline as `[label](codoc:file.py#symbol)` markdown links; `parse.extract_refs` pulls them out. **No `↪ refs:` line** — derived bindings are not printed into the text; they ride in the sidecar and the IDE renders them as inlay-hint chips. Pending proposals render as an **in-place overlay**: ADD/MOVE emit a ghost hunk (`+`/`~` op char in col 0, node at its tree depth, hidden `⟨e-id⟩`) at the destination parent; RETIRE/AMEND emit no text (they're carried in the sidecar). The parser skips any line matching both the proposal shape and a `⟨e-id⟩` marker, so render→parse→diff stays a no-op. (The legacy `# ── pending changes` sentinel is still honored on read.)
-- **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE (now **version 3**). Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id,realized}}, feature_edges{}, proposals{by_feature{fid:{op,event_id,tag,…}}, by_event{eid:{op,…}}}}`. `proposals.by_feature` drives the in-place retire/amend overlays + Accept/Reject on the live node; `realized` drives the unrealized-placeholder decoration. Written atomically (tmp → rename).
-- **`.codoc/status.json`** (written by the loops, not `write_tree`) — `{version, state, pending, detail, at}`; `state ∈ {in_sync, code_drift, tree_dirty, awaiting_impl, realizing}` drives the IDE status bar + the tree.codoc header CodeLens. `awaiting_impl` means Loop B queued code-implying tree edits in `.codoc/realize.md` for the live session (`pending` = directive count). `refresh_status` treats a non-empty `realize.md` as a floor: if no proposals are pending it reports `awaiting_impl` rather than `in_sync`, so a later code-side pass can't clobber the state and orphan the queued directive (the file self-clears when `/codoc:realize` completes).
-- **`.codoc/realize.md`** (written by Loop B) — the realization queue: the assembled directive prompt the live session implements via `/codoc:realize`, then deletes. Replaces the old headless `claude -p` spawn.
+- **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE (now **version 4**). Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id,realized}}, feature_edges{}, proposals{by_feature{fid:{op,event_id,tag,actor,mode,caused_by,…}}, by_event{eid:{op,…}}}, changes:[{event_id,at,kind,feature_id,actor,mode,caused_by}], holds:[fid]}`. `proposals.by_feature` drives the in-place retire/amend overlays + Accept/Reject on the live node; `realized` drives the unrealized-placeholder decoration. v4's `changes` (last ~50 applied events, newest first) drives the agent-pencil re-stamp in the webview, `holds` is the doc-wins hold set, and proposal `caused_by` drives the `↳ from your edit` cascade cue. Written atomically (tmp → rename).
+- **`.codoc/status.json`** (written by the loops, not `write_tree`) — `{version, state, pending, detail, at}`; `state ∈ {in_sync, code_drift, tree_dirty, awaiting_impl, realizing}` drives the IDE status bar + the tree.codoc header CodeLens. `awaiting_impl` means Loop B queued code-implying tree edits in `.codoc/realize.md` for the live session (`pending` = directive count). `refresh_status` treats a non-empty `realize.md` as a floor: if no proposals are pending it reports `awaiting_impl` rather than `in_sync`, so a later code-side pass can't clobber the state and orphan the queued directive (the file self-clears when `/codoc:sync` completes).
+- **`.codoc/realize.md`** (written by Loop B) — the realization queue: the assembled directive prompt the live session implements via `/codoc:sync`, then deletes (together with `realize.json`). Each `### N.` heading carries its `⟨d-id⟩`. Replaces the old headless `claude -p` spawn.
+- **`.codoc/realize.json`** (written by Loop B next to realize.md) — the machine-readable directive manifest `{version, directives:[{id, feature_id, kind, caused_by}]}`: feature ids feed the doc-wins hold set, ids feed `caused_by` tagging. Stale (no realize.md beside it) ⇒ ignored + cleaned.
 - **`.codoc/inbox.json`** (written by the IDE) — `{version, verdicts:[{event_id, accept}]}`; drained by Loop B / `codoc sync`, then cleared. The watch daemon watches it so an Accept/Reject wakes the loop.
+- **`.codoc/edits.json`** (written by the IDE host; `loop/edits.py` + `src/state/edits-channel.ts`) — the provenance/intent channel: `edits` = per-feature authorship annotations for settles (written BEFORE the tree.codoc save; drained by Loop B, default human/pen), `intents` = the live doc-ahead suggestions (host-owned list; >7-day-old intents ignored; the other half of the hold set). An intent carries the suggested title/description as **payload**, and Loop B's **intent drain** applies it — the agent-side "apply" (classify row 9 → 7/8, `mode=suggest`, `caused_by=` suggestion id); satisfied intents (payload == store) are skipped so the read-only drain is idempotent. Watched by the daemon (a suggestion alone must wake Loop B).
 
 ### VSCode extension (`vscode-codoc/`)
 
@@ -257,7 +284,7 @@ multiple proposal surfaces onto one inline model and removed the headless coding
   `+`/`~` ghosts + decorations + CodeLens + lightbulb unchanged.
 - **No headless `claude -p`** — Loop B writes code-implying directives to `.codoc/realize.md`
   and sets status `awaiting_impl`; the live session implements them via the new
-  `/codoc:realize` command (nudged by a `UserPromptSubmit` hook). `_spawn_claude` /
+  `/codoc:sync` command (nudged by a `UserPromptSubmit` hook). `_spawn_claude` /
   `_files_modified_since` / the `spawn=`/`refine=` params and `LoopBResult.{spawned,
   files_written,refinement}` were removed; `run_loop_b(root, codoc_dir, *, dry_run)` now.
 - **Removed** the Explorer "codoc Features" sidebar (`feature-tree-view.ts` deleted,
@@ -297,7 +324,76 @@ assertable as Given/When/Then userflows:
   delete detaches). Runs in a subprocess (cocoindex's index is a per-process
   singleton). Run it standalone with `python -m tests.bdd.e2e_report`.
 
-Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); ego-graph context for Loop A subtree selection; may-impact propagation in the LLM prompt.
+**Unified change ledger (2026-06-10):** provenance + doc-wins conflicts + causality +
+incrementality, in six landed phases (see `docs/codoc-change-ledger.md` — the citable
+algorithm description):
+- **Ledger schema** — `events` gains `actor`/`mode`/`caused_by` (additive migration);
+  `Event` model validator infers actor/mode from `source` for legacy rows;
+  `apply_op(actor=, mode=, caused_by=)`. New `loop/classify.py` holds THE 13-row
+  decision table (absorbed `_is_imperative`/`_implies_code` from loop_b; row 13 =
+  `suppressed_by_hold`).
+- **Annotation channel** — `.codoc/edits.json` (host → loops: settle authorship +
+  live doc-ahead intents) + `.codoc/realize.json` (directive manifest). Loop B stamps
+  user ops from annotations and mints `⟨d-id⟩` directive ids; MCP tools accept
+  `caused_by`/`actor`; `/codoc:sync` + `prompts/realize.txt` instruct the agent to
+  echo the id and delete both queue files.
+- **Doc always wins** — pending doc-ahead intent holds code-side AMEND/RETIRE/MOVE on
+  that feature (bindings still maintained); holds release when the suggestion clears
+  or the realize queue completes; 7-day staleness backstop. BDD: `tests/bdd/test_doc_wins.py`.
+- **Incrementality** — LanceDB file-scope pushdown + no embeddings in the loops
+  (`read_all_chunks(files=, with_embeddings=, with_source=)`); one feature-table read
+  per Loop A pass (`bound_feature_ids()`); bootstrap title list maintained
+  incrementally. Guard: `tests/test_reader.py`.
+- **Sidecar v4 + minimal frontend** — `changes` feed + `holds` + proposal provenance;
+  webview pencil-stamps agent-amended prose (`reconcileDoc(agentAmends)`,
+  `agentAmendsByFeature`), `↳ from your edit` cascade cue on diff cards
+  (`Suggestion.causedBy`), host writes `edits.json` annotations before each settle and
+  mirrors intents from doc-ahead suggestions (`src/state/edits-channel.ts`). No new UI
+  surfaces — color=direction, ink=authorship, text-only cascade cue.
+- Tests: 310 Python (+ classify/edits/doc-wins/reader suites) + 127 vitest, tsc/esbuild clean.
+
+**Verdict grammar + agent-applied suggestions (2026-06-10):** who resolves what is
+now structural, with one rule — *Accept/Reject is exclusively a human verb on
+code-ahead items; a doc-ahead suggestion is applied by the AI side and offers its
+author only Withdraw.*
+- **Loop B intent drain** — `edits.json` intents carry the suggested title/desc as
+  payload (`loop/edits.py Intent.title/description`, mirrored in
+  `edits-channel.ts intentsFromSuggestions`); Loop B step 2.5 applies live payload
+  intents as user ops (`mode=suggest`, `caused_by=` suggestion id → row 7/8: a
+  descriptive suggestion persists, an imperative one queues a directive). Satisfied
+  intents are skipped (stateless idempotence); the daemon watches `edits.json`. The
+  webview's Apply button, `suggest-apply` message, host `applySuggestion` +
+  `editTitle`/`editDescription` were deleted; the doc-ahead card shows
+  `→ for agent · Withdraw`. Withdraw works until the drain picks the intent up.
+- **Loop B text↔store coherence fix** — accepted AMENDs were being silently
+  reverted: the pass diffed the (necessarily stale) text against the already-
+  mutated store and applied the old text back as a "user edit". Fixed by
+  snapshotting the text diff BEFORE verdicts/intents (step 0) and re-rendering
+  `tree.codoc` at end of any store-mutating pass. Regression test:
+  `test_accepted_amend_survives_the_stale_text`.
+- **Two quiet encodings on diff cards** (colour stays direction, shape stays kind):
+  authorship = ink opacity (`by-human` full / `by-agent` pencil-faded until
+  accepted); realization = texture (a plan proposal — `tag` contains "plan", code
+  not yet real — gets a hollow `△` marker + dashed left border, rhyming with the
+  unrealized dashed ring; landed-code reflections stay solid `▲`).
+- **Agent activity in the doc pane** — `sync.phase` (hooks → `activity.json`
+  features.phase) was computed but never rendered; a new
+  `tiptap/activity-decorations.ts` extension + `setPhases` decorate the heading
+  with a pulsing dot (`editing`) / hollow dot (`reflecting`), reduced-motion-gated
+  explicitly (the `*` blanket doesn't match pseudo-elements). `reflecting` has no
+  Python writer yet — supported, awaiting one.
+
+**Command-surface consolidation (2026-06-10):** `/codoc:realize` was folded into
+`/codoc:sync` (whose `awaiting_impl` branch now carries the full realize loop) —
+the plugin ships exactly two commands, `/codoc:plan` and `/codoc:sync`. All nudges
+(UserPromptSubmit hook, status detail strings, IDE tooltips, `--auto-realize`'s
+headless `claude -p`) point at `/codoc:sync`; `install_hooks` deletes
+previously-installed codoc commands the plugin no longer ships. The `codoc-intent`
+SKILL.md was slimmed to tree-format + code-first reflection guidance (it no longer
+duplicates the per-command loop walkthroughs). The `.codoc/realize.md` *queue file*
+and the realize machinery are unchanged.
+
+Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); may-impact propagation in the LLM prompt; an LLM imperative classifier behind `classify.is_imperative` if heuristic precision becomes limiting.
 
 ## Tests
 
@@ -306,8 +402,13 @@ Possible next steps: reconcile authored inline refs into authoritative bindings 
 - `tests/bdd/` — Given/When/Then userflows for the code↔tree round-trip (see the
   2026-05-30 status note): deterministic Loop A/B scenarios via an injected
   `propose`, plus a subprocess-isolated real-LLM E2E that prints a position report
-  for manual inspection.
+  for manual inspection. `test_doc_wins.py` covers the holds/causality rows.
+- Ledger suites: `tests/loop/test_classify.py` (the decision table, row by row),
+  `tests/loop/test_edits.py` (annotation channel + manifest + hold_set),
+  `tests/test_reader.py` (scoped LanceDB reads + the compute_changeset read contract).
 - `tests/loop/test_end_to_end.py` and `tests/bdd/test_e2e_userflows.py` are gated
   on `OPENAI_API_KEY` (real index + real LLM); everything else is deterministic.
+- vscode-codoc: `npx vitest run` from `vscode-codoc/` (incl. `edits-channel.test.ts`
+  pinning the edits.json contract + pencil re-stamp + cascade cue).
 
-Code fixtures: `test/draco/` (small Python), `test/requests/` (real-world Python library), `test/mosaic/` (TypeScript), `test/small_python_repo/` (toy Python), `test/altair/`, `test/gofish-python/`, `test/nanochat/` (additional Python codebases).
+Code fixtures: `tests/fixtures/` (self-contained Python + TypeScript samples used by the adapter tests — committed, so the suite passes on a fresh clone) and `test/` (real-world corpora for bootstrap/E2E runs: `requests/`, `altair/`, `nanochat/`, `small_python_repo/`).

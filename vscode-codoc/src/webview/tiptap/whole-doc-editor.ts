@@ -24,10 +24,12 @@ import {
     headingPosForFid,
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
+import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { diffDocsToSuggestions } from '../../state/suggestion-model';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { PMNode } from '../../state/pm-doc';
+import type { FeaturePhase } from '../../state/activity-model';
 import type { ThreadsData } from '../protocol';
 
 export type EditMode = 'editing' | 'suggesting';
@@ -42,7 +44,6 @@ export interface WholeDocEditorOptions {
     onAccept: (s: Suggestion) => void;
     onReject: (s: Suggestion) => void;
     onWithdraw: (s: Suggestion) => void;
-    onApply: (s: Suggestion) => void;
     onOpenBinding: (file: string, symbol: string) => void;
     /** Selection moved into a feature — drives tree-pane highlight. */
     onActiveFeature?: (fid: string | null) => void;
@@ -56,6 +57,8 @@ export interface WholeDocEditorHandle {
     setSuggestions: (suggestions: Suggestion[]) => void;
     /** Update the per-feature dependency threads (reads / used-by / code refs). */
     setThreads: (threads: Record<string, ThreadsData>) => void;
+    /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
+    setPhases: (phases: Record<string, FeaturePhase>) => void;
     scrollToFeature: (fid: string) => void;
     isDirty: () => boolean;
     destroy: () => void;
@@ -139,6 +142,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let baselineDoc: PMNode | null = null; // last settled doc (Suggesting diff base)
     let currentSuggestions: Suggestion[] = [];
     let currentThreads: Record<string, ThreadsData> = {};
+    let currentPhases: Record<string, FeaturePhase> = {};
 
     const editor = new Editor({
         element: surface,
@@ -148,13 +152,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             CodeRefSuggestion.configure({ getSymbols: opts.getSymbols, char: '@' }),
             SuggestionDecorations.configure({
                 getSuggestions: () => currentSuggestions,
-                handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw, apply: opts.onApply },
+                handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw },
             }),
             DependencyDecorations.configure({
                 getThreads: () => currentThreads,
                 onNavigate: fid => scrollToFeatureInternal(fid, true),
                 onOpenBinding: opts.onOpenBinding,
             }),
+            ActivityDecorations.configure({ getPhases: () => currentPhases }),
             makeKeymap(),
         ],
         content: { type: 'doc', content: [{ type: 'paragraph' }] },
@@ -493,6 +498,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         setThreads: (threadsMap: Record<string, ThreadsData>) => {
             currentThreads = threadsMap;
             editor.view.dispatch(editor.state.tr.setMeta(DEPS_UPDATED, true));
+        },
+        setPhases: (phases: Record<string, FeaturePhase>) => {
+            currentPhases = phases;
+            editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
         },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
         isDirty: () => dirty,

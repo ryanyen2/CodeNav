@@ -42,6 +42,10 @@ export interface Suggestion {
     tag?: string;
     /** Store event id — present for code-ahead (drives inbox.json verdicts). */
     eventId?: string;
+    /** Causality (v4 ledger): the directive (d-…) this change implements. A
+     *  directive only ever exists because a doc edit queued it, so a non-empty
+     *  value means "this surfaced back from your edit" — the cascade cue. */
+    causedBy?: string;
     titleOld?: string;
     titleNew?: string;
     descOld?: string;
@@ -93,11 +97,11 @@ export function codeAheadSuggestions(
 
     for (const [fid, p] of Object.entries(props.by_feature ?? {})) {
         if (p.op === 'retire') {
-            out.push({ id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'retire', featureId: fid, originRole: roleFromTag(p.tag), tag: p.tag });
+            out.push({ id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'retire', featureId: fid, originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined });
         } else if (p.op === 'amend') {
             out.push({
                 id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'amend', featureId: fid,
-                originRole: roleFromTag(p.tag), tag: p.tag,
+                originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 titleOld: currentTitle(fid), titleNew: p.title ?? currentTitle(fid),
                 descOld: currentDescription(fid), descNew: p.description ?? currentDescription(fid),
             });
@@ -107,12 +111,13 @@ export function codeAheadSuggestions(
         if (p.op === 'add') {
             out.push({
                 id: eventId, eventId, direction: 'code-ahead', kind: 'add', featureId: null, parentId: p.parent_id ?? null,
-                originRole: roleFromTag(p.tag), tag: p.tag, titleNew: p.title ?? '', descNew: p.description ?? '',
+                originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
+                titleNew: p.title ?? '', descNew: p.description ?? '',
             });
         } else if (p.op === 'move') {
             out.push({
                 id: eventId, eventId, direction: 'code-ahead', kind: 'move', featureId: p.feature_id ?? null, parentId: p.parent_id ?? null,
-                originRole: roleFromTag(p.tag), tag: p.tag,
+                originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
             });
         }
     }
