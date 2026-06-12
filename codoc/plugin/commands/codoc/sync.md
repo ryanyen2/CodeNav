@@ -17,11 +17,20 @@ The user accepted code-implying tree edits; directives are waiting in
 `.codoc/realize.md`. Implement the queue now.
 
 **Read the queue.** Read `.codoc/realize.md`. It contains a numbered list of
-directives, each one of `NEW FEATURE` / `UPDATE FEATURE` / `RETIRE FEATURE`, with
-an `Intent:` / `New intent:` line, the currently-`Bound code:`, and an
-`Edit only:` scope. Each `### N.` heading carries a directive id like
-`⟨d-1a2b3c4d⟩` — note it; you pass it back as `caused_by` when you reflect that
-directive's code.
+directives, each one of `NEW FEATURE` / `UPDATE FEATURE` / `RETIRE FEATURE` /
+`STEER FEATURE`, with an `Intent:` / `New intent:` / `Author note:` line, the
+currently-`Bound code:`, and an `Edit only:` scope. Each `### N.` heading
+carries a directive id like `⟨d-1a2b3c4d⟩` — note it; you pass it back as
+`caused_by` when you reflect that directive's code. Three optional signals:
+- `STEER FEATURE` = an inline `> …` comment the user addressed to you; the note
+  wins over the feature's description where they conflict.
+- `Focus:` = phrases the user **bolded** — the highest-priority part of the
+  intent.
+- `Consult:` = an external page; fetch it with WebFetch and read it before
+  implementing that item.
+The queue can GROW while you work — the user steers mid-flight by adding `> …`
+comments in the doc. Re-read `.codoc/realize.md` after finishing each directive
+and implement any newly appended items before clearing the queue.
 
 **Implement each directive (minimum surgical change), sequentially.** Reflect
 each one before starting the next — this lets the IDE's documentation view fill

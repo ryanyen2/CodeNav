@@ -2,10 +2,13 @@
 
 Parse the edited ``tree.codoc`` → apply proposal verdicts + direct user edits +
 live doc-ahead suggestions (payload intents — the loop, not the human, applies a
-suggestion: see classify row 9) → for edits that imply a code change, build a
+suggestion: see classify row 9) + inline ``> …`` steering comments (notes
+addressed to the agent; always a directive, consumed from the text by the
+end-of-pass re-render) → for edits that imply a code change, build a
 directive from the feature's description + bound symbols and **queue it for the
 live Claude Code session** by writing ``.codoc/realize.md`` (set status
-``awaiting_impl``). The session implements the queued directives via
+``awaiting_impl``). An in-flight queue is appended to (via the manifest's
+directive texts), never clobbered — steering works mid-realization. The session implements the queued directives via
 ``/codoc:sync`` (Read → implement → ``codoc_reflect`` → delete the file); the
 loop is then closed by the existing Stop-hook reflection
 (``agent/hook._maybe_spawn_reflect``) or the watch daemon's epoch-close Loop A
@@ -28,12 +31,12 @@ from pathlib import Path
 
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.codoc_file.diff import diff_codoc
-from codoc.codoc_file.parse import parse_tree_file
+from codoc.codoc_file.parse import extract_bold, extract_links, parse_tree_file
 from codoc.codoc_file.render import write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
-from codoc.loop.classify import implies_code
+from codoc.loop.classify import implies_code, is_imperative
 from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop.fsio import atomic_write_text
 from codoc.model.event import NodeOp, NodeOpKind
@@ -46,6 +49,7 @@ class LoopBResult:
     accepted: int = 0
     rejected: int = 0
     user_edits: int = 0
+    steered: int = 0  # inline `> …` steering comments drained this pass
     directives: list[str] = field(default_factory=list)
     directive_ids: list[str] = field(default_factory=list)  # d-… ids, parallel to directives
     queued: bool = False  # directives written to .codoc/realize.md for the session
@@ -53,6 +57,8 @@ class LoopBResult:
 
     def summary(self) -> str:
         parts = [f"accepted {self.accepted}", f"rejected {self.rejected}", f"edits {self.user_edits}"]
+        if self.steered:
+            parts.append(f"steered {self.steered}")
         if self.queued:
             parts.append(f"queued {len(self.directives)} directive(s) for the session")
         if self.error:
@@ -60,9 +66,26 @@ class LoopBResult:
         return " · ".join(parts)
 
 
-def build_directive(op: NodeOp, store: Store) -> str:
+def _signal_lines(text: str | None, *, emphasis: list[str] | None = None) -> str:
+    """``Focus:`` (bolded spans) + ``Consult:`` (external links) suffix lines for
+    a directive. ``emphasis`` (the spans newly bolded by this edit) takes
+    precedence over re-extracting every bold span from the text."""
+    lines: list[str] = []
+    spans = emphasis if emphasis is not None else extract_bold(text or "")
+    if spans:
+        joined = "; ".join(f'"{s}"' for s in spans)
+        lines.append(f"  Focus: {joined}  (the author bolded these — highest-priority intent)")
+    for link in extract_links(text or ""):
+        label = f"  ({link.label})" if link.label else ""
+        lines.append(f"  Consult: {link.url}{label}")
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
+def build_directive(op: NodeOp, store: Store, *, emphasis: list[str] | None = None) -> str:
     if op.kind is NodeOpKind.ADD_NODE:
-        return f'NEW FEATURE: "{op.title}"\n  Intent: {op.description or "(none)"}\n  Implement this feature in the codebase.'
+        return (f'NEW FEATURE: "{op.title}"\n  Intent: {op.description or "(none)"}\n'
+                f'  Implement this feature in the codebase.'
+                + _signal_lines(op.description))
     if op.kind is NodeOpKind.AMEND:
         f = store.get_feature(op.feature_id)
         title = op.title or (f.title if f else op.feature_id)
@@ -71,7 +94,8 @@ def build_directive(op: NodeOp, store: Store) -> str:
         files = _bound_files(op.feature_id, store)
         scope = ", ".join(files) if files else "(none yet — create where it fits)"
         return (f'UPDATE FEATURE: "{title}"\n  New intent: {op.description}\n'
-                f'  Bound code: {loc}\n  Edit only: {scope}\n  Align the bound code with the new intent.')
+                f'  Bound code: {loc}\n  Edit only: {scope}\n  Align the bound code with the new intent.'
+                + _signal_lines(op.description, emphasis=emphasis))
     if op.kind is NodeOpKind.RETIRE_NODE:
         f = store.get_feature(op.feature_id)
         binds = [b.symbol_path for b in store.bindings_for_feature(op.feature_id)] if f else []
@@ -81,6 +105,26 @@ def build_directive(op: NodeOp, store: Store) -> str:
         return (f'RETIRE FEATURE: "{f.title if f else op.feature_id}"\n  Bound code: {loc}\n'
                 f'  Edit only: {scope}\n  Remove or refactor this code so the feature no longer exists.')
     return ""
+
+
+def build_steer_directive(feature_id: str, comment: str, store: Store) -> str:
+    """An inline ``> …`` comment is an explicit note to the agent — imperative by
+    construction (the author addressed the agent, not the prose). It steers the
+    feature's code without rewriting its description: useful mid-generation,
+    when editing the description directly is the wrong tool."""
+    f = store.get_feature(feature_id)
+    if f is None:
+        return ""
+    binds = [b.symbol_path for b in store.bindings_for_feature(feature_id)]
+    loc = ", ".join(binds) if binds else "(no bound code yet)"
+    files = _bound_files(feature_id, store)
+    scope = ", ".join(files) if files else "(none yet — create where it fits)"
+    note = comment.replace("\n", "\n    ")
+    return (f'STEER FEATURE: "{f.title}"\n  Author note: {note}\n'
+            f'  Bound code: {loc}\n  Edit only: {scope}\n'
+            f'  Apply the note to this feature\'s code; where it conflicts with the '
+            f'description, the note wins.'
+            + _signal_lines(comment))
 
 
 def _bound_files(feature_id: str | None, store: Store) -> list[str]:
@@ -198,7 +242,12 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                       actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
                       caused_by=(ann.suggestion_id if ann else ""))
         res.user_edits += 1
-        if implies_code(op, store):
+        # Boldening amplifies the imperative gate: a span the author NEWLY
+        # bolded that itself reads imperative queues a directive even when the
+        # description as a whole is descriptive — emphasis is a stronger intent
+        # signal than other revision text.
+        bolded = diff.emphasis.get(op.feature_id or "", [])
+        if implies_code(op, store) or any(is_imperative(s) for s in bolded):
             # The directive's cause: the doc-ahead suggestion this settle applied
             # (if the host told us), else the user-op event itself.
             cause = (ann.suggestion_id if ann and ann.suggestion_id else ev.id)
@@ -236,14 +285,32 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         if implies_code(op, store):
             directive_ops.append((op, f.id, intent.id))
 
+    # 2.7 Steering comments (`> …` in the text, snapshotted in step 0) — explicit
+    #     notes to the agent, imperative by construction. Each becomes a STEER
+    #     directive; the end-of-pass re-render consumes them from the text (the
+    #     store never holds them). In dry mode they are consumed without
+    #     queueing, exactly like an imperative edit's directive is built but
+    #     never queued.
+    steered: list[tuple[str, str]] = []  # (directive text, feature_id)
+    for fid, comment in diff.comments:
+        d = build_steer_directive(fid, comment, store)
+        if d:
+            steered.append((d, fid))
+    res.steered = len(steered)
+
     # Re-render tree.codoc when this pass moved the store ahead of the text
-    # (verdict accepts / intent applies) — otherwise the next pass would diff the
-    # stale text and read it as a human edit reverting the change. User text
-    # edits were absorbed above, so regenerating from the store loses nothing.
-    if res.accepted or res.user_edits:
+    # (verdict accepts / intent applies) or consumed steering comments —
+    # otherwise the next pass would diff the stale text and read it as a human
+    # edit reverting the change (or re-queue the same comment). User text edits
+    # were absorbed above, so regenerating from the store loses nothing.
+    if res.accepted or res.user_edits or res.steered:
         write_tree(store, codoc_dir)
 
-    rendered = [(build_directive(op, store), fid, cause, op) for op, fid, cause in directive_ops]
+    rendered = [
+        (build_directive(op, store, emphasis=diff.emphasis.get(fid)), fid, cause, op.kind.value)
+        for op, fid, cause in directive_ops
+    ]
+    rendered += [(text, fid, "", "steer") for text, fid in steered]
     rendered = [r for r in rendered if r[0]]
     res.directives = [r[0] for r in rendered]
 
@@ -258,16 +325,23 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     #    implements via /codoc:sync; the loop closes when the Stop-hook
     #    reflection (or the watch daemon's epoch-close Loop A) reflects the
     #    written code back.
+    #    An in-flight queue is APPENDED to, not clobbered: unimplemented
+    #    directives from the existing manifest (those carrying their rendered
+    #    text) are re-rendered ahead of the new ones — this is what lets a
+    #    steering comment land while a realization is already underway.
+    existing = [d for d in edits_channel.read_manifest(codoc_dir) if d.text]
     res.directive_ids = [new_directive_id() for _ in rendered]
-    prompt = build_realize_prompt(res.directives, root_dir, res.directive_ids)
+    all_texts = [d.text for d in existing] + res.directives
+    all_ids = [d.id for d in existing] + res.directive_ids
+    prompt = build_realize_prompt(all_texts, root_dir, all_ids)
     _write_realize(codoc_dir, prompt)
-    edits_channel.write_manifest(codoc_dir, [
-        edits_channel.Directive(id=did, feature_id=fid, kind=op.kind.value, caused_by=cause)
-        for did, (_, fid, cause, op) in zip(res.directive_ids, rendered)
+    edits_channel.write_manifest(codoc_dir, existing + [
+        edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text)
+        for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ])
     res.queued = True
     status.refresh_status(
-        codoc_dir, store, awaiting_impl=True, pending=len(res.directives),
-        detail=f"{len(res.directives)} change(s) ready to implement — run /codoc:sync",
+        codoc_dir, store, awaiting_impl=True, pending=len(all_texts),
+        detail=f"{len(all_texts)} change(s) ready to implement — run /codoc:sync",
     )
     return res

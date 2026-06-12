@@ -84,8 +84,11 @@ class Intent:
 class Directive:
     id: str            # d-… (model.ids.new_directive_id)
     feature_id: str    # "" when unknown (e.g. ADD whose id wasn't recoverable)
-    kind: str          # NodeOpKind value
+    kind: str          # NodeOpKind value, or "steer" (an inline `> …` comment)
     caused_by: str = ""  # suggestion id or event id that queued this directive
+    text: str = ""     # the rendered directive body — lets a later Loop B pass
+                       # APPEND to an in-flight queue (rebuild realize.md from
+                       # old + new) instead of clobbering unimplemented items
 
 
 def edits_path(codoc_dir: str | Path) -> Path:
@@ -173,7 +176,8 @@ def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
     dest = manifest_path(codoc_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(dest, {"version": 1, "directives": [
-        {"id": d.id, "feature_id": d.feature_id, "kind": d.kind, "caused_by": d.caused_by}
+        {"id": d.id, "feature_id": d.feature_id, "kind": d.kind,
+         "caused_by": d.caused_by, "text": d.text}
         for d in directives
     ]})
     return dest
@@ -191,7 +195,8 @@ def read_manifest(codoc_dir: str | Path) -> list[Directive]:
         return []
     data = read_json(path, default={})
     return [Directive(id=d.get("id") or "", feature_id=d.get("feature_id") or "",
-                      kind=d.get("kind") or "", caused_by=d.get("caused_by") or "")
+                      kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
+                      text=d.get("text") or "")
             for d in data.get("directives", [])]
 
 
