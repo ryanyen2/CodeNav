@@ -8,6 +8,8 @@ import { PendingChange } from '../state/realize-model';
 const HIDDEN_ID_RE = /\s*⟨(?:f|e)-[0-9a-f]+⟩/g;
 // A retired *live* feature line: '~ Title' (3rd char is a letter, not a marker).
 const RETIRED_RE = /^\s*~\s+\S/;
+// A steering-note line (`> …`) — a note addressed to the agent, not prose.
+const STEERING_RE = /^\s*>/;
 
 // Proposal hunk accents. Literal rgba (VS Code decoration colors don't resolve CSS
 // vars), centralized here so each colour is defined once: `tint` is the whole-line
@@ -240,7 +242,7 @@ export function applyDecorations(
             retired.push(new vscode.Range(i, 0, i, text.length));
         }
 
-        const isSteering = !proposalLines.has(i) && /^\s*>/.test(text);
+        const isSteering = !proposalLines.has(i) && STEERING_RE.test(text);
         if (isSteering) {
             steering.push({
                 range: new vscode.Range(i, 0, i, text.length),

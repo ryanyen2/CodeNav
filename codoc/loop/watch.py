@@ -372,12 +372,16 @@ def maybe_auto_realize(state: WatchState, root_dir: str, codoc_dir: str, *, prin
         proc = None
     if not autorealize.should_spawn(codoc_dir, in_flight=proc is not None):
         return
-    launched = autorealize.spawn_realize(root_dir, codoc_dir)
+    from codoc.loop.sdk_realize import resolve_engine
+
+    engine = resolve_engine("auto")
+    launched = autorealize.spawn_realize(root_dir, codoc_dir, engine=engine)
     if launched is None:
-        printer("⚠ --auto-realize: `claude` CLI not found on PATH; leaving realize.md queued")
+        printer("⚠ --auto-realize: no realize engine available (pip install 'codoc[sdk]' "
+                "or put `claude` on PATH); leaving realize.md queued")
         return
     state.realize_proc = launched
-    printer("▸ auto-realize  spawned headless /codoc:sync")
+    printer(f"▸ auto-realize  spawned {engine} /codoc:sync")
 
 
 def run_watch(
@@ -412,7 +416,7 @@ def run_watch(
         except Exception as e:  # noqa: BLE001
             printer(f"⚠ startup reconcile failed (continuing to watch): {e}")
 
-    suffix = "  (--auto-realize: headless implement when unattended)" if auto_realize else ""
+    suffix = "  (--auto-realize: unattended implement when no session is open)" if auto_realize else ""
     printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop){suffix}")
     for changes in watchfiles.watch(root_dir, watch_filter=watch_filter(codoc_dir), debounce=DEBOUNCE_MS):
         out = safe_process_batch([p for _, p in changes], root_dir, codoc_dir, state,

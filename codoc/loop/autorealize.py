@@ -63,10 +63,9 @@ def spawn_realize(root_dir: str, codoc_dir: str, *, engine: str = "auto") -> sub
     to ``realizing`` so the IDE reflects that an implementation pass is underway."""
     import sys
 
-    from codoc.loop.sdk_realize import sdk_available
+    from codoc.loop.sdk_realize import resolve_engine, sdk_available
 
-    if engine == "auto":
-        engine = "sdk" if sdk_available() else "cli"
+    engine = resolve_engine(engine)
 
     if engine == "sdk":
         if not sdk_available():

@@ -24,6 +24,7 @@ SDK installed.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -45,6 +46,13 @@ def sdk_available() -> bool:
     import importlib.util
 
     return importlib.util.find_spec("claude_agent_sdk") is not None
+
+
+def resolve_engine(engine: str) -> str:
+    """``auto`` → ``sdk`` when claude-agent-sdk is importable, else ``cli``."""
+    if engine == "auto":
+        return "sdk" if sdk_available() else "cli"
+    return engine
 
 
 def _dim(s: str, tty: bool) -> str:
@@ -81,6 +89,7 @@ class RealizeMonitor:
         self.errored = False
         self.result_text = ""
         self._started = time.monotonic()
+        self._sidecar: dict | None = None  # lazy; invalidated on each reflection
 
     # -- helpers ---------------------------------------------------------
 
@@ -90,11 +99,12 @@ class RealizeMonitor:
         return _rel(path, self.root_dir)
 
     def _titles_for(self, rel: str) -> list[str]:
-        from codoc.agent.hook import BINDINGS_FILENAME
-        from codoc.loop.fsio import read_json
+        if self._sidecar is None:
+            from codoc.agent.hook import BINDINGS_FILENAME
+            from codoc.loop.fsio import read_json
 
-        sidecar = read_json(Path(self.codoc_dir) / BINDINGS_FILENAME, default={})
-        entries = (sidecar.get("by_file") or {}).get(rel, [])
+            self._sidecar = read_json(Path(self.codoc_dir) / BINDINGS_FILENAME, default={})
+        entries = (self._sidecar.get("by_file") or {}).get(rel, [])
         return list(dict.fromkeys(e["feature_title"] for e in entries
                                   if e.get("feature_title")))
 
@@ -134,6 +144,7 @@ class RealizeMonitor:
             return
 
         if name.startswith("mcp__codoc__"):
+            self._sidecar = None  # a reflection rewrites the sidecar — re-read next time
             fids = _collect_feature_ids(tool_input)
             if fids:
                 mark_feature_phase(self.codoc_dir, fids, PHASE_REFLECTING)
@@ -177,8 +188,6 @@ class RealizeMonitor:
 
 async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
                printer: Printer) -> int:
-    import os
-
     from claude_agent_sdk import ClaudeAgentOptions, query
 
     # Mark the epoch loop-owned (the SessionStart hook reads this), exactly like

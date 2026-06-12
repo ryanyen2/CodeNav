@@ -70,8 +70,9 @@ def watch(
     dry: bool = typer.Option(False, "--dry", help="Reflect + apply tree edits, but don't queue realization directives."),
     auto_realize: bool = typer.Option(
         False, "--auto-realize",
-        help="Unattended fallback: spawn a headless `claude -p /codoc:sync` to "
-             "implement queued tree edits when no interactive session is around.",
+        help="Unattended fallback: implement queued tree edits when no interactive "
+             "session is around — via the Claude Agent SDK when installed "
+             "(codoc[sdk]; live readout), else a headless `claude -p /codoc:sync`.",
     ),
 ):
     """Watch code + tree.codoc and run both loops continuously."""
@@ -103,14 +104,13 @@ def realize(
     import subprocess
 
     from codoc.loop.loop_b import realize_path
-    from codoc.loop.sdk_realize import run_sdk_realize, sdk_available
+    from codoc.loop.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
 
     if not realize_path(_codoc_dir(root)).exists():
         typer.echo("Nothing queued (.codoc/realize.md absent). Edit tree.codoc, then `codoc sync`.")
         raise typer.Exit(0)
 
-    if engine == "auto":
-        engine = "sdk" if sdk_available() else "cli"
+    engine = resolve_engine(engine)
     if engine == "sdk":
         if not sdk_available():
             typer.echo("claude-agent-sdk is not installed — pip install 'codoc[sdk]', "

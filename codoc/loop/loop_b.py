@@ -53,6 +53,7 @@ class LoopBResult:
     directives: list[str] = field(default_factory=list)
     directive_ids: list[str] = field(default_factory=list)  # d-… ids, parallel to directives
     queued: bool = False  # directives written to .codoc/realize.md for the session
+    queued_total: int = 0  # whole queue size after this pass (existing + new)
     error: str = ""
 
     def summary(self) -> str:
@@ -60,7 +61,8 @@ class LoopBResult:
         if self.steered:
             parts.append(f"steered {self.steered}")
         if self.queued:
-            parts.append(f"queued {len(self.directives)} directive(s) for the session")
+            total = self.queued_total or len(self.directives)
+            parts.append(f"queued {total} directive(s) for the session")
         if self.error:
             parts.append(f"error: {self.error}")
         return " · ".join(parts)
@@ -89,18 +91,16 @@ def build_directive(op: NodeOp, store: Store, *, emphasis: list[str] | None = No
     if op.kind is NodeOpKind.AMEND:
         f = store.get_feature(op.feature_id)
         title = op.title or (f.title if f else op.feature_id)
-        binds = [b.symbol_path for b in store.bindings_for_feature(op.feature_id)] if f else []
-        loc = ", ".join(binds) if binds else "(no bound code yet)"
-        files = _bound_files(op.feature_id, store)
+        loc, files = _bound_code(op.feature_id, store) if f else ("", [])
+        loc = loc or "(no bound code yet)"
         scope = ", ".join(files) if files else "(none yet — create where it fits)"
         return (f'UPDATE FEATURE: "{title}"\n  New intent: {op.description}\n'
                 f'  Bound code: {loc}\n  Edit only: {scope}\n  Align the bound code with the new intent.'
                 + _signal_lines(op.description, emphasis=emphasis))
     if op.kind is NodeOpKind.RETIRE_NODE:
         f = store.get_feature(op.feature_id)
-        binds = [b.symbol_path for b in store.bindings_for_feature(op.feature_id)] if f else []
-        loc = ", ".join(binds) if binds else "(no bound code)"
-        files = _bound_files(op.feature_id, store)
+        loc, files = _bound_code(op.feature_id, store) if f else ("", [])
+        loc = loc or "(no bound code)"
         scope = ", ".join(files) if files else "(none)"
         return (f'RETIRE FEATURE: "{f.title if f else op.feature_id}"\n  Bound code: {loc}\n'
                 f'  Edit only: {scope}\n  Remove or refactor this code so the feature no longer exists.')
@@ -115,9 +115,8 @@ def build_steer_directive(feature_id: str, comment: str, store: Store) -> str:
     f = store.get_feature(feature_id)
     if f is None:
         return ""
-    binds = [b.symbol_path for b in store.bindings_for_feature(feature_id)]
-    loc = ", ".join(binds) if binds else "(no bound code yet)"
-    files = _bound_files(feature_id, store)
+    loc, files = _bound_code(feature_id, store)
+    loc = loc or "(no bound code yet)"
     scope = ", ".join(files) if files else "(none yet — create where it fits)"
     note = comment.replace("\n", "\n    ")
     return (f'STEER FEATURE: "{f.title}"\n  Author note: {note}\n'
@@ -127,14 +126,16 @@ def build_steer_directive(feature_id: str, comment: str, store: Store) -> str:
             + _signal_lines(comment))
 
 
-def _bound_files(feature_id: str | None, store: Store) -> list[str]:
-    """Distinct repo-relative files owned by a feature — the agent's edit scope."""
+def _bound_code(feature_id: str | None, store: Store) -> tuple[str, list[str]]:
+    """One bindings fetch → (joined symbol paths, distinct repo-relative files).
+
+    The symbols are the directive's ``Bound code:`` line, the files its
+    ``Edit only:`` scope."""
     if not feature_id:
-        return []
-    seen: dict[str, None] = {}
-    for b in store.bindings_for_feature(feature_id):
-        seen.setdefault(b.file, None)
-    return list(seen.keys())
+        return "", []
+    binds = store.bindings_for_feature(feature_id)
+    files = list(dict.fromkeys(b.file for b in binds))
+    return ", ".join(b.symbol_path for b in binds), files
 
 
 def build_realize_prompt(directives: list[str], root_dir: str,
@@ -333,6 +334,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     res.directive_ids = [new_directive_id() for _ in rendered]
     all_texts = [d.text for d in existing] + res.directives
     all_ids = [d.id for d in existing] + res.directive_ids
+    res.queued_total = len(all_texts)
     prompt = build_realize_prompt(all_texts, root_dir, all_ids)
     _write_realize(codoc_dir, prompt)
     edits_channel.write_manifest(codoc_dir, existing + [
