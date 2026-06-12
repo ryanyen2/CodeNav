@@ -87,14 +87,20 @@ files (the Python loops never read the rich `tree.doc.json`):
 
 ```json
 {"version": 1, "directives": [
-  {"id": "d-…", "feature_id": "f-…", "kind": "amend", "caused_by": "<suggestion or event id>"}]}
+  {"id": "d-…", "feature_id": "f-…", "kind": "amend",
+   "caused_by": "<suggestion or event id>", "text": "<rendered directive body>"}]}
 ```
 
 The machine-readable manifest of the queued directives: feature ids form the
 other half of the hold set; directive ids are echoed as `⟨d-…⟩` in the
 `realize.md` headings so the implementing agent can pass them back via
-`codoc_reflect(caused_by=…)`. Deleted together with `realize.md` when the queue
-completes; a manifest with no `realize.md` beside it is stale and ignored.
+`codoc_reflect(caused_by=…)`. `kind` may also be `"steer"` (an inline `> …`
+steering comment). `text` carries each directive's rendered body so a later
+Loop B pass rebuilds `realize.md` as old + new — the queue is **appended to,
+never clobbered** while a realization is in flight (closing the previously
+deferred "wholesale rewrite can drop earlier queued directives" gap). Deleted
+together with `realize.md` when the queue completes; a manifest with no
+`realize.md` beside it is stale and ignored.
 
 ## The causality chain (surface-back)
 

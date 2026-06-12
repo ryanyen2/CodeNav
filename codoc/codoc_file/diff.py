@@ -27,6 +27,10 @@ class CodocDiff:
     # Loop B turns each into a realize directive; the post-pass re-render
     # consumes them from the text (the store never holds them).
     comments: list[tuple[str, str]] = field(default_factory=list)
+    # Steering comments on hand-added nodes (no ⟨f-id⟩ yet): (title, comment).
+    # Loop B resolves the freshly-minted id by title after applying the ADD —
+    # without this the note would be silently destroyed by the re-render.
+    new_node_comments: list[tuple[str, str]] = field(default_factory=list)
     # feature_id → spans the author NEWLY bolded in this edit (new bold minus
     # old bold). Boldening is a focus signal stronger than other revision text:
     # it rides into the directive as a `Focus:` line, and an imperative bolded
@@ -51,9 +55,13 @@ def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
                 description=node.description,
                 parent_id=node.parent_id,
             ))
+            for comment in node.comments:
+                diff.new_node_comments.append((node.title, comment))
             continue
 
         if node.retired and not f.retired:
+            # A comment on a node being retired in the same save is intentionally
+            # dropped — the retire directive supersedes any steering on it.
             diff.user_ops.append(NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id))
             continue
 

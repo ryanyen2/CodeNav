@@ -5,18 +5,20 @@
  *
  * Directive blocks look like (see codoc/loop/loop_b.py::build_directive):
  *
- *   ### 2. UPDATE FEATURE: "Sandboxed code execution"
+ *   ### 2. ⟨d-1a2b3c4d⟩ UPDATE FEATURE: "Sandboxed code execution"
  *     New intent: …
  *     Bound code: execution.py::execute_code, execution.py::time_limit
  *     Edit only: execution.py
  *     Align the bound code with the new intent.
  *
- * NEW FEATURE blocks carry only an `Intent:` (no bound code yet); UPDATE/RETIRE
- * carry `Bound code:` symbol paths + an `Edit only:` file scope. Sentinel values
- * like "(no bound code yet)" / "(none)" are ignored.
+ * The heading carries an optional directive id (`⟨d-…⟩`). NEW FEATURE blocks
+ * carry only an `Intent:` (no bound code yet); UPDATE/RETIRE/STEER carry
+ * `Bound code:` symbol paths + an `Edit only:` file scope (STEER's prose rides
+ * in `Author note:`). Sentinel values like "(no bound code yet)" / "(none)"
+ * are ignored.
  */
 
-export type RealizeKind = 'new' | 'update' | 'retire';
+export type RealizeKind = 'new' | 'update' | 'retire' | 'steer';
 
 export interface RealizeDirective {
     kind: RealizeKind;
@@ -33,7 +35,7 @@ export interface PendingChange {
     kind: RealizeKind;
 }
 
-const HEADER_RE = /^###\s+\d+\.\s+(NEW|UPDATE|RETIRE)\s+FEATURE:\s*"?(.*?)"?\s*$/;
+const HEADER_RE = /^###\s+\d+\.\s+(?:⟨d-[0-9a-f]+⟩\s+)?(NEW|UPDATE|RETIRE|STEER)\s+FEATURE:\s*"?(.*?)"?\s*$/;
 
 function splitList(value: string): string[] {
     const v = value.trim();
@@ -56,10 +58,10 @@ export function parseRealize(text: string): RealizeDirective[] {
             continue;
         }
         if (!cur) continue;
-        const m = /^\s*(Intent|New intent|Bound code|Edit only):\s*(.*)$/.exec(line);
+        const m = /^\s*(Intent|New intent|Author note|Bound code|Edit only):\s*(.*)$/.exec(line);
         if (!m) continue;
         const field = m[1].toLowerCase();
-        if (field === 'intent' || field === 'new intent') cur.intent = m[2].trim();
+        if (field === 'intent' || field === 'new intent' || field === 'author note') cur.intent = m[2].trim();
         else if (field === 'bound code') cur.boundCode = splitList(m[2]);
         else if (field === 'edit only') cur.editOnly = splitList(m[2]);
     }

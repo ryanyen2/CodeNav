@@ -13,7 +13,7 @@ import pytest
 
 from codoc.loop import autorealize
 from codoc.loop.activity import read_activity
-from codoc.loop.sdk_realize import RealizeMonitor, _collect_feature_ids
+from codoc.loop.sdk_realize import RealizeMonitor, _collect_feature_ids, consume_stream
 
 
 @pytest.fixture
@@ -129,6 +129,36 @@ def test_summary_counts_writes_and_reflections(repo):
     m.on_tool_use("mcp__codoc__codoc_attach", {"feature_id": "f-0000aaaa"})
     s = m.summary()
     assert "✓ done" in s and "1 file(s) written" in s and "1 reflection(s)" in s
+
+
+def test_notebook_edit_maps_notebook_path(repo):
+    root, _codoc = repo
+    lines: list[str] = []
+    m = _monitor(repo, lines)
+    m.on_tool_use("NotebookEdit", {"notebook_path": str(Path(root) / "src/colors.py")})
+    assert m.writes == {"src/colors.py"}
+
+
+def test_consume_stream_marks_failure_instead_of_raising(repo):
+    """An SDK exception mid-stream must mark the run failed (so the caller's
+    status recovery runs) rather than propagate and strand status=realizing."""
+    import asyncio
+
+    lines: list[str] = []
+    m = _monitor(repo, lines)
+    root = repo[0]
+
+    async def broken_stream():
+        yield SimpleNamespace(content=[
+            SimpleNamespace(name="Write", input={"file_path": str(Path(root) / "src/colors.py")})])
+        raise RuntimeError("socket dropped")
+
+    asyncio.run(consume_stream(m, broken_stream()))
+
+    assert m.writes == {"src/colors.py"}  # events before the failure still landed
+    assert m.errored is True
+    assert "socket dropped" in m.result_text
+    assert "✗ failed" in m.summary()
 
 
 def test_collect_feature_ids_is_recursive_and_deduped():

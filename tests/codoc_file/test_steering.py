@@ -71,6 +71,17 @@ def test_comment_citing_a_feature_id_is_not_a_bad_marker():
     assert n.comments == ["merge this with ⟨f-0000bbbb⟩"]
 
 
+def test_hash_line_separates_two_steering_runs():
+    n = _node(
+        "- Feat  ⟨f-0000aaaa⟩\n"
+        "  prose\n"
+        "  > one\n"
+        "  # divider\n"
+        "  > two\n"
+    )
+    assert n.comments == ["one", "two"]
+
+
 def test_comment_outside_any_feature_is_ignored():
     tree = parse_text("> stray note\n- Feat  ⟨f-0000aaaa⟩\n  prose\n")
     assert tree.nodes[0].comments == []

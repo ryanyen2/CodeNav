@@ -32,7 +32,7 @@ from pathlib import Path
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import extract_bold, extract_links, parse_tree_file
-from codoc.codoc_file.render import write_tree
+from codoc.codoc_file.render import tree_path, write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
@@ -163,6 +163,28 @@ def _write_realize(codoc_dir: str, prompt: str) -> None:
     atomic_write_text(dest, prompt)
 
 
+def _reinsert_comments(codoc_dir: str, targets: list[tuple[str, str]]) -> None:
+    """A dry pass re-rendered the text (store-driven, so the ``> …`` lines are
+    gone) but must not consume the un-queued notes — re-insert each under its
+    feature's title line so a later real pass can drain it."""
+    path = tree_path(codoc_dir)
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return
+    for fid, comment in targets:
+        if not fid:
+            continue
+        marker = f"⟨{fid}⟩"
+        for i, ln in enumerate(lines):
+            if marker in ln:
+                indent = " " * (len(ln) - len(ln.lstrip()) + 4)
+                lines[i + 1:i + 1] = [f"{indent}> {cl}".rstrip()
+                                      for cl in comment.splitlines()]
+                break
+    atomic_write_text(path, "\n".join(lines) + "\n")
+
+
 def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False) -> LoopBResult:
     with open_store(codoc_dir) as store:
         return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
@@ -289,14 +311,24 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # 2.7 Steering comments (`> …` in the text, snapshotted in step 0) — explicit
     #     notes to the agent, imperative by construction. Each becomes a STEER
     #     directive; the end-of-pass re-render consumes them from the text (the
-    #     store never holds them). In dry mode they are consumed without
-    #     queueing, exactly like an imperative edit's directive is built but
-    #     never queued.
-    steered: list[tuple[str, str]] = []  # (directive text, feature_id)
-    for fid, comment in diff.comments:
-        d = build_steer_directive(fid, comment, store)
+    #     store never holds them). A steer's caused_by is the co-occurring
+    #     AMEND's cause on the same feature when there is one (the comment rode
+    #     along with that edit), so the IDE's cascade cue can group them.
+    #     Comments on hand-added nodes resolve their freshly-minted id by title
+    #     (step 2 just applied the ADD).
+    amend_cause = {fid: cause for _op, fid, cause in directive_ops if fid}
+    steered: list[tuple[str, str, str]] = []  # (directive text, feature_id, cause)
+    comment_targets = list(diff.comments)
+    if diff.new_node_comments:
+        by_title: dict[str, str] = {}
+        for f2 in store.list_features():
+            by_title.setdefault(f2.title, f2.id)
+        comment_targets += [(by_title.get(title, ""), comment)
+                            for title, comment in diff.new_node_comments]
+    for fid, comment in comment_targets:
+        d = build_steer_directive(fid, comment, store) if fid else ""
         if d:
-            steered.append((d, fid))
+            steered.append((d, fid, amend_cause.get(fid, "")))
     res.steered = len(steered)
 
     # Re-render tree.codoc when this pass moved the store ahead of the text
@@ -304,14 +336,21 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # otherwise the next pass would diff the stale text and read it as a human
     # edit reverting the change (or re-queue the same comment). User text edits
     # were absorbed above, so regenerating from the store loses nothing.
-    if res.accepted or res.user_edits or res.steered:
+    # Steering comments are consumed ONLY when their directives will actually be
+    # queued: a dry/no-realize pass must leave the `>` lines in the text for a
+    # later real pass — consuming without queueing would destroy the note.
+    if res.accepted or res.user_edits or (res.steered and not dry_run):
         write_tree(store, codoc_dir)
+        if dry_run and comment_targets:
+            # The dry re-render (store-driven) just dropped the `> …` lines even
+            # though we are not queueing them — put them back.
+            _reinsert_comments(codoc_dir, comment_targets)
 
     rendered = [
         (build_directive(op, store, emphasis=diff.emphasis.get(fid)), fid, cause, op.kind.value)
         for op, fid, cause in directive_ops
     ]
-    rendered += [(text, fid, "", "steer") for text, fid in steered]
+    rendered += [(text, fid, cause, "steer") for text, fid, cause in steered]
     rendered = [r for r in rendered if r[0]]
     res.directives = [r[0] for r in rendered]
 
@@ -330,20 +369,42 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     #    directives from the existing manifest (those carrying their rendered
     #    text) are re-rendered ahead of the new ones — this is what lets a
     #    steering comment land while a realization is already underway.
-    existing = [d for d in edits_channel.read_manifest(codoc_dir) if d.text]
+    existing = edits_channel.read_manifest(codoc_dir)
+    legacy = [d for d in existing if not d.text]
     res.directive_ids = [new_directive_id() for _ in rendered]
-    all_texts = [d.text for d in existing] + res.directives
-    all_ids = [d.id for d in existing] + res.directive_ids
-    res.queued_total = len(all_texts)
-    prompt = build_realize_prompt(all_texts, root_dir, all_ids)
-    _write_realize(codoc_dir, prompt)
+    res.queued_total = len(existing) + len(res.directives)
+
+    if legacy:
+        # Pre-`text` manifest entries can't be re-rendered from the manifest —
+        # preserve the existing queue file verbatim and append the new sections
+        # after it, rather than silently dropping the in-flight directives.
+        try:
+            old_body = realize_path(codoc_dir).read_text()
+        except OSError:
+            old_body = ""
+        new_sections = "\n\n".join(
+            f"### {len(existing) + i + 1}. ⟨{did}⟩ {text}"
+            for i, (did, text) in enumerate(zip(res.directive_ids, res.directives)))
+        prompt = (f"{old_body.rstrip()}\n\n{new_sections}\n" if old_body.strip()
+                  else build_realize_prompt(res.directives, root_dir, res.directive_ids))
+    else:
+        all_texts = [d.text for d in existing] + res.directives
+        all_ids = [d.id for d in existing] + res.directive_ids
+        prompt = build_realize_prompt(all_texts, root_dir, all_ids)
+
+    # Manifest BEFORE the queue file: a crash between the two writes then leaves
+    # a manifest with no realize.md beside it — a state read_manifest already
+    # treats as stale (cleaned up, or self-healed on the in-flight append path).
+    # The reverse order would orphan realize.md: the next pass would see an
+    # empty manifest and clobber the queued items.
     edits_channel.write_manifest(codoc_dir, existing + [
         edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text)
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ])
+    _write_realize(codoc_dir, prompt)
     res.queued = True
     status.refresh_status(
-        codoc_dir, store, awaiting_impl=True, pending=len(all_texts),
-        detail=f"{len(all_texts)} change(s) ready to implement — run /codoc:sync",
+        codoc_dir, store, awaiting_impl=True, pending=res.queued_total,
+        detail=f"{res.queued_total} change(s) ready to implement — run /codoc:sync",
     )
     return res

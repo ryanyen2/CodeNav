@@ -118,8 +118,10 @@ class RealizeMonitor:
         from codoc.agent.hook import _handle_tool
 
         try:
+            # phase="pre": a streamed tool_use block arrives when the tool is
+            # REQUESTED, matching the interactive PreToolUse hook semantics.
             _handle_tool({"tool_name": name, "tool_input": tool_input},
-                         self.codoc_dir, phase="post")
+                         self.codoc_dir, phase="pre")
         except Exception:  # noqa: BLE001 — signals never break the run
             pass
 
@@ -131,10 +133,11 @@ class RealizeMonitor:
             return
 
         if name in _WRITE_TOOLS or name in _READ_TOOLS:
-            rel = self._rel(tool_input.get("file_path") or "")
+            path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+            rel = self._rel(path)
             if rel is None:
                 return
-            self._record_touch(name, tool_input)
+            self._record_touch(name, {**tool_input, "file_path": path})
             if name in _WRITE_TOOLS:
                 self.writes.add(rel)
                 titles = ", ".join(self._titles_for(rel))
@@ -186,14 +189,23 @@ class RealizeMonitor:
                 f"{self.reflections} reflection(s) · {elapsed}s")
 
 
+async def consume_stream(monitor: RealizeMonitor, stream: Any) -> None:
+    """Drain the SDK message stream into the monitor. An exception mid-stream
+    (SDK error, broken pipe, rate-limit blowup) marks the run failed instead of
+    propagating — the caller's status recovery must always run, or status.json
+    is left stuck at ``realizing`` and the daemon never retries the queue."""
+    try:
+        async for msg in stream:
+            monitor.handle_message(msg)
+    except Exception as exc:  # noqa: BLE001 — the queue file survives; report + recover
+        monitor.errored = True
+        monitor.result_text = monitor.result_text or f"{type(exc).__name__}: {exc}"
+
+
 async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
                printer: Printer) -> int:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
-    # Mark the epoch loop-owned (the SessionStart hook reads this), exactly like
-    # a Loop B-driven session — the Stop-hook reflect defers to /codoc:sync's
-    # own in-session reflection.
-    os.environ.setdefault("CODOC_EPOCH_ORIGIN", "loop_b")
     options = ClaudeAgentOptions(
         cwd=root_dir,
         permission_mode=permission_mode,
@@ -211,12 +223,24 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
         pass
 
     printer("codoc realize · /codoc:sync · claude-agent-sdk")
-    async for msg in query(prompt="/codoc:sync", options=options):
-        monitor.handle_message(msg)
+    # Mark the epoch loop-owned for the spawned CLI (the SessionStart hook reads
+    # this), exactly like a Loop B-driven session — restored afterwards so a
+    # foreground `codoc realize` doesn't leak the mutation into its process.
+    prev_origin = os.environ.get("CODOC_EPOCH_ORIGIN")
+    os.environ.setdefault("CODOC_EPOCH_ORIGIN", "loop_b")
+    try:
+        await consume_stream(monitor, query(prompt="/codoc:sync", options=options))
+    finally:
+        if prev_origin is None:
+            os.environ.pop("CODOC_EPOCH_ORIGIN", None)
+        else:
+            os.environ["CODOC_EPOCH_ORIGIN"] = prev_origin
     printer(monitor.summary())
 
     # The agent deletes realize.md when the queue is done; recompute the honest
-    # lifecycle state either way (awaiting_impl floor if it left items behind).
+    # lifecycle state either way (awaiting_impl floor if it left items behind,
+    # and ALWAYS on failure — a stuck `realizing` would freeze the daemon's
+    # auto-realize cycle forever).
     try:
         from codoc.store.db import open_store
 

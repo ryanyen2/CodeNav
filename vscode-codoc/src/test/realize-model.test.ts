@@ -35,6 +35,26 @@ describe('parseRealize', () => {
     it('returns [] for empty text', () => {
         expect(parseRealize('')).toEqual([]);
     });
+
+    it('parses ⟨d-id⟩ headings and STEER directives with an Author note', () => {
+        const text = [
+            '### 1. ⟨d-1a2b3c4d⟩ UPDATE FEATURE: "Color palette"',
+            '  New intent: Should expose dark-mode variants.',
+            '  Bound code: colors.py::PALETTE',
+            '  Edit only: colors.py',
+            '',
+            '### 2. ⟨d-9f8e7d6c⟩ STEER FEATURE: "Color palette"',
+            '  Author note: use CSS custom properties, not a JS map',
+            '  Bound code: colors.py::PALETTE',
+            '  Edit only: colors.py',
+            '',
+        ].join('\n');
+        const ds = parseRealize(text);
+        expect(ds.map(d => d.kind)).toEqual(['update', 'steer']);
+        expect(ds[1].title).toBe('Color palette');
+        expect(ds[1].intent).toContain('CSS custom properties');
+        expect(ds[1].editOnly).toEqual(['colors.py']);
+    });
 });
 
 describe('pendingCodeByFile', () => {

@@ -110,6 +110,9 @@ def realize(
         typer.echo("Nothing queued (.codoc/realize.md absent). Edit tree.codoc, then `codoc sync`.")
         raise typer.Exit(0)
 
+    if engine not in ("auto", "sdk", "cli"):
+        typer.echo(f"Unknown --engine {engine!r} — expected auto, sdk, or cli.", err=True)
+        raise typer.Exit(2)
     engine = resolve_engine(engine)
     if engine == "sdk":
         if not sdk_available():

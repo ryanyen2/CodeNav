@@ -97,7 +97,9 @@ def test_steering_comment_appends_to_inflight_queue(dirs):
     assert all(d.text for d in manifest)
 
 
-def test_steering_comment_consumed_but_not_queued_in_dry_run(dirs):
+def test_dry_run_preserves_steering_comment_in_text(dirs):
+    """A dry pass must NOT consume a note it didn't queue — consuming without
+    queueing would silently destroy explicit user intent."""
     root, codoc_dir = dirs
     _seed(codoc_dir)
     _edit_tree(codoc_dir, "Holds brand colors.",
@@ -108,6 +110,85 @@ def test_steering_comment_consumed_but_not_queued_in_dry_run(dirs):
     assert res.steered == 1
     assert res.directives and not res.queued
     assert not realize_path(codoc_dir).exists()
+    assert "> rename the constant" in tree_path(codoc_dir).read_text()
+    # …and a later real pass drains it normally.
+    res2 = run_loop_b(root, codoc_dir, dry_run=False)
+    assert res2.steered == 1 and res2.queued
+
+
+def test_dry_run_with_prose_edit_reinserts_comment_after_rerender(dirs):
+    """A dry pass that re-renders (prose edit absorbed) must put the un-queued
+    `>` lines back — the store-driven render drops them."""
+    root, codoc_dir = dirs
+    _seed(codoc_dir)
+    _edit_tree(codoc_dir, "Holds brand colors.",
+               "Holds brand colors and tints.\n  > rename the constant")
+
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.user_edits == 1 and res.steered == 1 and not res.queued
+    text = tree_path(codoc_dir).read_text()
+    assert "Holds brand colors and tints." in text  # edit absorbed + re-rendered
+    assert "> rename the constant" in text          # note preserved
+
+
+def test_comment_on_hand_added_node_resolves_minted_id(dirs):
+    """A `>` note under a brand-new (id-less) node must not be destroyed: the
+    ADD is applied first, then the steer resolves the freshly-minted id by
+    title."""
+    root, codoc_dir = dirs
+    _seed(codoc_dir)
+    p = tree_path(codoc_dir)
+    p.write_text(p.read_text() + "\n- Theme tokens\n    Should expose design tokens.\n"
+                 "    > start with the color scale\n")
+
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.steered == 1 and res.queued
+    body = realize_path(codoc_dir).read_text()
+    assert 'STEER FEATURE: "Theme tokens"' in body
+    assert "start with the color scale" in body
+    steer = next(d for d in edits_channel.read_manifest(codoc_dir) if d.kind == "steer")
+    assert steer.feature_id.startswith("f-")
+
+
+def test_steer_caused_by_matches_cooccurring_amend(dirs):
+    """A comment riding along with an imperative edit on the same feature
+    inherits that edit's cause, so the IDE cascade cue groups them."""
+    root, codoc_dir = dirs
+    _seed(codoc_dir)
+    _edit_tree(codoc_dir, "Holds brand colors.",
+               "Should expose dark-mode variants.\n  > keep the public API stable")
+
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.queued and res.steered == 1
+    manifest = edits_channel.read_manifest(codoc_dir)
+    amend = next(d for d in manifest if d.kind == "amend")
+    steer = next(d for d in manifest if d.kind == "steer")
+    assert amend.caused_by and steer.caused_by == amend.caused_by
+
+
+def test_legacy_textless_manifest_preserved_on_append(dirs):
+    """Pre-`text` manifest entries can't be re-rendered — the existing queue
+    file must be kept verbatim and the new sections appended, never dropped."""
+    root, codoc_dir = dirs
+    f = _seed(codoc_dir)
+    old_body = '### 1. UPDATE FEATURE: "Color palette"\n  New intent: legacy directive body\n'
+    realize_path(codoc_dir).write_text(old_body)
+    edits_channel.write_manifest(codoc_dir, [
+        edits_channel.Directive(id="d-legacy01", feature_id=f.id, kind="amend")])
+
+    _edit_tree(codoc_dir, "Holds brand colors.",
+               "Holds brand colors.\n  > also cache palette lookups")
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.steered == 1 and res.queued and res.queued_total == 2
+    body = realize_path(codoc_dir).read_text()
+    assert "legacy directive body" in body          # old queue preserved verbatim
+    assert "### 2." in body and "STEER FEATURE" in body  # new section appended
+    manifest = edits_channel.read_manifest(codoc_dir)
+    assert [d.id for d in manifest][0] == "d-legacy01" and len(manifest) == 2
 
 
 # -- bold = focus -----------------------------------------------------------

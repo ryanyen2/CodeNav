@@ -101,12 +101,8 @@ def extract_links(text: str) -> list[Link]:
 
 def extract_bold(text: str) -> list[str]:
     """Pull ``**bold**`` spans out of prose, in document order, deduped."""
-    seen: dict[str, None] = {}
-    for m in _BOLD_RE.finditer(text or ""):
-        span = m.group(1).strip()
-        if span:
-            seen.setdefault(span, None)
-    return list(seen.keys())
+    spans = (m.group(1).strip() for m in _BOLD_RE.finditer(text or ""))
+    return list(dict.fromkeys(s for s in spans if s))
 
 
 def parse_text(text: str) -> ParsedTree:
@@ -179,8 +175,10 @@ def parse_text(text: str) -> ParsedTree:
                     desc_buf.append("")
             continue
         if _DIFF_HUNK_RE.match(line):
+            flush_comment()  # any non-`>` line ends a steering run
             continue  # stray proposal hunk outside the pending block
         if s.startswith("#"):
+            flush_comment()
             continue
 
         mf = _FEATURE_RE.match(line)

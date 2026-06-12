@@ -160,8 +160,8 @@ export function parseTreeCodoc(text: string): ParseResult {
             }
             continue;
         }
-        if (DIFF_HUNK_RE.test(line)) continue;
-        if (s.startsWith('#')) continue;
+        if (DIFF_HUNK_RE.test(line)) { flushComment(); continue; }
+        if (s.startsWith('#')) { flushComment(); continue; }
 
         const mf = FEATURE_RE.exec(line);
         if (mf?.groups) {
