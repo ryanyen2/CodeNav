@@ -44,6 +44,7 @@ export interface CodocDecorations {
     amendInline: vscode.TextEditorDecorationType;     // proposed title/description edit
     unrealizedPlaceholder: vscode.TextEditorDecorationType;  // accepted plan node, no code yet
     pendingCodeChange: vscode.TextEditorDecorationType;  // source code a queued tree edit will rework
+    steeringNote: vscode.TextEditorDecorationType;  // `> …` note addressed to the agent
 }
 
 export function createDecorations(_context: vscode.ExtensionContext): CodocDecorations {
@@ -106,6 +107,13 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
             borderColor: new vscode.ThemeColor('charts.purple'),
             borderWidth: '0 0 0 2px',
             borderStyle: 'dashed',
+        }),
+        // A `> …` steering note is addressed to the agent, not the reader:
+        // ghost-text ink (the editor's "for the machine" tone), italic, no hue —
+        // colour stays reserved for direction. Consumed by the next Loop B pass.
+        steeringNote: vscode.window.createTextEditorDecorationType({
+            fontStyle: 'italic',
+            color: new vscode.ThemeColor('editorGhostText.foreground'),
         }),
     };
 }
@@ -214,6 +222,11 @@ export function applyDecorations(
         }
     }
 
+    // Steering notes (`> …`): ghost-ink the whole run, and tag each run's first
+    // line with a quiet "→ for agent" cue (mirrors the doc-ahead suggestion
+    // language; the note is drained into a directive on the next Loop B pass).
+    const steering: vscode.DecorationOptions[] = [];
+    let prevWasSteering = false;
     for (let i = 0; i < editor.document.lineCount; i++) {
         const text = editor.document.lineAt(i).text;
 
@@ -226,6 +239,21 @@ export function applyDecorations(
         if (!proposalLines.has(i) && RETIRED_RE.test(text)) {
             retired.push(new vscode.Range(i, 0, i, text.length));
         }
+
+        const isSteering = !proposalLines.has(i) && /^\s*>/.test(text);
+        if (isSteering) {
+            steering.push({
+                range: new vscode.Range(i, 0, i, text.length),
+                renderOptions: prevWasSteering ? undefined : {
+                    after: {
+                        contentText: '  → for agent',
+                        fontStyle: 'italic',
+                        color: new vscode.ThemeColor('editorGhostText.foreground'),
+                    },
+                },
+            });
+        }
+        prevWasSteering = isSteering;
     }
 
     editor.setDecorations(dec.hiddenId, hiddenId);
@@ -236,6 +264,7 @@ export function applyDecorations(
     editor.setDecorations(dec.retireStrike, retireStrike);
     editor.setDecorations(dec.amendInline, amendInline);
     editor.setDecorations(dec.unrealizedPlaceholder, unrealized);
+    editor.setDecorations(dec.steeringNote, steering);
 
     const activeRanges = activeFeatureLines.map(
         line => new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER)

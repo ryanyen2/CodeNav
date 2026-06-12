@@ -5,6 +5,10 @@
  *   description  indented prose beneath a feature; blank lines are paragraph
  *                breaks (kept). A node ends only at the next feature line, an
  *                in-situ proposal hunk, or EOF — never at a blank line.
+ *   steering     "> …" lines inside a description are notes TO THE AGENT, not
+ *                prose: collected per-feature into `comments` (a contiguous run
+ *                is one comment) and EXCLUDED from `description`. Loop B drains
+ *                them into realize directives and the next render consumes them.
  *   proposals    in-situ diff hunks: a col-0 op char (+/-/~) then a node bearing
  *                a hidden ⟨e-id⟩, terminated by a blank line. Display-only here;
  *                harvested with their line range for the gutter/lens.
@@ -22,6 +26,11 @@ export interface ParsedRef {
     symbol: string | null;
 }
 
+export interface ParsedComment {
+    text: string;        // the `>` run's text, lines joined with '\n'
+    line: number;        // 0-based line of the run's first `>` line
+}
+
 export interface ParsedFeature {
     id: string | null;   // null = new / no ⟨f-id⟩
     title: string;
@@ -30,6 +39,7 @@ export interface ParsedFeature {
     retired: boolean;
     line: number;        // 0-based line of the title (for navigation)
     refs: ParsedRef[];
+    comments: ParsedComment[];  // steering notes to the agent (not prose)
 }
 
 export interface ProposalHunk {
@@ -75,7 +85,20 @@ export function parseTreeCodoc(text: string): ParseResult {
     let inProposal = false;                 // inside an in-situ proposal block
     let curProposal: ProposalHunk | null = null;
 
+    let commentBuf: string[] = [];          // current contiguous `>` run
+    let commentLine = -1;                   // first line of the run
+
+    function flushComment(): void {
+        if (descOwner !== null && commentBuf.length) {
+            const text = commentBuf.join('\n').trim();
+            if (text) descOwner.comments.push({ text, line: commentLine });
+        }
+        commentBuf = [];
+        commentLine = -1;
+    }
+
     function flushDesc(): void {
+        flushComment();
         if (descOwner !== null) {
             const lines = descBuf.map(l => l.trim());
             while (lines.length && !lines[0]) lines.shift();
@@ -124,7 +147,19 @@ export function parseTreeCodoc(text: string): ParseResult {
             }
         }
 
-        if (!s) { if (descOwner) descBuf.push(''); continue; }
+        if (!s) {
+            if (descOwner) {
+                if (commentBuf.length) {
+                    // The blank ends a steering-comment run; the comment "owns"
+                    // one paragraph break — don't double it (mirrors parse.py).
+                    flushComment();
+                    if (descBuf.length && descBuf[descBuf.length - 1] !== '') descBuf.push('');
+                } else {
+                    descBuf.push('');
+                }
+            }
+            continue;
+        }
         if (DIFF_HUNK_RE.test(line)) continue;
         if (s.startsWith('#')) continue;
 
@@ -143,7 +178,7 @@ export function parseTreeCodoc(text: string): ParseResult {
 
             const feature: ParsedFeature = {
                 id: fid, title, description: '', parent_id,
-                retired: marker === '~', line: i, refs: [],
+                retired: marker === '~', line: i, refs: [], comments: [],
             };
             features.push(feature);
             stack.push({ indent, id: fid });
@@ -152,7 +187,15 @@ export function parseTreeCodoc(text: string): ParseResult {
             continue;
         }
 
-        if (descOwner !== null) descBuf.push(s);
+        if (descOwner !== null) {
+            if (s.startsWith('>')) {
+                if (!commentBuf.length) commentLine = i;
+                commentBuf.push(s.slice(1).replace(/^\s+/, ''));
+            } else {
+                flushComment();
+                descBuf.push(s);
+            }
+        }
     }
 
     flushDesc();
