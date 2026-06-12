@@ -3,9 +3,11 @@
 The default loop hands code-implying tree edits to the *live* Claude Code session
 (`.codoc/realize.md` + the ``/codoc:sync`` command). That requires a human to
 be (or soon be) at the keyboard. With ``codoc watch --auto-realize`` the daemon
-instead spawns a **headless** ``claude -p "/codoc:sync"`` to implement the queue
-when no interactive session is around — so accepting a plan with nobody watching
-still lands code.
+instead spawns an unattended pass to implement the queue when no interactive
+session is around — so accepting a plan with nobody watching still lands code.
+Two engines (``spawn_realize(engine=…)``): the Claude Agent SDK runner
+(:mod:`codoc.loop.sdk_realize` — preferred when installed: live per-action
+readout + IDE activity signals) and the original blind ``claude -p "/codoc:sync"``.
 
 This deliberately re-introduces the headless spawn the 2026-05-29 rewrite removed,
 but isolated here and gated behind the explicit flag, so the in-session model stays
@@ -49,24 +51,48 @@ def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:
     return not _epoch_open(codoc_dir)
 
 
-def spawn_realize(root_dir: str, codoc_dir: str) -> subprocess.Popen | None:
-    """Launch ``claude -p "/codoc:sync"`` detached in ``root_dir``.
+def spawn_realize(root_dir: str, codoc_dir: str, *, engine: str = "auto") -> subprocess.Popen | None:
+    """Launch an unattended realize pass detached in ``root_dir``.
 
-    Returns the Popen handle (so the daemon can track liveness), or None if the
-    ``claude`` CLI isn't available. Sets status to ``realizing`` so the IDE reflects
-    that an (unattended) implementation pass is underway."""
-    claude = find_claude()
-    if claude is None:
-        return None
-    proc = subprocess.Popen(
-        [claude, "-p", "/codoc:sync"],
-        cwd=root_dir,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-    )
+    Two engines: ``sdk`` runs ``python -m codoc.loop.sdk_realize`` (Claude Agent
+    SDK — streams a compact per-action readout to the daemon's terminal and
+    feeds ``activity.json`` so the IDE shows live signals) and ``cli`` is the
+    original blind ``claude -p "/codoc:sync"``. ``auto`` prefers the SDK when
+    the package is importable. Returns the Popen handle (so the daemon can
+    track liveness), or None if the chosen engine isn't available. Sets status
+    to ``realizing`` so the IDE reflects that an implementation pass is underway."""
+    import sys
+
+    from codoc.loop.sdk_realize import sdk_available
+
+    if engine == "auto":
+        engine = "sdk" if sdk_available() else "cli"
+
+    if engine == "sdk":
+        if not sdk_available():
+            return None
+        # stdout/stderr inherit: the runner's per-action lines land in the
+        # daemon's terminal — the user sees what the agent does without a UI.
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "codoc.loop.sdk_realize", root_dir],
+            cwd=root_dir,
+            stdin=subprocess.DEVNULL,
+        )
+        detail = "implementing (sdk) — codoc watch --auto-realize"
+    else:
+        claude = find_claude()
+        if claude is None:
+            return None
+        proc = subprocess.Popen(
+            [claude, "-p", "/codoc:sync"],
+            cwd=root_dir,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+        detail = "implementing (headless) — codoc watch --auto-realize"
     try:
-        status.write_status(codoc_dir, status.REALIZING, detail="implementing (headless) — codoc watch --auto-realize")
+        status.write_status(codoc_dir, status.REALIZING, detail=detail)
     except Exception:  # noqa: BLE001 — status is advisory
         pass
     return proc
