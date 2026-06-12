@@ -30,8 +30,15 @@ codoc install-hooks       # (re)install the CC hooks + MCP registration
 # watch flags
 codoc watch --dry           # reflect + apply tree edits, but don't queue realization directives
 codoc watch --no-realize    # sync the tree but never queue directives for the session
-codoc watch --auto-realize  # unattended fallback: spawn a headless `claude -p /codoc:sync`
-                            #   to implement queued tree edits when no interactive session is open
+codoc watch --auto-realize  # unattended fallback: implement queued tree edits when no interactive
+                            #   session is open — prefers the Claude Agent SDK engine
+                            #   (loop/sdk_realize.py) when `codoc[sdk]` is installed, else a
+                            #   headless `claude -p /codoc:sync`
+
+codoc realize               # implement the queue NOW, foreground: SDK engine streams one compact
+                            #   line per agent action (edit/read/reflect/fetch) and mirrors each
+                            #   into .codoc/activity.json so the IDE shows live signals
+                            #   (--engine auto|sdk|cli, --permission-mode)
 
 # Tests (run with Python 3.11+; the project venv is .venv)
 python3.11 -m pytest tests/
@@ -44,6 +51,18 @@ are accepted/rejected with the IDE's inline **Accept / Reject** actions (which
 write verdicts to `.codoc/inbox.json` — there is no accept/reject *syntax* to
 type). Feature ids (`⟨f-id⟩`) stay on disk for stable identity but the IDE hides
 them. Code is cited inline with markdown links: `[label](codoc:file.py#symbol)`.
+
+Three further markdown-native signals in descriptions (2026-06-12):
+- `> …` blockquote lines are **steering comments** — notes addressed to the
+  agent, not prose. Loop B drains each into a `STEER FEATURE` realize directive
+  (always imperative; appended to an in-flight queue, so you can steer
+  mid-generation) and the next render consumes it from the text. The raw editor
+  ghost-inks them with a `→ for agent` cue.
+- `**bold**` is **focus**: newly-bolded spans ride into directives as a `Focus:`
+  line, and a newly-bolded span that itself reads imperative queues a directive
+  even when the description as a whole is descriptive.
+- `[label](https://…)` external links become `Consult:` lines — the realizing
+  agent WebFetches them before implementing.
 
 ## Architecture
 
@@ -103,7 +122,13 @@ codoc/
                   #                    _cover_uncovered_adds (coverage net: neighbor_feature or ADD_NODE proposal);
                   #                    held features (doc-wins) + caused_by stamping from the realize manifest
                   #   loop_b.py      — run_loop_b (codoc → code; stamp user ops from edits.json annotations, mint
-                  #                    ⟨d-…⟩ directive ids, queue .codoc/realize.md + realize.json for the session)
+                  #                    ⟨d-…⟩ directive ids, queue .codoc/realize.md + realize.json for the session;
+                  #                    drain `> …` steering comments → STEER directives, bold-amplified imperative
+                  #                    gate, Focus:/Consult: signal lines, append-to-queue via manifest texts)
+                  #   sdk_realize.py — Claude Agent SDK realize engine: run /codoc:sync via query(),
+                  #                    RealizeMonitor maps streamed tool events → compact terminal lines +
+                  #                    activity.json signals (editing/reflecting); `python -m` runnable
+                  #   autorealize.py — unattended spawn: should_spawn + spawn_realize(engine=auto|sdk|cli)
                   #   bootstrap.py   — run_bootstrap / run_init (thin shim; organize=True by default)
                   #   bootstrap_hier.py — two-phase bootstrap:
                   #                       per-file pass (propose_file_features, one LLM call per file) +
@@ -198,7 +223,9 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 `run_loop_b` first drains the `edits.json` **annotations** and snapshots the text diff (`codoc_file/diff.py`) **against the pre-mutation store** (step 0 — diffing after verdicts would read the stale text as a human edit and revert the accepted change), then drains `.codoc/inbox.json` (proposal verdicts written by the IDE's Accept/Reject actions: accept → `apply_op` + delete event; reject → delete event), applies the snapshotted user ops (user edits are intentional → applied immediately) **stamped with the annotating actor/mode (default human/pen)**, then drains live **payload intents** (doc-ahead suggestions — applied as user ops `mode=suggest`/`caused_by=` suggestion id; the agent-side "apply"), **re-renders `tree.codoc`** when the pass mutated the store, and builds a directive from each code-implying op's `description` + bound symbols (`prompts/realize.txt`). Each queued directive gets a minted `d-…` id, embedded as `⟨d-id⟩` in its `### N.` heading and recorded in the **`.codoc/realize.json` manifest** (`{id, feature_id, kind, caused_by}` — `caused_by` = the applying settle's suggestion id, else the user-op event id); the implementing agent passes the id back via `codoc_reflect(caused_by=…)`. **RETIRE is path-asymmetric:** accepting an auto-raised RETIRE *from the inbox* is **detach-only** — it marks the feature retired and detaches its bindings (so the code isn't orphaned under a now-hidden feature) but NEVER queues a code-removal directive (a Loop-A retire off transient drift could be a false positive; deleting code on accept is the most destructive failure mode). Only a human `~` retire *in the text* (a `user_op`) keeps its bindings and queues a `RETIRE FEATURE` removal directive. Instead of spawning a headless agent, it **hands the work to the live session**: it writes the assembled directives to `.codoc/realize.md` and sets `status.json` = `awaiting_impl`. The user's interactive Claude Code session (nudged by the `UserPromptSubmit` hook) runs `/codoc:sync` — read the file → implement each directive → `codoc_reflect` to bind → delete `.codoc/realize.md`. The loop is then closed by the existing Stop-hook reflection (`agent/hook._maybe_spawn_reflect`) or the watch daemon's epoch-close Loop A pass. `--dry`/`--no-realize` skip the queue write.
 
-**Realization trigger + fallbacks.** The primary path is *in-session*: `/codoc:plan` proposes nodes then calls the **blocking** `codoc_await_verdicts(event_ids)` MCP tool (modeled on plannotator's blocking review hook) — it polls `inbox.json`, applies each verdict as it lands (recovering an ADD's freshly-minted feature id by diffing the feature set), marks accepted nodes `phase=editing`, and returns so the *same turn* implements + binds. No daemon, no idle gap. Two fallbacks reuse `realize.md` for when no session is waiting on that tool: (1) the `UserPromptSubmit` hook (`agent/hook._drain_inbox_fallback`) drains the inbox via Loop B when **no `codoc watch` daemon** owns the repo, so a plan accepted with no daemon still queues `realize.md` on the next prompt; (2) `codoc watch --auto-realize` (`loop/autorealize.py`: `should_spawn`/`spawn_realize`, driven by `watch.maybe_auto_realize`) spawns a **headless** `claude -p /codoc:sync` when a queue exists and no interactive epoch is open — the only path that lands code with nobody at the keyboard. The unified `/codoc:sync` command reads `status.json` and dispatches direction (awaiting_impl/tree_dirty → realize, code_drift → reflect).
+**Steering / emphasis / links (2026-06-12).** Step 2.7 drains inline `> …` **steering comments** (parsed per-node into `ParsedNode.comments`, excluded from the prose, surfaced by `diff.py` as `CodocDiff.comments`): each becomes a `STEER FEATURE` directive (`build_steer_directive` — the note wins over the description where they conflict) and the end-of-pass re-render consumes it from the text (a comment-only pass re-renders too). The imperative gate is **bold-amplified**: `CodocDiff.emphasis` carries each AMEND's newly-bolded spans (new bold minus old bold), and an imperative bolded span queues a directive even when the whole description reads descriptive. `build_directive` appends `Focus:` (bolded spans) and `Consult:` (external `https://` links) lines; `prompts/realize.txt` + `/codoc:sync` tell the agent to prioritize Focus phrases and WebFetch Consult links. The queue **appends instead of clobbering**: `realize.json` directives now carry their rendered `text`, and step 3 rebuilds `realize.md` from existing-manifest + new directives — so a steering comment lands while a realization is in flight (`/codoc:sync` re-reads the queue after each directive).
+
+**Realization trigger + fallbacks.** The primary path is *in-session*: `/codoc:plan` proposes nodes then calls the **blocking** `codoc_await_verdicts(event_ids)` MCP tool (modeled on plannotator's blocking review hook) — it polls `inbox.json`, applies each verdict as it lands (recovering an ADD's freshly-minted feature id by diffing the feature set), marks accepted nodes `phase=editing`, and returns so the *same turn* implements + binds. No daemon, no idle gap. Two fallbacks reuse `realize.md` for when no session is waiting on that tool: (1) the `UserPromptSubmit` hook (`agent/hook._drain_inbox_fallback`) drains the inbox via Loop B when **no `codoc watch` daemon** owns the repo, so a plan accepted with no daemon still queues `realize.md` on the next prompt; (2) `codoc watch --auto-realize` (`loop/autorealize.py`: `should_spawn`/`spawn_realize(engine=…)`, driven by `watch.maybe_auto_realize`) spawns an unattended pass when a queue exists and no interactive epoch is open — the only path that lands code with nobody at the keyboard. Two engines: **`loop/sdk_realize.py`** (preferred when `codoc[sdk]`/claude-agent-sdk is installed; also runnable foreground via `codoc realize`) runs `/codoc:sync` through `claude_agent_sdk.query()` with `setting_sources=["user","project","local"]` (so the repo's hooks/MCP/commands load) and reacts to each streamed tool event synchronously — one compact terminal line per action (`● edit`/`◦ read`/`⊙ reflect`/`⇣ fetch`, dim-ANSI on tty only, summary line at the end) and codoc-side signals via the SAME `agent/hook._handle_tool` path the interactive hooks use (`activity.json` `touched` + phase `editing`), plus marking `reflecting` on `mcp__codoc__*` calls — the writer the doc-pane hollow-dot decoration was waiting for (`RealizeMonitor` is duck-typed/SDK-free for tests); or the original blind **`claude -p /codoc:sync`**. The unified `/codoc:sync` command reads `status.json` and dispatches direction (awaiting_impl/tree_dirty → realize, code_drift → reflect).
 
 ### Environment variables
 
@@ -226,7 +253,7 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 - **`.codoc/tree.bindings.json`** — machine-readable sidecar for the IDE (now **version 4**). Schema: `{version, by_feature{fid:[{file,symbol}]}, by_file{file:[{symbol,feature_id,feature_title}]}, features{fid:{title,parent_id,realized}}, feature_edges{}, proposals{by_feature{fid:{op,event_id,tag,actor,mode,caused_by,…}}, by_event{eid:{op,…}}}, changes:[{event_id,at,kind,feature_id,actor,mode,caused_by}], holds:[fid]}`. `proposals.by_feature` drives the in-place retire/amend overlays + Accept/Reject on the live node; `realized` drives the unrealized-placeholder decoration. v4's `changes` (last ~50 applied events, newest first) drives the agent-pencil re-stamp in the webview, `holds` is the doc-wins hold set, and proposal `caused_by` drives the `↳ from your edit` cascade cue. Written atomically (tmp → rename).
 - **`.codoc/status.json`** (written by the loops, not `write_tree`) — `{version, state, pending, detail, at}`; `state ∈ {in_sync, code_drift, tree_dirty, awaiting_impl, realizing}` drives the IDE status bar + the tree.codoc header CodeLens. `awaiting_impl` means Loop B queued code-implying tree edits in `.codoc/realize.md` for the live session (`pending` = directive count). `refresh_status` treats a non-empty `realize.md` as a floor: if no proposals are pending it reports `awaiting_impl` rather than `in_sync`, so a later code-side pass can't clobber the state and orphan the queued directive (the file self-clears when `/codoc:sync` completes).
 - **`.codoc/realize.md`** (written by Loop B) — the realization queue: the assembled directive prompt the live session implements via `/codoc:sync`, then deletes (together with `realize.json`). Each `### N.` heading carries its `⟨d-id⟩`. Replaces the old headless `claude -p` spawn.
-- **`.codoc/realize.json`** (written by Loop B next to realize.md) — the machine-readable directive manifest `{version, directives:[{id, feature_id, kind, caused_by}]}`: feature ids feed the doc-wins hold set, ids feed `caused_by` tagging. Stale (no realize.md beside it) ⇒ ignored + cleaned.
+- **`.codoc/realize.json`** (written by Loop B next to realize.md) — the machine-readable directive manifest `{version, directives:[{id, feature_id, kind, caused_by, text}]}`: feature ids feed the doc-wins hold set, ids feed `caused_by` tagging, and `text` (the rendered directive body) lets a later pass rebuild `realize.md` as old + new — append, never clobber. `kind` may also be `"steer"`. Stale (no realize.md beside it) ⇒ ignored + cleaned.
 - **`.codoc/inbox.json`** (written by the IDE) — `{version, verdicts:[{event_id, accept}]}`; drained by Loop B / `codoc sync`, then cleared. The watch daemon watches it so an Accept/Reject wakes the loop.
 - **`.codoc/edits.json`** (written by the IDE host; `loop/edits.py` + `src/state/edits-channel.ts`) — the provenance/intent channel: `edits` = per-feature authorship annotations for settles (written BEFORE the tree.codoc save; drained by Loop B, default human/pen), `intents` = the live doc-ahead suggestions (host-owned list; >7-day-old intents ignored; the other half of the hold set). An intent carries the suggested title/description as **payload**, and Loop B's **intent drain** applies it — the agent-side "apply" (classify row 9 → 7/8, `mode=suggest`, `caused_by=` suggestion id); satisfied intents (payload == store) are skipped so the read-only drain is idempotent. Watched by the daemon (a suggestion alone must wake Loop B).
 
@@ -392,6 +419,30 @@ previously-installed codoc commands the plugin no longer ships. The `codoc-inten
 SKILL.md was slimmed to tree-format + code-first reflection guidance (it no longer
 duplicates the per-command loop walkthroughs). The `.codoc/realize.md` *queue file*
 and the realize machinery are unchanged.
+
+**Steering / emphasis / links + SDK realize engine (2026-06-12):** four
+author-side signals + a second unattended engine, all markdown-native (no new
+syntax to learn):
+- **Inline steering comments** — `> …` blockquote lines in a description are
+  notes TO THE AGENT: parsed per-node (`ParsedNode.comments`, excluded from
+  prose; TS parser parity in `tree-model.ts`), drained by Loop B step 2.7 into
+  `STEER FEATURE` directives (note wins over description), consumed from the
+  text by the end-of-pass re-render. Raw editor ghost-inks them with a
+  `→ for agent` cue (`decoration.ts steeringNote`). The realize queue now
+  **appends** (manifest directives carry their rendered `text`) so steering
+  works mid-realization; `/codoc:sync` re-reads the queue after each directive.
+- **Bold = focus** — `CodocDiff.emphasis` (newly-bolded spans per AMEND) rides
+  into directives as `Focus:` lines, and an imperative bolded span queues a
+  directive even when the prose reads descriptive (bold-amplified gate).
+- **External links** — `[label](https://…)` in descriptions become `Consult:`
+  directive lines; realize.txt/sync.md instruct WebFetch-before-implement.
+- **SDK realize engine** — `loop/sdk_realize.py` runs `/codoc:sync` via
+  `claude_agent_sdk.query()` (optional dep `codoc[sdk]`): compact per-action
+  terminal readout + every action mirrored into `activity.json` through the
+  same `hook._handle_tool` path (and `reflecting` finally has its Python
+  writer). `codoc realize` runs it foreground; `--auto-realize` prefers it via
+  `spawn_realize(engine=auto)`. Both engines + the interactive path coexist.
+- Tests: 327 Python + 26 BDD + 133 vitest; tsc/esbuild clean.
 
 Possible next steps: reconcile authored inline refs into authoritative bindings (currently navigable + round-trip-safe, but not yet fed back as `attach` ops); may-impact propagation in the LLM prompt; an LLM imperative classifier behind `classify.is_imperative` if heuristic precision becomes limiting.
 
