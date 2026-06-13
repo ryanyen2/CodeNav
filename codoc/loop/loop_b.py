@@ -172,15 +172,26 @@ def _reinsert_comments(codoc_dir: str, targets: list[tuple[str, str]]) -> None:
         lines = path.read_text().splitlines()
     except OSError:
         return
+    # Group by feature so MULTIPLE notes on one feature re-insert as DISTINCT
+    # `>` runs separated by a blank line. Adjacent `>` lines would merge into a
+    # single comment on the next parse (parse.py: a contiguous run is one
+    # comment), silently collapsing two steering notes into one.
+    by_fid: dict[str, list[str]] = {}
     for fid, comment in targets:
-        if not fid:
-            continue
+        if fid:
+            by_fid.setdefault(fid, []).append(comment)
+    for fid, comments in by_fid.items():
         marker = f"⟨{fid}⟩"
         for i, ln in enumerate(lines):
             if marker in ln:
                 indent = " " * (len(ln) - len(ln.lstrip()) + 4)
-                lines[i + 1:i + 1] = [f"{indent}> {cl}".rstrip()
-                                      for cl in comment.splitlines()]
+                block: list[str] = []
+                for j, comment in enumerate(comments):
+                    if j:
+                        block.append("")  # blank separates distinct `>` runs
+                    block.extend(f"{indent}> {cl}".rstrip()
+                                 for cl in comment.splitlines())
+                lines[i + 1:i + 1] = block
                 break
     atomic_write_text(path, "\n".join(lines) + "\n")
 

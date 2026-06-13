@@ -22,6 +22,10 @@ import { reconcileDoc } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
+import {
+    CommentThread, commentsByFid, injectComments, reconcileComments, reanchorComments,
+    stripOrphanComments,
+} from '../state/comment-model';
 import { directedEdges, agentAmendsByFeature } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
@@ -109,8 +113,74 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     if (ids.length) this.state.writeVerdict(ids, !!msg.accept);
                     return;
                 }
+                case 'comment-create':
+                    await this.createComment(document, msg.doc, msg.thread);
+                    return;
+                case 'comment-edit':
+                    await this.editComment(document, msg.id, msg.body);
+                    return;
+                case 'comment-resolve':
+                    await this.resolveComment(document, msg.doc, msg.id);
+                    return;
             }
         });
+    }
+
+    // ── inline comments — span-anchored steering notes (see comment-model.ts) ────
+    //    A comment serializes to a `> …` line under its feature; Loop B drains it
+    //    into a STEER directive. The host owns the thread store + the `> …` write;
+    //    the webview owns the anchor mark + the composer/popover UI.
+
+    /** Project the doc to canonical tree.codoc, splice in every OPEN comment's
+     *  `> …` line, and write it (waking the daemon's Loop B) — but only when the
+     *  text actually changed, so a no-op stays a no-op. */
+    private async writeTreeWithComments(document: vscode.TextDocument, df: DocFile): Promise<boolean> {
+        const next = injectComments(renderTreeFromDoc(df.doc), commentsByFid(df.comments));
+        if (next === document.getText()) return false;
+        const edit = new vscode.WorkspaceEdit();
+        const last = document.lineAt(document.lineCount - 1);
+        edit.replace(document.uri, new vscode.Range(0, 0, last.lineNumber, last.text.length), next);
+        await vscode.workspace.applyEdit(edit);
+        await document.save();
+        return true;
+    }
+
+    /** Create a comment: persist the doc (with its new anchor mark) + the thread,
+     *  then queue the note as a `> …` steering line for the agent. */
+    private async createComment(document: vscode.TextDocument, doc: PMNode, thread: CommentThread): Promise<void> {
+        const df = this.docFileFor(document);
+        df.doc = doc;
+        const norm: CommentThread = { ...thread, status: 'open', serialized: false };
+        df.comments = [...df.comments.filter(c => c.id !== norm.id), norm];
+        await this.persistDocFile(document, df);
+        await this.writeTreeWithComments(document, df);
+    }
+
+    /** Edit an open comment's body — re-queues the replacing `> …` line. */
+    private async editComment(document: vscode.TextDocument, id: string, body: string): Promise<void> {
+        const df = this.docFileFor(document);
+        const t = df.comments.find(c => c.id === id);
+        if (!t || t.status !== 'open') return;
+        t.body = body;
+        // Keep serialized:true — writeTreeWithComments rewrites the line NOW, so the
+        // new note is in the text before any reconcile. Resetting it to false would
+        // let a concurrent daemon drain take the "never written" branch and resurrect
+        // the note (double-queue); staying true means a drain correctly flips to sent.
+        await this.persistDocFile(document, df);
+        await this.writeTreeWithComments(document, df);
+    }
+
+    /** Resolve / delete a comment: drop the thread + its `> …` line; the doc carries
+     *  the anchor-mark removal. */
+    private async resolveComment(document: vscode.TextDocument, doc: PMNode, id: string): Promise<void> {
+        const df = this.docFileFor(document);
+        df.doc = doc;
+        df.comments = df.comments.filter(c => c.id !== id);
+        await this.persistDocFile(document, df);
+        if (!(await this.writeTreeWithComments(document, df))) {
+            // no text change (the note was already drained) — still refresh the panel
+            this.docFileByUri.set(document.uri.toString(), df);
+        }
     }
 
     private buildPayload(document: vscode.TextDocument): DocPayload {
@@ -227,10 +297,25 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const prevFile = this.docFileByUri.get(uri) ?? null;
         // v4 changes feed → descriptions an agent amended get pencil ink (instead
         // of a mark reset) when their text drifted under the saved doc.
-        const doc = reconcileDoc(document.getText(), prevFile?.doc ?? null, realized,
+        const reconciled = reconcileDoc(document.getText(), prevFile?.doc ?? null, realized,
             agentAmendsByFeature(sidecar));
-        const docFile: DocFile = { version: 1, doc, suggestions: prevFile?.suggestions ?? [] };
+
+        // Comment lifecycle: first re-anchor any null-fid thread whose feature has
+        // since been minted (its anchor mark now sits under a fid'd heading), then
+        // harvest raw-editor `> …` notes into threads, flip a serialized-then-
+        // vanished thread to `sent` (Loop B drained it), drop feature-gone /
+        // settled ones. Then GC anchor marks for any dropped thread.
+        const anchored = reanchorComments(reconciled, prevFile?.comments ?? []);
+        const rc = reconcileComments(features, anchored.threads, {
+            inSync: status.state === 'in_sync',
+        });
+        rc.changed = rc.changed || anchored.changed;
+        const liveIds = new Set(rc.threads.map(t => t.id));
+        const doc = stripOrphanComments(reconciled, liveIds);
+
+        const docFile: DocFile = { version: 1, doc, suggestions: prevFile?.suggestions ?? [], comments: rc.threads };
         this.docFileByUri.set(uri, docFile);
+        if (rc.changed) void this.persistDocFile(document, docFile); // harvest / drain survive a reload
 
         // Unified pending diffs: code-ahead (from sidecar proposals) + doc-ahead
         // (persisted). Old text for amend diffs comes from the parsed features.
@@ -283,6 +368,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             symbols: this.buildSymbols(sidecar),
             suggestions,
             threads,
+            comments: docFile.comments,
             rev: ++this.rev,
         };
     }
@@ -374,12 +460,17 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         }
     }
 
-    /** Persist tree.doc.json (doc + doc-ahead suggestions) atomically (tmp →
-     *  rename). Watched by neither the VS Code WorkspaceState nor the Python
-     *  daemon, so this write never loops back. */
+    private docFileWriteSeq = 0;
+
+    /** Persist tree.doc.json (doc + doc-ahead suggestions + comments) atomically
+     *  (tmp → rename). Watched by neither the VS Code WorkspaceState nor the
+     *  Python daemon, so this write never loops back. The tmp name carries a
+     *  per-write counter: buildPayload can fire two fire-and-forget persists in one
+     *  pass (comment reconcile + suggestion rebase), and a shared tmp path would
+     *  let the second writeFile clobber the first mid-rename. */
     private async persistDocFile(document: vscode.TextDocument, docFile: DocFile): Promise<void> {
         const target = this.docUri(document).fsPath;
-        const tmp = path.join(path.dirname(target), `.${DOC_FILENAME}.tmp`);
+        const tmp = path.join(path.dirname(target), `.${DOC_FILENAME}.${++this.docFileWriteSeq}.tmp`);
         await fs.writeFile(tmp, JSON.stringify(docFile), 'utf-8');
         await fs.rename(tmp, target);
     }
@@ -406,7 +497,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         df.doc = doc;
         await this.persistDocFile(document, df);
 
-        const next = renderTreeFromDoc(doc);
+        // Splice open comments back in so a prose/structure settle never drops a
+        // pending `> …` steering note (the residual-#3 fix): renderTreeFromDoc drops
+        // comment marks, injectComments re-adds each open thread's line.
+        const next = injectComments(renderTreeFromDoc(doc), commentsByFid(df.comments));
         if (next === document.getText()) return; // no structural/text change → no write
 
         // Tell the loops WHO authored this settle (per changed feature) before the

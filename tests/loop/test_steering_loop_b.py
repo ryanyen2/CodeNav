@@ -132,6 +132,30 @@ def test_dry_run_with_prose_edit_reinserts_comment_after_rerender(dirs):
     assert "> rename the constant" in text          # note preserved
 
 
+def test_dry_run_reinserts_two_distinct_comments_without_merging(dirs):
+    """Two `>` notes on one feature must re-insert as DISTINCT runs (blank-
+    separated). Adjacent `>` lines would merge into a single comment on the next
+    parse — silently collapsing two steering notes into one."""
+    from codoc.codoc_file.parse import parse_text
+
+    root, codoc_dir = dirs
+    _seed(codoc_dir)
+    # Two DISTINCT runs (blank-separated) — adjacent `>` lines are correctly one
+    # comment; the bug under test is the dry-run RE-INSERTION merging them.
+    _edit_tree(codoc_dir, "Holds brand colors.",
+               "Holds brand colors and tints.\n  > rename the constant\n\n  > also add a dark variant")
+
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.user_edits == 1 and res.steered == 2 and not res.queued
+    node = next(n for n in parse_text(tree_path(codoc_dir).read_text()).nodes
+                if n.title == "Color palette")
+    assert node.comments == ["rename the constant", "also add a dark variant"]
+    # a later real pass drains BOTH as distinct directives
+    res2 = run_loop_b(root, codoc_dir, dry_run=False)
+    assert res2.steered == 2 and res2.queued
+
+
 def test_comment_on_hand_added_node_resolves_minted_id(dirs):
     """A `>` note under a brand-new (id-less) node must not be destroyed: the
     ADD is applied first, then the steer resolves the freshly-minted id by

@@ -9,6 +9,7 @@
 import type { FeaturePhase } from '../state/doc-layout';
 import type { PMNode } from '../state/pm-doc';
 import type { Suggestion } from '../state/suggestion-model';
+import type { CommentThread } from '../state/comment-model';
 
 /** An autocomplete candidate for the `@`-triggered code-reference picker (U5).
  *  Sourced from the sidecar `by_file` (bound symbols only). */
@@ -89,6 +90,10 @@ export interface DocPayload {
     /** Per-feature unified dependency threads (reads / used-by / code refs) for the
      *  inline threads line under each heading + the on-demand peek (U4). */
     threads?: Record<string, ThreadsData>;
+    /** Inline comment threads (span-anchored steering notes). The editor renders a
+     *  dotted underline + corner icon per thread and resolves the body popover
+     *  client-side; the host owns their `> …` lifecycle. */
+    comments?: CommentThread[];
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }
@@ -106,4 +111,12 @@ export type WebviewMessage =
     | { kind: 'suggest-withdraw'; id: string }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
     | { kind: 'open-binding'; file: string; symbol: string }
-    | { kind: 'verdict'; eventIds: string[]; accept: boolean };
+    | { kind: 'verdict'; eventIds: string[]; accept: boolean }
+    /** Create an inline comment: persist the thread + the doc (carrying its new
+     *  `comment` mark) and queue the note as a `> …` steering line for the agent. */
+    | { kind: 'comment-create'; doc: PMNode; thread: CommentThread }
+    /** Edit a comment's body in place (the anchor + mark are unchanged). */
+    | { kind: 'comment-edit'; id: string; body: string }
+    /** Resolve / delete a comment: drop the thread + its `> …` line; the doc carries
+     *  the mark removal. */
+    | { kind: 'comment-resolve'; doc: PMNode; id: string };

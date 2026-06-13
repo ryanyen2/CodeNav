@@ -161,6 +161,36 @@ def test_consume_stream_marks_failure_instead_of_raising(repo):
     assert "✗ failed" in m.summary()
 
 
+def test_synchronous_query_raise_recovers_status(repo, monkeypatch):
+    """A SYNCHRONOUS raise from query() (invalid options / auth failure, evaluated
+    before the stream loop) must NOT strand status at 'realizing' — _run recovers
+    status in a finally and returns a failure code rather than propagating."""
+    import asyncio
+    import sys
+    import types
+    from codoc.loop.sdk_realize import _run
+
+    root, codoc = repo
+    (Path(codoc) / "realize.md").write_text('### 1. STEER FEATURE: "x"\n  do the thing\n')
+
+    fake = types.ModuleType("claude_agent_sdk")
+    fake.ClaudeAgentOptions = lambda **kw: object()
+
+    def _raise(**kw):
+        raise RuntimeError("invalid permission mode")
+
+    fake.query = _raise
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake)
+
+    # Call _run directly — it carries the fix; run_sdk_realize's sdk_available()
+    # guard would reject the spec-less fake module before reaching it.
+    rc = asyncio.run(_run(root, codoc, permission_mode="acceptEdits", printer=lambda *a, **k: None))
+
+    assert rc == 1  # marked failed, not propagated
+    state = json.loads((Path(codoc) / "status.json").read_text())
+    assert state["state"] != "realizing"  # status recovered, not stranded
+
+
 def test_collect_feature_ids_is_recursive_and_deduped():
     assert _collect_feature_ids({
         "feature_id": "f-1",

@@ -229,25 +229,30 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
     prev_origin = os.environ.get("CODOC_EPOCH_ORIGIN")
     os.environ.setdefault("CODOC_EPOCH_ORIGIN", "loop_b")
     try:
-        await consume_stream(monitor, query(prompt="/codoc:sync", options=options))
+        try:
+            await consume_stream(monitor, query(prompt="/codoc:sync", options=options))
+        except Exception:  # noqa: BLE001 — a SYNCHRONOUS raise from query() (invalid
+            # options / auth failure, evaluated before consume_stream's own guard)
+            # lands here; mark failed and fall through to recovery, never propagate.
+            monitor.errored = True
+        finally:
+            if prev_origin is None:
+                os.environ.pop("CODOC_EPOCH_ORIGIN", None)
+            else:
+                os.environ["CODOC_EPOCH_ORIGIN"] = prev_origin
+        printer(monitor.summary())
     finally:
-        if prev_origin is None:
-            os.environ.pop("CODOC_EPOCH_ORIGIN", None)
-        else:
-            os.environ["CODOC_EPOCH_ORIGIN"] = prev_origin
-    printer(monitor.summary())
+        # The agent deletes realize.md when the queue is done; recompute the honest
+        # lifecycle state in a FINALLY so it runs even on a synchronous query()
+        # raise — a stuck `realizing` would freeze the daemon's auto-realize cycle
+        # forever (awaiting_impl floor if items were left behind).
+        try:
+            from codoc.store.db import open_store
 
-    # The agent deletes realize.md when the queue is done; recompute the honest
-    # lifecycle state either way (awaiting_impl floor if it left items behind,
-    # and ALWAYS on failure — a stuck `realizing` would freeze the daemon's
-    # auto-realize cycle forever).
-    try:
-        from codoc.store.db import open_store
-
-        with open_store(codoc_dir) as store:
-            status_mod.refresh_status(codoc_dir, store)
-    except Exception:  # noqa: BLE001
-        pass
+            with open_store(codoc_dir) as store:
+                status_mod.refresh_status(codoc_dir, store)
+        except Exception:  # noqa: BLE001
+            pass
     return 1 if monitor.errored else 0
 
 

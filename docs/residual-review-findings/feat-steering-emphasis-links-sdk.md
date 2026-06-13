@@ -49,3 +49,33 @@ below are design-level follow-ups, accepted as known residuals.
    never stored), but an LLM-amended description containing one would be
    re-read as a steering comment. Escape-on-render or diff-aware detection if
    it ever bites.
+
+## Frontend inline comments (2026-06-13)
+
+The webview inline-comment surface (select → bubble menu → composer → `> …`
+steering line; `comment-model.ts` + `comment-decorations.ts` + the host
+lifecycle in `tree-editor.ts`) was reviewed adversarially (ce-adversarial-reviewer,
+agent `a98fe75c`). Three load-bearing findings were fixed on-branch — the
+adjacent-`>`-line MERGE that collapsed two threads (now a blank separates runs),
+the `editComment` `serialized:false` RESURRECTION (now stays `true`, so a
+concurrent drain flips to `sent` instead of re-queuing), and harvested-id CHURN
+(now a deterministic content hash, `harvestCommentId`). Both have regression
+tests in `comment-model.test.ts`. The remaining two are accepted residuals:
+
+8. **Two threads with byte-identical emitted notes on ONE feature**
+   (`comment-model.ts reconcileComments`, correctness, narrow). Thread identity
+   in the `> …` channel is by `(featureId, noteText)`, so two comments whose
+   `re "anchor": body` lines are identical collapse — one drain flips both to
+   `sent`, or a phantom harvest appears. Requires the SAME anchor snippet AND
+   body on the same feature, so it's rare (distinct selections → distinct
+   anchors). A per-line id marker would fix it but would pollute the steering
+   note the agent reads. Left as-is.
+
+9. **`sent` marker lingers while a repo never returns to `in_sync`**
+   (`comment-model.ts` line ~192, cosmetic). A drained comment's faded ✓ is
+   dropped only at `status==in_sync`; on a chronically-busy repo (or with no
+   daemon, where an open note isn't drained until the next prompt) the marker
+   persists. Not data loss — the thread store stays consistent and the global
+   status bar/activity dots carry the live signal; the semantics ("clears when
+   the tree settles") are defensible. A spawn-time/observed-once GC could clear
+   it sooner if it bites.
