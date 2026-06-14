@@ -174,8 +174,12 @@ def _complete_claude(prompt: str, config: LLMConfig) -> str:
 
     # Child env minus ANTHROPIC_API_KEY so the subscription login wins.
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    # The model rides in argv; reject a flag-shaped value (e.g. from a malicious
+    # .env) that the CLI parser could re-lex into options.
+    if config.model and config.model.startswith("-"):
+        raise ValueError(f"Refusing a flag-shaped CODOC_MODEL: {config.model!r}")
     cmd = [
-        claude, "-p", prompt,
+        claude, "-p",
         "--output-format", "json",
         "--max-turns", "1",
         "--allowedTools", "",  # pure completion — no tools, no agent loop
@@ -183,8 +187,12 @@ def _complete_claude(prompt: str, config: LLMConfig) -> str:
     if config.model:
         cmd += ["--model", config.model]
 
+    # The prompt is built from repo/tree.codoc content (attacker-influenceable in a
+    # shared repo). Deliver it on STDIN, never argv: a flag-shaped prompt can't be
+    # re-lexed into CLI options (so `--allowedTools ""` / `--max-turns 1` hold), and
+    # the prompt (source snippets) never appears in `ps`/process listings.
     proc = subprocess.run(
-        cmd, capture_output=True, text=True,
+        cmd, input=prompt, capture_output=True, text=True,
         cwd=tempfile.gettempdir(), env=env,
     )
     if proc.returncode != 0:

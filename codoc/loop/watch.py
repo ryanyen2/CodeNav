@@ -166,6 +166,17 @@ def read_pid(codoc_dir: str) -> int | None:
 
 
 def clear_pidfile(codoc_dir: str) -> None:
+    """Remove ``watch.pid`` — but ONLY when it still names this process.
+
+    Ownership check matters on a fast restart/bounce: when the extension stops one
+    daemon (async SIGTERM) and immediately starts another, the dying daemon's
+    ``atexit`` must not unlink the *new* daemon's pidfile (which would orphan a live
+    daemon from ``daemon_running``). A foreign/absent pid is left untouched."""
+    import os
+
+    pid = read_pid(codoc_dir)
+    if pid is not None and pid != os.getpid():
+        return  # the pidfile names another (live) daemon — not ours to remove
     try:
         _pidfile(codoc_dir).unlink()
     except OSError:

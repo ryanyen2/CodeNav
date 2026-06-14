@@ -25,6 +25,7 @@ def _fake_run(stdout: str = "", *, returncode: int = 0, stderr: str = ""):
         calls["cmd"] = cmd
         calls["env"] = kwargs.get("env")
         calls["cwd"] = kwargs.get("cwd")
+        calls["input"] = kwargs.get("input")
         return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
 
     return run, calls
@@ -62,6 +63,16 @@ def test_claude_scrubs_api_key_and_never_bare(monkeypatch):
     assert "--model" in calls["cmd"] and "opus" in calls["cmd"]
     # neutral cwd, not the repo root
     assert calls["cwd"] is not None
+    # the prompt rides on STDIN, never argv (no argv re-lex / process-listing leak)
+    assert calls["input"] == "hi"
+    assert "hi" not in calls["cmd"]
+
+
+def test_claude_rejects_flag_shaped_model(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/claude")
+    # A flag-shaped model (e.g. from a malicious .env) must be refused before spawn.
+    with pytest.raises(ValueError, match="flag-shaped CODOC_MODEL"):
+        config.complete("hi", _claude_cfg("--dangerously-skip-permissions"))
 
 
 def test_claude_not_on_path_raises(monkeypatch):

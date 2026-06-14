@@ -120,3 +120,26 @@ def test_daemon_running_true_for_live_legacy_pid(codoc_dir):
 def test_daemon_running_false_for_dead_pid(codoc_dir):
     watch._pidfile(codoc_dir).write_text(json.dumps({"pid": _dead_pid(), "owner": "", "started_at": 0}))
     assert watch.daemon_running(codoc_dir) is False
+
+
+# ── clear_pidfile is ownership-aware (no bounce-clobber) ──────────────────────
+
+
+def test_clear_pidfile_removes_our_own(codoc_dir):
+    watch.write_pidfile(codoc_dir)  # writes our own pid
+    watch.clear_pidfile(codoc_dir)
+    assert not watch._pidfile(codoc_dir).exists()
+
+
+def test_clear_pidfile_leaves_another_daemons_file(codoc_dir):
+    # A different (live) daemon owns the pidfile — a dying daemon's atexit must NOT
+    # delete it, or the live daemon is orphaned from daemon_running().
+    other = json.dumps({"pid": os.getpid() + 1, "owner": "other-window", "started_at": 0})
+    watch._pidfile(codoc_dir).write_text(other)
+    watch.clear_pidfile(codoc_dir)
+    assert watch._pidfile(codoc_dir).exists()
+
+
+def test_clear_pidfile_tolerates_missing(codoc_dir):
+    watch.clear_pidfile(codoc_dir)  # no file → no error
+    assert not watch._pidfile(codoc_dir).exists()
