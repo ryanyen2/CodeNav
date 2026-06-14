@@ -19,9 +19,18 @@ There is **one file** you ever look at — `.codoc/tree.codoc`.
 
 ## 1. Install
 
+**Recommended — the VS Code extension.** Install the **codoc** extension and run
+**“codoc: Set up codoc”** (offered on first run, or via the `$(rocket) Set up codoc`
+status-bar item). It provisions the Python core into an isolated `uv` environment,
+points codoc's reflection at your existing **Claude Code** login (no API key
+prompt), runs `codoc init`, and manages the `codoc watch` daemon for you. Skip
+straight to §4 — the rest of §1–§3 describes what setup does under the hood (and
+the manual CLI path for no-IDE / scripting use).
+
 ```bash
-pip install -e .            # Python 3.11+
-export OPENAI_API_KEY=sk-…  # codoc's own LLM calls; override model with CODOC_MODEL
+uv tool install codoc        # isolated, version-pinned; or: pip install -e .  (Python 3.11+)
+export CODOC_PROVIDER=claude  # reuse your Claude Code login — no separate key
+#   …or OpenAI:  export CODOC_PROVIDER=openai && export OPENAI_API_KEY=sk-…
 codoc --help
 ```
 
@@ -261,7 +270,7 @@ agent reflecting via MCP and you Accepting in the IDE.)
 ```
 .codoc/
   tree.codoc          # the one human surface (commit with your code)
-  tree.bindings.json  # IDE sidecar: feature↔symbol index + dependency edges + proposals (v3)
+  tree.bindings.json  # IDE sidecar: feature↔symbol index + dependency edges + proposals + change feed + holds (v4)
   status.json         # loop lifecycle: in_sync / code_drift / tree_dirty / awaiting_impl / realizing
   inbox.json          # verdict channel: Accept/Reject writes here, the loop drains it
   realize.md          # realization queue: directives the live session implements via /codoc:sync
