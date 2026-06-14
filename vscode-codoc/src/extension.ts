@@ -103,6 +103,7 @@ async function runSetup(context: vscode.ExtensionContext, state: WorkspaceState)
     }
 
     const channel = outputChannel();
+    state.setProvisioning(true); // status bar → "$(cloud-download) setting up…"
     try {
         // 1. ensure-uv → 2. provision (each cancellable inside provision.ts).
         channel.appendLine(`codoc: ${SETUP_STEPS[0].label}`);
@@ -144,6 +145,8 @@ async function runSetup(context: vscode.ExtensionContext, state: WorkspaceState)
         } else if (choice === 'View Log') {
             channel.show();
         }
+    } finally {
+        state.setProvisioning(false); // clear the "setting up…" status-bar state
     }
 }
 

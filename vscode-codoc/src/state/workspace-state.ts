@@ -21,6 +21,7 @@ import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
 import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
 import { parseRealize, pendingCodeByFile, PendingChange } from './realize-model';
+import { statusBarView } from './status-presentation';
 
 export { ParsedFeature, SidecarData };
 
@@ -39,6 +40,7 @@ export class WorkspaceState {
     private _status: CodocStatus = { state: 'in_sync', pending: 0, detail: '' };
     private _activity: ActivityData = {};
     private _pendingCode: Map<string, PendingChange[]> = new Map();
+    private _provisioning = false;
 
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
@@ -83,6 +85,10 @@ export class WorkspaceState {
     }
 
     private _reload(): void {
+        // codoc.ready drives the walkthrough's onContext completion: true whenever a
+        // `.codoc/` repo is present (already set up), so the step ticks without a
+        // fresh `codoc.setup` run this session.
+        void vscode.commands.executeCommand('setContext', 'codoc.ready', this._rootDir !== null);
         if (!this._rootDir) {
             this._features = [];
             this._proposals = [];
@@ -134,43 +140,33 @@ export class WorkspaceState {
         this._onDidChange.fire();
     }
 
+    /** Reflect whether one-click setup is actively provisioning (drives the
+     *  "$(cloud-download) setting up…" status-bar state). Called by extension.ts
+     *  around the setup flow. */
+    setProvisioning(active: boolean): void {
+        this._provisioning = active;
+        this._updateStatusBar();
+    }
+
     private _updateStatusBar(): void {
         const bar = this.statusBar;
-        bar.backgroundColor = undefined;
-        if (!this._rootDir) {
-            bar.text = '$(sync) codoc: not initialized';
-            bar.tooltip = 'No .codoc directory — run `codoc init` to initialize';
-            bar.show();
-            return;
-        }
-        if (this.agentActive) {
-            const n = Object.keys(this._activity.touched ?? {}).length;
-            bar.text = `$(zap) codoc: agent working… (${n} files)`;
-            bar.show();
-            return;
-        }
-        const { state, pending } = this._status;
-        if (state === 'realizing') {
-            bar.text = '$(loading~spin) codoc: implementing…';
-            bar.tooltip = this._status.detail || 'The coding agent is implementing your tree edits';
-        } else if (state === 'tree_dirty') {
-            bar.text = '$(pencil) codoc: applying tree edits…';
-            bar.tooltip = this._status.detail || 'tree.codoc was edited — realizing the code change';
-        } else if (state === 'awaiting_impl') {
-            bar.text = `$(play) codoc: ${pending} to implement`;
-            bar.tooltip = this._status.detail
-                || 'Accepted tree edits are queued in .codoc/realize.md — run /codoc:sync in your Claude Code session';
-            bar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-        } else if (state === 'code_drift' || pending > 0) {
-            bar.text = `$(bell) codoc: ${pending} proposal${pending === 1 ? '' : 's'}`;
-            bar.tooltip = 'Code changed — review proposed tree updates (Accept / Reject in the editor)';
-            // status language (U5/H7): the warning background is reserved for the ONE "you
-            // owe an action" state (awaiting_impl); the bell glyph already signals review.
-        } else {
-            const count = this._features.filter(f => !f.retired).length;
-            bar.text = `$(check) codoc: ${count}`;
-            bar.tooltip = `codoc: ${count} feature${count === 1 ? '' : 's'} — in sync`;
-        }
+        const view = statusBarView({
+            initialized: this._rootDir !== null,
+            provisioning: this._provisioning,
+            agentActive: this.agentActive,
+            agentFileCount: Object.keys(this._activity.touched ?? {}).length,
+            state: this._status.state,
+            pending: this._status.pending,
+            detail: this._status.detail,
+            featureCount: this._features.filter(f => !f.retired).length,
+        });
+        bar.text = view.text;
+        bar.tooltip = view.tooltip;
+        bar.command = view.command;
+        // The warning background is reserved for the ONE "you owe an action" state.
+        bar.backgroundColor = view.warn
+            ? new vscode.ThemeColor('statusBarItem.warningBackground')
+            : undefined;
         bar.show();
     }
 
