@@ -1,6 +1,6 @@
 ---
 title: "feat: One-click VS Code setup — extension-provisioned Python core, single Claude auth, managed daemon"
-status: active
+status: completed
 date: 2026-06-14
 type: feat
 depth: deep
