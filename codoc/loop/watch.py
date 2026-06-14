@@ -42,6 +42,10 @@ EPOCH_STALE_SECONDS = 900
 # Batch window for filesystem events: rapid-fire saves coalesce into one pass.
 DEBOUNCE_MS = 600
 
+# How often the watch loop wakes when idle to re-check the spawning parent's
+# liveness (only relevant when CODOC_WATCH_PARENT_PID is set by the extension).
+PARENT_POLL_MS = 3000
+
 
 @dataclass
 class WatchState:
@@ -119,8 +123,46 @@ def _pidfile(codoc_dir: str) -> Path:
 
 
 def write_pidfile(codoc_dir: str) -> None:
+    """Write ``.codoc/watch.pid`` with owner metadata.
+
+    The file is JSON ``{pid, owner, started_at}`` so the VS Code extension can tell
+    which window owns the daemon (``owner`` from ``CODOC_WATCH_OWNER``; empty for a
+    plain CLI invocation). Readers that only want the pid use :func:`read_pid`,
+    which still parses a legacy bare-int file — the format change is backward
+    compatible."""
+    import json
     import os
-    _pidfile(codoc_dir).write_text(str(os.getpid()))
+    import time
+
+    payload = {
+        "pid": os.getpid(),
+        "owner": os.environ.get("CODOC_WATCH_OWNER", ""),
+        "started_at": time.time(),
+    }
+    _pidfile(codoc_dir).write_text(json.dumps(payload))
+
+
+def read_pid(codoc_dir: str) -> int | None:
+    """Read the daemon pid from ``watch.pid`` (JSON ``{pid}`` or legacy bare int).
+
+    Returns None when the file is missing/unparseable, so liveness checks degrade
+    to "no daemon" rather than raising."""
+    import json
+
+    try:
+        raw = _pidfile(codoc_dir).read_text().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        return int(json.loads(raw)["pid"])
+    except (ValueError, TypeError, KeyError):
+        pass
+    try:
+        return int(raw)  # legacy bare-int pidfile
+    except ValueError:
+        return None
 
 
 def clear_pidfile(codoc_dir: str) -> None:
@@ -135,16 +177,42 @@ def daemon_running(codoc_dir: str) -> bool:
 
     Lets the Stop hook decide whether to reflect itself (no daemon) or defer to the
     daemon's epoch-close reconcile — so the two never double-run on one epoch."""
-    import os
-    try:
-        pid = int(_pidfile(codoc_dir).read_text().strip())
-    except (OSError, ValueError):
+    pid = read_pid(codoc_dir)
+    if pid is None:
         return False
+    return _pid_alive(pid)
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if ``pid`` is a live process (signal-0 liveness probe)."""
+    import os
+
     try:
         os.kill(pid, 0)  # signal 0 = liveness probe, doesn't actually signal
         return True
     except OSError:
-        return False  # stale pidfile → no live daemon
+        return False
+
+
+def parent_alive() -> bool:
+    """Decide whether the watch loop should keep running w.r.t. its spawner.
+
+    When the VS Code extension spawns the daemon it sets ``CODOC_WATCH_PARENT_PID``
+    to its own (extension-host) pid. If that process dies — the window was closed
+    or the host crashed without :func:`deactivate` running — the daemon would
+    otherwise be orphaned. This returns False once that pid is gone so the loop can
+    self-exit. When the env var is unset (a plain ``codoc watch`` from a shell) it
+    always returns True, so the manual CLI path is completely unchanged."""
+    import os
+
+    raw = os.environ.get("CODOC_WATCH_PARENT_PID")
+    if not raw:
+        return True  # no managed parent → behave exactly as today
+    try:
+        parent_pid = int(raw)
+    except ValueError:
+        return True  # malformed → don't self-exit on a bad value
+    return _pid_alive(parent_pid)
 
 
 def _epoch_stale(codoc_dir: str, now: float, *, threshold: float = EPOCH_STALE_SECONDS) -> bool:
@@ -418,7 +486,21 @@ def run_watch(
 
     suffix = "  (--auto-realize: unattended implement when no session is open)" if auto_realize else ""
     printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop){suffix}")
-    for changes in watchfiles.watch(root_dir, watch_filter=watch_filter(codoc_dir), debounce=DEBOUNCE_MS):
+    # `yield_on_timeout` wakes the loop every PARENT_POLL_MS even with no file
+    # changes, so the parent-death self-exit (when the extension spawned us) is
+    # checked on a steady cadence rather than only on the next edit.
+    for changes in watchfiles.watch(
+        root_dir,
+        watch_filter=watch_filter(codoc_dir),
+        debounce=DEBOUNCE_MS,
+        rust_timeout=PARENT_POLL_MS,
+        yield_on_timeout=True,
+    ):
+        if not parent_alive():
+            printer("▸ codoc watch: spawning extension host gone — self-exiting")
+            break
+        if not changes:
+            continue  # bare timeout tick — just the parent-death check above
         out = safe_process_batch([p for _, p in changes], root_dir, codoc_dir, state,
                                  no_realize=no_realize, dry_run=dry_run, printer=printer)
         if out:
