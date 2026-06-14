@@ -14,6 +14,12 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Tree navigation works untrusted; setup, provisioning, and the watch daemon require trust."
+    }
+  },
   "contributes": {
     "menus": {
       "commandPalette": [
@@ -104,6 +110,14 @@
       }
     ],
     "commands": [
+      {
+        "command": "codoc.setup",
+        "title": "codoc: Set up codoc"
+      },
+      {
+        "command": "codoc.repair",
+        "title": "codoc: Repair / re-run setup"
+      },
       {
         "command": "codoc.sync",
         "title": "codoc: Sync"
@@ -269,7 +283,38 @@
         "editor.guides.indentation": true,
         "editor.guides.highlightActiveIndentation": true
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "codocSetup",
+        "title": "Get started with codoc",
+        "description": "Provision codoc and open your codebase as a navigable feature tree — in one click.",
+        "steps": [
+          {
+            "id": "setup",
+            "title": "Set up codoc",
+            "description": "Install the Python core, index your repo, and start the managed daemon — no terminal, no manual pip.\n[Set up codoc](command:codoc.setup)",
+            "media": {
+              "markdown": "media/walkthrough/setup.md"
+            },
+            "completionEvents": [
+              "onContext:codoc.ready"
+            ]
+          },
+          {
+            "id": "open-tree",
+            "title": "Open your feature tree",
+            "description": "Navigate your codebase as a tree of intent — jump to code, author titles/descriptions, steer the agent.\n[Open your feature tree](command:codoc.open)",
+            "media": {
+              "markdown": "media/walkthrough/open-tree.md"
+            },
+            "completionEvents": [
+              "onCommand:codoc.open"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "devDependencies": {
     "@types/node": "^25.6.2",
