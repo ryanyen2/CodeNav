@@ -282,6 +282,8 @@
     "build": "node esbuild.config.mjs",
     "compile": "npm run build",
     "watch": "node esbuild.config.mjs --watch",
+    "bundle-wheel": "node scripts/bundle-wheel.mjs",
+    "vscode:prepublish": "npm run build && npm run bundle-wheel",
     "test": "vitest run"
   },
   "dependencies": {

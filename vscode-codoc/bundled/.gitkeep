@@ -1,0 +1,2 @@
+# Build-time home for codoc-<ver>-py3-none-any.whl (see scripts/bundle-wheel.mjs).
+# The wheel is gitignored but shipped inside the VSIX; this keeps the dir present.

@@ -38,6 +38,10 @@ uv.lock
 node_modules/
 dist/
 
+# Bundled Python wheel — a build artifact produced by scripts/bundle-wheel.mjs
+# at VSIX package time; shipped inside the .vsix, never committed.
+vscode-codoc/bundled/*.whl
+
 .codoc/
 
 test/
