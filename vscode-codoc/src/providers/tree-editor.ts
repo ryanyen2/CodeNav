@@ -454,6 +454,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     /** Bound-symbol autocomplete candidates from the sidecar `by_file` (deduped by
      *  file + leaf name) — the same source as the plain-text completion provider. */
     private buildSymbols(sidecar: SidecarData): RefSymbol[] {
+        // Deliberately NOT the canonical `symbolLeaf`: strips only the `file::`
+        // qualifier and KEEPS `Class.method` (this leaf becomes the `#symbol` link
+        // target). Kept in sync with completion.ts:leaf — see the note there.
         const leaf = (s: string): string => { const i = s.indexOf('::'); return i >= 0 ? s.slice(i + 2) : s; };
         const seen = new Set<string>();
         const out: RefSymbol[] = [];

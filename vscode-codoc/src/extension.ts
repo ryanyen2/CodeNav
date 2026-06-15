@@ -15,6 +15,7 @@ import { CodocSymbolProvider } from './providers/symbol';
 import { applyDecorations, applyPendingCodeDecorations, createDecorations } from './providers/decoration';
 import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
 import { bindingsForFeature } from './state/bindings-model';
+import { symbolLeaf } from './state/registry-model';
 import { DependencyFocus } from './providers/focus';
 import { AgentGutter } from './providers/agent';
 import { CodocFileDecorationProvider } from './providers/file-decoration';
@@ -293,8 +294,9 @@ export function activate(context: vscode.ExtensionContext): void {
                     'vscode.executeDocumentSymbolProvider', uri
                 );
                 if (syms) {
-                    // symbol may be "file::Qualified.Name" format; extract leaf after last '.' or '::'
-                    const leaf = symbol.split('::').pop()?.split('.').pop() ?? symbol;
+                    // symbol may be "file::Qualified.Name" format; extract the leaf
+                    // (strip the `file::` qualifier, then the last `.`-segment).
+                    const leaf = symbolLeaf(symbol);
                     const found = findSymbolByName(syms, leaf);
                     if (found) targetRange = found.selectionRange;
                 }
@@ -302,9 +304,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
             // Fallback: regex scan
             if (!targetRange) {
-                const leaf = symbol.includes('::') ? symbol.split('::').pop()!.split('.').pop()!
-                            : symbol.includes('.')  ? symbol.split('.').pop()!
-                            : symbol;
+                const leaf = symbolLeaf(symbol);
                 const re = new RegExp(`(?:def|class|function|const|let|var)\\s+${leaf}\\b|\\b${leaf}\\s*[=:(]`);
                 for (let i = 0; i < doc.lineCount; i++) {
                     if (re.test(doc.lineAt(i).text)) {
@@ -338,6 +338,8 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             const picked = await vscode.window.showQuickPick(
                 binds.map(b => {
+                    // DISPLAY variant (not canonical symbolLeaf): keep `Class.method`,
+                    // map the synthetic `__module__` to the `‹module›` glyph.
                     const sym = b.symbol.split('::').pop() ?? b.symbol;
                     const tail = sym === '__module__' ? '‹module›' : sym;
                     return { label: `$(symbol-method) ${tail}`, description: b.file, b };

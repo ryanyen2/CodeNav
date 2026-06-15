@@ -373,3 +373,132 @@ def test_write_sidecar_survives_write_registry_oserror(store, codoc_dir, monkeyp
 
     sidecar = json.loads((Path(codoc_dir) / BINDINGS_FILENAME).read_text())
     assert f.id in sidecar["by_feature"]  # bindings sidecar completed
+
+
+# ─── Fix B: drift through the PRODUCTION reconcile_drift / run_loop_a path ─────
+#
+# The cases above drive ``apply_changeset`` directly. The production daemon path
+# is ``reconcile_drift`` (``amend_on_change=True``, ``allow_retire=True``,
+# ``file_scope``, ``codoc_dir``) / ``run_loop_a``. These tests exercise those
+# entrypoints end-to-end with the index layer faked out (a fixture chunk table)
+# and the single LLM pass replaced by an injected deterministic ``propose`` — so
+# no real index and no real LLM are needed, yet the full state-changeset →
+# apply_changeset → drift-persist (scoped merge) wiring is covered.
+
+def _chunk_row(file, sym, tok, *, types_hash="t"):
+    """A minimal LanceDB ChunkRow stand-in for the faked index reader."""
+    from codoc.pipelines.indexing.reader import ChunkRow
+
+    return ChunkRow(id=0, file=file, symbol_path=sym, language="python",
+                    source="def f(): ...", tokens_hash=tok, types_hash=types_hash,
+                    start_byte=0, end_byte=0, embedding=None)
+
+
+def _fake_index(monkeypatch, rows):
+    """Make ``reconcile_drift`` / ``run_loop_a`` read ``rows`` from a fake index
+    (``update_index`` is a no-op; ``read_all_chunks`` returns the fixture)."""
+    monkeypatch.setattr("codoc.pipelines.indexing.runner.update_index",
+                        lambda *a, **k: None)
+    monkeypatch.setattr("codoc.pipelines.indexing.reader.read_all_chunks",
+                        lambda *a, **k: list(rows))
+
+
+def _inject_propose(monkeypatch, ops):
+    """Replace the single Loop A LLM pass with a fixed op list (BDD-style).
+
+    ``reconcile_drift`` / ``run_loop_a`` call ``apply_changeset`` WITHOUT
+    forwarding ``propose``, so it uses the ``propose=propose_tree_update``
+    keyword default captured at def-time. Patch that kwdefault (not just the
+    module attribute) so the injected pass actually flows through the production
+    entrypoints — no real LLM."""
+    from codoc.loop.loop_a import apply_changeset
+
+    monkeypatch.setitem(apply_changeset.__kwdefaults__, "propose",
+                        lambda *a, **k: list(ops))
+
+
+def test_reconcile_drift_writes_questioned_through_production_path(codoc_dir, monkeypatch):
+    """reconcile_drift (daemon path) flags a realized feature whose bound code
+    changed in place as `questioned`, persisting drift.json — proven with an
+    injected propose (no LLM) and a faked index (no cocoindex)."""
+    s = open_store(codoc_dir)
+    try:
+        f = Feature(title="Validator", description="Validates input.")
+        s.upsert_feature(f)
+        _bind(s, f.id, "v.py", "v.py::check", "old")  # fingerprint != new code
+    finally:
+        s.close()
+
+    # The live index reports the bound chunk with a NEW tokens_hash → modified.
+    _fake_index(monkeypatch, [_chunk_row("v.py", "v.py::check", "new")])
+    # The LLM pass would run (amend_on_change=True) but proposes nothing → the
+    # prose stays un-amended → the feature is questioned.
+    _inject_propose(monkeypatch, [])
+
+    from codoc.loop.loop_a import reconcile_drift
+
+    reconcile_drift("root", codoc_dir)
+
+    assert read_drift(codoc_dir) == {f.id: DRIFT_QUESTIONED}
+
+
+def test_reconcile_drift_clears_when_amended_through_production_path(codoc_dir, monkeypatch):
+    """When the injected LLM pass amends the drifted feature's prose, the
+    production path records it as `followed` (no badge) — exercising the
+    amend_on_change trigger + the amended-set drift carve-out."""
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    s = open_store(codoc_dir)
+    try:
+        f = Feature(title="Validator", description="Validates input.")
+        s.upsert_feature(f)
+        _bind(s, f.id, "v.py", "v.py::check", "old")
+    finally:
+        s.close()
+
+    _fake_index(monkeypatch, [_chunk_row("v.py", "v.py::check", "new")])
+    _inject_propose(monkeypatch, [NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id,
+                                         description="Validates and sanitizes input.")])
+
+    from codoc.loop.loop_a import reconcile_drift
+
+    reconcile_drift("root", codoc_dir)
+
+    assert read_drift(codoc_dir) == {}  # prose addressed this pass → followed
+
+
+def test_reconcile_drift_scoped_merge_preserves_out_of_scope_drift(codoc_dir, monkeypatch):
+    """reconcile_drift with file_scope set (the watch daemon's scoped pass) MERGES
+    drift through the production path: an out-of-scope feature's badge survives
+    while the in-scope feature is freshly computed — asserting the scoped-merge
+    behavior end-to-end through the daemon entrypoint."""
+    s = open_store(codoc_dir)
+    try:
+        fa = Feature(title="A feature", description="In file a.")
+        fb = Feature(title="B feature", description="In file b.")
+        s.upsert_feature(fa)
+        s.upsert_feature(fb)
+        _bind(s, fa.id, "a.py", "a.py::a_fn", "old")
+        _bind(s, fb.id, "b.py", "b.py::b_fn", "old")
+    finally:
+        s.close()
+
+    # Prior (full) pass questioned A.
+    write_drift(codoc_dir, {fa.id: DRIFT_QUESTIONED})
+
+    # The scoped pass examines only b.py — its bound chunk changed (modified).
+    # reconcile_drift's _state_changeset reads the whole index; the scope is
+    # carried into the drift merge. a.py is out of scope so its badge survives.
+    _fake_index(monkeypatch, [
+        _chunk_row("a.py", "a.py::a_fn", "old"),   # unchanged (matches fingerprint)
+        _chunk_row("b.py", "b.py::b_fn", "new"),   # modified vs stored "old"
+    ])
+    _inject_propose(monkeypatch, [])
+
+    from codoc.loop.loop_a import reconcile_drift
+
+    reconcile_drift("root", codoc_dir, file_scope={"b.py"})
+
+    drift = read_drift(codoc_dir)
+    assert drift[fa.id] == DRIFT_QUESTIONED   # out-of-scope — preserved by merge
+    assert drift[fb.id] == DRIFT_QUESTIONED   # in-scope — freshly computed

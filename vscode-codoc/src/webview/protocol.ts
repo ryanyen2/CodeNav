@@ -24,8 +24,10 @@ export interface RefSymbol {
 
 /** A feature→feature thread target (a reads / used-by edge). `weight`/`kinds` ride
  *  along from `feature_edges` so the Connections panel ranks by coupling weight and
- *  picks a per-edge shape (shape = kind). */
-export interface ThreadTarget { toId: string; toTitle: string; weight: number; kinds: string[] }
+ *  picks a per-edge shape (shape = kind). Both are OPTIONAL on the wire: a stale /
+ *  replayed payload from a prior build may omit them, so consumers default at read
+ *  (`weight ?? 0`, `kinds ?? []`). The producer (assembleThreads) always sets them. */
+export interface ThreadTarget { toId: string; toTitle: string; weight?: number; kinds?: string[] }
 /** A code-ref thread target (a binding). */
 export interface ThreadRef { file: string; symbol: string }
 /** An external `[label](https://…)` link cited in a feature's description — the
@@ -40,13 +42,16 @@ export interface ThreadConsult { label: string; url: string }
  *  from `feature_edges` (deps, with weights) + `by_feature` (bindings) + the
  *  description's external links (consult). `collapsed` reports, per strand, whether it
  *  exceeds the inline display cap (THREADS_COLLAPSE_AT) so the renderer shows a
- *  "show N more" affordance reusing the peek — a display swap, no transition. */
+ *  "show N more" affordance reusing the peek — a display swap, no transition.
+ *  `consult`/`collapsed` are OPTIONAL on the wire: a stale / replayed payload from a
+ *  prior build may omit them, so consumers default at read (`consult ?? []`,
+ *  `collapsed?.reads ?? false`). The producer (assembleThreads) always sets them. */
 export interface ThreadsData {
     reads: ThreadTarget[];
     usedBy: ThreadTarget[];
     refs: ThreadRef[];
-    consult: ThreadConsult[];
-    collapsed: { reads: boolean; usedBy: boolean; refs: boolean; consult: boolean };
+    consult?: ThreadConsult[];
+    collapsed?: { reads: boolean; usedBy: boolean; refs: boolean; consult: boolean };
 }
 
 /** The inline-display cap per strand; beyond it the strand collapses behind a

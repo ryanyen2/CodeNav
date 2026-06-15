@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { assembleThreads } from '../state/threads';
 import { THREADS_COLLAPSE_AT } from '../webview/protocol';
+import type { ThreadsData, ThreadTarget } from '../webview/protocol';
 
 const titles: Record<string, string> = {
     'f-a': 'Alpha', 'f-b': 'Beta', 'f-c': 'Gamma', 'f-self': 'Self',
@@ -66,7 +67,7 @@ describe('U5 — Consult strand', () => {
             titleOf, selfId: 'f-self',
         });
         expect(t).not.toBeNull();
-        expect(t!.consult.map(c => c.url)).toEqual([
+        expect(t!.consult!.map(c => c.url)).toEqual([
             'http://peps.python.org/pep-0008/',       // ranked by label: "PEP 8" < "RFC 7231"
             'https://www.rfc-editor.org/rfc/rfc7231',
         ]);
@@ -86,7 +87,7 @@ describe('U5 — Consult strand', () => {
             titleOf, selfId: 'f-self',
         });
         expect(t!.consult).toHaveLength(1);
-        expect(t!.consult[0]).toEqual({ label: 'https://example.com/a', url: 'https://example.com/a' });
+        expect(t!.consult![0]).toEqual({ label: 'https://example.com/a', url: 'https://example.com/a' });
     });
 });
 
@@ -141,8 +142,8 @@ describe('U5 — collapse flag', () => {
             selfId: 'f-self',
         });
         expect(t!.reads.length).toBe(THREADS_COLLAPSE_AT + 1);
-        expect(t!.collapsed.reads).toBe(true);
-        expect(t!.collapsed.usedBy).toBe(false);
+        expect(t!.collapsed!.reads).toBe(true);
+        expect(t!.collapsed!.usedBy).toBe(false);
     });
 
     it('reports collapsed:false at exactly THREADS_COLLAPSE_AT rows (boundary)', () => {
@@ -152,7 +153,42 @@ describe('U5 — collapse flag', () => {
             in: [], bindings: [],
             titleOf: fid => fid, selfId: 'f-self',
         });
-        expect(t!.collapsed.reads).toBe(false);
+        expect(t!.collapsed!.reads).toBe(false);
+    });
+});
+
+describe('api-contract — defensive reads on a stale / replayed payload', () => {
+    // A payload deserialized from a prior build may omit the newer optional fields
+    // (`consult`, `collapsed`, ThreadTarget.`weight`/`kinds`) even though the current
+    // TS types say present. Consumers must default at read, never throw. We model such a
+    // stale object by constructing it WITHOUT those fields (cast through unknown so the
+    // missing-field shape compiles) and exercising the read sites.
+    const staleThreads = (): ThreadsData => ({
+        reads: [{ toId: 'f-a', toTitle: 'Alpha' } as ThreadTarget],
+        usedBy: [],
+        refs: [{ file: 'x.py', symbol: 'x::a' }],
+        // no `consult`, no `collapsed`
+    } as unknown as ThreadsData);
+
+    it('threadsEmpty-style consult read tolerates a missing consult strand', () => {
+        const t = staleThreads();
+        // mirrors suggestion-decorations.threadsEmpty / the strand/peek consult reads
+        expect(() => (t.consult ?? []).length).not.toThrow();
+        expect((t.consult ?? []).map(l => l.url)).toEqual([]);
+    });
+
+    it('collapsed read tolerates a missing collapsed object', () => {
+        const t = staleThreads();
+        expect(t.collapsed?.reads ?? false).toBe(false);
+    });
+
+    it('ThreadTarget weight/kinds reads tolerate missing fields', () => {
+        const t = staleThreads();
+        const target = t.reads[0];
+        expect(target.weight ?? 0).toBe(0);
+        expect(target.kinds ?? []).toEqual([]);
+        // kindShape-style `kinds.some(...)` must not throw on an absent strand
+        expect(() => (target.kinds ?? []).some(k => k.includes('call'))).not.toThrow();
     });
 });
 

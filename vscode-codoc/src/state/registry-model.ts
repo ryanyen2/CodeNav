@@ -135,9 +135,12 @@ export interface DeadRef {
 
 export type ResolvedCard = HoverCard | FileOwnersCard | DeadRef;
 
-/** Leaf of a (possibly qualified) symbol path: drop the `file::` qualifier and
- *  the `Class.` nesting — mirrors `completion.ts:leaf` + `openRef`'s leaf rule. */
-function symbolLeaf(symbolPath: string): string {
+/** Leaf of a (possibly qualified) symbol path: strip the `file::` qualifier, then
+ *  take the last `.`-segment of the remaining `Class.method` nesting. The ONE
+ *  canonical implementation of the `file::Qualified.name` → leaf rule, shared by
+ *  completion / inlay / tree-editor / openRef / code-lens / suggestion-decorations
+ *  (display variants — e.g. inlay's `__module__` mapping — wrap this, not fork it). */
+export function symbolLeaf(symbolPath: string): string {
     const afterFile = symbolPath.includes('::') ? symbolPath.split('::').pop()! : symbolPath;
     return afterFile.includes('.') ? afterFile.split('.').pop()! : afterFile;
 }

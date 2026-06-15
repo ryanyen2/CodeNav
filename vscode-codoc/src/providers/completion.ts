@@ -12,6 +12,11 @@ import { WorkspaceState } from '../state/workspace-state';
 const OPEN_BRACKET_RE = /\[[^\]]*$/;        // just after a '[' (label being typed)
 const CODOC_TARGET_RE = /\]\(codoc:[^)]*$/; // inside the (codoc:…) target
 
+// NOTE: deliberately NOT the canonical `symbolLeaf` (registry-model.ts). This
+// strips only the `file::` qualifier and KEEPS the `Class.method` nesting, because
+// the completion candidate is the `#symbol` link target — it must round-trip the
+// qualified path. Kept byte-for-byte in sync with tree-editor.ts:buildSymbols (the
+// webview `@`-ref picker uses the same rule). Do not converge with symbolLeaf.
 function leaf(symbol: string): string {
     const i = symbol.indexOf('::');
     return i >= 0 ? symbol.slice(i + 2) : symbol;

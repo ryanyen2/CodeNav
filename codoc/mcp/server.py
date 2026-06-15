@@ -39,7 +39,12 @@ def _need_dir() -> tuple[str | None, dict | None]:
 @mcp.tool
 def codoc_tree() -> dict:
     """Read the live feature tree (id, title, description, parent, realized,
-    bindings) plus pending proposals. Read-only. Call this before proposing."""
+    bindings) plus pending proposals. Read-only. Call this before proposing.
+
+    Each feature also carries ``drift`` — the last code-side pass's trust signal
+    (``"questioned"`` = bound code changed but the prose wasn't amended;
+    ``"binding-lost"`` = lost its last binding; ``null`` = followed). Amend or
+    re-attach questioned features when reconciling."""
     cd, err = _need_dir()
     return err or tools.read_tree(cd)
 
@@ -49,7 +54,11 @@ def codoc_status() -> dict:
     """Counts of features / pending proposals / unrealized plan nodes, and the
     current pipeline state (in_sync | code_drift | tree_dirty | awaiting_impl |
     realizing). ``awaiting_impl`` means accepted tree edits are queued in
-    ``.codoc/realize.md`` for you to implement via ``/codoc:sync``."""
+    ``.codoc/realize.md`` for you to implement via ``/codoc:sync``.
+
+    Also reports ``dead_refs`` (count) + ``dead_ref_list`` ([{feature_id, file,
+    symbol}]) — inline ``codoc:`` links that no longer resolve to a binding; fix or
+    re-bind them when reconciling."""
     cd, err = _need_dir()
     return err or tools.read_status(cd)
 

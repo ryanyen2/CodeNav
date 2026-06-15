@@ -188,3 +188,81 @@ def test_await_verdicts_times_out_when_no_verdict(codoc_dir):
     assert out["timed_out"] is True
     assert out["pending"] == [eid]
     assert out["accepted"] == [] and out["rejected"] == []
+
+
+# ─── Fix A: agent-native parity — drift + dead-ref surfaced via the MCP tools ──
+
+def test_read_tree_surfaces_drift_state_for_questioned_feature(codoc_dir):
+    """read_tree carries each feature's loop-computed drift state (from
+    drift.json) so a reconciling agent sees which features are `questioned` /
+    `binding-lost`; a `followed` feature has drift=None."""
+    from codoc.loop.edits import DRIFT_QUESTIONED, write_drift
+
+    questioned = _seed(codoc_dir, title="Validator", description="Validates input.")
+    followed = _seed(codoc_dir, title="Router", description="Routes requests.")
+
+    # A prior code-side pass questioned the validator (its bound code drifted).
+    write_drift(codoc_dir, {questioned.id: DRIFT_QUESTIONED})
+
+    tree = tools.read_tree(codoc_dir)
+    by_id = {f["id"]: f for f in tree["features"]}
+    assert by_id[questioned.id]["drift"] == DRIFT_QUESTIONED
+    assert by_id[followed.id]["drift"] is None   # absence = followed = no badge
+
+
+def test_read_tree_drift_field_is_none_without_drift_file(codoc_dir):
+    """No drift.json (never a loop pass) → every feature's drift is None, tolerant."""
+    f = _seed(codoc_dir, title="Auth", description="Logs users in.")
+    tree = tools.read_tree(codoc_dir)
+    assert tree["features"][0]["id"] == f.id
+    assert tree["features"][0]["drift"] is None
+
+
+def test_read_status_reports_dead_ref_from_registry(codoc_dir):
+    """read_status summarizes unresolved inline refs from tree.index.json: a feature
+    whose description cites code with no backing binding is a dead ref."""
+    from codoc.codoc_file.render import write_registry
+
+    # A feature that cites code which is NOT bound anywhere → the ref is unresolved.
+    f = _seed(codoc_dir, title="Cache",
+              description="Caches via [get](codoc:cache.py#get).")
+
+    s = open_store(codoc_dir)
+    try:
+        write_registry(s, codoc_dir)   # derives refs + resolved flags
+    finally:
+        s.close()
+
+    st = tools.read_status(codoc_dir)
+    assert st["dead_refs"] == 1
+    assert st["dead_ref_list"] == [
+        {"feature_id": f.id, "file": "cache.py", "symbol": "get"}
+    ]
+
+
+def test_read_status_no_dead_refs_when_ref_is_bound(codoc_dir):
+    """A cited symbol that IS bound resolves → no dead ref reported."""
+    from codoc.codoc_file.render import write_registry
+    from codoc.model.binding import Binding
+
+    f = _seed(codoc_dir, title="Cache",
+              description="Caches via [get](codoc:cache.py#get).")
+    s = open_store(codoc_dir)
+    try:
+        s.upsert_binding(Binding(feature_id=f.id, file="cache.py",
+                                 symbol_path="cache.py::get", fingerprint="h"))
+        write_registry(s, codoc_dir)
+    finally:
+        s.close()
+
+    st = tools.read_status(codoc_dir)
+    assert st["dead_refs"] == 0
+    assert st["dead_ref_list"] == []
+
+
+def test_read_status_tolerates_missing_registry(codoc_dir):
+    """No tree.index.json → dead-ref summary degrades to empty (no crash)."""
+    _seed(codoc_dir, title="Auth")
+    st = tools.read_status(codoc_dir)
+    assert st["dead_refs"] == 0
+    assert st["dead_ref_list"] == []

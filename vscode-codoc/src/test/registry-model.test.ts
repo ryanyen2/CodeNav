@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { isRefResolved, type RegistryData } from '../state/registry-model';
+import { isRefResolved, symbolLeaf, type RegistryData } from '../state/registry-model';
 import { loadRegistry } from '../state/registry-loader';
 
 const FIXTURE: RegistryData = {
@@ -96,5 +96,31 @@ describe('isRefResolved', () => {
 
     it('returns true when the registry is null (graceful — do not strike)', () => {
         expect(isRefResolved(null, 'auth.py', 'logout')).toBe(true);
+    });
+});
+
+describe('symbolLeaf — canonical `file::Qualified.name` → leaf rule', () => {
+    it('strips the file:: qualifier then the Class. nesting', () => {
+        expect(symbolLeaf('file.py::Class.method')).toBe('method');
+    });
+
+    it('strips the file:: qualifier for a top-level symbol', () => {
+        expect(symbolLeaf('file.py::func')).toBe('func');
+    });
+
+    it('passes a bare symbol through unchanged', () => {
+        expect(symbolLeaf('func')).toBe('func');
+    });
+
+    it('takes the last dot-segment when there is no file:: qualifier', () => {
+        expect(symbolLeaf('Class.method')).toBe('method');
+    });
+
+    it('handles deep nesting (Outer.Inner.method → method)', () => {
+        expect(symbolLeaf('mod.py::Outer.Inner.method')).toBe('method');
+    });
+
+    it('handles the empty string without throwing', () => {
+        expect(symbolLeaf('')).toBe('');
     });
 });

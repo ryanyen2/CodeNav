@@ -195,6 +195,10 @@ const depKey = new PluginKey('codocThreadDecorations');
 
 const THREAD_MAX = THREADS_COLLAPSE_AT; // named items per strand before a "+N" peek
 
+// DISPLAY variant — deliberately NOT the canonical `symbolLeaf` (registry-model.ts):
+// strips only the `file::` qualifier (keeps `Class.method`) and maps `__module__` to
+// the `‹module›` glyph for the Connections "bound code" rows. Converging it would
+// drop the `Class.` nesting from the displayed symbol label.
 function leafSym(symbol: string): string {
     const i = symbol.indexOf('::');
     const tail = i >= 0 ? symbol.slice(i + 2) : symbol;
@@ -204,8 +208,8 @@ function leafSym(symbol: string): string {
 /** Per-edge SHAPE glyph (shape = kind, never a new colour). A pure call edge →
  *  `()`; a pure import edge → `⊂`; mixed / unknown → none. Rendered as a quiet
  *  superscript marker on the feature link. */
-function kindShape(kinds: string[]): string {
-    const has = (k: string): boolean => kinds.some(x => x.includes(k));
+function kindShape(kinds: string[] | undefined): string {
+    const has = (k: string): boolean => (kinds ?? []).some(x => x.includes(k));
     const call = has('call');
     const imp = has('import');
     if (call && !imp) return '()';
@@ -214,7 +218,7 @@ function kindShape(kinds: string[]): string {
 }
 
 function threadsEmpty(t: ThreadsData): boolean {
-    return !t.reads.length && !t.usedBy.length && !t.refs.length && !t.consult.length;
+    return !t.reads.length && !t.usedBy.length && !t.refs.length && !(t.consult ?? []).length;
 }
 
 function threadLink(text: string, title: string, onClick: () => void, fid?: string, shape?: string): HTMLElement {
@@ -258,7 +262,7 @@ function openThreadsPeek(
     section('depends on', t.reads.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId, kindShape(d.kinds))));
     section('used by', t.usedBy.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId, kindShape(d.kinds))));
     section('bound code', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => { closePeek(); onOpenBinding(r.file, r.symbol); })));
-    section('consult', t.consult.map(l => threadLink(l.label, l.url, () => { closePeek(); onConsult(l.url); })));
+    section('consult', (t.consult ?? []).map(l => threadLink(l.label, l.url, () => { closePeek(); onConsult(l.url); })));
     document.body.append(pop);
     const rect = anchor.getBoundingClientRect();
     pop.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
@@ -305,7 +309,7 @@ function makeThreadsRow(
     strand('reads', '↳', 'depends on', t.reads.map(d => featureLink(d, 'depends on', onNavigate)), 'depends on');
     strand('used', '↰', 'used by', t.usedBy.map(d => featureLink(d, 'used by', onNavigate)), 'used by');
     strand('refs', '⟢', 'bound code', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => onOpenBinding(r.file, r.symbol))), 'bound code');
-    strand('consult', '◷', 'consult', t.consult.map(l => threadLink(l.label, l.url, () => onConsult(l.url))), 'consult links');
+    strand('consult', '◷', 'consult', (t.consult ?? []).map(l => threadLink(l.label, l.url, () => onConsult(l.url))), 'consult links');
     return row;
 }
 

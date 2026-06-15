@@ -16,6 +16,8 @@ the user reviews in the IDE.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from codoc.loop.activity import PHASE_DONE, PHASE_EDITING, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
 from codoc.loop.inbox import drop_verdicts as _inbox_drop
@@ -78,7 +80,19 @@ def _op_summary(op: NodeOp, store: Store) -> str:
 # ─── reads ────────────────────────────────────────────────────────────────────
 
 def read_tree(codoc_dir: str) -> dict:
-    """The live feature tree (incl. ``realized``) + pending proposals."""
+    """The live feature tree (incl. ``realized`` + per-feature ``drift``) + pending
+    proposals.
+
+    ``drift`` surfaces the loop-computed per-feature trust signal
+    (``"questioned"`` / ``"binding-lost"``) the same way the IDE sidecar does, so an
+    agent reconciling via ``/codoc:sync`` can see which features the last code-side
+    pass questioned. It is read from ``.codoc/drift.json`` (one dict lookup per
+    feature; no index read) — ``followed`` is the absence of an entry, so the field
+    is omitted (None) for features the loop did not flag.
+    """
+    from codoc.loop.edits import read_drift
+
+    drift = read_drift(codoc_dir)
     with open_store(codoc_dir) as store:
         feats = []
         for f in store.list_features():
@@ -88,6 +102,7 @@ def read_tree(codoc_dir: str) -> dict:
                 "description": f.description,
                 "parent_id": f.parent_id,
                 "realized": f.realized,
+                "drift": drift.get(f.id),
                 "bindings": [b.symbol_path for b in store.bindings_for_feature(f.id)],
             })
         proposals = [
@@ -99,8 +114,31 @@ def read_tree(codoc_dir: str) -> dict:
         return {"ok": True, "features": feats, "proposals": proposals}
 
 
+def _dead_refs(codoc_dir: str) -> list[dict]:
+    """Unresolved inline ``codoc:`` refs from the cross-reference registry.
+
+    The registry (``.codoc/tree.index.json``, written by ``render.write_registry``)
+    tags every authored ref ``resolved`` per the leaf-matching rule. We read it
+    tolerantly (missing / corrupt → no dead refs) and return one entry per ref
+    whose ``resolved`` is False, so an agent can fix dead links instead of only the
+    IDE seeing the decoration."""
+    from codoc.codoc_file.render import INDEX_FILENAME
+    from codoc.loop.fsio import read_json
+
+    data = read_json(Path(codoc_dir) / INDEX_FILENAME, default={})
+    refs = data.get("refs", []) if isinstance(data, dict) else []
+    return [
+        {"feature_id": r.get("feature_id"), "file": r.get("file"),
+         "symbol": r.get("symbol")}
+        for r in refs
+        if isinstance(r, dict) and not r.get("resolved", True)
+    ]
+
+
 def read_status(codoc_dir: str) -> dict:
-    """Feature / proposal counts + the current pipeline state."""
+    """Feature / proposal counts + the current pipeline state, plus a dead-ref
+    summary (count + list) sourced from the cross-reference registry so an agent
+    can see which inline ``codoc:`` links no longer resolve to a binding."""
     from codoc.loop.status import refresh_status
     import json
 
@@ -113,9 +151,11 @@ def read_status(codoc_dir: str) -> dict:
             state = json.loads(st.read_text()).get("state", "in_sync")
         except Exception:
             state = "in_sync"
+        dead = _dead_refs(codoc_dir)
         return {
             "ok": True, "features": len(feats), "pending": len(pending),
             "unrealized": len(unrealized), "state": state,
+            "dead_refs": len(dead), "dead_ref_list": dead,
         }
 
 

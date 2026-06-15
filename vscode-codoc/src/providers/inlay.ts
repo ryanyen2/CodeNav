@@ -13,6 +13,10 @@ import { bindingsForFeature } from '../state/bindings-model';
  * — those are a different surface (see doc-links / completion).
  */
 
+// DISPLAY variant — deliberately NOT the canonical `symbolLeaf` (registry-model.ts):
+// it strips only the `file::` qualifier (keeps `Class.method`) and maps the synthetic
+// `__module__` symbol to the `‹module›` glyph for the hover list. Converging it would
+// drop the `Class.` nesting from the displayed binding label.
 function leaf(symbol: string): string {
     const i = symbol.indexOf('::');
     const tail = i >= 0 ? symbol.slice(i + 2) : symbol;
