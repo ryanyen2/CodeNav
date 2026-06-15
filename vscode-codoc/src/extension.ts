@@ -514,7 +514,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const refreshDecorations = (editor?: vscode.TextEditor): void => {
         const ed = editor ?? vscode.window.activeTextEditor;
         if (!ed) return;
-        applyDecorations(ed, decorations, state.activeFeatureLines, state.sidecar);
+        applyDecorations(ed, decorations, state.activeFeatureLines, state.sidecar, state.registry);
         // Reverse direction: mark the code a queued tree edit will rework.
         const rel = vscode.workspace.asRelativePath(ed.document.fileName);
         applyPendingCodeDecorations(ed, decorations, state.pendingCodeForFile(rel));

@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 import { parseTreeCodoc } from '../state/tree-model';
 import { SidecarData, emptySidecar } from '../state/bindings-model';
+import { RegistryData, isRefResolved } from '../state/registry-model';
 import { PendingChange } from '../state/realize-model';
+
+// Inline code citation: "[label](codoc:file.py#symbol)" — mirrors REF_RE in
+// doc-links.ts so dead-ref decoration finds the same spans the link provider does.
+const REF_RE = /\[[^\]]*\]\(codoc:([^)#]+)(?:#([^)]+))?\)/g;
 
 // Identity / event markers ⟨f-…⟩ ⟨e-…⟩ (plus the two spaces before them) are
 // collapsed to nothing — the human never sees or types an id.
@@ -47,6 +52,7 @@ export interface CodocDecorations {
     unrealizedPlaceholder: vscode.TextEditorDecorationType;  // accepted plan node, no code yet
     pendingCodeChange: vscode.TextEditorDecorationType;  // source code a queued tree edit will rework
     steeringNote: vscode.TextEditorDecorationType;  // `> …` note addressed to the agent
+    deadRef: vscode.TextEditorDecorationType;  // unresolved `codoc:` link (target gone)
 }
 
 export function createDecorations(_context: vscode.ExtensionContext): CodocDecorations {
@@ -117,6 +123,17 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
             fontStyle: 'italic',
             color: new vscode.ThemeColor('editorGhostText.foreground'),
         }),
+        // A dead `codoc:` link — its target binding is gone (registry resolved=false).
+        // Shape = kind: a static strike-through (no hue rainbow, no animation), tinted
+        // with the editor's error-foreground theme token + a wavy error squiggle so it
+        // reads as "broken reference, fix it" without inventing a colour. Reduced-motion
+        // safe by construction (no transition/animation).
+        deadRef: vscode.window.createTextEditorDecorationType({
+            textDecoration: 'line-through wavy var(--vscode-editorError-foreground)',
+            color: new vscode.ThemeColor('editorError.foreground'),
+            overviewRulerColor: new vscode.ThemeColor('editorError.foreground'),
+            overviewRulerLane: vscode.OverviewRulerLane.Right,
+        }),
     };
 }
 
@@ -171,6 +188,7 @@ export function applyDecorations(
     dec: CodocDecorations,
     activeFeatureLines: number[] = [],
     sidecar: SidecarData = emptySidecar(),
+    registry: RegistryData | null = null,
 ): void {
     if (editor.document.languageId !== 'codoc') return;
     const hiddenId: vscode.Range[] = [];
@@ -228,6 +246,9 @@ export function applyDecorations(
     // line with a quiet "→ for agent" cue (mirrors the doc-ahead suggestion
     // language; the note is drained into a directive on the next Loop B pass).
     const steering: vscode.DecorationOptions[] = [];
+    // Dead `codoc:` links: the registry resolved them as unresolved. Live nodes
+    // only — skip ghost-hunk lines so a proposed-add's ref isn't struck.
+    const deadRef: vscode.Range[] = [];
     let prevWasSteering = false;
     for (let i = 0; i < editor.document.lineCount; i++) {
         const text = editor.document.lineAt(i).text;
@@ -236,6 +257,18 @@ export function applyDecorations(
         let m: RegExpExecArray | null;
         while ((m = HIDDEN_ID_RE.exec(text)) !== null) {
             hiddenId.push(new vscode.Range(i, m.index, i, m.index + m[0].length));
+        }
+
+        if (!proposalLines.has(i)) {
+            REF_RE.lastIndex = 0;
+            let r: RegExpExecArray | null;
+            while ((r = REF_RE.exec(text)) !== null) {
+                const file = r[1];
+                const symbol = r[2] ?? null;
+                if (!isRefResolved(registry, file, symbol)) {
+                    deadRef.push(new vscode.Range(i, r.index, i, r.index + r[0].length));
+                }
+            }
         }
 
         if (!proposalLines.has(i) && RETIRED_RE.test(text)) {
@@ -267,6 +300,7 @@ export function applyDecorations(
     editor.setDecorations(dec.amendInline, amendInline);
     editor.setDecorations(dec.unrealizedPlaceholder, unrealized);
     editor.setDecorations(dec.steeringNote, steering);
+    editor.setDecorations(dec.deadRef, deadRef);
 
     const activeRanges = activeFeatureLines.map(
         line => new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER)

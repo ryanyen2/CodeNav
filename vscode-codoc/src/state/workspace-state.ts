@@ -19,6 +19,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
 import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
+import { RegistryData, loadRegistry } from './registry-model';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
 import { parseRealize, pendingCodeByFile, PendingChange } from './realize-model';
 import { statusBarView } from './status-presentation';
@@ -37,6 +38,7 @@ export class WorkspaceState {
     private _features: ParsedFeature[] = [];
     private _proposals: ProposalHunk[] = [];
     private _sidecar: SidecarData = emptySidecar();
+    private _registry: RegistryData | null = null;
     private _status: CodocStatus = { state: 'in_sync', pending: 0, detail: '' };
     private _activity: ActivityData = {};
     private _pendingCode: Map<string, PendingChange[]> = new Map();
@@ -60,6 +62,7 @@ export class WorkspaceState {
         for (const glob of [
             '**/.codoc/tree.codoc',
             '**/.codoc/tree.bindings.json',
+            '**/.codoc/tree.index.json',
             '**/.codoc/status.json',
             '**/.codoc/inbox.json',
             '**/.codoc/activity.json',
@@ -93,6 +96,7 @@ export class WorkspaceState {
             this._features = [];
             this._proposals = [];
             this._sidecar = emptySidecar();
+            this._registry = null;
             this._status = { state: 'in_sync', pending: 0, detail: '' };
             this._pendingCode = new Map();
             this._updateStatusBar();
@@ -114,6 +118,10 @@ export class WorkspaceState {
         } catch {
             this._sidecar = emptySidecar();
         }
+
+        // tree.index.json — the cross-reference registry (resolved/dead refs).
+        // Tolerant: missing/corrupt → null (loadRegistry never throws).
+        this._registry = loadRegistry(this._rootDir);
 
         try {
             const st = JSON.parse(fs.readFileSync(this._codocPath('status.json'), 'utf-8'));
@@ -190,6 +198,7 @@ export class WorkspaceState {
     get features(): ParsedFeature[] { return this._features; }
     get proposals(): ProposalHunk[] { return this._proposals; }
     get sidecar(): SidecarData { return this._sidecar; }
+    get registry(): RegistryData | null { return this._registry; }
     get status(): CodocStatus { return this._status; }
     get activity(): ActivityData { return this._activity; }
     get agentActive(): boolean { return isAgentActive(this._activity); }
