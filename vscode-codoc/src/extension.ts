@@ -8,6 +8,7 @@ import { CodocTreeLensProvider } from './providers/codoc-tree-lens';
 import { CodocCodeActionProvider } from './providers/code-actions';
 import { CodocCompletionProvider } from './providers/completion';
 import { CodocDocumentLinkProvider } from './providers/doc-links';
+import { CodocHoverProvider } from './providers/hover';
 import { CodocInlayHintsProvider } from './providers/inlay';
 import { CodocFoldingProvider } from './providers/folding';
 import { CodocSymbolProvider } from './providers/symbol';
@@ -505,6 +506,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.languages.registerCompletionItemProvider(codocSelector, new CodocCompletionProvider(state), '[', '#', ':'),
         vscode.languages.registerDocumentLinkProvider(codocSelector, new CodocDocumentLinkProvider()),
         vscode.languages.registerInlayHintsProvider(codocSelector, new CodocInlayHintsProvider(state)),
+        vscode.languages.registerHoverProvider(codocSelector, new CodocHoverProvider(state)),
         vscode.languages.registerFoldingRangeProvider(codocSelector, new CodocFoldingProvider()),
         vscode.languages.registerDocumentSymbolProvider(codocSelector, new CodocSymbolProvider()),
     );
