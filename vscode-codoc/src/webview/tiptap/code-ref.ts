@@ -48,6 +48,9 @@ export const CodeRef = Node.create<CodeRefOptions>({
                 'data-symbol': symbol ?? '',
                 class: 'codoc-code-ref',
                 title: symbol ? `codoc:${file}#${symbol}` : `codoc:${file}`,
+                // Keyboard-reachable so the hover card (U4) opens on Enter/Space. A
+                // render attr only — never serialized (doc-serialize.ts owns markdown).
+                tabindex: '0',
             }),
             text,
         ];

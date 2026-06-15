@@ -26,6 +26,7 @@ import {
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
+import { attachHoverCards, HoverCardData } from './hover-card';
 import { diffDocsToSuggestions } from '../../state/suggestion-model';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
@@ -67,6 +68,8 @@ export interface WholeDocEditorHandle {
     setThreads: (threads: Record<string, ThreadsData>) => void;
     /** Update the inline comment threads (drives the anchor icons + popover). */
     setComments: (comments: CommentThread[]) => void;
+    /** Update the precomputed tier-1 hover-preview cards (codeRef chips + feature links). */
+    setHoverCards: (cards: HoverCardData | null) => void;
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
     scrollToFeature: (fid: string) => void;
@@ -154,6 +157,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentComments: CommentThread[] = [];
+    let currentHoverCards: HoverCardData | null = null;
 
     const editor = new Editor({
         element: surface,
@@ -442,6 +446,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         if (!chip) return;
         ev.preventDefault();
         opts.onOpenBinding(chip.getAttribute('data-file') || '', chip.getAttribute('data-symbol') || '');
+    });
+
+    // Tier-1 hover-preview cards (U4): hover/keyboard a codeRef chip or a feature
+    // dependency link → a transient card from the precomputed payload data. Pure
+    // overlay; never touches the doc. Torn down in destroy().
+    const detachHoverCards = attachHoverCards(editor.view.dom as HTMLElement, {
+        getCards: () => currentHoverCards,
+        onOpenBinding: opts.onOpenBinding,
+        onNavigate: fid => scrollToFeatureInternal(fid, true),
     });
 
     /** Patch freshly-minted feature ids into the live editor BY INDEX, even while the
@@ -742,6 +755,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             currentComments = comments;
             editor.view.dispatch(editor.state.tr.setMeta(COMMENTS_UPDATED, true));
         },
+        setHoverCards: (cards: HoverCardData | null) => {
+            // Pure overlay data — no doc transaction; the handler reads it lazily on
+            // the next hover, so a re-render mid-hover picks up fresh cards.
+            currentHoverCards = cards;
+        },
         setPhases: (phases: Record<string, FeaturePhase>) => {
             currentPhases = phases;
             editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
@@ -755,6 +773,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (blurTimer) clearTimeout(blurTimer);
             closeComposer();
             bubble.remove();
+            detachHoverCards();        // tear down the hover-card listeners + open card
             resetCommentDecorations(); // tear down the module-level popover + hover timer
             editor.destroy();
         },

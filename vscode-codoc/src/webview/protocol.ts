@@ -10,6 +10,7 @@ import type { FeaturePhase } from '../state/doc-layout';
 import type { PMNode } from '../state/pm-doc';
 import type { Suggestion } from '../state/suggestion-model';
 import type { CommentThread } from '../state/comment-model';
+import type { ResolvedCard } from '../state/registry-model';
 
 /** An autocomplete candidate for the `@`-triggered code-reference picker (U5).
  *  Sourced from the sidecar `by_file` (bound symbols only). */
@@ -34,6 +35,18 @@ export interface ThreadsData {
     reads: ThreadTarget[];
     usedBy: ThreadTarget[];
     refs: ThreadRef[];
+}
+
+/** Tier-1 hover-preview cards (U4), precomputed host-side from the registry +
+ *  bindings sidecar via the pure `resolveCard` — the webview cannot read files or
+ *  call Python, so it consumes these by lookup key:
+ *   - `byRef`     keyed by `file#symbol` (a `codeRef` chip's exact target) and by
+ *                 bare `file` (a file-only ref). The same `ResolvedCard` shape the
+ *                 raw-text hover renders, so both surfaces share one contract.
+ *   - `byFeature` keyed by feature id (a feature-title link hover). */
+export interface HoverCards {
+    byRef: Record<string, ResolvedCard>;
+    byFeature: Record<string, ResolvedCard>;
 }
 
 /** A node in the left tree pane (navigation). Mirrors the live feature tree
@@ -94,6 +107,9 @@ export interface DocPayload {
      *  dotted underline + corner icon per thread and resolves the body popover
      *  client-side; the host owns their `> …` lifecycle. */
     comments?: CommentThread[];
+    /** Tier-1 hover-preview cards keyed by ref target + feature id (U4). Assembled
+     *  host-side from the registry + sidecar; the webview renders them on hover. */
+    hoverCards?: HoverCards;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }

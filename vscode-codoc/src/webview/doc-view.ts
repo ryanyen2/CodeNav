@@ -164,6 +164,7 @@ function reconcile(): void {
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setComments(payload.comments ?? []);
+        wholeEditor.setHoverCards(payload.hoverCards ?? null);
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
     }
@@ -363,6 +364,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setComments(payload.comments ?? []);
+    wholeEditor.setHoverCards(payload.hoverCards ?? null);
     return host;
 }
 

@@ -10,7 +10,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { loadRegistry, isRefResolved, type RegistryData } from '../state/registry-model';
+import { isRefResolved, type RegistryData } from '../state/registry-model';
+import { loadRegistry } from '../state/registry-loader';
 
 const FIXTURE: RegistryData = {
     version: 1,

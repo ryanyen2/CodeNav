@@ -63,6 +63,60 @@ export function resetCommentDecorations(): void {
     closePop();
 }
 
+/* ─── generic single-open floating card (extracted from showPopover) ───────────
+ *  showCard() owns ONLY the geometry + dismissal that both the comment popover and
+ *  the hover-preview card (U4) share: position under the anchor (clamped on-screen),
+ *  enforce one-open-at-a-time, and — when pinned — close on outside-click / Escape.
+ *  The CONTENT is fully owned by the caller (a pre-built element), so this stays
+ *  comment-free and the hover card reuses the same positioning rules verbatim.
+ *
+ *  A hover (`pinned:false`) card keeps itself alive while the pointer is over it
+ *  (the caller's anchor mouseleave handles the "left both" dismissal); a pinned
+ *  card registers the outside-click/Escape listeners synchronously. Returns a
+ *  disposer (`closeCard`); the module enforces a single visible card across BOTH
+ *  the comment popover and the hover card by routing every open through here. */
+export function showCard(
+    anchor: HTMLElement,
+    content: HTMLElement,
+    opts: { pinned: boolean },
+): () => void {
+    closePop();
+    content.dataset.pinned = opts.pinned ? '1' : '0';
+    document.body.append(content);
+    const rect = anchor.getBoundingClientRect();
+    content.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - content.offsetHeight - 8)}px`;
+    content.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - content.offsetWidth - 8))}px`;
+    openPopEl = content;
+    popThreadId = null; // a generic card has no threadId (comment popover re-sets it)
+    if (opts.pinned) {
+        // Register synchronously — the anchor's click handler stopPropagation's the
+        // opening mousedown, so onDoc won't see it. (A deferred registration leaks
+        // listeners when a second card opens first tick.)
+        const onDoc = (e: MouseEvent): void => {
+            if (!content.contains(e.target as Node) && !anchor.contains(e.target as Node)) closePop();
+        };
+        const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closePop(); };
+        document.addEventListener('mousedown', onDoc, true);
+        document.addEventListener('keydown', onKey, true);
+        popCleanup = (): void => {
+            document.removeEventListener('mousedown', onDoc, true);
+            document.removeEventListener('keydown', onKey, true);
+        };
+    } else {
+        // hover card: keep alive while the pointer is over the card itself; the
+        // caller's anchor mouseleave decides the "left both" dismissal.
+        content.addEventListener('mouseenter', () => { if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = 0; } });
+        content.addEventListener('mouseleave', () => { if (content.dataset.pinned !== '1') closePop(); });
+    }
+    return closePop;
+}
+
+/** Whether `el` is the currently-open floating card (so a caller can decide a
+ *  hover dismissal). Shared with the hover card so only one is ever visible. */
+export function isOpenCard(el: HTMLElement | null): boolean {
+    return !!el && el === openPopEl;
+}
+
 function buildPopover(t: CommentThread, handlers: CommentHandlers): HTMLElement {
     const pop = elc('div', 'ce-cmt-pop ' + (t.status === 'sent' ? 'sent' : 'open'));
     if (t.anchorText.trim()) {
@@ -92,34 +146,11 @@ function buildPopover(t: CommentThread, handlers: CommentHandlers): HTMLElement 
 
 function showPopover(anchor: HTMLElement, t: CommentThread, handlers: CommentHandlers, pinned: boolean): void {
     if (popThreadId === t.id && openPopEl && !pinned) return; // already showing for hover
-    closePop();
     const pop = buildPopover(t, handlers);
-    pop.dataset.pinned = pinned ? '1' : '0';
-    document.body.append(pop);
-    const rect = anchor.getBoundingClientRect();
-    pop.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - pop.offsetHeight - 8)}px`;
-    pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 8))}px`;
-    openPopEl = pop;
+    // showCard owns the geometry + single-open + pinned dismissal (shared with the
+    // hover card); the comment popover only adds its own threadId bookkeeping.
+    showCard(anchor, pop, { pinned });
     popThreadId = t.id;
-    if (pinned) {
-        // Register synchronously — the icon's click handler stopPropagation's the
-        // opening mousedown, so onDoc won't see it. (A deferred setTimeout(0)
-        // registration leaks listeners when a second showPopover lands first tick.)
-        const onDoc = (e: MouseEvent): void => {
-            if (!pop.contains(e.target as Node) && !anchor.contains(e.target as Node)) closePop();
-        };
-        const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closePop(); };
-        document.addEventListener('mousedown', onDoc, true);
-        document.addEventListener('keydown', onKey, true);
-        popCleanup = (): void => {
-            document.removeEventListener('mousedown', onDoc, true);
-            document.removeEventListener('keydown', onKey, true);
-        };
-    } else {
-        // hover popover: keep alive while the pointer is over the icon or the popover
-        pop.addEventListener('mouseenter', () => { if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = 0; } });
-        pop.addEventListener('mouseleave', () => { if (pop.dataset.pinned !== '1') closePop(); });
-    }
 }
 
 function makeIcon(t: CommentThread, handlers: CommentHandlers): HTMLElement {

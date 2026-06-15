@@ -199,9 +199,13 @@ function threadsEmpty(t: ThreadsData): boolean {
     return !t.reads.length && !t.usedBy.length && !t.refs.length;
 }
 
-function threadLink(text: string, title: string, onClick: () => void): HTMLElement {
+function threadLink(text: string, title: string, onClick: () => void, fid?: string): HTMLElement {
     const a = elc('span', 'ce-thread', text || '(untitled)');
     a.title = title;
+    // Tag a feature link with its fid so the hover-card handler (U4) can resolve it
+    // by feature id — a decoration data-attr only, never serialized into the doc —
+    // and make it keyboard-reachable so the card opens on Enter/Space.
+    if (fid) { a.dataset.fid = fid; a.tabIndex = 0; }
     a.addEventListener('mousedown', ev => ev.preventDefault());
     a.addEventListener('click', ev => { ev.preventDefault(); onClick(); });
     return a;
@@ -226,8 +230,8 @@ function openThreadsPeek(
         sec.append(list);
         pop.append(sec);
     };
-    section('reads', t.reads.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); })));
-    section('used by', t.usedBy.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); })));
+    section('reads', t.reads.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId)));
+    section('used by', t.usedBy.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId)));
     section('code refs', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => { closePeek(); onOpenBinding(r.file, r.symbol); })));
     document.body.append(pop);
     const rect = anchor.getBoundingClientRect();
@@ -267,8 +271,8 @@ function makeThreadsRow(
         }
         row.append(s);
     };
-    strand('↳', 'reads', t.reads.map(d => threadLink(d.toTitle, 'reads ' + d.toTitle + ' — go to it', () => onNavigate(d.toId))), 'reads');
-    strand('↰', 'used by', t.usedBy.map(d => threadLink(d.toTitle, 'used by ' + d.toTitle + ' — go to it', () => onNavigate(d.toId))), 'used by');
+    strand('↳', 'reads', t.reads.map(d => threadLink(d.toTitle, 'reads ' + d.toTitle + ' — go to it', () => onNavigate(d.toId), d.toId)), 'reads');
+    strand('↰', 'used by', t.usedBy.map(d => threadLink(d.toTitle, 'used by ' + d.toTitle + ' — go to it', () => onNavigate(d.toId), d.toId)), 'used by');
     strand('⟢', 'code refs', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => onOpenBinding(r.file, r.symbol))), 'code refs');
     return row;
 }

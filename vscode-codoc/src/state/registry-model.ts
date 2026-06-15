@@ -10,13 +10,12 @@
  *
  * Python already does the (leaf-tolerant) resolution and bakes the authoritative
  * `resolved` flag into each ref, so the extension never re-derives — it just
- * consumes. Kept vscode-import-free so the testable core runs under vitest,
- * exactly like bindings-model.ts. The file IO lives in the (vscode-free) Node
- * `fs`/`path` loader below.
+ * consumes. Kept vscode-import-free AND node-import-free (no `fs`/`path`) so the
+ * pure core bundles into BOTH the extension host AND the browser webview (U4's
+ * hover cards run client-side). The Node `fs`/`path` loader lives in the sibling
+ * `registry-loader.ts`; tests + the webview import only the pure core here.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import {
     SidecarData,
     bindingsForFeature,
@@ -48,22 +47,6 @@ export interface RegistryData {
     features: Record<string, RegistryFeature>;
     bindings: RegistryBinding[];
     refs: RegistryRef[];
-}
-
-/**
- * Load .codoc/tree.index.json. Tolerant — a missing or corrupt file returns null
- * (never throws), mirroring how the bindings sidecar is read in workspace-state.
- */
-export function loadRegistry(rootDir: string): RegistryData | null {
-    try {
-        const raw = fs.readFileSync(path.join(rootDir, '.codoc', 'tree.index.json'), 'utf-8');
-        const data = JSON.parse(raw) as RegistryData;
-        // Minimal shape guard — a JSON blob missing `refs` would crash callers.
-        if (!Array.isArray(data.refs)) return null;
-        return data;
-    } catch {
-        return null;
-    }
 }
 
 /**
@@ -269,4 +252,97 @@ export function resolveCard(
         ownerFeatureId,
         unrealized,
     };
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Hover-card lookup precompute (U4 — webview).
+ *
+ * The webview can't read files or call Python, so the host precomputes every card
+ * a reader could hover and ships them by lookup key in the DocPayload. This is the
+ * pure assembly the host's `buildPayload` calls — kept here (vscode-free) so the
+ * unit test exercises the exact production path under vitest.
+ *
+ *   - byRef:     one card per registry ref, keyed by its exact hovered target
+ *                (`file#symbol`, or bare `file` for a file-only ref). This is the
+ *                key a `codeRef` chip uses (`data-file` + `data-symbol`). The
+ *                owning feature's description (threaded via `descOf`) yields the
+ *                gist — the sidecar carries no description, so the host supplies it.
+ *   - byFeature: one card per realized/known feature, keyed by feature id — what a
+ *                feature-title link hover resolves. Built by resolving the feature's
+ *                first/representative binding (so it shares the resolveCard contract)
+ *                or, for a binding-less placeholder, a direct HoverCard.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface HoverCards {
+    byRef: Record<string, ResolvedCard>;
+    byFeature: Record<string, ResolvedCard>;
+}
+
+/** The hovered-target key for a ref: `file#symbol`, or bare `file` when symbol-less.
+ *  Matches the `codeRef` chip's `data-file` / `data-symbol` lookup in the webview. */
+export function refKey(file: string, symbol: string | null): string {
+    const sym = symbol && symbol.length > 0 ? symbol : null;
+    return sym ? `${file}#${sym}` : file;
+}
+
+/**
+ * Precompute the tier-1 hover cards for every ref + feature. Pure over the
+ * registry + bindings sidecar; `descOf(fid)` threads the owning feature's
+ * description so the card carries a gist (the sidecar has none). No vscode, no
+ * Python.
+ */
+export function buildHoverCards(
+    registry: RegistryData | null,
+    sidecar: SidecarData,
+    descOf: (fid: string) => string | null | undefined,
+): HoverCards {
+    const byRef: Record<string, ResolvedCard> = {};
+    const byFeature: Record<string, ResolvedCard> = {};
+
+    // A card per registry ref (what a codeRef chip hovers).
+    for (const ref of registry?.refs ?? []) {
+        const key = refKey(ref.file, ref.symbol);
+        if (key in byRef) continue; // first ref wins (a target may be cited twice)
+        // Thread the OWNING feature's description so a resolved feature card gets a
+        // gist; resolveCard re-derives the owner, but the description is keyed by the
+        // ref's recorded feature_id (the feature that authored the citation).
+        byRef[key] = resolveCard(registry, sidecar, ref.file, ref.symbol, descOf(ref.feature_id));
+    }
+
+    // A card per feature (what a feature-title link hovers). Resolve through the
+    // feature's first binding so file-only / nested symbols share the contract;
+    // a binding-less (unrealized) feature gets a direct HoverCard.
+    const featureIds = new Set<string>([
+        ...Object.keys(sidecar.features),
+        ...Object.keys(registry?.features ?? {}),
+    ]);
+    for (const fid of featureIds) {
+        const meta = sidecar.features[fid];
+        const regMeta = registry?.features[fid];
+        const title = meta?.title ?? regMeta?.title ?? fid;
+        const binds = bindingsForFeature(sidecar, fid);
+        const gist = firstSentence(descOf(fid));
+        if (binds.length > 0) {
+            const b = binds[0];
+            const card = resolveCard(registry, sidecar, b.file, b.symbol, descOf(fid));
+            // resolveCard resolves the owner by (file, symbol); for a feature whose
+            // first binding it owns this is exactly `fid`. Use it directly when it
+            // resolved to a feature card, else fall back to a synthesized card.
+            byFeature[fid] = card.resolved && card.kind === 'feature'
+                ? card
+                : {
+                    resolved: true, kind: 'feature', title, gist,
+                    bindingCount: binds.length, ownerFeatureId: fid,
+                    unrealized: isUnrealized(sidecar, fid) && binds.length === 0,
+                };
+        } else {
+            byFeature[fid] = {
+                resolved: true, kind: 'feature', title, gist,
+                bindingCount: 0, ownerFeatureId: fid,
+                unrealized: isUnrealized(sidecar, fid),
+            };
+        }
+    }
+
+    return { byRef, byFeature };
 }

@@ -32,6 +32,7 @@ import {
     annotationsForSettle, intentsFromSuggestions,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
+import { buildHoverCards } from '../state/registry-model';
 import type { SidecarData } from '../state/bindings-model';
 import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData } from '../webview/protocol';
 
@@ -357,6 +358,16 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             if (t) threads[f.id] = t;
         }
 
+        // Tier-1 hover-preview cards (U4): precompute every ref + feature card from
+        // the registry + sidecar host-side (the webview can't read files / call
+        // Python). The owning feature's description threads in the gist (the sidecar
+        // has none) — keyed by the registry ref's feature_id / the feature id.
+        const hoverCards = buildHoverCards(
+            this.state.registry,
+            sidecar,
+            fid => descOf.get(fid) ?? null,
+        );
+
         return {
             nodes,
             roots,
@@ -369,6 +380,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             suggestions,
             threads,
             comments: docFile.comments,
+            hoverCards,
             rev: ++this.rev,
         };
     }
