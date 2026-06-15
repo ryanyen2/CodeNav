@@ -4,9 +4,11 @@ import {
     SidecarData,
     FeatureMeta,
     FeatureKind,
+    FeatureDrift,
     SeeAlsoEntry,
     kindForFeature,
     seeAlsoForFeature,
+    driftForFeature,
 } from '../state/bindings-model';
 
 // The TS side only READS the pitch (Python derives it). These tests pin the
@@ -92,5 +94,39 @@ describe('sidecar v5 / inferred structure (kind + see_also)', () => {
         expect(legacy.feature_kind).toBeUndefined();
         expect(kindForFeature(legacy, 'f-a')).toBeUndefined();
         expect(seeAlsoForFeature(legacy, 'f-a')).toEqual([]);
+    });
+});
+
+// B-U4: the loop-computed drift/trust slice. The TS side only READS it (the loop
+// computes it; render re-emits it from drift.json). Parity with
+// codoc/loop/loop_a.py:_compute_drift + codoc/loop/edits.py drift states.
+
+describe('sidecar v5 / drift (feature_drift)', () => {
+    const sidecar: SidecarData = {
+        ...emptySidecar(),
+        feature_drift: {
+            'f-stale': 'questioned',
+            'f-empty': 'binding-lost',
+        } as Record<string, FeatureDrift>,
+        // f-followed is deliberately ABSENT — followed = no badge.
+    };
+
+    it('driftForFeature surfaces the recorded state', () => {
+        expect(driftForFeature(sidecar, 'f-stale')).toBe('questioned');
+        expect(driftForFeature(sidecar, 'f-empty')).toBe('binding-lost');
+    });
+
+    it('a followed (absent) feature yields undefined → no badge', () => {
+        expect(driftForFeature(sidecar, 'f-followed')).toBeUndefined();
+        expect(driftForFeature(sidecar, 'f-missing')).toBeUndefined();
+    });
+
+    it('the slice is optional — a < v5 sidecar still parses', () => {
+        const legacy: SidecarData = {
+            version: 4, by_feature: {}, by_file: {},
+            features: { 'f-a': { title: 'Legacy', parent_id: null } },
+        };
+        expect(legacy.feature_drift).toBeUndefined();
+        expect(driftForFeature(legacy, 'f-a')).toBeUndefined();
     });
 });

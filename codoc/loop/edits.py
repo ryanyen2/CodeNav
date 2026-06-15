@@ -47,7 +47,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from codoc.loop.filenames import EDITS_FILENAME, REALIZE_FILENAME, REALIZE_MANIFEST_FILENAME
+from codoc.loop.filenames import (
+    DRIFT_FILENAME,
+    EDITS_FILENAME,
+    REALIZE_FILENAME,
+    REALIZE_MANIFEST_FILENAME,
+)
 from codoc.loop.fsio import atomic_write_json, read_json
 
 # Intents older than this are ignored by the hold set (an abandoned suggestion
@@ -223,3 +228,48 @@ def hold_set(codoc_dir: str | Path, *, now_ms: int | None = None) -> set[str]:
         if d.feature_id:
             held.add(d.feature_id)
     return held
+
+
+# ─── drift.json — the loop-computed per-feature drift/trust signal ────────────
+#
+# render.py:write_sidecar has NO live index, so it cannot compare a binding's
+# fingerprint against the live tokens_hash. The loop passes that DO re-index
+# (run_loop_a / reconcile_drift) compute the typed drift and persist it here;
+# write_sidecar re-emits it passively as the sidecar's `feature_drift` slice —
+# the exact pattern `holds` (a control-file read) reaches the sidecar by. An
+# interactive write (Accept/Reject, MCP reflect) thus re-emits the last
+# loop-computed drift unchanged rather than recomputing against a stale index.
+#
+# Only `questioned` / `binding-lost` features are stored; `followed` (the common
+# case) is the ABSENCE of an entry — no badge.
+
+# The two recorded drift states. "followed" is never written (absence = followed
+# = no badge); "refreshed" is deliberately dropped — a REFRESH overwrites the
+# binding fingerprint so a refreshed binding is indistinguishable from followed.
+DRIFT_QUESTIONED = "questioned"      # realized feature owns a modified bound chunk, prose not amended
+DRIFT_BINDING_LOST = "binding-lost"  # realized feature lost its last binding
+
+
+def drift_path(codoc_dir: str | Path) -> Path:
+    return Path(codoc_dir) / DRIFT_FILENAME
+
+
+def write_drift(codoc_dir: str | Path, drift: dict[str, str]) -> Path:
+    """Persist the loop-computed per-feature drift map (only ``questioned`` /
+    ``binding-lost`` entries; ``followed`` is the absence of an entry).
+
+    Always written — an empty map clears a stale prior signal so a feature that
+    re-followed (its prose was amended, or its binding came back) loses its
+    badge on the next pass."""
+    dest = drift_path(codoc_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(dest, {"version": 1, "drift": dict(drift)})
+    return dest
+
+
+def read_drift(codoc_dir: str | Path) -> dict[str, str]:
+    """The last loop-computed drift map (``feature_id → state``). Tolerant:
+    a missing or corrupt file degrades to ``{}`` (no badges)."""
+    data = read_json(drift_path(codoc_dir), default={})
+    out = data.get("drift") if isinstance(data, dict) else None
+    return dict(out) if isinstance(out, dict) else {}

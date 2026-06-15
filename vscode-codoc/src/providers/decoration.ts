@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { parseTreeCodoc } from '../state/tree-model';
-import { SidecarData, emptySidecar } from '../state/bindings-model';
+import { SidecarData, emptySidecar, driftForFeature } from '../state/bindings-model';
 import { RegistryData, isRefResolved } from '../state/registry-model';
 import { PendingChange } from '../state/realize-model';
 
@@ -53,7 +53,16 @@ export interface CodocDecorations {
     pendingCodeChange: vscode.TextEditorDecorationType;  // source code a queued tree edit will rework
     steeringNote: vscode.TextEditorDecorationType;  // `> …` note addressed to the agent
     deadRef: vscode.TextEditorDecorationType;  // unresolved `codoc:` link (target gone)
+    driftBadge: vscode.TextEditorDecorationType;  // loop-computed drift/trust signal (shape, no hue)
 }
+
+// Drift badge glyphs — SHAPE encodes the kind (colour stays reserved for
+// direction, KTD5). `?` = the prose is questioned (bound code changed under it);
+// `⊘` = its last binding is gone (no code left). `followed` shows no badge.
+const DRIFT_GLYPH = {
+    'questioned': ' ?',
+    'binding-lost': ' ⊘',
+} as const;
 
 export function createDecorations(_context: vscode.ExtensionContext): CodocDecorations {
     return {
@@ -134,6 +143,12 @@ export function createDecorations(_context: vscode.ExtensionContext): CodocDecor
             overviewRulerColor: new vscode.ThemeColor('editorError.foreground'),
             overviewRulerLane: vscode.OverviewRulerLane.Right,
         }),
+        // Loop-computed drift/trust badge on a feature title line. The GLYPH (in
+        // renderOptions.after, set per-range) carries the kind — colour stays a
+        // quiet, neutral theme token (no new hue; colour is reserved for direction).
+        // Static: no transition/animation, so it is reduced-motion safe. `followed`
+        // features get no entry, so the badge never fires on the common case.
+        driftBadge: vscode.window.createTextEditorDecorationType({}),
     };
 }
 
@@ -216,10 +231,32 @@ export function applyDecorations(
     const retireStrike: vscode.Range[] = [];
     const amendInline: vscode.DecorationOptions[] = [];
     const unrealized: vscode.Range[] = [];
+    // Loop-computed drift/trust badges. `followed`/absent features get nothing.
+    const driftBadges: vscode.DecorationOptions[] = [];
     for (const f of features) {
         if (!f.id) continue;
         const line = editor.document.lineAt(f.line).text;
         const prop = overlay[f.id];
+
+        // Drift badge: a quiet shape/glyph at the end of the title line (skip ghost
+        // hunk lines — proposals decorate elsewhere). `followed`/absent → no badge.
+        const drift = driftForFeature(sidecar, f.id);
+        if (drift && !proposalLines.has(f.line)) {
+            driftBadges.push({
+                range: new vscode.Range(f.line, line.length, f.line, line.length),
+                hoverMessage: new vscode.MarkdownString(
+                    drift === 'questioned'
+                        ? '**codoc** — the code under this feature changed; its description may be stale.'
+                        : '**codoc** — this feature lost its last code binding.',
+                ),
+                renderOptions: {
+                    after: {
+                        contentText: DRIFT_GLYPH[drift],
+                        color: new vscode.ThemeColor('editorCodeLens.foreground'),
+                    },
+                },
+            });
+        }
         if (prop?.op === 'retire') {
             retireStrike.push(new vscode.Range(f.line, 0, f.line, line.length));
         } else if (prop?.op === 'amend') {
@@ -301,6 +338,7 @@ export function applyDecorations(
     editor.setDecorations(dec.unrealizedPlaceholder, unrealized);
     editor.setDecorations(dec.steeringNote, steering);
     editor.setDecorations(dec.deadRef, deadRef);
+    editor.setDecorations(dec.driftBadge, driftBadges);
 
     const activeRanges = activeFeatureLines.map(
         line => new vscode.Range(line, 0, line, Number.MAX_SAFE_INTEGER)

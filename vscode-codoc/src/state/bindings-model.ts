@@ -14,6 +14,8 @@
  *   pitch            – derived one-line pitch on each FeatureMeta (v5)
  *   feature_kind     – Diátaxis-lite kind hint per feature (v5)
  *   feature_see_also – top-N coupled neighbours per feature (v5, data only)
+ *   feature_drift    – loop-computed per-feature drift/trust signal (v5,
+ *                      questioned|binding-lost; `followed` is absent → no badge)
  *
  * New slices are optional — the reader keys on field presence, not the version
  * literal, so older sidecars keep parsing.
@@ -54,6 +56,15 @@ export interface FeatureEdge {
  *  binding-less leaf (just-detached / pre-attach placeholder); `retired` = a tombstoned
  *  node (suppressed in the UI). Rendered as a small chip below the feature title. */
 export type FeatureKind = 'overview' | 'reference' | 'unclassified' | 'retired';
+
+/** The loop-computed per-feature drift/trust signal (v5, `feature_drift` slice). Computed
+ *  in the loop pass that re-indexes (render has no live index), typed and doc-wins-aware:
+ *  `questioned` = a realized feature owns a bound chunk whose code changed and whose prose
+ *  was not amended this pass (the description may be stale); `binding-lost` = a realized
+ *  feature lost its last binding. `followed` (the common case) is NEVER recorded — its
+ *  badge is the ABSENCE of an entry. Held + unrealized features are excluded. Rendered as
+ *  a quiet shape/glyph badge (NOT a new hue — colour stays reserved for direction). */
+export type FeatureDrift = 'questioned' | 'binding-lost';
 
 /** One See-Also neighbour (v5, `feature_see_also` slice): a coupled feature ranked by
  *  coupling `weight`, with the edge `kinds` (calls/imports) summarised as a one-line
@@ -135,6 +146,9 @@ export interface SidecarData {
     // v5: top-N coupled neighbours per feature (data only — the Connections panel
     // already surfaces coupled features, so no second See-Also UI section).
     feature_see_also?: Record<string, SeeAlsoEntry[]>;
+    // v5: loop-computed per-feature drift/trust signal (questioned | binding-lost).
+    // `followed` features are absent (no badge). Re-emitted from drift.json.
+    feature_drift?: Record<string, FeatureDrift>;
 }
 
 /** The derived kind hint for a feature, if any (v5). Suppressed/retired tags are
@@ -146,6 +160,13 @@ export function kindForFeature(sidecar: SidecarData, featureId: string): Feature
 /** Top-N coupled neighbours for a feature (v5). Empty when the feature has no edges. */
 export function seeAlsoForFeature(sidecar: SidecarData, featureId: string): SeeAlsoEntry[] {
     return sidecar.feature_see_also?.[featureId] ?? [];
+}
+
+/** The loop-computed drift/trust signal for a feature, if any (v5). `undefined`
+ *  means `followed` (the common case) — no badge. Held + unrealized features are
+ *  excluded loop-side, so they are always `undefined` here. */
+export function driftForFeature(sidecar: SidecarData, featureId: string): FeatureDrift | undefined {
+    return sidecar.feature_drift?.[featureId];
 }
 
 /** Latest applied agent-authored AMEND per feature (fid → agent actor id), from

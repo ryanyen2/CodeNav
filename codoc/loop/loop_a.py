@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from codoc.agent.tree_update import propose_tree_update
 from codoc.loop import edits as edits_channel
 from codoc.loop.apply import apply_op, derive_auto_ops, should_auto_apply
+from codoc.loop.edits import DRIFT_BINDING_LOST, DRIFT_QUESTIONED, write_drift
 from codoc.loop.classify import suppressed_by_hold
 from codoc.loop.diff import ChangeSet, ChunkRef, compute_changeset
 from codoc.loop.subtree import select_relevant_subtree
@@ -219,6 +220,65 @@ def _has_modified_realized(cs: ChangeSet, store: Store, claimed_features: set[st
     )
 
 
+def _compute_drift(
+    cs: ChangeSet,
+    store: Store,
+    removed_owner: dict[tuple[str, str], str],
+    *,
+    held: set[str],
+    amended: set[str],
+) -> dict[str, str]:
+    """The typed, doc-wins-aware per-feature drift/trust signal (KTD2/KTD5).
+
+    Run from a loop pass that has a FRESH index (``cs`` carries the live
+    ``tokens_hash``), so the signal is captured FROM the change set — not by
+    re-comparing fingerprints afterward (a REFRESH applied earlier in the pass
+    has already overwritten ``binding.fingerprint`` to the new hash, which would
+    read as ``followed``). Called at the END of the pass so detaches/relocations
+    have settled: ``removed_owner`` is the pre-detach capture of which feature
+    each removed chunk belonged to.
+
+    Three states, of which only the first two are recorded (``followed`` is the
+    absence of an entry → no badge):
+
+    - ``questioned``   — a realized feature owns a bound chunk the change set
+      shows as ``modified`` (its ``tokens_hash`` changed) and whose prose was
+      NOT amended this pass (``amended``). The description may now be stale.
+    - ``binding-lost`` — a realized feature lost its LAST binding (every owned
+      chunk left the index this pass, and nothing relocated back into it).
+
+    Excludes held features (``held`` — doc-wins, classify row 13) and unrealized
+    placeholders (``realized=False``); both are gated before the typed split, so
+    a held feature is never badged even with a modified/removed chunk. Mixed
+    bindings take the worst case: ``binding-lost`` (the feature has no code left)
+    dominates ``questioned``."""
+    out: dict[str, str] = {}
+
+    def _realized_live(fid: str) -> bool:
+        if not fid or fid in held:
+            return False
+        f = store.get_feature(fid)
+        return bool(f and f.realized and not f.retired)
+
+    # questioned: a realized feature owns a modified bound chunk, prose un-amended.
+    # The binding still exists (REFRESH kept the row, only the fingerprint moved),
+    # so its current owner is the owner of the drifted chunk.
+    for m in cs.modified:
+        b = store.binding_at(m.file, m.symbol_path)
+        if not b or b.feature_id in amended:
+            continue
+        if _realized_live(b.feature_id):
+            out[b.feature_id] = DRIFT_QUESTIONED
+
+    # binding-lost: a realized feature that owned a removed chunk and, after the
+    # detaches/relocations applied this pass, has NO bindings left. Worst case —
+    # overwrites a `questioned` for the same feature (no code left is graver).
+    for fid in set(removed_owner.values()):
+        if _realized_live(fid) and not store.bindings_for_feature(fid):
+            out[fid] = DRIFT_BINDING_LOST
+    return out
+
+
 def _compute_impacted(cs: ChangeSet, store: Store) -> dict[str, list[str]]:
     """Phase 4: upstream dependents of changed/removed symbols.
 
@@ -297,6 +357,10 @@ def apply_changeset(
     held: set[str] | None = None,
     caused_by_map: dict[str, str] | None = None,
     default_caused_by: str = "",
+    # When given, the loop-computed per-feature drift map is persisted to
+    # ``<codoc_dir>/drift.json`` so render's index-free ``write_sidecar`` can
+    # re-emit it (KTD2). Bare unit-test callers pass None → drift is skipped.
+    codoc_dir: str | None = None,
 ) -> LoopAResult:
     held = held or set()
 
@@ -312,7 +376,16 @@ def apply_changeset(
     removed_keys = frozenset((r.file, r.symbol_path) for r in cs.removed)
     gc = _gc_superseded_proposals(store, removed_keys)
     if cs.is_empty():
+        # An empty change set drifted nothing — persist an empty map so a feature
+        # that re-followed since the last pass loses its badge.
+        if codoc_dir is not None:
+            write_drift(codoc_dir, {})
         return LoopAResult(auto={"gc": gc} if gc else {})
+
+    # Feature ids whose prose was AMENDed this pass — drained into _compute_drift
+    # so a feature whose description was brought back in line with the new code is
+    # `followed`, not `questioned`.
+    amended: set[str] = set()
 
     fp = cs.fingerprints()
     th = cs.types_hashes()
@@ -417,7 +490,15 @@ def apply_changeset(
     modified_realized = amend_on_change and _has_modified_realized(
         cs, store, claimed_features | held)
 
+    def _persist_drift() -> None:
+        if codoc_dir is not None:
+            write_drift(codoc_dir, _compute_drift(
+                cs, store, removed_owner, held=held, amended=amended))
+
     if not (added_unbound or emptied or modified_realized):
+        # No LLM pass — but `modified`/`removed` chunks still carry drift the badge
+        # must reflect (a run_loop_a pass with modified-only changes lands here).
+        _persist_drift()
         return result
 
     # 3. The single LLM pass.
@@ -482,6 +563,10 @@ def apply_changeset(
                          th_lookup=th, caused_by=_cause(dedup))
                 result.auto["attach"] = result.auto.get("attach", 0) + 1
                 continue
+        # An AMEND (applied small one, or a proposed larger one) means the prose
+        # for this feature was addressed this pass → it is no longer `questioned`.
+        if op.kind is NodeOpKind.AMEND and op.feature_id:
+            amended.add(op.feature_id)
         applied = should_auto_apply(op, store)
         apply_op(op, store, source=source, applied=applied, fp_lookup=fp, th_lookup=th,
                  caused_by=_cause(op))
@@ -502,6 +587,7 @@ def apply_changeset(
     covered_by_ops = {b for op in ops for b in op.bindings}
     _cover_uncovered_adds(added_unbound, covered_by_ops, store, result, fp, th, source,
                           cause=_cause)
+    _persist_drift()
     return result
 
 
@@ -569,7 +655,8 @@ def run_loop_a(
         result = apply_changeset(cs, store, source=source, repo_name=repo_name,
                                  config=config, adopt_placeholders=adopt_placeholders,
                                  allow_retire=False, held=held,
-                                 caused_by_map=cb_map, default_caused_by=default_cb)
+                                 caused_by_map=cb_map, default_caused_by=default_cb,
+                                 codoc_dir=codoc_dir)
         from codoc.loop.status import refresh_status
 
         refresh_status(codoc_dir, store)
@@ -659,6 +746,7 @@ def reconcile_drift(
         result = apply_changeset(cs, store, source=source, repo_name=repo_name,
                                  config=config, adopt_placeholders=adopt_placeholders,
                                  allow_retire=True, amend_on_change=True, held=held,
-                                 caused_by_map=cb_map, default_caused_by=default_cb)
+                                 caused_by_map=cb_map, default_caused_by=default_cb,
+                                 codoc_dir=codoc_dir)
         refresh_status(codoc_dir, store)
         return result

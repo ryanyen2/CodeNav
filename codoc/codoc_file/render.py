@@ -513,7 +513,7 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
                 {"symbol": b.symbol_path, "feature_id": f.id, "feature_title": f.title}
             )
 
-    from codoc.loop.edits import hold_set
+    from codoc.loop.edits import hold_set, read_drift
 
     sidecar = {
         "version": 5,
@@ -533,6 +533,12 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # NEVER a `> …` steering line, never tree.codoc/tree.doc.json content.
         "feature_kind": _compute_kinds(store),
         "feature_see_also": _compute_see_also(store),
+        # v5: the per-feature drift/trust signal (questioned / binding-lost). This
+        # is RE-EMITTED passively from the loop-computed `drift.json` — render has
+        # NO live index, so it cannot recompute fingerprint-vs-tokens_hash here
+        # (KTD2). An interactive write (Accept/Reject, MCP reflect) thus re-emits
+        # the last loop-computed drift unchanged. `followed` features are absent.
+        "feature_drift": read_drift(codoc_dir),
     }
     dest = Path(codoc_dir) / BINDINGS_FILENAME
     tmp = dest.with_suffix(".json.tmp")

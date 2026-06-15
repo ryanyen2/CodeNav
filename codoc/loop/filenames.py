@@ -9,3 +9,4 @@ from __future__ import annotations
 REALIZE_FILENAME = "realize.md"
 REALIZE_MANIFEST_FILENAME = "realize.json"  # machine-readable directive manifest (ids + targets)
 EDITS_FILENAME = "edits.json"               # IDE→loop provenance annotations + live doc-ahead intents
+DRIFT_FILENAME = "drift.json"               # loop-computed per-feature drift/trust signal (sidecar re-emits)
