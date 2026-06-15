@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -41,6 +42,11 @@ from codoc.store.db import Store
 TREE_FILENAME = "tree.codoc"
 BINDINGS_FILENAME = "tree.bindings.json"
 INDEX_FILENAME = "tree.index.json"
+
+# Max length of a derived one-line feature pitch (the first sentence of the
+# description, flattened of inline refs). Shared by the Python writer and the TS
+# parity test so both trim to the same length.
+PITCH_MAX_LEN = 120
 
 # Legacy sentinel that opened the old bottom-of-file pending-changes block.
 # Proposals now render in situ, but the parser still honours this sentinel so it
@@ -358,6 +364,46 @@ def write_registry(store: Store, codoc_dir: str | Path) -> None:
     atomic_write_json(Path(codoc_dir) / INDEX_FILENAME, _compute_registry(store))
 
 
+# A sentence boundary: ``.``/``!``/``?`` followed by whitespace or end-of-string.
+# Used only to take the *first* sentence for the derived pitch.
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s|$)")
+
+
+def _flatten_refs(text: str) -> str:
+    """Replace each inline ``[label](codoc:file#symbol)`` ref with its label.
+
+    A description that leads with a citation would otherwise yield raw link
+    markdown as its pitch; flattening to the human-readable label first keeps the
+    pitch readable prose. Reuses the parser's :data:`~codoc.codoc_file.parse._REF_RE`."""
+    from codoc.codoc_file.parse import _REF_RE
+
+    return _REF_RE.sub(lambda m: m.group("label"), text)
+
+
+def _pitch(description: str, title: str) -> str:
+    """A derived one-line pitch for a feature: the first sentence of its prose.
+
+    Inline ``codoc:`` refs are flattened to their labels first (so a
+    citation-leading description reads as prose, not markdown). The pitch is the
+    first sentence — split on a ``.!?`` sentence boundary — trimmed to
+    :data:`PITCH_MAX_LEN`. Falls back to ``title`` when the description is
+    empty/blank or the first sentence is empty after flattening (e.g. it was only
+    a citation). Pure derivation — never an LLM call, never a model field."""
+    flat = _flatten_refs(description or "").strip()
+    if not flat:
+        return title
+    # First non-blank line, then first sentence within it. Multi-paragraph
+    # descriptions contribute only their opening sentence.
+    first_line = next((ln.strip() for ln in flat.splitlines() if ln.strip()), "")
+    m = _SENTENCE_END_RE.search(first_line)
+    sentence = first_line[: m.end()].strip() if m else first_line
+    if not sentence:
+        return title
+    if len(sentence) > PITCH_MAX_LEN:
+        sentence = sentence[:PITCH_MAX_LEN].rstrip()
+    return sentence
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -375,7 +421,14 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     for f in features:
         bindings = store.bindings_for_feature(f.id)
         by_feature[f.id] = [{"file": b.file, "symbol": b.symbol_path} for b in bindings]
-        feats_meta[f.id] = {"title": f.title, "parent_id": f.parent_id, "realized": f.realized}
+        feats_meta[f.id] = {
+            "title": f.title,
+            "parent_id": f.parent_id,
+            "realized": f.realized,
+            # v5: a derived one-line pitch (first sentence of the prose, refs
+            # flattened to labels, else the title) for overview / glance rendering.
+            "pitch": _pitch(f.description, f.title),
+        }
         for b in bindings:
             by_file.setdefault(b.file, []).append(
                 {"symbol": b.symbol_path, "feature_id": f.id, "feature_title": f.title}
@@ -384,7 +437,7 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     from codoc.loop.edits import hold_set
 
     sidecar = {
-        "version": 4,
+        "version": 5,
         "by_feature": by_feature,
         "by_file": by_file,
         "features": feats_meta,

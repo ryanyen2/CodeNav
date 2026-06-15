@@ -1,14 +1,20 @@
 /**
  * Read and type the tree.bindings.json sidecar written by codoc/codoc_file/render.py.
  *
- * Schema (version 3):
+ * Schema (version 5):
  *   by_feature    – {feature_id → [{file, symbol}]}
  *   by_file       – {file → [{symbol, feature_id, feature_title}]}
- *   features      – {feature_id → {title, parent_id, realized}}
+ *   features      – {feature_id → {title, parent_id, realized, pitch}}
  *   feature_edges – {feature_id → [{to, weight, kinds}]}        (v2+)
  *   proposals     – in-place overlay payload (v3):
  *       by_feature – {feature_id → {op:'retire'|'amend', event_id, tag, …}}
  *       by_event   – {event_id   → {op:'add'|'move', …}}  (ADD/MOVE ghosts)
+ *   changes       – recent applied events with provenance (v4)
+ *   holds         – doc-wins hold set (v4)
+ *   pitch         – derived one-line pitch on each FeatureMeta (v5)
+ *
+ * New slices are optional — the reader keys on field presence, not the version
+ * literal, so older sidecars keep parsing.
  */
 
 export interface SymbolEntry {
@@ -28,6 +34,10 @@ export interface FeatureMeta {
     // Optional for backward compat — sidecar < v3 has no realization bit (treat
     // absent as realized=true so old trees render normally).
     realized?: boolean;
+    // v5: a derived one-line pitch (first sentence of the description, refs
+    // flattened, else the title). Python derives it; the TS side only reads it.
+    // Optional so older (< v5) sidecars still parse.
+    pitch?: string;
 }
 
 export interface FeatureEdge {
@@ -121,7 +131,7 @@ export function agentAmendsByFeature(sidecar: SidecarData): Map<string, string> 
 
 /** Return an empty sidecar (used when the file hasn't been created yet). */
 export function emptySidecar(): SidecarData {
-    return { version: 3, by_feature: {}, by_file: {}, features: {}, proposals: { by_feature: {}, by_event: {} } };
+    return { version: 5, by_feature: {}, by_file: {}, features: {}, proposals: { by_feature: {}, by_event: {} } };
 }
 
 /** The in-place overlay proposal for a feature, if any (retire/amend). */
