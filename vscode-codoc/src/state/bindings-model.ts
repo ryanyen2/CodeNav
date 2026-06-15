@@ -9,9 +9,11 @@
  *   proposals     – in-place overlay payload (v3):
  *       by_feature – {feature_id → {op:'retire'|'amend', event_id, tag, …}}
  *       by_event   – {event_id   → {op:'add'|'move', …}}  (ADD/MOVE ghosts)
- *   changes       – recent applied events with provenance (v4)
- *   holds         – doc-wins hold set (v4)
- *   pitch         – derived one-line pitch on each FeatureMeta (v5)
+ *   changes          – recent applied events with provenance (v4)
+ *   holds            – doc-wins hold set (v4)
+ *   pitch            – derived one-line pitch on each FeatureMeta (v5)
+ *   feature_kind     – Diátaxis-lite kind hint per feature (v5)
+ *   feature_see_also – top-N coupled neighbours per feature (v5, data only)
  *
  * New slices are optional — the reader keys on field presence, not the version
  * literal, so older sidecars keep parsing.
@@ -44,6 +46,25 @@ export interface FeatureEdge {
     to: string;
     weight: number;
     kinds: string[];
+}
+
+/** A derived Diátaxis-lite kind hint per feature (v5, `feature_kind` slice). A pure
+ *  structural heuristic, NOT a model field: `overview` = a binding-less realized theme
+ *  parent (has children); `reference` = a code-bound feature; `unclassified` = a
+ *  binding-less leaf (just-detached / pre-attach placeholder); `retired` = a tombstoned
+ *  node (suppressed in the UI). Rendered as a small chip below the feature title. */
+export type FeatureKind = 'overview' | 'reference' | 'unclassified' | 'retired';
+
+/** One See-Also neighbour (v5, `feature_see_also` slice): a coupled feature ranked by
+ *  coupling `weight`, with the edge `kinds` (calls/imports) summarised as a one-line
+ *  `rationale`. Emitted as DATA ONLY — the Connections panel already surfaces coupled
+ *  features (Depends-on / Used-by), so there is no second See-Also UI section; this slice
+ *  exists for completeness + future consumers and is never a `> …` steering line. */
+export interface SeeAlsoEntry {
+    to: string;
+    weight: number;
+    kinds: string[];
+    rationale: string;
 }
 
 /** In-place overlay for a RETIRE/AMEND proposal that decorates a live node. */
@@ -109,6 +130,22 @@ export interface SidecarData {
     changes?: ChangeEntry[];
     // v4: features with pending doc-ahead intent (doc-wins hold set).
     holds?: string[];
+    // v5: a derived Diátaxis-lite kind hint per feature (overview/reference/…).
+    feature_kind?: Record<string, FeatureKind>;
+    // v5: top-N coupled neighbours per feature (data only — the Connections panel
+    // already surfaces coupled features, so no second See-Also UI section).
+    feature_see_also?: Record<string, SeeAlsoEntry[]>;
+}
+
+/** The derived kind hint for a feature, if any (v5). Suppressed/retired tags are
+ *  filtered by the renderer (no chip), so callers get the raw slice value here. */
+export function kindForFeature(sidecar: SidecarData, featureId: string): FeatureKind | undefined {
+    return sidecar.feature_kind?.[featureId];
+}
+
+/** Top-N coupled neighbours for a feature (v5). Empty when the feature has no edges. */
+export function seeAlsoForFeature(sidecar: SidecarData, featureId: string): SeeAlsoEntry[] {
+    return sidecar.feature_see_also?.[featureId] ?? [];
 }
 
 /** Latest applied agent-authored AMEND per feature (fid → agent actor id), from

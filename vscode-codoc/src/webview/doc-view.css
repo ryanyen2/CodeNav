@@ -798,3 +798,19 @@ body.glance .ce-whole-surface .ce-diff { display: none; }
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70ch;
     user-select: none; cursor: default;
 }
+
+/* B-U3: the Diátaxis-lite kind chip below each feature title. Shape/label = kind;
+   colour is the muted, neutral `--vscode-badge-*` token — NO new hue (colour is
+   reserved for direction). It is offered, never mandated. */
+.ce-kind-row { margin: 0.15em 0 0.1em; user-select: none; }
+.ce-kind-chip {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    font: 10.5px/1.4 var(--vscode-font-family); letter-spacing: 0.02em;
+    padding: 1px 7px; border-radius: 9px;
+    color: var(--vscode-badge-foreground);
+    background: color-mix(in srgb, var(--vscode-badge-background) 70%, transparent);
+    cursor: default;
+}
+.ce-kind-glyph { opacity: 0.8; font-size: 0.9em; }
+/* glance mode keeps the row to a single one-liner — drop the kind chip too. */
+body.glance .ce-whole-surface .ce-kind-row { display: none; }

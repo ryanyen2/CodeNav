@@ -199,6 +199,7 @@ function reconcile(): void {
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
+        wholeEditor.setKinds(payload.kinds ?? {}); // B-U3 kind chip
         applyGlance();     // refresh pitch map (a loop pass may have rewritten pitches)
         refreshOverview(); // re-mount the landing with the latest themes/edges
     } else {
@@ -417,6 +418,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
+    wholeEditor.setKinds(payload.kinds ?? {}); // B-U3 kind chip
     applyGlance();      // seed pitch + glance state into the fresh editor
     refreshOverview();  // mount the overview landing at the top of the surface
     return host;

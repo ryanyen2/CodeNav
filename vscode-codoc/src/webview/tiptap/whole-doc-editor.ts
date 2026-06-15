@@ -26,6 +26,7 @@ import {
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
+import { KindDecorations, KIND_UPDATED } from './kind-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { diffDocsToSuggestions } from '../../state/suggestion-model';
@@ -79,6 +80,8 @@ export interface WholeDocEditorHandle {
     setPitches: (pitches: Record<string, string>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
     setGlance: (on: boolean) => void;
+    /** Per-feature Diátaxis-lite kind hints (B-U3) — the chip below each title. */
+    setKinds: (kinds: Record<string, string>) => void;
     scrollToFeature: (fid: string) => void;
     isDirty: () => boolean;
     destroy: () => void;
@@ -167,6 +170,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
     let glanceOn = false;
+    let currentKinds: Record<string, string> = {};   // B-U3: fid → kind hint
 
     const editor = new Editor({
         element: surface,
@@ -188,6 +192,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',
+            }),
+            KindDecorations.configure({
+                getKind: (fid: string) => currentKinds[fid] ?? '',
             }),
             CommentDecorations.configure({
                 getComments: () => currentComments,
@@ -789,6 +796,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // Body class drives the CSS that hides descriptions; the plugin draws the pitch.
             document.body.classList.toggle('glance', on);
             editor.view.dispatch(editor.state.tr.setMeta(GLANCE_UPDATED, true));
+        },
+        setKinds: (kinds: Record<string, string>) => {
+            currentKinds = kinds;
+            editor.view.dispatch(editor.state.tr.setMeta(KIND_UPDATED, true));
         },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
         isDirty: () => dirty,

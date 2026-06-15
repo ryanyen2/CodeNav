@@ -134,6 +134,12 @@ export interface DocPayload {
     /** Per-feature one-line pitch (FeatureMeta.pitch, B-U1) keyed by feature id — feeds
      *  glance mode (each feature collapses to its pitch). Derived from the sidecar. */
     pitches?: Record<string, string>;
+    /** Per-feature derived Diátaxis-lite kind hint (B-U3, `feature_kind` slice) keyed by
+     *  feature id — rendered as a small chip below the feature title. Suppressed/retired
+     *  kinds are filtered host-side, so absent ⇒ no chip. See-Also is NOT carried here:
+     *  it is emitted as sidecar data only (the Connections panel already shows coupled
+     *  features), so there is no second See-Also UI section. */
+    kinds?: Record<string, string>;
     /** Persisted webview prefs (B-U2): the overview's per-workspace dismiss state and the
      *  glance-mode toggle, restored from workspaceState so they survive a reload. */
     prefs?: WebviewPrefs;

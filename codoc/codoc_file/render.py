@@ -404,6 +404,85 @@ def _pitch(description: str, title: str) -> str:
     return sentence
 
 
+# Max number of See-Also neighbours emitted per feature. feature_edges can be
+# noisy on highly-coupled nodes, so the slice is ranked by coupling weight and
+# capped at this many. Shared by the Python writer and the TS parity test.
+SEE_ALSO_MAX = 5
+
+
+def _compute_kinds(store: Store) -> dict[str, str]:
+    """A derived Diátaxis-lite ``kind`` hint per feature (sidecar metadata).
+
+    A pure structural heuristic over the binding-less taxonomy — never an LLM
+    call, never a model field, never written into ``tree.codoc``:
+
+    - retired                                  → ``"retired"`` (suppressed in UI)
+    - binding-less + has children + realized   → ``"overview"`` (an org-pass theme
+      parent — binding-less *by design*, fully real; it must NOT read as unrealized,
+      see :func:`codoc.loop.apply._mutate`)
+    - has bindings                             → ``"reference"`` (a real, code-bound
+      feature)
+    - binding-less leaf (no children, no code) → ``"unclassified"`` (a just-detached
+      node or a pre-attach ``/codoc:plan`` placeholder)
+
+    Returns ``{feature_id: kind}`` for every live + retired feature.
+    """
+    # include_retired so a retired feature gets its suppressing tag, not omitted.
+    features = store.list_features(include_retired=True)
+    bound = store.bound_feature_ids()
+    has_children: set[str] = {f.parent_id for f in features if f.parent_id}
+
+    out: dict[str, str] = {}
+    for f in features:
+        if f.retired:
+            out[f.id] = "retired"
+        elif f.id in bound:
+            out[f.id] = "reference"
+        elif f.id in has_children and f.realized:
+            out[f.id] = "overview"
+        else:
+            # Binding-less leaf: a just-detached node, a not-yet-realized plan
+            # placeholder, or a theme parent that lost its children. Not enough
+            # signal to call it overview/reference.
+            out[f.id] = "unclassified"
+    return out
+
+
+def _compute_see_also(store: Store) -> dict[str, list[dict]]:
+    """Top-N coupled-feature neighbours per feature (sidecar metadata ONLY).
+
+    Built from :func:`_compute_feature_edges` (symbol-level call/import edges
+    aggregated to feature coupling), ranked by coupling ``weight`` (heaviest
+    first) and capped at :data:`SEE_ALSO_MAX`. Each row carries the destination
+    feature id, its weight, and the edge ``kinds`` (``calls``/``imports``) as a
+    one-line rationale.
+
+    This OVERLAPS the IDE's Connections panel (Depends-on / Used-by from the same
+    ``feature_edges``), so it is emitted purely as derived data for completeness +
+    future consumers — it is *never* a ``> …`` steering line and never enters
+    ``tree.codoc`` / ``tree.doc.json`` (KTD4). Returns
+    ``{src_feature_id: [{to, weight, kinds, rationale}]}``; a feature with no edges
+    is absent (an empty See-Also).
+    """
+    edges = _compute_feature_edges(store)
+    out: dict[str, list[dict]] = {}
+    for src, neighbours in edges.items():
+        ranked = sorted(neighbours, key=lambda n: n["weight"], reverse=True)[:SEE_ALSO_MAX]
+        if not ranked:
+            continue
+        out[src] = [
+            {
+                "to": n["to"],
+                "weight": n["weight"],
+                "kinds": n["kinds"],
+                # One-line rationale: which edge kind couples them. e.g. "calls".
+                "rationale": ", ".join(n["kinds"]) or "coupled",
+            }
+            for n in ranked
+        ]
+    return out
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -447,6 +526,13 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # (who/how/why-chained) + the doc-wins hold set.
         "changes": _changes_feed(store),
         "holds": sorted(hold_set(codoc_dir)),
+        # v5: lightweight INFERRED structure (additive optional slices, no version
+        # bump). `feature_kind` is a Diátaxis-lite hint rendered as a chip below the
+        # feature title; `feature_see_also` is the top-N coupled neighbours emitted
+        # as data only (the Connections panel already surfaces coupled features) —
+        # NEVER a `> …` steering line, never tree.codoc/tree.doc.json content.
+        "feature_kind": _compute_kinds(store),
+        "feature_see_also": _compute_see_also(store),
     }
     dest = Path(codoc_dir) / BINDINGS_FILENAME
     tmp = dest.with_suffix(".json.tmp")

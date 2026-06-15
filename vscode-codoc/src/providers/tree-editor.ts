@@ -419,6 +419,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             pitches[fid] = (meta.pitch && meta.pitch.trim()) ? meta.pitch : meta.title;
         }
 
+        // Per-feature Diátaxis-lite kind hint (B-U3 `feature_kind` slice) → a chip below
+        // the title. Suppress `retired` (no chip on a tombstoned node) and `unclassified`
+        // (a binding-less leaf carries no useful signal — a chip there is just noise);
+        // only the meaningful `overview` / `reference` hints reach the webview.
+        const kinds: Record<string, string> = {};
+        for (const [fid, kind] of Object.entries(sidecar.feature_kind ?? {})) {
+            if (kind === 'overview' || kind === 'reference') kinds[fid] = kind;
+        }
+
         return {
             nodes,
             roots,
@@ -434,6 +443,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             hoverCards,
             overview,
             pitches,
+            kinds,
             prefs: this.prefsFor(document),
             rev: ++this.rev,
         };
