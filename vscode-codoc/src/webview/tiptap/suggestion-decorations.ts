@@ -13,7 +13,8 @@ import { Node as PMModelNode } from '@tiptap/pm/model';
 import { wordDiff, compactRuns } from '../../state/doc-diff';
 import { directionLabel, directionActions } from '../../state/grammar';
 import type { Suggestion } from '../../state/suggestion-model';
-import type { ThreadsData } from '../protocol';
+import type { ThreadsData, ThreadTarget } from '../protocol';
+import { THREADS_COLLAPSE_AT } from '../protocol';
 
 export interface SuggestionHandlers {
     accept: (s: Suggestion) => void;
@@ -174,20 +175,25 @@ function buildDecorations(doc: PMModelNode, suggestions: Suggestion[], handlers:
     return DecorationSet.create(doc, decos);
 }
 
-// ── Unified dependency "threads" under each heading + on-demand peek (U4) ──────
-// One quiet in-flow line per feature: `↳ reads … · ↰ used by … · ⟢ code refs …`,
+// ── Unified "Connections" under each heading + on-demand peek (U4 → U5) ────────
+// One quiet in-flow line per feature, four strands:
+//   ↳ Depends-on (reads) · ↰ Used-by · ⟢ Bound code · ◷ Consult (external links)
 // replacing the old ce-deps chips, the legacy xrefs, AND the tree-pane refs pill.
-// Each strand shows a few named items + a "+N" that opens a peek popover with the full
-// neighbourhood (client-side from the same payload — no extra round-trip; KTD5/H1).
+// reads/used-by are RANKED by coupling weight (heaviest first); each strand caps at
+// THREADS_COLLAPSE_AT and, when it overflows, shows a "+N" that opens a peek popover
+// with the full ranked neighbourhood (client-side from the same payload — no extra
+// round-trip; KTD5/H1). The cap matches the assembler's `collapsed` flag.
+// COLOUR = direction (reads vs used-by); SHAPE = kind (per-edge call/import marker).
 export interface DependencyDecorationsOptions {
     getThreads: () => Record<string, ThreadsData>;
     onNavigate: (fid: string) => void;
     onOpenBinding: (file: string, symbol: string) => void;
+    onConsult: (url: string) => void;
 }
 export const DEPS_UPDATED = 'codocThreadsUpdated';
 const depKey = new PluginKey('codocThreadDecorations');
 
-const THREAD_MAX = 3; // named items per strand before a "+N" peek
+const THREAD_MAX = THREADS_COLLAPSE_AT; // named items per strand before a "+N" peek
 
 function leafSym(symbol: string): string {
     const i = symbol.indexOf('::');
@@ -195,20 +201,38 @@ function leafSym(symbol: string): string {
     return tail === '__module__' ? '‹module›' : (tail.split('::').pop() ?? tail);
 }
 
-function threadsEmpty(t: ThreadsData): boolean {
-    return !t.reads.length && !t.usedBy.length && !t.refs.length;
+/** Per-edge SHAPE glyph (shape = kind, never a new colour). A pure call edge →
+ *  `()`; a pure import edge → `⊂`; mixed / unknown → none. Rendered as a quiet
+ *  superscript marker on the feature link. */
+function kindShape(kinds: string[]): string {
+    const has = (k: string): boolean => kinds.some(x => x.includes(k));
+    const call = has('call');
+    const imp = has('import');
+    if (call && !imp) return '()';
+    if (imp && !call) return '⊂';
+    return '';
 }
 
-function threadLink(text: string, title: string, onClick: () => void, fid?: string): HTMLElement {
+function threadsEmpty(t: ThreadsData): boolean {
+    return !t.reads.length && !t.usedBy.length && !t.refs.length && !t.consult.length;
+}
+
+function threadLink(text: string, title: string, onClick: () => void, fid?: string, shape?: string): HTMLElement {
     const a = elc('span', 'ce-thread', text || '(untitled)');
     a.title = title;
     // Tag a feature link with its fid so the hover-card handler (U4) can resolve it
     // by feature id — a decoration data-attr only, never serialized into the doc —
     // and make it keyboard-reachable so the card opens on Enter/Space.
     if (fid) { a.dataset.fid = fid; a.tabIndex = 0; }
+    if (shape) a.append(elc('sup', 'ce-thread-kind', shape));
     a.addEventListener('mousedown', ev => ev.preventDefault());
     a.addEventListener('click', ev => { ev.preventDefault(); onClick(); });
     return a;
+}
+
+/** A feature thread link carrying its shape (kind) marker. */
+function featureLink(d: ThreadTarget, verb: string, onNavigate: (fid: string) => void): HTMLElement {
+    return threadLink(d.toTitle, `${verb} ${d.toTitle} — go to it`, () => onNavigate(d.toId), d.toId, kindShape(d.kinds));
 }
 
 // ── peek popover (the full neighbourhood, client-side) ────────────────────────
@@ -218,6 +242,7 @@ function closePeek(): void { openPeekEl?.remove(); openPeekEl = null; }
 function openThreadsPeek(
     anchor: HTMLElement, t: ThreadsData,
     onNavigate: (fid: string) => void, onOpenBinding: (file: string, symbol: string) => void,
+    onConsult: (url: string) => void,
 ): void {
     closePeek();
     const pop = elc('div', 'ce-peek');
@@ -230,9 +255,10 @@ function openThreadsPeek(
         sec.append(list);
         pop.append(sec);
     };
-    section('reads', t.reads.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId)));
-    section('used by', t.usedBy.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId)));
-    section('code refs', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => { closePeek(); onOpenBinding(r.file, r.symbol); })));
+    section('depends on', t.reads.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId, kindShape(d.kinds))));
+    section('used by', t.usedBy.map(d => threadLink(d.toTitle, 'go to ' + d.toTitle, () => { closePeek(); onNavigate(d.toId); }, d.toId, kindShape(d.kinds))));
+    section('bound code', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => { closePeek(); onOpenBinding(r.file, r.symbol); })));
+    section('consult', t.consult.map(l => threadLink(l.label, l.url, () => { closePeek(); onConsult(l.url); })));
     document.body.append(pop);
     const rect = anchor.getBoundingClientRect();
     pop.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
@@ -254,32 +280,39 @@ function openThreadsPeek(
 function makeThreadsRow(
     t: ThreadsData,
     onNavigate: (fid: string) => void, onOpenBinding: (file: string, symbol: string) => void,
+    onConsult: (url: string) => void,
 ): HTMLElement {
     const row = elc('div', 'ce-threads');
     row.contentEditable = 'false';
-    const strand = (glyph: string, glyphTitle: string, items: HTMLElement[], moreLabel: string): void => {
+    // dir ∈ reads (Depends-on) | used (Used-by) | refs (Bound code) | consult — the
+    // CLASS, not a hue: colour = direction is applied in CSS off `.ce-strand.<dir>`.
+    const strand = (dir: string, glyph: string, glyphTitle: string, items: HTMLElement[], moreLabel: string): void => {
         if (!items.length) return;
-        const s = elc('span', 'ce-strand');
+        const s = elc('span', 'ce-strand ' + dir);
         const g = elc('span', 'ce-strand-glyph', glyph); g.title = glyphTitle; s.append(g);
         items.slice(0, THREAD_MAX).forEach((el, i) => { if (i) s.append(document.createTextNode(', ')); s.append(el); });
+        // Collapse: beyond THREADS_COLLAPSE_AT rows, a "+N" reveals the full ranked list
+        // in the peek — a display swap (popover), no transition (reduced-motion safe).
         if (items.length > THREAD_MAX) {
-            const more = elc('span', 'ce-more', `+${items.length - THREAD_MAX}`);
+            const more = elc('span', 'ce-more', `+${items.length - THREAD_MAX} more`);
             more.title = `Show all ${items.length} ${moreLabel}`;
             more.addEventListener('mousedown', ev => ev.preventDefault());
-            more.addEventListener('click', ev => { ev.preventDefault(); openThreadsPeek(row, t, onNavigate, onOpenBinding); });
+            more.addEventListener('click', ev => { ev.preventDefault(); openThreadsPeek(row, t, onNavigate, onOpenBinding, onConsult); });
             s.append(more);
         }
         row.append(s);
     };
-    strand('↳', 'reads', t.reads.map(d => threadLink(d.toTitle, 'reads ' + d.toTitle + ' — go to it', () => onNavigate(d.toId), d.toId)), 'reads');
-    strand('↰', 'used by', t.usedBy.map(d => threadLink(d.toTitle, 'used by ' + d.toTitle + ' — go to it', () => onNavigate(d.toId), d.toId)), 'used by');
-    strand('⟢', 'code refs', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => onOpenBinding(r.file, r.symbol))), 'code refs');
+    strand('reads', '↳', 'depends on', t.reads.map(d => featureLink(d, 'depends on', onNavigate)), 'depends on');
+    strand('used', '↰', 'used by', t.usedBy.map(d => featureLink(d, 'used by', onNavigate)), 'used by');
+    strand('refs', '⟢', 'bound code', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => onOpenBinding(r.file, r.symbol))), 'bound code');
+    strand('consult', '◷', 'consult', t.consult.map(l => threadLink(l.label, l.url, () => onConsult(l.url))), 'consult links');
     return row;
 }
 
 function buildThreadDecorations(
     doc: PMModelNode, threadsMap: Record<string, ThreadsData>,
     onNavigate: (fid: string) => void, onOpenBinding: (file: string, symbol: string) => void,
+    onConsult: (url: string) => void,
 ): DecorationSet {
     const decos: Decoration[] = [];
     doc.forEach((node, pos) => {
@@ -289,7 +322,7 @@ function buildThreadDecorations(
         const t = threadsMap[fid];
         if (!t || threadsEmpty(t)) return;
         const after = pos + node.nodeSize;
-        decos.push(Decoration.widget(after, () => makeThreadsRow(t, onNavigate, onOpenBinding), { side: -1, key: 'thr-' + fid }));
+        decos.push(Decoration.widget(after, () => makeThreadsRow(t, onNavigate, onOpenBinding, onConsult), { side: -1, key: 'thr-' + fid }));
     });
     return DecorationSet.create(doc, decos);
 }
@@ -297,19 +330,20 @@ function buildThreadDecorations(
 export const DependencyDecorations = Extension.create<DependencyDecorationsOptions>({
     name: 'dependencyDecorations',
     addOptions() {
-        return { getThreads: () => ({}), onNavigate: () => {}, onOpenBinding: () => {} };
+        return { getThreads: () => ({}), onNavigate: () => {}, onOpenBinding: () => {}, onConsult: () => {} };
     },
     addProseMirrorPlugins() {
         const getThreads = (): Record<string, ThreadsData> => this.options.getThreads();
         const onNavigate = this.options.onNavigate;
         const onOpenBinding = this.options.onOpenBinding;
+        const onConsult = this.options.onConsult;
         return [
             new Plugin({
                 key: depKey,
                 state: {
-                    init: (_c, state) => buildThreadDecorations(state.doc, getThreads(), onNavigate, onOpenBinding),
+                    init: (_c, state) => buildThreadDecorations(state.doc, getThreads(), onNavigate, onOpenBinding, onConsult),
                     apply: (tr, old, _o, newState) => {
-                        if (tr.getMeta(DEPS_UPDATED) || tr.docChanged) return buildThreadDecorations(newState.doc, getThreads(), onNavigate, onOpenBinding);
+                        if (tr.getMeta(DEPS_UPDATED) || tr.docChanged) return buildThreadDecorations(newState.doc, getThreads(), onNavigate, onOpenBinding, onConsult);
                         return old.map(tr.mapping, tr.doc);
                     },
                 },

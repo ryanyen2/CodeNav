@@ -21,21 +21,37 @@ export interface RefSymbol {
     detail?: string; // `file · feature title`
 }
 
-/** A feature→feature thread target (a reads / used-by edge). */
-export interface ThreadTarget { toId: string; toTitle: string }
+/** A feature→feature thread target (a reads / used-by edge). `weight`/`kinds` ride
+ *  along from `feature_edges` so the Connections panel ranks by coupling weight and
+ *  picks a per-edge shape (shape = kind). */
+export interface ThreadTarget { toId: string; toTitle: string; weight: number; kinds: string[] }
 /** A code-ref thread target (a binding). */
 export interface ThreadRef { file: string; symbol: string }
+/** An external `[label](https://…)` link cited in a feature's description — the
+ *  Consult strand (the realizing agent WebFetches these). */
+export interface ThreadConsult { label: string; url: string }
 
-/** The unified dependency "threads" for one feature (U4): the three strands of the
- *  inline threads line under a heading — what it `reads`, what `usedBy` it, and the
- *  code `refs` it binds. The full (un-truncated) data, so the on-demand peek renders
- *  client-side with no extra round-trip. Assembled host-side from `feature_edges`
- *  (deps) + `by_feature` (bindings). */
+/** The unified dependency "Connections" for one feature (U4 → U5): the four strands
+ *  of the inline threads line / detail-pane panel under a heading — what it `reads`
+ *  (Depends-on), what `usedBy` it, the code `refs` it binds (Bound code), and the
+ *  external links to `consult`. The full (un-truncated, already-ranked) data, so the
+ *  on-demand peek renders client-side with no extra round-trip. Assembled host-side
+ *  from `feature_edges` (deps, with weights) + `by_feature` (bindings) + the
+ *  description's external links (consult). `collapsed` reports, per strand, whether it
+ *  exceeds the inline display cap (THREADS_COLLAPSE_AT) so the renderer shows a
+ *  "show N more" affordance reusing the peek — a display swap, no transition. */
 export interface ThreadsData {
     reads: ThreadTarget[];
     usedBy: ThreadTarget[];
     refs: ThreadRef[];
+    consult: ThreadConsult[];
+    collapsed: { reads: boolean; usedBy: boolean; refs: boolean; consult: boolean };
 }
+
+/** The inline-display cap per strand; beyond it the strand collapses behind a
+ *  "show N more" affordance (the peek shows the full ranked list). Shared by the
+ *  assembler (sets `collapsed`) and the renderer (slices to it). */
+export const THREADS_COLLAPSE_AT = 5;
 
 /** Tier-1 hover-preview cards (U4), precomputed host-side from the registry +
  *  bindings sidecar via the pure `resolveCard` — the webview cannot read files or
@@ -127,6 +143,8 @@ export type WebviewMessage =
     | { kind: 'suggest-withdraw'; id: string }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
     | { kind: 'open-binding'; file: string; symbol: string }
+    /** Open an external Consult link (a description's `https://` link) in the browser. */
+    | { kind: 'open-link'; url: string }
     | { kind: 'verdict'; eventIds: string[]; accept: boolean }
     /** Create an inline comment: persist the thread + the doc (carrying its new
      *  `comment` mark) and queue the note as a `> …` steering line for the agent. */

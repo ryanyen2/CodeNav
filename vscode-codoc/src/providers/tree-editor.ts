@@ -16,7 +16,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
-import { parseTreeCodoc } from '../state/tree-model';
+import { parseTreeCodoc, extractLinks } from '../state/tree-model';
 import { activeFeatureModes, featurePhases } from '../state/activity-model';
 import { reconcileDoc } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
@@ -107,6 +107,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await vscode.commands.executeCommand('codoc.openRef', msg.file, sym);
                     return;
                 }
+                case 'open-link':
+                    // Consult strand: open the external page in the browser.
+                    if (/^https?:\/\//.test(msg.url)) await vscode.env.openExternal(vscode.Uri.parse(msg.url));
+                    return;
                 case 'verdict': {
                     const ids: string[] = Array.isArray(msg.eventIds)
                         ? msg.eventIds
@@ -340,18 +344,20 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             fid => descOf.get(fid) ?? '',
         );
 
-        // Per-feature unified dependency threads (U4): reads / used-by (feature_edges) +
-        // code refs (by_feature bindings). Full lists — the inline line truncates to a
-        // few, the peek shows all. reads/usedBy dedup within their own strand (a mutual
-        // dependency can legitimately appear in both).
+        // Per-feature unified Connections (U4 → U5): Depends-on / Used-by (feature_edges,
+        // ranked by coupling weight) + Bound code (by_feature bindings) + Consult (the
+        // description's external https:// links). Full ranked lists — the inline line caps
+        // each strand at THREADS_COLLAPSE_AT and reports `collapsed`, the peek shows all.
+        // reads/usedBy dedup within their own strand (a mutual dependency may appear in both).
         const dir = directedEdges(sidecar);
         const threads: Record<string, ThreadsData> = {};
         for (const f of features) {
             if (!f.id) continue;
             const t = assembleThreads({
-                out: dir.out.get(f.id) ?? [],
+                out: dir.out.get(f.id) ?? [],   // {to, weight, kinds} — weight ranks rows
                 in: dir.in.get(f.id) ?? [],
                 bindings: sidecar.by_feature[f.id] ?? [],
+                links: extractLinks(descOf.get(f.id) ?? ''),  // Consult strand (parse-free assembler)
                 titleOf: fid => sidecar.features[fid]?.title ?? '',
                 selfId: f.id,
             });

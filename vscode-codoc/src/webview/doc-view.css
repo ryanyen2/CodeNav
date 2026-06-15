@@ -523,6 +523,15 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 }
 .ce-strand { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; }
 .ce-strand-glyph { opacity: 0.7; }
+/* colour = direction — the glyph is tinted by strand, never the link text (which
+   stays muted). Depends-on / Used-by share the dependency axis; Consult is the
+   doc-side green; Bound code is neutral. No new hue is introduced. */
+.ce-strand.reads   > .ce-strand-glyph { color: var(--dir-review); }
+.ce-strand.used    > .ce-strand-glyph { color: var(--dir-review); opacity: 0.6; }
+.ce-strand.refs    > .ce-strand-glyph { color: var(--accent-refs); }
+.ce-strand.consult > .ce-strand-glyph { color: var(--dir-await); }
+/* shape = kind — a quiet superscript marker on a feature link (call `()` / import `⊂`). */
+.ce-thread-kind { font-size: 0.72em; opacity: 0.55; margin-left: 1px; }
 .ce-thread {
     cursor: pointer; color: var(--fg-muted);
     border-bottom: 1px dotted color-mix(in srgb, var(--vscode-foreground) 28%, transparent);

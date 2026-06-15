@@ -63,6 +63,9 @@ const PROPOSAL_TITLE_RE = /^[+\-~] \s*[-~] /;
 // Legacy depth-0 hunk for trees written before in-situ proposals.
 const DIFF_HUNK_RE = /^[+\-~] [-~] /;
 const REF_RE = /\[([^\]]*)\]\(codoc:([^)#]+)(?:#([^)]+))?\)/g;
+// External markdown link `[label](https://…)` — a page the realizing agent should
+// consult (mirrors Python parse._LINK_RE). `codoc:` links are refs, not links.
+const LINK_RE = /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
 
 export function extractRefs(text: string): ParsedRef[] {
     const refs: ParsedRef[] = [];
@@ -72,6 +75,19 @@ export function extractRefs(text: string): ParsedRef[] {
         refs.push({ label: m[1], file: m[2], symbol: m[3] ?? null });
     }
     return refs;
+}
+
+/** Pull external `[label](https://…)` links out of prose — the Consult strand
+ *  (the realizing agent WebFetches them). `codoc:` links are excluded by the
+ *  `https?://` scheme guard. Mirrors Python parse.extract_links. */
+export function extractLinks(text: string): { label: string; url: string }[] {
+    const links: { label: string; url: string }[] = [];
+    LINK_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = LINK_RE.exec(text)) !== null) {
+        links.push({ label: m[1], url: m[2] });
+    }
+    return links;
 }
 
 export function parseTreeCodoc(text: string): ParseResult {

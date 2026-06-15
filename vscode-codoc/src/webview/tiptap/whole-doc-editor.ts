@@ -48,6 +48,8 @@ export interface WholeDocEditorOptions {
     onReject: (s: Suggestion) => void;
     onWithdraw: (s: Suggestion) => void;
     onOpenBinding: (file: string, symbol: string) => void;
+    /** Open a Consult strand link (a description's external `https://` page). */
+    onConsult: (url: string) => void;
     /** Create an inline comment: the whole doc (carrying the new anchor mark) + the thread. */
     onCommentCreate: (doc: PMNode, thread: CommentThread) => void;
     /** Edit a comment's body in place. */
@@ -173,6 +175,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 getThreads: () => currentThreads,
                 onNavigate: fid => scrollToFeatureInternal(fid, true),
                 onOpenBinding: opts.onOpenBinding,
+                onConsult: opts.onConsult,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
             CommentDecorations.configure({
