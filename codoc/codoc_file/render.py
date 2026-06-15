@@ -410,7 +410,7 @@ def _pitch(description: str, title: str) -> str:
 SEE_ALSO_MAX = 5
 
 
-def _compute_kinds(store: Store) -> dict[str, str]:
+def _compute_kinds(store: Store, features: list | None = None) -> dict[str, str]:
     """A derived Diátaxis-lite ``kind`` hint per feature (sidecar metadata).
 
     A pure structural heuristic over the binding-less taxonomy — never an LLM
@@ -426,9 +426,13 @@ def _compute_kinds(store: Store) -> dict[str, str]:
       node or a pre-attach ``/codoc:plan`` placeholder)
 
     Returns ``{feature_id: kind}`` for every live + retired feature.
+
+    ``features`` may be passed pre-read (include_retired) to avoid a redundant
+    ``list_features`` query; falls back to its own read for standalone callers.
     """
     # include_retired so a retired feature gets its suppressing tag, not omitted.
-    features = store.list_features(include_retired=True)
+    if features is None:
+        features = store.list_features(include_retired=True)
     bound = store.bound_feature_ids()
     has_children: set[str] = {f.parent_id for f in features if f.parent_id}
 
@@ -448,14 +452,15 @@ def _compute_kinds(store: Store) -> dict[str, str]:
     return out
 
 
-def _compute_see_also(store: Store) -> dict[str, list[dict]]:
+def _compute_see_also(edges: dict[str, list[dict]]) -> dict[str, list[dict]]:
     """Top-N coupled-feature neighbours per feature (sidecar metadata ONLY).
 
     Built from :func:`_compute_feature_edges` (symbol-level call/import edges
-    aggregated to feature coupling), ranked by coupling ``weight`` (heaviest
-    first) and capped at :data:`SEE_ALSO_MAX`. Each row carries the destination
-    feature id, its weight, and the edge ``kinds`` (``calls``/``imports``) as a
-    one-line rationale.
+    aggregated to feature coupling) — passed in precomputed so ``write_sidecar``
+    derives the edges once and shares them with the ``feature_edges`` slot.
+    Ranked by coupling ``weight`` (heaviest first) and capped at
+    :data:`SEE_ALSO_MAX`. Each row carries the destination feature id, its weight,
+    and the edge ``kinds`` (``calls``/``imports``) as a one-line rationale.
 
     This OVERLAPS the IDE's Connections panel (Depends-on / Used-by from the same
     ``feature_edges``), so it is emitted purely as derived data for completeness +
@@ -464,7 +469,6 @@ def _compute_see_also(store: Store) -> dict[str, list[dict]]:
     ``{src_feature_id: [{to, weight, kinds, rationale}]}``; a feature with no edges
     is absent (an empty See-Also).
     """
-    edges = _compute_feature_edges(store)
     out: dict[str, list[dict]] = {}
     for src, neighbours in edges.items():
         ranked = sorted(neighbours, key=lambda n: n["weight"], reverse=True)[:SEE_ALSO_MAX]
@@ -483,6 +487,37 @@ def _compute_see_also(store: Store) -> dict[str, list[dict]]:
     return out
 
 
+def _live_drift(store: Store, drift: dict[str, str]) -> dict[str, str]:
+    """Filter a loop-computed drift map against live store state (pure store
+    reads — NO index access, keeping render index-free).
+
+    An interactive re-emit (MCP reflect ATTACH, Accept/Reject) re-writes the
+    sidecar without recomputing drift, so a stale entry can outlive the state it
+    described until the next loop pass. We drop the entries that are now provably
+    contradicted by the store:
+
+    - ``binding-lost`` for a feature that NOW owns >=1 binding (an ATTACH re-bound
+      it) — the badge would directly contradict the visible bindings.
+    - any entry for a feature that is now retired or absent.
+
+    ``questioned`` entries (the prose may be stale) are kept: only a loop pass
+    with a fresh index can tell whether the code drift was resolved, so render
+    must not guess. From the same module's :data:`~codoc.loop.edits.DRIFT_*`."""
+    if not drift:
+        return drift
+    from codoc.loop.edits import DRIFT_BINDING_LOST
+
+    out: dict[str, str] = {}
+    for fid, state in drift.items():
+        f = store.get_feature(fid)
+        if f is None or f.retired:
+            continue  # feature gone/retired — its badge is meaningless now
+        if state == DRIFT_BINDING_LOST and store.bindings_for_feature(fid):
+            continue  # re-bound since the loop pass — badge contradicts state
+        out[fid] = state
+    return out
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -492,7 +527,11 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     back to preserve a human edit, so the IDE always sees current proposal/binding
     state (an accepted verdict reflects immediately rather than appearing to do
     nothing)."""
-    features = store.list_features()
+    # One feature-table read (include_retired) threaded into the body +
+    # _compute_kinds (which needs retired features for its suppressing tag); the
+    # body filters to live features to keep by_feature/feats_meta byte-identical.
+    all_features = store.list_features(include_retired=True)
+    features = [f for f in all_features if not f.retired]
     by_feature: dict[str, list[dict]] = {}
     by_file: dict[str, list[dict]] = {}
     feats_meta: dict[str, dict] = {}
@@ -515,12 +554,16 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
 
     from codoc.loop.edits import hold_set, read_drift
 
+    # Compute feature-coupling edges ONCE and share them between the feature_edges
+    # slot and _compute_see_also (which is derived from the same edges).
+    edges = _compute_feature_edges(store)
+
     sidecar = {
         "version": 5,
         "by_feature": by_feature,
         "by_file": by_file,
         "features": feats_meta,
-        "feature_edges": _compute_feature_edges(store),
+        "feature_edges": edges,
         "proposals": _proposals_map(store),
         # v4: the provenance ledger surfaced to the IDE — recent applied events
         # (who/how/why-chained) + the doc-wins hold set.
@@ -531,14 +574,17 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # feature title; `feature_see_also` is the top-N coupled neighbours emitted
         # as data only (the Connections panel already surfaces coupled features) —
         # NEVER a `> …` steering line, never tree.codoc/tree.doc.json content.
-        "feature_kind": _compute_kinds(store),
-        "feature_see_also": _compute_see_also(store),
+        "feature_kind": _compute_kinds(store, all_features),
+        "feature_see_also": _compute_see_also(edges),
         # v5: the per-feature drift/trust signal (questioned / binding-lost). This
         # is RE-EMITTED passively from the loop-computed `drift.json` — render has
         # NO live index, so it cannot recompute fingerprint-vs-tokens_hash here
         # (KTD2). An interactive write (Accept/Reject, MCP reflect) thus re-emits
-        # the last loop-computed drift unchanged. `followed` features are absent.
-        "feature_drift": read_drift(codoc_dir),
+        # the last loop-computed drift, but FILTERED against live store state
+        # (`_live_drift`) so an ATTACH that re-bound a `binding-lost` feature, or a
+        # retired/removed feature, no longer shows a contradictory badge before the
+        # next loop pass. `followed` features are absent.
+        "feature_drift": _live_drift(store, read_drift(codoc_dir)),
     }
     dest = Path(codoc_dir) / BINDINGS_FILENAME
     tmp = dest.with_suffix(".json.tmp")
@@ -546,8 +592,17 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     os.replace(tmp, dest)
 
     # The cross-reference registry rides on the same seam as the bindings
-    # sidecar (one write per pass, every call-site, no double-write).
-    write_registry(store, codoc_dir)
+    # sidecar (one write per pass, every call-site, no double-write). It is pure
+    # derived state and the IDE degrades gracefully (loadRegistry → null) when it
+    # is absent or stale, so a disk error writing it (EROFS / disk-full on the
+    # tmp file) must NOT abort the caller — that would propagate out of
+    # write_tree → run_loop_b and skip directive queueing + status refresh.
+    try:
+        write_registry(store, codoc_dir)
+    except OSError as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "write_registry failed (%s); registry left stale", exc)
 
 
 def write_tree(store: Store, codoc_dir: str | Path) -> Path:

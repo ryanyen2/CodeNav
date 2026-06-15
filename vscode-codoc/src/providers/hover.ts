@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { WorkspaceState } from '../state/workspace-state';
 import { resolveCard, ResolvedCard } from '../state/registry-model';
+import { codocRefRe } from '../state/tree-model';
 
 /**
  * Tier-1 hover-preview for inline `codoc:` code citations in the raw `tree.codoc`
@@ -13,9 +14,10 @@ import { resolveCard, ResolvedCard } from '../state/registry-model';
  * Everything is assembled host-side from the already-loaded registry + bindings
  * sidecar via the pure `resolveCard`; there is NO host→Python call. The webview
  * popover (a later unit) consumes the same `ResolvedCard` contract.
+ *
+ * The citation regex is the shared `codocRefRe()` factory (one source of truth,
+ * fresh per-use to avoid shared `lastIndex` state).
  */
-const REF_RE = /\[[^\]]*\]\(codoc:([^)#]+)(?:#([^)]+))?\)/g;
-
 export class CodocHoverProvider implements vscode.HoverProvider {
     constructor(private state: WorkspaceState) {}
 
@@ -23,9 +25,10 @@ export class CodocHoverProvider implements vscode.HoverProvider {
         if (document.languageId !== 'codoc') return null;
 
         const line = document.lineAt(position.line).text;
-        REF_RE.lastIndex = 0;
+        const refRe = codocRefRe();
+        refRe.lastIndex = 0;
         let m: RegExpExecArray | null;
-        while ((m = REF_RE.exec(line)) !== null) {
+        while ((m = refRe.exec(line)) !== null) {
             const start = m.index;
             const end = m.index + m[0].length;
             if (position.character < start || position.character > end) continue;

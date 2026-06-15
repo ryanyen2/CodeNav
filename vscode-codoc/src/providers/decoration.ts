@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
-import { parseTreeCodoc } from '../state/tree-model';
-import { SidecarData, emptySidecar, driftForFeature } from '../state/bindings-model';
+import { parseTreeCodoc, codocRefRe } from '../state/tree-model';
+import { SidecarData, emptySidecar, driftForFeature, kindForFeature } from '../state/bindings-model';
 import { RegistryData, isRefResolved } from '../state/registry-model';
 import { PendingChange } from '../state/realize-model';
 
-// Inline code citation: "[label](codoc:file.py#symbol)" — mirrors REF_RE in
-// doc-links.ts so dead-ref decoration finds the same spans the link provider does.
-const REF_RE = /\[[^\]]*\]\(codoc:([^)#]+)(?:#([^)]+))?\)/g;
+// Inline code citation `[label](codoc:file.py#symbol)` is matched via the shared
+// `codocRefRe()` factory in tree-model.ts — one source of truth across this file,
+// hover.ts, and doc-links.ts so dead-ref decoration finds the same spans the link
+// provider does (fresh RegExp per use to avoid shared `lastIndex` state).
 
 // Identity / event markers ⟨f-…⟩ ⟨e-…⟩ (plus the two spaces before them) are
 // collapsed to nothing — the human never sees or types an id.
@@ -240,8 +241,14 @@ export function applyDecorations(
 
         // Drift badge: a quiet shape/glyph at the end of the title line (skip ghost
         // hunk lines — proposals decorate elsewhere). `followed`/absent → no badge.
+        // Never badge a tombstone: a feature retired in the text, marked retired in
+        // the kind slice, or carrying a pending retire overlay already reads as
+        // "going away" (strike) — a contradictory drift glyph would double-signal.
         const drift = driftForFeature(sidecar, f.id);
-        if (drift && !proposalLines.has(f.line)) {
+        const isRetired = f.retired
+            || kindForFeature(sidecar, f.id) === 'retired'
+            || prop?.op === 'retire';
+        if (drift && !isRetired && !proposalLines.has(f.line)) {
             driftBadges.push({
                 range: new vscode.Range(f.line, line.length, f.line, line.length),
                 hoverMessage: new vscode.MarkdownString(
@@ -287,6 +294,7 @@ export function applyDecorations(
     // only — skip ghost-hunk lines so a proposed-add's ref isn't struck.
     const deadRef: vscode.Range[] = [];
     let prevWasSteering = false;
+    const refRe = codocRefRe();
     for (let i = 0; i < editor.document.lineCount; i++) {
         const text = editor.document.lineAt(i).text;
 
@@ -297,9 +305,9 @@ export function applyDecorations(
         }
 
         if (!proposalLines.has(i)) {
-            REF_RE.lastIndex = 0;
+            refRe.lastIndex = 0;
             let r: RegExpExecArray | null;
-            while ((r = REF_RE.exec(text)) !== null) {
+            while ((r = refRe.exec(text)) !== null) {
                 const file = r[1];
                 const symbol = r[2] ?? null;
                 if (!isRefResolved(registry, file, symbol)) {

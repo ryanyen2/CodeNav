@@ -113,8 +113,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 }
                 case 'open-link':
-                    // Consult strand: open the external page in the browser.
-                    if (/^https?:\/\//.test(msg.url)) await vscode.env.openExternal(vscode.Uri.parse(msg.url));
+                    // Consult strand: open the external page in the browser. The
+                    // Consult signal is specified as `https://` links only, so a
+                    // non-https (e.g. plain http://) url is simply not opened.
+                    if (/^https:\/\//.test(msg.url)) await vscode.env.openExternal(vscode.Uri.parse(msg.url));
                     return;
                 case 'verdict': {
                     const ids: string[] = Array.isArray(msg.eventIds)

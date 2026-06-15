@@ -19,6 +19,7 @@ import pytest
 from codoc.codoc_file.render import (
     BINDINGS_FILENAME,
     SEE_ALSO_MAX,
+    _compute_feature_edges,
     _compute_kinds,
     _compute_see_also,
     write_tree,
@@ -143,7 +144,7 @@ def test_see_also_lists_top_neighbours_with_rationale(store):
     ])
     store.insert_edges([_edge("s.py::caller", "b.py::b_fn", "import")])
 
-    see = _compute_see_also(store)
+    see = _compute_see_also(_compute_feature_edges(store))
     assert src.id in see
     rows = see[src.id]
     # Ranked by weight: a (weight 2) before b (weight 1).
@@ -171,7 +172,7 @@ def test_see_also_is_capped_at_max(store):
                 {**_edge("hub.py::hub", f"n{i}.py::fn", "call"), "dst_name": f"fn_{i}_{j}"}
             ])
 
-    rows = _compute_see_also(store)[src.id]
+    rows = _compute_see_also(_compute_feature_edges(store))[src.id]
     assert len(rows) == SEE_ALSO_MAX
     # Capped to the HEAVIEST neighbours (descending weight).
     weights = [r["weight"] for r in rows]
@@ -185,7 +186,7 @@ def test_feature_with_no_edges_has_empty_see_also(store):
     store.upsert_feature(lonely)
     _bind(store, lonely.id, "i.py", "i.py::island")
 
-    see = _compute_see_also(store)
+    see = _compute_see_also(_compute_feature_edges(store))
     # Absent ⇒ an empty See-Also (no key at all).
     assert lonely.id not in see
 
@@ -232,7 +233,7 @@ def test_see_also_never_emits_a_steering_line(store, tmp_path):
         assert not line.lstrip().startswith(">"), f"unexpected `> …` line: {line!r}"
 
     # And the See-Also slice itself carries no blockquote-shaped payload.
-    see = _compute_see_also(store)
+    see = _compute_see_also(_compute_feature_edges(store))
     for rows in see.values():
         for r in rows:
             assert not str(r.get("rationale", "")).lstrip().startswith(">")

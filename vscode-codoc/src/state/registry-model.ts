@@ -202,22 +202,26 @@ export function resolveCard(
         return { resolved: true, kind: 'file', file, owners: deduped };
     }
 
-    // Symbol ref → find the owning feature. The registry's `refs` entry carries
-    // the authoritative `feature_id` (the feature whose description authored the
-    // ref) and works even for an unrealized placeholder that owns no binding yet.
-    // Fall back to the binding table, then the sidecar by_file (registry-less).
+    // Symbol ref → find the feature that OWNS the cited symbol. The card's title +
+    // gist describe the owner of the code, NOT the feature whose description
+    // authored the citation — these differ for a CROSS-FEATURE ref (feature A
+    // cites a symbol owned by feature B; the card must read as B). So the binding
+    // table wins; only when no binding owns the symbol do we fall back to the ref's
+    // authoring `feature_id` — that path serves an unrealized placeholder that
+    // authors a ref to code it doesn't bind yet. Finally the sidecar by_file
+    // (registry-less).
     let ownerFeatureId: string | null = null;
     if (registry) {
-        for (const r of registry.refs) {
-            if (r.file === file && r.symbol === sym) {
-                ownerFeatureId = r.feature_id;
+        for (const b of registry.bindings) {
+            if (b.file === file && refMatchesBinding(sym, b.symbol_path)) {
+                ownerFeatureId = b.feature_id;
                 break;
             }
         }
         if (!ownerFeatureId) {
-            for (const b of registry.bindings) {
-                if (b.file === file && refMatchesBinding(sym, b.symbol_path)) {
-                    ownerFeatureId = b.feature_id;
+            for (const r of registry.refs) {
+                if (r.file === file && r.symbol === sym) {
+                    ownerFeatureId = r.feature_id;
                     break;
                 }
             }
@@ -247,11 +251,33 @@ export function resolveCard(
         resolved: true,
         kind: 'feature',
         title,
-        gist: firstSentence(description),
+        // Prefer the Python-derived pitch on the OWNER feature (refs flattened,
+        // trimmed to 120 — the same gist the overview/glance show), so the hover
+        // never diverges from the sidecar pitch. Fall back to a TS first-sentence
+        // of the threaded description only when no pitch exists (a feature missing
+        // from the sidecar). NOTE: keyed on the owner, not the authoring ref.
+        gist: gistFor(sidecar, ownerFeatureId, description),
         bindingCount,
         ownerFeatureId,
         unrealized,
     };
+}
+
+/**
+ * The display gist for a feature: the sidecar's already-derived `pitch` when
+ * present (Python flattened refs + trimmed to PITCH_MAX_LEN — identical to the
+ * overview/glance pitch), else a TS-side first sentence of the threaded
+ * description (backward-compat for a feature absent from the sidecar). Returns
+ * null when neither yields prose, so the caller shows "No description yet".
+ */
+function gistFor(
+    sidecar: SidecarData,
+    featureId: string,
+    description?: string | null,
+): string | null {
+    const pitch = sidecar.features[featureId]?.pitch;
+    if (pitch && pitch.trim()) return pitch;
+    return firstSentence(description);
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -303,10 +329,14 @@ export function buildHoverCards(
     for (const ref of registry?.refs ?? []) {
         const key = refKey(ref.file, ref.symbol);
         if (key in byRef) continue; // first ref wins (a target may be cited twice)
-        // Thread the OWNING feature's description so a resolved feature card gets a
-        // gist; resolveCard re-derives the owner, but the description is keyed by the
-        // ref's recorded feature_id (the feature that authored the citation).
-        byRef[key] = resolveCard(registry, sidecar, ref.file, ref.symbol, descOf(ref.feature_id));
+        // Resolve once to learn the OWNING feature (the feature owning the cited
+        // symbol — NOT the authoring `ref.feature_id`, which differs for a
+        // cross-feature ref). resolveCard prefers the owner's sidecar pitch for the
+        // gist; we thread the OWNER's description as the no-pitch fallback so a
+        // pitch-less owner still gets its own gist, never the author's.
+        const probe = resolveCard(registry, sidecar, ref.file, ref.symbol);
+        const ownerId = probe.resolved && probe.kind === 'feature' ? probe.ownerFeatureId : ref.feature_id;
+        byRef[key] = resolveCard(registry, sidecar, ref.file, ref.symbol, descOf(ownerId));
     }
 
     // A card per feature (what a feature-title link hovers). Resolve through the
@@ -321,7 +351,9 @@ export function buildHoverCards(
         const regMeta = registry?.features[fid];
         const title = meta?.title ?? regMeta?.title ?? fid;
         const binds = bindingsForFeature(sidecar, fid);
-        const gist = firstSentence(descOf(fid));
+        // Pitch-first, same policy as resolveCard (used only for the synthesized
+        // fallback cards below; the binding-resolved path goes through resolveCard).
+        const gist = gistFor(sidecar, fid, descOf(fid));
         if (binds.length > 0) {
             const b = binds[0];
             const card = resolveCard(registry, sidecar, b.file, b.symbol, descOf(fid));

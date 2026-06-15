@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from codoc.agent.tree_update import propose_tree_update
 from codoc.loop import edits as edits_channel
 from codoc.loop.apply import apply_op, derive_auto_ops, should_auto_apply
-from codoc.loop.edits import DRIFT_BINDING_LOST, DRIFT_QUESTIONED, write_drift
+from codoc.loop.edits import DRIFT_BINDING_LOST, DRIFT_QUESTIONED, merge_drift, write_drift
 from codoc.loop.classify import suppressed_by_hold
 from codoc.loop.diff import ChangeSet, ChunkRef, compute_changeset
 from codoc.loop.subtree import select_relevant_subtree
@@ -361,6 +361,11 @@ def apply_changeset(
     # ``<codoc_dir>/drift.json`` so render's index-free ``write_sidecar`` can
     # re-emit it (KTD2). Bare unit-test callers pass None → drift is skipped.
     codoc_dir: str | None = None,
+    # The file scope this pass examined (the watch daemon passes the edited
+    # files). When set, drift is MERGED — only features re-examined this pass
+    # (those owning a binding in scope) have their entry refreshed; out-of-scope
+    # badges survive. None ⇒ a full pass that examined every file ⇒ full-replace.
+    file_scope: set[str] | None = None,
 ) -> LoopAResult:
     held = held or set()
 
@@ -375,11 +380,27 @@ def apply_changeset(
     # removal survives GC (the dedup path handles it instead).
     removed_keys = frozenset((r.file, r.symbol_path) for r in cs.removed)
     gc = _gc_superseded_proposals(store, removed_keys)
+
+    def _persist_drift_map(fresh: dict[str, str]) -> None:
+        """Persist the fresh drift map: full-replace on an unscoped pass; on a
+        scoped pass MERGE so a still-valid badge on a feature bound only to an
+        out-of-scope file survives (it was never re-examined this pass)."""
+        if codoc_dir is None:
+            return
+        if file_scope is None:
+            write_drift(codoc_dir, fresh)
+            return
+        # In-scope feature ids = features re-examined this pass = those owning a
+        # binding in one of the scoped files. Only these may have their entry
+        # cleared/updated; everything else is preserved.
+        in_scope = {b.feature_id for b in store.bindings_in_files(file_scope)}
+        merge_drift(codoc_dir, fresh, in_scope=in_scope)
+
     if cs.is_empty():
-        # An empty change set drifted nothing — persist an empty map so a feature
-        # that re-followed since the last pass loses its badge.
-        if codoc_dir is not None:
-            write_drift(codoc_dir, {})
+        # An empty change set drifted nothing — persist an empty (fresh) map so a
+        # feature that re-followed since the last pass loses its badge. (Scoped
+        # passes still preserve out-of-scope badges via the merge.)
+        _persist_drift_map({})
         return LoopAResult(auto={"gc": gc} if gc else {})
 
     # Feature ids whose prose was AMENDed this pass — drained into _compute_drift
@@ -491,9 +512,8 @@ def apply_changeset(
         cs, store, claimed_features | held)
 
     def _persist_drift() -> None:
-        if codoc_dir is not None:
-            write_drift(codoc_dir, _compute_drift(
-                cs, store, removed_owner, held=held, amended=amended))
+        _persist_drift_map(_compute_drift(
+            cs, store, removed_owner, held=held, amended=amended))
 
     if not (added_unbound or emptied or modified_realized):
         # No LLM pass — but `modified`/`removed` chunks still carry drift the badge
@@ -656,7 +676,7 @@ def run_loop_a(
                                  config=config, adopt_placeholders=adopt_placeholders,
                                  allow_retire=False, held=held,
                                  caused_by_map=cb_map, default_caused_by=default_cb,
-                                 codoc_dir=codoc_dir)
+                                 codoc_dir=codoc_dir, file_scope=file_scope)
         from codoc.loop.status import refresh_status
 
         refresh_status(codoc_dir, store)
@@ -747,6 +767,6 @@ def reconcile_drift(
                                  config=config, adopt_placeholders=adopt_placeholders,
                                  allow_retire=True, amend_on_change=True, held=held,
                                  caused_by_map=cb_map, default_caused_by=default_cb,
-                                 codoc_dir=codoc_dir)
+                                 codoc_dir=codoc_dir, file_scope=file_scope)
         refresh_status(codoc_dir, store)
         return result

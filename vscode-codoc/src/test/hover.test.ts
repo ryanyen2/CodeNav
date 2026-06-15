@@ -80,6 +80,32 @@ describe('resolveCard — symbol refs', () => {
     });
 });
 
+describe('resolveCard — gist prefers the sidecar pitch', () => {
+    // A sidecar carrying the Python-derived pitch (refs flattened, ≤120 chars).
+    const PITCHED: SidecarData = {
+        ...SIDECAR,
+        features: {
+            ...SIDECAR.features,
+            'f-1': { title: 'Auth', parent_id: null, realized: true, pitch: 'Handles authentication and sessions.' },
+        },
+    };
+
+    it('uses the owner feature pitch even when a divergent description is threaded', () => {
+        // The threaded description would yield a different (raw/markdown) sentence;
+        // the pitch must win so the hover matches the overview/glance pitch.
+        const card = resolveCard(REGISTRY, PITCHED, 'auth.py', 'login', '[login](codoc:auth.py#login) is the entrypoint.');
+        if (!card.resolved || card.kind !== 'feature') throw new Error('expected a feature card');
+        expect(card.gist).toBe('Handles authentication and sessions.');
+    });
+
+    it('falls back to firstSentence when the owner has no pitch (backward-compat)', () => {
+        // f-1 has no pitch in the default SIDECAR → the threaded description is used.
+        const card = resolveCard(REGISTRY, SIDECAR, 'auth.py', 'login', 'Login flow. Extra.');
+        if (!card.resolved || card.kind !== 'feature') throw new Error('expected a feature card');
+        expect(card.gist).toBe('Login flow.');
+    });
+});
+
 describe('resolveCard — unrealized placeholder', () => {
     it('suppresses the count and flags unrealized for a plan placeholder', () => {
         const card = resolveCard(REGISTRY, SIDECAR, 'export.py', 'run');

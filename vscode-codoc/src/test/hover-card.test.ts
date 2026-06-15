@@ -204,3 +204,105 @@ describe('buildHoverCards — graceful with no registry', () => {
         expect(card.gist).toBe('Renders the login form.');
     });
 });
+
+// ── gist prefers the sidecar pitch (Fix 1) ────────────────────────────────────
+// A SIDECAR variant carrying the Python-derived pitch on each feature.
+const PITCHED_SIDECAR: SidecarData = {
+    ...SIDECAR,
+    features: {
+        'f-1': { title: 'Auth', parent_id: null, realized: true, pitch: 'Authentication, sessions, and tokens.' },
+        'f-2': { title: 'Login form', parent_id: 'f-1', realized: true, pitch: 'The login form widget.' },
+        'f-3': { title: 'Planned export', parent_id: null, realized: false, pitch: 'Planned CSV export.' },
+    },
+} as SidecarData;
+
+describe('buildHoverCards — gist equals the sidecar pitch when present', () => {
+    const cards = buildHoverCards(REGISTRY, PITCHED_SIDECAR, fid => DESC[fid] ?? null);
+
+    it('a ref card shows the owner pitch, not a firstSentence(description)', () => {
+        const card = cards.byRef[refKey('auth.py', 'login')];
+        if (!card.resolved || card.kind !== 'feature') throw new Error('expected feature card');
+        expect(card.ownerFeatureId).toBe('f-1');
+        // Pitch wins over the threaded description's first sentence ("Handles
+        // authentication.").
+        expect(card.gist).toBe('Authentication, sessions, and tokens.');
+    });
+
+    it('a feature card shows the feature pitch', () => {
+        const card = cards.byFeature['f-1'];
+        if (!card.resolved || card.kind !== 'feature') throw new Error('expected feature card');
+        expect(card.gist).toBe('Authentication, sessions, and tokens.');
+    });
+
+    it('a binding-less unrealized feature card shows its pitch', () => {
+        const card = cards.byFeature['f-3'];
+        if (!card.resolved || card.kind !== 'feature') throw new Error('expected feature card');
+        expect(card.unrealized).toBe(true);
+        expect(card.gist).toBe('Planned CSV export.');
+    });
+});
+
+// A cross-feature ref: feature A (f-author) AUTHORS a citation pointing at a symbol
+// OWNED by feature B (f-owner). The card's title/gist must be B's, never A's.
+describe('buildHoverCards — cross-feature ref uses the OWNER, not the author', () => {
+    const X_REGISTRY: RegistryData = {
+        version: 1,
+        features: {
+            'f-author': { title: 'Author feature', parent_id: null },
+            'f-owner': { title: 'Owner feature', parent_id: null },
+        },
+        bindings: [
+            // The cited symbol is OWNED by f-owner.
+            { file: 'pay.py', symbol_path: 'pay.py::charge', feature_id: 'f-owner' },
+        ],
+        refs: [
+            // …but the ref is AUTHORED by f-author (records f-author as feature_id).
+            { feature_id: 'f-author', label: 'charge', file: 'pay.py', symbol: 'charge', resolved: true },
+        ],
+    };
+    const X_SIDECAR: SidecarData = {
+        version: 5,
+        by_feature: {
+            'f-author': [],
+            'f-owner': [{ file: 'pay.py', symbol: 'pay.py::charge' }],
+        },
+        by_file: {
+            'pay.py': [{ symbol: 'pay.py::charge', feature_id: 'f-owner', feature_title: 'Owner feature' }],
+        },
+        features: {
+            'f-author': { title: 'Author feature', parent_id: null, realized: true, pitch: 'AUTHOR pitch (wrong).' },
+            'f-owner': { title: 'Owner feature', parent_id: null, realized: true, pitch: 'OWNER pitch (correct).' },
+        },
+    } as SidecarData;
+    const X_DESC: Record<string, string> = {
+        'f-author': 'Author description should NOT appear.',
+        'f-owner': 'Owner description.',
+    };
+
+    it('the ref card carries the OWNER title + OWNER pitch', () => {
+        const cards = buildHoverCards(X_REGISTRY, X_SIDECAR, fid => X_DESC[fid] ?? null);
+        const card = cards.byRef[refKey('pay.py', 'charge')];
+        if (!card.resolved || card.kind !== 'feature') throw new Error('expected feature card');
+        expect(card.ownerFeatureId).toBe('f-owner');
+        expect(card.title).toBe('Owner feature');
+        // The OWNER's pitch, never the authoring feature's.
+        expect(card.gist).toBe('OWNER pitch (correct).');
+        expect(card.gist).not.toBe('AUTHOR pitch (wrong).');
+    });
+
+    it('cross-feature owner is used even with no pitch (description fallback by owner)', () => {
+        const noPitch: SidecarData = {
+            ...X_SIDECAR,
+            features: {
+                'f-author': { title: 'Author feature', parent_id: null, realized: true },
+                'f-owner': { title: 'Owner feature', parent_id: null, realized: true },
+            },
+        };
+        const cards = buildHoverCards(X_REGISTRY, noPitch, fid => X_DESC[fid] ?? null);
+        const card = cards.byRef[refKey('pay.py', 'charge')];
+        if (!card.resolved || card.kind !== 'feature') throw new Error('expected feature card');
+        expect(card.ownerFeatureId).toBe('f-owner');
+        // No pitch → falls back to the OWNER's threaded description, not the author's.
+        expect(card.gist).toBe('Owner description.');
+    });
+});

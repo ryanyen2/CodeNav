@@ -273,3 +273,27 @@ def read_drift(codoc_dir: str | Path) -> dict[str, str]:
     data = read_json(drift_path(codoc_dir), default={})
     out = data.get("drift") if isinstance(data, dict) else None
     return dict(out) if isinstance(out, dict) else {}
+
+
+def merge_drift(
+    codoc_dir: str | Path,
+    fresh: dict[str, str],
+    *,
+    in_scope: set[str],
+) -> Path:
+    """Persist drift from a SCOPED pass without wiping out-of-scope entries.
+
+    A scoped loop pass (the watch daemon's ``file_scope=code_files``) only
+    re-examines features that own a binding in scope. Full-replacing
+    ``drift.json`` would clear a still-valid badge on a feature bound entirely to
+    a file the pass never touched. So we MERGE: read the existing map, drop only
+    the entries for features that WERE re-examined this pass (``in_scope`` — those
+    are now authoritatively re-derived in ``fresh``, including their absence =
+    cleared), then overlay ``fresh``. Out-of-scope entries survive untouched.
+
+    ``write_drift`` (full-replace) remains the right call for an unscoped pass,
+    where every feature is re-examined and a stale entry SHOULD be cleared."""
+    merged = {fid: state for fid, state in read_drift(codoc_dir).items()
+              if fid not in in_scope}
+    merged.update(fresh)
+    return write_drift(codoc_dir, merged)

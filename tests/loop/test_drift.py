@@ -233,3 +233,143 @@ def test_write_sidecar_missing_drift_file_is_empty(store, codoc_dir):
     from pathlib import Path
     sidecar = json.loads((Path(codoc_dir) / BINDINGS_FILENAME).read_text())
     assert sidecar["feature_drift"] == {}
+
+
+# ─── Fix 1: a SCOPED pass merges drift (out-of-scope badges survive) ──────────
+
+def test_scoped_pass_preserves_out_of_scope_drift(store, codoc_dir):
+    """A feature questioned from a prior pass (bound to file A) keeps its badge
+    when a later SCOPED pass touches only file B. The scoped pass full-replacing
+    drift.json would wrongly wipe the still-valid A badge."""
+    fa = Feature(title="A feature", description="In file a.")
+    fb = Feature(title="B feature", description="In file b.")
+    store.upsert_feature(fa)
+    store.upsert_feature(fb)
+    _bind(store, fa.id, "a.py", "a.py::a_fn", "old")
+    _bind(store, fb.id, "b.py", "b.py::b_fn", "old")
+
+    # Prior (full) pass questioned A (its bound code drifted).
+    write_drift(codoc_dir, {fa.id: DRIFT_QUESTIONED})
+
+    # Later SCOPED pass touches only b.py — B's chunk modified. A is out of scope
+    # (no binding in {b.py}) so its badge must survive.
+    apply_changeset(_modified("b.py", "b.py::b_fn"), store,
+                    propose=_propose_nothing, codoc_dir=codoc_dir,
+                    file_scope={"b.py"})
+
+    drift = read_drift(codoc_dir)
+    assert drift[fa.id] == DRIFT_QUESTIONED   # out-of-scope — preserved
+    assert drift[fb.id] == DRIFT_QUESTIONED   # in-scope — freshly computed
+
+
+def test_scoped_pass_clears_in_scope_drift_that_refollowed(store, codoc_dir):
+    """An in-scope feature whose code now follows again loses its badge even on a
+    scoped pass (merge clears entries for re-examined features)."""
+    fb = Feature(title="B feature", description="In file b.")
+    store.upsert_feature(fb)
+    _bind(store, fb.id, "b.py", "b.py::b_fn", "h")  # fingerprint matches new code
+
+    write_drift(codoc_dir, {fb.id: DRIFT_QUESTIONED})  # stale prior badge
+
+    # Scoped pass over b.py with an empty change set → B re-followed → cleared.
+    apply_changeset(ChangeSet(), store, propose=_propose_nothing,
+                    codoc_dir=codoc_dir, file_scope={"b.py"})
+
+    assert read_drift(codoc_dir) == {}  # in-scope + re-followed → badge dropped
+
+
+def test_full_unscoped_pass_still_clears_stale_drift(store, codoc_dir):
+    """A full (file_scope=None) pass keeps the full-replace behavior: a stale
+    badge for a feature that re-followed is cleared."""
+    fa = Feature(title="A feature", description="In file a.")
+    store.upsert_feature(fa)
+    _bind(store, fa.id, "a.py", "a.py::a_fn", "h")  # matches → followed
+
+    write_drift(codoc_dir, {fa.id: DRIFT_QUESTIONED, "f-ghost": DRIFT_BINDING_LOST})
+
+    apply_changeset(ChangeSet(), store, propose=_propose_nothing,
+                    codoc_dir=codoc_dir)  # file_scope=None → full replace
+
+    assert read_drift(codoc_dir) == {}  # everything re-examined → all cleared
+
+
+# ─── Fix 2: interactive re-emit filters drift against live store state ────────
+
+def test_write_sidecar_drops_binding_lost_for_rebound_feature(store, codoc_dir):
+    """An interactive write (Accept/Reject, MCP reflect ATTACH) re-emits drift.json
+    verbatim, but a `binding-lost` badge on a feature that now owns a binding is
+    contradictory — write_sidecar filters it out (pure store reads, no index)."""
+    import json
+    from codoc.codoc_file.render import BINDINGS_FILENAME
+    from pathlib import Path
+
+    f = Feature(title="Validator", description="Validates input.")
+    store.upsert_feature(f)
+    write_drift(codoc_dir, {f.id: DRIFT_BINDING_LOST})
+
+    # An ATTACH re-bound the feature after the loop pass left the badge behind.
+    _bind(store, f.id, "v.py", "v.py::check", "h")
+
+    write_sidecar(store, codoc_dir)
+
+    sidecar = json.loads((Path(codoc_dir) / BINDINGS_FILENAME).read_text())
+    assert f.id not in sidecar["feature_drift"]  # re-bound → no contradictory badge
+
+
+def test_write_sidecar_drops_drift_for_retired_feature(store, codoc_dir):
+    """A drift entry for a feature that is now retired is not re-emitted."""
+    import json
+    from codoc.codoc_file.render import BINDINGS_FILENAME
+    from pathlib import Path
+
+    f = Feature(title="Validator", description="Validates input.")
+    store.upsert_feature(f)
+    write_drift(codoc_dir, {f.id: DRIFT_QUESTIONED})
+    store.retire_feature(f.id)
+
+    write_sidecar(store, codoc_dir)
+
+    sidecar = json.loads((Path(codoc_dir) / BINDINGS_FILENAME).read_text())
+    assert f.id not in sidecar["feature_drift"]  # retired → badge meaningless
+
+
+def test_write_sidecar_keeps_questioned_for_live_bound_feature(store, codoc_dir):
+    """A `questioned` badge on a still-live, still-bound feature is KEPT — only a
+    loop pass with a fresh index can tell whether the prose drift was resolved."""
+    import json
+    from codoc.codoc_file.render import BINDINGS_FILENAME
+    from pathlib import Path
+
+    f = Feature(title="Validator", description="Validates input.")
+    store.upsert_feature(f)
+    _bind(store, f.id, "v.py", "v.py::check", "h")
+    write_drift(codoc_dir, {f.id: DRIFT_QUESTIONED})
+
+    write_sidecar(store, codoc_dir)
+
+    sidecar = json.loads((Path(codoc_dir) / BINDINGS_FILENAME).read_text())
+    assert sidecar["feature_drift"] == {f.id: DRIFT_QUESTIONED}  # kept
+
+
+# ─── Fix 3: write_registry failure does not abort write_sidecar ───────────────
+
+def test_write_sidecar_survives_write_registry_oserror(store, codoc_dir, monkeypatch):
+    """A disk error writing the (pure derived) registry must not propagate out of
+    write_sidecar — the bindings sidecar is still written and the loop pass
+    continues (the IDE degrades gracefully when the registry is stale/absent)."""
+    import json
+    from codoc.codoc_file.render import BINDINGS_FILENAME
+    from pathlib import Path
+
+    f = Feature(title="Validator", description="Validates input.")
+    store.upsert_feature(f)
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("codoc.codoc_file.render.write_registry", _boom)
+
+    write_sidecar(store, codoc_dir)  # must NOT raise
+
+    sidecar = json.loads((Path(codoc_dir) / BINDINGS_FILENAME).read_text())
+    assert f.id in sidecar["by_feature"]  # bindings sidecar completed

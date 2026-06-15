@@ -67,6 +67,23 @@ const REF_RE = /\[([^\]]*)\]\(codoc:([^)#]+)(?:#([^)]+))?\)/g;
 // consult (mirrors Python parse._LINK_RE). `codoc:` links are refs, not links.
 const LINK_RE = /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
 
+/**
+ * The canonical inline `codoc:` citation regex for the *provider* layer
+ * (`[label](codoc:file#symbol)` → group 1 = file, group 2 = symbol; the label is
+ * non-capturing). This is the single source of truth for `decoration.ts`,
+ * `hover.ts`, and `doc-links.ts`, which previously each defined an identical copy.
+ *
+ * Returned by a FACTORY (not a shared const) on purpose: a `g`-flagged RegExp
+ * carries mutable `lastIndex`, so a shared instance would let the three consumers
+ * corrupt each other's iteration state. Each caller gets a fresh `RegExp` here.
+ *
+ * NOTE: distinct from `REF_RE`/`extractRefs` above, which captures the label too
+ * (3 groups) for the parser. The provider pattern is intentionally label-less.
+ */
+export function codocRefRe(): RegExp {
+    return /\[[^\]]*\]\(codoc:([^)#]+)(?:#([^)]+))?\)/g;
+}
+
 export function extractRefs(text: string): ParsedRef[] {
     const refs: ParsedRef[] = [];
     REF_RE.lastIndex = 0;
