@@ -16,6 +16,7 @@
  * description change, plus the structural kinds add/move/retire.
  */
 import type { SidecarData } from './bindings-model';
+import type { CommentThread } from './comment-model';
 import {
     PMNode,
     NODE_FEATURE_HEADING,
@@ -52,21 +53,23 @@ export interface Suggestion {
     descNew?: string;
 }
 
-/** The tree.doc.json wrapper: settled doc + persisted doc-ahead suggestions. */
+/** The tree.doc.json wrapper: settled doc + persisted doc-ahead suggestions +
+ *  inline comment threads (span-anchored steering notes; see comment-model.ts). */
 export interface DocFile {
     version: number;
     doc: PMNode;
     suggestions: Suggestion[];
+    comments: CommentThread[];
 }
 
 export const DOC_FILE_VERSION = 1;
 
 export function emptyDocFile(doc: PMNode): DocFile {
-    return { version: DOC_FILE_VERSION, doc, suggestions: [] };
+    return { version: DOC_FILE_VERSION, doc, suggestions: [], comments: [] };
 }
 
-/** Accept either a wrapper {version,doc,suggestions} or a bare ProseMirror doc
- *  (forward-compat with the U4 format) and normalize to a DocFile. */
+/** Accept either a wrapper {version,doc,suggestions,comments} or a bare ProseMirror
+ *  doc (forward-compat with the U4 format) and normalize to a DocFile. */
 export function parseDocFile(json: unknown): DocFile | null {
     if (!json || typeof json !== 'object') return null;
     const o = json as Record<string, unknown>;
@@ -76,6 +79,7 @@ export function parseDocFile(json: unknown): DocFile | null {
             version: typeof o.version === 'number' ? o.version : DOC_FILE_VERSION,
             doc: o.doc as PMNode,
             suggestions: Array.isArray(o.suggestions) ? (o.suggestions as Suggestion[]) : [],
+            comments: Array.isArray(o.comments) ? (o.comments as CommentThread[]) : [],
         };
     }
     return null;

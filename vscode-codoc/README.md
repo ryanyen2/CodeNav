@@ -4,15 +4,30 @@ Navigate and edit the codoc feature tree directly inside VS Code. The extension
 reads `.codoc/tree.codoc` and the sidecar `.codoc/tree.bindings.json` from disk —
 **no server, no port, no HTTP**. File watchers drive everything.
 
-## Prerequisites
+## Setup — one click, no terminal
 
-- A codoc-initialized repo: run `codoc init` in your project root (Python package required)
-- The extension activates automatically when VS Code finds a `.codoc/` directory in the workspace
+Open your repo and run **“codoc: Set up codoc”** — from the first-run walkthrough,
+the `$(rocket) Set up codoc` status-bar item, or the command palette. Setup:
 
-`codoc init` also installs the **codoc Claude Code plugin** into `.claude/` and
-`.mcp.json` — hooks, the MCP server, the `codoc-intent` skill, and the
-`/codoc:plan` + `/codoc:sync` commands — so Claude Code sessions in this repo
-follow the propose-then-implement workflow (see §Claude Code below).
+1. Bootstraps **`uv`** and installs the codoc Python core into an isolated,
+   version-pinned environment (no manual `pip`, no system-Python assumptions).
+2. Points codoc's reflection at your existing **Claude Code** login — no separate
+   API key in the common case (OpenAI is the fallback; you'll be prompted only
+   then). *Heads-up:* headless Claude usage bills against your Claude subscription
+   as of **2026-06-15**.
+3. Runs `codoc init` (indexes the repo, proposes the tree, installs the **Claude
+   Code plugin** into `.claude/` + `.mcp.json` — hooks, MCP server, `codoc-intent`
+   skill, `/codoc:plan` + `/codoc:sync`).
+4. Starts and supervises the `codoc watch` daemon **for you** — it stops cleanly
+   when you close the window; you never run `codoc watch` by hand.
+
+**Workspace Trust:** setup, provisioning, and the daemon require a trusted
+workspace (they install and run code). In an untrusted/restricted workspace the
+extension still parses and navigates `tree.codoc` read-only. Re-run anytime with
+**“codoc: Repair / re-run setup”**.
+
+Prefer the terminal? The CLI path (`uv tool install codoc` / `pip install -e .`,
+then `codoc init`) still works — see the repo README.
 
 ## How to run the extension (development)
 
@@ -150,6 +165,8 @@ codoc sync    # one-shot: apply tree edits, reflect code once, exit
 
 | Command | Description |
 |---|---|
+| `codoc: Set up codoc` | One-click setup: provision the core, init, start the daemon |
+| `codoc: Repair / re-run setup` | Re-run setup to repair a partial/broken state |
 | `codoc: Open` | Open `tree.codoc` |
 | `codoc: Sync` | Run `codoc sync` in a new terminal |
 | `codoc: Navigate to feature` | Jump to a feature line by title or id |
@@ -186,7 +203,8 @@ The `codoc` status bar item (bottom-left) reflects the current loop state
 
 | Status | State | Meaning |
 |---|---|---|
-| `$(sync) codoc: not initialized` | — | No `.codoc/` directory — run `codoc init` |
+| `$(rocket) codoc: Set up codoc` | — | No `.codoc/` yet — click to run one-click setup |
+| `$(cloud-download) codoc: setting up…` | — | Provisioning the core / indexing the repo |
 | `$(loading~spin) codoc: implementing…` | `realizing` | Your session is implementing tree edits |
 | `$(pencil) codoc: applying tree edits…` | `tree_dirty` | Loop B is processing tree changes |
 | `$(play) codoc: N to implement` | `awaiting_impl` | N directives queued in `realize.md` — run `/codoc:sync` |

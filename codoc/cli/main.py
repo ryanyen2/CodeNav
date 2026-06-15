@@ -70,8 +70,9 @@ def watch(
     dry: bool = typer.Option(False, "--dry", help="Reflect + apply tree edits, but don't queue realization directives."),
     auto_realize: bool = typer.Option(
         False, "--auto-realize",
-        help="Unattended fallback: spawn a headless `claude -p /codoc:sync` to "
-             "implement queued tree edits when no interactive session is around.",
+        help="Unattended fallback: implement queued tree edits when no interactive "
+             "session is around — via the Claude Agent SDK when installed "
+             "(codoc[sdk]; live readout), else a headless `claude -p /codoc:sync`.",
     ),
 ):
     """Watch code + tree.codoc and run both loops continuously."""
@@ -79,6 +80,55 @@ def watch(
 
     run_watch(root, _codoc_dir(root), no_realize=no_realize, dry_run=dry,
               auto_realize=auto_realize, printer=typer.echo)
+
+
+@app.command()
+def realize(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    engine: str = typer.Option(
+        "auto", "--engine",
+        help="auto | sdk | cli — sdk streams a live per-action readout "
+             "(claude-agent-sdk); cli is a blind `claude -p /codoc:sync`.",
+    ),
+    permission_mode: str = typer.Option(
+        "acceptEdits", "--permission-mode",
+        help="Claude Agent SDK permission mode for the sdk engine.",
+    ),
+):
+    """Implement the queued tree edits (.codoc/realize.md) now, in the foreground.
+
+    The SDK engine shows one compact line per agent action (edit / read /
+    reflect / fetch) and mirrors every action into ``.codoc/activity.json`` so
+    the IDE shows live signals on the matching features.
+    """
+    import subprocess
+
+    from codoc.loop.loop_b import realize_path
+    from codoc.loop.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
+
+    if not realize_path(_codoc_dir(root)).exists():
+        typer.echo("Nothing queued (.codoc/realize.md absent). Edit tree.codoc, then `codoc sync`.")
+        raise typer.Exit(0)
+
+    if engine not in ("auto", "sdk", "cli"):
+        typer.echo(f"Unknown --engine {engine!r} — expected auto, sdk, or cli.", err=True)
+        raise typer.Exit(2)
+    engine = resolve_engine(engine)
+    if engine == "sdk":
+        if not sdk_available():
+            typer.echo("claude-agent-sdk is not installed — pip install 'codoc[sdk]', "
+                       "or use --engine cli.", err=True)
+            raise typer.Exit(2)
+        raise typer.Exit(run_sdk_realize(root, _codoc_dir(root),
+                                         permission_mode=permission_mode,
+                                         printer=typer.echo))
+    from codoc.loop.autorealize import find_claude
+    claude = find_claude()
+    if claude is None:
+        typer.echo("`claude` CLI not found on PATH.", err=True)
+        raise typer.Exit(2)
+    typer.echo("codoc realize · /codoc:sync · claude -p (no streamed readout)")
+    raise typer.Exit(subprocess.call([claude, "-p", "/codoc:sync"], cwd=root))
 
 
 @app.command()

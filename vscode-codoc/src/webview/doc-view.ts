@@ -163,6 +163,7 @@ function reconcile(): void {
         wholeEditor.setSuggestions(payload.suggestions ?? []);
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
+        wholeEditor.setComments(payload.comments ?? []);
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
     }
@@ -347,6 +348,9 @@ function renderDocHost(): HTMLElement {
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdraw: s => vscode.postMessage({ kind: 'suggest-withdraw', id: s.id }),
         onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
+        onCommentCreate: (doc, thread) => vscode.postMessage({ kind: 'comment-create', doc, thread }),
+        onCommentEdit: (id, body) => vscode.postMessage({ kind: 'comment-edit', id, body }),
+        onCommentResolve: (doc, id) => vscode.postMessage({ kind: 'comment-resolve', doc, id }),
         onActiveFeature: fid => {
             if (!fid) return;
             syncingFromEditor = true;
@@ -358,6 +362,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setSuggestions(payload.suggestions ?? []);
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
+    wholeEditor.setComments(payload.comments ?? []);
     return host;
 }
 

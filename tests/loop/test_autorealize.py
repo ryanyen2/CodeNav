@@ -49,14 +49,16 @@ def test_no_spawn_when_one_is_already_in_flight(codoc_dir):
 
 def test_spawn_returns_none_when_claude_missing(codoc_dir):
     _queue(codoc_dir)
-    with patch.object(autorealize, "find_claude", return_value=None):
+    with patch("codoc.loop.sdk_realize.sdk_available", return_value=False), \
+         patch.object(autorealize, "find_claude", return_value=None):
         assert autorealize.spawn_realize(str(__import__("pathlib").Path(codoc_dir).parent), codoc_dir) is None
 
 
 def test_spawn_launches_claude_and_sets_status(codoc_dir):
     _queue(codoc_dir)
     fake = object()
-    with patch.object(autorealize, "find_claude", return_value="/usr/bin/claude"), \
+    with patch("codoc.loop.sdk_realize.sdk_available", return_value=False), \
+         patch.object(autorealize, "find_claude", return_value="/usr/bin/claude"), \
          patch.object(autorealize.subprocess, "Popen", return_value=fake) as popen:
         proc = autorealize.spawn_realize("/repo", codoc_dir)
     assert proc is fake

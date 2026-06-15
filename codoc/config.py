@@ -1,12 +1,17 @@
 """
 codoc.config — LLM and embedder configuration, env-var driven.
 
-Supports OpenAI and Ollama for completions; OpenAI and sentence-transformers for embeddings.
-No adalflow dependency.
+Supports OpenAI, Ollama, and Claude for completions; OpenAI and
+sentence-transformers for embeddings. No adalflow dependency.
+
+The ``claude`` provider reuses the user's *existing* Claude credentials by
+shelling out to the ``claude`` CLI in headless JSON mode — no separate API key.
+This is what lets the VS Code extension offer a single-sign-in setup: codoc's
+own reflection calls ride on the same auth Claude Code already resolved.
 
 Environment variables:
-    CODOC_PROVIDER          LLM provider: "openai" | "ollama"  (default "openai")
-    CODOC_MODEL             Model name  (default "gpt-5.4-mini")
+    CODOC_PROVIDER          LLM provider: "openai" | "ollama" | "claude"  (default "openai")
+    CODOC_MODEL             Model name  (default "gpt-5.4-mini"; "sonnet" when provider="claude")
     OPENAI_API_KEY          API key for OpenAI (required when provider=openai)
     CODOC_BASE_URL          Override base URL (e.g. for local OpenAI-compatible servers)
     CODOC_TEMPERATURE       Float  (default 0.2)
@@ -36,7 +41,7 @@ load_dotenv(override=True)
 
 
 class LLMConfig(BaseModel):
-    provider: str  # "openai" | "ollama"
+    provider: str  # "openai" | "ollama" | "claude"
     model: str
     api_key: str | None = None
     base_url: str | None = None
@@ -47,10 +52,19 @@ class LLMConfig(BaseModel):
 
 
 def get_llm_config() -> LLMConfig:
-    """Build LLMConfig from environment variables."""
+    """Build LLMConfig from environment variables.
+
+    When ``CODOC_MODEL`` is unset the default tracks the provider: the OpenAI
+    default (``gpt-5.4-mini``) makes no sense for Claude, so ``claude`` falls
+    back to the ``sonnet`` alias the ``claude`` CLI understands.
+    """
+    provider = os.environ.get("CODOC_PROVIDER", "openai")
+    model = os.environ.get("CODOC_MODEL")
+    if model is None:
+        model = "sonnet" if provider in ("claude", "anthropic") else "gpt-5.4-mini"
     return LLMConfig(
-        provider=os.environ.get("CODOC_PROVIDER", "openai"),
-        model=os.environ.get("CODOC_MODEL", "gpt-5.4-mini"),
+        provider=provider,
+        model=model,
         api_key=os.environ.get("OPENAI_API_KEY"),
         base_url=os.environ.get("CODOC_BASE_URL"),
         temperature=float(os.environ.get("CODOC_TEMPERATURE", "0.2")),
@@ -71,6 +85,8 @@ def complete(prompt: str, config: LLMConfig | None = None) -> str:
         response_text = _complete_openai(prompt, config)
     elif config.provider == "ollama":
         response_text = _complete_ollama(prompt, config)
+    elif config.provider in ("claude", "anthropic"):
+        response_text = _complete_claude(prompt, config)
     else:
         raise ValueError(f"Unknown LLM provider: {config.provider!r}")
 
@@ -124,6 +140,80 @@ def _complete_ollama(prompt: str, config: LLMConfig) -> str:
         options={"temperature": config.temperature, "num_predict": config.max_tokens},
     )
     return response["message"]["content"]
+
+
+def _complete_claude(prompt: str, config: LLMConfig) -> str:
+    """Complete via the user's existing Claude credentials by shelling out to the
+    ``claude`` CLI in headless JSON mode — no separate API key.
+
+    Why the CLI and not the ``anthropic`` SDK: the subscription OAuth token Claude
+    Code stores is *not* a general API key, so only the ``claude`` binary can reuse
+    that login. Three guards make the reuse correct and cheap:
+
+    * **never ``--bare``** — bare mode skips the OAuth/keychain read, forcing a key.
+    * **drop ``ANTHROPIC_API_KEY``** from the child env — if present it silently
+      overrides the subscription and bills the wrong account.
+    * **neutral cwd** — run from a temp dir so codoc's *own* repo hooks / MCP /
+      CLAUDE.md don't load (heavy, and risks the reflection re-triggering codoc).
+
+    Returns the model's text (the JSON envelope's ``result``); codoc's
+    ``parse_solution`` extracts the structured payload exactly as for OpenAI, so
+    the prompt contract is unchanged.
+    """
+    import json as _json
+    import shutil
+    import subprocess
+    import tempfile
+
+    claude = shutil.which("claude")
+    if claude is None:
+        raise RuntimeError(
+            "provider='claude' needs the `claude` CLI on PATH "
+            "(install Claude Code, or set CODOC_PROVIDER=openai)."
+        )
+
+    # Child env minus ANTHROPIC_API_KEY so the subscription login wins.
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    # The model rides in argv; reject a flag-shaped value (e.g. from a malicious
+    # .env) that the CLI parser could re-lex into options.
+    if config.model and config.model.startswith("-"):
+        raise ValueError(f"Refusing a flag-shaped CODOC_MODEL: {config.model!r}")
+    cmd = [
+        claude, "-p",
+        "--output-format", "json",
+        "--max-turns", "1",
+        "--allowedTools", "",  # pure completion — no tools, no agent loop
+    ]
+    if config.model:
+        cmd += ["--model", config.model]
+
+    # The prompt is built from repo/tree.codoc content (attacker-influenceable in a
+    # shared repo). Deliver it on STDIN, never argv: a flag-shaped prompt can't be
+    # re-lexed into CLI options (so `--allowedTools ""` / `--max-turns 1` hold), and
+    # the prompt (source snippets) never appears in `ps`/process listings.
+    proc = subprocess.run(
+        cmd, input=prompt, capture_output=True, text=True,
+        cwd=tempfile.gettempdir(), env=env,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"`claude -p` failed (exit {proc.returncode}): "
+            f"{(proc.stderr or proc.stdout or '').strip()[:300]}"
+        )
+    try:
+        payload = _json.loads(proc.stdout)
+    except _json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"`claude -p` returned non-JSON output: {proc.stdout[:300]!r}"
+        ) from exc
+    # The headless JSON envelope reports outcome via subtype/is_error; a billing
+    # or rate-limit subtype must surface, not return half an answer.
+    if payload.get("is_error") or payload.get("subtype") not in (None, "success"):
+        raise RuntimeError(
+            f"`claude -p` did not succeed (subtype={payload.get('subtype')!r}): "
+            f"{str(payload.get('result') or '')[:300]}"
+        )
+    return str(payload.get("result", ""))
 
 
 # ---------------------------------------------------------------------------

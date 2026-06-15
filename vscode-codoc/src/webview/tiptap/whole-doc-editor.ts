@@ -25,8 +25,10 @@ import {
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
+import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { diffDocsToSuggestions } from '../../state/suggestion-model';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
+import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { PMNode } from '../../state/pm-doc';
 import type { FeaturePhase } from '../../state/activity-model';
@@ -45,6 +47,12 @@ export interface WholeDocEditorOptions {
     onReject: (s: Suggestion) => void;
     onWithdraw: (s: Suggestion) => void;
     onOpenBinding: (file: string, symbol: string) => void;
+    /** Create an inline comment: the whole doc (carrying the new anchor mark) + the thread. */
+    onCommentCreate: (doc: PMNode, thread: CommentThread) => void;
+    /** Edit a comment's body in place. */
+    onCommentEdit: (id: string, body: string) => void;
+    /** Resolve a comment: the whole doc (anchor mark removed) + the thread id. */
+    onCommentResolve: (doc: PMNode, id: string) => void;
     /** Selection moved into a feature — drives tree-pane highlight. */
     onActiveFeature?: (fid: string | null) => void;
 }
@@ -57,6 +65,8 @@ export interface WholeDocEditorHandle {
     setSuggestions: (suggestions: Suggestion[]) => void;
     /** Update the per-feature dependency threads (reads / used-by / code refs). */
     setThreads: (threads: Record<string, ThreadsData>) => void;
+    /** Update the inline comment threads (drives the anchor icons + popover). */
+    setComments: (comments: CommentThread[]) => void;
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
     scrollToFeature: (fid: string) => void;
@@ -143,6 +153,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentSuggestions: Suggestion[] = [];
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
+    let currentComments: CommentThread[] = [];
 
     const editor = new Editor({
         element: surface,
@@ -160,6 +171,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onOpenBinding: opts.onOpenBinding,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
+            CommentDecorations.configure({
+                getComments: () => currentComments,
+                handlers: {
+                    resolve: (id: string) => resolveComment(id),
+                    edit: (thread: CommentThread) => openComposerForEdit(thread),
+                },
+            }),
             makeKeymap(),
         ],
         content: { type: 'doc', content: [{ type: 'paragraph' }] },
@@ -172,6 +190,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             scheduleRail();
         },
         onSelectionUpdate: () => {
+            updateBubble();
             if (!opts.onActiveFeature) return;
             opts.onActiveFeature(activeFid());
         },
@@ -304,9 +323,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         iconButton('B', 'Bold (⌘B)', () => editor.chain().focus().toggleBold().run(), 'ce-bold'),
         iconButton('I', 'Italic (⌘I)', () => editor.chain().focus().toggleItalic().run(), 'ce-italic'),
         iconButton('H', 'Highlight', () => editor.chain().focus().toggleHighlight().run(), 'ce-hl'),
-        iconButton('❝', 'Comment (ask for a higher-level edit — stored only in slice 1)', () => {
-            editor.chain().focus().setMark('comment', { threadId: 'c-' + Date.now().toString(36) }).run();
-        }, 'ce-cm'),
+        iconButton('❝', 'Comment on the selection — a steering note the agent will address', () => openComposerForSelection(), 'ce-cm'),
     );
 
     const structure = document.createElement('div');
@@ -451,6 +468,228 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         suppressUpdate = false;
     }
 
+    // ── inline comments — bubble menu + composer + resolve ────────────────────
+    // Selecting prose surfaces a one-action bubble (❝); clicking it (or the toolbar
+    // ❝) opens a composer aside the selection. Enter saves: a `comment` mark anchors
+    // the threadId, the note is handed to the host (→ a `> …` steering line the agent
+    // drains). The marker icon + popover live in comment-decorations.ts; resolving
+    // removes the anchor mark here and tells the host to drop the `> …` line.
+    type ComposeMode = 'create' | 'edit';
+    const bubble = document.createElement('div');
+    bubble.className = 'ce-cmt-bubble';
+    bubble.style.display = 'none';
+    const bubbleBtn = document.createElement('button');
+    bubbleBtn.type = 'button';
+    bubbleBtn.className = 'ce-cmt-bubble-btn';
+    bubbleBtn.textContent = '❝ Comment';
+    bubbleBtn.title = 'Comment on the selection — a steering note the agent will address';
+    bubbleBtn.addEventListener('mousedown', ev => ev.preventDefault()); // keep the editor selection
+    bubbleBtn.addEventListener('click', ev => { ev.preventDefault(); openComposerForSelection(); });
+    bubble.append(bubbleBtn);
+    document.body.append(bubble);
+
+    let composer: HTMLElement | null = null;
+    let composeMode: ComposeMode = 'create';
+    let composeRange: { from: number; to: number } | null = null;
+    let composeFid: string | null = null;
+    let composeAnchor = '';
+    let composeThreadId = '';
+
+    function selectionRect(): DOMRect | null {
+        const { from, to, empty } = editor.state.selection;
+        if (empty) return null;
+        try {
+            const a = editor.view.coordsAtPos(from);
+            const b = editor.view.coordsAtPos(to);
+            const left = Math.min(a.left, b.left);
+            const right = Math.max(a.right, b.right);
+            const top = Math.min(a.top, b.top);
+            const bottom = Math.max(a.bottom, b.bottom);
+            return new DOMRect(left, top, right - left, bottom - top);
+        } catch { return null; }
+    }
+
+    function updateBubble(): void {
+        if (composer) { bubble.style.display = 'none'; return; }
+        const { from, to, empty } = editor.state.selection;
+        const rect = empty ? null : selectionRect();
+        // Only over real prose: both ends inside a paragraph/heading text block.
+        const inText = !empty && editor.state.doc.resolve(from).parent.isTextblock
+            && to - from >= 1;
+        if (!rect || !inText) { bubble.style.display = 'none'; return; }
+        bubble.style.display = 'block';
+        const bw = bubble.offsetWidth || 96;
+        bubble.style.left = `${Math.max(8, Math.min(rect.left + rect.width / 2 - bw / 2, window.innerWidth - bw - 8))}px`;
+        bubble.style.top = `${Math.max(8, rect.top - bubble.offsetHeight - 8)}px`;
+    }
+    function closeBubble(): void { bubble.style.display = 'none'; }
+
+    function selectedText(from: number, to: number): string {
+        return editor.state.doc.textBetween(from, to, ' ', ' ');
+    }
+
+    function openComposerForSelection(): void {
+        const { from, to, empty } = editor.state.selection;
+        if (empty || to <= from) { editor.commands.focus(); return; }
+        composeMode = 'create';
+        composeRange = { from, to };
+        composeFid = activeFid();
+        composeAnchor = selectedText(from, to);
+        composeThreadId = mintCommentId(Date.now(), String(from));
+        openComposer(selectionRect(), '');
+    }
+
+    function openComposerForEdit(thread: CommentThread): void {
+        composeMode = 'edit';
+        composeThreadId = thread.id;
+        composeRange = commentMarkRange(thread.id);
+        composeFid = thread.featureId;
+        composeAnchor = thread.anchorText;
+        const at = composeRange ? coordsRect(composeRange.from, composeRange.to) : null;
+        openComposer(at, thread.body);
+    }
+
+    function coordsRect(from: number, to: number): DOMRect | null {
+        try {
+            const a = editor.view.coordsAtPos(from);
+            const b = editor.view.coordsAtPos(to);
+            return new DOMRect(Math.min(a.left, b.left), Math.min(a.top, b.top),
+                Math.abs(b.right - a.left), Math.max(a.bottom, b.bottom) - Math.min(a.top, b.top));
+        } catch { return null; }
+    }
+
+    function openComposer(at: DOMRect | null, initial: string): void {
+        closeComposer();
+        closeBubble();
+        const box = document.createElement('div');
+        box.className = 'ce-cmt-composer';
+        if (composeAnchor.trim()) {
+            const ctx = document.createElement('div');
+            ctx.className = 'ce-cmt-ctx';
+            ctx.textContent = composeAnchor;
+            ctx.title = composeAnchor;
+            box.append(ctx);
+        }
+        const ta = document.createElement('textarea');
+        ta.className = 'ce-cmt-input';
+        ta.rows = 2;
+        ta.placeholder = composeMode === 'edit' ? 'Edit your note…' : 'Tell the agent what to change…';
+        ta.value = initial;
+        ta.addEventListener('keydown', ev => {
+            if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); saveComposer(ta.value); }
+            else if (ev.key === 'Escape') { ev.preventDefault(); closeComposer(); editor.commands.focus(); }
+        });
+        const foot = document.createElement('div');
+        foot.className = 'ce-cmt-composer-foot';
+        const hint = document.createElement('span');
+        hint.className = 'ce-cmt-hint';
+        hint.textContent = '⏎ send · esc cancel';
+        const send = document.createElement('button');
+        send.type = 'button';
+        send.className = 'ce-cmt-send';
+        send.textContent = composeMode === 'edit' ? 'Save' : 'Send';
+        send.addEventListener('mousedown', ev => ev.preventDefault());
+        send.addEventListener('click', ev => { ev.preventDefault(); saveComposer(ta.value); });
+        foot.append(hint, send);
+        box.append(ta, foot);
+        document.body.append(box);
+        composer = box;
+        const w = box.offsetWidth || 240;
+        const left = at ? Math.max(8, Math.min(at.left, window.innerWidth - w - 8)) : (window.innerWidth - w) / 2;
+        const top = at ? Math.min(at.bottom + 6, window.innerHeight - box.offsetHeight - 8) : 120;
+        box.style.left = `${left}px`;
+        box.style.top = `${top}px`;
+        ta.focus();
+        // dismiss on outside click
+        setTimeout(() => document.addEventListener('mousedown', onComposerOutside, true), 0);
+    }
+    function onComposerOutside(e: MouseEvent): void {
+        if (composer && !composer.contains(e.target as Node)) { closeComposer(); }
+    }
+    function closeComposer(): void {
+        document.removeEventListener('mousedown', onComposerOutside, true);
+        composer?.remove();
+        composer = null;
+    }
+
+    function commentMarkRange(threadId: string): { from: number; to: number } | null {
+        let found: { from: number; to: number } | null = null;
+        editor.state.doc.descendants((node, pos) => {
+            if (!node.isText || !node.marks.length) return;
+            const cm = node.marks.find(m => m.type.name === 'comment');
+            if ((cm?.attrs.threadId as string | undefined) !== threadId) return;
+            const from = pos, to = pos + node.nodeSize;
+            if (!found) found = { from, to };
+            else if (found.to === from) found.to = to;
+        });
+        return found;
+    }
+
+    /** Apply a comment-mark mutation WITHOUT tripping the settle machinery. A bare
+     *  dispatch would set dirty + schedule a settle (and clearing dirty afterwards
+     *  would drop any UNRELATED pending edit — and, in Suggesting mode, bypass its
+     *  capture). suppressUpdate makes onUpdate ignore this transaction, so dirty and
+     *  any in-flight settle are left exactly as they were; the host persists the
+     *  mark via the comment-* message, not the settle. */
+    function commentMutate(mutate: (tr: import('@tiptap/pm/state').Transaction) => void): void {
+        suppressUpdate = true;
+        try { const tr = editor.state.tr; mutate(tr); editor.view.dispatch(tr); }
+        finally { suppressUpdate = false; }
+    }
+
+    function saveComposer(value: string): void {
+        const body = value.trim();
+        if (!body) { closeComposer(); editor.commands.focus(); return; }
+        if (composeMode === 'edit') {
+            closeComposer();
+            opts.onCommentEdit(composeThreadId, body);
+            markSaving('commented');
+            editor.commands.focus();
+            return;
+        }
+        if (!composeRange) { closeComposer(); return; }
+        const { from, to } = composeRange;
+        const markType = editor.state.schema.marks.comment;
+        if (!markType) { closeComposer(); return; }
+        commentMutate(tr => tr.addMark(from, to, markType.create({ threadId: composeThreadId })));
+        markSaving('commented');
+        closeComposer();
+        // Collapse to the span end so the bubble doesn't immediately re-appear over
+        // the still-selected text.
+        editor.commands.setTextSelection(to);
+        const thread: CommentThread = {
+            id: composeThreadId,
+            featureId: composeFid,
+            anchorText: composeAnchor,
+            body,
+            status: 'open',
+            author: 'human',
+            createdAt: Date.now(),
+        };
+        opts.onCommentCreate(editor.getJSON() as PMNode, thread);
+        editor.commands.focus();
+    }
+
+    function resolveComment(id: string): void {
+        const range = commentMarkRange(id);
+        const markType = editor.state.schema.marks.comment;
+        if (range && markType) commentMutate(tr => tr.removeMark(range.from, range.to, markType));
+        markSaving('');
+        opts.onCommentResolve(editor.getJSON() as PMNode, id);
+    }
+
+    // Reposition / dismiss the bubble + composer as the surface scrolls or blurs.
+    let blurTimer = 0;
+    surface.addEventListener('scroll', () => { if (bubble.style.display !== 'none') updateBubble(); }, { passive: true });
+    editor.view.dom.addEventListener('blur', () => {
+        if (blurTimer) clearTimeout(blurTimer);
+        blurTimer = window.setTimeout(() => {
+            blurTimer = 0;
+            if (document.activeElement && bubble.contains(document.activeElement)) return;
+            closeBubble();
+        }, 100);
+    });
+
     return {
         element: wrap,
         setDoc: (doc: PMNode) => {
@@ -499,6 +738,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             currentThreads = threadsMap;
             editor.view.dispatch(editor.state.tr.setMeta(DEPS_UPDATED, true));
         },
+        setComments: (comments: CommentThread[]) => {
+            currentComments = comments;
+            editor.view.dispatch(editor.state.tr.setMeta(COMMENTS_UPDATED, true));
+        },
         setPhases: (phases: Record<string, FeaturePhase>) => {
             currentPhases = phases;
             editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
@@ -509,6 +752,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (settleTimer) clearTimeout(settleTimer);
             if (railTimer) clearTimeout(railTimer);
             if (muteTimer) clearTimeout(muteTimer);
+            if (blurTimer) clearTimeout(blurTimer);
+            closeComposer();
+            bubble.remove();
+            resetCommentDecorations(); // tear down the module-level popover + hover timer
             editor.destroy();
         },
     };

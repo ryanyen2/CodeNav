@@ -17,11 +17,17 @@ The user accepted code-implying tree edits; directives are waiting in
 `.codoc/realize.md`. Implement the queue now.
 
 **Read the queue.** Read `.codoc/realize.md`. It contains a numbered list of
-directives, each one of `NEW FEATURE` / `UPDATE FEATURE` / `RETIRE FEATURE`, with
-an `Intent:` / `New intent:` line, the currently-`Bound code:`, and an
-`Edit only:` scope. Each `### N.` heading carries a directive id like
-`⟨d-1a2b3c4d⟩` — note it; you pass it back as `caused_by` when you reflect that
-directive's code.
+directives, each one of `NEW FEATURE` / `UPDATE FEATURE` / `RETIRE FEATURE` /
+`STEER FEATURE`, with an `Intent:` / `New intent:` / `Author note:` line, the
+currently-`Bound code:`, and an `Edit only:` scope. Each `### N.` heading
+carries a directive id like `⟨d-1a2b3c4d⟩` — note it; you pass it back as
+`caused_by` when you reflect that directive's code. Three optional signals:
+- `STEER FEATURE` = an inline `> …` comment the user addressed to you; the note
+  wins over the feature's description where they conflict.
+- `Focus:` = phrases the user **bolded** — the highest-priority part of the
+  intent.
+- `Consult:` = an external page; fetch it with WebFetch and read it before
+  implementing that item.
 
 **Implement each directive (minimum surgical change), sequentially.** Reflect
 each one before starting the next — this lets the IDE's documentation view fill
@@ -45,6 +51,9 @@ directive *i* of *N*:
   edit ("↳ from your edit") — always pass it. If you implemented anything beyond
   the queued directives, include `add_node` ops in the same `codoc_reflect` call
   (same `caused_by`) so it surfaces as a proposal grouped under that edit.
+- After reflecting each directive, **re-read `.codoc/realize.md`** — the queue
+  can GROW while you work (the user steers mid-flight by adding `> …` comments
+  in the doc). Implement any newly appended items before clearing the queue.
 - After the last directive, call `codoc_realize_progress(done=N, total=N)`.
 
 **Clear the queue.** Delete `.codoc/realize.md` AND `.codoc/realize.json` (the
@@ -66,6 +75,10 @@ code. **Reconcile the tree to the code you can see:**
 - For code you wrote/changed that belongs to an existing feature, `codoc_attach` it.
 - For genuinely new intent, `codoc_reflect` with `add_node` ops (they surface as
   proposals for the user to accept).
+- When you author a `description`, you can use the same signals humans do:
+  `**bold**` marks a phrase as the highest-priority intent (promoted to a
+  `Focus:` line in future directives) and `[label](https://…)` cites a page to
+  consult (promoted to `Consult:`). Use them sparingly, where they carry weight.
 - Summarize the pending proposals so the user can Accept/Reject them in the IDE.
 
 ### `realizing` — already in progress

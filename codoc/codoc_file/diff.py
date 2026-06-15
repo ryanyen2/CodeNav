@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from codoc.codoc_file.parse import ParsedTree
+from codoc.codoc_file.parse import ParsedTree, extract_bold
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.store.db import Store
 
@@ -23,9 +23,23 @@ from codoc.store.db import Store
 @dataclass
 class CodocDiff:
     user_ops: list[NodeOp] = field(default_factory=list)
+    # Steering comments (`> …`) on live nodes: (feature_id, comment text).
+    # Loop B turns each into a realize directive; the post-pass re-render
+    # consumes them from the text (the store never holds them).
+    comments: list[tuple[str, str]] = field(default_factory=list)
+    # Steering comments on hand-added nodes (no ⟨f-id⟩ yet): (title, comment).
+    # Loop B resolves the freshly-minted id by title after applying the ADD —
+    # without this the note would be silently destroyed by the re-render.
+    new_node_comments: list[tuple[str, str]] = field(default_factory=list)
+    # feature_id → spans the author NEWLY bolded in this edit (new bold minus
+    # old bold). Boldening is a focus signal stronger than other revision text:
+    # it rides into the directive as a `Focus:` line, and an imperative bolded
+    # span queues a directive even when the description as a whole reads
+    # descriptive.
+    emphasis: dict[str, list[str]] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
-        return not self.user_ops
+        return not self.user_ops and not self.comments
 
 
 def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
@@ -41,13 +55,24 @@ def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
                 description=node.description,
                 parent_id=node.parent_id,
             ))
+            for comment in node.comments:
+                diff.new_node_comments.append((node.title, comment))
             continue
 
         if node.retired and not f.retired:
+            # A comment on a node being retired in the same save is intentionally
+            # dropped — the retire directive supersedes any steering on it.
             diff.user_ops.append(NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id))
             continue
 
+        for comment in node.comments:
+            diff.comments.append((f.id, comment))
+
         if node.title != f.title or node.description != (f.description or ""):
+            old_bold = set(extract_bold(f.description or ""))
+            newly = [b for b in extract_bold(node.description) if b not in old_bold]
+            if newly:
+                diff.emphasis[f.id] = newly
             diff.user_ops.append(NodeOp(
                 kind=NodeOpKind.AMEND,
                 feature_id=f.id,

@@ -1,4 +1,4 @@
-"""Phase 7 — the 4-command CLI."""
+"""The codoc CLI — core commands (init/watch/status/sync/realize) + plumbing."""
 from __future__ import annotations
 
 from typer.testing import CliRunner
@@ -35,9 +35,25 @@ def test_status_reports_features_and_pending(tmp_path):
 
 
 def test_each_command_has_help():
-    for cmd in ("init", "watch", "status", "sync", "propose", "install-hooks"):
+    for cmd in ("init", "watch", "status", "sync", "realize", "propose", "install-hooks"):
         r = runner.invoke(app, [cmd, "--help"])
         assert r.exit_code == 0, f"{cmd} --help failed: {r.output}"
+
+
+def test_realize_rejects_unknown_engine(tmp_path):
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    (cd / "realize.md").write_text('### 1. STEER FEATURE: "x"\n  do it\n')  # past the queue check
+    r = runner.invoke(app, ["realize", "--root", str(tmp_path), "--engine", "bogus"])
+    assert r.exit_code == 2
+
+
+def test_realize_with_no_queue_exits_clean(tmp_path):
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    r = runner.invoke(app, ["realize", "--root", str(tmp_path)])
+    assert r.exit_code == 0
+    assert "Nothing queued" in r.output
 
 
 def test_help_lists_new_commands():

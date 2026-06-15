@@ -1,4 +1,8 @@
 src/**
+scripts/**
 tsconfig.json
 .eslintrc.json
 **/*.map
+bundled/.gitkeep
+test/**
+vitest.config.*

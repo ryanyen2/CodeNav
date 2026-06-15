@@ -13,6 +13,7 @@ function feat(p: Partial<ParsedFeature> & { id: string; title: string }): Parsed
         retired: p.retired ?? false,
         line: p.line ?? 0,
         refs: p.refs ?? extractRefs(description),
+        comments: p.comments ?? [],
     };
 }
 

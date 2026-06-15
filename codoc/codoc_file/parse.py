@@ -5,6 +5,12 @@ Lines:
   * description  indented prose lines beneath a feature; blank lines are kept as
                  paragraph breaks. A description ends only at the next feature
                  line, the pending-changes sentinel, or EOF — never at a blank.
+  * steering     ``> …`` blockquote lines inside a description are notes TO THE
+                 AGENT, not prose: collected per-node into
+                 :attr:`ParsedNode.comments` and EXCLUDED from ``description``.
+                 A contiguous run of ``>`` lines is one comment; Loop B turns
+                 each into a realize directive and the next render (store-driven)
+                 consumes it from the text.
   * comment      ``# …`` (ignored, except the legacy pending-changes sentinel)
   * proposals    in-situ diff hunks — a col-0 op char (``+``/``-``/``~``) then a
                  node carrying a hidden ``⟨e-id⟩`` (live nodes carry ``⟨f-id⟩``),
@@ -27,8 +33,9 @@ from codoc.codoc_file.render import PENDING_SENTINEL
 _FEATURE_RE = re.compile(r"^(?P<indent>\s*)(?P<marker>[-~])\s+(?P<rest>.*\S)\s*$")
 _ID_RE = re.compile(r"⟨(f-[0-9a-f]+|new)⟩")
 # Detects a line that looks like a feature line (indented non-space + space + text)
-# but uses an unrecognized marker — e.g. "    * Title ⟨f-id⟩".
-_BAD_MARKER_RE = re.compile(r"^(?P<indent>\s*)(?P<marker>[^\s\-~#])[ \t]+\S")
+# but uses an unrecognized marker — e.g. "    * Title ⟨f-id⟩". `>` is excluded:
+# it is the steering-comment marker, never a mangled feature line.
+_BAD_MARKER_RE = re.compile(r"^(?P<indent>\s*)(?P<marker>[^\s\-~#>])[ \t]+\S")
 # An in-situ proposal title: col-0 op char, space, optional tree indent, a
 # feature marker, space. Combined with an ``⟨e-id⟩`` (live nodes carry ``⟨f-id⟩``)
 # this is unambiguous against a live feature line like ``- Title``.
@@ -38,6 +45,12 @@ _EVENT_ID_RE = re.compile(r"⟨e-[0-9a-f]+⟩")
 _DIFF_HUNK_RE = re.compile(r"^[+\-~] [-~] ")
 # Inline code citation: [label](codoc:file.py#symbol)  — symbol part optional.
 _REF_RE = re.compile(r"\[(?P<label>[^\]]*)\]\(codoc:(?P<file>[^)#]+)(?:#(?P<symbol>[^)]+))?\)")
+# External markdown link: [label](https://…) — a page the realizing agent should
+# consult (WebFetch) before implementing. codoc: links are refs, not links.
+_LINK_RE = re.compile(r"\[(?P<label>[^\]]*)\]\((?P<url>https?://[^)\s]+)\)")
+# **bold** span — the author's emphasis. Newly-bolded spans in an edit signal
+# "focus here" and ride into realize directives as `Focus:` lines.
+_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 
 
 @dataclass
@@ -48,6 +61,12 @@ class Ref:
 
 
 @dataclass
+class Link:
+    label: str
+    url: str
+
+
+@dataclass
 class ParsedNode:
     id: str | None  # None = newly authored (no ⟨f-id⟩, or ⟨new⟩)
     title: str
@@ -55,6 +74,8 @@ class ParsedNode:
     parent_id: str | None
     retired: bool
     refs: list[Ref] = field(default_factory=list)
+    # Steering comments (`> …` runs) — notes to the agent, not part of the prose.
+    comments: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -71,6 +92,19 @@ def extract_refs(text: str) -> list[Ref]:
     ]
 
 
+def extract_links(text: str) -> list[Link]:
+    """Pull external ``[label](https://…)`` links out of prose — pages the
+    realizing agent should consult before implementing."""
+    return [Link(label=m.group("label"), url=m.group("url"))
+            for m in _LINK_RE.finditer(text or "")]
+
+
+def extract_bold(text: str) -> list[str]:
+    """Pull ``**bold**`` spans out of prose, in document order, deduped."""
+    spans = (m.group(1).strip() for m in _BOLD_RE.finditer(text or ""))
+    return list(dict.fromkeys(s for s in spans if s))
+
+
 def parse_text(text: str) -> ParsedTree:
     tree = ParsedTree()
     stack: list[tuple[int, ParsedNode]] = []  # (indent, node)
@@ -80,8 +114,19 @@ def parse_text(text: str) -> ParsedTree:
     in_proposal = False  # inside an in-situ proposal block (until the next blank)
     skip_desc = False  # True after a bad-marker line; cleared on next valid feature
 
+    comment_buf: list[str] = []  # current contiguous `>` run
+
+    def flush_comment() -> None:
+        nonlocal comment_buf
+        if desc_owner is not None and comment_buf:
+            text = "\n".join(comment_buf).strip()
+            if text:
+                desc_owner.comments.append(text)
+        comment_buf = []
+
     def flush_desc() -> None:
         nonlocal desc_owner, desc_buf
+        flush_comment()
         if desc_owner is not None:
             lines = [dl.strip() for dl in desc_buf]
             while lines and not lines[0]:
@@ -119,11 +164,21 @@ def parse_text(text: str) -> ParsedTree:
             # Blank line: a paragraph break inside the current description (kept),
             # or filler between nodes (dropped when the description is flushed).
             if desc_owner is not None:
-                desc_buf.append("")
+                if comment_buf:
+                    # The blank ends a steering-comment run. The comment "owns"
+                    # one paragraph break — don't double it, or a comment-only
+                    # edit would read as a prose change.
+                    flush_comment()
+                    if desc_buf and desc_buf[-1] != "":
+                        desc_buf.append("")
+                else:
+                    desc_buf.append("")
             continue
         if _DIFF_HUNK_RE.match(line):
+            flush_comment()  # any non-`>` line ends a steering run
             continue  # stray proposal hunk outside the pending block
         if s.startswith("#"):
+            flush_comment()
             continue
 
         mf = _FEATURE_RE.match(line)
@@ -160,11 +215,16 @@ def parse_text(text: str) -> ParsedTree:
             skip_desc = True
             continue
 
-        # otherwise: a description line for the current node
+        # otherwise: a description line for the current node — `> …` lines are
+        # steering comments (notes to the agent), everything else is prose.
         if skip_desc:
             continue
         if desc_owner is not None:
-            desc_buf.append(s)
+            if s.startswith(">"):
+                comment_buf.append(s[1:].lstrip())
+            else:
+                flush_comment()
+                desc_buf.append(s)
 
     flush_desc()
     return tree

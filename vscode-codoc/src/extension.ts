@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as cp from 'node:child_process';
 import { WorkspaceState } from './state/workspace-state';
 import { CodocCodeLensProvider } from './providers/code-lens';
 import { CodocTreeLensProvider } from './providers/codoc-tree-lens';
@@ -17,10 +18,206 @@ import { DependencyFocus } from './providers/focus';
 import { AgentGutter } from './providers/agent';
 import { CodocFileDecorationProvider } from './providers/file-decoration';
 import { CodocTreeEditorProvider } from './providers/tree-editor';
+import {
+    ensureUv, provisionCodoc, cachedExecutables,
+    WorkspaceUntrustedError, ProvisionCancelledError,
+} from './setup/provision';
+import { bootstrapCredentials, syncCredentialsToEnv, SECRET_OPENAI_KEY } from './setup/credentials';
+import { startDaemon, stopDaemon, reapStaleLock } from './daemon/daemon-manager';
+import { SETUP_STEPS, needsSetup } from './setup/setup-flow';
+
+/** Shared "codoc" OutputChannel — same name provision.ts / credentials.ts / daemon-manager.ts use. */
+let _channel: vscode.OutputChannel | undefined;
+function outputChannel(): vscode.OutputChannel {
+    if (!_channel) _channel = vscode.window.createOutputChannel('codoc');
+    return _channel;
+}
+
+/** Once-per-session guard so the first-run "Set up codoc" nudge isn't shown on every reload. */
+let _setupOffered = false;
+
+/**
+ * The setup workspace root: a `.codoc/`-bearing root if one is already known
+ * (re-run / repair), else the first workspace folder (the fresh-repo case where
+ * `.codoc/` doesn't exist yet). Returns `undefined` when there is no folder open.
+ */
+function setupRootDir(state: WorkspaceState): string | undefined {
+    return state.rootDir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+/**
+ * Run a `codoc <subcommand>` console-script as a child process, streaming
+ * stdout/stderr to the shared OutputChannel. Resolves on exit 0, rejects on a
+ * non-zero exit or spawn error. Used for the long `codoc init` step (indexing +
+ * LLM bootstrap), wrapped by the caller in `withProgress`.
+ *
+ * Argv-only (shell:false) with an explicit cwd/env; no untrusted input on argv.
+ */
+function runCodoc(codocPath: string, args: readonly string[], rootDir: string): Promise<void> {
+    const channel = outputChannel();
+    channel.appendLine(`$ ${codocPath} ${args.join(' ')}`);
+    return new Promise<void>((resolve, reject) => {
+        const child = cp.spawn(codocPath, args as string[], {
+            cwd: rootDir,
+            env: { ...process.env },
+            shell: false,
+        });
+        child.stdout?.on('data', (buf: Buffer) => channel.append(buf.toString()));
+        child.stderr?.on('data', (buf: Buffer) => channel.append(buf.toString()));
+        child.on('error', err => reject(err));
+        child.on('close', code => {
+            if (code === 0) resolve();
+            else reject(new Error(`codoc ${args[0] ?? ''} failed (exit ${code}). See the codoc output channel.`));
+        });
+    });
+}
+
+/**
+ * Orchestrate the whole zero-manual-step setup, in the canonical order defined by
+ * {@link SETUP_STEPS}: ensureUv → provisionCodoc → bootstrapCredentials → `codoc
+ * init` → startDaemon. Credentials are written to `.env` BEFORE `codoc init` so
+ * init's LLM bootstrap (indexing + tree proposal) has a configured provider — the
+ * correctness invariant.
+ *
+ * Trust-gated (KTD6/R5): if the workspace is untrusted, prompts to trust it and
+ * returns without spawning anything. Failures surface a Retry / View Log dialog.
+ * On success sets the `codoc.ready` context key (drives the walkthrough completion).
+ */
+async function runSetup(context: vscode.ExtensionContext, state: WorkspaceState): Promise<void> {
+    // KTD6/R5: gate every spawn/install on Workspace Trust.
+    if (!vscode.workspace.isTrusted) {
+        const choice = await vscode.window.showWarningMessage(
+            'codoc setup installs and runs a Python core, so it needs a trusted workspace.',
+            'Trust Workspace',
+        );
+        if (choice === 'Trust Workspace') {
+            await vscode.commands.executeCommand('workbench.trust.manage');
+        }
+        return;
+    }
+
+    const rootDir = setupRootDir(state);
+    if (!rootDir) {
+        void vscode.window.showInformationMessage('Open a folder before setting up codoc.');
+        return;
+    }
+
+    const channel = outputChannel();
+    state.setProvisioning(true); // status bar → "$(cloud-download) setting up…"
+    try {
+        // 1. ensure-uv → 2. provision (each cancellable inside provision.ts).
+        channel.appendLine(`codoc: ${SETUP_STEPS[0].label}`);
+        const uvPath = await ensureUv();
+        channel.appendLine(`codoc: ${SETUP_STEPS[1].label}`);
+        const execs = await provisionCodoc(context, uvPath);
+
+        // 3. credentials — MUST precede init (init runs the LLM bootstrap).
+        channel.appendLine(`codoc: ${SETUP_STEPS[2].label}`);
+        await bootstrapCredentials(context, rootDir);
+
+        // 4. codoc init — long (indexing + LLM bootstrap); streamed to the channel.
+        channel.appendLine(`codoc: ${SETUP_STEPS[3].label}`);
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'codoc: indexing your repo and proposing the feature tree…' },
+            () => runCodoc(execs.codoc, ['init', '--root', rootDir], rootDir),
+        );
+
+        // 5. start the managed daemon (reap a stale lock first).
+        channel.appendLine(`codoc: ${SETUP_STEPS[4].label}`);
+        reapStaleLock(rootDir);
+        startDaemon(context, execs.codoc, rootDir);
+
+        await vscode.commands.executeCommand('setContext', 'codoc.ready', true);
+        void vscode.window.showInformationMessage('codoc is set up — open your feature tree to get started.', 'Open Tree')
+            .then(c => { if (c === 'Open Tree') void vscode.commands.executeCommand('codoc.open'); });
+    } catch (err) {
+        if (err instanceof ProvisionCancelledError) {
+            channel.appendLine('codoc: setup cancelled.');
+            return; // user-initiated; no error dialog
+        }
+        const msg = err instanceof WorkspaceUntrustedError
+            ? err.message
+            : `codoc setup failed: ${(err as Error).message}`;
+        channel.appendLine(`codoc: ${msg}`);
+        const choice = await vscode.window.showErrorMessage(msg, 'Retry', 'View Log');
+        if (choice === 'Retry') {
+            await runSetup(context, state);
+        } else if (choice === 'View Log') {
+            channel.show();
+        }
+    } finally {
+        state.setProvisioning(false); // clear the "setting up…" status-bar state
+    }
+}
 
 export function activate(context: vscode.ExtensionContext): void {
     const state = new WorkspaceState(context);
     const codocSelector: vscode.DocumentSelector = { language: 'codoc' };
+
+    // ── codoc.setup — one-click provision → init → daemon ─────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.setup', () => runSetup(context, state)),
+        // codoc.repair is an alias — re-running setup repairs a broken/partial state.
+        vscode.commands.registerCommand('codoc.repair', () => runSetup(context, state)),
+    );
+
+    // ── URI handler: vscode://codoc.codoc/setup → codoc.setup ─────────────────
+    // Validate the path; NEVER forward URI query params into any shell/spawn.
+    context.subscriptions.push(
+        vscode.window.registerUriHandler({
+            handleUri(uri: vscode.Uri): void {
+                if (uri.path === '/setup') {
+                    void vscode.commands.executeCommand('codoc.setup');
+                }
+            },
+        }),
+    );
+
+    // ── Managed daemon lifecycle ──────────────────────────────────────────────
+    // On activate: if trusted + initialized + provisioned, reap a stale lock then
+    // start the warm daemon. The user never runs `codoc watch` by hand (KTD3).
+    const maybeStartDaemon = (): void => {
+        if (!vscode.workspace.isTrusted) return;
+        const rootDir = state.rootDir;
+        if (!rootDir) return;
+        const execs = cachedExecutables(context);
+        if (!execs) return;
+        reapStaleLock(rootDir);
+        startDaemon(context, execs.codoc, rootDir);
+    };
+    maybeStartDaemon();
+    // Trust may be granted after activation — start the daemon then.
+    context.subscriptions.push(
+        vscode.workspace.onDidGrantWorkspaceTrust(() => maybeStartDaemon()),
+    );
+
+    // ── Secrets: OpenAI key change → re-mirror .env + restart the daemon ───────
+    context.subscriptions.push(
+        context.secrets.onDidChange(e => {
+            if (e.key !== SECRET_OPENAI_KEY) return;
+            const rootDir = state.rootDir;
+            if (!rootDir) return;
+            void syncCredentialsToEnv(context, rootDir).then(() => {
+                // Bounce the daemon so the new key (in .env) takes effect.
+                const execs = cachedExecutables(context);
+                if (vscode.workspace.isTrusted && execs) {
+                    stopDaemon();
+                    reapStaleLock(rootDir);
+                    startDaemon(context, execs.codoc, rootDir);
+                }
+            });
+        }),
+    );
+
+    // ── First-run nudge: no .codoc/ + nothing provisioned → offer setup once ──
+    if (needsSetup(state.rootDir !== null, cachedExecutables(context) !== undefined) && !_setupOffered) {
+        _setupOffered = true;
+        void vscode.commands.executeCommand(
+            'workbench.action.openWalkthrough', 'codoc.codoc#codocSetup', false,
+        );
+        void vscode.window.showInformationMessage('Set up codoc to navigate your codebase as a feature tree.', 'Set up codoc')
+            .then(c => { if (c === 'Set up codoc') void vscode.commands.executeCommand('codoc.setup'); });
+    }
 
     // ── codoc.open ───────────────────────────────────────────────────────────
     context.subscriptions.push(
@@ -373,4 +570,8 @@ function findSymbolByName(symbols: vscode.DocumentSymbol[], name: string): vscod
 
 export function deactivate(): void {
     // All disposables registered on context.subscriptions.
+    // Synchronously SIGTERM the managed daemon (deactivate has a limited budget,
+    // can't await) — the Python parent-death self-exit is the backstop if this
+    // never runs (host crash).
+    stopDaemon();
 }

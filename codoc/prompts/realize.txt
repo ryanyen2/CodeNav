@@ -19,6 +19,17 @@ conflict with the new intent. Prefer small, surgical edits over large rewrites.
 - Do not rename, reword, or "tidy" features, descriptions, or symbols that no
   item asked you to change.
 
+## Reading the items
+
+- `STEER FEATURE` items carry an `Author note:` — an inline comment the user
+  addressed to you mid-flight. Apply the note to that feature's code; where the
+  note conflicts with the feature's description, the note wins.
+- A `Focus:` line lists phrases the author **bolded** in the doc. Treat them as
+  the highest-priority part of that item's intent — get those exactly right
+  before anything else.
+- A `Consult:` line cites an external page. Fetch and read it (WebFetch) before
+  implementing that item — it carries details the intent text omits.
+
 ## Changes to apply
 
 {directives}

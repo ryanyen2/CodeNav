@@ -41,21 +41,39 @@ in your interactive session, with your permissions.
 
 ## Requirements
 
-- Python 3.11+
-- SQLite WAL (bundled)
-- cocoindex + LanceDB for incremental embedded vector indexing (auto-installed)
-- tree-sitter parsing (Python and TypeScript supported)
-- An OpenAI-compatible LLM API (codoc's own reflection calls)
-- Claude Code (for the interactive plan/implement integration)
+- The **codoc VS Code extension** (it provisions everything else for you).
+- **Claude Code** — used both for the interactive plan/implement workflow *and*,
+  by default, as the engine for codoc's own reflection calls (so no separate LLM
+  key is needed). An OpenAI key is the fallback when Claude Code isn't present.
 
-## Quick start
+Everything below is auto-provisioned by the extension's one-click setup and does
+not need manual installation: Python 3.11+ (via a `uv`-managed isolated env),
+cocoindex + LanceDB (incremental vector index), tree-sitter (Python + TypeScript),
+and SQLite WAL.
+
+## Quick start (recommended: the VS Code extension)
+
+1. Install the **codoc** VS Code extension.
+2. Open your repo and run **“codoc: Set up codoc”** (the walkthrough offers it on
+   first run, or via the `$(rocket) Set up codoc` status-bar item / command palette).
+
+Setup is fully automatic and needs no terminal: it bootstraps `uv`, installs the
+codoc core into an isolated environment, wires the Claude Code plugin (hooks + MCP
++ skill + slash commands), points codoc's reflection at your existing Claude
+credentials (no API key prompt in the common case), runs `codoc init` to index the
+repo and propose the initial tree, and starts the `codoc watch` daemon **for you**
+— you never run or stop it by hand. (Setup requires a trusted workspace.)
+
+### Advanced: the CLI (no IDE, or scripting)
 
 ```bash
-pip install -e .
+uv tool install codoc            # or: pip install -e .
 
-export CODOC_PROVIDER=openai
-export CODOC_MODEL=gpt-5.4-mini   # any OpenAI-compatible model
-export OPENAI_API_KEY=sk-...
+export CODOC_PROVIDER=claude     # reuse your Claude Code login (no separate key)
+# …or the OpenAI path:
+#   export CODOC_PROVIDER=openai
+#   export CODOC_MODEL=gpt-5.4-mini
+#   export OPENAI_API_KEY=sk-...
 
 cd my-repo
 codoc init        # index repo, propose initial tree, install the CC plugin
@@ -64,7 +82,8 @@ codoc watch       # run both loops as you edit code / tree.codoc
 
 `codoc init` installs the Claude Code plugin (hooks + MCP server + skill + slash
 commands) into the repo's `.claude/` and `.mcp.json`. It is idempotent — re-run it
-after a fresh clone to wire up the integration on a new machine.
+(or **“codoc: Repair / re-run setup”** in the IDE) after a fresh clone to wire up
+the integration on a new machine.
 
 ## Core commands
 
@@ -197,9 +216,9 @@ drives the "↳ from your edit" cascade cue.
 
 | Var | Default | Description |
 |---|---|---|
-| `CODOC_PROVIDER` | `openai` | LLM provider (`openai` or `ollama`) |
-| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name |
-| `OPENAI_API_KEY` | — | OpenAI API key |
+| `CODOC_PROVIDER` | `openai` | LLM provider for reflection: `claude` (reuse Claude Code's login via headless `claude -p`, no key), `openai`, or `ollama`. The extension sets `claude` by default. |
+| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name (defaults to `sonnet` when `CODOC_PROVIDER=claude`) |
+| `OPENAI_API_KEY` | — | OpenAI API key (only for `CODOC_PROVIDER=openai`) |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
 | `CODOC_TEMPERATURE` | `0.2` | LLM sampling temperature |
 | `CODOC_MAX_TOKENS` | `16000` | LLM completion budget (reasoning models spend it on hidden reasoning too) |
