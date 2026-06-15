@@ -107,6 +107,12 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     border-color: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
 }
 .toolbar button.bulk { color: var(--vscode-foreground); }
+/* glance toggle (B-U2): active = a quiet structural-accent fill (no new hue) */
+.toolbar button.toggle.glance.active {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--vscode-foreground);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
 
 .main {
     display: grid;
@@ -685,4 +691,110 @@ body.vscode-high-contrast .ce-hovercard { outline: 1px solid var(--vscode-contra
 .codoc-code-ref:focus-visible,
 .ce-thread:focus-visible {
     outline: 1px solid var(--accent); outline-offset: 1px; border-radius: 2px;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   concept-first OVERVIEW landing (B-U2) — a widget at the top of the doc surface
+   (NOT inside the TipTap doc): theme cards (title + pitch + child count) + a grounded
+   "how the themes connect" list drawn ONLY from real feature_edges. Pure --vscode-*
+   tokens; the structural accent marks it as the landing, never a direction hue.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-overview {
+    margin: 0 0 1.6em; padding: 14px 16px 16px;
+    border: var(--rule); border-left: 3px solid color-mix(in srgb, var(--accent) 60%, transparent);
+    border-radius: var(--radius-card);
+    background: color-mix(in srgb, var(--vscode-foreground) 3%, transparent);
+    user-select: none; max-width: 78ch;
+}
+.ce-ov-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.ce-ov-title {
+    font: 600 13px var(--vscode-font-family); letter-spacing: 0.02em;
+    color: var(--vscode-foreground);
+}
+.ce-ov-sub { font: 11px var(--vscode-font-family); color: var(--fg-muted); }
+.ce-ov-spacer { flex: 1; }
+.ce-ov-dismiss {
+    font: 12px var(--vscode-font-family); line-height: 1; cursor: pointer;
+    background: transparent; border: 1px solid transparent; border-radius: var(--radius-ctrl);
+    color: var(--fg-muted); padding: 2px 6px;
+}
+.ce-ov-dismiss:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
+
+.ce-ov-grid {
+    display: grid; gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+.ce-ov-card {
+    display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+    text-align: left; cursor: pointer;
+    padding: 9px 11px; border-radius: var(--radius-card);
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+    background: var(--vscode-editor-background);
+    transition: border-color 120ms ease, background 120ms ease;
+}
+.ce-ov-card:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: var(--hover-bg);
+}
+.ce-ov-card-title {
+    font: 600 12.5px var(--vscode-font-family); color: var(--vscode-foreground);
+    letter-spacing: -0.005em;
+}
+.ce-ov-card-pitch {
+    font: 11.5px/1.45 var(--vscode-font-family);
+    color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+    /* one to two lines, then ellipsis — the pitch is a one-liner, not the full prose */
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ce-ov-card-count { font: 10.5px var(--vscode-font-family); color: var(--fg-muted); margin-top: 1px; }
+
+/* grounded dependency view (Mermaid substitute): a structured list of real edges in a
+   fixed-height scroll box. Direction is the dependency review hue's glyph; no invented arrows. */
+.ce-ov-diagram { margin-top: 14px; padding-top: 12px; border-top: var(--rule); }
+.ce-ov-diagram-label {
+    font: 500 9.5px var(--vscode-font-family); text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--fg-muted); margin-bottom: 6px;
+}
+.ce-ov-diagram-list {
+    max-height: 132px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 3px;
+}
+.ce-ov-edge { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font: 11.5px var(--vscode-font-family); }
+.ce-ov-edge-node {
+    cursor: pointer; background: transparent; border: none; padding: 1px 3px; border-radius: 3px;
+    color: var(--vscode-foreground); font: inherit;
+    border-bottom: 1px dotted color-mix(in srgb, var(--vscode-foreground) 28%, transparent);
+}
+.ce-ov-edge-node:hover { background: var(--hover-bg); border-bottom-color: var(--accent); }
+.ce-ov-edge-arrow { color: var(--dir-review); opacity: 0.8; }
+.ce-ov-edge-kind { font-size: 10px; color: var(--fg-muted); opacity: 0.75; margin-left: 2px; }
+
+body.vscode-high-contrast .ce-overview,
+body.vscode-high-contrast .ce-ov-card {
+    outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   GLANCE MODE (B-U2 / R3) — collapse every feature to its one-line pitch. A pure
+   presentation toggle: `body.glance` hides the description blocks; the pitch widget
+   (glance-decorations.ts) sits under each heading. No doc edit — the round-trip is
+   byte-identical with glance on or off. Reduced motion is covered by the global gate.
+   ─────────────────────────────────────────────────────────────────────────── */
+/* Hide the editable description content while glancing — only the headings (+ the
+   injected pitch widgets) and the overview landing remain. The ProseMirror's direct
+   block children that are NOT feature headings are descriptions / refs lines. */
+body.glance .ce-whole-surface .ProseMirror > p,
+body.glance .ce-whole-surface .ProseMirror > blockquote,
+body.glance .ce-whole-surface .ProseMirror > ul,
+body.glance .ce-whole-surface .ProseMirror > ol,
+body.glance .ce-whole-surface .ProseMirror > pre,
+body.glance .ce-whole-surface .ce-threads,
+body.glance .ce-whole-surface .ce-diff { display: none; }
+/* the injected one-line pitch under each heading */
+.ce-glance-pitch {
+    font: 11.5px/1.45 var(--vscode-font-family);
+    color: color-mix(in srgb, var(--vscode-foreground) 62%, transparent);
+    margin: 0.1em 0 0.2em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70ch;
+    user-select: none; cursor: default;
 }

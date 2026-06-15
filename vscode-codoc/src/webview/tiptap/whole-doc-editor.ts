@@ -25,6 +25,7 @@ import {
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
+import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { diffDocsToSuggestions } from '../../state/suggestion-model';
@@ -74,6 +75,10 @@ export interface WholeDocEditorHandle {
     setHoverCards: (cards: HoverCardData | null) => void;
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
+    /** Per-feature one-line pitches (FeatureMeta.pitch) — feeds glance mode. */
+    setPitches: (pitches: Record<string, string>) => void;
+    /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
+    setGlance: (on: boolean) => void;
     scrollToFeature: (fid: string) => void;
     isDirty: () => boolean;
     destroy: () => void;
@@ -160,6 +165,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
+    let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
+    let glanceOn = false;
 
     const editor = new Editor({
         element: surface,
@@ -178,6 +185,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onConsult: opts.onConsult,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
+            GlanceDecorations.configure({
+                isGlance: () => glanceOn,
+                getPitch: (fid: string) => currentPitches[fid] ?? '',
+            }),
             CommentDecorations.configure({
                 getComments: () => currentComments,
                 handlers: {
@@ -766,6 +777,18 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         setPhases: (phases: Record<string, FeaturePhase>) => {
             currentPhases = phases;
             editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
+        },
+        setPitches: (pitches: Record<string, string>) => {
+            currentPitches = pitches;
+            // Refresh glance widgets if glance is currently on (no-op decoration when off).
+            editor.view.dispatch(editor.state.tr.setMeta(GLANCE_UPDATED, true));
+        },
+        setGlance: (on: boolean) => {
+            if (glanceOn === on) return;
+            glanceOn = on;
+            // Body class drives the CSS that hides descriptions; the plugin draws the pitch.
+            document.body.classList.toggle('glance', on);
+            editor.view.dispatch(editor.state.tr.setMeta(GLANCE_UPDATED, true));
         },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
         isDirty: () => dirty,

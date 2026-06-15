@@ -12,7 +12,8 @@ import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
 import { AuthorController } from './tiptap/author-plugin';
 import { kindGlyph } from '../state/grammar';
-import type { DocPayload, UINode, WebviewMessage } from './protocol';
+import { renderOverview } from './overview-widget';
+import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: WebviewMessage): void };
 const vscode = acquireVsCodeApi();
@@ -25,6 +26,11 @@ const EMPTY: DocPayload = {
 };
 
 let payload: DocPayload = EMPTY;
+// Per-workspace webview prefs (B-U2): overview dismiss + glance toggle. Seeded from
+// the host payload (workspaceState) on the first doc, then mutated optimistically and
+// persisted back via a `set-pref` message. Local copy avoids a round-trip flicker.
+let prefs: WebviewPrefs = { overviewDismissed: false, glance: false };
+let prefsSeeded = false;
 // The active authoring instrument (pen/pencil + role). Persists across edits so
 // the user's chosen mode sticks.
 const authorController = new AuthorController();
@@ -77,6 +83,34 @@ function statusLabel(s: string, n: number): string {
 
 function postVerdict(eventIds: string[], accept: boolean): void {
     vscode.postMessage({ kind: 'verdict', eventIds, accept });
+}
+
+// ── webview prefs (B-U2: overview dismiss + glance) ──────────────────────────
+function setPref(pref: 'overviewDismissed' | 'glance', value: boolean): void {
+    prefs = { ...prefs, [pref]: value };
+    vscode.postMessage({ kind: 'set-pref', pref, value }); // persist in workspaceState
+}
+
+/** (Re)mount the overview landing at the top of the doc surface (above the editor,
+ *  inside the surface — never inside the TipTap doc). Removes it when dismissed/empty. */
+function refreshOverview(): void {
+    const surface = document.querySelector('.ce-whole-surface');
+    document.querySelector('.ce-overview')?.remove();
+    if (!surface) return;
+    const node = renderOverview(payload.overview, prefs.overviewDismissed, {
+        onNavigate: fid => { if (fid) setSelected(fid, true); },
+        onDismiss: () => { setPref('overviewDismissed', true); refreshOverview(); },
+        titleOf: fid => payload.nodes[fid]?.title ?? payload.overview?.cards.find(c => c.id === fid)?.title ?? '',
+    });
+    if (node) surface.insertBefore(node, surface.firstChild);
+}
+
+/** Push the current glance + pitch state into the editor (decoration only). */
+function applyGlance(): void {
+    document.body.classList.toggle('glance', prefs.glance);
+    if (!wholeEditor) return;
+    wholeEditor.setPitches(payload.pitches ?? {});
+    wholeEditor.setGlance(prefs.glance);
 }
 
 // ── Optimistic verdict feedback ──────────────────────────────────────────────
@@ -165,6 +199,8 @@ function reconcile(): void {
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
+        applyGlance();     // refresh pitch map (a loop pass may have rewritten pitches)
+        refreshOverview(); // re-mount the landing with the latest themes/edges
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
     }
@@ -182,6 +218,10 @@ function reconcileTree(): void {
 }
 
 // ─── Toolbar ─────────────────────────────────────────────────────────────────
+function rerenderToolbar(): void {
+    document.querySelector('.toolbar')?.replaceWith(renderToolbar());
+}
+
 function renderToolbar(): HTMLElement {
     const t = el('div', 'toolbar');
     const p = el('div', 'path');
@@ -197,6 +237,17 @@ function renderToolbar(): HTMLElement {
     t.append(s);
 
     t.append(el('div', 'spacer'));
+
+    // Glance toggle (B-U2): collapse every feature to its one-line pitch. Tree-wide,
+    // default off, persisted per-workspace. A decoration only — the doc is untouched.
+    const glance = el('button', 'toggle glance' + (prefs.glance ? ' active' : ''),
+        (prefs.glance ? '◢ ' : '◿ ') + 'Glance');
+    glance.title = prefs.glance
+        ? 'Glance on — features show their one-line pitch. Click to expand full prose.'
+        : 'Glance — collapse every feature to its one-line pitch';
+    glance.setAttribute('aria-pressed', String(prefs.glance));
+    glance.onclick = () => { setPref('glance', !prefs.glance); applyGlance(); rerenderToolbar(); };
+    t.append(glance);
 
     const ids = payload.pendingEventIds;
     if (ids.length) {
@@ -366,6 +417,8 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
+    applyGlance();      // seed pitch + glance state into the fresh editor
+    refreshOverview();  // mount the overview landing at the top of the surface
     return host;
 }
 
@@ -471,6 +524,11 @@ window.addEventListener('message', ev => {
     // endApplying MUST stay after the stale-rev guard — a stale (dropped) post must
     // not clear the optimistic applying state for a verdict still in flight.
     endApplying();
+
+    // Seed per-workspace prefs from the host (workspaceState) once — afterward the
+    // local copy is authoritative (optimistic toggles), so a repost can't revert a
+    // pref the user just changed.
+    if (!prefsSeeded && payload.prefs) { prefs = payload.prefs; prefsSeeded = true; }
 
     if (selectedId && !payload.nodes[selectedId]) selectedId = null;
     for (const id of [...expanded]) if (!payload.nodes[id]) expanded.delete(id);

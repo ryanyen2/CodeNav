@@ -27,6 +27,7 @@ import {
     stripOrphanComments,
 } from '../state/comment-model';
 import { directedEdges, agentAmendsByFeature } from '../state/bindings-model';
+import { buildOverview } from '../state/overview';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
     annotationsForSettle, intentsFromSuggestions,
@@ -34,9 +35,13 @@ import {
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
 import type { SidecarData } from '../state/bindings-model';
-import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData } from '../webview/protocol';
+import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData, WebviewPrefs } from '../webview/protocol';
 
 const DOC_FILENAME = 'tree.doc.json';
+
+/** workspaceState key for the per-workspace webview prefs (B-U2: overview dismiss +
+ *  glance toggle). One blob per document uri so two open trees keep separate prefs. */
+const PREFS_KEY = 'codoc.webviewPrefs';
 
 export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'codoc.tree-editor';
@@ -127,8 +132,36 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 case 'comment-resolve':
                     await this.resolveComment(document, msg.doc, msg.id);
                     return;
+                case 'set-pref':
+                    await this.setPref(document, msg.pref, msg.value);
+                    // No payload repost needed — the webview already applied it
+                    // optimistically; persistence is all the host owes here.
+                    return;
             }
         });
+    }
+
+    // ── per-workspace webview prefs (B-U2) ────────────────────────────────────
+    //    Overview dismiss + glance toggle live in workspaceState, keyed by document
+    //    uri so two open trees don't share state. Decoration-only — they never enter
+    //    tree.doc.json / tree.codoc, so the round-trip stays a no-op.
+
+    private prefsFor(document: vscode.TextDocument): WebviewPrefs {
+        const all = this.context.workspaceState.get<Record<string, WebviewPrefs>>(PREFS_KEY) ?? {};
+        const p = all[document.uri.toString()];
+        return { overviewDismissed: !!p?.overviewDismissed, glance: !!p?.glance };
+    }
+
+    private async setPref(
+        document: vscode.TextDocument,
+        pref: 'overviewDismissed' | 'glance',
+        value: boolean,
+    ): Promise<void> {
+        const all = this.context.workspaceState.get<Record<string, WebviewPrefs>>(PREFS_KEY) ?? {};
+        const key = document.uri.toString();
+        const cur = all[key] ?? { overviewDismissed: false, glance: false };
+        all[key] = { ...cur, [pref]: value };
+        await this.context.workspaceState.update(PREFS_KEY, all);
     }
 
     // ── inline comments — span-anchored steering notes (see comment-model.ts) ────
@@ -374,6 +407,18 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             fid => descOf.get(fid) ?? null,
         );
 
+        // Concept-first overview landing (B-U2): top themes + grounded diagram edges,
+        // derived purely from the loaded sidecar (parentless features + feature_edges +
+        // the B-U1 pitch). Empty when nothing is parentless.
+        const overview = buildOverview(sidecar);
+
+        // Per-feature pitch (B-U1 slice) for glance mode — fall back to the title so a
+        // feature with no derived pitch still collapses to a meaningful one-liner.
+        const pitches: Record<string, string> = {};
+        for (const [fid, meta] of Object.entries(sidecar.features)) {
+            pitches[fid] = (meta.pitch && meta.pitch.trim()) ? meta.pitch : meta.title;
+        }
+
         return {
             nodes,
             roots,
@@ -387,6 +432,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             threads,
             comments: docFile.comments,
             hoverCards,
+            overview,
+            pitches,
+            prefs: this.prefsFor(document),
             rev: ++this.rev,
         };
     }
