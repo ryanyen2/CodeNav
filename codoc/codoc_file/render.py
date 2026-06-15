@@ -40,6 +40,7 @@ from codoc.store.db import Store
 
 TREE_FILENAME = "tree.codoc"
 BINDINGS_FILENAME = "tree.bindings.json"
+INDEX_FILENAME = "tree.index.json"
 
 # Legacy sentinel that opened the old bottom-of-file pending-changes block.
 # Proposals now render in situ, but the parser still honours this sentinel so it
@@ -250,6 +251,113 @@ def _compute_feature_edges(store: Store) -> dict[str, list[dict]]:
     return out
 
 
+def _symbol_leaf(symbol_path: str) -> str:
+    """The trailing bare-name segment of a qualified ``symbol_path``.
+
+    Mirrors ``completion.ts:leaf`` / ``extension.ts:openRef``: drop everything
+    before ``::`` (the file-qualifier), then take the last ``.``-segment of what
+    remains (``file.py::Class.method`` → ``method``)."""
+    qualified = symbol_path.split("::", 1)[-1]
+    return qualified.rsplit(".", 1)[-1]
+
+
+def _ref_matches_binding(ref_symbol: str, binding_symbol_path: str) -> bool:
+    """True when an authored ref's *leaf* symbol resolves to a qualified binding.
+
+    Authored ``codoc:`` refs carry the leaf symbol (``method``) or a partial
+    dotted path (``Class.method``), while bindings store the qualified
+    ``symbol_path`` (``file.py::Class.method``). Mirroring the navigation rule in
+    ``extension.ts``/``completion.ts``, a ref resolves when, ignoring the file
+    qualifier, it equals the binding's qualified name, is a trailing
+    dotted-segment suffix of it, or equals its bare leaf — NOT by constructing
+    ``file::symbol`` and comparing for equality (which would mark every live
+    nested-symbol ref dead)."""
+    qualified = binding_symbol_path.split("::", 1)[-1]  # "Class.method"
+    if ref_symbol == qualified or ref_symbol == binding_symbol_path:
+        return True
+    # Trailing dotted-segment suffix: "method" / "Class.method" of "Outer.Class.method".
+    if qualified.endswith("." + ref_symbol):
+        return True
+    # Bare-leaf equality (the leaf the IDE navigates to).
+    return _symbol_leaf(binding_symbol_path) == ref_symbol
+
+
+def _resolve_ref(
+    ref_file: str,
+    ref_symbol: str | None,
+    bindings_by_file: dict[str, list[str]],
+) -> bool:
+    """Resolution rule for one inline ``codoc:`` ref against the binding index.
+
+    A ref ``(file, symbol)`` resolves when some binding in the SAME ``file`` has a
+    ``symbol_path`` whose leaf/suffix matches ``symbol`` (leaf-matching, per
+    :func:`_ref_matches_binding`). A file-only ref (``symbol is None``) resolves
+    when the file carries any binding."""
+    paths = bindings_by_file.get(ref_file)
+    if not paths:
+        return False
+    if ref_symbol is None:
+        return True
+    return any(_ref_matches_binding(ref_symbol, p) for p in paths)
+
+
+def _compute_registry(store: Store) -> dict:
+    """The cross-reference registry: every feature, every binding, every ref.
+
+    Pure derived state, written to ``tree.index.json`` each loop pass. ``refs``
+    is built by running :func:`~codoc.codoc_file.parse.extract_refs` over each
+    live feature's ``description`` and tagging it ``resolved`` per the
+    leaf-matching rule in :func:`_resolve_ref` — so the IDE can decorate dead
+    ``codoc:`` links without re-deriving anything host-side."""
+    from codoc.codoc_file.parse import extract_refs
+
+    features = store.list_features()
+    all_bindings = store.all_bindings()
+
+    feats_meta: dict[str, dict] = {
+        f.id: {"title": f.title, "parent_id": f.parent_id} for f in features
+    }
+    bindings = [
+        {"file": b.file, "symbol_path": b.symbol_path, "feature_id": b.feature_id}
+        for b in all_bindings
+    ]
+    bindings_by_file: dict[str, list[str]] = {}
+    for b in all_bindings:
+        bindings_by_file.setdefault(b.file, []).append(b.symbol_path)
+
+    refs: list[dict] = []
+    for f in features:
+        for ref in extract_refs(f.description):
+            refs.append({
+                "feature_id": f.id,
+                "label": ref.label,
+                "file": ref.file,
+                "symbol": ref.symbol,
+                "resolved": _resolve_ref(ref.file, ref.symbol, bindings_by_file),
+            })
+
+    return {
+        "version": 1,
+        "features": feats_meta,
+        "bindings": bindings,
+        "refs": refs,
+    }
+
+
+def write_registry(store: Store, codoc_dir: str | Path) -> None:
+    """Write ``.codoc/tree.index.json`` atomically (tmp → rename).
+
+    The registry is *pure derived state* (features, bindings, resolved refs) — it
+    is never hand-edited, so it is always safe to regenerate. It is emitted from
+    inside :func:`write_sidecar` so every call-site (``write_tree``,
+    ``safe_write_tree``, bootstrap, Loop B) emits it through one seam with no
+    double-write, and stays live even when the ``tree.codoc`` text render is held
+    back."""
+    from codoc.loop.fsio import atomic_write_json
+
+    atomic_write_json(Path(codoc_dir) / INDEX_FILENAME, _compute_registry(store))
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -291,6 +399,10 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     tmp = dest.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(sidecar, indent=2))
     os.replace(tmp, dest)
+
+    # The cross-reference registry rides on the same seam as the bindings
+    # sidecar (one write per pass, every call-site, no double-write).
+    write_registry(store, codoc_dir)
 
 
 def write_tree(store: Store, codoc_dir: str | Path) -> Path:
