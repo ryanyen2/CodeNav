@@ -97,10 +97,12 @@ describe('uv argv builders', () => {
         expect(uvPythonInstallArgs('3.12')).toEqual(['python', 'install', '3.12']);
     });
 
-    it('uvToolInstallArgs includes --python, 3.11, the SDK extra, and the wheel path', () => {
+    it('uvToolInstallArgs includes --reinstall, --python, 3.11, the SDK extra, and the wheel path', () => {
         const wheel = '/ext/bundled/codoc-0.1.1-py3-none-any.whl';
         const args = uvToolInstallArgs(wheel);
-        expect(args).toEqual(['tool', 'install', '--python', '3.11', '--with', 'claude-agent-sdk', wheel]);
+        expect(args).toEqual(['tool', 'install', '--reinstall', '--python', '3.11', '--with', 'claude-agent-sdk', wheel]);
+        // --reinstall guarantees a rebuilt same-version bundled wheel actually replaces a stale install
+        expect(args).toContain('--reinstall');
         expect(args).toContain('--python');
         expect(args).toContain('3.11');
         expect(args).toContain(wheel);

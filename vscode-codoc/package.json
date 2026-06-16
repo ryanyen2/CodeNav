@@ -2,8 +2,14 @@
   "name": "codoc",
   "displayName": "codoc",
   "description": "Feature-tree navigator and transaction queue for codoc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "codoc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ryanyen2/CodeNav.git",
+    "directory": "vscode-codoc"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

@@ -105,9 +105,18 @@ async def _process_file(
     source = await file.read_text()
     adapter = get_adapter(lang)
     chunks = adapter.extract_chunks(file_str, source)
+    # The chunk id is generate_id((file, symbol_path)) and the LanceDB PK, so the
+    # system treats (file, symbol_path) as unique (bindings are UNIQUE on it, the
+    # changeset keys on it). Real code legitimately repeats a qualified name
+    # (@overload stubs, conditional/try-except redefinitions), which would yield
+    # the same memoized id and a "target state already declared" PK collision —
+    # dropping the whole file. Keep the first chunk per symbol_path so the file
+    # still indexes and the uniqueness invariant holds.
+    seen: set[str] = set()
     items = [
         (file_str, lang, c.symbol_path, c.source, c.start_byte, c.end_byte)
         for c in chunks
+        if not (c.symbol_path in seen or seen.add(c.symbol_path))
     ]
     await coco.map(_process_chunk, items, target)
 

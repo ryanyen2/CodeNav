@@ -44,6 +44,7 @@ include = ["codoc*"]
 
 [tool.setuptools.package-data]
 "codoc.plugin" = ["**/*"]
+"codoc.prompts" = ["*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

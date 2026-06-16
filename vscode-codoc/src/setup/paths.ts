@@ -123,6 +123,11 @@ export function uvPythonInstallArgs(version: string = CODOC_PYTHON_VERSION): str
  * (the plan's `codoc[sdk]` intent) so `codoc realize`'s SDK engine is available —
  * a bare wheel path can't carry an extra, so `--with` is the uv-supported form.
  *
+ * `--reinstall` is required: the bundled wheel can change without a version bump
+ * (it's a path install, rebuilt by `bundle-wheel`), so a same-version `uv tool
+ * install` would otherwise no-op and leave a stale build in place — exactly the
+ * trap that shipped a wheel missing its prompt files.
+ *
  * @param wheelPath absolute path to the bundled `codoc-*.whl`.
  * @param version the pinned Python version (defaults to {@link CODOC_PYTHON_VERSION}).
  */
@@ -130,7 +135,7 @@ export function uvToolInstallArgs(wheelPath: string, version: string = CODOC_PYT
     if (wheelPath.trim().length === 0) {
         throw new Error('uvToolInstallArgs: a wheel path is required.');
     }
-    return ['tool', 'install', '--python', version, '--with', 'claude-agent-sdk', wheelPath];
+    return ['tool', 'install', '--reinstall', '--python', version, '--with', 'claude-agent-sdk', wheelPath];
 }
 
 /** Build the `uv tool dir --bin` argv (the bin-dir discovery query). */
