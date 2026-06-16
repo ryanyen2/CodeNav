@@ -195,7 +195,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 getSuggestions: () => effectiveSuggestions(),
                 // The caret's feature renders LIVE (no tracked-change overlay) so the
                 // user keeps composing the suggestion inline; all others show the diff.
-                getActiveFid: () => activeFid(),
+                // MUST read the pre-declared `lastActiveFid` var, NOT call activeFid()
+                // here: the plugin's state.init runs *inside* `new Editor(...)`, before
+                // the `editor` const is assigned, so touching editor.state would throw a
+                // TDZ error and break the whole editor render.
+                getActiveFid: () => lastActiveFid,
                 handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw },
             }),
             DependencyDecorations.configure({
