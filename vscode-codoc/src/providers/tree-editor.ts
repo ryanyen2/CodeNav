@@ -27,7 +27,6 @@ import {
     stripOrphanComments,
 } from '../state/comment-model';
 import { directedEdges, agentAmendsByFeature } from '../state/bindings-model';
-import { buildOverview } from '../state/overview';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
     annotationsForSettle, intentsFromSuggestions,
@@ -151,17 +150,17 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     private prefsFor(document: vscode.TextDocument): WebviewPrefs {
         const all = this.context.workspaceState.get<Record<string, WebviewPrefs>>(PREFS_KEY) ?? {};
         const p = all[document.uri.toString()];
-        return { overviewDismissed: !!p?.overviewDismissed, glance: !!p?.glance };
+        return { glance: !!p?.glance };
     }
 
     private async setPref(
         document: vscode.TextDocument,
-        pref: 'overviewDismissed' | 'glance',
+        pref: 'glance',
         value: boolean,
     ): Promise<void> {
         const all = this.context.workspaceState.get<Record<string, WebviewPrefs>>(PREFS_KEY) ?? {};
         const key = document.uri.toString();
-        const cur = all[key] ?? { overviewDismissed: false, glance: false };
+        const cur = all[key] ?? { glance: false };
         all[key] = { ...cur, [pref]: value };
         await this.context.workspaceState.update(PREFS_KEY, all);
     }
@@ -409,25 +408,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             fid => descOf.get(fid) ?? null,
         );
 
-        // Concept-first overview landing (B-U2): top themes + grounded diagram edges,
-        // derived purely from the loaded sidecar (parentless features + feature_edges +
-        // the B-U1 pitch). Empty when nothing is parentless.
-        const overview = buildOverview(sidecar);
-
         // Per-feature pitch (B-U1 slice) for glance mode — fall back to the title so a
         // feature with no derived pitch still collapses to a meaningful one-liner.
         const pitches: Record<string, string> = {};
         for (const [fid, meta] of Object.entries(sidecar.features)) {
             pitches[fid] = (meta.pitch && meta.pitch.trim()) ? meta.pitch : meta.title;
-        }
-
-        // Per-feature Diátaxis-lite kind hint (B-U3 `feature_kind` slice) → a chip below
-        // the title. Suppress `retired` (no chip on a tombstoned node) and `unclassified`
-        // (a binding-less leaf carries no useful signal — a chip there is just noise);
-        // only the meaningful `overview` / `reference` hints reach the webview.
-        const kinds: Record<string, string> = {};
-        for (const [fid, kind] of Object.entries(sidecar.feature_kind ?? {})) {
-            if (kind === 'overview' || kind === 'reference') kinds[fid] = kind;
         }
 
         return {
@@ -443,9 +428,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             threads,
             comments: docFile.comments,
             hoverCards,
-            overview,
             pitches,
-            kinds,
             prefs: this.prefsFor(document),
             rev: ++this.rev,
         };

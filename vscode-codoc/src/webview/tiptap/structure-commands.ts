@@ -99,14 +99,17 @@ export function newFeatureHeading(editor: Editor): boolean {
         const [, end] = subtreeRange(hs, i);
         insertPos = end < hs.length ? hs[end].pos : editor.state.doc.content.size;
     }
+    const placeholder = 'New feature';
     const heading = editor.schema.nodes.featureHeading.create(
         { fid: null, level, retired: false, realized: true },
-        editor.schema.text('New feature'),
+        editor.schema.text(placeholder),
     );
     const para = editor.schema.nodes.paragraph.create();
     const tr = editor.state.tr.insert(insertPos, [heading, para]);
-    // Put the cursor in the new heading's title.
-    tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 1)));
+    // SELECT the placeholder title (not just place the caret) so the user types over it
+    // immediately — no manual select-all, no "New featureMy title" concatenation.
+    const titleStart = insertPos + 1;
+    tr.setSelection(TextSelection.create(tr.doc, titleStart, titleStart + placeholder.length));
     editor.view.dispatch(tr);
     editor.view.focus();
     return true;

@@ -12,7 +12,6 @@ import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
 import { AuthorController } from './tiptap/author-plugin';
 import { kindGlyph } from '../state/grammar';
-import { renderOverview } from './overview-widget';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: WebviewMessage): void };
@@ -29,7 +28,7 @@ let payload: DocPayload = EMPTY;
 // Per-workspace webview prefs (B-U2): overview dismiss + glance toggle. Seeded from
 // the host payload (workspaceState) on the first doc, then mutated optimistically and
 // persisted back via a `set-pref` message. Local copy avoids a round-trip flicker.
-let prefs: WebviewPrefs = { overviewDismissed: false, glance: false };
+let prefs: WebviewPrefs = { glance: false };
 let prefsSeeded = false;
 // The active authoring instrument (pen/pencil + role). Persists across edits so
 // the user's chosen mode sticks.
@@ -41,6 +40,10 @@ let wholeEditor: WholeDocEditorHandle | null = null;
 let syncingFromEditor = false;
 const expanded = new Set<string>();
 let selectedId: string | null = null;
+// Focus dimming (WS5): when a feature is focused, its dependency neighbours stay at
+// full opacity (depends-on tinted one hue, used-by another) and everything else dims.
+// Null = no dimming (the focused feature has no dependencies to spotlight).
+let focusState: { fid: string; on: Set<string>; by: Set<string> } | null = null;
 let firstPayload = true;
 let dragSourceId: string | null = null;
 let lastRev = -1;
@@ -86,23 +89,9 @@ function postVerdict(eventIds: string[], accept: boolean): void {
 }
 
 // ── webview prefs (B-U2: overview dismiss + glance) ──────────────────────────
-function setPref(pref: 'overviewDismissed' | 'glance', value: boolean): void {
+function setPref(pref: 'glance', value: boolean): void {
     prefs = { ...prefs, [pref]: value };
     vscode.postMessage({ kind: 'set-pref', pref, value }); // persist in workspaceState
-}
-
-/** (Re)mount the overview landing at the top of the doc surface (above the editor,
- *  inside the surface — never inside the TipTap doc). Removes it when dismissed/empty. */
-function refreshOverview(): void {
-    const surface = document.querySelector('.ce-whole-surface');
-    document.querySelector('.ce-overview')?.remove();
-    if (!surface) return;
-    const node = renderOverview(payload.overview, prefs.overviewDismissed, {
-        onNavigate: fid => { if (fid) setSelected(fid, true); },
-        onDismiss: () => { setPref('overviewDismissed', true); refreshOverview(); },
-        titleOf: fid => payload.nodes[fid]?.title ?? payload.overview?.cards.find(c => c.id === fid)?.title ?? '',
-    });
-    if (node) surface.insertBefore(node, surface.firstChild);
 }
 
 /** Push the current glance + pitch state into the editor (decoration only). */
@@ -190,18 +179,24 @@ function renderAll(): void {
 function reconcile(): void {
     document.querySelector('.toolbar')?.replaceWith(renderToolbar());
     reconcileTree();
+    // Refresh the dependency spotlight: a loop pass may have changed payload.threads
+    // while a feature stayed selected, so the dimmed/tinted set must be recomputed
+    // (reconcileTree only re-applies the existing focusState, never recomputes it).
+    if (selectedId && computeFocus(selectedId)) applyFocusClasses();
     // Feed the whole-doc editor the new settled doc (it ignores updates while the
     // user has unsettled local edits, so typing isn't clobbered) + the latest diffs.
     if (payload.doc && wholeEditor) {
-        wholeEditor.setDoc(payload.doc);
+        // setSuggestions BEFORE setDoc: setDoc's splice/strip read the suggestion set,
+        // so the authoritative list must be current first — otherwise a withdrawn or
+        // freshly-echoed suggestion is one payload stale and the live prose isn't
+        // reconciled this turn (the WS4 withdraw-revert + echo-freshness fix).
         wholeEditor.setSuggestions(payload.suggestions ?? []);
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
-        wholeEditor.setKinds(payload.kinds ?? {}); // B-U3 kind chip
+        wholeEditor.setDoc(payload.doc);
         applyGlance();     // refresh pitch map (a loop pass may have rewritten pitches)
-        refreshOverview(); // re-mount the landing with the latest themes/edges
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
     }
@@ -304,6 +299,7 @@ function appendRow(parent: HTMLElement, id: string): void {
     if (!n.realized) row.classList.add('unrealized');
     if (n.proposal?.op === 'amend') row.classList.add('has-amend');
     if (n.proposal?.op === 'retire') row.classList.add('has-retire');
+    markFocusRow(row, id); // dependency spotlight (WS5) — survives reconciles
     row.style.setProperty('--depth', String(n.depth));
 
     const handle = el('span', 'drag-handle', '⋮⋮');
@@ -388,6 +384,7 @@ function appendRow(parent: HTMLElement, id: string): void {
 function renderDocHost(): HTMLElement {
     const host = el('div', 'doc-host');
     if (wholeEditor) { wholeEditor.destroy(); wholeEditor = null; }
+    computeFocus(null); // editor torn down → clear the dependency-spotlight body class
     if (!payload.doc) {
         host.append(el('div', 'doc empty', 'No features yet. Run `codoc init` to bootstrap the tree.'));
         return host;
@@ -411,17 +408,73 @@ function renderDocHost(): HTMLElement {
             setSelected(fid, false); // highlight the tree row, don't re-scroll the editor
             syncingFromEditor = false;
         },
+        onHoverFeature: fid => peekTreeRow(fid), // WS5: preview a dependency link's target
     });
-    wholeEditor.setDoc(payload.doc);
-    wholeEditor.setSuggestions(payload.suggestions ?? []);
+    wholeEditor.setSuggestions(payload.suggestions ?? []); // before setDoc — see reconcile()
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
-    wholeEditor.setKinds(payload.kinds ?? {}); // B-U3 kind chip
+    wholeEditor.setDoc(payload.doc);
     applyGlance();      // seed pitch + glance state into the fresh editor
-    refreshOverview();  // mount the overview landing at the top of the surface
     return host;
+}
+
+// ─── Focus dimming (WS5) ──────────────────────────────────────────────────────
+/** Recompute which tree rows the focused feature depends on / is used by, and toggle
+ *  the body dimming class. No dependencies → no dimming (spotlighting an isolated node
+ *  by greying the whole tree would be noise, not signal). Returns whether the spotlight
+ *  actually changed, so callers can skip the O(rows) re-tag on an unchanged focus
+ *  (arrow-key nav usually stays within the same dependency cluster). */
+function sameFocus(a: typeof focusState, b: typeof focusState): boolean {
+    if (a === b) return true;
+    if (!a || !b || a.fid !== b.fid || a.on.size !== b.on.size || a.by.size !== b.by.size) return false;
+    for (const x of a.on) if (!b.on.has(x)) return false;
+    for (const x of a.by) if (!b.by.has(x)) return false;
+    return true;
+}
+function computeFocus(fid: string | null): boolean {
+    const t = fid ? payload.threads?.[fid] : undefined;
+    const on = new Set((t?.reads ?? []).map(r => r.toId));
+    const by = new Set((t?.usedBy ?? []).map(r => r.toId));
+    const next = fid && (on.size || by.size) ? { fid, on, by } : null;
+    const changed = !sameFocus(focusState, next);
+    focusState = next;
+    document.body.classList.toggle('focus-dimming', !!focusState);
+    return changed;
+}
+
+/** Tag a row with its dependency relationship to the focused feature (called from
+ *  appendRow so it survives reconciles, and applied in bulk by applyFocusClasses). */
+function markFocusRow(row: HTMLElement, id: string): void {
+    row.classList.remove('dep-focus', 'dep-on', 'dep-by', 'dep-related');
+    if (!focusState) return;
+    if (id === focusState.fid) row.classList.add('dep-focus', 'dep-related');
+    else if (focusState.on.has(id)) row.classList.add('dep-on', 'dep-related');
+    else if (focusState.by.has(id)) row.classList.add('dep-by', 'dep-related');
+}
+
+/** Re-tag every existing tree row (cheap, no re-render) after the focus changes. */
+function applyFocusClasses(): void {
+    document.querySelectorAll<HTMLElement>('.tree .row[data-id]').forEach(row => markFocusRow(row, row.dataset.id!));
+}
+
+/** Transient preview of a depends-on / used-by link target: highlight + scroll its
+ *  tree row into view without moving the selection (WS5 hover-navigate). The highlight
+ *  is instant feedback; the scroll is debounced so flicking across several links doesn't
+ *  yank the tree pane out from under a manual scroll. The previously-peeked row is
+ *  tracked so clearing is O(1), not an all-rows query. */
+let peekedRow: HTMLElement | null = null;
+let peekTimer = 0;
+function peekTreeRow(fid: string | null): void {
+    if (peekTimer) { clearTimeout(peekTimer); peekTimer = 0; }
+    if (peekedRow) { peekedRow.classList.remove('hover-peek'); peekedRow = null; }
+    if (!fid) return;
+    const row = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(fid) + '"]');
+    if (!row) return;
+    row.classList.add('hover-peek');
+    peekedRow = row;
+    peekTimer = window.setTimeout(() => { peekTimer = 0; row.scrollIntoView({ block: 'nearest' }); }, 90);
 }
 
 // ─── Selection (tree ↔ editor) ───────────────────────────────────────────────
@@ -430,6 +483,10 @@ function setSelected(id: string | null, scrollDoc: boolean): void {
     // Reveal a selected node's ancestors so its tree row exists and can be marked
     // .selected (cheap — only re-renders when an ancestor was actually collapsed).
     if (id) revealAncestors(id);
+    // Recompute the dependency spotlight; only re-tag every row when it actually
+    // changed (a re-render via revealAncestors re-applies the unchanged state in
+    // appendRow, so skipping the bulk pass here is safe).
+    if (computeFocus(id)) applyFocusClasses();
     document.querySelectorAll('.row.selected').forEach(r => r.classList.remove('selected'));
     if (!id) return;
     const rowEl = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(id) + '"]');

@@ -12,6 +12,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import { wordDiff, compactRuns } from '../../state/doc-diff';
 import { directionLabel, directionActions } from '../../state/grammar';
+import { textToInlineRuns, codeRefToText, type CodeRefAttrs } from '../../state/pm-doc';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { ThreadsData, ThreadTarget } from '../protocol';
 import { THREADS_COLLAPSE_AT } from '../protocol';
@@ -25,6 +26,10 @@ export interface SuggestionHandlers {
 export interface SuggestionDecorationsOptions {
     getSuggestions: () => Suggestion[];
     handlers: SuggestionHandlers;
+    /** The feature the caret is currently in — its suggestion renders as LIVE editable
+     *  text (no tracked-change overlay) so the user keeps composing inline; every other
+     *  suggested feature shows the inline tracked change. */
+    getActiveFid: () => string | null;
 }
 
 export const SUGGESTIONS_UPDATED = 'codocSuggestionsUpdated';
@@ -38,24 +43,6 @@ function elc(tag: string, cls?: string, text?: string): HTMLElement {
 }
 
 const WD_CLASS = { same: 'wd-same', del: 'wd-del', ins: 'wd-ins' } as const;
-
-function diffSpans(oldStr: string, newStr: string): HTMLElement {
-    const wrap = elc('span', 'ce-wd');
-    const runs = wordDiff(oldStr, newStr);
-    // A heavy rewrite (many separate change regions) makes a word-diff noisy and
-    // illegible — show the new text compactly instead (the live prose below still shows
-    // the current settled text, so nothing is lost).
-    if (runs.filter(r => r.t !== 'same').length > 8) {
-        const words = newStr.split(/\s+/).filter(Boolean);
-        const preview = words.length > 16 ? words.slice(0, 16).join(' ') + ' …' : newStr;
-        wrap.append(elc('span', 'wd-ins', preview));
-        return wrap;
-    }
-    for (const r of compactRuns(runs)) {
-        wrap.append(elc('span', WD_CLASS[r.t], r.s));
-    }
-    return wrap;
-}
 
 function actionButton(label: string, cls: string, onClick: () => void): HTMLButtonElement {
     const b = document.createElement('button');
@@ -102,8 +89,9 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
         box.append(cascade);
     }
 
-    // the change itself, in situ — compact (only the changed words + a little context),
-    // never the whole description restated (the live prose sits right below).
+    // The structural kind, compact. makeWidget only ever renders add / move / retire —
+    // amend suggestions render inline via amendBlock (the tracked-change overlay), so
+    // there is deliberately no amend branch here.
     const body = elc('span', 'ce-diff-body');
     if (s.kind === 'add') {
         body.append(elc('span', 'ce-diff-kind', '+ new'), document.createTextNode(' ' + (s.titleNew || '(untitled)')));
@@ -111,12 +99,6 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
         body.append(elc('span', 'ce-diff-kind', '~ retire'), document.createTextNode(' — detaches bindings; code kept'));
     } else if (s.kind === 'move') {
         body.append(elc('span', 'ce-diff-kind', '→ move'));
-    } else {
-        if ((s.titleOld || '') !== (s.titleNew || '')) body.append(diffSpans(s.titleOld || '', s.titleNew || ''));
-        if ((s.descOld || '') !== (s.descNew || '')) {
-            if (body.childNodes.length) body.append(elc('span', 'ce-diff-sep', ' · '));
-            body.append(diffSpans(s.descOld || '', s.descNew || ''));
-        }
     }
     box.append(body);
 
@@ -148,29 +130,158 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
     return box;
 }
 
-function buildDecorations(doc: PMModelNode, suggestions: Suggestion[], handlers: SuggestionHandlers): DecorationSet {
-    const headingByFid = new Map<string, { pos: number; node: PMModelNode }>();
+// ── inline tracked-change rendering (the Google-Docs look) ─────────────────────
+// An AMEND suggestion renders IN PLACE: the title diff is struck/inserted inline on
+// the heading; the description's live paragraphs are hidden and the tracked change is
+// rendered where they sat (strike removed words, underline inserted words, refs as
+// chips). The proposed text is shown standalone from the {old,new} STRINGS — robust
+// against ref atoms (no fragile char→position mapping over the live doc). When the
+// caret is in the feature it renders nothing (the live editable prose shows through),
+// so the user keeps composing the suggestion inline. add/move/retire keep a compact
+// widget (they can't be expressed as in-prose tracked changes).
+
+/** Render a diff run's text into `out`, turning `[label](codoc:…)` refs into chips so
+ *  the tracked change reads like prose, not raw markdown. `cls` ∈ wd-same/del/ins. */
+function runDom(text: string, cls: string, out: Node[]): void {
+    for (const r of textToInlineRuns(text)) {
+        if (r.type === 'text') { if (r.text) out.push(elc('span', cls, r.text)); }
+        else if (r.type === 'codeRef') {
+            const a = r.attrs as unknown as CodeRefAttrs;
+            const chip = elc('span', cls + ' ce-tc-ref', a.label || leafSym(a.symbol ?? a.file) || a.file);
+            chip.title = codeRefToText(a);
+            out.push(chip);
+        }
+    }
+}
+
+/** Paragraph-aligned word-diff render of a description change. */
+function trackedDesc(descOld: string, descNew: string): HTMLElement {
+    const wrap = elc('div', 'ce-tc');
+    const olds = descOld ? descOld.split(/\n{2,}/) : [];
+    const news = descNew ? descNew.split(/\n{2,}/) : [];
+    const n = Math.max(olds.length, news.length);
+    for (let i = 0; i < n; i++) {
+        const o = olds[i] ?? '';
+        const ne = news[i] ?? '';
+        const p = elc('p', 'ce-tc-p');
+        const nodes: Node[] = [];
+        if (o && !ne) runDom(o, 'wd-del', nodes);
+        else if (!o && ne) runDom(ne, 'wd-ins', nodes);
+        else if (o === ne) runDom(o, 'wd-same', nodes);
+        else for (const run of compactRuns(wordDiff(o, ne))) runDom(run.s, WD_CLASS[run.t], nodes);
+        nodes.forEach(x => p.append(x));
+        wrap.append(p);
+    }
+    return wrap;
+}
+
+/** Inline title tracked-change over the heading (titles are ref-free → char offset ==
+ *  PM position, 1:1): strike removed words in place, insert new words as inline widgets. */
+function titleDecos(headingPos: number, titleOld: string, titleNew: string, key: string): Decoration[] {
+    const decos: Decoration[] = [];
+    const base = headingPos + 1; // heading content start
+    let off = 0;
+    for (const run of compactRuns(wordDiff(titleOld, titleNew))) {
+        if (run.t === 'same') { off += run.s.length; }
+        else if (run.t === 'del') {
+            decos.push(Decoration.inline(base + off, base + off + run.s.length, { class: 'ce-tc-del-inline' }));
+            off += run.s.length;
+        } else {
+            decos.push(Decoration.widget(base + off, () => elc('span', 'ce-tc-ins-inline', run.s), { side: 1, key: `${key}-ti-${off}` }));
+        }
+    }
+    return decos;
+}
+
+/** The compact resolution affordance (direction marker + accept/reject or withdraw).
+ *  Replaces the old full card — the change itself is shown inline above it. */
+function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
+    const row = elc('div', 'ce-tc-actions ' + s.direction);
+    const planned = isPlanned(s);
+    const mark = elc('span', 'ce-tc-mark', s.direction === 'code-ahead' ? (planned ? '△' : '▲') : '▼');
+    mark.title = directionLabel(s.direction) + (planned ? ' · not yet in code' : '') + (s.tag ? ' · ' + s.tag : '');
+    row.append(mark);
+    if (s.causedBy) {
+        const c = elc('span', 'ce-tc-cascade', '↳ from your edit');
+        c.title = `implements ${s.causedBy}`;
+        row.append(c);
+    }
+    const actions = elc('span', 'ce-tc-btns');
+    const once = (fn: (s: Suggestion) => void) => () => {
+        actions.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
+        actions.classList.add('applying');
+        fn(s);
+    };
+    const [secondary, primary] = directionActions(s.direction);
+    if (s.direction === 'code-ahead' && s.eventId) {
+        actions.append(actionButton(secondary, 'reject', once(handlers.reject)), actionButton(primary, 'accept', once(handlers.accept)));
+    } else {
+        actions.append(elc('span', 'ce-tc-await', '→ for agent'), actionButton(secondary, 'withdraw', once(handlers.withdraw)));
+    }
+    row.append(actions);
+    return row;
+}
+
+/** The inline tracked-change block placed where a feature's description sits (its live
+ *  paragraphs are hidden by a node decoration while this shows). */
+function amendBlock(s: Suggestion, handlers: SuggestionHandlers, descChanged: boolean): HTMLElement {
+    const box = elc('div', `ce-tc-block ${s.direction}` + (isPlanned(s) ? ' planned' : '')
+        + (s.originRole === 'human' ? ' by-human' : ' by-agent'));
+    box.contentEditable = 'false';
+    if (descChanged) box.append(trackedDesc(s.descOld ?? '', s.descNew ?? ''));
+    box.append(amendActions(s, handlers));
+    return box;
+}
+
+interface FeatureLoc { headingPos: number; heading: PMModelNode; descBlocks: { pos: number; node: PMModelNode }[]; }
+
+function buildDecorations(
+    doc: PMModelNode, suggestions: Suggestion[], handlers: SuggestionHandlers, activeFid: string | null,
+): DecorationSet {
+    // Locate every feature: its heading + the non-heading blocks beneath it.
+    const loc = new Map<string, FeatureLoc>();
+    let cur: FeatureLoc | null = null;
     doc.forEach((node, pos) => {
-        if (node.type.name === 'featureHeading' && node.attrs.fid) {
-            headingByFid.set(node.attrs.fid as string, { pos, node });
+        if (node.type.name === 'featureHeading') {
+            const fid = node.attrs.fid as string | null;
+            cur = { headingPos: pos, heading: node, descBlocks: [] };
+            if (fid) loc.set(fid, cur);
+        } else if (cur && node.type.name === 'paragraph') {
+            cur.descBlocks.push({ pos, node });
         }
     });
 
     const decos: Decoration[] = [];
     for (const s of suggestions) {
         if (s.kind === 'add') {
-            const parent = s.parentId ? headingByFid.get(s.parentId) : null;
-            const pos = parent ? parent.pos + parent.node.nodeSize : 0;
+            const parent = s.parentId ? loc.get(s.parentId) : null;
+            const pos = parent ? parent.headingPos + parent.heading.nodeSize : 0;
             decos.push(Decoration.widget(pos, () => makeWidget(s, handlers), { side: 1, key: 'sug-' + s.id }));
             continue;
         }
-        const h = s.featureId ? headingByFid.get(s.featureId) : null;
-        if (!h) continue;
-        const after = h.pos + h.node.nodeSize;
-        if (s.kind === 'retire') {
-            decos.push(Decoration.node(h.pos, after, { class: 'ce-retire-proposed' }));
+        const l = s.featureId ? loc.get(s.featureId) : null;
+        if (!l) continue;
+        const after = l.headingPos + l.heading.nodeSize;
+        if (s.kind === 'move' || s.kind === 'retire') {
+            if (s.kind === 'retire') decos.push(Decoration.node(l.headingPos, after, { class: 'ce-retire-proposed' }));
+            decos.push(Decoration.widget(after, () => makeWidget(s, handlers), { side: 1, key: 'sug-' + s.id }));
+            continue;
         }
-        decos.push(Decoration.widget(after, () => makeWidget(s, handlers), { side: 1, key: 'sug-' + s.id }));
+        // amend — inline tracked change. Suppress the overlay only for a DOC-AHEAD
+        // suggestion whose feature the caret is in (the user is composing it live, so
+        // the live prose shows through). A CODE-AHEAD proposal must always render its
+        // tracked change + accept/reject, even with the caret inside, or it becomes
+        // non-actionable while editing that feature.
+        if (s.direction === 'doc-ahead' && s.featureId === activeFid) continue;
+        const titleOld = s.titleOld ?? '', titleNew = s.titleNew ?? '';
+        const descChanged = (s.descOld ?? '') !== (s.descNew ?? '');
+        if (titleOld !== titleNew && (l.heading.textContent || '') === titleOld) {
+            for (const d of titleDecos(l.headingPos, titleOld, titleNew, s.id)) decos.push(d);
+        }
+        if (descChanged) {
+            for (const b of l.descBlocks) decos.push(Decoration.node(b.pos, b.pos + b.node.nodeSize, { class: 'ce-tc-hidden' }));
+        }
+        decos.push(Decoration.widget(after, () => amendBlock(s, handlers, descChanged), { side: 1, key: 'sug-' + s.id }));
     }
     return DecorationSet.create(doc, decos);
 }
@@ -361,20 +472,21 @@ export const SuggestionDecorations = Extension.create<SuggestionDecorationsOptio
     name: 'suggestionDecorations',
 
     addOptions() {
-        return { getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {}, withdraw: () => {}, apply: () => {} } };
+        return { getSuggestions: () => [], getActiveFid: () => null, handlers: { accept: () => {}, reject: () => {}, withdraw: () => {} } };
     },
 
     addProseMirrorPlugins() {
         const getSuggestions = (): Suggestion[] => this.options.getSuggestions();
+        const getActiveFid = (): string | null => this.options.getActiveFid();
         const handlers = this.options.handlers;
         return [
             new Plugin({
                 key: decoKey,
                 state: {
-                    init: (_config, state) => buildDecorations(state.doc, getSuggestions(), handlers),
+                    init: (_config, state) => buildDecorations(state.doc, getSuggestions(), handlers, getActiveFid()),
                     apply: (tr, old, _oldState, newState) => {
                         if (tr.getMeta(SUGGESTIONS_UPDATED) || tr.docChanged) {
-                            return buildDecorations(newState.doc, getSuggestions(), handlers);
+                            return buildDecorations(newState.doc, getSuggestions(), handlers, getActiveFid());
                         }
                         return old.map(tr.mapping, tr.doc);
                     },

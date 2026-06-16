@@ -8,10 +8,16 @@
     --select-bg: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 35%, transparent);
 
     /* ── Design-system tokens (U1) ──────────────────────────────────────────────
-       Scoped palette: ONE structural accent + TWO directional hues + role-ink tints.
-       Lifecycle (unrealized) and live agent activity ride the non-color STATUS axis
-       (U3/H4), never a hue. The legacy --accent-* below are kept until U3 re-points
-       the op-type rainbow (kind→shape); new code reaches for the semantic tokens. */
+       Scoped palette: ONE structural accent + TWO grammar directional hues + role-ink
+       tints. Lifecycle (unrealized) and live agent activity ride the non-color STATUS
+       axis (U3/H4), never a hue. The legacy --accent-* below are kept until U3 re-points
+       the op-type rainbow (kind→shape); new code reaches for the semantic tokens.
+
+       SANCTIONED EXCEPTION (2026-06 focus-dimming): the dependency spotlight adds TWO
+       directional hues of its own — --dep-out / --dep-in (see below) — to distinguish
+       "depends on →" from "← used by" at a glance, as explicitly requested. They live in
+       a separate, mutually-exclusive context (the dimmed tree + the inline threads line),
+       so they do not collide in practice with the grammar's code/doc-ahead hues. */
     --accent:     var(--vscode-focusBorder, var(--vscode-charts-blue, #6aa9ff));
     --dir-review: var(--vscode-charts-blue, #6aa9ff);    /* code-ahead — you resolve   */
     --dir-await:  var(--vscode-charts-green, #66bb6a);   /* doc-ahead  — agent resolves */
@@ -34,6 +40,31 @@
     --accent-retire: var(--vscode-charts-red, #d96666);
     --accent-add: var(--vscode-charts-green, #66bb6a);
     --ease: cubic-bezier(.2, .7, .2, 1);
+    /* ── Motion + elevation (2026-06 redesign) ──────────────────────────────────
+       Motion is invisible-by-default per minimalist-ui: a single quick-out/soft-settle
+       curve for entrances, a barely-there spring reserved for floating surfaces. All of
+       it is suppressed by the `body.vscode-reduce-motion` blanket gate below. */
+    --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);     /* entrances: quick out, soft settle */
+    --ease-spring: cubic-bezier(0.34, 1.32, 0.5, 1);  /* gentle overshoot, popovers only   */
+    --dur-fast:   0.12s;
+    --dur-base:   0.18s;
+    /* floating-surface elevation — diffuse, theme-tinted, never a hard black drop */
+    --shadow-pop:    0 10px 30px -12px var(--vscode-widget-shadow, rgba(0,0,0,0.45)),
+                     0 2px 8px -4px var(--vscode-widget-shadow, rgba(0,0,0,0.22));
+    --shadow-pop-sm: 0 4px 14px -6px var(--vscode-widget-shadow, rgba(0,0,0,0.4));
+    /* dependency-direction hues (focus-dimming, WS5): a focused node's OUTGOING
+       "depends on →" vs INCOMING "← used by". Two distinct, restrained hues so the
+       two relationships read apart at a glance. */
+    --dep-out: var(--vscode-charts-blue, #6aa9ff);    /* this node depends on →  */
+    --dep-in:  var(--vscode-charts-orange, #e0935a);  /* ← used by this node     */
+}
+
+/* Shared entrance for floating surfaces (popovers, composer, hover card). One
+   declaration so every transient surface animates identically; the reduced-motion
+   body-class gate zeroes it out. */
+@keyframes ce-pop-in {
+    from { opacity: 0; transform: translateY(5px) scale(0.97); }
+    to   { opacity: 1; transform: none; }
 }
 
 /* ── High-contrast themes (U1 a11y) ─────────────────────────────────────────────
@@ -144,6 +175,33 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     width: 2px; background: var(--accent); border-radius: 1px;
 }
 
+/* ── Dependency spotlight (WS5) ──────────────────────────────────────────────
+   When a feature is focused, its neighbours stay lit and everything else recedes.
+   Direction is a hue: what the focus DEPENDS ON (outgoing) vs what it's USED BY
+   (incoming). A thin left rail in that hue makes the relationship scannable; the
+   title picks up a matching tint. Opacity transitions are gentle, gated by the
+   global reduced-motion blanket. */
+body.focus-dimming .tree .row { opacity: 0.6; transition: opacity var(--dur-base) var(--ease); }
+body.focus-dimming .tree .row.dep-related,
+body.focus-dimming .tree .row.hover-peek { opacity: 1; }
+/* (the dep-on / dep-by title tints live below the base .title rule so the design-system
+   CSS test still reads the navigator title rule first) */
+.tree .row.dep-on::after,
+.tree .row.dep-by::after,
+.tree .row.dep-focus::after {
+    content: ""; position: absolute; right: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 1px;
+}
+.tree .row.dep-on::after  { background: var(--dep-out); }
+.tree .row.dep-by::after  { background: var(--dep-in); }
+.tree .row.dep-focus::after { background: var(--accent); }
+
+/* hover-preview of a depends-on / used-by link target (WS5 hover-navigate) */
+.tree .row.hover-peek { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.tree .row.hover-peek::before {
+    content: ""; position: absolute; left: 0; top: 3px; bottom: 3px;
+    width: 2px; background: var(--accent); border-radius: 1px;
+}
+
 .drag-handle {
     position: absolute;
     left: calc(var(--indent) * var(--depth, 0) + 4px);
@@ -186,6 +244,9 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .row.retired .title { text-decoration: line-through; opacity: 0.55; }
 .row.has-retire .title { text-decoration: line-through; color: var(--fg-muted); opacity: 0.7; }
 .row.unrealized .title { font-style: italic; opacity: 0.78; }
+/* dependency spotlight tints (WS5) — depends-on (outgoing) vs used-by (incoming) */
+.row.dep-on .title { color: color-mix(in srgb, var(--dep-out) 85%, var(--vscode-foreground)); }
+.row.dep-by .title { color: color-mix(in srgb, var(--dep-in) 85%, var(--vscode-foreground)); }
 
 .amend-inline {
     font-family: var(--vscode-editor-font-family); font-size: 11.5px;
@@ -348,11 +409,12 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 .cr-popup {
     position: absolute; z-index: 50; min-width: 220px; max-width: 360px; max-height: 240px; overflow-y: auto;
     background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
-    border: 1px solid var(--vscode-editorSuggestWidget-border, var(--rule)); border-radius: 5px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.3); padding: 3px;
+    border: 1px solid var(--vscode-editorSuggestWidget-border, var(--rule)); border-radius: 8px;
+    box-shadow: var(--shadow-pop); padding: 4px;
     font: 12px var(--vscode-font-family);
+    animation: ce-pop-in var(--dur-fast) var(--ease-out);
 }
-.cr-item { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-radius: 3px; cursor: pointer; }
+.cr-item { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-radius: 5px; cursor: pointer; }
 .cr-item.active { background: var(--vscode-editorSuggestWidget-selectedBackground, var(--select-bg)); }
 .cr-name { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
 .cr-detail { font-size: 10.5px; color: var(--fg-muted); margin-left: auto; white-space: nowrap; }
@@ -521,6 +583,66 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 /* proposed retire (code-ahead) — strike is the SHAPE, direction is the colour */
 .codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
 
+/* ───────────────────────────────────────────────────────────────────────────
+   INLINE TRACKED CHANGES (WS4 — the Google-Docs look). An amend suggestion renders
+   where the prose lives: the live description paragraphs are hidden (.ce-tc-hidden)
+   and the change is drawn in their place — removed words struck + muted, inserted
+   words underlined + direction-tinted, refs as chips. The title change is struck /
+   inserted inline on the heading itself. A thin direction rail + a quiet resolve row
+   replace the old boxed card. The caret's own feature shows live editable prose
+   instead (no overlay), so composing a suggestion stays inline.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-tc-hidden { display: none; }
+
+.ce-tc-block {
+    margin: 0.1em 0 0.7em; padding: 2px 0 3px 12px;
+    border-left: 2px solid transparent;
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
+}
+.ce-tc-block.code-ahead { border-left-color: color-mix(in srgb, var(--dir-review) 70%, transparent); }
+.ce-tc-block.doc-ahead  { border-left-color: color-mix(in srgb, var(--dir-await) 70%, transparent); }
+.ce-tc-block.planned    { border-left-style: dashed; }
+
+.ce-tc-p {
+    margin: 0 0 0.4em; white-space: pre-wrap; max-width: 70ch;
+    font: 13.5px/1.7 var(--vscode-font-family);
+    color: color-mix(in srgb, var(--vscode-foreground) 82%, transparent);
+}
+.ce-tc-p:last-child { margin-bottom: 0.3em; }
+/* kind = shape (colourblind-safe): deletions strike + mute; insertions underline +
+   direction-tint. Same vocabulary on the heading title (inline variants). */
+.ce-tc .wd-same { color: inherit; }
+.ce-tc .wd-del,
+.ce-tc-del-inline { text-decoration: line-through; color: var(--fg-muted); opacity: 0.75; }
+.ce-tc .wd-ins,
+.ce-tc-ins-inline {
+    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px;
+    color: var(--vscode-foreground);
+}
+.ce-tc-block.doc-ahead  .wd-ins, .ce-tc-block.doc-ahead  .ce-tc-ins-inline { color: color-mix(in srgb, var(--dir-await) 75%, var(--vscode-foreground)); }
+.ce-tc-block.code-ahead .wd-ins { color: color-mix(in srgb, var(--dir-review) 75%, var(--vscode-foreground)); }
+.ce-tc-ins-inline { margin-left: 0.2em; }
+/* a code-ref inside a tracked change reads as a quiet chip, not raw markdown */
+.ce-tc-ref {
+    font-family: var(--vscode-editor-font-family); font-size: 0.92em;
+    padding: 0 4px; border-radius: 3px;
+    background: color-mix(in srgb, var(--accent-refs) 12%, transparent);
+}
+.ce-tc-ref::before { content: "⟢ "; opacity: 0.55; }
+
+/* the quiet resolve row (replaces the old card actions) — muted until hover */
+.ce-tc-actions {
+    display: flex; align-items: center; gap: 8px; margin-top: 3px;
+    font: 11px var(--vscode-font-family); color: var(--fg-muted); user-select: none;
+}
+.ce-tc-mark { font-size: 9px; }
+.ce-tc-actions.code-ahead .ce-tc-mark { color: var(--dir-review); }
+.ce-tc-actions.doc-ahead  .ce-tc-mark { color: var(--dir-await); }
+.ce-tc-cascade { font-size: 10px; opacity: 0.8; color: var(--dir-review); }
+.ce-tc-await { font-size: 10px; color: var(--dir-await); opacity: 0.85; }
+.ce-tc-btns { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
+.ce-tc-block:hover .ce-tc-btns, .ce-tc-btns.applying { opacity: 1; }
+
 /* ── unified dependency "threads" line under a heading + peek popover (U4) ───── */
 .ce-threads {
     display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
@@ -532,8 +654,10 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 /* colour = direction — the glyph is tinted by strand, never the link text (which
    stays muted). Depends-on / Used-by share the dependency axis; Consult is the
    doc-side green; Bound code is neutral. No new hue is introduced. */
-.ce-strand.reads   > .ce-strand-glyph { color: var(--dir-review); }
-.ce-strand.used    > .ce-strand-glyph { color: var(--dir-review); opacity: 0.6; }
+/* depends-on (outgoing) vs used-by (incoming) carry the SAME two hues as the tree
+   spotlight (WS5), so the doc line and the dimmed tree read as one language. */
+.ce-strand.reads   > .ce-strand-glyph { color: var(--dep-out); }
+.ce-strand.used    > .ce-strand-glyph { color: var(--dep-in); }
 .ce-strand.refs    > .ce-strand-glyph { color: var(--accent-refs); }
 .ce-strand.consult > .ce-strand-glyph { color: var(--dir-await); }
 /* shape = kind — a quiet superscript marker on a feature link (call `()` / import `⊂`). */
@@ -554,11 +678,12 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 /* the on-demand neighbourhood peek — the full lists, rendered client-side */
 .ce-peek {
     position: fixed; z-index: 60; min-width: 200px; max-width: 360px; max-height: 320px;
-    overflow-y: auto; padding: 8px 10px;
+    overflow-y: auto; padding: 10px 12px;
     background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
-    border: 1px solid var(--vscode-editorSuggestWidget-border, color-mix(in srgb, var(--vscode-foreground) 18%, transparent));
-    border-radius: var(--radius-card); box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    border: 1px solid var(--vscode-editorSuggestWidget-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
+    border-radius: 10px; box-shadow: var(--shadow-pop);
     font: 12px var(--vscode-font-family);
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
 }
 .ce-peek-sec { margin-bottom: 8px; }
 .ce-peek-sec:last-child { margin-bottom: 0; }
@@ -571,207 +696,144 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 .ce-peek .ce-thread:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
 
 /* ───────────────────────────────────────────────────────────────────────────
-   inline comments — span-anchored steering notes the agent resolves later.
-   ONE amber accent (shared with the dotted underline + highlight). The marker is
-   a quiet 9px superscript, never a badge; the bubble / composer / popover are
-   compact floating cards with a single fade (the `*` reduce-motion gate covers
-   them). Multiple comments stay uncluttered: each is just one small glyph.
+   Floating surfaces (2026-06 redesign) — the selection toolbar, comment
+   composer/popover, and hover preview. Notion-grade: hairline border, soft diffuse
+   elevation (--shadow-pop), 10px radius, one quick fade+rise (ce-pop-in). ONE amber
+   accent marks "comment" (a thin left edge); the hover preview stays neutral. All
+   motion is covered by the reduced-motion blanket gate.
    ─────────────────────────────────────────────────────────────────────────── */
-@keyframes ce-cmt-fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 
-/* the top-right anchor icon (one per thread; placed at the span's end) */
+/* the top-right anchor icon (one per comment thread; placed at the span's end) */
 .ce-cmt-icon {
     display: inline-block; font-size: 9px; line-height: 1; vertical-align: super;
     margin-left: 1px; cursor: pointer; user-select: none;
-    color: var(--accent-amend); opacity: 0.72; transition: opacity 0.12s var(--ease);
+    color: var(--accent-amend); opacity: 0.7; transition: opacity var(--dur-fast) var(--ease);
 }
 .ce-cmt-icon:hover { opacity: 1; }
-.ce-cmt-icon.sent { color: var(--fg-muted); opacity: 0.6; }
+.ce-cmt-icon.sent { color: var(--fg-muted); opacity: 0.55; }
 
-/* bubble menu (selection → ❝) */
-.ce-cmt-bubble {
-    position: fixed; z-index: 70; padding: 2px;
+/* selection toolbar (format · comment · hand-to-AI) — a Medium/Notion floating bar */
+.ce-bubble {
+    position: fixed; z-index: 70; display: flex; align-items: stretch; gap: 1px; padding: 3px;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 18%, transparent));
-    border-radius: var(--radius-ctrl); box-shadow: 0 2px 10px rgba(0,0,0,0.28);
-    animation: ce-cmt-fade 0.12s var(--ease);
+    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
+    border-radius: 9px; box-shadow: var(--shadow-pop);
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
 }
-.ce-cmt-bubble-btn {
-    font: 11px var(--vscode-font-family); color: var(--vscode-foreground);
-    background: transparent; border: none; border-radius: 3px; padding: 3px 9px; cursor: pointer;
+.ce-bub-btn {
+    font: 12px var(--vscode-font-family); color: var(--vscode-foreground);
+    background: transparent; border: none; border-radius: 6px; padding: 4px 9px; cursor: pointer; line-height: 1.2;
+    white-space: nowrap; transition: background var(--dur-fast) var(--ease);
 }
-.ce-cmt-bubble-btn:hover { background: color-mix(in srgb, var(--accent-amend) 18%, transparent); }
+.ce-bub-btn:hover { background: var(--hover-bg); }
+.ce-bub-btn.ce-bub-bold { font-weight: 700; }
+.ce-bub-btn.ce-bub-italic { font-style: italic; }
+.ce-bub-btn.ce-bub-hl:hover { background: color-mix(in srgb, var(--accent-amend) 22%, transparent); }
+.ce-bub-btn.ce-bub-ai { color: color-mix(in srgb, var(--ink-claude) 80%, var(--vscode-foreground)); }
+.ce-bub-sep { width: 1px; margin: 3px 2px; background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
 
-/* composer + view popover share the card chrome (amber left rule = "comment") */
+/* comment composer + thread popover share the card chrome (a quiet amber left edge) */
 .ce-cmt-composer, .ce-cmt-pop {
-    position: fixed; z-index: 75; width: 248px; max-width: calc(100vw - 16px);
+    position: fixed; z-index: 75; width: 264px; max-width: calc(100vw - 16px);
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 18%, transparent));
-    border-left: 2px solid var(--accent-amend);
-    border-radius: var(--radius-card); box-shadow: 0 4px 16px rgba(0,0,0,0.32);
-    padding: 8px 10px; font: 12px var(--vscode-font-family);
-    animation: ce-cmt-fade 0.12s var(--ease);
+    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
+    border-left: 2px solid color-mix(in srgb, var(--accent-amend) 55%, transparent);
+    border-radius: 10px; box-shadow: var(--shadow-pop);
+    padding: 11px 12px; font: 12px var(--vscode-font-family);
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
 }
+/* the anchored snippet reads like a Notion quote — a thin neutral rule, 2 lines max */
 .ce-cmt-ctx, .ce-cmt-anchor {
-    font-size: 10.5px; color: var(--fg-muted); font-style: italic;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 5px;
+    font-size: 11px; color: var(--fg-muted); line-height: 1.4;
+    padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+    margin-bottom: 8px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.ce-cmt-quote { opacity: 0.55; font-style: normal; }
+.ce-cmt-quote { display: none; } /* the left rule replaces the literal quote glyphs */
 .ce-cmt-input {
     width: 100%; box-sizing: border-box; resize: none;
-    font: 12px var(--vscode-font-family); color: var(--vscode-input-foreground);
+    font: 12.5px/1.5 var(--vscode-font-family); color: var(--vscode-input-foreground);
     background: var(--vscode-input-background);
-    border: 1px solid var(--vscode-input-border, color-mix(in srgb, var(--vscode-foreground) 14%, transparent));
-    border-radius: var(--radius-ctrl); padding: 5px 6px; outline: none;
+    border: 1px solid var(--vscode-input-border, color-mix(in srgb, var(--vscode-foreground) 12%, transparent));
+    border-radius: 7px; padding: 7px 8px; outline: none;
+    transition: border-color var(--dur-fast) var(--ease);
 }
-.ce-cmt-input:focus { border-color: var(--accent); }
-.ce-cmt-composer-foot, .ce-cmt-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.ce-cmt-hint, .ce-cmt-state { font-size: 10px; color: var(--fg-muted); flex: 1; min-width: 0; }
+.ce-cmt-input::placeholder { color: var(--fg-muted); }
+.ce-cmt-input:focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.ce-cmt-composer-foot, .ce-cmt-foot { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.ce-cmt-hint, .ce-cmt-state { font-size: 10.5px; color: var(--fg-muted); flex: 1; min-width: 0; }
 .ce-cmt-pop.sent .ce-cmt-state { color: var(--accent-add); }
 .ce-cmt-send {
-    font: 11px var(--vscode-font-family); cursor: pointer;
+    font: 11.5px var(--vscode-font-family); font-weight: 600; cursor: pointer;
     background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-    border: none; border-radius: var(--radius-ctrl); padding: 3px 10px;
+    border: none; border-radius: 7px; padding: 4px 12px;
+    transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 .ce-cmt-send:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
-.ce-cmt-body { color: var(--vscode-foreground); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.ce-cmt-send:active { transform: scale(0.97); }
+.ce-cmt-body { color: var(--vscode-foreground); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .ce-cmt-action {
     font: 11px var(--vscode-font-family); cursor: pointer; color: var(--vscode-foreground);
-    background: transparent; border: 1px solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
-    border-radius: var(--radius-ctrl); padding: 2px 8px;
+    background: transparent; border: 1px solid color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+    border-radius: 6px; padding: 3px 9px;
+    transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
 .ce-cmt-action:hover { background: var(--hover-bg); }
-.ce-cmt-resolve:hover { background: color-mix(in srgb, var(--accent-add) 22%, transparent); border-color: var(--accent-add); }
-body.vscode-high-contrast .ce-cmt-bubble,
+.ce-cmt-resolve:hover { background: color-mix(in srgb, var(--accent-add) 18%, transparent); border-color: color-mix(in srgb, var(--accent-add) 60%, transparent); }
+body.vscode-high-contrast .ce-bubble,
 body.vscode-high-contrast .ce-cmt-composer,
 body.vscode-high-contrast .ce-cmt-pop { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
+/* HC floors for the selection toolbar: the faint divider + the low-% hover washes
+   vanish under high contrast, so raise them to a real border / solid fill. */
+body.vscode-high-contrast .ce-bub-sep { background: var(--vscode-contrastBorder, var(--vscode-foreground)); }
+body.vscode-high-contrast .ce-bub-btn:hover,
+body.vscode-high-contrast .ce-bub-btn.ce-bub-hl:hover {
+    background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+    outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+}
 
 /* ───────────────────────────────────────────────────────────────────────────
-   tier-1 hover-preview card (U4) — a transient overlay shown on hover/keyboard of
-   a codeRef chip or a feature dependency link. Shares the comment popover's card
-   chrome (editorWidget tokens, single fade — the `*` reduce-motion gate covers it)
-   but a NEUTRAL accent (the focus-border), since amber is the comment colour. A
-   dead ref reads on the review hue (code-ahead "you resolve") + a ⚠ shape, never a
-   new colour. The card is positioned by comment-decorations.ts:showCard.
+   tier-1 hover-preview card (U4) — a transient overlay on hover/keyboard of a
+   codeRef chip or a feature dependency link. Same card chrome as the comment cards
+   but NEUTRAL (no amber edge), since amber is the comment colour. A dead ref reads
+   on the review hue + a ⚠ shape, never a new colour.
    ─────────────────────────────────────────────────────────────────────────── */
 .ce-hovercard {
-    position: fixed; z-index: 75; width: 248px; max-width: calc(100vw - 16px);
+    position: fixed; z-index: 75; width: 264px; max-width: calc(100vw - 16px);
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 18%, transparent));
-    border-left: 2px solid var(--accent);
-    border-radius: var(--radius-card); box-shadow: 0 4px 16px rgba(0,0,0,0.32);
-    padding: 8px 10px; font: 12px var(--vscode-font-family);
-    animation: ce-cmt-fade 0.12s var(--ease);
+    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
+    border-radius: 10px; box-shadow: var(--shadow-pop);
+    padding: 11px 12px; font: 12px var(--vscode-font-family);
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
 }
-.ce-hovercard.dead { border-left-color: var(--dir-review); }
-.ce-hc-head { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
+.ce-hovercard.dead { border-color: color-mix(in srgb, var(--dir-review) 45%, var(--vscode-editorWidget-border)); }
+.ce-hc-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 .ce-hc-warn { color: var(--dir-review); font-size: 12px; }
-.ce-hc-title { color: var(--vscode-foreground); font-weight: 600; word-break: break-word; }
-.ce-hc-gist { color: var(--vscode-foreground); line-height: 1.45; margin-top: 4px; word-break: break-word; }
+.ce-hc-title { color: var(--vscode-foreground); font-weight: 650; word-break: break-word; letter-spacing: -0.005em; }
+.ce-hc-gist { color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); line-height: 1.5; margin-top: 4px; word-break: break-word; }
 .ce-hc-gist.muted { color: var(--fg-muted); font-style: italic; }
-.ce-hc-meta { color: var(--fg-muted); font-size: 10.5px; margin-top: 6px; }
+.ce-hc-meta { color: var(--fg-muted); font-size: 10.5px; margin-top: 7px; letter-spacing: 0.01em; }
 .ce-hc-plan { color: var(--fg-muted); }
 .ce-hc-target {
     font: 11px var(--vscode-editor-font-family, monospace); color: var(--fg-muted);
-    word-break: break-all; margin: 2px 0 4px;
+    word-break: break-all; margin: 3px 0 4px;
 }
-.ce-hc-note { color: var(--fg-muted); font-size: 10.5px; line-height: 1.4; }
-.ce-hc-owners { margin-top: 5px; display: flex; flex-direction: column; gap: 2px; }
+.ce-hc-note { color: var(--fg-muted); font-size: 10.5px; line-height: 1.45; }
+.ce-hc-owners { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
 .ce-hc-owner { color: var(--vscode-foreground); font-size: 11.5px; }
 .ce-hc-open {
-    margin-top: 8px; font: 11px var(--vscode-font-family); cursor: pointer;
+    margin-top: 9px; font: 11px var(--vscode-font-family); font-weight: 600; cursor: pointer;
     background: transparent; color: var(--accent);
-    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-    border-radius: var(--radius-ctrl); padding: 2px 9px;
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+    border-radius: 6px; padding: 3px 10px; transition: background var(--dur-fast) var(--ease);
 }
-.ce-hc-open:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.ce-hc-open:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 body.vscode-high-contrast .ce-hovercard { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
 
 /* keyboard reachability for the hover targets (Enter/Space opens the card) */
 .codoc-code-ref:focus-visible,
 .ce-thread:focus-visible {
     outline: 1px solid var(--accent); outline-offset: 1px; border-radius: 2px;
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
-   concept-first OVERVIEW landing (B-U2) — a widget at the top of the doc surface
-   (NOT inside the TipTap doc): theme cards (title + pitch + child count) + a grounded
-   "how the themes connect" list drawn ONLY from real feature_edges. Pure --vscode-*
-   tokens; the structural accent marks it as the landing, never a direction hue.
-   ─────────────────────────────────────────────────────────────────────────── */
-.ce-overview {
-    margin: 0 0 1.6em; padding: 14px 16px 16px;
-    border: var(--rule); border-left: 3px solid color-mix(in srgb, var(--accent) 60%, transparent);
-    border-radius: var(--radius-card);
-    background: color-mix(in srgb, var(--vscode-foreground) 3%, transparent);
-    user-select: none; max-width: 78ch;
-}
-.ce-ov-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
-.ce-ov-title {
-    font: 600 13px var(--vscode-font-family); letter-spacing: 0.02em;
-    color: var(--vscode-foreground);
-}
-.ce-ov-sub { font: 11px var(--vscode-font-family); color: var(--fg-muted); }
-.ce-ov-spacer { flex: 1; }
-.ce-ov-dismiss {
-    font: 12px var(--vscode-font-family); line-height: 1; cursor: pointer;
-    background: transparent; border: 1px solid transparent; border-radius: var(--radius-ctrl);
-    color: var(--fg-muted); padding: 2px 6px;
-}
-.ce-ov-dismiss:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
-
-.ce-ov-grid {
-    display: grid; gap: 8px;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-}
-.ce-ov-card {
-    display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
-    text-align: left; cursor: pointer;
-    padding: 9px 11px; border-radius: var(--radius-card);
-    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
-    background: var(--vscode-editor-background);
-    transition: border-color 120ms ease, background 120ms ease;
-}
-.ce-ov-card:hover {
-    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-    background: var(--hover-bg);
-}
-.ce-ov-card-title {
-    font: 600 12.5px var(--vscode-font-family); color: var(--vscode-foreground);
-    letter-spacing: -0.005em;
-}
-.ce-ov-card-pitch {
-    font: 11.5px/1.45 var(--vscode-font-family);
-    color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
-    /* one to two lines, then ellipsis — the pitch is a one-liner, not the full prose */
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.ce-ov-card-count { font: 10.5px var(--vscode-font-family); color: var(--fg-muted); margin-top: 1px; }
-
-/* grounded dependency view (Mermaid substitute): a structured list of real edges in a
-   fixed-height scroll box. Direction is the dependency review hue's glyph; no invented arrows. */
-.ce-ov-diagram { margin-top: 14px; padding-top: 12px; border-top: var(--rule); }
-.ce-ov-diagram-label {
-    font: 500 9.5px var(--vscode-font-family); text-transform: uppercase; letter-spacing: 0.07em;
-    color: var(--fg-muted); margin-bottom: 6px;
-}
-.ce-ov-diagram-list {
-    max-height: 132px; overflow-y: auto;
-    display: flex; flex-direction: column; gap: 3px;
-}
-.ce-ov-edge { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font: 11.5px var(--vscode-font-family); }
-.ce-ov-edge-node {
-    cursor: pointer; background: transparent; border: none; padding: 1px 3px; border-radius: 3px;
-    color: var(--vscode-foreground); font: inherit;
-    border-bottom: 1px dotted color-mix(in srgb, var(--vscode-foreground) 28%, transparent);
-}
-.ce-ov-edge-node:hover { background: var(--hover-bg); border-bottom-color: var(--accent); }
-.ce-ov-edge-arrow { color: var(--dir-review); opacity: 0.8; }
-.ce-ov-edge-kind { font-size: 10px; color: var(--fg-muted); opacity: 0.75; margin-left: 2px; }
-
-body.vscode-high-contrast .ce-overview,
-body.vscode-high-contrast .ce-ov-card {
-    outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -789,7 +851,8 @@ body.glance .ce-whole-surface .ProseMirror > ul,
 body.glance .ce-whole-surface .ProseMirror > ol,
 body.glance .ce-whole-surface .ProseMirror > pre,
 body.glance .ce-whole-surface .ce-threads,
-body.glance .ce-whole-surface .ce-diff { display: none; }
+body.glance .ce-whole-surface .ce-diff,
+body.glance .ce-whole-surface .ce-tc-block { display: none; }
 /* the injected one-line pitch under each heading */
 .ce-glance-pitch {
     font: 11.5px/1.45 var(--vscode-font-family);
@@ -798,19 +861,3 @@ body.glance .ce-whole-surface .ce-diff { display: none; }
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70ch;
     user-select: none; cursor: default;
 }
-
-/* B-U3: the Diátaxis-lite kind chip below each feature title. Shape/label = kind;
-   colour is the muted, neutral `--vscode-badge-*` token — NO new hue (colour is
-   reserved for direction). It is offered, never mandated. */
-.ce-kind-row { margin: 0.15em 0 0.1em; user-select: none; }
-.ce-kind-chip {
-    display: inline-flex; align-items: baseline; gap: 4px;
-    font: 10.5px/1.4 var(--vscode-font-family); letter-spacing: 0.02em;
-    padding: 1px 7px; border-radius: 9px;
-    color: var(--vscode-badge-foreground);
-    background: color-mix(in srgb, var(--vscode-badge-background) 70%, transparent);
-    cursor: default;
-}
-.ce-kind-glyph { opacity: 0.8; font-size: 0.9em; }
-/* glance mode keeps the row to a single one-liner — drop the kind chip too. */
-body.glance .ce-whole-surface .ce-kind-row { display: none; }

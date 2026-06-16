@@ -26,14 +26,13 @@ import {
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
-import { KindDecorations, KIND_UPDATED } from './kind-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
-import { diffDocsToSuggestions } from '../../state/suggestion-model';
+import { diffDocsToSuggestions, applyDocAheadSuggestions, stripDocAheadSuggestions } from '../../state/suggestion-model';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { Suggestion } from '../../state/suggestion-model';
-import type { PMNode } from '../../state/pm-doc';
+import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
 import type { FeaturePhase } from '../../state/activity-model';
 import type { ThreadsData } from '../protocol';
 
@@ -60,6 +59,9 @@ export interface WholeDocEditorOptions {
     onCommentResolve: (doc: PMNode, id: string) => void;
     /** Selection moved into a feature — drives tree-pane highlight. */
     onActiveFeature?: (fid: string | null) => void;
+    /** Pointer hovering a depends-on / used-by link — drives a transient tree-pane
+     *  highlight + scroll-to (preview navigation). null on leave. */
+    onHoverFeature?: (fid: string | null) => void;
 }
 
 export interface WholeDocEditorHandle {
@@ -80,8 +82,6 @@ export interface WholeDocEditorHandle {
     setPitches: (pitches: Record<string, string>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
     setGlance: (on: boolean) => void;
-    /** Per-feature Diátaxis-lite kind hints (B-U3) — the chip below each title. */
-    setKinds: (kinds: Record<string, string>) => void;
     scrollToFeature: (fid: string) => void;
     isDirty: () => boolean;
     destroy: () => void;
@@ -164,13 +164,26 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let forceSuggest = false;
     let baselineDoc: PMNode | null = null; // last settled doc (Suggesting diff base)
     let currentSuggestions: Suggestion[] = [];
+    // Doc-ahead suggestions captured locally this session but not yet echoed by the
+    // host (keyed by suggestion id). They keep the in-flight inline edit from being
+    // reverted by a repost that arrives before the host acknowledges it (WS4 race).
+    // `seen` flips true once an authoritative payload (setSuggestions) has had the
+    // chance to reflect the capture; an entry that survives a full cycle still un-echoed
+    // was resolved server-side (withdrawn / applied / rejected) and is then dropped, so
+    // a stale entry can never linger and re-splice forever.
+    const pendingDocAhead = new Map<string, { s: Suggestion; seen: boolean }>();
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
     let glanceOn = false;
-    let currentKinds: Record<string, string> = {};   // B-U3: fid → kind hint
+    // Last NON-EMPTY selection — a fallback so a toolbar / bubble action still has a
+    // range to act on if focus moved and the live selection collapsed (the "to AI /
+    // comment did nothing" bug).
+    let lastSelection: { from: number; to: number } | null = null;
+    // The feature the caret was last in — drives the dual-state suggestion render (WS4).
+    let lastActiveFid: string | null = null;
 
     const editor = new Editor({
         element: surface,
@@ -179,7 +192,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             AuthorStamp.configure({ controller: opts.controller, now: () => Date.now() }),
             CodeRefSuggestion.configure({ getSymbols: opts.getSymbols, char: '@' }),
             SuggestionDecorations.configure({
-                getSuggestions: () => currentSuggestions,
+                getSuggestions: () => effectiveSuggestions(),
+                // The caret's feature renders LIVE (no tracked-change overlay) so the
+                // user keeps composing the suggestion inline; all others show the diff.
+                getActiveFid: () => activeFid(),
                 handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw },
             }),
             DependencyDecorations.configure({
@@ -192,9 +208,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',
-            }),
-            KindDecorations.configure({
-                getKind: (fid: string) => currentKinds[fid] ?? '',
             }),
             CommentDecorations.configure({
                 getComments: () => currentComments,
@@ -215,11 +228,36 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             scheduleRail();
         },
         onSelectionUpdate: () => {
+            const { from, to, empty } = editor.state.selection;
+            if (!empty && to > from) lastSelection = { from, to };
             updateBubble();
-            if (!opts.onActiveFeature) return;
-            opts.onActiveFeature(activeFid());
+            const fid = activeFid();
+            // When the caret crosses into a different feature, re-render the suggestion
+            // decorations: the feature the caret just LEFT flips to its inline tracked
+            // change, the one it ENTERED flips to live editable text (dual-state, WS4).
+            if (fid !== lastActiveFid) {
+                lastActiveFid = fid;
+                if (effectiveSuggestions().length) {
+                    queueMicrotask(() => { if (!editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true)); });
+                }
+            }
+            if (opts.onActiveFeature) opts.onActiveFeature(fid);
         },
     });
+
+    /** The range a selection-driven toolbar/bubble action should target: the live
+     *  selection if non-empty, else the last non-empty one — clamped to the current
+     *  doc so a stale fallback (after a reload) can't address out-of-bounds positions.
+     *  Returns null when there's nothing valid to act on. */
+    function actionRange(): { from: number; to: number } | null {
+        const sel = editor.state.selection;
+        const cand = (!sel.empty && sel.to > sel.from) ? { from: sel.from, to: sel.to } : lastSelection;
+        if (!cand) return null;
+        const max = editor.state.doc.content.size;
+        const from = Math.max(0, Math.min(cand.from, max));
+        const to = Math.max(0, Math.min(cand.to, max));
+        return to > from ? { from, to } : null;
+    }
 
     function activeFid(): string | null {
         const { $from } = editor.state.selection;
@@ -264,6 +302,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         return pos;
     }
 
+    /** Current doc-ahead suggestions = what the host has echoed, plus what we just
+     *  captured locally and the host hasn't acknowledged yet (host entries win on id). */
+    function effectiveSuggestions(): Suggestion[] {
+        if (!pendingDocAhead.size) return currentSuggestions;
+        const byId = new Map<string, Suggestion>();
+        for (const s of currentSuggestions) byId.set(s.id, s);
+        for (const { s } of pendingDocAhead.values()) if (!byId.has(s.id)) byId.set(s.id, s);
+        return [...byId.values()];
+    }
+
     function scheduleSettle(): void {
         if (settleTimer) clearTimeout(settleTimer);
         settleTimer = window.setTimeout(settleNow, SETTLE_DEBOUNCE_MS);
@@ -283,35 +331,32 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         const suggesting = mode === 'suggesting' || forceSuggest; // visible toggle OR ⌥ override
         forceSuggest = false;
         if (suggesting && baselineDoc && !structural) {
-            // Capture the edit as doc-ahead suggestions; DON'T settle the text.
-            // Revert the inline edit immediately to the baseline — the change then
-            // re-appears as a persistent tracked diff (via the host repost) awaiting
-            // the agent. Immediate revert avoids a double-capture if the user keeps
-            // typing before the host round-trips.
+            // Capture the edit as doc-ahead suggestions WITHOUT reverting the prose
+            // (WS4 inline model): the live text stays where the user typed it, so the
+            // caret never jumps and continued editing keeps the in-flight suggestion.
+            // tree.codoc stays at baseline because Suggesting mode never calls onSettle;
+            // the change renders as an inline tracked diff for every feature except the
+            // one the caret is in. `applyDocAheadSuggestions` on the next repost keeps
+            // this live text from being reverted by the round-trip.
             const captured = diffDocsToSuggestions(baselineDoc, edited);
-            reloadBaseline();
+            // Buffer locally so a repost arriving before the host echoes the suggestion
+            // can't revert the in-flight inline edit (WS4 race). `seen:false` → it gets
+            // one full setSuggestions cycle of grace before the resolved-drop kicks in.
+            for (const s of captured) pendingDocAhead.set(s.id, { s, seen: false });
             if (captured.length) opts.onSuggest(captured);
+            // Refresh the decorations now (dirty just went false → the just-edited
+            // feature may need its tracked change drawn once the caret leaves it).
+            editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true));
             markSaving('suggested');
         } else {
-            opts.onSettle(edited);
+            // Editing mode: strip any pending doc-ahead suggestions back to baseline
+            // (except the feature being committed) so an unrelated in-flight suggestion
+            // never leaks into canonical tree.codoc just because a different feature
+            // was edited. With no pending suggestions this is a no-op.
+            opts.onSettle(stripDocAheadSuggestions(edited, effectiveSuggestions()));
             markSaving('saved');
         }
         rebuildRail();
-    }
-
-    function reloadBaseline(): void {
-        if (!baselineDoc) return;
-        suppressUpdate = true;
-        try {
-            const node = editor.state.schema.nodeFromJSON(baselineDoc);
-            if (node.content.size > 0) {
-                editor.view.dispatch(
-                    editor.state.tr.replaceWith(0, editor.state.doc.content.size, node.content)
-                        .setMeta(REFLECT_META, true).setMeta('addToHistory', false),
-                );
-            }
-        } catch { /* leave as-is */ }
-        suppressUpdate = false;
     }
 
     // ── toolbar: per-span authorship + marks + structure ──────────────────────
@@ -320,8 +365,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // "hand to AI" (pencil — AI may revise it directly) / "take back" (pen — committed,
     // AI may only propose). It acts on the selection, like the mark buttons.
     function setSpanMode(mode: 'pen' | 'pencil'): void {
-        const { from, to, empty } = editor.state.selection;
-        if (empty) { editor.commands.focus(); return; } // needs a selection to re-stamp
+        const range = actionRange();
+        if (!range) { editor.commands.focus(); return; }
+        const { from, to } = range;
         const id = opts.controller.get();
         const markType = editor.state.schema.marks.author;
         if (!markType) return;
@@ -431,6 +477,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         updateSpy();
     }
     let spyRaf = 0;
+    let lastSpyFid: string | null = null; // dedupe scroll-spy onActiveFeature notifications
     function updateSpy(): void {
         if (spyRaf) return;
         spyRaf = requestAnimationFrame(() => {
@@ -446,7 +493,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 if (dom && dom.getBoundingClientRect().top <= threshold) current = fid;
             });
             markCurrent(current);
-            if (current) opts.onActiveFeature?.(current);
+            // Only notify on an actual section change — scroll-spy runs every RAF frame,
+            // and onActiveFeature drives the tree highlight + dependency spotlight recompute
+            // (an O(rows) DOM pass), so firing it per-frame thrashes a large tree.
+            if (current && current !== lastSpyFid) { lastSpyFid = current; opts.onActiveFeature?.(current); }
         });
     }
     let railTimer = 0;
@@ -469,6 +519,24 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         opts.onOpenBinding(chip.getAttribute('data-file') || '', chip.getAttribute('data-symbol') || '');
     });
 
+    // Hovering a depends-on / used-by link previews its target in the tree pane (WS5):
+    // highlight + scroll-to without changing the caret. Delegated so it survives deco
+    // re-renders; deduped on fid so it fires once per link, not per pixel.
+    let hoverFid: string | null = null;
+    const emitHover = (fid: string | null): void => {
+        if (fid === hoverFid) return;
+        hoverFid = fid;
+        opts.onHoverFeature?.(fid);
+    };
+    editor.view.dom.addEventListener('mouseover', ev => {
+        const link = (ev.target as HTMLElement).closest('.ce-thread[data-fid]') as HTMLElement | null;
+        emitHover(link?.dataset.fid ?? null);
+    });
+    editor.view.dom.addEventListener('mouseout', ev => {
+        const to = (ev as MouseEvent).relatedTarget as HTMLElement | null;
+        if (!to || !to.closest('.ce-thread[data-fid]')) emitHover(null);
+    });
+
     // Tier-1 hover-preview cards (U4): hover/keyboard a codeRef chip or a feature
     // dependency link → a transient card from the precomputed payload data. Pure
     // overlay; never touches the doc. Torn down in destroy().
@@ -478,23 +546,42 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         onNavigate: fid => scrollToFeatureInternal(fid, true),
     });
 
-    /** Patch freshly-minted feature ids into the live editor BY INDEX, even while the
-     *  user is still editing (dirty). Without this, a new heading stays fid:null in
-     *  the editor, so the next settle re-emits a fid-less heading and the pipeline
-     *  ADDs a SECOND feature. Conservative: only fills a null fid from the incoming. */
+    /** Patch freshly-minted feature ids into the live editor even while the user is
+     *  still editing (dirty). Without this, a new heading stays fid:null in the editor,
+     *  so the next settle re-emits a fid-less heading and the pipeline ADDs a SECOND
+     *  feature.
+     *
+     *  Robust matching (the old by-raw-index pairing broke on any concurrent indent /
+     *  reorder / sibling-add between settle and repost): only headings whose fid is NOT
+     *  already present locally count as freshly minted; each local fid:null heading
+     *  claims a minted id by TITLE first (so a uniquely-named new feature always lands
+     *  its own id), then falls back to document order. Never reuses a minted id; only
+     *  ever FILLS a null. */
     function patchMintedIds(incoming: PMNode): void {
-        const incHeadings = (incoming.content ?? []).filter(b => b.type === 'featureHeading');
+        const localFids = new Set<string>();
+        editor.state.doc.forEach(node => {
+            if (node.type.name === 'featureHeading' && node.attrs.fid) localFids.add(node.attrs.fid as string);
+        });
+        const minted: { title: string; fid: string }[] = [];
+        for (const b of incoming.content ?? []) {
+            if (b.type !== 'featureHeading') continue;
+            const fid = (b.attrs as { fid?: string | null } | undefined)?.fid;
+            if (fid && !localFids.has(fid)) minted.push({ title: inlineRunsToText(b.content).trim(), fid });
+        }
+        if (!minted.length) return;
+
+        const used = new Set<number>();
         let tr = editor.state.tr;
         let changed = false;
-        let idx = -1;
         editor.state.doc.forEach((node, pos) => {
-            if (node.type.name !== 'featureHeading') return;
-            idx++;
-            const incFid = (incHeadings[idx]?.attrs as { fid?: string | null } | undefined)?.fid;
-            if (node.attrs.fid == null && incFid) {
-                tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, fid: incFid });
-                changed = true;
-            }
+            if (node.type.name !== 'featureHeading' || node.attrs.fid != null) return;
+            const title = (node.textContent || '').trim();
+            let pick = minted.findIndex((m, i) => !used.has(i) && m.title === title);
+            if (pick < 0) pick = minted.findIndex((_m, i) => !used.has(i)); // order fallback
+            if (pick < 0) return;
+            used.add(pick);
+            tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, fid: minted[pick].fid });
+            changed = true;
         });
         if (!changed) return;
         suppressUpdate = true;
@@ -502,24 +589,40 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         suppressUpdate = false;
     }
 
-    // ── inline comments — bubble menu + composer + resolve ────────────────────
-    // Selecting prose surfaces a one-action bubble (❝); clicking it (or the toolbar
-    // ❝) opens a composer aside the selection. Enter saves: a `comment` mark anchors
-    // the threadId, the note is handed to the host (→ a `> …` steering line the agent
-    // drains). The marker icon + popover live in comment-decorations.ts; resolving
-    // removes the anchor mark here and tells the host to drop the `> …` line.
+    // ── inline comments — selection toolbar + composer + resolve ──────────────
+    // Selecting prose surfaces a Notion/Medium-style floating toolbar (format · comment ·
+    // hand-to-AI). Comment opens a composer aside the selection; Enter saves: a `comment`
+    // mark anchors the threadId, the note is handed to the host (→ a `> …` steering line
+    // the agent drains). The marker icon + popover live in comment-decorations.ts;
+    // resolving removes the anchor mark here and tells the host to drop the `> …` line.
     type ComposeMode = 'create' | 'edit';
     const bubble = document.createElement('div');
-    bubble.className = 'ce-cmt-bubble';
+    bubble.className = 'ce-bubble';
     bubble.style.display = 'none';
-    const bubbleBtn = document.createElement('button');
-    bubbleBtn.type = 'button';
-    bubbleBtn.className = 'ce-cmt-bubble-btn';
-    bubbleBtn.textContent = '❝ Comment';
-    bubbleBtn.title = 'Comment on the selection — a steering note the agent will address';
-    bubbleBtn.addEventListener('mousedown', ev => ev.preventDefault()); // keep the editor selection
-    bubbleBtn.addEventListener('click', ev => { ev.preventDefault(); openComposerForSelection(); });
-    bubble.append(bubbleBtn);
+    // Guard the WHOLE bubble (not just the buttons): a mousedown landing on the bubble's
+    // padding would otherwise blur the editor and collapse the selection before a
+    // button's click fires — the "selection vanished, nothing happened" bug.
+    bubble.addEventListener('mousedown', ev => ev.preventDefault());
+    function bubBtn(label: string, title: string, onClick: () => void, cls = ''): HTMLButtonElement {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = ('ce-bub-btn ' + cls).trim();
+        b.textContent = label;
+        b.title = title;
+        b.addEventListener('mousedown', ev => ev.preventDefault()); // keep the editor selection
+        b.addEventListener('click', ev => { ev.preventDefault(); onClick(); });
+        return b;
+    }
+    const bubSep = (): HTMLElement => { const s = document.createElement('span'); s.className = 'ce-bub-sep'; return s; };
+    bubble.append(
+        bubBtn('B', 'Bold (⌘B)', () => editor.chain().focus().toggleBold().run(), 'ce-bub-bold'),
+        bubBtn('I', 'Italic (⌘I)', () => editor.chain().focus().toggleItalic().run(), 'ce-bub-italic'),
+        bubBtn('H', 'Highlight', () => editor.chain().focus().toggleHighlight().run(), 'ce-bub-hl'),
+        bubSep(),
+        bubBtn('❝ Comment', 'Comment on the selection — a steering note the agent will address', () => openComposerForSelection()),
+        bubSep(),
+        bubBtn('✋ AI', 'Hand this selection to AI — mark it pencil (AI may revise it directly)', () => setSpanMode('pencil'), 'ce-bub-ai'),
+    );
     document.body.append(bubble);
 
     let composer: HTMLElement | null = null;
@@ -529,24 +632,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let composeAnchor = '';
     let composeThreadId = '';
 
-    function selectionRect(): DOMRect | null {
-        const { from, to, empty } = editor.state.selection;
-        if (empty) return null;
-        try {
-            const a = editor.view.coordsAtPos(from);
-            const b = editor.view.coordsAtPos(to);
-            const left = Math.min(a.left, b.left);
-            const right = Math.max(a.right, b.right);
-            const top = Math.min(a.top, b.top);
-            const bottom = Math.max(a.bottom, b.bottom);
-            return new DOMRect(left, top, right - left, bottom - top);
-        } catch { return null; }
-    }
 
     function updateBubble(): void {
         if (composer) { bubble.style.display = 'none'; return; }
         const { from, to, empty } = editor.state.selection;
-        const rect = empty ? null : selectionRect();
+        const rect = empty ? null : coordsRect(from, to);
         // Only over real prose: both ends inside a paragraph/heading text block.
         const inText = !empty && editor.state.doc.resolve(from).parent.isTextblock
             && to - from >= 1;
@@ -563,14 +653,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
 
     function openComposerForSelection(): void {
-        const { from, to, empty } = editor.state.selection;
-        if (empty || to <= from) { editor.commands.focus(); return; }
+        const range = actionRange();
+        if (!range) { editor.commands.focus(); return; }
+        const { from, to } = range;
         composeMode = 'create';
         composeRange = { from, to };
         composeFid = activeFid();
         composeAnchor = selectedText(from, to);
         composeThreadId = mintCommentId(Date.now(), String(from));
-        openComposer(selectionRect(), '');
+        // Anchor the composer to the captured range (the live rect may be gone if the
+        // selection collapsed) so it always opens beside the text it comments on.
+        openComposer(coordsRect(from, to), '');
     }
 
     function openComposerForEdit(thread: CommentThread): void {
@@ -583,12 +676,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         openComposer(at, thread.body);
     }
 
+    /** Bounding rect of the doc range [from,to) — the anchor for the bubble + composer.
+     *  Uses min/max of both endpoints so a multi-line selection still yields a sane box
+     *  (the prior `b.right - a.left` width went haywire across a line break). */
     function coordsRect(from: number, to: number): DOMRect | null {
         try {
             const a = editor.view.coordsAtPos(from);
             const b = editor.view.coordsAtPos(to);
-            return new DOMRect(Math.min(a.left, b.left), Math.min(a.top, b.top),
-                Math.abs(b.right - a.left), Math.max(a.bottom, b.bottom) - Math.min(a.top, b.top));
+            const left = Math.min(a.left, b.left);
+            const top = Math.min(a.top, b.top);
+            return new DOMRect(left, top, Math.max(a.right, b.right) - left, Math.max(a.bottom, b.bottom) - top);
         } catch { return null; }
     }
 
@@ -729,13 +826,23 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         setDoc: (doc: PMNode) => {
             patchMintedIds(doc); // learn minted ids even mid-edit (prevents a double-add)
             if (dirty) return;   // otherwise don't clobber unsettled edits
-            // Skip the reload when the SETTLED content (canonical tree.codoc) is
-            // unchanged — this is the common case right after a settle round-trips,
-            // and reloading would reset the caret to the top + drop local title
-            // marks. Only reload when a real content change (e.g. a loop) arrives.
-            const sameText = baselineDoc !== null
-                && renderTreeFromDoc(doc) === renderTreeFromDoc(editor.getJSON() as PMNode);
-            baselineDoc = doc; // the settled baseline Suggesting mode diffs against
+            // A reload while a comment composer / bubble is open would remap or destroy
+            // the captured range under it (the "selection vanished mid-comment" bug).
+            // Defer the WHOLE update — do NOT advance baselineDoc either: shifting the
+            // diff base while the visible editor still shows the old doc would make the
+            // next Suggesting settle diff against a baseline the user never saw and
+            // manufacture spurious "revert" suggestions. The next payload reloads cleanly.
+            if (composer || bubble.style.display !== 'none') return;
+            baselineDoc = doc; // the PURE baseline Suggesting mode diffs against
+            // Splice the user's in-flight doc-ahead suggestion text back into the
+            // incoming baseline (WS4) so a round-trip never reverts a suggestion they're
+            // still composing — the live editor keeps descNew while tree.codoc stays
+            // baseline. With no pending suggestions this is the incoming doc unchanged.
+            const merged = applyDocAheadSuggestions(doc, effectiveSuggestions());
+            // Skip the reload when the rendered content is unchanged — the common case
+            // right after a settle round-trips; reloading would reset the caret + drop
+            // local marks. Only reload when a real content change (e.g. a loop) arrives.
+            const sameText = renderTreeFromDoc(merged) === renderTreeFromDoc(editor.getJSON() as PMNode);
             if (sameText) { markSaving(''); return; }
 
             const keepFid = activeFid();          // stable anchor for existing features
@@ -745,7 +852,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // Replace the whole doc with a REFLECT-tagged transaction so the
                 // authorship-stamp plugin does NOT treat this programmatic load as
                 // user input (otherwise every reload re-stamps the entire doc).
-                const node = editor.state.schema.nodeFromJSON(doc);
+                const node = editor.state.schema.nodeFromJSON(merged);
                 if (node.content.size > 0) {
                     const tr = editor.state.tr
                         .replaceWith(0, editor.state.doc.content.size, node.content)
@@ -757,6 +864,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 editor.commands.setContent(doc as unknown as Record<string, unknown>, false);
             }
             suppressUpdate = false;
+            // The pre-reload selection no longer maps onto the new doc — drop it so a
+            // toolbar/bubble action can't fall back to a stale range and stamp the wrong
+            // span (a clamp keeps it in-bounds but not in the right text).
+            lastSelection = null;
             const restorePos = (keepFid ? headingPosForFid(editor, keepFid) : null) ?? headingPosAtIndex(keepIndex);
             if (restorePos != null) {
                 editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(restorePos + 1))));
@@ -766,6 +877,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setSuggestions: (list: Suggestion[]) => {
             currentSuggestions = list;
+            // Reconcile the local buffer against the authoritative list:
+            //  - echoed (id in list) → the host owns it now, drop from the buffer;
+            //  - absent but already seen a full cycle → resolved server-side
+            //    (withdrawn / applied / rejected), drop it so it can't re-splice;
+            //  - absent and fresh → keep one cycle (bridges the setDoc-before-echo gap),
+            //    mark it seen.
+            const ids = new Set(list.map(s => s.id));
+            for (const [id, e] of pendingDocAhead) {
+                if (ids.has(id) || e.seen) pendingDocAhead.delete(id);
+                else e.seen = true;
+            }
             editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true));
         },
         setThreads: (threadsMap: Record<string, ThreadsData>) => {
@@ -797,10 +919,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             document.body.classList.toggle('glance', on);
             editor.view.dispatch(editor.state.tr.setMeta(GLANCE_UPDATED, true));
         },
-        setKinds: (kinds: Record<string, string>) => {
-            currentKinds = kinds;
-            editor.view.dispatch(editor.state.tr.setMeta(KIND_UPDATED, true));
-        },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
         isDirty: () => dirty,
         destroy: () => {
@@ -808,6 +926,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (railTimer) clearTimeout(railTimer);
             if (muteTimer) clearTimeout(muteTimer);
             if (blurTimer) clearTimeout(blurTimer);
+            if (spyRaf) cancelAnimationFrame(spyRaf); // else the RAF fires onActiveFeature on a destroyed editor
             closeComposer();
             bubble.remove();
             detachHoverCards();        // tear down the hover-card listeners + open card
