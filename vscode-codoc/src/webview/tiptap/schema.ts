@@ -18,6 +18,12 @@ import { CodeRef } from './code-ref';
 import { AuthorMark } from './author-mark';
 import { HighlightMark } from './highlight-mark';
 import { CommentMark } from './comment-mark';
+// Vendored tracked-changes engine (sungkhum/tiptap-track-changes, MIT — see
+// track-changes/NOTICE): registers insertion/deletion/format-change marks + the
+// suggest-mode plugin. Mode defaults to 'edit' (no interception) until the editing
+// model wires it (U3+); registering it here puts the marks in the schema so
+// agent-authored tracked changes can be rendered and serialization can strip them.
+import { TrackChangesExtension } from './track-changes';
 
 export function codocExtensions(): Extensions {
     return [
@@ -40,6 +46,9 @@ export function codocExtensions(): Extensions {
         AuthorMark,
         HighlightMark,
         CommentMark,
+        // featureHeading is the outliner's block node; register it for node-level
+        // change tracking (the global dataTracked attr) alongside paragraph.
+        TrackChangesExtension.configure({ mode: 'edit', additionalBlockTypes: ['featureHeading'] }),
     ];
 }
 

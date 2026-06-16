@@ -389,6 +389,25 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
    added by comment-decorations.ts (store-driven) — see "inline comments" below. */
 .codoc-comment { border-bottom: 2px dotted var(--accent-amend); }
 
+/* ── tracked changes (vendored engine: <ins>/<del>) ──────────────────────────
+   Kind = shape (insert underlines, delete strikes — colourblind-safe); the author
+   rides the engine's `--author-color` CSS var (set per mark, falling back to the
+   neutral foreground). Calm by design: no heavy fills. These render agent-authored
+   changes "awaiting your review" (U4) and divergent realizations (U5); a human's own
+   committed edit carries no tracked marks (KTD2). Reduced-motion/HC gates are global. */
+ins[data-change-id] {
+    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px;
+    text-decoration-color: var(--author-color, var(--vscode-foreground));
+    color: color-mix(in srgb, var(--author-color, var(--vscode-foreground)) 80%, var(--vscode-foreground));
+}
+del[data-change-id] {
+    text-decoration: line-through; text-decoration-color: var(--author-color, var(--fg-muted));
+    color: var(--fg-muted);
+}
+/* a pure formatting change (no text add/del) — a quiet dotted underline in author tint */
+[data-change-id].codoc-format-change,
+span[data-change-id] { text-decoration-style: solid; }
+
 /* authorship (U6): opacity = commitment mode, tint + dotted underline = role.
    pen = solid baseline (human-authored, no decoration); pencil = tentative. */
 .codoc-author { --role-tint: var(--fg-muted); }

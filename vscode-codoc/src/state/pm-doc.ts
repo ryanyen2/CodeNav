@@ -32,6 +32,12 @@ export const NODE_CODE_REF = 'codeRef';
 export const NODE_HARD_BREAK = 'hardBreak';
 
 export const MARK_AUTHOR = 'author';
+// Tracked-change marks (vendored track-changes engine). `insertion` wraps
+// not-yet-committed added text; `deletion` wraps text struck but still present in
+// the baseline. The canonical `tree.codoc` projection is the BASELINE — see
+// `inlineRunsToText`.
+export const MARK_INSERTION = 'insertion';
+export const MARK_DELETION = 'deletion';
 
 /** Commitment mode — drives OPACITY (pen solid, pencil faded). */
 export type AuthorMode = 'pen' | 'pencil';
@@ -109,10 +115,18 @@ export function codeRefToText(attrs: CodeRefAttrs): string {
  * `tree.codoc`): text verbatim, codeRef → markdown link, hardBreak → "\n".
  * Marks (bold/italic/highlight/comment/author) are intentionally DROPPED — they
  * live only in `tree.doc.json`.
+ *
+ * Tracked-change BASELINE projection: a run carrying an `insertion` mark is a
+ * not-yet-accepted addition, so it is EXCLUDED (it must not leak into the committed
+ * canonical text); a `deletion`-marked run is struck but still part of the baseline,
+ * so its text is KEPT (the mark dropped like any other). A human edit that committed
+ * directly carries no tracked marks and is emitted normally. This keeps `tree.codoc`
+ * equal to "what is committed before pending agent proposals are resolved."
  */
 export function inlineRunsToText(content: PMNode[] | undefined): string {
     let s = '';
     for (const n of content ?? []) {
+        if (n.marks?.some(m => m.type === MARK_INSERTION)) continue; // uncommitted insertion — excluded from baseline
         if (n.type === NODE_TEXT) s += n.text ?? '';
         else if (n.type === NODE_CODE_REF && n.attrs) s += codeRefToText(n.attrs as unknown as CodeRefAttrs);
         else if (n.type === NODE_HARD_BREAK) s += '\n';
