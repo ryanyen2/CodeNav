@@ -42,6 +42,9 @@ dist/
 # at VSIX package time; shipped inside the .vsix, never committed.
 vscode-codoc/bundled/*.whl
 
+# Packaged extension — a build artifact produced by `vsce package`, never committed.
+vscode-codoc/*.vsix
+
 .codoc/
 
 # Root-level real-world corpora only (requests/, altair/, …); anchored so it does
