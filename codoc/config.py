@@ -1,18 +1,28 @@
 """
 codoc.config — LLM and embedder configuration, env-var driven.
 
-Supports OpenAI, Ollama, and Claude for completions; OpenAI and
+Supports OpenAI, Anthropic, Ollama, and Claude Code for completions; OpenAI and
 sentence-transformers for embeddings. No adalflow dependency.
 
-The ``claude`` provider reuses the user's *existing* Claude credentials by
-shelling out to the ``claude`` CLI in headless JSON mode — no separate API key.
-This is what lets the VS Code extension offer a single-sign-in setup: codoc's
-own reflection calls ride on the same auth Claude Code already resolved.
+The default, keyless path is **Claude Code** (provider ``claude``): it reuses the
+user's *existing* Claude login by shelling out to the ``claude`` CLI in headless
+JSON mode — no separate API key. This is what lets the VS Code extension offer a
+zero-key setup: codoc's reflection calls ride on the same auth Claude Code already
+resolved. Users who prefer a managed API can instead set an OpenAI key (provider
+``openai``) or an Anthropic key (provider ``anthropic``).
+
+Provider resolution (``get_llm_config``) when ``CODOC_PROVIDER`` is unset:
+``OPENAI_API_KEY`` present → ``openai``; else ``ANTHROPIC_API_KEY`` present →
+``anthropic``; else → ``claude`` (keyless Claude Code). An explicit
+``CODOC_PROVIDER`` always wins. So a fresh install with no key "just works" via
+Claude Code, and never crashes demanding an OpenAI key.
 
 Environment variables:
-    CODOC_PROVIDER          LLM provider: "openai" | "ollama" | "claude"  (default "openai")
-    CODOC_MODEL             Model name  (default "gpt-5.4-mini"; "sonnet" when provider="claude")
+    CODOC_PROVIDER          LLM provider: "openai" | "anthropic" | "ollama" | "claude"
+                            (default: inferred from which key is present, else "claude")
+    CODOC_MODEL             Model name  (per-provider default: gpt-5.4-mini / claude-sonnet-4-6 / sonnet)
     OPENAI_API_KEY          API key for OpenAI (required when provider=openai)
+    ANTHROPIC_API_KEY       API key for Anthropic (required when provider=anthropic)
     CODOC_BASE_URL          Override base URL (e.g. for local OpenAI-compatible servers)
     CODOC_TEMPERATURE       Float  (default 0.2)
     CODOC_MAX_TOKENS        Int    (default 16000)
@@ -28,11 +38,17 @@ import os
 import sys
 
 from pydantic import BaseModel
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
+# Load the repo's .env from the CURRENT WORKING DIRECTORY, not from this module's
+# install location. Bare load_dotenv()/find_dotenv() walk up from the *caller's
+# file* (site-packages/codoc/config.py for a uv-tool install), so they never find
+# the project .env and the user's CODOC_PROVIDER choice is silently ignored.
+# codoc is always run with cwd = the repo (the daemon, the CC hooks, `codoc init
+# --root <repo>` all set it), so usecwd=True is the correct, robust anchor.
 # override=True so the project's .env is authoritative over stale shell exports
 # (e.g. a globally-exported CODOC_MAX_TOKENS that would otherwise win).
-load_dotenv(override=True)
+load_dotenv(find_dotenv(usecwd=True), override=True)
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +57,7 @@ load_dotenv(override=True)
 
 
 class LLMConfig(BaseModel):
-    provider: str  # "openai" | "ollama" | "claude"
+    provider: str  # "openai" | "anthropic" | "ollama" | "claude"
     model: str
     api_key: str | None = None
     base_url: str | None = None
@@ -51,21 +67,78 @@ class LLMConfig(BaseModel):
     max_tokens: int = 16000
 
 
+# Per-provider default model when CODOC_MODEL is unset. The OpenAI default makes
+# no sense for the Claude paths: the ``claude`` CLI takes the ``sonnet`` alias,
+# while the Anthropic API needs a concrete model id.
+_DEFAULT_MODELS = {
+    "openai": "gpt-5.4-mini",
+    "anthropic": "claude-sonnet-4-6",
+    "claude": "sonnet",
+}
+
+
+def _is_claude_family_model(model: str) -> bool:
+    """Whether a model name belongs to the Claude family (so it can run on the
+    ``claude`` CLI / Anthropic API but NOT on OpenAI, and vice-versa)."""
+    m = model.lower()
+    return any(tag in m for tag in ("sonnet", "opus", "haiku", "claude"))
+
+
+def _model_fits_provider(provider: str, model: str) -> bool:
+    """Whether ``model`` can actually run on ``provider``. A cross-family mismatch
+    (e.g. a globally-exported ``CODOC_MODEL=gpt-…`` leaking onto the keyless Claude
+    path) is rejected so we fall back to the provider's default instead of handing
+    an unusable model name to the CLI/API."""
+    if provider in ("claude", "anthropic"):
+        return _is_claude_family_model(model)
+    if provider == "openai":
+        return not _is_claude_family_model(model)
+    return True  # ollama / unknown: trust the user's explicit model
+
+
+def _resolve_provider() -> str:
+    """Pick the LLM provider, honoring an explicit choice and otherwise inferring
+    one from which key is present — keyless Claude Code is the final fallback.
+
+    An explicit ``CODOC_PROVIDER`` always wins (the VS Code setup writes it). With
+    none set we infer: an ``OPENAI_API_KEY`` means the user opted into OpenAI, an
+    ``ANTHROPIC_API_KEY`` means the Anthropic API; with no key at all we default to
+    ``claude`` (Claude Code, no key) so a fresh install never crashes demanding an
+    OpenAI key.
+    """
+    explicit = os.environ.get("CODOC_PROVIDER")
+    if explicit:
+        return explicit
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return "claude"
+
+
 def get_llm_config() -> LLMConfig:
     """Build LLMConfig from environment variables.
 
-    When ``CODOC_MODEL`` is unset the default tracks the provider: the OpenAI
-    default (``gpt-5.4-mini``) makes no sense for Claude, so ``claude`` falls
-    back to the ``sonnet`` alias the ``claude`` CLI understands.
+    Provider defaults to keyless Claude Code unless a key or explicit
+    ``CODOC_PROVIDER`` selects otherwise (see :func:`_resolve_provider`). The
+    model and api_key both track the resolved provider.
     """
-    provider = os.environ.get("CODOC_PROVIDER", "openai")
-    model = os.environ.get("CODOC_MODEL")
-    if model is None:
-        model = "sonnet" if provider in ("claude", "anthropic") else "gpt-5.4-mini"
+    provider = _resolve_provider()
+    default_model = _DEFAULT_MODELS.get(provider, "gpt-5.4-mini")
+    model = os.environ.get("CODOC_MODEL") or default_model
+    if not _model_fits_provider(provider, model):
+        # A stray cross-family CODOC_MODEL can't run on this provider — ignore it.
+        model = default_model
+    if provider == "anthropic":
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    else:
+        # The e2e/eval suites gate on `get_llm_config().api_key` being the OpenAI
+        # key, so keep this field the OpenAI key for every non-Anthropic provider.
+        api_key = os.environ.get("OPENAI_API_KEY")
     return LLMConfig(
         provider=provider,
         model=model,
-        api_key=os.environ.get("OPENAI_API_KEY"),
+        api_key=api_key,
         base_url=os.environ.get("CODOC_BASE_URL"),
         temperature=float(os.environ.get("CODOC_TEMPERATURE", "0.2")),
         max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "16000")),
@@ -85,7 +158,9 @@ def complete(prompt: str, config: LLMConfig | None = None) -> str:
         response_text = _complete_openai(prompt, config)
     elif config.provider == "ollama":
         response_text = _complete_ollama(prompt, config)
-    elif config.provider in ("claude", "anthropic"):
+    elif config.provider == "anthropic":
+        response_text = _complete_anthropic(prompt, config)
+    elif config.provider in ("claude", "claude-code"):
         response_text = _complete_claude(prompt, config)
     else:
         raise ValueError(f"Unknown LLM provider: {config.provider!r}")
@@ -140,6 +215,40 @@ def _complete_ollama(prompt: str, config: LLMConfig) -> str:
         options={"temperature": config.temperature, "num_predict": config.max_tokens},
     )
     return response["message"]["content"]
+
+
+def _complete_anthropic(prompt: str, config: LLMConfig) -> str:
+    """Complete via the Anthropic API using an explicit ``ANTHROPIC_API_KEY``.
+
+    This is the *managed-API* path (the user pasted an Anthropic key in setup), as
+    opposed to the keyless ``claude`` provider that reuses a Claude Code login. The
+    model must be a concrete API id (e.g. ``claude-sonnet-4-6``), not a CLI alias.
+    """
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise ImportError(
+            "anthropic package is required for provider='anthropic'. Run: pip install anthropic"
+        ) from exc
+
+    kwargs: dict = {}
+    if config.api_key is not None:
+        kwargs["api_key"] = config.api_key
+    if config.base_url is not None:
+        kwargs["base_url"] = config.base_url
+
+    client = anthropic.Anthropic(**kwargs)
+    message = client.messages.create(
+        model=config.model,
+        max_tokens=config.max_tokens,
+        temperature=config.temperature,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    # Concatenate the text blocks of the response (tool/thinking blocks, if any,
+    # carry no .text and are skipped) — the same raw-text contract as the others.
+    return "".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    )
 
 
 def _complete_claude(prompt: str, config: LLMConfig) -> str:

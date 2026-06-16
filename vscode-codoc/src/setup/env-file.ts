@@ -24,7 +24,7 @@
  */
 
 /** The provider codoc's reflection LLM runs on. */
-export type CodocProvider = 'claude' | 'openai';
+export type CodocProvider = 'claude' | 'openai' | 'anthropic';
 
 /**
  * Parse `.env` text into a key→value map. Comment lines (`# …`) and blank lines
@@ -98,26 +98,27 @@ export function upsertEnvLines(existingText: string, vars: Record<string, string
 
 /**
  * The canonical env-var set for a chosen reflection provider.
- *   • claude → `{ CODOC_PROVIDER: 'claude' }` (keyless — reuses Claude Code auth),
- *              with `CODOC_MODEL` when a model override is given.
- *   • openai → `{ CODOC_PROVIDER: 'openai', OPENAI_API_KEY: <key> }`,
- *              with `CODOC_MODEL` when a model override is given.
+ *   • claude    → `{ CODOC_PROVIDER: 'claude' }` (keyless — reuses Claude Code auth).
+ *   • openai    → `{ CODOC_PROVIDER: 'openai', OPENAI_API_KEY: <key> }`.
+ *   • anthropic → `{ CODOC_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: <key> }`.
+ * `CODOC_MODEL` is added when a model override is given.
  *
  * @param provider the chosen provider.
- * @param openaiKey the OpenAI key — REQUIRED when `provider === 'openai'`.
+ * @param key the API key — REQUIRED when `provider` is `openai` or `anthropic`,
+ *            ignored for the keyless `claude` provider.
  * @param model an optional `CODOC_MODEL` override.
  */
 export function providerEnvVars(
     provider: CodocProvider,
-    openaiKey?: string,
+    key?: string,
     model?: string,
 ): Record<string, string> {
     const vars: Record<string, string> = { CODOC_PROVIDER: provider };
-    if (provider === 'openai') {
-        if (!openaiKey || openaiKey.trim().length === 0) {
-            throw new Error("providerEnvVars('openai', …) requires an OpenAI API key.");
+    if (provider === 'openai' || provider === 'anthropic') {
+        if (!key || key.trim().length === 0) {
+            throw new Error(`providerEnvVars('${provider}', …) requires an API key.`);
         }
-        vars.OPENAI_API_KEY = openaiKey.trim();
+        vars[provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'] = key.trim();
     }
     if (model && model.trim().length > 0) vars.CODOC_MODEL = model.trim();
     return vars;

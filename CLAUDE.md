@@ -236,9 +236,10 @@ Bootstrap and both loops call `update_index` first, then read from LanceDB via `
 
 | Var | Default | Description |
 |---|---|---|
-| `CODOC_PROVIDER` | `openai` | LLM provider (`openai` or `ollama`) |
-| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name |
-| `OPENAI_API_KEY` | — | OpenAI API key |
+| `CODOC_PROVIDER` | inferred | LLM provider (`claude`, `openai`, `anthropic`, `ollama`). Unset → `openai` if `OPENAI_API_KEY` set, else `anthropic` if `ANTHROPIC_API_KEY` set, else **keyless `claude`** (Claude Code login — the zero-key default) |
+| `CODOC_MODEL` | per-provider | LLM model name (default `gpt-5.4-mini` / `claude-sonnet-4-6` / `sonnet`; a cross-family value is ignored on the wrong provider) |
+| `OPENAI_API_KEY` | — | OpenAI API key (selects/uses provider `openai`) |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key (selects/uses provider `anthropic`) |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
 | `CODOC_TEMPERATURE` | `0.2` | LLM sampling temperature |
 | `CODOC_MAX_TOKENS` | `16000` | LLM completion budget (reasoning models spend it on hidden reasoning too) |

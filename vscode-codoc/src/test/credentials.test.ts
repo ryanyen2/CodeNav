@@ -97,15 +97,35 @@ describe('providerEnvVars', () => {
         });
     });
 
-    it('throws when openai is requested without a key', () => {
-        expect(() => providerEnvVars('openai')).toThrow(/requires an OpenAI API key/);
-        expect(() => providerEnvVars('openai', '   ')).toThrow(/requires an OpenAI API key/);
+    it('anthropic → both CODOC_PROVIDER and ANTHROPIC_API_KEY', () => {
+        expect(providerEnvVars('anthropic', 'sk-ant-x')).toEqual({
+            CODOC_PROVIDER: 'anthropic',
+            ANTHROPIC_API_KEY: 'sk-ant-x',
+        });
+    });
+
+    it('anthropic with a model adds CODOC_MODEL', () => {
+        expect(providerEnvVars('anthropic', 'sk-ant-x', 'claude-sonnet-4-6')).toEqual({
+            CODOC_PROVIDER: 'anthropic',
+            ANTHROPIC_API_KEY: 'sk-ant-x',
+            CODOC_MODEL: 'claude-sonnet-4-6',
+        });
+    });
+
+    it('throws when a key-requiring provider is requested without a key', () => {
+        expect(() => providerEnvVars('openai')).toThrow(/requires an API key/);
+        expect(() => providerEnvVars('openai', '   ')).toThrow(/requires an API key/);
+        expect(() => providerEnvVars('anthropic')).toThrow(/requires an API key/);
     });
 
     it('trims a surrounding-whitespace key', () => {
         expect(providerEnvVars('openai', '  sk-x  ')).toEqual({
             CODOC_PROVIDER: 'openai',
             OPENAI_API_KEY: 'sk-x',
+        });
+        expect(providerEnvVars('anthropic', '  sk-ant-x  ')).toEqual({
+            CODOC_PROVIDER: 'anthropic',
+            ANTHROPIC_API_KEY: 'sk-ant-x',
         });
     });
 });

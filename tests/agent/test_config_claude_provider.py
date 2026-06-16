@@ -118,3 +118,103 @@ def test_default_model_tracks_provider(monkeypatch):
 
     monkeypatch.setenv("CODOC_PROVIDER", "openai")
     assert config.get_llm_config().model == "gpt-5.4-mini"
+
+    monkeypatch.setenv("CODOC_PROVIDER", "anthropic")
+    assert config.get_llm_config().model == "claude-sonnet-4-6"
+
+
+def _clear_provider_env(monkeypatch):
+    for var in ("CODOC_PROVIDER", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CODOC_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_default_provider_is_keyless_claude(monkeypatch):
+    # No explicit provider and NO key → keyless Claude Code, never an openai crash.
+    _clear_provider_env(monkeypatch)
+    cfg = config.get_llm_config()
+    assert cfg.provider == "claude"
+    assert cfg.model == "sonnet"
+    assert cfg.api_key is None
+
+
+def test_openai_key_infers_openai_provider(monkeypatch):
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    cfg = config.get_llm_config()
+    assert cfg.provider == "openai"
+    assert cfg.api_key == "sk-openai-test"
+
+
+def test_anthropic_key_infers_anthropic_provider(monkeypatch):
+    # ANTHROPIC_API_KEY (and no OpenAI key) → the managed Anthropic API path.
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    cfg = config.get_llm_config()
+    assert cfg.provider == "anthropic"
+    assert cfg.api_key == "sk-ant-test"
+    assert cfg.model == "claude-sonnet-4-6"
+
+
+def test_stray_openai_model_ignored_on_claude_path(monkeypatch):
+    # A globally-exported CODOC_MODEL=gpt-… must not leak onto the claude CLI path.
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("CODOC_PROVIDER", "claude")
+    monkeypatch.setenv("CODOC_MODEL", "gpt-5.4-mini")
+    assert config.get_llm_config().model == "sonnet"
+
+
+def test_stray_claude_model_ignored_on_openai_path(monkeypatch):
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("CODOC_PROVIDER", "openai")
+    monkeypatch.setenv("CODOC_MODEL", "sonnet")
+    assert config.get_llm_config().model == "gpt-5.4-mini"
+
+
+def test_compatible_explicit_model_is_respected(monkeypatch):
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("CODOC_PROVIDER", "claude")
+    monkeypatch.setenv("CODOC_MODEL", "opus")
+    assert config.get_llm_config().model == "opus"
+
+
+def test_explicit_provider_overrides_key_inference(monkeypatch):
+    # An explicit CODOC_PROVIDER always wins over key-presence inference.
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.setenv("CODOC_PROVIDER", "claude")
+    assert config.get_llm_config().provider == "claude"
+
+
+def test_anthropic_provider_routes_to_anthropic(monkeypatch):
+    # provider='anthropic' must call the Anthropic SDK, NOT the keyless claude CLI.
+    captured: dict = {}
+
+    class _FakeMessages:
+        def create(self, **kwargs):  # noqa: ANN001
+            captured.update(kwargs)
+
+            class _Block:
+                type = "text"
+                text = "<solution>{\"ops\": []}</solution>"
+
+            class _Msg:
+                content = [_Block()]
+
+            return _Msg()
+
+    class _FakeAnthropic:
+        def __init__(self, **kwargs):  # noqa: ANN001
+            captured["init"] = kwargs
+            self.messages = _FakeMessages()
+
+    import types
+
+    fake_mod = types.SimpleNamespace(Anthropic=_FakeAnthropic)
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_mod)
+
+    out = config.complete(
+        "hi", config.LLMConfig(provider="anthropic", model="claude-sonnet-4-6", api_key="sk-ant-x")
+    )
+    assert parse_solution(out) == {"ops": []}
+    assert captured["init"]["api_key"] == "sk-ant-x"
+    assert captured["model"] == "claude-sonnet-4-6"

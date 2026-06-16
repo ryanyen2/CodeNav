@@ -28,13 +28,16 @@ import * as vscode from 'vscode';
 import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { providerEnvVars, upsertEnvLines } from './env-file';
+import { parseEnv, providerEnvVars, upsertEnvLines, type CodocProvider } from './env-file';
 
-/** SecretStorage key for the canonical OpenAI fallback key. */
+/** SecretStorage key for the canonical OpenAI key. */
 export const SECRET_OPENAI_KEY = 'codoc.openaiApiKey';
 
+/** SecretStorage key for the canonical Anthropic key. */
+export const SECRET_ANTHROPIC_KEY = 'codoc.anthropicApiKey';
+
 /** The chosen reflection provider, or 'none' if the user dismissed the key prompt. */
-export type BootstrapResult = 'claude' | 'openai' | 'none';
+export type BootstrapResult = 'claude' | 'openai' | 'anthropic' | 'none';
 
 /** Claude headless subscription-billing began 2026-06-15; surface this on the claude path. */
 const CLAUDE_BILLING_CAVEAT =
@@ -123,16 +126,37 @@ function validateOpenAiKey(value: string): string | undefined {
     return undefined;
 }
 
+/** Validate an Anthropic key input: non-empty and key-shaped (`sk-ant-…`). */
+function validateAnthropicKey(value: string): string | undefined {
+    const v = value.trim();
+    if (v.length === 0) return 'An Anthropic API key is required (or press Escape to add one later).';
+    if (!v.startsWith('sk-ant-')) return 'That does not look like an Anthropic key (expected it to start with "sk-ant-").';
+    if (v.length < 20) return 'That key looks too short to be valid.';
+    return undefined;
+}
+
+/** Read the current `CODOC_PROVIDER` from the repo-root `.env`, if any. */
+function readProviderFromEnv(rootDir: string): CodocProvider | undefined {
+    try {
+        const provider = parseEnv(fs.readFileSync(envPath(rootDir), 'utf8')).CODOC_PROVIDER;
+        if (provider === 'claude' || provider === 'openai' || provider === 'anthropic') return provider;
+    } catch { /* no .env yet */ }
+    return undefined;
+}
+
 /**
- * Bootstrap codoc's reflection credentials. The common, keyless path: when the
- * `claude` CLI is available, write `CODOC_PROVIDER=claude` into `.env`, surface
- * the subscription-billing caveat, and return `'claude'` — no key prompt.
+ * Bootstrap codoc's reflection credentials by letting the user CHOOSE a provider:
  *
- * Otherwise fall back to OpenAI: prompt for a key (validated, password-masked),
- * store it canonically in SecretStorage, MIRROR it to `.env` as
- * `CODOC_PROVIDER=openai` + `OPENAI_API_KEY=…` (KTD7), and return `'openai'`. If
- * the user dismisses the prompt, return `'none'` (the caller surfaces a friendly
- * "add a key later" path).
+ *   1. Claude Code (recommended, keyless) — reuses the existing Claude Code login,
+ *      no API key. Writes `CODOC_PROVIDER=claude` and surfaces the subscription-
+ *      billing caveat. This is the default and the dismiss-the-picker fallback, so
+ *      "just install the extension" needs zero key.
+ *   2. OpenAI API key — prompt (validated, masked), store in SecretStorage, mirror
+ *      to `.env` as `CODOC_PROVIDER=openai` + `OPENAI_API_KEY=…` (KTD7).
+ *   3. Anthropic API key — same, as `CODOC_PROVIDER=anthropic` + `ANTHROPIC_API_KEY=…`.
+ *
+ * Returns the chosen provider, or `'none'` if a key prompt was dismissed (the
+ * caller surfaces a friendly "add a key later" path).
  *
  * @param context the extension context (for SecretStorage).
  * @param rootDir the workspace root holding `.env`.
@@ -141,45 +165,89 @@ export async function bootstrapCredentials(
     context: vscode.ExtensionContext,
     rootDir: string,
 ): Promise<BootstrapResult> {
-    if (await probeClaudeAuth()) {
+    const claudeAvailable = await probeClaudeAuth();
+
+    type Choice = vscode.QuickPickItem & { id: CodocProvider };
+    const items: Choice[] = [
+        {
+            id: 'claude',
+            label: '$(sparkle) Use Claude Code (no API key)',
+            description: claudeAvailable ? 'Recommended' : 'Claude Code CLI not detected on PATH',
+            detail: "Reuses your existing Claude Code login — codoc's reflection bills against your Claude subscription.",
+        },
+        {
+            id: 'openai',
+            label: '$(key) Use an OpenAI API key',
+            detail: 'Run codoc reflection on OpenAI (e.g. gpt-5.4-mini) with your own key.',
+        },
+        {
+            id: 'anthropic',
+            label: '$(key) Use an Anthropic API key',
+            detail: 'Run codoc reflection on the Anthropic API (Claude) with your own key.',
+        },
+    ];
+
+    const pick = await vscode.window.showQuickPick(items, {
+        title: 'codoc — choose a reflection provider',
+        placeHolder: 'How should codoc run its reflection LLM? (Esc → keyless Claude Code)',
+        ignoreFocusOut: true,
+    });
+
+    // Dismissed → default to the zero-key Claude Code path.
+    const chosen: CodocProvider = pick?.id ?? 'claude';
+
+    if (chosen === 'claude') {
         writeEnvVars(rootDir, providerEnvVars('claude'));
-        // Non-blocking caveat with a link to the support article.
-        void vscode.window
-            .showInformationMessage(CLAUDE_BILLING_CAVEAT, 'Learn more')
-            .then(choice => {
-                if (choice === 'Learn more') {
-                    void vscode.env.openExternal(vscode.Uri.parse(CLAUDE_BILLING_URL));
-                }
-            });
+        if (!claudeAvailable) {
+            void vscode.window.showWarningMessage(
+                "codoc will use Claude Code, but the `claude` CLI wasn't found on PATH. " +
+                'Install Claude Code (or re-run "codoc: Set up codoc" and pick an API key) if reflection fails.',
+            );
+        } else {
+            // Non-blocking billing caveat with a link to the support article.
+            void vscode.window
+                .showInformationMessage(CLAUDE_BILLING_CAVEAT, 'Learn more')
+                .then(choice => {
+                    if (choice === 'Learn more') {
+                        void vscode.env.openExternal(vscode.Uri.parse(CLAUDE_BILLING_URL));
+                    }
+                });
+        }
         return 'claude';
     }
 
-    // Fallback: no Claude CLI → ask for an OpenAI key.
+    // OpenAI / Anthropic → prompt for the matching key.
+    const isOpenAi = chosen === 'openai';
     const key = await vscode.window.showInputBox({
-        title: 'codoc — OpenAI API key',
-        prompt: "Claude Code wasn't found, so codoc's reflection will use OpenAI. Paste an OpenAI API key.",
+        title: isOpenAi ? 'codoc — OpenAI API key' : 'codoc — Anthropic API key',
+        prompt: isOpenAi
+            ? "Paste an OpenAI API key for codoc's reflection."
+            : "Paste an Anthropic API key for codoc's reflection.",
         password: true,
         ignoreFocusOut: true,
-        placeHolder: 'sk-…',
-        validateInput: validateOpenAiKey,
+        placeHolder: isOpenAi ? 'sk-…' : 'sk-ant-…',
+        validateInput: isOpenAi ? validateOpenAiKey : validateAnthropicKey,
     });
 
     if (key === undefined || key.trim().length === 0) {
-        outputChannel().appendLine('codoc: no OpenAI key provided — reflection will stay unconfigured until a key is added.');
+        outputChannel().appendLine(
+            `codoc: no ${chosen} key provided — reflection will stay unconfigured until a key is added.`,
+        );
         return 'none';
     }
 
     const trimmed = key.trim();
-    await context.secrets.store(SECRET_OPENAI_KEY, trimmed);
-    writeEnvVars(rootDir, providerEnvVars('openai', trimmed));
-    return 'openai';
+    await context.secrets.store(isOpenAi ? SECRET_OPENAI_KEY : SECRET_ANTHROPIC_KEY, trimmed);
+    writeEnvVars(rootDir, providerEnvVars(chosen, trimmed));
+    return chosen;
 }
 
 /**
- * Re-mirror the canonical OpenAI key from SecretStorage into the repo-root `.env`
- * (as the openai provider). Called by U4's `context.secrets.onDidChange` listener
- * so an external key change takes effect for the separate hook/MCP/daemon
- * processes. A no-op when no key is stored (the keyless Claude path).
+ * Re-mirror the canonical API key from SecretStorage into the repo-root `.env`,
+ * matching whatever provider `.env` currently names. Called by U4's
+ * `context.secrets.onDidChange` listener so an external key change takes effect
+ * for the separate hook/MCP/daemon processes. A no-op on the keyless Claude path
+ * (or when no matching key is stored), so it never clobbers the chosen provider.
  *
  * @param context the extension context (for SecretStorage).
  * @param rootDir the workspace root holding `.env`.
@@ -188,6 +256,13 @@ export async function syncCredentialsToEnv(
     context: vscode.ExtensionContext,
     rootDir: string,
 ): Promise<void> {
+    const provider = readProviderFromEnv(rootDir);
+    if (provider === 'anthropic') {
+        const key = await context.secrets.get(SECRET_ANTHROPIC_KEY);
+        if (key && key.trim().length > 0) writeEnvVars(rootDir, providerEnvVars('anthropic', key.trim()));
+        return;
+    }
+    // Default / openai: mirror the OpenAI key if one is stored.
     const key = await context.secrets.get(SECRET_OPENAI_KEY);
     if (!key || key.trim().length === 0) return; // nothing stored → keyless path, leave .env alone
     writeEnvVars(rootDir, providerEnvVars('openai', key.trim()));
