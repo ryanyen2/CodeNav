@@ -608,6 +608,14 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
 def write_tree(store: Store, codoc_dir: str | Path) -> Path:
     path = tree_path(codoc_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_tree(store))
+    rendered = render_tree(store)
+    # Skip the text write when the on-disk file is already byte-identical. A redundant
+    # rewrite bumps the file mtime, and when the IDE has tree.codoc open (the custom
+    # editor) that external change races its own save → "content of the file is newer".
+    # The common daemon path — re-render after a clean round-trip — is byte-identical,
+    # so this removes the dominant write-conflict. The sidecar is pure derived state
+    # and is always refreshed below.
+    if not (path.exists() and path.read_text() == rendered):
+        path.write_text(rendered)
     write_sidecar(store, codoc_dir)
     return path

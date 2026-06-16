@@ -16,6 +16,31 @@ def codoc(tmp_path):
     return str(cd)
 
 
+def test_write_tree_skips_byte_identical_rewrite(codoc):
+    """U2: write_tree must NOT touch tree.codoc when the render is byte-identical to
+    what's on disk. A redundant rewrite bumps the mtime and races the IDE's own save
+    of tree.codoc ("content of the file is newer"). Proven via mtime: a skipped write
+    leaves the pinned past-mtime intact; a real change updates it."""
+    import os
+
+    s = open_store(codoc)
+    try:
+        s.upsert_feature(Feature(title="Auth", description="Login."))
+        tp = tree_path(codoc)
+        write_tree(s, codoc)                       # initial write
+        past = tp.stat().st_mtime - 100
+        os.utime(tp, (past, past))                 # pin mtime to the past
+
+        write_tree(s, codoc)                       # store unchanged → identical render → skip
+        assert tp.stat().st_mtime == past          # NOT rewritten (mtime preserved)
+
+        s.upsert_feature(Feature(title="Data"))    # genuine store change
+        write_tree(s, codoc)                       # render differs → rewrite
+        assert tp.stat().st_mtime != past          # rewritten
+    finally:
+        s.close()
+
+
 def test_safe_write_renders_when_file_is_clean(codoc):
     s = open_store(codoc)
     try:
