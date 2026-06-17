@@ -35,6 +35,10 @@ without making Python read ``tree.doc.json``:
     rebuilds/removes ``realize.md``. The committed prose is KEPT — withdraw
     cancels the code realization, not the documented intent (re-wording it is a
     normal edit).
+  - ``steers`` are one-shot inline-comment notes (U2b): once the host stopped
+    writing ``tree.codoc`` (single-writer), an inline ``> …`` comment can no
+    longer ride the text round-trip, so the webview hands it here; Loop B drains
+    each into a STEER directive exactly once (same one-shot pattern as ``edits``).
 
 * ``realize.json`` (Loop-B-written next to ``realize.md``)::
 
@@ -77,6 +81,17 @@ class EditAnnotation:
     mode: str = "pen"
     suggestion_id: str = ""  # set when this settle applied a doc-ahead suggestion
     ts: int = 0              # unix ms
+
+
+@dataclass
+class Steer:
+    """A one-shot inline-comment steer (U2b): the webview hands an inline `> …`
+    comment to Loop B through edits.json instead of the tree.codoc text round-trip
+    (the host no longer writes tree.codoc). Drained once → a STEER directive."""
+    feature_id: str
+    text: str
+    comment_id: str = ""  # the doc thread id (so the host can mark it sent)
+    ts: int = 0           # unix ms
 
 
 @dataclass
@@ -145,22 +160,53 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
     return out
 
 
-def drain_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
-    """Consume the ``edits`` list (returning it keyed by feature), KEEPING the
-    host-owned ``intents`` and ``cancellations`` lists in place."""
-    anns = read_annotations(codoc_dir)
-    if not anns:
-        return anns
+# The four edits.json lists. ``edits``/``cancellations``/``steers`` are loop-drained
+# one-shot; ``intents`` is host-owned (the loops only read it). Every writer
+# preserves the lists it isn't changing via ``_rewrite``.
+_LISTS = ("edits", "intents", "cancellations", "steers")
+
+
+def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
+    """Read edits.json, overlay the changed lists, write it back (or delete the file
+    when every list is empty). One funnel so a drain/append never drops a sibling
+    list. Returns the path written, or None when the file was removed."""
     data = _load(codoc_dir)
-    intents = data.get("intents") or []
-    cancellations = data.get("cancellations") or []
-    if intents or cancellations:
-        _write_edits_file(codoc_dir, edits=[], intents=intents, cancellations=cancellations)
-    else:
+    merged = {k: list(changes[k] if k in changes else (data.get(k) or [])) for k in _LISTS}
+    if not any(merged.values()):
         try:
             edits_path(codoc_dir).unlink()
         except FileNotFoundError:
             pass
+        return None
+    dest = edits_path(codoc_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict = {"version": 1, "edits": merged["edits"], "intents": merged["intents"]}
+    # Keep the optional lists out of the payload when empty (matches the prior shape
+    # + keeps a plain annotations-only file byte-identical to before).
+    for k in ("cancellations", "steers"):
+        if merged[k]:
+            payload[k] = merged[k]
+    atomic_write_json(dest, payload)
+    return dest
+
+
+def _write_edits_file(
+    codoc_dir: str | Path, *, edits: list, intents: list,
+    cancellations: list | None = None, steers: list | None = None,
+) -> Path | None:
+    """Overwrite the named lists wholesale (the others reset to empty). The test +
+    host-setup seam for seeding intents/edits; production drains/appends go through
+    :func:`_rewrite`, which PRESERVES the lists it isn't changing."""
+    return _rewrite(codoc_dir, edits=edits, intents=intents,
+                    cancellations=cancellations or [], steers=steers or [])
+
+
+def drain_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
+    """Consume the ``edits`` list (returning it keyed by feature), KEEPING the
+    host-owned ``intents`` + the one-shot ``cancellations``/``steers`` in place."""
+    anns = read_annotations(codoc_dir)
+    if anns:
+        _rewrite(codoc_dir, edits=[])
     return anns
 
 
@@ -178,58 +224,61 @@ def read_cancellations(codoc_dir: str | Path) -> list[str]:
 
 
 def drain_cancellations(codoc_dir: str | Path) -> list[str]:
-    """Consume the ``cancellations`` list (feature ids), KEEPING ``edits`` and
-    ``intents`` in place — Loop B prunes the matching directives from the queue."""
+    """Consume the ``cancellations`` list (feature ids), keeping the others — Loop B
+    prunes the matching directives from the queue."""
     cancels = read_cancellations(codoc_dir)
-    if not cancels:
-        return cancels
-    data = _load(codoc_dir)
-    edits = data.get("edits") or []
-    intents = data.get("intents") or []
-    if edits or intents:
-        _write_edits_file(codoc_dir, edits=edits, intents=intents, cancellations=[])
-    else:
-        try:
-            edits_path(codoc_dir).unlink()
-        except FileNotFoundError:
-            pass
+    if cancels:
+        _rewrite(codoc_dir, cancellations=[])
     return cancels
 
 
-def _write_edits_file(
-    codoc_dir: str | Path, *, edits: list, intents: list, cancellations: list | None = None,
-) -> Path:
-    dest = edits_path(codoc_dir)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": 1, "edits": edits, "intents": intents}
-    if cancellations:
-        payload["cancellations"] = cancellations
-    atomic_write_json(dest, payload)
-    return dest
+def read_steers(codoc_dir: str | Path) -> list[Steer]:
+    """Pending inline-comment steers (U2b): the webview's `> …` comments handed to
+    Loop B through edits.json (the host no longer writes them into tree.codoc)."""
+    out: list[Steer] = []
+    for s in _load(codoc_dir).get("steers", []):
+        if isinstance(s, dict) and s.get("feature_id") and s.get("text"):
+            out.append(Steer(feature_id=s["feature_id"], text=s["text"],
+                             comment_id=s.get("comment_id") or "", ts=int(s.get("ts") or 0)))
+    return out
 
 
-def append_annotation(codoc_dir: str | Path, ann: EditAnnotation) -> Path:
+def drain_steers(codoc_dir: str | Path) -> list[Steer]:
+    """Consume the ``steers`` list (one-shot), keeping the others — Loop B turns each
+    into a STEER directive exactly once (no re-queue: the list is cleared here)."""
+    steers = read_steers(codoc_dir)
+    if steers:
+        _rewrite(codoc_dir, steers=[])
+    return steers
+
+
+def append_annotation(codoc_dir: str | Path, ann: EditAnnotation) -> Path | None:
     """Append a settle annotation (used by the CLI/tests; the IDE host writes
     this file too)."""
-    data = _load(codoc_dir)
-    edits = data.get("edits") or []
-    edits.append({
+    edits = (_load(codoc_dir).get("edits") or []) + [{
         "feature_id": ann.feature_id, "fields": ann.fields, "actor": ann.actor,
         "mode": ann.mode, "suggestion_id": ann.suggestion_id,
         "ts": ann.ts or int(time.time() * 1000),
-    })
-    return _write_edits_file(codoc_dir, edits=edits, intents=data.get("intents") or [],
-                             cancellations=data.get("cancellations") or [])
+    }]
+    return _rewrite(codoc_dir, edits=edits)
 
 
-def append_cancellation(codoc_dir: str | Path, feature_id: str) -> Path:
-    """Append a realize-withdrawal request for ``feature_id`` (used by the CLI/tests;
-    the IDE host writes this on the withdraw affordance). Drained by Loop B."""
-    data = _load(codoc_dir)
-    cancellations = data.get("cancellations") or []
-    cancellations.append({"feature_id": feature_id, "ts": int(time.time() * 1000)})
-    return _write_edits_file(codoc_dir, edits=data.get("edits") or [],
-                             intents=data.get("intents") or [], cancellations=cancellations)
+def append_cancellation(codoc_dir: str | Path, feature_id: str) -> Path | None:
+    """Append a realize-withdrawal request for ``feature_id`` (host withdraw
+    affordance; CLI/tests). Drained by Loop B."""
+    cancellations = (_load(codoc_dir).get("cancellations") or []) + [
+        {"feature_id": feature_id, "ts": int(time.time() * 1000)}]
+    return _rewrite(codoc_dir, cancellations=cancellations)
+
+
+def append_steer(codoc_dir: str | Path, steer: Steer) -> Path | None:
+    """Append a one-shot inline-comment steer (U2b host comment-create; CLI/tests).
+    Drained by Loop B into a STEER directive."""
+    steers = (_load(codoc_dir).get("steers") or []) + [{
+        "feature_id": steer.feature_id, "text": steer.text,
+        "comment_id": steer.comment_id, "ts": steer.ts or int(time.time() * 1000),
+    }]
+    return _rewrite(codoc_dir, steers=steers)
 
 
 # ─── realize.json — the directive manifest ───────────────────────────────────

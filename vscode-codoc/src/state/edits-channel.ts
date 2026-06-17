@@ -14,6 +14,9 @@
  *   • `cancellations` — realize-WITHDRAWALS (U6): feature ids whose queued
  *     directive the human cancelled. Loop B drains them and prunes the matching
  *     directive from the queue (releasing the hold); the prose is kept.
+ *   • `steers` — one-shot inline-comment notes (U2b): with the host no longer
+ *     writing tree.codoc, a `> …` comment is handed to Loop B here instead of the
+ *     text round-trip; Loop B drains each into a STEER directive once.
  *
  * Mirrors codoc/loop/edits.py (schema version 1). File I/O lives in the host
  * (tree-editor.ts) — this module is pure data so vitest can pin the contract.
@@ -50,6 +53,16 @@ export interface CancellationEntry {
     ts: number;                 // unix ms
 }
 
+/** A one-shot inline-comment STEER (U2b): once the host stopped writing tree.codoc,
+ *  a `> …` comment can't ride the text round-trip, so the webview hands it here.
+ *  Loop B drains it once → a STEER directive. */
+export interface SteerEntry {
+    feature_id: string;
+    text: string;               // the note (commentNoteText: `re "…": body`)
+    comment_id: string;         // the doc thread id
+    ts: number;                 // unix ms
+}
+
 export interface EditsFile {
     version: 1;
     edits: EditAnnotation[];
@@ -57,6 +70,8 @@ export interface EditsFile {
     /** Pending realize-withdrawals (U6). Omitted when empty (matches the Python
      *  writer, which only emits the key when non-empty). */
     cancellations?: CancellationEntry[];
+    /** Pending one-shot comment steers (U2b). Omitted when empty. */
+    steers?: SteerEntry[];
 }
 
 export function emptyEditsFile(): EditsFile {
@@ -72,6 +87,7 @@ export function parseEditsFile(json: unknown): EditsFile {
         intents: Array.isArray(o.intents) ? (o.intents as IntentEntry[]) : [],
     };
     if (Array.isArray(o.cancellations)) file.cancellations = o.cancellations as CancellationEntry[];
+    if (Array.isArray(o.steers)) file.steers = o.steers as SteerEntry[];
     return file;
 }
 
@@ -81,6 +97,16 @@ export function appendCancellation(file: EditsFile, featureId: string, ts: numbe
     const cancellations = (file.cancellations ?? []).filter(c => c.feature_id !== featureId);
     cancellations.push({ feature_id: featureId, ts });
     return { ...file, cancellations };
+}
+
+/** Append a one-shot comment steer (U2b), replacing any prior steer for the same
+ *  thread (an edit re-hands the latest note). Pure — Loop B drains the list once. */
+export function appendSteer(
+    file: EditsFile, entry: { feature_id: string; text: string; comment_id: string; ts: number },
+): EditsFile {
+    const steers = (file.steers ?? []).filter(s => s.comment_id !== entry.comment_id);
+    steers.push(entry);
+    return { ...file, steers };
 }
 
 /** A minimal parsed-feature shape (matches tree-model's ParsedFeature fields we need). */

@@ -31,6 +31,7 @@ from pathlib import Path
 
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.codoc_file.diff import diff_codoc
+from codoc.codoc_file.doc_parse import parse_doc_file
 from codoc.codoc_file.parse import extract_bold, extract_links, parse_tree_file
 from codoc.codoc_file.render import tree_path, write_tree
 from codoc.loop import edits as edits_channel
@@ -237,6 +238,19 @@ def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
     return removed
 
 
+def _pick_parsed(codoc_dir: str, store: Store):
+    """U2b — choose the edit-detection source. Prefer ``tree.doc.json`` (the
+    webview's authored intent; the single-writer model means the host no longer
+    writes ``tree.codoc``) when it carries a pending feature edit; otherwise the
+    daemon-owned ``tree.codoc`` text — which still serves raw-text-editor edits and
+    is the only source before any webview has authored a doc. Read-only (the
+    ``diff_codoc`` probe never mutates), so it is safe ahead of the step-0 snapshot."""
+    doc_parsed = parse_doc_file(codoc_dir)
+    if doc_parsed is not None and not diff_codoc(doc_parsed, store).is_empty():
+        return doc_parsed
+    return parse_tree_file(codoc_dir)
+
+
 def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False) -> LoopBResult:
     with open_store(codoc_dir) as store:
         return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
@@ -258,7 +272,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     #    intent applies move the store ahead of the on-disk text; diffing after
     #    them would read the stale text as a human edit and revert the change.
     annotations = edits_channel.drain_annotations(codoc_dir)
-    parsed = parse_tree_file(codoc_dir)
+    parsed = _pick_parsed(codoc_dir, store)
     if parsed.errors:
         import logging
         _log = logging.getLogger(__name__)
@@ -387,6 +401,18 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         d = build_steer_directive(fid, comment, store) if fid else ""
         if d:
             steered.append((d, fid, amend_cause.get(fid, "")))
+
+    # 2.8 Inline-comment steers via edits.json (U2b): once the host stopped writing
+    #     tree.codoc, a webview comment can't ride the `> …` text round-trip, so it
+    #     arrives as a one-shot steer here. Drained exactly once → a STEER directive
+    #     (caused_by the comment's thread id so the host can mark it sent). A dry/
+    #     no-realize pass leaves them queued by NOT draining (consuming without
+    #     queueing would lose the note) — mirroring the `> …` re-insert guard below.
+    if not dry_run:
+        for s in edits_channel.drain_steers(codoc_dir):
+            d = build_steer_directive(s.feature_id, s.text, store)
+            if d:
+                steered.append((d, s.feature_id, s.comment_id or amend_cause.get(s.feature_id, "")))
     res.steered = len(steered)
 
     # Re-render tree.codoc when this pass moved the store ahead of the text

@@ -17,6 +17,7 @@ and flush to the file as soon as it is clean again.
 from __future__ import annotations
 
 from codoc.codoc_file.diff import CodocDiff, diff_codoc
+from codoc.codoc_file.doc_parse import parse_doc_file
 from codoc.codoc_file.parse import parse_tree_file
 from codoc.codoc_file.render import write_sidecar, write_tree
 from codoc.store.db import Store, open_store
@@ -36,6 +37,19 @@ def has_pending_user_edits(codoc_dir: str) -> bool:
         return not pending_user_edits(store, codoc_dir).is_empty()
 
 
+def has_pending_doc_edits(codoc_dir: str) -> bool:
+    """True if ``tree.doc.json`` (the webview's authored doc, U2b) holds feature
+    edits the store hasn't absorbed yet — the doc-side analogue of
+    :func:`has_pending_user_edits`. The daemon uses it to skip a Loop B pass for a
+    non-edit doc.json write (a comment-reconcile / suggestion-rebase persist), so a
+    payload-driven write never ping-pongs the loop. (Inline-comment steers ride
+    ``edits.json`` and are caught by the daemon's separate ``edits_touched`` signal.)"""
+    if parse_doc_file(codoc_dir) is None:
+        return False
+    with open_store(codoc_dir) as store:
+        return not diff_codoc(parse_doc_file(codoc_dir), store).is_empty()
+
+
 def safe_write_tree(store: Store, codoc_dir: str) -> bool:
     """Refresh ``tree.codoc`` non-destructively.
 
@@ -48,6 +62,13 @@ def safe_write_tree(store: Store, codoc_dir: str) -> bool:
     """
     write_sidecar(store, codoc_dir)
     if not pending_user_edits(store, codoc_dir).is_empty():
+        return False
+    # U2b: also yield to a pending WEBVIEW edit (tree.doc.json ahead of the store).
+    # Rendering tree.codoc from the old store while a doc edit awaits Loop B would
+    # push stale text the host then adopts — reverting the user's settle. Only Loop B
+    # applies the doc edit; once it has, the doc is in sync and this renders normally.
+    doc_parsed = parse_doc_file(codoc_dir)
+    if doc_parsed is not None and not diff_codoc(doc_parsed, store).is_empty():
         return False
     write_tree(store, codoc_dir)
     return True

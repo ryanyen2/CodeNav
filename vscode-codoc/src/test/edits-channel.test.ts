@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     parseEditsFile, emptyEditsFile, annotationsForSettle, intentsFromSuggestions,
-    appendCancellation,
+    appendCancellation, appendSteer,
 } from '../state/edits-channel';
 import { agentAmendsByFeature, type SidecarData } from '../state/bindings-model';
 import { codeAheadSuggestions, type Suggestion } from '../state/suggestion-model';
@@ -45,6 +45,39 @@ describe('U6 — cancellations (realize withdraw)', () => {
         const file = parseEditsFile({ version: 1, edits: [], intents: [],
             cancellations: [{ feature_id: 'f-x', ts: 3 }] });
         expect(file.cancellations).toEqual([{ feature_id: 'f-x', ts: 3 }]);
+    });
+});
+
+describe('U2b — comment steers (single-writer)', () => {
+    const entry = { feature_id: 'f-a', text: 're "x": use bcrypt', comment_id: 'cm-1', ts: 5 };
+
+    it('appendSteer adds a one-shot steer Loop B will drain', () => {
+        expect(appendSteer(emptyEditsFile(), entry).steers).toEqual([entry]);
+    });
+
+    it('re-handing the same thread replaces its steer (latest note wins)', () => {
+        let file = appendSteer(emptyEditsFile(), entry);
+        file = appendSteer(file, { ...entry, text: 're "x": use argon2', ts: 9 });
+        expect(file.steers).toEqual([{ ...entry, text: 're "x": use argon2', ts: 9 }]);
+    });
+
+    it('preserves edits / intents / cancellations alongside a steer', () => {
+        const base = parseEditsFile({
+            version: 1,
+            edits: [{ feature_id: 'f-a', fields: ['title'], actor: 'human', mode: 'pen', ts: 1 }],
+            intents: [{ id: 's1', feature_id: 'f-b', actor: 'human', ts: 1 }],
+            cancellations: [{ feature_id: 'f-c', ts: 2 }],
+        });
+        const file = appendSteer(base, entry);
+        expect(file.edits).toHaveLength(1);
+        expect(file.intents).toHaveLength(1);
+        expect(file.cancellations).toHaveLength(1);
+        expect(file.steers).toEqual([entry]);
+    });
+
+    it('parseEditsFile round-trips the steers list', () => {
+        expect(parseEditsFile({ version: 1, edits: [], intents: [], steers: [entry] }).steers)
+            .toEqual([entry]);
     });
 });
 

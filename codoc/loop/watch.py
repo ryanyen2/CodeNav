@@ -21,6 +21,7 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from codoc.codoc_file.doc_parse import doc_path
 from codoc.codoc_file.render import tree_path
 from codoc.loop import status
 from codoc.loop.activity import activity_path, epoch_touched_files
@@ -75,21 +76,24 @@ def _classify(
     paths: list[str],
     root_dir: str,
     codoc_dir: str,
-) -> tuple[bool, bool, bool, bool, set[str]]:
+) -> tuple[bool, bool, bool, bool, bool, set[str]]:
     """Classify a batch of changed paths.
 
-    Returns ``(codoc_touched, inbox_touched, edits_touched, activity_touched,
-    code_files)``. ``activity_touched`` is True when ``.codoc/activity.json``
-    changed — the epoch-control signal consumed by :func:`process_batch` step 1.
-    ``edits_touched`` is True when ``.codoc/edits.json`` changed — a doc-ahead
-    suggestion was created/withdrawn (payload intents are applied by Loop B).
+    Returns ``(codoc_touched, doc_touched, inbox_touched, edits_touched,
+    activity_touched, code_files)``. ``doc_touched`` is True when
+    ``.codoc/tree.doc.json`` changed — a webview edit in the single-writer model
+    (U2b), routed to Loop B exactly like a ``tree.codoc`` edit. ``activity_touched``
+    is the epoch-control signal (step 1); ``edits_touched`` covers
+    annotations/suggestions/withdrawals/comment-steers in ``edits.json``.
     """
     tp = tree_path(codoc_dir).resolve()
+    dp = doc_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
     ep = edits_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
     root = Path(root_dir).resolve()
     codoc_touched = False
+    doc_touched = False
     inbox_touched = False
     edits_touched = False
     activity_touched = False
@@ -98,6 +102,9 @@ def _classify(
         rp = Path(p).resolve()
         if rp == tp:
             codoc_touched = True
+            continue
+        if rp == dp:
+            doc_touched = True
             continue
         if rp == ip:
             inbox_touched = True
@@ -115,7 +122,7 @@ def _classify(
                 code_files.add(str(rp.relative_to(root)))
             except ValueError:
                 pass
-    return codoc_touched, inbox_touched, edits_touched, activity_touched, code_files
+    return codoc_touched, doc_touched, inbox_touched, edits_touched, activity_touched, code_files
 
 
 def _pidfile(codoc_dir: str) -> Path:
@@ -245,18 +252,19 @@ def _read_epoch(codoc_dir: str) -> dict | None:
 
 
 def watch_filter(codoc_dir: str):
-    """A watchfiles filter: allow tree.codoc, inbox.json, edits.json,
+    """A watchfiles filter: allow tree.codoc, tree.doc.json, inbox.json, edits.json,
     activity.json, and code files; drop everything else (notably .codoc indexing
     artifacts that churn during update_index, and codoc's own status.json/sidecar
     re-writes)."""
     tp = tree_path(codoc_dir).resolve()
+    dp = doc_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
     ep = edits_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
 
     def _f(_change, path: str) -> bool:
         rp = Path(path).resolve()
-        if rp in (tp, ip, ep, ap):
+        if rp in (tp, dp, ip, ep, ap):
             return True
         if any(part in _SKIP_DIRS for part in rp.parts):
             return False
@@ -296,11 +304,12 @@ def process_batch(
     reconciliation, which self-heals a missed/crashed cycle."""
     if has_user_edits is None:
         from codoc.loop.reconcile import has_pending_user_edits as has_user_edits
+    from codoc.loop.reconcile import has_pending_doc_edits
     if now is None:
         import time as _time
         now = _time.time
     tp = tree_path(codoc_dir)
-    codoc_touched, inbox_touched, edits_touched, activity_touched, code_files = _classify(
+    codoc_touched, doc_touched, inbox_touched, edits_touched, activity_touched, code_files = _classify(
         paths, root_dir, codoc_dir
     )
 
@@ -365,7 +374,7 @@ def process_batch(
                 state.last_epoch_id = ep_id
 
         # If no other signal co-occurs, this was a pure activity churn → no-op.
-        if not (codoc_touched or inbox_touched or edits_touched or code_files):
+        if not (codoc_touched or doc_touched or inbox_touched or edits_touched or code_files):
             return None
 
     # ── Step 2: Ignore codoc's own / the agent's MCP re-renders. ───────────────
@@ -377,6 +386,11 @@ def process_batch(
     if codoc_touched:
         if _hash(tp) == state.last_tree_hash or not has_user_edits(codoc_dir):
             codoc_touched = False
+    # tree.doc.json (U2b): the host persists it on every payload (comment reconcile /
+    # suggestion rebase), so only route to Loop B when it carries a pending feature
+    # edit — else a non-edit persist would ping-pong the loop.
+    if doc_touched and not has_pending_doc_edits(codoc_dir):
+        doc_touched = False
 
     # ── Step 3: While an epoch is open, suppress independent Loop A AND Loop B. ──
     if state.epoch_open:
@@ -387,16 +401,18 @@ def process_batch(
         # the hash guard above can't catch it). Routing it to Loop B would spawn a
         # nested coding agent to "implement" what the agent just reflected. Suppress
         # it; the epoch-close scoped Loop A reconciles everything. (A genuine human
-        # tree edit mid-session is rare and is deferred to epoch close.)
+        # tree/doc edit mid-session is rare and is deferred to epoch close.)
         codoc_touched = False
+        doc_touched = False
         if not (inbox_touched or edits_touched):
             return None  # code churn / agent reflection during epoch → suppressed
 
     # ── Step 4: Normal routing (unchanged). ────────────────────────────────────
-    # A tree edit, an Accept/Reject verdict, or a doc-ahead suggestion (payload
-    # intent in edits.json) all drive Loop B (codoc → code).
-    if codoc_touched or inbox_touched or edits_touched:
-        if codoc_touched:
+    # A tree.codoc edit, a tree.doc.json webview edit (U2b), an Accept/Reject
+    # verdict, or a doc-ahead suggestion / comment steer (edits.json) all drive
+    # Loop B (codoc → code).
+    if codoc_touched or doc_touched or inbox_touched or edits_touched:
+        if codoc_touched or doc_touched:
             status.write_status(codoc_dir, status.TREE_DIRTY, detail="applying tree edits")
         res = loop_b(root_dir, codoc_dir, dry_run=dry_run or no_realize)
         label, summary = "codoc→code", res.summary()

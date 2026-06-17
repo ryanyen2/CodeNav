@@ -20,17 +20,18 @@ import { parseTreeCodoc, extractLinks } from '../state/tree-model';
 import { activeFeatureModes, featurePhases } from '../state/activity-model';
 import { reconcileDoc } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
+import { moveFeatureInDoc } from '../state/doc-move';
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
 import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
 import {
-    CommentThread, commentsByFid, injectComments, reconcileComments, reanchorComments,
+    CommentThread, commentNoteText, reconcileComments, reanchorComments,
     stripOrphanComments,
 } from '../state/comment-model';
 import { directedEdges, agentAmendsByFeature, heldFeatures, divergentFeatures } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
-    annotationsForSettle, intentsFromSuggestions, appendCancellation,
+    annotationsForSettle, intentsFromSuggestions, appendCancellation, appendSteer,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -56,6 +57,12 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  tree.codoc (carries authorship marks). Loaded from tree.doc.json, reconciled
      *  with the text on each payload, and persisted on a user doc-commit. */
     private docFileByUri = new Map<string, DocFile>();
+    /** Single-writer (U2b): uris whose saved doc is AHEAD of the on-disk tree.codoc
+     *  — the webview committed an edit the daemon hasn't rendered back yet. While set,
+     *  buildPayload sources the tree from the saved doc (not the stale text) so a
+     *  payload in that window never reverts the user's just-settled edit. Cleared
+     *  when tree.codoc catches up. */
+    private docAhead = new Set<string>();
 
     async resolveCustomTextEditor(
         document: vscode.TextDocument,
@@ -79,7 +86,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
 
         const subs: vscode.Disposable[] = [
             vscode.workspace.onDidChangeTextDocument(e => {
-                if (e.document.uri.toString() === document.uri.toString()) post();
+                if (e.document.uri.toString() !== document.uri.toString()) return;
+                // U2b: the host never writes tree.codoc now, so this fires only when the
+                // DAEMON rendered it — and the daemon yields until Loop B has applied any
+                // pending doc edit (safe_write_tree), so the new text is authoritative.
+                // Clear docAhead → buildPayload sources from tree.codoc (with minted ids).
+                this.docAhead.delete(document.uri.toString());
+                post();
             }),
             this.state.onDidChange(() => post()),
         ];
@@ -92,7 +105,8 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 case 'doc-settle':
                     await this.settleDoc(document, msg.doc);
-                    return;
+                    post();  // U2b: no tree.codoc write → repost so the tree pane/badges
+                    return;  // reflect the settle now (sourced from the saved doc)
                 case 'suggest-create':
                     await this.createSuggestions(document, msg.suggestions);
                     post();
@@ -106,6 +120,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 case 'move':
                     await this.editMove(document, msg.sourceId, msg.newParentId);
+                    post();  // U2b: doc-level move → repost (saved doc leads tree.codoc)
                     return;
                 case 'open-binding': {
                     // <module>-level bindings have no symbol to jump to — just open the file.
@@ -130,12 +145,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 }
                 case 'comment-create':
                     await this.createComment(document, msg.doc, msg.thread);
+                    post();  // U2b: no tree.codoc write → repost so the marker/threads refresh
                     return;
                 case 'comment-edit':
                     await this.editComment(document, msg.id, msg.body);
+                    post();
                     return;
                 case 'comment-resolve':
                     await this.resolveComment(document, msg.doc, msg.id);
+                    post();
                     return;
                 case 'set-pref':
                     await this.setPref(document, msg.pref, msg.value);
@@ -170,64 +188,68 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     }
 
     // ── inline comments — span-anchored steering notes (see comment-model.ts) ────
-    //    A comment serializes to a `> …` line under its feature; Loop B drains it
-    //    into a STEER directive. The host owns the thread store + the `> …` write;
-    //    the webview owns the anchor mark + the composer/popover UI.
+    //    U2b: the host no longer writes tree.codoc, so a comment can't ride the
+    //    `> …` text round-trip. Instead it is handed to Loop B as a one-shot STEER
+    //    on edits.json (the same channel as authorship annotations); the thread is
+    //    marked `sent` (handed off) and lingers in the UI until the realize cycle
+    //    settles. The webview owns the anchor mark; the host owns the thread store.
 
-    /** Project the doc to canonical tree.codoc, splice in every OPEN comment's
-     *  `> …` line, and write it (waking the daemon's Loop B) — but only when the
-     *  text actually changed, so a no-op stays a no-op. */
-    private async writeTreeWithComments(document: vscode.TextDocument, df: DocFile): Promise<boolean> {
-        const next = injectComments(renderTreeFromDoc(df.doc), commentsByFid(df.comments));
-        if (next === document.getText()) return false;
-        const edit = new vscode.WorkspaceEdit();
-        const last = document.lineAt(document.lineCount - 1);
-        edit.replace(document.uri, new vscode.Range(0, 0, last.lineNumber, last.text.length), next);
-        await vscode.workspace.applyEdit(edit);
-        await document.save();
-        return true;
+    /** Hand a thread's note to Loop B as a one-shot steer, and mark it sent. */
+    private async steerComment(document: vscode.TextDocument, thread: CommentThread): Promise<void> {
+        if (!thread.featureId) return;  // a null-fid comment waits for the mint
+        const file = appendSteer(await this.readEditsFile(document), {
+            feature_id: thread.featureId, text: commentNoteText(thread),
+            comment_id: thread.id, ts: Date.now(),
+        });
+        await this.writeEditsFile(document, file);
     }
 
-    /** Create a comment: persist the doc (with its new anchor mark) + the thread,
-     *  then queue the note as a `> …` steering line for the agent. */
+    /** Create a comment: persist the doc (with its anchor mark) + the thread, and
+     *  hand the note to Loop B as a steer. */
     private async createComment(document: vscode.TextDocument, doc: PMNode, thread: CommentThread): Promise<void> {
         const df = this.docFileFor(document);
         df.doc = doc;
-        const norm: CommentThread = { ...thread, status: 'open', serialized: false };
+        const norm: CommentThread = { ...thread, status: 'sent', serialized: true };
         df.comments = [...df.comments.filter(c => c.id !== norm.id), norm];
         await this.persistDocFile(document, df);
-        await this.writeTreeWithComments(document, df);
+        await this.steerComment(document, norm);
     }
 
-    /** Edit an open comment's body — re-queues the replacing `> …` line. */
+    /** Edit a comment's body — re-hands the replacing note as a steer. */
     private async editComment(document: vscode.TextDocument, id: string, body: string): Promise<void> {
         const df = this.docFileFor(document);
         const t = df.comments.find(c => c.id === id);
-        if (!t || t.status !== 'open') return;
+        if (!t) return;
         t.body = body;
-        // Keep serialized:true — writeTreeWithComments rewrites the line NOW, so the
-        // new note is in the text before any reconcile. Resetting it to false would
-        // let a concurrent daemon drain take the "never written" branch and resurrect
-        // the note (double-queue); staying true means a drain correctly flips to sent.
         await this.persistDocFile(document, df);
-        await this.writeTreeWithComments(document, df);
+        await this.steerComment(document, t);
     }
 
-    /** Resolve / delete a comment: drop the thread + its `> …` line; the doc carries
-     *  the anchor-mark removal. */
+    /** Resolve / delete a comment: drop the thread; the doc carries the anchor-mark
+     *  removal. No tree.codoc write (single-writer). */
     private async resolveComment(document: vscode.TextDocument, doc: PMNode, id: string): Promise<void> {
         const df = this.docFileFor(document);
         df.doc = doc;
         df.comments = df.comments.filter(c => c.id !== id);
         await this.persistDocFile(document, df);
-        if (!(await this.writeTreeWithComments(document, df))) {
-            // no text change (the note was already drained) — still refresh the panel
-            this.docFileByUri.set(document.uri.toString(), df);
-        }
+        this.docFileByUri.set(document.uri.toString(), df);  // refresh the panel
     }
 
     private buildPayload(document: vscode.TextDocument): DocPayload {
-        const { features } = parseTreeCodoc(document.getText());
+        const uri = document.uri.toString();
+        // U2b single-writer: when the saved doc LEADS the on-disk tree.codoc (a
+        // webview edit the daemon hasn't rendered back yet), source the tree from the
+        // saved doc — otherwise a payload triggered in that window (a sidecar/status
+        // change) would reconcile from the stale text and revert the user's settle.
+        // Clear the flag once tree.codoc catches up.
+        const savedDoc = this.docFileByUri.get(uri)?.doc;
+        let sourceText = document.getText();
+        if (this.docAhead.has(uri) && savedDoc) {
+            const savedText = renderTreeFromDoc(savedDoc);
+            if (savedText === document.getText()) this.docAhead.delete(uri);
+            else sourceText = savedText;
+        }
+        const { features } = parseTreeCodoc(sourceText);
         const sidecar = this.state.sidecar;
         const status = this.state.status;
         const activity = this.state.activity;
@@ -333,14 +355,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             realize: this.parseRealizeProgress(status.detail),
         };
 
-        // Authoritative rich doc: structure from the text, authorship marks borrowed
-        // from the in-memory saved doc by fid (re-anchored where text is unchanged).
-        const uri = document.uri.toString();
+        // Authoritative rich doc: structure from `sourceText` (the saved doc while it
+        // leads, else the on-disk text), authorship marks borrowed from the in-memory
+        // saved doc by fid (re-anchored where text is unchanged).
         const realized = (fid: string): boolean => sidecar.features[fid]?.realized !== false;
         const prevFile = this.docFileByUri.get(uri) ?? null;
         // v4 changes feed → descriptions an agent amended get pencil ink (instead
         // of a mark reset) when their text drifted under the saved doc.
-        const reconciled = reconcileDoc(document.getText(), prevFile?.doc ?? null, realized,
+        const reconciled = reconcileDoc(sourceText, prevFile?.doc ?? null, realized,
             agentAmendsByFeature(sidecar));
 
         // Comment lifecycle: first re-anchor any null-fid thread whose feature has
@@ -563,33 +585,29 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     }
 
     /**
-     * Whole-doc settle (R3): persist the entire edited doc (with marks) to
-     * tree.doc.json, then project it to canonical tree.codoc and write the whole
-     * file. The existing parse→diff→apply pipeline derives the AMEND / MOVE / ADD /
-     * RETIRE ops. Pending code-ahead ghosts are store-side; the daemon re-emits
-     * them on its next render (they're not authored doc content).
+     * Whole-doc settle (R3 / U2b single-writer): persist the entire edited doc (with
+     * marks) to tree.doc.json — and that is ALL the host writes. It does NOT touch
+     * tree.codoc; the daemon is the sole writer of that file. Loop B learns this edit
+     * from tree.doc.json (parse_doc_file) — woken by the doc.json write (the daemon
+     * watches it) and the authorship annotation below — applies the AMEND/MOVE/ADD/
+     * RETIRE op, and re-renders tree.codoc itself. Removing the host's
+     * applyEdit+document.save() is what fully closes the "content is newer" conflict.
      */
     private async settleDoc(document: vscode.TextDocument, doc: PMNode): Promise<void> {
         const df = this.docFileFor(document);
         df.doc = doc;
         await this.persistDocFile(document, df);
 
-        // Splice open comments back in so a prose/structure settle never drops a
-        // pending `> …` steering note (the residual-#3 fix): renderTreeFromDoc drops
-        // comment marks, injectComments re-adds each open thread's line.
-        const next = injectComments(renderTreeFromDoc(doc), commentsByFid(df.comments));
-        if (next === document.getText()) return; // no structural/text change → no write
+        const next = renderTreeFromDoc(doc);
+        const uri = document.uri.toString();
+        if (next === document.getText()) { this.docAhead.delete(uri); return; } // no change
 
-        // Tell the loops WHO authored this settle (per changed feature) before the
-        // save wakes the daemon. Webview settles are direct human edits (a
-        // Suggesting-mode capture goes through suggest-create, never here).
+        // Tell the loops WHO authored this settle (per changed feature). The diff is
+        // prev on-disk text (== store state) vs the new doc render.
         await this.annotateSettle(document, document.getText(), next);
-
-        const edit = new vscode.WorkspaceEdit();
-        const last = document.lineAt(document.lineCount - 1);
-        edit.replace(document.uri, new vscode.Range(0, 0, last.lineNumber, last.text.length), next);
-        await vscode.workspace.applyEdit(edit);
-        await document.save();
+        // The saved doc now leads the on-disk tree.codoc until the daemon renders it
+        // back — buildPayload sources from the saved doc meanwhile (no reversion).
+        this.docAhead.add(uri);
     }
 
     /** Re-base persisted doc-ahead suggestions onto the current text + drop the ones
@@ -662,89 +680,18 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         return { done: Number(m[1]), total: Number(m[2]), current: (m[3] ?? '').trim() };
     }
 
-    /** Move a feature (and its subtree) under a new parent (or to root if null). */
+    /** Move a feature (and its subtree) under a new parent (or to root if null).
+     *  U2b: a pure transform on the authored doc (moveFeatureInDoc) persisted to
+     *  tree.doc.json — NOT a tree.codoc text rewrite. Loop B derives the MOVE_NODE
+     *  from parse_doc_file; the daemon renders tree.codoc. */
     private async editMove(document: vscode.TextDocument, sourceId: string, newParentId: string | null): Promise<void> {
-        const text = document.getText();
-        const { features } = parseTreeCodoc(text);
-        const src = features.find(f => f.id === sourceId);
-        if (!src) return;
-        if (src.parent_id === newParentId) return;
-        // Cycle guard.
-        if (newParentId) {
-            const blocked = new Set<string>([sourceId]);
-            let grew = true;
-            while (grew) {
-                grew = false;
-                for (const f of features) {
-                    if (f.id && f.parent_id && blocked.has(f.parent_id) && !blocked.has(f.id)) {
-                        blocked.add(f.id); grew = true;
-                    }
-                }
-            }
-            if (blocked.has(newParentId)) return;
-        }
-
-        const lines = text.split('\n');
-        const isMarker = (l: string): boolean => /^\s*[-~]\s+/.test(l);
-        const lead = (l: string): number => (/^(\s*)/.exec(l) ?? ['', ''])[1].length;
-        const srcIndent = lead(lines[src.line]);
-
-        // Subtree extent: continues while we see lines at deeper indent, until
-        // a marker at indent ≤ src or the pending sentinel.
-        let subtreeEnd = lines.length - 1;
-        for (let i = src.line + 1; i < lines.length; i++) {
-            if (lines[i].startsWith('# ── pending changes')) { subtreeEnd = i - 1; break; }
-            if (isMarker(lines[i]) && lead(lines[i]) <= srcIndent) { subtreeEnd = i - 1; break; }
-        }
-        while (subtreeEnd > src.line && lines[subtreeEnd].trim() === '') subtreeEnd--;
-
-        // Compute new indent.
-        let newIndent = 0;
-        if (newParentId) {
-            const np = features.find(f => f.id === newParentId);
-            if (!np) return;
-            newIndent = lead(lines[np.line]) + 4;
-        }
-        const delta = newIndent - srcIndent;
-
-        const moved = lines.slice(src.line, subtreeEnd + 1).map(l => {
-            if (l.trim() === '') return l;
-            if (delta > 0) return ' '.repeat(delta) + l;
-            if (delta < 0) {
-                const li = lead(l);
-                const strip = Math.min(-delta, li);
-                return l.slice(strip);
-            }
-            return l;
-        });
-
-        // Cut the subtree.
-        const remaining = lines.slice(0, src.line).concat(lines.slice(subtreeEnd + 1));
-
-        // Find insertion point: end of the new parent's subtree (or end of file
-        // for root), in the post-cut buffer.
-        let insertAt = remaining.length;
-        if (newParentId) {
-            const remText = remaining.join('\n');
-            const remFeatures = parseTreeCodoc(remText).features;
-            const np = remFeatures.find(f => f.id === newParentId);
-            if (!np) return;
-            const npIndent = lead(remaining[np.line]);
-            insertAt = remaining.length;
-            for (let i = np.line + 1; i < remaining.length; i++) {
-                if (remaining[i].startsWith('# ── pending changes')) { insertAt = i; break; }
-                if (isMarker(remaining[i]) && lead(remaining[i]) <= npIndent) { insertAt = i; break; }
-            }
-        }
-
-        const out = remaining.slice(0, insertAt).concat(moved).concat(remaining.slice(insertAt));
-        const edit = new vscode.WorkspaceEdit();
-        const lastLine = document.lineAt(document.lineCount - 1);
-        edit.replace(document.uri,
-            new vscode.Range(0, 0, lastLine.lineNumber, lastLine.text.length),
-            out.join('\n'));
-        await vscode.workspace.applyEdit(edit);
-        await document.save();
+        const df = this.docFileFor(document);
+        const moved = moveFeatureInDoc(df.doc, sourceId, newParentId);
+        if (!moved) return;  // no-op / invalid / cycle
+        df.doc = moved;
+        await this.persistDocFile(document, df);
+        await this.annotateSettle(document, document.getText(), renderTreeFromDoc(moved));
+        this.docAhead.add(document.uri.toString());
     }
 
     private html(webview: vscode.Webview): string {
