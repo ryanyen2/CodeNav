@@ -660,10 +660,12 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # pending (a resolved one drops the flag). Faithful realizations are absent.
         "feature_resolution": _live_resolution(store, read_resolution(codoc_dir)),
     }
-    dest = Path(codoc_dir) / BINDINGS_FILENAME
-    tmp = dest.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(sidecar, indent=2))
-    os.replace(tmp, dest)
+    # Route through the shared atomic writer (per-writer-unique tmp) rather than a
+    # hand-rolled fixed-name tmp: two writers of this sidecar (two daemons, or a daemon
+    # racing an MCP reflection) must not collide on `tree.bindings.json.tmp` and crash on
+    # os.replace when the other already renamed it.
+    from codoc.loop.fsio import atomic_write_json
+    atomic_write_json(Path(codoc_dir) / BINDINGS_FILENAME, sidecar)
 
     # The cross-reference registry rides on the same seam as the bindings
     # sidecar (one write per pass, every call-site, no double-write). It is pure
