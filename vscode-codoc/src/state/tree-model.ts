@@ -136,7 +136,15 @@ export function parseTreeCodoc(text: string): ParseResult {
             const lines = descBuf.map(l => l.trim());
             while (lines.length && !lines[0]) lines.shift();
             while (lines.length && !lines[lines.length - 1]) lines.pop();
-            descOwner.description = lines.join('\n');
+            // Collapse interior runs of blank lines to a SINGLE break (U7) — the
+            // rich editor's paragraph model has no notion of multiple consecutive
+            // blanks, so normalize to one (parity with parse.py.flush_desc).
+            const collapsed: string[] = [];
+            for (const ln of lines) {
+                if (!ln && collapsed.length && !collapsed[collapsed.length - 1]) continue;
+                collapsed.push(ln);
+            }
+            descOwner.description = collapsed.join('\n');
             descOwner.refs = extractRefs(descOwner.description);
         }
         descOwner = null;

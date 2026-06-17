@@ -27,6 +27,7 @@ import {
     NODE_PARAGRAPH,
     PMNode,
     inlineRunsToText,
+    blocksToDescriptionText,
     FeatureHeadingAttrs,
 } from './pm-doc';
 
@@ -85,14 +86,19 @@ export function renderTreeFromDoc(doc: PMNode): string {
         const title = inlineRunsToText(b.content).trim();
         lines.push(titleLine(attrs, title, depth));
 
-        // Gather the description paragraphs belonging to this heading.
-        const paras: string[] = [];
+        // Gather the description paragraph NODES belonging to this heading, then
+        // normalize via blocksToDescriptionText (U7): empty paragraphs are dropped
+        // and the rest joined with a single blank line. This is the SAME normalization
+        // the settle path stores (so the live serialization == the round-tripped one —
+        // no reflow/caret-jump when you leave blank lines between or after features),
+        // and it matches parse.py's collapsed description string (TS↔Python parity).
+        const descBlocks: PMNode[] = [];
         i++;
         while (i < blocks.length && blocks[i].type !== NODE_FEATURE_HEADING) {
-            if (blocks[i].type === NODE_PARAGRAPH) paras.push(inlineRunsToText(blocks[i].content));
+            if (blocks[i].type === NODE_PARAGRAPH) descBlocks.push(blocks[i]);
             i++;
         }
-        const description = paras.join('\n\n');
+        const description = blocksToDescriptionText(descBlocks);
         if (description) lines.push(...descriptionLines(description, indent));
         lines.push('');
     }

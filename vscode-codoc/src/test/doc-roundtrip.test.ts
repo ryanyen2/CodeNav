@@ -183,6 +183,63 @@ describe('U2: structural editing semantics', () => {
     });
 });
 
+describe('U7: blank-line normalization (no reflow / phantom paragraphs)', () => {
+    const A = { fid: 'f-aaaa0001', level: 0, retired: false, realized: true };
+    const B = { fid: 'f-bbbb0002', level: 0, retired: false, realized: true };
+
+    it('drops a trailing empty paragraph (Enter after the text → no trailing-blank churn)', () => {
+        const doc = makeDoc([
+            featureHeadingNode(A, textToInlineRuns('A')),
+            paragraphNode(textToInlineRuns('Desc.')),
+            paragraphNode([]),  // user pressed Enter at the end
+        ]);
+        expect(renderTreeFromDoc(doc)).toBe('- A  ⟨f-aaaa0001⟩\n    Desc.\n');
+    });
+
+    it('collapses multiple empty paragraphs between two text paragraphs to one blank', () => {
+        const doc = makeDoc([
+            featureHeadingNode(A, textToInlineRuns('A')),
+            paragraphNode(textToInlineRuns('P1.')),
+            paragraphNode([]), paragraphNode([]),
+            paragraphNode(textToInlineRuns('P2.')),
+        ]);
+        expect(renderTreeFromDoc(doc)).toBe('- A  ⟨f-aaaa0001⟩\n    P1.\n\n    P2.\n');
+    });
+
+    it('treats empty paragraphs between two features as cosmetic (no phantom feature/line)', () => {
+        const doc = makeDoc([
+            featureHeadingNode(A, textToInlineRuns('A')),
+            paragraphNode(textToInlineRuns('Desc A.')),
+            paragraphNode([]),  // cosmetic spacing before the next heading
+            featureHeadingNode(B, textToInlineRuns('B')),
+            paragraphNode(textToInlineRuns('Desc B.')),
+        ]);
+        expect(renderTreeFromDoc(doc)).toBe(
+            '- A  ⟨f-aaaa0001⟩\n    Desc A.\n\n- B  ⟨f-bbbb0002⟩\n    Desc B.\n');
+    });
+
+    it('a freshly minted ## heading with an empty description renders clean (no id, no trailing blank)', () => {
+        const doc = makeDoc([
+            featureHeadingNode(A, textToInlineRuns('Existing')),
+            paragraphNode(textToInlineRuns('Desc.')),
+            featureHeadingNode({ fid: null, level: 0, retired: false, realized: true }, textToInlineRuns('New feature')),
+            paragraphNode([]),  // the empty paragraph that follows a just-typed heading
+        ]);
+        expect(renderTreeFromDoc(doc)).toBe('- Existing  ⟨f-aaaa0001⟩\n    Desc.\n\n- New feature\n');
+    });
+
+    it('is a fixpoint: serializing the normalized output again is unchanged', () => {
+        const doc = makeDoc([
+            featureHeadingNode(A, textToInlineRuns('A')),
+            paragraphNode(textToInlineRuns('P1.')),
+            paragraphNode([]), paragraphNode([]),
+            paragraphNode(textToInlineRuns('P2.')),
+        ]);
+        const once = renderTreeFromDoc(doc);
+        expect(rt(once)).toBe(once);  // re-parse + re-render is stable
+    });
+});
+
 describe('U2: inline text projection helpers', () => {
     it('inlineRunsToText drops marks but keeps codeRef markdown', () => {
         const runs: PMNode[] = [

@@ -133,7 +133,17 @@ def parse_text(text: str) -> ParsedTree:
                 lines.pop(0)
             while lines and not lines[-1]:
                 lines.pop()
-            desc_owner.description = "\n".join(lines)
+            # Collapse interior runs of blank lines to a SINGLE break (U7): the rich
+            # editor round-trips descriptions through a paragraph model that has no
+            # notion of multiple consecutive blank lines, so a raw-text edit with
+            # extra blanks must normalize to one — keeping the TS↔Python round-trip
+            # byte-identical (doc-serialize's blocksToDescriptionText does the same).
+            collapsed: list[str] = []
+            for ln in lines:
+                if not ln and collapsed and not collapsed[-1]:
+                    continue  # drop a 2nd+ consecutive blank
+                collapsed.append(ln)
+            desc_owner.description = "\n".join(collapsed)
             desc_owner.refs = extract_refs(desc_owner.description)
         desc_owner = None
         desc_buf = []
