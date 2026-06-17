@@ -40,6 +40,9 @@ let wholeEditor: WholeDocEditorHandle | null = null;
 let syncingFromEditor = false;
 const expanded = new Set<string>();
 let selectedId: string | null = null;
+// Features awaiting AI realization (the daemon's hold set) — drives the calm
+// "being realized" badge on tree rows. Mirrors the editor's heading badge.
+let awaitingAI = new Set<string>();
 // Focus dimming (WS5): when a feature is focused, its dependency neighbours stay at
 // full opacity (depends-on tinted one hue, used-by another) and everything else dims.
 // Null = no dimming (the focused feature has no dependencies to spotlight).
@@ -193,6 +196,7 @@ function reconcile(): void {
         wholeEditor.setSuggestions(payload.suggestions ?? []);
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
+        wholeEditor.setHeld(payload.awaitingAI ?? []);
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
         wholeEditor.setDoc(payload.doc);
@@ -346,6 +350,12 @@ function appendRow(parent: HTMLElement, id: string): void {
 
     if (n.activeMode === 'write') row.append(el('span', 'badge active-write'));
     else if (n.activeMode === 'read') row.append(el('span', 'badge active-read'));
+    // "being realized": a code-implying edit is queued for the agent (daemon hold set).
+    if (awaitingAI.has(id)) {
+        const b = el('span', 'badge realizing');
+        b.title = 'Awaiting AI realization — your edit is queued for the agent to implement.';
+        row.append(b);
+    }
     if (!n.realized) row.append(el('span', 'badge unrealized'));
     if (n.proposal?.op === 'amend') row.append(el('span', 'badge amend'));
     if (n.proposal?.op === 'retire') row.append(el('span', 'badge retire'));
@@ -393,7 +403,6 @@ function renderDocHost(): HTMLElement {
         controller: authorController,
         getSymbols: () => payload.symbols ?? [],
         onSettle: doc => vscode.postMessage({ kind: 'doc-settle', doc }),
-        onSuggest: suggestions => vscode.postMessage({ kind: 'suggest-create', suggestions }),
         onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdraw: s => vscode.postMessage({ kind: 'suggest-withdraw', id: s.id }),
@@ -413,6 +422,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setSuggestions(payload.suggestions ?? []); // before setDoc — see reconcile()
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
+    wholeEditor.setHeld(payload.awaitingAI ?? []);
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
     wholeEditor.setDoc(payload.doc);
@@ -580,6 +590,7 @@ window.addEventListener('message', ev => {
     if (msg.payload.rev < lastRev) return; // ignore stale posts
     lastRev = msg.payload.rev;
     payload = msg.payload;
+    awaitingAI = new Set(payload.awaitingAI ?? []);
     // endApplying MUST stay after the stale-rev guard — a stale (dropped) post must
     // not clear the optimistic applying state for a verdict still in flight.
     endApplying();

@@ -169,6 +169,17 @@ export function driftForFeature(sidecar: SidecarData, featureId: string): Featur
     return sidecar.feature_drift?.[featureId];
 }
 
+/** Features "awaiting AI realization" — the daemon-computed doc-wins hold set
+ *  (`sidecar.holds` = live doc-ahead intents ∪ queued realize directives; see
+ *  codoc/loop/edits.py:hold_set). In the single-surface model (U3) a human's
+ *  code-implying commit makes Loop B mint a directive, which lands the feature
+ *  here; a faithful realization clears it (the badge auto-resolves). This is the
+ *  SOLE source for the "being realized" badge — no client-side classification.
+ *  Tolerant: a sidecar from before v4 has no `holds`, so default to none. */
+export function heldFeatures(sidecar: SidecarData): string[] {
+    return sidecar.holds ?? [];
+}
+
 /** Latest applied agent-authored AMEND per feature (fid → agent actor id), from
  *  the v4 changes feed. Drives the pencil re-stamp: when a description changed
  *  under the saved doc AND this map names an agent, the fresh text is inked as

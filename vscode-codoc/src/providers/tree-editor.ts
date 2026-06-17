@@ -26,7 +26,7 @@ import {
     CommentThread, commentsByFid, injectComments, reconcileComments, reanchorComments,
     stripOrphanComments,
 } from '../state/comment-model';
-import { directedEdges, agentAmendsByFeature } from '../state/bindings-model';
+import { directedEdges, agentAmendsByFeature, heldFeatures } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
     annotationsForSettle, intentsFromSuggestions,
@@ -429,6 +429,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             comments: docFile.comments,
             hoverCards,
             pitches,
+            awaitingAI: heldFeatures(sidecar),
             prefs: this.prefsFor(document),
             rev: ++this.rev,
         };

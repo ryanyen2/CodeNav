@@ -1,5 +1,5 @@
 /**
- * whole-doc-editor.ts — ONE TipTap editor over the entire feature tree (R3, slice 1).
+ * whole-doc-editor.ts — ONE TipTap editor over the entire feature tree.
  *
  * Headings are feature nodes; heading depth = tree structure. Editing a heading
  * renames the feature; Tab / Shift-Tab indent / outdent it (and its subtree)
@@ -8,13 +8,17 @@
  * `tree.codoc` (renderTreeFromDoc) — the host writes it and the existing
  * parse→diff→apply pipeline derives the AMEND / MOVE / ADD / RETIRE ops.
  *
- * Slice 1 is EDITING mode only (changes settle). The Editing/Suggesting toggle and
- * persistent diff decorations land in slices 2–3.
+ * ONE editing surface (U3): there is no Editing/Suggesting toggle and no pen/pencil
+ * instrument. The human just edits; every edit COMMITS (settles). The daemon's
+ * `classify.py` decides per-edit whether it implies code; a code-implying commit
+ * lands the feature in the doc-wins hold set, which surfaces here as the calm
+ * "being realized" badge (hold-decorations.ts) — not a client-side guess. The
+ * agent→human review direction (tracked changes, accept/reject) lands in U4.
  */
 import { Editor, Extension } from '@tiptap/core';
 import { TextSelection } from '@tiptap/pm/state';
 import { codocExtensions } from './schema';
-import { AuthorStamp, AuthorController, REFLECT_META, AUTHOR_META } from './author-plugin';
+import { AuthorStamp, AuthorController, REFLECT_META } from './author-plugin';
 import { CodeRefSuggestion, RefSymbol } from './code-ref-suggestion';
 import {
     indentHeading,
@@ -25,10 +29,11 @@ import {
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
+import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
-import { diffDocsToSuggestions, applyDocAheadSuggestions, stripDocAheadSuggestions } from '../../state/suggestion-model';
+import { applyDocAheadSuggestions } from '../../state/suggestion-model';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { Suggestion } from '../../state/suggestion-model';
@@ -36,15 +41,11 @@ import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
 import type { FeaturePhase } from '../../state/activity-model';
 import type { ThreadsData } from '../protocol';
 
-export type EditMode = 'editing' | 'suggesting';
-
 export interface WholeDocEditorOptions {
     controller: AuthorController;
     getSymbols: () => RefSymbol[];
-    /** Editing-mode commit — the whole settled doc (debounced). */
+    /** Commit the whole settled doc (debounced). The single edit path. */
     onSettle: (doc: PMNode) => void;
-    /** Suggesting-mode commit — doc-ahead suggestions captured from the edit. */
-    onSuggest: (suggestions: Suggestion[]) => void;
     onAccept: (s: Suggestion) => void;
     onReject: (s: Suggestion) => void;
     onWithdraw: (s: Suggestion) => void;
@@ -78,6 +79,9 @@ export interface WholeDocEditorHandle {
     setHoverCards: (cards: HoverCardData | null) => void;
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
+    /** Update the "awaiting AI realization" set (the daemon hold set) — drives the
+     *  calm being-realized badge on each held feature heading. */
+    setHeld: (fids: string[]) => void;
     /** Per-feature one-line pitches (FeatureMeta.pitch) — feeds glance mode. */
     setPitches: (pitches: Record<string, string>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
@@ -88,18 +92,6 @@ export interface WholeDocEditorHandle {
 }
 
 const SETTLE_DEBOUNCE_MS = 1200;
-
-/** Signature of the heading sequence (fid:level:retired) — used to detect a
- *  STRUCTURAL change (vs a pure title/description text change). */
-function headingSignature(doc: PMNode): string {
-    return (doc.content ?? [])
-        .filter(b => b.type === 'featureHeading')
-        .map(b => {
-            const a = (b.attrs ?? {}) as { fid?: string | null; level?: number; retired?: boolean };
-            return `${a.fid ?? 'new'}:${a.level ?? 0}:${a.retired ? 1 : 0}`;
-        })
-        .join('|');
-}
 
 function iconButton(label: string, title: string, onClick: () => void, cls = ''): HTMLButtonElement {
     const b = document.createElement('button');
@@ -156,13 +148,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let dirty = false;
     let settleTimer = 0;
     let suppressUpdate = false;          // true while we programmatically setContent
-    let mode: EditMode = 'editing';      // editing settles; suggesting captures diffs
-    // ⌥ momentary override (U2 tail / H3a): when Alt is held during an edit, that settle is
-    // captured as a suggestion even in editing mode. Latched at keystroke time because
-    // settleNow fires ~1200ms later, long after Alt is released.
-    let altDown = false;
-    let forceSuggest = false;
-    let baselineDoc: PMNode | null = null; // last settled doc (Suggesting diff base)
     let currentSuggestions: Suggestion[] = [];
     // Doc-ahead suggestions captured locally this session but not yet echoed by the
     // host (keyed by suggestion id). They keep the in-flight inline edit from being
@@ -174,16 +159,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     const pendingDocAhead = new Map<string, { s: Suggestion; seen: boolean }>();
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
+    let currentHeld = new Set<string>();   // features awaiting AI realization (badge)
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
     let glanceOn = false;
-    // Last NON-EMPTY selection — a fallback so a toolbar / bubble action still has a
-    // range to act on if focus moved and the live selection collapsed (the "to AI /
-    // comment did nothing" bug).
+    // Last NON-EMPTY selection — a fallback so a bubble action still has a range to act
+    // on if focus moved and the live selection collapsed (the "comment did nothing" bug).
     let lastSelection: { from: number; to: number } | null = null;
-    // The feature the caret was last in — drives the dual-state suggestion render (WS4).
-    let lastActiveFid: string | null = null;
 
     const editor = new Editor({
         element: surface,
@@ -193,13 +176,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             CodeRefSuggestion.configure({ getSymbols: opts.getSymbols, char: '@' }),
             SuggestionDecorations.configure({
                 getSuggestions: () => effectiveSuggestions(),
-                // The caret's feature renders LIVE (no tracked-change overlay) so the
-                // user keeps composing the suggestion inline; all others show the diff.
-                // MUST read the pre-declared `lastActiveFid` var, NOT call activeFid()
-                // here: the plugin's state.init runs *inside* `new Editor(...)`, before
-                // the `editor` const is assigned, so touching editor.state would throw a
-                // TDZ error and break the whole editor render.
-                getActiveFid: () => lastActiveFid,
+                // No dual-state in the single-surface model: the human never composes a
+                // doc-ahead suggestion inline (they just commit), so there is no
+                // active-feature suppression. Code-ahead (agent → human) proposals
+                // always render their tracked change + accept/reject. (U4 moves these
+                // onto the vendored engine's marks.)
+                getActiveFid: () => null,
                 handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw },
             }),
             DependencyDecorations.configure({
@@ -209,6 +191,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onConsult: opts.onConsult,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
+            HoldDecorations.configure({ getHeld: () => currentHeld }),
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',
@@ -227,7 +210,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         onUpdate: () => {
             if (suppressUpdate) return;
             dirty = true;
-            if (altDown) forceSuggest = true; // ⌥-held edit → suggest this settle (H3a)
             scheduleSettle();
             scheduleRail();
         },
@@ -235,17 +217,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             const { from, to, empty } = editor.state.selection;
             if (!empty && to > from) lastSelection = { from, to };
             updateBubble();
-            const fid = activeFid();
-            // When the caret crosses into a different feature, re-render the suggestion
-            // decorations: the feature the caret just LEFT flips to its inline tracked
-            // change, the one it ENTERED flips to live editable text (dual-state, WS4).
-            if (fid !== lastActiveFid) {
-                lastActiveFid = fid;
-                if (effectiveSuggestions().length) {
-                    queueMicrotask(() => { if (!editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true)); });
-                }
-            }
-            if (opts.onActiveFeature) opts.onActiveFeature(fid);
+            if (opts.onActiveFeature) opts.onActiveFeature(activeFid());
         },
     });
 
@@ -326,72 +298,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = 0; }
         if (!dirty) return;
         dirty = false;
-        const edited = editor.getJSON() as PMNode;
-        // Structural edits (indent/outdent/new/retire — changes to the heading
-        // sequence) always settle directly: they can't be expressed as block-level
-        // text suggestions, so capturing them in Suggesting mode would silently
-        // revert them. Only title/description prose respects Suggesting mode.
-        const structural = baselineDoc !== null && headingSignature(edited) !== headingSignature(baselineDoc);
-        const suggesting = mode === 'suggesting' || forceSuggest; // visible toggle OR ⌥ override
-        forceSuggest = false;
-        if (suggesting && baselineDoc && !structural) {
-            // Capture the edit as doc-ahead suggestions WITHOUT reverting the prose
-            // (WS4 inline model): the live text stays where the user typed it, so the
-            // caret never jumps and continued editing keeps the in-flight suggestion.
-            // tree.codoc stays at baseline because Suggesting mode never calls onSettle;
-            // the change renders as an inline tracked diff for every feature except the
-            // one the caret is in. `applyDocAheadSuggestions` on the next repost keeps
-            // this live text from being reverted by the round-trip.
-            const captured = diffDocsToSuggestions(baselineDoc, edited);
-            // Buffer locally so a repost arriving before the host echoes the suggestion
-            // can't revert the in-flight inline edit (WS4 race). `seen:false` → it gets
-            // one full setSuggestions cycle of grace before the resolved-drop kicks in.
-            for (const s of captured) pendingDocAhead.set(s.id, { s, seen: false });
-            if (captured.length) opts.onSuggest(captured);
-            // Refresh the decorations now (dirty just went false → the just-edited
-            // feature may need its tracked change drawn once the caret leaves it).
-            editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true));
-            markSaving('suggested');
-        } else {
-            // Editing mode: strip any pending doc-ahead suggestions back to baseline
-            // (except the feature being committed) so an unrelated in-flight suggestion
-            // never leaks into canonical tree.codoc just because a different feature
-            // was edited. With no pending suggestions this is a no-op.
-            opts.onSettle(stripDocAheadSuggestions(edited, effectiveSuggestions()));
-            markSaving('saved');
-        }
+        // ONE edit path (U3): the human's edit always COMMITS. The daemon classifies
+        // it (pure-doc vs code-implying) and, when it implies code, lands the feature
+        // in the hold set → the calm "being realized" badge surfaces back. No
+        // client-side suggest/strip/dual-state.
+        opts.onSettle(editor.getJSON() as PMNode);
+        markSaving('saved');
         rebuildRail();
     }
 
-    // ── toolbar: per-span authorship + marks + structure ──────────────────────
-    // pen/pencil is no longer a future-typing MODE toggle (D2/H2). The human writes
-    // in pen by default; this group re-stamps the SELECTED span's authorship ink:
-    // "hand to AI" (pencil — AI may revise it directly) / "take back" (pen — committed,
-    // AI may only propose). It acts on the selection, like the mark buttons.
-    function setSpanMode(mode: 'pen' | 'pencil'): void {
-        const range = actionRange();
-        if (!range) { editor.commands.focus(); return; }
-        const { from, to } = range;
-        const id = opts.controller.get();
-        const markType = editor.state.schema.marks.author;
-        if (!markType) return;
-        const mark = markType.create({ authorId: id.authorId, role: 'human', mode, ts: Date.now() });
-        // removeMark FIRST: the author mark has `excludes: ''` (so distinct-author spans
-        // never merge), which means a bare addMark over an already-stamped span would
-        // STACK a second author mark instead of replacing it. Strip the old one, then add.
-        // Tag AUTHOR_META so the auto-stamp plugin treats this as an explicit re-stamp.
-        editor.view.dispatch(
-            editor.state.tr.removeMark(from, to, markType).addMark(from, to, mark).setMeta(AUTHOR_META, true),
-        );
-        editor.commands.focus();
-    }
-    const authorGrp = document.createElement('div');
-    authorGrp.className = 'ce-author';
-    authorGrp.append(
-        iconButton('✋ to AI', 'Hand this selection to AI — mark it pencil (AI may revise it directly)', () => setSpanMode('pencil'), 'ce-toai'),
-        iconButton('↩ take back', 'Take back — mark this selection pen (committed; AI may only propose)', () => setSpanMode('pen'), 'ce-takeback'),
-    );
-
+    // ── toolbar: marks + structure ────────────────────────────────────────────
     const marks = document.createElement('div');
     marks.className = 'ce-marks';
     marks.append(
@@ -409,31 +325,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         iconButton('~ retire', 'Toggle retire on this feature', () => { toggleRetireHeading(editor); editor.commands.focus(); }, 'ce-retire'),
     );
 
-    // ── Editing / Suggesting mode (separate from the pen/pencil instrument) ────
-    const modeSeg = document.createElement('div');
-    modeSeg.className = 'ce-seg ce-modeseg';
-    const editBtn = iconButton('Editing', 'Edits settle directly into the tree', () => setEditMode('editing'), 'ce-editmode');
-    const sugBtn = iconButton('Suggesting', 'Edits become tracked suggestions for the agent', () => setEditMode('suggesting'), 'ce-sugmode');
-    modeSeg.append(editBtn, sugBtn);
-    function setEditMode(m: EditMode): void {
-        mode = m;
-        editBtn.classList.toggle('active', m === 'editing');
-        sugBtn.classList.toggle('active', m === 'suggesting');
-        wrap.dataset.editmode = m;
-        editor.commands.focus();
-    }
-
     const spacer = document.createElement('div');
     spacer.className = 'ce-spacer';
     const saveState = document.createElement('span');
     saveState.className = 'ce-savestate';
     function markSaving(text: string): void { saveState.textContent = text; }
 
-    toolbar.append(modeSeg, marks, authorGrp, structure, spacer, saveState);
+    // ONE editing surface: no Editing/Suggesting toggle, no pen/pencil instrument.
+    toolbar.append(marks, structure, spacer, saveState);
     wrap.append(toolbar, body);
     container.append(wrap);
-
-    setEditMode('editing');
 
     // ── TOC rail + scroll-spy (rehomed scroll indicator) ──────────────────────
     const tickByFid = new Map<string, HTMLElement>();
@@ -509,11 +410,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         railTimer = window.setTimeout(rebuildRail, 250);
     }
     surface.addEventListener('scroll', updateSpy, { passive: true });
-
-    // ⌥ momentary "suggest this edit" override — track whether Alt is held during input.
-    // Listeners live on the editor DOM, so they're torn down with editor.destroy().
-    editor.view.dom.addEventListener('keydown', ev => { altDown = ev.altKey; }, true);
-    editor.view.dom.addEventListener('keyup', ev => { altDown = ev.altKey; }, true);
 
     // Code-ref chip click → navigate.
     editor.view.dom.addEventListener('click', ev => {
@@ -624,8 +520,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         bubBtn('H', 'Highlight', () => editor.chain().focus().toggleHighlight().run(), 'ce-bub-hl'),
         bubSep(),
         bubBtn('❝ Comment', 'Comment on the selection — a steering note the agent will address', () => openComposerForSelection()),
-        bubSep(),
-        bubBtn('✋ AI', 'Hand this selection to AI — mark it pencil (AI may revise it directly)', () => setSpanMode('pencil'), 'ce-bub-ai'),
     );
     document.body.append(bubble);
 
@@ -762,10 +656,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
 
     /** Apply a comment-mark mutation WITHOUT tripping the settle machinery. A bare
      *  dispatch would set dirty + schedule a settle (and clearing dirty afterwards
-     *  would drop any UNRELATED pending edit — and, in Suggesting mode, bypass its
-     *  capture). suppressUpdate makes onUpdate ignore this transaction, so dirty and
-     *  any in-flight settle are left exactly as they were; the host persists the
-     *  mark via the comment-* message, not the settle. */
+     *  would drop any UNRELATED pending edit). suppressUpdate makes onUpdate ignore
+     *  this transaction, so dirty and any in-flight settle are left exactly as they
+     *  were; the host persists the mark via the comment-* message, not the settle. */
     function commentMutate(mutate: (tr: import('@tiptap/pm/state').Transaction) => void): void {
         suppressUpdate = true;
         try { const tr = editor.state.tr; mutate(tr); editor.view.dispatch(tr); }
@@ -832,16 +725,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (dirty) return;   // otherwise don't clobber unsettled edits
             // A reload while a comment composer / bubble is open would remap or destroy
             // the captured range under it (the "selection vanished mid-comment" bug).
-            // Defer the WHOLE update — do NOT advance baselineDoc either: shifting the
-            // diff base while the visible editor still shows the old doc would make the
-            // next Suggesting settle diff against a baseline the user never saw and
-            // manufacture spurious "revert" suggestions. The next payload reloads cleanly.
+            // Defer the WHOLE update — the next payload reloads cleanly.
             if (composer || bubble.style.display !== 'none') return;
-            baselineDoc = doc; // the PURE baseline Suggesting mode diffs against
-            // Splice the user's in-flight doc-ahead suggestion text back into the
-            // incoming baseline (WS4) so a round-trip never reverts a suggestion they're
-            // still composing — the live editor keeps descNew while tree.codoc stays
-            // baseline. With no pending suggestions this is the incoming doc unchanged.
+            // No human-authored doc-ahead suggestions in the single-surface model, so
+            // this is the incoming doc unchanged in the common case (the splice is a
+            // dormant no-op kept until the suggestion machinery is retired in U8).
             const merged = applyDocAheadSuggestions(doc, effectiveSuggestions());
             // Skip the reload when the rendered content is unchanged — the common case
             // right after a settle round-trips; reloading would reset the caret + drop
@@ -910,6 +798,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         setPhases: (phases: Record<string, FeaturePhase>) => {
             currentPhases = phases;
             editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
+        },
+        setHeld: (fids: string[]) => {
+            currentHeld = new Set(fids);
+            editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true));
         },
         setPitches: (pitches: Record<string, string>) => {
             currentPitches = pitches;

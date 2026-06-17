@@ -268,6 +268,19 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .badge.active-write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }
 .badge.active-read { background: var(--fg-muted); }
 
+/* "being realized" = STATUS axis (no hue): a code-implying edit committed by the human
+   and queued for the agent (the daemon hold set). A calm SLOW breathing ring — distinct
+   from active-write (solid fast pulse) and unrealized (static dashed ring). The live
+   ce-phase-* shimmer layers on top while the agent is actually mid-edit; this durable
+   badge says "code is catching up." Reduced-motion gates freeze it to a steady ring. */
+.badge.realizing {
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+    box-sizing: border-box;
+    animation: breathe 2.6s ease-in-out infinite;
+}
+@keyframes breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.95; } }
+
 /* (the tree-pane refs pill was removed — code refs now live in the doc threads line, U4) */
 
 /* Ghost rows for pending ADD/MOVE */
@@ -307,7 +320,8 @@ body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
     /* fallback gate (the body-class rule below is authoritative in webviews — KTD4).
        Only the live animated elements remain after the read-view CSS was removed. */
-    .toolbar .status.realizing .dot, .badge.active-write,
+    .toolbar .status.realizing .dot, .badge.active-write, .badge.realizing,
+    .ce-realize-badge,
     .codoc-feature-heading.ce-phase-editing::after {
         transition: none !important; animation: none !important;
     }
@@ -483,6 +497,20 @@ span[data-change-id] { text-decoration-style: solid; }
 }
 .codoc-feature-heading.ce-phase-reflecting::after {
     border: 1px solid var(--vscode-foreground); opacity: 0.7;
+}
+
+/* "being realized" badge (U3): a calm chip after a held feature's heading — the
+   durable companion to the transient ce-phase-* dots. Means "you edited this; the
+   code is catching up." No hue (status axis); the slow breathe matches the tree-pane
+   dot, and reduced-motion gates freeze it. The node decoration (.ce-realizing) is a
+   styling hook only — the chip carries the signal. */
+.ce-realize-badge {
+    display: inline-block; margin-left: 10px; vertical-align: middle; user-select: none;
+    font: 10px var(--vscode-font-family); letter-spacing: 0.02em; line-height: 1.4;
+    color: var(--fg-muted);
+    padding: 0 7px; border-radius: 9px;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 24%, transparent);
+    animation: breathe 2.6s ease-in-out infinite;
 }
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }

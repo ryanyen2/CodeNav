@@ -134,6 +134,11 @@ export interface DocPayload {
     /** Per-feature one-line pitch (FeatureMeta.pitch, B-U1) keyed by feature id — feeds
      *  glance mode (each feature collapses to its pitch). Derived from the sidecar. */
     pitches?: Record<string, string>;
+    /** Feature ids "awaiting AI realization" — the daemon's doc-wins hold set
+     *  (sidecar.holds: live doc-ahead intents ∪ queued realize directives). Drives the
+     *  calm "being realized" badge in the single-surface model (U3); a faithful
+     *  realization clears the feature from this set. Absent on legacy payloads. */
+    awaitingAI?: string[];
     /** Persisted webview prefs: the glance-mode toggle, restored from workspaceState so
      *  it survives a reload. */
     prefs?: WebviewPrefs;
