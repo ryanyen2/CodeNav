@@ -168,6 +168,10 @@ export type WebviewMessage =
     | { kind: 'suggest-create'; suggestions: Suggestion[] }
     /** Withdraw a pending doc-ahead suggestion by id. */
     | { kind: 'suggest-withdraw'; id: string }
+    /** Withdraw a queued realization (U6): cancel feature `featureId`'s directive.
+     *  The host appends a cancellation to edits.json; Loop B prunes the directive
+     *  and releases the hold. The committed prose is kept. */
+    | { kind: 'withdraw-realization'; featureId: string }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
     | { kind: 'open-binding'; file: string; symbol: string }
     /** Open an external Consult link (a description's `https://` link) in the browser. */

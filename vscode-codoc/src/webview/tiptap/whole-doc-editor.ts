@@ -49,6 +49,9 @@ export interface WholeDocEditorOptions {
     onAccept: (s: Suggestion) => void;
     onReject: (s: Suggestion) => void;
     onWithdraw: (s: Suggestion) => void;
+    /** Withdraw a queued realization for a feature (U6) — the ✕ on its "realizing"
+     *  badge. Cancels the directive, keeps the prose. */
+    onWithdrawRealization: (featureId: string) => void;
     onOpenBinding: (file: string, symbol: string) => void;
     /** Open a Consult strand link (a description's external `https://` page). */
     onConsult: (url: string) => void;
@@ -194,7 +197,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onConsult: opts.onConsult,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
-            HoldDecorations.configure({ getHeld: () => currentHeld }),
+            HoldDecorations.configure({ getHeld: () => currentHeld, onWithdraw: opts.onWithdrawRealization }),
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',

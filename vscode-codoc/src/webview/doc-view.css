@@ -328,7 +328,7 @@ body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
     /* fallback gate (the body-class rule below is authoritative in webviews — KTD4).
        Only the live animated elements remain after the read-view CSS was removed. */
     .toolbar .status.realizing .dot, .badge.active-write, .badge.realizing,
-    .ce-realize-badge,
+    .ce-realize-label,
     .codoc-feature-heading.ce-phase-editing::after {
         transition: none !important; animation: none !important;
     }
@@ -521,13 +521,22 @@ span[data-change-id] { text-decoration-style: solid; }
    dot, and reduced-motion gates freeze it. The node decoration (.ce-realizing) is a
    styling hook only — the chip carries the signal. */
 .ce-realize-badge {
-    display: inline-block; margin-left: 10px; vertical-align: middle; user-select: none;
+    display: inline-flex; align-items: center; gap: 5px;
+    margin-left: 10px; vertical-align: middle; user-select: none;
     font: 10px var(--vscode-font-family); letter-spacing: 0.02em; line-height: 1.4;
     color: var(--fg-muted);
-    padding: 0 7px; border-radius: 9px;
+    padding: 0 5px 0 7px; border-radius: 9px;
     border: 1px solid color-mix(in srgb, var(--vscode-foreground) 24%, transparent);
-    animation: breathe 2.6s ease-in-out infinite;
 }
+.ce-realize-label { animation: breathe 2.6s ease-in-out infinite; }
+/* withdraw ✕ — cancels the AI realization (keeps the text). Quiet until hover. */
+.ce-realize-withdraw {
+    border: none; background: transparent; cursor: pointer; padding: 0 1px;
+    font-size: 9px; line-height: 1; color: var(--fg-muted); opacity: 0.6;
+    border-radius: 3px;
+}
+.ce-realize-withdraw:hover { opacity: 1; color: var(--vscode-foreground);
+    background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); }
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }

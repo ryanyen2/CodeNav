@@ -30,7 +30,7 @@ import {
 import { directedEdges, agentAmendsByFeature, heldFeatures, divergentFeatures } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
-    annotationsForSettle, intentsFromSuggestions,
+    annotationsForSettle, intentsFromSuggestions, appendCancellation,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -100,6 +100,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 case 'suggest-withdraw':
                     await this.withdrawSuggestion(document, msg.id);
                     post();
+                    return;
+                case 'withdraw-realization':
+                    await this.withdrawRealization(document, msg.featureId);
                     return;
                 case 'move':
                     await this.editMove(document, msg.sourceId, msg.newParentId);
@@ -640,6 +643,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         df.suggestions = df.suggestions.filter(s => s.id !== id);
         await this.persistDocFile(document, df);
         await this.syncIntents(document, df); // release the hold
+    }
+
+    /** Withdraw a queued realization (U6): append a cancellation to edits.json. The
+     *  daemon (watching edits.json) wakes Loop B, which prunes the feature's directive
+     *  from the queue and releases the hold; the committed prose is kept. No payload
+     *  repost — the daemon's resulting sidecar/status write drives the UI refresh. */
+    private async withdrawRealization(document: vscode.TextDocument, featureId: string): Promise<void> {
+        const file = appendCancellation(await this.readEditsFile(document), featureId, Date.now());
+        await this.writeEditsFile(document, file);
     }
 
     /** Loop B / realize may stamp "done/total" progress into status.detail

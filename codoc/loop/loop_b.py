@@ -50,6 +50,7 @@ class LoopBResult:
     rejected: int = 0
     user_edits: int = 0
     steered: int = 0  # inline `> …` steering comments drained this pass
+    canceled: int = 0  # queued directives withdrawn this pass (U6)
     directives: list[str] = field(default_factory=list)
     directive_ids: list[str] = field(default_factory=list)  # d-… ids, parallel to directives
     queued: bool = False  # directives written to .codoc/realize.md for the session
@@ -60,6 +61,8 @@ class LoopBResult:
         parts = [f"accepted {self.accepted}", f"rejected {self.rejected}", f"edits {self.user_edits}"]
         if self.steered:
             parts.append(f"steered {self.steered}")
+        if self.canceled:
+            parts.append(f"withdrew {self.canceled} directive(s)")
         if self.queued:
             total = self.queued_total or len(self.directives)
             parts.append(f"queued {total} directive(s) for the session")
@@ -196,6 +199,44 @@ def _reinsert_comments(codoc_dir: str, targets: list[tuple[str, str]]) -> None:
     atomic_write_text(path, "\n".join(lines) + "\n")
 
 
+def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
+    """U6 — withdraw queued realizations. Drain the host's cancellations (feature
+    ids) and prune the matching directives from the queue: rewrite the manifest
+    without them, and rebuild ``realize.md`` from the survivors (or remove both when
+    the queue empties). Pruning the manifest releases the doc-wins hold for those
+    features (``hold_set`` reads the manifest). The committed prose is untouched —
+    withdraw cancels the code work, not the documented intent.
+
+    Returns the number of directives removed (0 when nothing matched — a cancel for
+    an already-realized / never-queued feature is a harmless no-op)."""
+    cancels = set(edits_channel.drain_cancellations(codoc_dir))
+    if not cancels:
+        return 0
+    existing = edits_channel.read_manifest(codoc_dir)
+    survivors = [d for d in existing if d.feature_id not in cancels]
+    removed = len(existing) - len(survivors)
+    if not removed:
+        return 0
+    if not survivors:
+        # The queue emptied — remove realize.md + the manifest so status falls back
+        # to in_sync/code_drift and no stale directive lingers.
+        try:
+            realize_path(codoc_dir).unlink()
+        except OSError:
+            pass
+        edits_channel.clear_manifest(codoc_dir)
+        return removed
+    edits_channel.write_manifest(codoc_dir, survivors)
+    # Rebuild realize.md from the survivors that carry their rendered text. (Legacy
+    # text-less entries can't be re-rendered; pruning the manifest still releases the
+    # canceled holds, and a later real pass rewrites the queue.)
+    texts = [d.text for d in survivors if d.text]
+    ids = [d.id for d in survivors if d.text]
+    if texts:
+        _write_realize(codoc_dir, build_realize_prompt(texts, root_dir, ids))
+    return removed
+
+
 def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False) -> LoopBResult:
     with open_store(codoc_dir) as store:
         return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
@@ -206,6 +247,12 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # (op, feature_id-or-"", caused_by) per code-implying edit — feature_id feeds
     # the doc-wins hold set, caused_by the causality chain (suggestion/event id).
     directive_ops: list[tuple[NodeOp, str, str]] = []
+
+    # U6 — withdraw: prune any cancelled directives from the queue FIRST so the rest
+    # of the pass (and step 3's manifest append) sees the survivors, and the hold for
+    # a withdrawn feature is released this pass. A dry pass still drains the request
+    # (withdraw is a real intent, not a directive to defer).
+    res.canceled = _apply_cancellations(root_dir, codoc_dir)
 
     # 0. Snapshot the text diff BEFORE any store mutation. Verdict accepts and
     #    intent applies move the store ahead of the on-disk text; diffing after

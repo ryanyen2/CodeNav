@@ -11,7 +11,8 @@ without making Python read ``tree.doc.json``:
                     "actor": "human", "mode": "pen",
                     "suggestion_id": "", "ts": 0}],
        "intents": [{"id": "d-f123", "feature_id": "f-…",
-                    "actor": "human", "ts": 0}]}
+                    "actor": "human", "ts": 0}],
+       "cancellations": [{"feature_id": "f-…", "ts": 0}]}
 
   - ``edits`` are per-feature authorship annotations for settles: Loop B drains
     them (``drain_annotations``) and stamps the matching user ops' events with
@@ -28,6 +29,12 @@ without making Python read ``tree.doc.json``:
     (mode=suggest, caused_by=suggestion id) and, when imperative, queues a
     realize directive. Intents whose payload matches the store are satisfied
     and skipped, so the read-only drain is idempotent.
+  - ``cancellations`` are realize-WITHDRAWALS (U6): feature ids whose queued
+    directive the human asked to cancel. Loop B drains them and prunes the
+    matching directive from ``realize.json`` (releasing the doc-wins hold) and
+    rebuilds/removes ``realize.md``. The committed prose is KEPT — withdraw
+    cancels the code realization, not the documented intent (re-wording it is a
+    normal edit).
 
 * ``realize.json`` (Loop-B-written next to ``realize.md``)::
 
@@ -140,14 +147,15 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
 
 def drain_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
     """Consume the ``edits`` list (returning it keyed by feature), KEEPING the
-    ``intents`` list in place — intents are owned by the host, not the loop."""
+    host-owned ``intents`` and ``cancellations`` lists in place."""
     anns = read_annotations(codoc_dir)
     if not anns:
         return anns
     data = _load(codoc_dir)
     intents = data.get("intents") or []
-    if intents:
-        _write_edits_file(codoc_dir, edits=[], intents=intents)
+    cancellations = data.get("cancellations") or []
+    if intents or cancellations:
+        _write_edits_file(codoc_dir, edits=[], intents=intents, cancellations=cancellations)
     else:
         try:
             edits_path(codoc_dir).unlink()
@@ -156,10 +164,47 @@ def drain_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
     return anns
 
 
-def _write_edits_file(codoc_dir: str | Path, *, edits: list, intents: list) -> Path:
+def read_cancellations(codoc_dir: str | Path) -> list[str]:
+    """Pending realize-withdrawals: feature ids whose queued directive the human
+    asked to cancel (U6). Order-preserving, deduped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in _load(codoc_dir).get("cancellations", []):
+        fid = c.get("feature_id") if isinstance(c, dict) else None
+        if fid and fid not in seen:
+            seen.add(fid)
+            out.append(fid)
+    return out
+
+
+def drain_cancellations(codoc_dir: str | Path) -> list[str]:
+    """Consume the ``cancellations`` list (feature ids), KEEPING ``edits`` and
+    ``intents`` in place — Loop B prunes the matching directives from the queue."""
+    cancels = read_cancellations(codoc_dir)
+    if not cancels:
+        return cancels
+    data = _load(codoc_dir)
+    edits = data.get("edits") or []
+    intents = data.get("intents") or []
+    if edits or intents:
+        _write_edits_file(codoc_dir, edits=edits, intents=intents, cancellations=[])
+    else:
+        try:
+            edits_path(codoc_dir).unlink()
+        except FileNotFoundError:
+            pass
+    return cancels
+
+
+def _write_edits_file(
+    codoc_dir: str | Path, *, edits: list, intents: list, cancellations: list | None = None,
+) -> Path:
     dest = edits_path(codoc_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(dest, {"version": 1, "edits": edits, "intents": intents})
+    payload = {"version": 1, "edits": edits, "intents": intents}
+    if cancellations:
+        payload["cancellations"] = cancellations
+    atomic_write_json(dest, payload)
     return dest
 
 
@@ -173,7 +218,18 @@ def append_annotation(codoc_dir: str | Path, ann: EditAnnotation) -> Path:
         "mode": ann.mode, "suggestion_id": ann.suggestion_id,
         "ts": ann.ts or int(time.time() * 1000),
     })
-    return _write_edits_file(codoc_dir, edits=edits, intents=data.get("intents") or [])
+    return _write_edits_file(codoc_dir, edits=edits, intents=data.get("intents") or [],
+                             cancellations=data.get("cancellations") or [])
+
+
+def append_cancellation(codoc_dir: str | Path, feature_id: str) -> Path:
+    """Append a realize-withdrawal request for ``feature_id`` (used by the CLI/tests;
+    the IDE host writes this on the withdraw affordance). Drained by Loop B."""
+    data = _load(codoc_dir)
+    cancellations = data.get("cancellations") or []
+    cancellations.append({"feature_id": feature_id, "ts": int(time.time() * 1000)})
+    return _write_edits_file(codoc_dir, edits=data.get("edits") or [],
+                             intents=data.get("intents") or [], cancellations=cancellations)
 
 
 # ─── realize.json — the directive manifest ───────────────────────────────────

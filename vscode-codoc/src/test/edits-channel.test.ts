@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     parseEditsFile, emptyEditsFile, annotationsForSettle, intentsFromSuggestions,
+    appendCancellation,
 } from '../state/edits-channel';
 import { agentAmendsByFeature, type SidecarData } from '../state/bindings-model';
 import { codeAheadSuggestions, type Suggestion } from '../state/suggestion-model';
@@ -15,6 +16,37 @@ import { MARK_AUTHOR, type PMNode } from '../state/pm-doc';
 
 const F = (id: string | null, title: string, description = ''): { id: string | null; title: string; description: string } =>
     ({ id, title, description });
+
+describe('U6 — cancellations (realize withdraw)', () => {
+    it('appendCancellation adds an entry the loop will drain', () => {
+        const file = appendCancellation(emptyEditsFile(), 'f-x', 7);
+        expect(file.cancellations).toEqual([{ feature_id: 'f-x', ts: 7 }]);
+    });
+
+    it('dedups a repeated withdraw of the same feature (latest ts wins)', () => {
+        let file = appendCancellation(emptyEditsFile(), 'f-x', 1);
+        file = appendCancellation(file, 'f-x', 9);
+        expect(file.cancellations).toEqual([{ feature_id: 'f-x', ts: 9 }]);
+    });
+
+    it('preserves edits + intents alongside a cancellation', () => {
+        const base = parseEditsFile({
+            version: 1,
+            edits: [{ feature_id: 'f-a', fields: ['title'], actor: 'human', mode: 'pen', ts: 1 }],
+            intents: [{ id: 's1', feature_id: 'f-b', actor: 'human', ts: 1 }],
+        });
+        const file = appendCancellation(base, 'f-x', 2);
+        expect(file.edits).toHaveLength(1);
+        expect(file.intents).toHaveLength(1);
+        expect(file.cancellations).toEqual([{ feature_id: 'f-x', ts: 2 }]);
+    });
+
+    it('parseEditsFile round-trips the cancellations list', () => {
+        const file = parseEditsFile({ version: 1, edits: [], intents: [],
+            cancellations: [{ feature_id: 'f-x', ts: 3 }] });
+        expect(file.cancellations).toEqual([{ feature_id: 'f-x', ts: 3 }]);
+    });
+});
 
 describe('annotationsForSettle', () => {
     it('annotates only the features whose title/description changed', () => {

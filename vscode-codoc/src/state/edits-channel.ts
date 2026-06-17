@@ -11,6 +11,9 @@
  *   • `intents` — the LIVE doc-ahead suggestions (the doc-wins hold set). Owned
  *     by the host: rewritten wholesale from the current DocFile suggestions on
  *     every suggestion mutation; the Python loops only read it.
+ *   • `cancellations` — realize-WITHDRAWALS (U6): feature ids whose queued
+ *     directive the human cancelled. Loop B drains them and prunes the matching
+ *     directive from the queue (releasing the hold); the prose is kept.
  *
  * Mirrors codoc/loop/edits.py (schema version 1). File I/O lives in the host
  * (tree-editor.ts) — this module is pure data so vitest can pin the contract.
@@ -39,10 +42,21 @@ export interface IntentEntry {
     description?: string;
 }
 
+/** A realize-WITHDRAWAL (U6): the human cancelled feature `feature_id`'s queued
+ *  directive. Loop B drains these and prunes the matching directive from the queue
+ *  (releasing the doc-wins hold); the committed prose is kept. */
+export interface CancellationEntry {
+    feature_id: string;
+    ts: number;                 // unix ms
+}
+
 export interface EditsFile {
     version: 1;
     edits: EditAnnotation[];
     intents: IntentEntry[];
+    /** Pending realize-withdrawals (U6). Omitted when empty (matches the Python
+     *  writer, which only emits the key when non-empty). */
+    cancellations?: CancellationEntry[];
 }
 
 export function emptyEditsFile(): EditsFile {
@@ -52,11 +66,21 @@ export function emptyEditsFile(): EditsFile {
 export function parseEditsFile(json: unknown): EditsFile {
     if (!json || typeof json !== 'object') return emptyEditsFile();
     const o = json as Record<string, unknown>;
-    return {
+    const file: EditsFile = {
         version: 1,
         edits: Array.isArray(o.edits) ? (o.edits as EditAnnotation[]) : [],
         intents: Array.isArray(o.intents) ? (o.intents as IntentEntry[]) : [],
     };
+    if (Array.isArray(o.cancellations)) file.cancellations = o.cancellations as CancellationEntry[];
+    return file;
+}
+
+/** Append a realize-withdrawal for `featureId` (deduped). Pure — returns a new
+ *  EditsFile the host persists; Loop B drains the `cancellations` list. */
+export function appendCancellation(file: EditsFile, featureId: string, ts: number): EditsFile {
+    const cancellations = (file.cancellations ?? []).filter(c => c.feature_id !== featureId);
+    cancellations.push({ feature_id: featureId, ts });
+    return { ...file, cancellations };
 }
 
 /** A minimal parsed-feature shape (matches tree-model's ParsedFeature fields we need). */

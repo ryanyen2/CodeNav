@@ -28,12 +28,18 @@ const holdKey = new PluginKey('codocHoldDecorations');
 export interface HoldDecorationsOptions {
     /** Feature ids awaiting AI realization (the daemon's hold set). */
     getHeld: () => Set<string>;
+    /** Withdraw the queued realization for a feature (U6) — cancels the directive,
+     *  keeps the prose. Wired to the ✕ on the badge; omitted ⇒ no ✕ (e.g. tests). */
+    onWithdraw?: (fid: string) => void;
 }
 
 /** Build the badge decorations: one node decoration + one trailing chip widget per
- *  held feature heading. Exported for headless tests (no DOM needed to construct;
+ *  held feature heading. The chip carries a ✕ to withdraw the realization when
+ *  `onWithdraw` is given. Exported for headless tests (no DOM needed to construct;
  *  the widget DOM factory only runs when the view renders). */
-export function buildHoldDecorations(doc: PMModelNode, held: Set<string>): DecorationSet {
+export function buildHoldDecorations(
+    doc: PMModelNode, held: Set<string>, onWithdraw?: (fid: string) => void,
+): DecorationSet {
     if (!held.size) return DecorationSet.empty;
     const decos: Decoration[] = [];
     doc.forEach((node, pos) => {
@@ -44,10 +50,23 @@ export function buildHoldDecorations(doc: PMModelNode, held: Set<string>): Decor
         decos.push(Decoration.widget(pos + node.nodeSize - 1, () => {
             const chip = document.createElement('span');
             chip.className = 'ce-realize-badge';
-            chip.textContent = 'realizing';
+            chip.contentEditable = 'false';
             chip.title = 'Awaiting AI realization — your edit is queued for the agent to implement. '
                 + 'It clears on its own once the change lands in code.';
-            chip.contentEditable = 'false';
+            const label = document.createElement('span');
+            label.className = 'ce-realize-label';
+            label.textContent = 'realizing';
+            chip.append(label);
+            if (onWithdraw) {
+                const x = document.createElement('button');
+                x.type = 'button';
+                x.className = 'ce-realize-withdraw';
+                x.textContent = '✕';
+                x.title = 'Withdraw — cancel the AI realization (keeps your text)';
+                x.addEventListener('mousedown', ev => ev.preventDefault());
+                x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); onWithdraw(fid); });
+                chip.append(x);
+            }
             return chip;
         }, { side: 1, key: 'hold-' + fid }));
     });
@@ -63,14 +82,15 @@ export const HoldDecorations = Extension.create<HoldDecorationsOptions>({
 
     addProseMirrorPlugins() {
         const getHeld = (): Set<string> => this.options.getHeld();
+        const onWithdraw = this.options.onWithdraw;
         return [
             new Plugin({
                 key: holdKey,
                 state: {
-                    init: (_c, state) => buildHoldDecorations(state.doc, getHeld()),
+                    init: (_c, state) => buildHoldDecorations(state.doc, getHeld(), onWithdraw),
                     apply: (tr, old, _o, newState) => {
                         if (tr.getMeta(HOLDS_UPDATED) || tr.docChanged) {
-                            return buildHoldDecorations(newState.doc, getHeld());
+                            return buildHoldDecorations(newState.doc, getHeld(), onWithdraw);
                         }
                         return old.map(tr.mapping, tr.doc);
                     },

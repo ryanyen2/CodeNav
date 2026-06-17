@@ -417,6 +417,7 @@ function renderDocHost(): HTMLElement {
         onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdraw: s => vscode.postMessage({ kind: 'suggest-withdraw', id: s.id }),
+        onWithdrawRealization: featureId => vscode.postMessage({ kind: 'withdraw-realization', featureId }),
         onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
         onConsult: url => vscode.postMessage({ kind: 'open-link', url }),
         onCommentCreate: (doc, thread) => vscode.postMessage({ kind: 'comment-create', doc, thread }),
