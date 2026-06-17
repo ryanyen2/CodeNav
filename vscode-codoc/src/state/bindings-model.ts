@@ -149,6 +149,12 @@ export interface SidecarData {
     // v5: loop-computed per-feature drift/trust signal (questioned | binding-lost).
     // `followed` features are absent (no badge). Re-emitted from drift.json.
     feature_drift?: Record<string, FeatureDrift>;
+    // v5 (U5): per-feature realize-divergence — a feature changed BEYOND a
+    // directive's target during a realization (reason "scope"), surfaced for
+    // "review what the AI did" (F3). Re-emitted from resolution.json, filtered to
+    // features whose surfaced proposal is still pending. Faithful realizations are
+    // absent (their badge just clears).
+    feature_resolution?: Record<string, string>;
 }
 
 /** The derived kind hint for a feature, if any (v5). Suppressed/retired tags are
@@ -167,6 +173,14 @@ export function seeAlsoForFeature(sidecar: SidecarData, featureId: string): SeeA
  *  excluded loop-side, so they are always `undefined` here. */
 export function driftForFeature(sidecar: SidecarData, featureId: string): FeatureDrift | undefined {
     return sidecar.feature_drift?.[featureId];
+}
+
+/** Features flagged as a DIVERGENT realization (U5): a code-implying edit was
+ *  realized, but the agent changed THIS feature beyond the one you edited — surfaced
+ *  for "review what the AI did" (F3). `{feature_id → reason}`; empty = nothing to
+ *  review (every realization so far was faithful). Tolerant default for old sidecars. */
+export function divergentFeatures(sidecar: SidecarData): Record<string, string> {
+    return sidecar.feature_resolution ?? {};
 }
 
 /** Features "awaiting AI realization" — the daemon-computed doc-wins hold set

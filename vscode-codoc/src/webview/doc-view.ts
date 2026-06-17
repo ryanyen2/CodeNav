@@ -43,6 +43,10 @@ let selectedId: string | null = null;
 // Features awaiting AI realization (the daemon's hold set) — drives the calm
 // "being realized" badge on tree rows. Mirrors the editor's heading badge.
 let awaitingAI = new Set<string>();
+// Features whose realization DIVERGED (U5) — the agent changed them beyond the
+// feature you edited; flagged "review what the AI did" alongside the surfaced
+// proposal. fid → reason ("scope").
+let divergent: Record<string, string> = {};
 // Focus dimming (WS5): when a feature is focused, its dependency neighbours stay at
 // full opacity (depends-on tinted one hue, used-by another) and everything else dims.
 // Null = no dimming (the focused feature has no dependencies to spotlight).
@@ -356,6 +360,13 @@ function appendRow(parent: HTMLElement, id: string): void {
         b.title = 'Awaiting AI realization — your edit is queued for the agent to implement.';
         row.append(b);
     }
+    // "review what the AI did": a realization changed this feature beyond the one you
+    // edited (U5 scope divergence). The change itself shows as a proposal below.
+    if (divergent[id]) {
+        const b = el('span', 'badge divergent');
+        b.title = 'Review — the AI changed this while realizing another of your edits.';
+        row.append(b);
+    }
     if (!n.realized) row.append(el('span', 'badge unrealized'));
     if (n.proposal?.op === 'amend') row.append(el('span', 'badge amend'));
     if (n.proposal?.op === 'retire') row.append(el('span', 'badge retire'));
@@ -591,6 +602,7 @@ window.addEventListener('message', ev => {
     lastRev = msg.payload.rev;
     payload = msg.payload;
     awaitingAI = new Set(payload.awaitingAI ?? []);
+    divergent = payload.divergent ?? {};
     // endApplying MUST stay after the stale-rev guard — a stale (dropped) post must
     // not clear the optimistic applying state for a verdict still in flight.
     endApplying();

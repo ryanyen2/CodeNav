@@ -518,6 +518,25 @@ def _live_drift(store: Store, drift: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def _live_resolution(store: Store, resolution: dict[str, str]) -> dict[str, str]:
+    """Filter the loop-computed realize-divergence map (U5) against live store state
+    (pure store reads). A divergence flag is only meaningful while its surfaced
+    proposal is still pending review: an interactive re-emit after the human
+    accepts/rejects that proposal must drop the flag (the loop's own prune handles
+    the daemon path; this covers the no-loop re-render). Also drop gone/retired
+    features."""
+    if not resolution:
+        return resolution
+    pend = {e.op.feature_id for e in store.pending_events() if e.op.feature_id}
+    out: dict[str, str] = {}
+    for fid, reason in resolution.items():
+        f = store.get_feature(fid)
+        if f is None or f.retired or fid not in pend:
+            continue
+        out[fid] = reason
+    return out
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -552,7 +571,7 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
                 {"symbol": b.symbol_path, "feature_id": f.id, "feature_title": f.title}
             )
 
-    from codoc.loop.edits import hold_set, read_drift
+    from codoc.loop.edits import hold_set, read_drift, read_resolution
 
     # Compute feature-coupling edges ONCE and share them between the feature_edges
     # slot and _compute_see_also (which is derived from the same edges).
@@ -585,6 +604,12 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # retired/removed feature, no longer shows a contradictory badge before the
         # next loop pass. `followed` features are absent.
         "feature_drift": _live_drift(store, read_drift(codoc_dir)),
+        # v5 (U5): the per-feature realize-divergence signal — a feature changed
+        # BEYOND a directive's target ("scope") during a realization, surfaced for
+        # "review what the AI did" (F3). Re-emitted from the loop-computed
+        # resolution.json, filtered to features whose surfaced proposal is still
+        # pending (a resolved one drops the flag). Faithful realizations are absent.
+        "feature_resolution": _live_resolution(store, read_resolution(codoc_dir)),
     }
     dest = Path(codoc_dir) / BINDINGS_FILENAME
     tmp = dest.with_suffix(".json.tmp")

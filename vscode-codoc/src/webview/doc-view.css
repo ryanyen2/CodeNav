@@ -263,6 +263,13 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .badge.unrealized { background: transparent; border: 1px dashed var(--fg-muted); box-sizing: border-box; }
 /* pending code-ahead change → direction colour (kind is shown by shape, not the dot) */
 .badge.amend, .badge.retire { background: var(--dir-review); }
+/* divergent realization (U5) → a review dot in the direction colour with a faint halo,
+   so "the AI changed this beyond your edit" reads as needing attention next to the
+   plain amend/retire dot. Status axis: no new hue (reuses --dir-review). */
+.badge.divergent {
+    background: var(--dir-review);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--dir-review) 35%, transparent);
+}
 
 /* live agent activity = STATUS axis: MOTION distinguishes write (pulsing) from read (steady), not hue */
 .badge.active-write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }

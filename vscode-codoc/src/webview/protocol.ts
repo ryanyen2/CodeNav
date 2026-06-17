@@ -139,6 +139,11 @@ export interface DocPayload {
      *  calm "being realized" badge in the single-surface model (U3); a faithful
      *  realization clears the feature from this set. Absent on legacy payloads. */
     awaitingAI?: string[];
+    /** Features whose realization DIVERGED (U5): the agent changed this feature beyond
+     *  the one you edited — flagged for "review what the AI did" (F3). `{fid → reason}`.
+     *  The change itself renders as a pending proposal; this adds the at-a-glance cue.
+     *  Faithful realizations are absent. Legacy payloads omit it. */
+    divergent?: Record<string, string>;
     /** Persisted webview prefs: the glance-mode toggle, restored from workspaceState so
      *  it survives a reload. */
     prefs?: WebviewPrefs;

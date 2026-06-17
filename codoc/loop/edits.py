@@ -52,6 +52,7 @@ from codoc.loop.filenames import (
     EDITS_FILENAME,
     REALIZE_FILENAME,
     REALIZE_MANIFEST_FILENAME,
+    RESOLUTION_FILENAME,
 )
 from codoc.loop.fsio import atomic_write_json, read_json
 
@@ -297,3 +298,36 @@ def merge_drift(
               if fid not in in_scope}
     merged.update(fresh)
     return write_drift(codoc_dir, merged)
+
+
+# ─── resolution.json — the loop-computed realize-divergence signal (U5) ───────
+#
+# When a realize epoch is active (a manifest is queued), Loop A classifies each
+# directive's realization (divergence.classify_realization) and records the
+# DIVERGENT targets here — ``{target_feature_id: "scope"|"intent"}``. A FAITHFUL
+# realization is the ABSENCE of an entry: its badge simply clears when the queue
+# drains, no review surface (F2). A divergent one keeps an entry so the sidecar
+# re-emits it as ``feature_resolution`` and the IDE flags "review what the AI did"
+# on top of the surfaced proposals (F3). Cleared (written empty) on any pass with
+# no active epoch, so a stale signal never lingers past its directive.
+
+def resolution_path(codoc_dir: str | Path) -> Path:
+    return Path(codoc_dir) / RESOLUTION_FILENAME
+
+
+def write_resolution(codoc_dir: str | Path, divergent: dict[str, str]) -> Path:
+    """Persist the realize-divergence map (``target_feature_id → reason``); only
+    divergent targets are stored. Always written (an empty map clears a stale
+    signal once the epoch that raised it has drained)."""
+    dest = resolution_path(codoc_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(dest, {"version": 1, "divergent": dict(divergent)})
+    return dest
+
+
+def read_resolution(codoc_dir: str | Path) -> dict[str, str]:
+    """The last loop-computed realize-divergence map (``feature_id → reason``).
+    Tolerant: a missing/corrupt file degrades to ``{}`` (no review flags)."""
+    data = read_json(resolution_path(codoc_dir), default={})
+    out = data.get("divergent") if isinstance(data, dict) else None
+    return dict(out) if isinstance(out, dict) else {}

@@ -17,8 +17,12 @@ from dataclasses import dataclass, field
 from codoc.agent.tree_update import propose_tree_update
 from codoc.loop import edits as edits_channel
 from codoc.loop.apply import apply_op, derive_auto_ops, should_auto_apply
-from codoc.loop.edits import DRIFT_BINDING_LOST, DRIFT_QUESTIONED, merge_drift, write_drift
+from codoc.loop.edits import (
+    DRIFT_BINDING_LOST, DRIFT_QUESTIONED, merge_drift, write_drift,
+    read_resolution, write_resolution,
+)
 from codoc.loop.classify import suppressed_by_hold
+from codoc.loop.divergence import Divergence, Realization, classify_realization
 from codoc.loop.diff import ChangeSet, ChunkRef, compute_changeset
 from codoc.loop.subtree import select_relevant_subtree
 from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
@@ -315,6 +319,10 @@ class LoopAResult:
     llm_called: bool = False
     impacted: list[str] = field(default_factory=list)         # feature IDs of upstream dependents
     held_back: int = 0  # intent ops suppressed by a doc-wins hold (classify row 13)
+    # U5: realize-divergence outcome for this pass — {receiving feature_id → reason}
+    # for features changed BEYOND a directive's target (scope divergence). A faithful
+    # realization records nothing (its badge just clears). Persisted to resolution.json.
+    realize_outcomes: dict[str, str] = field(default_factory=dict)
 
     def summary(self) -> str:
         auto = ", ".join(f"{n} {k}" for k, n in sorted(self.auto.items())) or "none"
@@ -328,6 +336,8 @@ class LoopAResult:
             parts.append(f"{len(self.impacted)} impacted features")
         if self.held_back:
             parts.append(f"held {self.held_back} op(s) — doc edit pending")
+        if self.realize_outcomes:
+            parts.append(f"{len(self.realize_outcomes)} divergent realization(s)")
         return " · ".join(parts)
 
 
@@ -368,11 +378,57 @@ def apply_changeset(
     file_scope: set[str] | None = None,
 ) -> LoopAResult:
     held = held or set()
+    caused_by_map = caused_by_map or {}
 
     def _cause(op: NodeOp) -> str:
-        if caused_by_map and op.feature_id and op.feature_id in caused_by_map:
+        if op.feature_id and op.feature_id in caused_by_map:
             return caused_by_map[op.feature_id]
         return default_caused_by
+
+    # U5 — realize-divergence: directive id → its target feature (inverse of
+    # caused_by_map), and the per-directive Realization built from the proposed
+    # intent ops produced this pass. Lets us tell a directive's ON-TARGET work from
+    # a change it made to ANOTHER feature (scope divergence) at end of pass.
+    dir_target = {d: f for f, d in caused_by_map.items()}
+    realizations: dict[str, Realization] = {}
+
+    def _note_realization(op: NodeOp, cause: str) -> None:
+        """Record a PROPOSED intent op produced under a realize directive so the
+        epoch's faithfulness can be classified. On-target work is expected; an op on
+        another feature / a new node is the scope-divergence signal (F3)."""
+        if not cause or cause not in dir_target:
+            return
+        r = realizations.setdefault(cause, Realization(target_feature_id=dir_target[cause]))
+        if op.kind is NodeOpKind.ADD_NODE:
+            r.added_feature = True
+        elif op.feature_id:
+            r.touched_feature_ids.add(op.feature_id)
+
+    def _persist_resolution(fresh: dict[str, str]) -> None:
+        """Persist the realize-divergence map (receiving feature → reason): retain
+        prior entries whose feature still has a pending proposal to review, then add
+        this pass's fresh divergences (each backed by a pending proposal). Self-clears
+        as proposals are accepted/rejected. Bare callers (no codoc_dir) skip."""
+        if codoc_dir is None:
+            return
+        pend = {e.op.feature_id for e in store.pending_events() if e.op.feature_id}
+        keep = {f: r for f, r in read_resolution(codoc_dir).items() if f in pend}
+        for f, r in fresh.items():
+            if f in pend:
+                keep[f] = r
+        write_resolution(codoc_dir, keep)
+
+    def _classify_realizations() -> dict[str, str]:
+        """End-of-pass: classify each directive's realization → {receiving feature →
+        reason} for the divergent ones (faithful records nothing — its badge clears)."""
+        fresh: dict[str, str] = {}
+        for r in realizations.values():
+            verdict = classify_realization(r)
+            if verdict is Divergence.FAITHFUL:
+                continue
+            for recv in r.touched_feature_ids - {r.target_feature_id}:
+                fresh[recv] = verdict.value
+        return fresh
 
     # GC stale proposals first so a no-op pass can converge to in_sync even when
     # there is no change set to process. Bindings this pass is about to remove
@@ -401,6 +457,7 @@ def apply_changeset(
         # feature that re-followed since the last pass loses its badge. (Scoped
         # passes still preserve out-of-scope badges via the merge.)
         _persist_drift_map({})
+        _persist_resolution({})  # prune resolved divergences (no new realize ops this pass)
         return LoopAResult(auto={"gc": gc} if gc else {})
 
     # Feature ids whose prose was AMENDed this pass — drained into _compute_drift
@@ -519,6 +576,7 @@ def apply_changeset(
         # No LLM pass — but `modified`/`removed` chunks still carry drift the badge
         # must reflect (a run_loop_a pass with modified-only changes lands here).
         _persist_drift()
+        _persist_resolution({})  # no realize ops this pass → only prune resolved ones
         return result
 
     # 3. The single LLM pass.
@@ -588,10 +646,12 @@ def apply_changeset(
         if op.kind is NodeOpKind.AMEND and op.feature_id:
             amended.add(op.feature_id)
         applied = should_auto_apply(op, store)
+        cause = _cause(op)
         apply_op(op, store, source=source, applied=applied, fp_lookup=fp, th_lookup=th,
-                 caused_by=_cause(op))
+                 caused_by=cause)
         if not applied:
             result.proposed.append(op)
+            _note_realization(op, cause)  # U5: track a proposed op against its directive
         elif op.kind not in SAFE_OPS:
             result.applied_structural.append(op)
         else:
@@ -607,6 +667,11 @@ def apply_changeset(
     covered_by_ops = {b for op in ops for b in op.bindings}
     _cover_uncovered_adds(added_unbound, covered_by_ops, store, result, fp, th, source,
                           cause=_cause)
+    # U5: classify this epoch's realizations → flag features changed beyond a
+    # directive's target (scope divergence) for "review what the AI did" (F3).
+    fresh_div = _classify_realizations()
+    result.realize_outcomes = fresh_div
+    _persist_resolution(fresh_div)
     _persist_drift()
     return result
 
