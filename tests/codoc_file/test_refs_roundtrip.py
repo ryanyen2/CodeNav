@@ -160,7 +160,8 @@ def test_sidecar_hold_detail_from_manifest(store, tmp_path):
     # or read_manifest treats it as stale.
     edits_channel.write_manifest(tmp_path, [
         edits_channel.Directive(id="d-aaaa1111", feature_id=auth.id, kind="amend",
-                                caused_by="e-1", text="UPDATE FEATURE: ...")])
+                                caused_by="e-1", text="UPDATE FEATURE: ...",
+                                baseline="Handles login.")])
     (tmp_path / REALIZE_FILENAME).write_text("### 1. ⟨d-aaaa1111⟩ UPDATE FEATURE: ...\n")
     # `util` is held only by a live intent (no directive) → rail but no gloss.
     edits_channel._write_edits_file(
@@ -174,6 +175,7 @@ def test_sidecar_hold_detail_from_manifest(store, tmp_path):
     assert auth.id in detail and util.id not in detail       # only the directive carries detail
     assert detail[auth.id]["kind"] == "amend"
     assert detail[auth.id]["intent"]                         # a non-empty plain-language gloss
+    assert detail[auth.id]["baseline"] == "Handles login."   # pre-edit text → IDE diffs it
 
 
 def test_sidecar_by_file_index(store, tmp_path):

@@ -570,7 +570,13 @@ def _hold_detail(store: Store, codoc_dir: str | Path) -> dict[str, dict]:
         f = store.get_feature(d.feature_id)
         if f is None or f.retired:
             continue
-        out[d.feature_id] = {"kind": d.kind, "intent": _intent_gloss(d.kind)}
+        out[d.feature_id] = {
+            "kind": d.kind,
+            "intent": _intent_gloss(d.kind),
+            # The pre-edit description (AMEND only) — the IDE diffs it against the live
+            # text to underline what changed. Empty for ADD/RETIRE/steer.
+            "baseline": d.baseline,
+        }
     return out
 
 

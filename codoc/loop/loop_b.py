@@ -262,6 +262,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # (op, feature_id-or-"", caused_by) per code-implying edit — feature_id feeds
     # the doc-wins hold set, caused_by the causality chain (suggestion/event id).
     directive_ops: list[tuple[NodeOp, str, str]] = []
+    # feature_id → its description BEFORE this pass mutated it. Captured for AMEND user
+    # edits and carried into the manifest as the directive's `baseline`, so the IDE can
+    # diff baseline↔current and underline the text the user actually changed (the
+    # in-situ "what's pending" highlight). First edit per feature wins.
+    baselines: dict[str, str] = {}
 
     # U6 — withdraw: prune any cancelled directives from the queue FIRST so the rest
     # of the pass (and step 3's manifest append) sees the survivors, and the hold for
@@ -333,6 +338,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     #    (edits.json); ops on features with no annotation default to human/pen
     #    (a raw-text edit).
     for op in diff.user_ops:
+        # Snapshot the pre-edit description BEFORE apply_op mutates the store, so the
+        # IDE can later show what changed (AMEND only; first edit per feature wins).
+        if op.kind is NodeOpKind.AMEND and op.feature_id and op.feature_id not in baselines:
+            prev = store.get_feature(op.feature_id)
+            baselines[op.feature_id] = (prev.description or "") if prev else ""
         ann = annotations.get(op.feature_id or "")
         ev = apply_op(op, store, source="user", applied=True,
                       actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
@@ -483,7 +493,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # The reverse order would orphan realize.md: the next pass would see an
     # empty manifest and clobber the queued items.
     edits_channel.write_manifest(codoc_dir, existing + [
-        edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text)
+        edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text,
+                                baseline=baselines.get(fid, ""))
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ])
     _write_realize(codoc_dir, prompt)

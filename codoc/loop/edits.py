@@ -117,6 +117,8 @@ class Directive:
     text: str = ""     # the rendered directive body — lets a later Loop B pass
                        # APPEND to an in-flight queue (rebuild realize.md from
                        # old + new) instead of clobbering unimplemented items
+    baseline: str = ""  # the feature's description BEFORE this edit (AMEND only) — lets
+                        # the IDE diff baseline↔current and underline the changed text
 
 
 def edits_path(codoc_dir: str | Path) -> Path:
@@ -288,7 +290,7 @@ def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(dest, {"version": 1, "directives": [
         {"id": d.id, "feature_id": d.feature_id, "kind": d.kind,
-         "caused_by": d.caused_by, "text": d.text}
+         "caused_by": d.caused_by, "text": d.text, "baseline": d.baseline}
         for d in directives
     ]})
     return dest
@@ -307,7 +309,7 @@ def read_manifest(codoc_dir: str | Path) -> list[Directive]:
     data = read_json(path, default={})
     return [Directive(id=d.get("id") or "", feature_id=d.get("feature_id") or "",
                       kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
-                      text=d.get("text") or "")
+                      text=d.get("text") or "", baseline=d.get("baseline") or "")
             for d in data.get("directives", [])]
 
 
