@@ -75,6 +75,9 @@ export interface HoldDetail {
     kind: string;
     /** One-line plain-language summary of the work — the pending rail's hover title. */
     intent: string;
+    /** The feature's description BEFORE this edit (AMEND only) — the IDE diffs it against
+     *  the live text to underline what the author changed. Empty for ADD/RETIRE/steer. */
+    baseline?: string;
 }
 
 /** One See-Also neighbour (v5, `feature_see_also` slice): a coupled feature ranked by

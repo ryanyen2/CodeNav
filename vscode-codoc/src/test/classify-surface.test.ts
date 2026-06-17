@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import { codocSchema } from '../webview/tiptap/schema';
-import { buildHoldDecorations } from '../webview/tiptap/hold-decorations';
+import { buildHoldDecorations, changedRange } from '../webview/tiptap/hold-decorations';
 import { heldFeatures, emptySidecar, type SidecarData } from '../state/bindings-model';
 
 function twoFeatureDoc(): PMModelNode {
@@ -107,5 +107,38 @@ describe('pending-intent rail + underline (the in-situ "what is queued" signal)'
             { 'f-a': { kind: 'amend', intent: 'update the code to match your new intent' } });
         const rail = set.find().find(d => attrsOf(d)?.class === 'ce-pending-rail');
         expect(attrsOf(rail)?.title).toContain('update the code to match your new intent');
+    });
+
+    it('underlines the text the author CHANGED when a baseline is provided', () => {
+        const doc = codocSchema().nodeFromJSON({
+            type: 'doc',
+            content: [
+                { type: 'featureHeading', attrs: { fid: 'f-a', level: 0, retired: false, realized: true }, content: [{ type: 'text', text: 'Auth' }] },
+                { type: 'paragraph', content: [{ type: 'text', text: 'Login and sessions, now with tokens.' }] },
+            ],
+        });
+        const set = buildHoldDecorations(doc, new Set(['f-a']), undefined,
+            { 'f-a': { kind: 'amend', intent: 'x', baseline: 'Login and sessions.' } });
+        expect(classesOf(set)).toContain('ce-intent-underline'); // the changed tail is marked
+    });
+});
+
+describe('changedRange (pending-change word diff)', () => {
+    it('is null when the text is unchanged', () => {
+        expect(changedRange('abc def', 'abc def')).toBeNull();
+    });
+    it('spans an inserted word', () => {
+        const cur = 'rewards poems by length.';
+        const r = changedRange('rewards by length.', cur)!;
+        expect(r).not.toBeNull();
+        expect(cur.slice(r.start, r.end)).toContain('poems');
+    });
+    it('spans a replaced word', () => {
+        const cur = 'the slow fox';
+        const r = changedRange('the quick fox', cur)!;
+        expect(cur.slice(r.start, r.end)).toContain('slow');
+    });
+    it('is null for a pure trailing deletion (nothing added in current)', () => {
+        expect(changedRange('one two three', 'one two')).toBeNull();
     });
 });
