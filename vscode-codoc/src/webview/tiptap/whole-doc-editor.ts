@@ -149,6 +149,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let settleTimer = 0;
     let suppressUpdate = false;          // true while we programmatically setContent
     let currentSuggestions: Suggestion[] = [];
+    // Signature of the agent code-ahead AMENDs last LOADED into the doc as engine
+    // marks. setDoc reloads when this changes even if the baseline text is identical
+    // — so a newly-arrived agent proposal's marks appear, and a rejected one's marks
+    // clear (reject leaves the baseline unchanged, so only the signature moves).
+    let lastProposalsSig = '';
     // Doc-ahead suggestions captured locally this session but not yet echoed by the
     // host (keyed by suggestion id). They keep the in-flight inline edit from being
     // reverted by a repost that arrives before the host acknowledges it (WS4 race).
@@ -175,13 +180,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             AuthorStamp.configure({ controller: opts.controller, now: () => Date.now() }),
             CodeRefSuggestion.configure({ getSymbols: opts.getSymbols, char: '@' }),
             SuggestionDecorations.configure({
+                // Agent → human (code-ahead) proposals: amend diffs render from engine
+                // marks in the doc (host-injected); this plugin anchors their
+                // accept/reject affordance and the add/move/retire widgets. No
+                // dual-state — the human never composes an inline suggestion (U3).
                 getSuggestions: () => effectiveSuggestions(),
-                // No dual-state in the single-surface model: the human never composes a
-                // doc-ahead suggestion inline (they just commit), so there is no
-                // active-feature suppression. Code-ahead (agent → human) proposals
-                // always render their tracked change + accept/reject. (U4 moves these
-                // onto the vendored engine's marks.)
-                getActiveFid: () => null,
                 handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw },
             }),
             DependencyDecorations.configure({
@@ -286,6 +289,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         for (const s of currentSuggestions) byId.set(s.id, s);
         for (const { s } of pendingDocAhead.values()) if (!byId.has(s.id)) byId.set(s.id, s);
         return [...byId.values()];
+    }
+
+    /** Signature of the agent code-ahead AMENDs (the proposals the host materializes
+     *  as engine marks in the payload doc). Changes when a proposal appears, mutates,
+     *  or resolves — the setDoc reload trigger keys on it so the marks render/clear
+     *  even when the baseline `tree.codoc` text is unchanged (notably on reject). */
+    function proposalsSig(): string {
+        return currentSuggestions
+            .filter(s => s.direction === 'code-ahead' && s.kind === 'amend')
+            .map(s => `${s.id}:${s.titleNew ?? ''}:${s.descNew ?? ''}`)
+            .join('|');
     }
 
     function scheduleSettle(): void {
@@ -731,11 +745,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // this is the incoming doc unchanged in the common case (the splice is a
             // dormant no-op kept until the suggestion machinery is retired in U8).
             const merged = applyDocAheadSuggestions(doc, effectiveSuggestions());
-            // Skip the reload when the rendered content is unchanged — the common case
-            // right after a settle round-trips; reloading would reset the caret + drop
-            // local marks. Only reload when a real content change (e.g. a loop) arrives.
+            // Skip the reload when BOTH the baseline text AND the agent-proposal set
+            // are unchanged — the common case right after a settle round-trips;
+            // reloading would reset the caret. Reload when the baseline text changed
+            // OR an agent proposal appeared/resolved (its marks live in `merged` but
+            // render to the same baseline, so a text-only compare would miss them).
+            const sig = proposalsSig();
             const sameText = renderTreeFromDoc(merged) === renderTreeFromDoc(editor.getJSON() as PMNode);
-            if (sameText) { markSaving(''); return; }
+            if (sameText && sig === lastProposalsSig) { markSaving(''); return; }
+            lastProposalsSig = sig;
 
             const keepFid = activeFid();          // stable anchor for existing features
             const keepIndex = activeHeadingIndex(); // fallback for a brand-new (fid:null) heading

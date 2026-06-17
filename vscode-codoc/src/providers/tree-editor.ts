@@ -22,6 +22,7 @@ import { reconcileDoc } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
+import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
 import {
     CommentThread, commentsByFid, injectComments, reconcileComments, reanchorComments,
     stripOrphanComments,
@@ -415,6 +416,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             pitches[fid] = (meta.pitch && meta.pitch.trim()) ? meta.pitch : meta.title;
         }
 
+        // Agent → human (U4): materialize each code-ahead AMEND as the engine's
+        // tracked-change marks in the PAYLOAD doc only. tree.doc.json (docFile.doc,
+        // persisted above) stays the clean human baseline; the baseline-aware
+        // serializer renders the marked doc back to the same tree.codoc. add/move/
+        // retire stay compact widgets (suggestion-decorations.ts).
+        const docForPayload = applyAgentProposals(doc, agentAmendsFrom(suggestions));
+
         return {
             nodes,
             roots,
@@ -422,7 +430,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             sync,
             rootName,
             pendingEventIds,
-            doc,
+            doc: docForPayload,
             symbols: this.buildSymbols(sidecar),
             suggestions,
             threads,

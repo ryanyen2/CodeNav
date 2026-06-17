@@ -191,8 +191,9 @@ function docAheadAmendByFid(suggestions: Suggestion[]): Map<string, Suggestion> 
 
 /** Rebuild a whole-tree doc, letting `replace(fid, heading, descBlocks)` swap a
  *  feature's heading + description blocks (return null to keep it unchanged). The
- *  shared spine for the two suggestion transforms below — pure, no editor state. */
-function rebuildFeatures(
+ *  shared spine for the suggestion transforms below AND the agent-proposal mark
+ *  materializer (agent-proposals.ts) — pure, no editor state. */
+export function rebuildFeatures(
     doc: PMNode,
     replace: (fid: string, heading: PMNode, descBlocks: PMNode[]) => { heading: PMNode; descBlocks: PMNode[] } | null,
 ): PMNode {

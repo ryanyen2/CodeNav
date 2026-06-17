@@ -418,6 +418,15 @@ del[data-change-id] {
     text-decoration: line-through; text-decoration-color: var(--author-color, var(--fg-muted));
     color: var(--fg-muted);
 }
+/* Per-agent tint (F7): the engine marks carry the author role in data-author-id; map
+   each to its --ink-* so two agents' proposals read as distinct ink. Themeable here
+   (the mark's authorColor attr is left blank so this CSS, not an inline style, drives
+   the hue). The human direction never produces these marks (KTD2). */
+ins[data-author-id="claude-code"], del[data-author-id="claude-code"] { --author-color: var(--ink-claude); }
+ins[data-author-id="codex"],       del[data-author-id="codex"]       { --author-color: var(--ink-codex); }
+ins[data-author-id="gemini"],      del[data-author-id="gemini"]      { --author-color: var(--ink-gemini); }
+ins[data-author-id="cursor"],      del[data-author-id="cursor"]      { --author-color: var(--ink-cursor); }
+ins[data-author-id="loop"],        del[data-author-id="loop"]        { --author-color: var(--ink-claude); }
 /* a pure formatting change (no text add/del) — a quiet dotted underline in author tint */
 [data-change-id].codoc-format-change,
 span[data-change-id] { text-decoration-style: solid; }

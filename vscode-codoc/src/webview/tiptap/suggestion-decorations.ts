@@ -1,18 +1,17 @@
 /**
- * suggestion-decorations.ts — renders the unified suggestion list as PERSISTENT
- * inline diff widgets in the whole-doc editor (R4). A diff sits beneath its
- * feature heading and stays until resolved:
+ * suggestion-decorations.ts — anchors the resolution affordances for the unified
+ * suggestion list in the whole-doc editor (R4):
  *   • code-ahead (agent → human): Reject / Accept → inbox.json verdict.
- *   • doc-ahead  (human → agent): "awaiting implementation" + Withdraw.
- * Word-level rendering over block-level {old,new} storage (doc-diff.ts).
+ *   • doc-ahead  (human → agent): "awaiting implementation" + Withdraw (legacy; U8).
+ * AMEND diffs render from the engine's insertion/deletion marks materialized in the
+ * doc by the host (agent-proposals.applyAgentProposals); add/move/retire keep a
+ * compact widget here. (Plus the per-feature "Connections" threads line below.)
  */
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
-import { wordDiff, compactRuns } from '../../state/doc-diff';
 import { directionLabel, directionActions } from '../../state/grammar';
-import { textToInlineRuns, codeRefToText, type CodeRefAttrs } from '../../state/pm-doc';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { ThreadsData, ThreadTarget } from '../protocol';
 import { THREADS_COLLAPSE_AT } from '../protocol';
@@ -26,10 +25,6 @@ export interface SuggestionHandlers {
 export interface SuggestionDecorationsOptions {
     getSuggestions: () => Suggestion[];
     handlers: SuggestionHandlers;
-    /** The feature the caret is currently in — its suggestion renders as LIVE editable
-     *  text (no tracked-change overlay) so the user keeps composing inline; every other
-     *  suggested feature shows the inline tracked change. */
-    getActiveFid: () => string | null;
 }
 
 export const SUGGESTIONS_UPDATED = 'codocSuggestionsUpdated';
@@ -41,8 +36,6 @@ function elc(tag: string, cls?: string, text?: string): HTMLElement {
     if (text != null) e.textContent = text;
     return e;
 }
-
-const WD_CLASS = { same: 'wd-same', del: 'wd-del', ins: 'wd-ins' } as const;
 
 function actionButton(label: string, cls: string, onClick: () => void): HTMLButtonElement {
     const b = document.createElement('button');
@@ -130,71 +123,14 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
     return box;
 }
 
-// ── inline tracked-change rendering (the Google-Docs look) ─────────────────────
-// An AMEND suggestion renders IN PLACE: the title diff is struck/inserted inline on
-// the heading; the description's live paragraphs are hidden and the tracked change is
-// rendered where they sat (strike removed words, underline inserted words, refs as
-// chips). The proposed text is shown standalone from the {old,new} STRINGS — robust
-// against ref atoms (no fragile char→position mapping over the live doc). When the
-// caret is in the feature it renders nothing (the live editable prose shows through),
-// so the user keeps composing the suggestion inline. add/move/retire keep a compact
-// widget (they can't be expressed as in-prose tracked changes).
+// ── agent AMEND affordance (the tracked-change marks render the diff) ───────────
+// The {old,new} diff is materialized as engine insertion/deletion marks in the doc
+// (host-side agent-proposals.applyAgentProposals); the engine + CSS render the
+// Google-Docs look (struck old / inserted new, agent-tinted). Here we only place the
+// compact accept/reject (or withdraw) affordance beneath the heading. add/move/retire
+// keep their own compact widget (they can't be expressed as in-prose tracked changes).
 
-/** Render a diff run's text into `out`, turning `[label](codoc:…)` refs into chips so
- *  the tracked change reads like prose, not raw markdown. `cls` ∈ wd-same/del/ins. */
-function runDom(text: string, cls: string, out: Node[]): void {
-    for (const r of textToInlineRuns(text)) {
-        if (r.type === 'text') { if (r.text) out.push(elc('span', cls, r.text)); }
-        else if (r.type === 'codeRef') {
-            const a = r.attrs as unknown as CodeRefAttrs;
-            const chip = elc('span', cls + ' ce-tc-ref', a.label || leafSym(a.symbol ?? a.file) || a.file);
-            chip.title = codeRefToText(a);
-            out.push(chip);
-        }
-    }
-}
-
-/** Paragraph-aligned word-diff render of a description change. */
-function trackedDesc(descOld: string, descNew: string): HTMLElement {
-    const wrap = elc('div', 'ce-tc');
-    const olds = descOld ? descOld.split(/\n{2,}/) : [];
-    const news = descNew ? descNew.split(/\n{2,}/) : [];
-    const n = Math.max(olds.length, news.length);
-    for (let i = 0; i < n; i++) {
-        const o = olds[i] ?? '';
-        const ne = news[i] ?? '';
-        const p = elc('p', 'ce-tc-p');
-        const nodes: Node[] = [];
-        if (o && !ne) runDom(o, 'wd-del', nodes);
-        else if (!o && ne) runDom(ne, 'wd-ins', nodes);
-        else if (o === ne) runDom(o, 'wd-same', nodes);
-        else for (const run of compactRuns(wordDiff(o, ne))) runDom(run.s, WD_CLASS[run.t], nodes);
-        nodes.forEach(x => p.append(x));
-        wrap.append(p);
-    }
-    return wrap;
-}
-
-/** Inline title tracked-change over the heading (titles are ref-free → char offset ==
- *  PM position, 1:1): strike removed words in place, insert new words as inline widgets. */
-function titleDecos(headingPos: number, titleOld: string, titleNew: string, key: string): Decoration[] {
-    const decos: Decoration[] = [];
-    const base = headingPos + 1; // heading content start
-    let off = 0;
-    for (const run of compactRuns(wordDiff(titleOld, titleNew))) {
-        if (run.t === 'same') { off += run.s.length; }
-        else if (run.t === 'del') {
-            decos.push(Decoration.inline(base + off, base + off + run.s.length, { class: 'ce-tc-del-inline' }));
-            off += run.s.length;
-        } else {
-            decos.push(Decoration.widget(base + off, () => elc('span', 'ce-tc-ins-inline', run.s), { side: 1, key: `${key}-ti-${off}` }));
-        }
-    }
-    return decos;
-}
-
-/** The compact resolution affordance (direction marker + accept/reject or withdraw).
- *  Replaces the old full card — the change itself is shown inline above it. */
+/** The compact resolution affordance (direction marker + accept/reject or withdraw). */
 function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
     const row = elc('div', 'ce-tc-actions ' + s.direction);
     const planned = isPlanned(s);
@@ -222,33 +158,18 @@ function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement 
     return row;
 }
 
-/** The inline tracked-change block placed where a feature's description sits (its live
- *  paragraphs are hidden by a node decoration while this shows). */
-function amendBlock(s: Suggestion, handlers: SuggestionHandlers, descChanged: boolean): HTMLElement {
-    const box = elc('div', `ce-tc-block ${s.direction}` + (isPlanned(s) ? ' planned' : '')
-        + (s.originRole === 'human' ? ' by-human' : ' by-agent'));
-    box.contentEditable = 'false';
-    if (descChanged) box.append(trackedDesc(s.descOld ?? '', s.descNew ?? ''));
-    box.append(amendActions(s, handlers));
-    return box;
-}
-
-interface FeatureLoc { headingPos: number; heading: PMModelNode; descBlocks: { pos: number; node: PMModelNode }[]; }
+interface FeatureLoc { headingPos: number; heading: PMModelNode; }
 
 function buildDecorations(
-    doc: PMModelNode, suggestions: Suggestion[], handlers: SuggestionHandlers, activeFid: string | null,
+    doc: PMModelNode, suggestions: Suggestion[], handlers: SuggestionHandlers,
 ): DecorationSet {
-    // Locate every feature: its heading + the non-heading blocks beneath it.
+    // Locate every feature heading (the amend diff renders from in-doc marks now, so
+    // we no longer need to track the description blocks for a hidden-overlay).
     const loc = new Map<string, FeatureLoc>();
-    let cur: FeatureLoc | null = null;
     doc.forEach((node, pos) => {
-        if (node.type.name === 'featureHeading') {
-            const fid = node.attrs.fid as string | null;
-            cur = { headingPos: pos, heading: node, descBlocks: [] };
-            if (fid) loc.set(fid, cur);
-        } else if (cur && node.type.name === 'paragraph') {
-            cur.descBlocks.push({ pos, node });
-        }
+        if (node.type.name !== 'featureHeading') return;
+        const fid = node.attrs.fid as string | null;
+        if (fid) loc.set(fid, { headingPos: pos, heading: node });
     });
 
     const decos: Decoration[] = [];
@@ -267,21 +188,11 @@ function buildDecorations(
             decos.push(Decoration.widget(after, () => makeWidget(s, handlers), { side: 1, key: 'sug-' + s.id }));
             continue;
         }
-        // amend — inline tracked change. Suppress the overlay only for a DOC-AHEAD
-        // suggestion whose feature the caret is in (the user is composing it live, so
-        // the live prose shows through). A CODE-AHEAD proposal must always render its
-        // tracked change + accept/reject, even with the caret inside, or it becomes
-        // non-actionable while editing that feature.
-        if (s.direction === 'doc-ahead' && s.featureId === activeFid) continue;
-        const titleOld = s.titleOld ?? '', titleNew = s.titleNew ?? '';
-        const descChanged = (s.descOld ?? '') !== (s.descNew ?? '');
-        if (titleOld !== titleNew && (l.heading.textContent || '') === titleOld) {
-            for (const d of titleDecos(l.headingPos, titleOld, titleNew, s.id)) decos.push(d);
-        }
-        if (descChanged) {
-            for (const b of l.descBlocks) decos.push(Decoration.node(b.pos, b.pos + b.node.nodeSize, { class: 'ce-tc-hidden' }));
-        }
-        decos.push(Decoration.widget(after, () => amendBlock(s, handlers, descChanged), { side: 1, key: 'sug-' + s.id }));
+        // amend — the tracked-change diff itself is materialized as engine ins/del
+        // marks in the doc by the host (agent-proposals.applyAgentProposals); the
+        // engine + CSS render it inline (struck old / inserted new, agent-tinted). We
+        // only anchor the compact accept/reject affordance after the heading.
+        decos.push(Decoration.widget(after, () => amendActions(s, handlers), { side: 1, key: 'sug-' + s.id }));
     }
     return DecorationSet.create(doc, decos);
 }
@@ -472,21 +383,20 @@ export const SuggestionDecorations = Extension.create<SuggestionDecorationsOptio
     name: 'suggestionDecorations',
 
     addOptions() {
-        return { getSuggestions: () => [], getActiveFid: () => null, handlers: { accept: () => {}, reject: () => {}, withdraw: () => {} } };
+        return { getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {}, withdraw: () => {} } };
     },
 
     addProseMirrorPlugins() {
         const getSuggestions = (): Suggestion[] => this.options.getSuggestions();
-        const getActiveFid = (): string | null => this.options.getActiveFid();
         const handlers = this.options.handlers;
         return [
             new Plugin({
                 key: decoKey,
                 state: {
-                    init: (_config, state) => buildDecorations(state.doc, getSuggestions(), handlers, getActiveFid()),
+                    init: (_config, state) => buildDecorations(state.doc, getSuggestions(), handlers),
                     apply: (tr, old, _oldState, newState) => {
                         if (tr.getMeta(SUGGESTIONS_UPDATED) || tr.docChanged) {
-                            return buildDecorations(newState.doc, getSuggestions(), handlers, getActiveFid());
+                            return buildDecorations(newState.doc, getSuggestions(), handlers);
                         }
                         return old.map(tr.mapping, tr.doc);
                     },
