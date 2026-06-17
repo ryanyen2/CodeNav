@@ -275,14 +275,15 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .badge.active-write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }
 .badge.active-read { background: var(--fg-muted); }
 
-/* "being realized" = STATUS axis (no hue): a code-implying edit committed by the human
-   and queued for the agent (the daemon hold set). A calm SLOW breathing ring — distinct
-   from active-write (solid fast pulse) and unrealized (static dashed ring). The live
-   ce-phase-* shimmer layers on top while the agent is actually mid-edit; this durable
-   badge says "code is catching up." Reduced-motion gates freeze it to a steady ring. */
-.badge.realizing {
+/* "pending" = STATUS axis (no hue beyond --accent): a code-implying doc edit (yours or
+   an AI's) that is QUEUED for the agent — it is NOT running. It is implemented only when
+   you run /codoc:sync. A dashed hollow ring with a slow pulse: distinct from active-write
+   (solid fast pulse) and unrealized (static dashed ring). The live ce-phase-* shimmer
+   layers on top ONLY while the agent is actually mid-edit during a sync — THAT is the real
+   "realizing." Reduced-motion freezes the pulse to a steady dashed ring. */
+.badge.pending {
     background: transparent;
-    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent);
     box-sizing: border-box;
     animation: breathe 2.6s ease-in-out infinite;
 }
@@ -327,8 +328,8 @@ body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
     /* fallback gate (the body-class rule below is authoritative in webviews — KTD4).
        Only the live animated elements remain after the read-view CSS was removed. */
-    .toolbar .status.realizing .dot, .badge.active-write, .badge.realizing,
-    .ce-realize-label,
+    .toolbar .status.realizing .dot, .badge.active-write, .badge.pending,
+    .ce-pending-dot,
     .codoc-feature-heading.ce-phase-editing::after {
         transition: none !important; animation: none !important;
     }
@@ -514,15 +515,18 @@ span[data-change-id] { text-decoration-style: solid; }
    code is catching up." No hue (status axis); the slow breathe matches the tree-pane
    dot, and reduced-motion gates freeze it. The node decoration (.ce-realizing) is a
    styling hook only — the chip carries the signal. */
-.ce-realize-badge {
+.ce-pending-badge {
     display: inline-flex; align-items: center; gap: 5px;
     margin-left: 10px; vertical-align: middle; user-select: none;
-    font: 10px var(--vscode-font-family); letter-spacing: 0.02em; line-height: 1.4;
-    color: var(--fg-muted);
-    padding: 0 5px 0 7px; border-radius: 9px;
-    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 24%, transparent);
 }
-.ce-realize-label { animation: breathe 2.6s ease-in-out infinite; }
+/* the pending marker: a dashed hollow accent ring, slow pulse — the heading-pane twin of
+   the tree row's .badge.pending. Means "queued for /codoc:sync", NOT "running now". */
+.ce-pending-dot {
+    width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box;
+    border: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+    background: transparent;
+    animation: breathe 2.6s ease-in-out infinite;
+}
 /* withdraw ✕ — cancels the AI realization (keeps the text). Quiet until hover. */
 .ce-realize-withdraw {
     border: none; background: transparent; cursor: pointer; padding: 0 1px;

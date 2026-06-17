@@ -354,10 +354,11 @@ function appendRow(parent: HTMLElement, id: string): void {
 
     if (n.activeMode === 'write') row.append(el('span', 'badge active-write'));
     else if (n.activeMode === 'read') row.append(el('span', 'badge active-read'));
-    // "being realized": a code-implying edit is queued for the agent (daemon hold set).
+    // "pending": a code-implying edit is QUEUED for the agent (daemon hold set) — NOT
+    // running. Implemented when you run /codoc:sync. The active shimmer is separate.
     if (awaitingAI.has(id)) {
-        const b = el('span', 'badge realizing');
-        b.title = 'Awaiting AI realization — your edit is queued for the agent to implement.';
+        const b = el('span', 'badge pending');
+        b.title = 'Pending — this edit is queued for the agent; run /codoc:sync to implement it (nothing is running yet).';
         row.append(b);
     }
     // "review what the AI did": a realization changed this feature beyond the one you

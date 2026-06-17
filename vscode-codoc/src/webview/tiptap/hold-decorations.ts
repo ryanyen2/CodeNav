@@ -58,25 +58,29 @@ export function buildHoldDecorations(
             const fid = node.attrs.fid as string | null;
             if (!fid || !held.has(fid)) { activeFid = null; return; }
             activeFid = fid;
-            // Heading: the calm node tint + the trailing "realizing" chip (the durable
-            // "live" cue; the substance lives on the rail's hover + the underline).
+            // Heading: a calm PENDING marker — a dashed hollow pulsing dot meaning
+            // "this edit is QUEUED for the agent; it is NOT running". It is implemented
+            // only when you run /codoc:sync; the active "realizing" shimmer is a separate
+            // signal (activity-decorations.ts, driven by the agent mid-sync). Hover shows
+            // the plain-language gloss of what's queued; the ✕ withdraws it.
+            const gloss = detail?.[fid]?.intent;
             decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'ce-realizing' }));
             decos.push(Decoration.widget(pos + node.nodeSize - 1, () => {
                 const chip = document.createElement('span');
-                chip.className = 'ce-realize-badge';
+                chip.className = 'ce-pending-badge';
                 chip.contentEditable = 'false';
-                chip.title = 'Awaiting AI realization — your edit is queued for the agent to implement. '
-                    + 'It clears on its own once the change lands in code.';
-                const label = document.createElement('span');
-                label.className = 'ce-realize-label';
-                label.textContent = 'realizing';
-                chip.append(label);
+                chip.title = 'Pending — this edit is queued for the agent and is implemented when you '
+                    + 'run /codoc:sync (nothing is running yet)'
+                    + (gloss ? `: the agent will ${gloss}.` : '.');
+                const dot = document.createElement('span');
+                dot.className = 'ce-pending-dot';
+                chip.append(dot);
                 if (onWithdraw) {
                     const x = document.createElement('button');
                     x.type = 'button';
                     x.className = 'ce-realize-withdraw';
                     x.textContent = '✕';
-                    x.title = 'Withdraw — cancel the AI realization (keeps your text)';
+                    x.title = 'Withdraw — cancel the queued change (keeps your text)';
                     x.addEventListener('mousedown', ev => ev.preventDefault());
                     x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); onWithdraw(fid); });
                     chip.append(x);
