@@ -10,8 +10,8 @@ codoc keeps a **feature tree** — a small, navigable map of what your code is
 - **codoc → code:** when you (or Claude Code) edit the tree, codoc builds the
   matching coding directive and **queues it for your live Claude Code session** —
   you run `/codoc:sync` to implement it, then codoc re-reads the result to
-  refine the tree if intent was under-specified. codoc never writes code itself
-  and never runs a headless model.
+  refine the tree if intent was under-specified. codoc never writes code itself —
+  implementation always runs in your interactive session.
 
 There is **one file** you ever look at — `.codoc/tree.codoc`.
 
@@ -65,6 +65,16 @@ Open `tree.codoc` in VS Code. Each indented line is a feature:
 
 `⟨f-…⟩` is the node's stable id — codoc writes it; the VS Code extension hides
 it. Indentation is the tree structure.
+
+By default the extension opens `tree.codoc` in the **Codoc Tree** webview — a
+rich-text view where headings are features and you just edit (no modes): your
+changes commit, and a calm **"realizing"** badge appears on a feature whose edit
+implies code (the agent is catching up; ✕ to withdraw). An agent's own changes
+surface inline as **tracked changes** (struck old / inserted new, tinted per
+author) with one-click Accept/Reject. The plain-markdown editor is still available
+(right-click → *Reopen Editor With…*); the daemon keeps `tree.codoc` byte-for-byte
+in sync (it is the sole writer — the webview's authored doc lives in
+`.codoc/tree.doc.json`). See [the collaborative-editing model](codoc-collaborative-editing-model.md).
 
 ## 3. How Claude Code is wired in
 
@@ -249,6 +259,18 @@ Save. `codoc watch` detects the change and runs Loop B. If the edit *requests* c
 (an imperative description on a node with bound symbols — "should validate…",
 "Add…"), Loop B queues a directive in `.codoc/realize.md` for you to implement with
 `/codoc:sync`. A descriptive edit just updates the prose.
+
+**Three markdown-native signals** steer the agent from inside a description — no
+special syntax:
+
+- `> …` blockquote = a **steering comment** addressed to the agent. Loop B drains
+  each into a `STEER FEATURE` directive (appended to an in-flight queue, so you can
+  steer mid-generation); the next render consumes it. In the Codoc Tree view you
+  author one by selecting prose → the comment bubble → a composer.
+- `**bold**` = **focus**: newly-bolded spans ride into the directive as a `Focus:`
+  line, and a newly-bolded span that reads imperative queues a directive on its own.
+- `[label](https://…)` external link = **consult**: a `Consult:` line the realizing
+  agent WebFetches before implementing.
 
 ## 8. The commands
 
