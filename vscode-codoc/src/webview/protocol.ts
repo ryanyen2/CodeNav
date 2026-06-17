@@ -160,14 +160,10 @@ export interface WebviewPrefs {
 /** Messages the webview posts back to the host. */
 export type WebviewMessage =
     | { kind: 'ready' }
-    /** Whole-doc settle (R3): the entire edited ProseMirror doc. The host persists
-     *  it to tree.doc.json and serializes it to canonical tree.codoc, driving the
-     *  existing parse→diff→apply pipeline (AMEND / MOVE / ADD / RETIRE). */
+    /** Whole-doc settle (R3 / U2b): the entire edited ProseMirror doc. The host
+     *  persists it to tree.doc.json (single writer); the daemon's Loop B derives the
+     *  AMEND / MOVE / ADD / RETIRE op from it and renders tree.codoc. */
     | { kind: 'doc-settle'; doc: PMNode }
-    /** Suggesting mode: persist captured doc-ahead suggestions (await the agent). */
-    | { kind: 'suggest-create'; suggestions: Suggestion[] }
-    /** Withdraw a pending doc-ahead suggestion by id. */
-    | { kind: 'suggest-withdraw'; id: string }
     /** Withdraw a queued realization (U6): cancel feature `featureId`'s directive.
      *  The host appends a cancellation to edits.json; Loop B prunes the directive
      *  and releases the hold. The committed prose is kept. */

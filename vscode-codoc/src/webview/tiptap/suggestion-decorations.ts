@@ -1,10 +1,9 @@
 /**
- * suggestion-decorations.ts — anchors the resolution affordances for the unified
- * suggestion list in the whole-doc editor (R4):
- *   • code-ahead (agent → human): Reject / Accept → inbox.json verdict.
- *   • doc-ahead  (human → agent): "awaiting implementation" + Withdraw (legacy; U8).
- * AMEND diffs render from the engine's insertion/deletion marks materialized in the
- * doc by the host (agent-proposals.applyAgentProposals); add/move/retire keep a
+ * suggestion-decorations.ts — anchors the resolution affordances for the suggestion
+ * list in the whole-doc editor (R4). Since U3/U2b the human commits directly, so the
+ * only suggestions here are agent code-ahead proposals (Reject / Accept → inbox.json
+ * verdict). AMEND diffs render from the engine's insertion/deletion marks materialized
+ * in the doc by the host (agent-proposals.applyAgentProposals); add/move/retire keep a
  * compact widget here. (Plus the per-feature "Connections" threads line below.)
  */
 import { Extension } from '@tiptap/core';
@@ -19,7 +18,6 @@ import { THREADS_COLLAPSE_AT } from '../protocol';
 export interface SuggestionHandlers {
     accept: (s: Suggestion) => void;
     reject: (s: Suggestion) => void;
-    withdraw: (s: Suggestion) => void;
 }
 
 export interface SuggestionDecorationsOptions {
@@ -103,22 +101,13 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
         actions.classList.add('applying');
         fn(s);
     };
-    // Verdicts follow the grammar: code-ahead → Reject/Accept (the human is the
-    // authority over the doc); doc-ahead → Withdraw only (the AI side applies it
-    // — Loop B drains the intent, the agent implements; "accepting" your own
-    // suggestion would be meaningless).
+    // All suggestions are agent code-ahead proposals (the human commits directly
+    // since U3) → Reject / Accept, the human's verdict over the agent's change.
     const [secondary, primary] = directionActions(s.direction);
-    if (s.direction === 'code-ahead' && s.eventId) {
-        actions.append(
-            actionButton(secondary, 'reject', once(handlers.reject)),
-            actionButton(primary, 'accept', once(handlers.accept)),
-        );
-    } else {
-        actions.append(
-            elc('span', 'ce-diff-await', '→ for agent'),
-            actionButton(secondary, 'withdraw', once(handlers.withdraw)),
-        );
-    }
+    actions.append(
+        actionButton(secondary, 'reject', once(handlers.reject)),
+        actionButton(primary, 'accept', once(handlers.accept)),
+    );
     box.append(actions);
     return box;
 }
@@ -127,14 +116,14 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
 // The {old,new} diff is materialized as engine insertion/deletion marks in the doc
 // (host-side agent-proposals.applyAgentProposals); the engine + CSS render the
 // Google-Docs look (struck old / inserted new, agent-tinted). Here we only place the
-// compact accept/reject (or withdraw) affordance beneath the heading. add/move/retire
-// keep their own compact widget (they can't be expressed as in-prose tracked changes).
+// compact accept/reject affordance beneath the heading. add/move/retire keep their
+// own compact widget (they can't be expressed as in-prose tracked changes).
 
-/** The compact resolution affordance (direction marker + accept/reject or withdraw). */
+/** The compact resolution affordance (direction marker + accept/reject). */
 function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
     const row = elc('div', 'ce-tc-actions ' + s.direction);
     const planned = isPlanned(s);
-    const mark = elc('span', 'ce-tc-mark', s.direction === 'code-ahead' ? (planned ? '△' : '▲') : '▼');
+    const mark = elc('span', 'ce-tc-mark', planned ? '△' : '▲');
     mark.title = directionLabel(s.direction) + (planned ? ' · not yet in code' : '') + (s.tag ? ' · ' + s.tag : '');
     row.append(mark);
     if (s.causedBy) {
@@ -149,11 +138,8 @@ function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement 
         fn(s);
     };
     const [secondary, primary] = directionActions(s.direction);
-    if (s.direction === 'code-ahead' && s.eventId) {
-        actions.append(actionButton(secondary, 'reject', once(handlers.reject)), actionButton(primary, 'accept', once(handlers.accept)));
-    } else {
-        actions.append(elc('span', 'ce-tc-await', '→ for agent'), actionButton(secondary, 'withdraw', once(handlers.withdraw)));
-    }
+    actions.append(actionButton(secondary, 'reject', once(handlers.reject)),
+                   actionButton(primary, 'accept', once(handlers.accept)));
     row.append(actions);
     return row;
 }
@@ -383,7 +369,7 @@ export const SuggestionDecorations = Extension.create<SuggestionDecorationsOptio
     name: 'suggestionDecorations',
 
     addOptions() {
-        return { getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {}, withdraw: () => {} } };
+        return { getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {} } };
     },
 
     addProseMirrorPlugins() {

@@ -20,12 +20,7 @@ import type { CommentThread } from './comment-model';
 import {
     PMNode,
     NODE_FEATURE_HEADING,
-    NODE_PARAGRAPH,
     FeatureHeadingAttrs,
-    inlineRunsToText,
-    blocksToDescriptionText,
-    descriptionToBlocks,
-    textToInlineRuns,
 } from './pm-doc';
 
 export type SuggestionDirection = 'code-ahead' | 'doc-ahead';
@@ -138,14 +133,15 @@ function roleFromTag(tag: string | undefined): string {
     return 'claude-code'; // "code drift" etc. — agent-originated
 }
 
-/** The full pending-suggestion list: code-ahead (from sidecar) + doc-ahead (persisted). */
+/** The full pending-suggestion list. Since U3/U2b the human commits directly (no
+ *  doc-ahead suggestions), so this is just the agent's code-ahead proposals derived
+ *  from the sidecar. (The signature is kept for the host call site.) */
 export function buildSuggestions(
     sidecar: SidecarData,
-    docAhead: Suggestion[],
     currentTitle: (fid: string) => string,
     currentDescription: (fid: string) => string,
 ): Suggestion[] {
-    return [...codeAheadSuggestions(sidecar, currentTitle, currentDescription), ...docAhead];
+    return codeAheadSuggestions(sidecar, currentTitle, currentDescription);
 }
 
 /** Suggestions targeting a given feature (amend/move/retire). */
@@ -159,40 +155,10 @@ export function addsUnderParent(suggestions: Suggestion[], parentId: string | nu
     return suggestions.filter(s => s.kind === 'add' && (s.parentId ?? null) === key);
 }
 
-/** Extract {title, description} per fid from a whole-tree doc. */
-function indexByFid(doc: PMNode): Map<string, { title: string; desc: string }> {
-    const out = new Map<string, { title: string; desc: string }>();
-    let cur: { fid: string; title: string; descs: PMNode[] } | null = null;
-    const flush = (): void => {
-        if (cur) out.set(cur.fid, { title: cur.title, desc: blocksToDescriptionText(cur.descs) });
-    };
-    for (const b of doc.content ?? []) {
-        if (b.type === NODE_FEATURE_HEADING) {
-            flush();
-            const fid = (b.attrs as FeatureHeadingAttrs | undefined)?.fid ?? null;
-            cur = fid ? { fid, title: inlineRunsToText(b.content).trim(), descs: [] } : null;
-        } else if (cur && b.type === NODE_PARAGRAPH) {
-            cur.descs.push(b);
-        }
-    }
-    flush();
-    return out;
-}
-
-/** Doc-ahead AMEND suggestions keyed by their target feature id (the only kind whose
- *  proposed text lives INLINE in the live editor doc — code-ahead proposals don't). */
-function docAheadAmendByFid(suggestions: Suggestion[]): Map<string, Suggestion> {
-    const m = new Map<string, Suggestion>();
-    for (const s of suggestions) {
-        if (s.direction === 'doc-ahead' && s.kind === 'amend' && s.featureId) m.set(s.featureId, s);
-    }
-    return m;
-}
-
 /** Rebuild a whole-tree doc, letting `replace(fid, heading, descBlocks)` swap a
  *  feature's heading + description blocks (return null to keep it unchanged). The
- *  shared spine for the suggestion transforms below AND the agent-proposal mark
- *  materializer (agent-proposals.ts) — pure, no editor state. */
+ *  shared spine for the agent-proposal mark materializer (agent-proposals.ts) —
+ *  pure, no editor state. */
 export function rebuildFeatures(
     doc: PMNode,
     replace: (fid: string, heading: PMNode, descBlocks: PMNode[]) => { heading: PMNode; descBlocks: PMNode[] } | null,
@@ -213,89 +179,4 @@ export function rebuildFeatures(
         i = j;
     }
     return { ...doc, content: out };
-}
-
-/**
- * Splice the user's in-flight doc-ahead suggestion text (titleNew / descNew) INTO an
- * incoming baseline doc. Used on every host repost so a round-trip never reverts a
- * suggestion the user is still composing inline (the live editor keeps the proposed
- * text; the host keeps tree.codoc at baseline).
- *
- * CONDITIONAL on the baseline being unchanged: a suggestion's proposal is only
- * re-spliced while the incoming feature still matches the baseline it was made against
- * (titleOld / descOld). If the authoritative side has since diverged — the agent
- * implemented or rewrote the feature — the incoming text is kept instead, so an
- * agent's work is never masked by a stale local suggestion. Pure inverse of
- * `stripDocAheadSuggestions`.
- */
-export function applyDocAheadSuggestions(doc: PMNode, suggestions: Suggestion[]): PMNode {
-    const byFid = docAheadAmendByFid(suggestions);
-    if (!byFid.size) return doc;
-    return rebuildFeatures(doc, (fid, heading, descBlocks) => {
-        const s = byFid.get(fid);
-        if (!s) return null;
-        const curTitle = inlineRunsToText(heading.content);
-        const curDesc = blocksToDescriptionText(descBlocks);
-        // Only splice while the incoming feature is still at the suggestion's baseline.
-        if ((s.titleOld != null && curTitle !== s.titleOld) || (s.descOld != null && curDesc !== s.descOld)) return null;
-        return {
-            heading: { ...heading, content: textToInlineRuns(s.titleNew ?? curTitle) },
-            descBlocks: descriptionToBlocks(s.descNew ?? curDesc),
-        };
-    });
-}
-
-/**
- * Strip the proposed text of pending doc-ahead suggestions back to BASELINE
- * (titleOld / descOld) before an EDITING-mode settle serializes the doc — so a
- * suggestion the user hasn't committed never leaks into canonical tree.codoc.
- *
- * A feature is stripped ONLY when it still shows the untouched proposal (its current
- * title+desc == the suggestion's titleNew/descNew). If the user has since edited the
- * feature past the proposal (Editing mode), that is a genuine commit and is left
- * intact. This is independent of the caret — the prior `exceptFid` (live-caret)
- * variant could leak a pending suggestion when the caret happened to sit in it.
- * Pure inverse of `applyDocAheadSuggestions`.
- */
-export function stripDocAheadSuggestions(doc: PMNode, suggestions: Suggestion[]): PMNode {
-    const byFid = docAheadAmendByFid(suggestions);
-    if (!byFid.size) return doc;
-    return rebuildFeatures(doc, (fid, heading, descBlocks) => {
-        const s = byFid.get(fid);
-        if (!s) return null;
-        const curTitle = inlineRunsToText(heading.content);
-        const curDesc = blocksToDescriptionText(descBlocks);
-        // Leave a feature the user edited past the proposal — only revert the untouched one.
-        if (curTitle !== (s.titleNew ?? curTitle) || curDesc !== (s.descNew ?? curDesc)) return null;
-        return {
-            heading: { ...heading, content: textToInlineRuns(s.titleOld ?? curTitle) },
-            descBlocks: descriptionToBlocks(s.descOld ?? curDesc),
-        };
-    });
-}
-
-/**
- * Diff an edited whole-tree doc against the settled baseline into DOC-AHEAD
- * suggestions — one per feature whose title and/or description changed. This is
- * the Suggesting-mode capture: the human's edits become tracked diffs awaiting the
- * agent, instead of settling. New headings (no fid) are handled by the structural
- * settle path, not here.
- */
-export function diffDocsToSuggestions(baseline: PMNode, edited: PMNode, originRole = 'human'): Suggestion[] {
-    const base = indexByFid(baseline);
-    const cur = indexByFid(edited);
-    const out: Suggestion[] = [];
-    for (const [fid, c] of cur) {
-        const b = base.get(fid);
-        if (!b) continue;
-        if (b.title !== c.title || b.desc !== c.desc) {
-            // Stable id per feature so a re-capture (and a Withdraw) targets the same
-            // card; the host merges title/description changes for the same feature.
-            out.push({
-                id: `d-${fid}`, direction: 'doc-ahead', kind: 'amend', featureId: fid,
-                originRole, tag: 'you', titleOld: b.title, titleNew: c.title, descOld: b.desc, descNew: c.desc,
-            });
-        }
-    }
-    return out;
 }

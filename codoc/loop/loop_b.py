@@ -231,9 +231,10 @@ def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
     # Rebuild realize.md from the survivors that carry their rendered text. (Legacy
     # text-less entries can't be re-rendered; pruning the manifest still releases the
     # canceled holds, and a later real pass rewrites the queue.)
-    texts = [d.text for d in survivors if d.text]
-    ids = [d.id for d in survivors if d.text]
-    if texts:
+    renderable = [d for d in survivors if d.text]
+    if renderable:
+        texts = [d.text for d in renderable]
+        ids = [d.id for d in renderable]
         _write_realize(codoc_dir, build_realize_prompt(texts, root_dir, ids))
     return removed
 

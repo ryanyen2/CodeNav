@@ -4,9 +4,9 @@
  * Headings are feature nodes; heading depth = tree structure. Editing a heading
  * renames the feature; Tab / Shift-Tab indent / outdent it (and its subtree)
  * within the tree; the body under a heading is its description (prose + `@`-refs +
- * marks). Edits settle (debounced) by serializing the WHOLE doc to canonical
- * `tree.codoc` (renderTreeFromDoc) — the host writes it and the existing
- * parse→diff→apply pipeline derives the AMEND / MOVE / ADD / RETIRE ops.
+ * marks). Edits settle (debounced) by handing the WHOLE doc to the host (onSettle),
+ * which persists it to `tree.doc.json` (U2b single-writer — never tree.codoc); the
+ * daemon's Loop B parses that doc and derives the AMEND / MOVE / ADD / RETIRE ops.
  *
  * ONE editing surface (U3): there is no Editing/Suggesting toggle and no pen/pencil
  * instrument. The human just edits; every edit COMMITS (settles). The daemon's
@@ -33,7 +33,6 @@ import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
-import { applyDocAheadSuggestions } from '../../state/suggestion-model';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { Suggestion } from '../../state/suggestion-model';
@@ -48,7 +47,6 @@ export interface WholeDocEditorOptions {
     onSettle: (doc: PMNode) => void;
     onAccept: (s: Suggestion) => void;
     onReject: (s: Suggestion) => void;
-    onWithdraw: (s: Suggestion) => void;
     /** Withdraw a queued realization for a feature (U6) — the ✕ on its "realizing"
      *  badge. Cancels the directive, keeps the prose. */
     onWithdrawRealization: (featureId: string) => void;
@@ -151,20 +149,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let dirty = false;
     let settleTimer = 0;
     let suppressUpdate = false;          // true while we programmatically setContent
-    let currentSuggestions: Suggestion[] = [];
+    let currentSuggestions: Suggestion[] = [];   // agent code-ahead proposals (sidecar)
     // Signature of the agent code-ahead AMENDs last LOADED into the doc as engine
     // marks. setDoc reloads when this changes even if the baseline text is identical
     // — so a newly-arrived agent proposal's marks appear, and a rejected one's marks
     // clear (reject leaves the baseline unchanged, so only the signature moves).
     let lastProposalsSig = '';
-    // Doc-ahead suggestions captured locally this session but not yet echoed by the
-    // host (keyed by suggestion id). They keep the in-flight inline edit from being
-    // reverted by a repost that arrives before the host acknowledges it (WS4 race).
-    // `seen` flips true once an authoritative payload (setSuggestions) has had the
-    // chance to reflect the capture; an entry that survives a full cycle still un-echoed
-    // was resolved server-side (withdrawn / applied / rejected) and is then dropped, so
-    // a stale entry can never linger and re-splice forever.
-    const pendingDocAhead = new Map<string, { s: Suggestion; seen: boolean }>();
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentHeld = new Set<string>();   // features awaiting AI realization (badge)
@@ -187,8 +177,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // marks in the doc (host-injected); this plugin anchors their
                 // accept/reject affordance and the add/move/retire widgets. No
                 // dual-state — the human never composes an inline suggestion (U3).
-                getSuggestions: () => effectiveSuggestions(),
-                handlers: { accept: opts.onAccept, reject: opts.onReject, withdraw: opts.onWithdraw },
+                getSuggestions: () => currentSuggestions,
+                handlers: { accept: opts.onAccept, reject: opts.onReject },
             }),
             DependencyDecorations.configure({
                 getThreads: () => currentThreads,
@@ -282,16 +272,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (seen === index && pos === null) pos = offset;
         });
         return pos;
-    }
-
-    /** Current doc-ahead suggestions = what the host has echoed, plus what we just
-     *  captured locally and the host hasn't acknowledged yet (host entries win on id). */
-    function effectiveSuggestions(): Suggestion[] {
-        if (!pendingDocAhead.size) return currentSuggestions;
-        const byId = new Map<string, Suggestion>();
-        for (const s of currentSuggestions) byId.set(s.id, s);
-        for (const { s } of pendingDocAhead.values()) if (!byId.has(s.id)) byId.set(s.id, s);
-        return [...byId.values()];
     }
 
     /** Signature of the agent code-ahead AMENDs (the proposals the host materializes
@@ -509,9 +489,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // ── inline comments — selection toolbar + composer + resolve ──────────────
     // Selecting prose surfaces a Notion/Medium-style floating toolbar (format · comment ·
     // hand-to-AI). Comment opens a composer aside the selection; Enter saves: a `comment`
-    // mark anchors the threadId, the note is handed to the host (→ a `> …` steering line
-    // the agent drains). The marker icon + popover live in comment-decorations.ts;
-    // resolving removes the anchor mark here and tells the host to drop the `> …` line.
+    // mark anchors the threadId, the note is handed to the host, which forwards it to Loop B
+    // as a one-shot STEER on edits.json (U2b — the host no longer writes tree.codoc). The
+    // marker icon + popover live in comment-decorations.ts; resolving removes the anchor
+    // mark here and tells the host to drop the thread.
     type ComposeMode = 'create' | 'edit';
     const bubble = document.createElement('div');
     bubble.className = 'ce-bubble';
@@ -744,17 +725,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // the captured range under it (the "selection vanished mid-comment" bug).
             // Defer the WHOLE update — the next payload reloads cleanly.
             if (composer || bubble.style.display !== 'none') return;
-            // No human-authored doc-ahead suggestions in the single-surface model, so
-            // this is the incoming doc unchanged in the common case (the splice is a
-            // dormant no-op kept until the suggestion machinery is retired in U8).
-            const merged = applyDocAheadSuggestions(doc, effectiveSuggestions());
             // Skip the reload when BOTH the baseline text AND the agent-proposal set
             // are unchanged — the common case right after a settle round-trips;
             // reloading would reset the caret. Reload when the baseline text changed
-            // OR an agent proposal appeared/resolved (its marks live in `merged` but
+            // OR an agent proposal appeared/resolved (its marks live in `doc` but
             // render to the same baseline, so a text-only compare would miss them).
             const sig = proposalsSig();
-            const sameText = renderTreeFromDoc(merged) === renderTreeFromDoc(editor.getJSON() as PMNode);
+            const sameText = renderTreeFromDoc(doc) === renderTreeFromDoc(editor.getJSON() as PMNode);
             if (sameText && sig === lastProposalsSig) { markSaving(''); return; }
             lastProposalsSig = sig;
 
@@ -765,7 +742,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // Replace the whole doc with a REFLECT-tagged transaction so the
                 // authorship-stamp plugin does NOT treat this programmatic load as
                 // user input (otherwise every reload re-stamps the entire doc).
-                const node = editor.state.schema.nodeFromJSON(merged);
+                const node = editor.state.schema.nodeFromJSON(doc);
                 if (node.content.size > 0) {
                     const tr = editor.state.tr
                         .replaceWith(0, editor.state.doc.content.size, node.content)
@@ -789,18 +766,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             rebuildRail();
         },
         setSuggestions: (list: Suggestion[]) => {
-            currentSuggestions = list;
-            // Reconcile the local buffer against the authoritative list:
-            //  - echoed (id in list) → the host owns it now, drop from the buffer;
-            //  - absent but already seen a full cycle → resolved server-side
-            //    (withdrawn / applied / rejected), drop it so it can't re-splice;
-            //  - absent and fresh → keep one cycle (bridges the setDoc-before-echo gap),
-            //    mark it seen.
-            const ids = new Set(list.map(s => s.id));
-            for (const [id, e] of pendingDocAhead) {
-                if (ids.has(id) || e.seen) pendingDocAhead.delete(id);
-                else e.seen = true;
-            }
+            currentSuggestions = list;  // agent code-ahead proposals (the host's sidecar)
             editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true));
         },
         setThreads: (threadsMap: Record<string, ThreadsData>) => {

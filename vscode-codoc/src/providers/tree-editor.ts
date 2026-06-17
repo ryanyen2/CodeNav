@@ -2,9 +2,9 @@
  * Codoc Tree Editor — a CustomTextEditorProvider that replaces the plain-text
  * view of tree.codoc with a webview: a feature-tree nav pane (left) beside one
  * continuous documentation article (right), every feature a section with its
- * citations woven inline. The .codoc text file remains the source of truth;
- * edits flow back through WorkspaceEdit + document.save() so the daemon's
- * watch / Loop B path is unchanged.
+ * citations woven inline. Single-writer (U2b): the host persists the webview's
+ * authored intent to tree.doc.json and never writes tree.codoc; the daemon is the
+ * sole tree.codoc writer, and Loop B learns webview edits from tree.doc.json.
  *
  * This host module builds the DocPayload (tree nodes + ordered doc sections via
  * `layoutDoc` + live sync state from activity.json) and serves the bundled
@@ -31,7 +31,7 @@ import {
 import { directedEdges, agentAmendsByFeature, heldFeatures, divergentFeatures } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
-    annotationsForSettle, intentsFromSuggestions, appendCancellation, appendSteer,
+    annotationsForSettle, appendCancellation, appendSteer,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -40,8 +40,8 @@ import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData, WebviewPref
 
 const DOC_FILENAME = 'tree.doc.json';
 
-/** workspaceState key for the per-workspace webview prefs (B-U2: overview dismiss +
- *  glance toggle). One blob per document uri so two open trees keep separate prefs. */
+/** workspaceState key for the per-workspace webview prefs (B-U2: the glance toggle).
+ *  One blob per document uri so two open trees keep separate prefs. */
 const PREFS_KEY = 'codoc.webviewPrefs';
 
 export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider {
@@ -53,9 +53,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     ) {}
 
     private rev = 0;
-    /** The authoritative rich doc + persisted doc-ahead suggestions per open
-     *  tree.codoc (carries authorship marks). Loaded from tree.doc.json, reconciled
-     *  with the text on each payload, and persisted on a user doc-commit. */
+    /** The authoritative rich doc per open tree.codoc (carries authorship marks +
+     *  inline comment threads). Loaded from tree.doc.json, reconciled with the text on
+     *  each payload, and persisted on a user doc-commit. */
     private docFileByUri = new Map<string, DocFile>();
     /** Single-writer (U2b): uris whose saved doc is AHEAD of the on-disk tree.codoc
      *  — the webview committed an edit the daemon hasn't rendered back yet. While set,
@@ -107,14 +107,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await this.settleDoc(document, msg.doc);
                     post();  // U2b: no tree.codoc write → repost so the tree pane/badges
                     return;  // reflect the settle now (sourced from the saved doc)
-                case 'suggest-create':
-                    await this.createSuggestions(document, msg.suggestions);
-                    post();
-                    return;
-                case 'suggest-withdraw':
-                    await this.withdrawSuggestion(document, msg.id);
-                    post();
-                    return;
                 case 'withdraw-realization':
                     await this.withdrawRealization(document, msg.featureId);
                     return;
@@ -165,9 +157,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     }
 
     // ── per-workspace webview prefs (B-U2) ────────────────────────────────────
-    //    Overview dismiss + glance toggle live in workspaceState, keyed by document
-    //    uri so two open trees don't share state. Decoration-only — they never enter
-    //    tree.doc.json / tree.codoc, so the round-trip stays a no-op.
+    //    The glance toggle lives in workspaceState, keyed by document uri so two open
+    //    trees don't share state. Decoration-only — it never enters tree.doc.json /
+    //    tree.codoc, so the round-trip stays a no-op.
 
     private prefsFor(document: vscode.TextDocument): WebviewPrefs {
         const all = this.context.workspaceState.get<Record<string, WebviewPrefs>>(PREFS_KEY) ?? {};
@@ -383,23 +375,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         if (rc.changed) void this.persistDocFile(document, docFile); // harvest / drain survive a reload
 
         // Unified pending diffs: code-ahead (from sidecar proposals) + doc-ahead
-        // (persisted). Old text for amend diffs comes from the parsed features.
+        // (Old text for amend diffs comes from the parsed features.) Since U3/U2b the
+        // human commits directly — there are no doc-ahead suggestions — so this is the
+        // agent's code-ahead proposals derived from the sidecar.
         const titleOf = new Map(features.filter(f => f.id).map(f => [f.id as string, f.title]));
         const descOf = new Map(features.filter(f => f.id).map(f => [f.id as string, f.description]));
-
-        // Re-base each persisted doc-ahead suggestion against the CURRENT text so the
-        // card shows `current → proposed` (not a stale baseline), Apply can't clobber
-        // a change the loop made meanwhile, and a suggestion auto-clears once the
-        // text/code caught up to it (nothing left to change).
-        const liveDocAhead = this.rebaseDocAhead(docFile.suggestions, titleOf, descOf);
-        if (liveDocAhead.length !== docFile.suggestions.length) {
-            docFile.suggestions = liveDocAhead;
-            void this.persistDocFile(document, docFile); // auto-clear satisfied ones
-            void this.syncIntents(document, docFile);    // …and release their holds
-        }
         const suggestions = buildSuggestions(
             sidecar,
-            liveDocAhead,
             fid => titleOf.get(fid) ?? '',
             fid => descOf.get(fid) ?? '',
         );
@@ -517,9 +499,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         await fs.rename(tmp, target);
     }
 
-    /** Append per-feature authorship annotations for a settle. Written BEFORE the
-     *  tree.codoc save so the daemon's Loop B pass (woken by that save) already
-     *  sees them. Loop B drains `edits`; `intents` stay host-owned. */
+    /** Append per-feature authorship annotations for a settle. Written alongside the
+     *  tree.doc.json persist (same debounced daemon batch) so the resulting Loop B
+     *  pass sees them. Loop B drains `edits`; `intents` stay host-owned. */
     private async annotateSettle(
         document: vscode.TextDocument,
         prevText: string,
@@ -535,18 +517,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         if (!anns.length) return;
         const file = await this.readEditsFile(document);
         file.edits.push(...anns);
-        await this.writeEditsFile(document, file);
-    }
-
-    /** Rewrite the intents list (the doc-wins hold set) from the current persisted
-     *  doc-ahead suggestions — create/withdraw/apply/auto-clear all converge here. */
-    private async syncIntents(document: vscode.TextDocument, df: DocFile): Promise<void> {
-        const file = await this.readEditsFile(document);
-        const next = intentsFromSuggestions(df.suggestions, Date.now());
-        const same = JSON.stringify(file.intents.map(i => [i.id, i.feature_id])) ===
-                     JSON.stringify(next.map(i => [i.id, i.feature_id]));
-        if (same) return;
-        file.intents = next;
         await this.writeEditsFile(document, file);
     }
 
@@ -608,59 +578,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         // The saved doc now leads the on-disk tree.codoc until the daemon renders it
         // back — buildPayload sources from the saved doc meanwhile (no reversion).
         this.docAhead.add(uri);
-    }
-
-    /** Re-base persisted doc-ahead suggestions onto the current text + drop the ones
-     *  whose change is already present (satisfied). A field with no intended change
-     *  tracks the current value so a drifting title can't manufacture a phantom diff. */
-    private rebaseDocAhead(
-        suggestions: Suggestion[],
-        titleOf: Map<string, string>,
-        descOf: Map<string, string>,
-    ): Suggestion[] {
-        const out: Suggestion[] = [];
-        for (const s of suggestions) {
-            if (s.direction !== 'doc-ahead') { out.push(s); continue; }
-            if (!s.featureId || !titleOf.has(s.featureId)) continue; // feature gone → drop
-            const curTitle = titleOf.get(s.featureId) ?? '';
-            const curDesc = descOf.get(s.featureId) ?? '';
-            const titleIntended = (s.titleNew ?? '') !== (s.titleOld ?? '');
-            const descIntended = (s.descNew ?? '') !== (s.descOld ?? '');
-            const r: Suggestion = {
-                ...s,
-                titleOld: curTitle,
-                titleNew: titleIntended ? s.titleNew : curTitle,
-                descOld: curDesc,
-                descNew: descIntended ? s.descNew : curDesc,
-            };
-            if ((r.titleNew ?? '') !== r.titleOld || (r.descNew ?? '') !== r.descOld) out.push(r); // still has a change
-        }
-        return out;
-    }
-
-    /** Persist captured doc-ahead suggestions (Suggesting mode). They render as
-     *  persistent diffs awaiting the agent; tree.codoc is NOT touched (intent only).
-     *  Title and description changes for the same feature are MERGED into one card. */
-    private async createSuggestions(document: vscode.TextDocument, suggestions: Suggestion[]): Promise<void> {
-        if (!suggestions.length) return;
-        const df = this.docFileFor(document);
-        for (const s of suggestions) {
-            const existing = df.suggestions.find(x => x.direction === 'doc-ahead' && x.featureId === s.featureId);
-            if (!existing) { df.suggestions.push(s); continue; }
-            // Compose: a desc-only capture must not erase a prior title change.
-            if ((s.titleNew ?? '') !== (s.titleOld ?? '')) { existing.titleOld = s.titleOld; existing.titleNew = s.titleNew; }
-            if ((s.descNew ?? '') !== (s.descOld ?? '')) { existing.descOld = s.descOld; existing.descNew = s.descNew; }
-            existing.id = s.id;
-        }
-        await this.persistDocFile(document, df);
-        await this.syncIntents(document, df); // register the doc-wins holds
-    }
-
-    private async withdrawSuggestion(document: vscode.TextDocument, id: string): Promise<void> {
-        const df = this.docFileFor(document);
-        df.suggestions = df.suggestions.filter(s => s.id !== id);
-        await this.persistDocFile(document, df);
-        await this.syncIntents(document, df); // release the hold
     }
 
     /** Withdraw a queued realization (U6): append a cancellation to edits.json. The

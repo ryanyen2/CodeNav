@@ -381,12 +381,6 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 .ce-seg { display: inline-flex; border: 1px solid color-mix(in srgb, var(--vscode-foreground) 14%, transparent); border-radius: 5px; overflow: hidden; }
 .ce-seg .ce-btn { border-radius: 0; border: none; }
 .ce-marks { display: inline-flex; gap: 2px; padding-left: 4px; border-left: var(--rule); }
-/* per-span authorship group (D2/H2): "hand to AI" (pencil) / "take back" (pen).
-   Acts on the current selection — no persistent active state, unlike the old mode toggle.
-   The buttons are tinted toward the ink they apply (AI role tint vs neutral human). */
-.ce-author { display: inline-flex; gap: 2px; padding-left: 4px; border-left: var(--rule); }
-.ce-author .ce-toai { color: color-mix(in srgb, var(--ink-claude) 80%, var(--vscode-foreground)); }
-.ce-author .ce-takeback { color: var(--ink-human); }
 
 .ce-surface { padding: 12px 14px; }
 .ce-surface .ProseMirror { outline: none; font: 13.5px/1.7 var(--vscode-font-family); color: var(--vscode-input-foreground); min-height: 60px; }
@@ -592,14 +586,6 @@ span[data-change-id] { text-decoration-style: solid; }
 .ce-tick.retired { background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent); opacity: 0.5; }
 .ce-tick.unrealized { background: transparent; outline: 1px dashed color-mix(in srgb, var(--vscode-foreground) 45%, transparent); }
 
-/* ── Editing / Suggesting mode toggle ─────────────────────────────────────── */
-.ce-modeseg .ce-editmode.active { background: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
-.ce-modeseg .ce-sugmode.active { background: color-mix(in srgb, var(--dir-await) 24%, transparent); color: var(--vscode-foreground); }
-/* a subtle banner tint while Suggesting */
-.codoc-whole-editor[data-editmode="suggesting"] .ce-whole-surface {
-    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--dir-await) 60%, transparent);
-}
-
 /* ── Persistent diff cards (suggestions) ──────────────────────────────────── */
 /* ── pending change — a slim IN-SITU strip, not a card. Shows only the change + a little
    context (the live prose sits right below, so no full restatement). Direction = the thin
@@ -612,7 +598,6 @@ span[data-change-id] { text-decoration-style: solid; }
     font: 12px/1.5 var(--vscode-font-family); user-select: none;
 }
 .ce-diff.code-ahead { border-left-color: var(--dir-review); }
-.ce-diff.doc-ahead  { border-left-color: var(--dir-await); }
 /* realization = TEXTURE (never a colour): a plan proposal describes code that
    doesn't exist yet → dashed edge + hollow △ marker (set in markup), rhyming
    with the unrealized node's hollow dashed ring. Landed-code reflections stay
@@ -620,26 +605,13 @@ span[data-change-id] { text-decoration-style: solid; }
 .ce-diff.planned { border-left-style: dashed; }
 .ce-diff-mark { flex: 0 0 auto; font-size: 9px; line-height: 1.7; }
 .ce-diff.code-ahead .ce-diff-mark { color: var(--dir-review); }
-.ce-diff.doc-ahead .ce-diff-mark { color: var(--dir-await); }
 /* cascade cue: this diff surfaced back from implementing the user's own edit */
 .ce-diff-cascade { flex: 0 0 auto; font-size: 10px; opacity: 0.75; }
 .ce-diff.code-ahead .ce-diff-cascade { color: var(--dir-review); }
 .ce-diff-body { flex: 1 1 auto; min-width: 0; color: var(--fg-muted); }
-/* authorship = INK OPACITY (the pen/pencil axis): your own suggestion reads at
-   full ink; an agent's proposal is pencil-faded until you accept it. */
+/* authorship = INK OPACITY: an agent's proposal is pencil-faded until you accept it. */
 .ce-diff.by-agent .ce-diff-body { opacity: 0.72; }
-/* the agent awaits a doc-ahead suggestion — a quiet state label, not a button */
-.ce-diff-await { flex: 0 0 auto; font-size: 10px; color: var(--dir-await); opacity: 0.85; }
 .ce-diff-kind { color: var(--vscode-foreground); }
-.ce-diff-sep { opacity: 0.4; padding: 0 2px; }
-
-.ce-wd { white-space: pre-wrap; }
-.ce-wd .wd-same { color: color-mix(in srgb, var(--vscode-foreground) 65%, transparent); }
-/* kind = shape, colourblind-safe: delete strikes, insert underlines (the change pops). */
-.ce-wd .wd-del { text-decoration: line-through; color: var(--fg-muted); opacity: 0.8; }
-.ce-wd .wd-ins { text-decoration: underline; text-decoration-thickness: 1px; color: var(--vscode-foreground); }
-/* a replace renders as adjacent strike+underline — keep them from mashing into one word */
-.ce-wd .wd-del + .wd-ins, .ce-wd .wd-ins + .wd-del { margin-left: 0.35em; }
 
 .ce-diff-actions { flex: 0 0 auto; display: inline-flex; gap: 4px; align-items: center; opacity: 0.55; transition: opacity 100ms ease; }
 .ce-diff:hover .ce-diff-actions, .ce-diff-actions.applying { opacity: 1; }
@@ -655,65 +627,20 @@ span[data-change-id] { text-decoration-style: solid; }
 /* proposed retire (code-ahead) — strike is the SHAPE, direction is the colour */
 .codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   INLINE TRACKED CHANGES (WS4 — the Google-Docs look). An amend suggestion renders
-   where the prose lives: the live description paragraphs are hidden (.ce-tc-hidden)
-   and the change is drawn in their place — removed words struck + muted, inserted
-   words underlined + direction-tinted, refs as chips. The title change is struck /
-   inserted inline on the heading itself. A thin direction rail + a quiet resolve row
-   replace the old boxed card. The caret's own feature shows live editable prose
-   instead (no overlay), so composing a suggestion stays inline.
-   ─────────────────────────────────────────────────────────────────────────── */
-.ce-tc-hidden { display: none; }
-
-.ce-tc-block {
-    margin: 0.1em 0 0.7em; padding: 2px 0 3px 12px;
-    border-left: 2px solid transparent;
-    animation: ce-pop-in var(--dur-base) var(--ease-out);
-}
-.ce-tc-block.code-ahead { border-left-color: color-mix(in srgb, var(--dir-review) 70%, transparent); }
-.ce-tc-block.doc-ahead  { border-left-color: color-mix(in srgb, var(--dir-await) 70%, transparent); }
-.ce-tc-block.planned    { border-left-style: dashed; }
-
-.ce-tc-p {
-    margin: 0 0 0.4em; white-space: pre-wrap; max-width: 70ch;
-    font: 13.5px/1.7 var(--vscode-font-family);
-    color: color-mix(in srgb, var(--vscode-foreground) 82%, transparent);
-}
-.ce-tc-p:last-child { margin-bottom: 0.3em; }
-/* kind = shape (colourblind-safe): deletions strike + mute; insertions underline +
-   direction-tint. Same vocabulary on the heading title (inline variants). */
-.ce-tc .wd-same { color: inherit; }
-.ce-tc .wd-del,
-.ce-tc-del-inline { text-decoration: line-through; color: var(--fg-muted); opacity: 0.75; }
-.ce-tc .wd-ins,
-.ce-tc-ins-inline {
-    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px;
-    color: var(--vscode-foreground);
-}
-.ce-tc-block.doc-ahead  .wd-ins, .ce-tc-block.doc-ahead  .ce-tc-ins-inline { color: color-mix(in srgb, var(--dir-await) 75%, var(--vscode-foreground)); }
-.ce-tc-block.code-ahead .wd-ins { color: color-mix(in srgb, var(--dir-review) 75%, var(--vscode-foreground)); }
-.ce-tc-ins-inline { margin-left: 0.2em; }
-/* a code-ref inside a tracked change reads as a quiet chip, not raw markdown */
-.ce-tc-ref {
-    font-family: var(--vscode-editor-font-family); font-size: 0.92em;
-    padding: 0 4px; border-radius: 3px;
-    background: color-mix(in srgb, var(--accent-refs) 12%, transparent);
-}
-.ce-tc-ref::before { content: "⟢ "; opacity: 0.55; }
-
-/* the quiet resolve row (replaces the old card actions) — muted until hover */
+/* ── agent-AMEND resolve row (U4) ──────────────────────────────────────────────
+   The {old,new} diff itself renders from the engine's ins/del marks in the doc
+   (agent-proposals.applyAgentProposals); here we style only the quiet accept/reject
+   row anchored beneath the heading — direction marker + an optional cascade cue +
+   the buttons, muted until hover. */
 .ce-tc-actions {
     display: flex; align-items: center; gap: 8px; margin-top: 3px;
     font: 11px var(--vscode-font-family); color: var(--fg-muted); user-select: none;
 }
 .ce-tc-mark { font-size: 9px; }
 .ce-tc-actions.code-ahead .ce-tc-mark { color: var(--dir-review); }
-.ce-tc-actions.doc-ahead  .ce-tc-mark { color: var(--dir-await); }
 .ce-tc-cascade { font-size: 10px; opacity: 0.8; color: var(--dir-review); }
-.ce-tc-await { font-size: 10px; color: var(--dir-await); opacity: 0.85; }
 .ce-tc-btns { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
-.ce-tc-block:hover .ce-tc-btns, .ce-tc-btns.applying { opacity: 1; }
+.ce-tc-actions:hover .ce-tc-btns, .ce-tc-btns.applying { opacity: 1; }
 
 /* ── unified dependency "threads" line under a heading + peek popover (U4) ───── */
 .ce-threads {
@@ -801,7 +728,6 @@ span[data-change-id] { text-decoration-style: solid; }
 .ce-bub-btn.ce-bub-bold { font-weight: 700; }
 .ce-bub-btn.ce-bub-italic { font-style: italic; }
 .ce-bub-btn.ce-bub-hl:hover { background: color-mix(in srgb, var(--accent-amend) 22%, transparent); }
-.ce-bub-btn.ce-bub-ai { color: color-mix(in srgb, var(--ink-claude) 80%, var(--vscode-foreground)); }
 .ce-bub-sep { width: 1px; margin: 3px 2px; background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
 
 /* comment composer + thread popover share the card chrome (a quiet amber left edge) */
@@ -924,7 +850,7 @@ body.glance .ce-whole-surface .ProseMirror > ol,
 body.glance .ce-whole-surface .ProseMirror > pre,
 body.glance .ce-whole-surface .ce-threads,
 body.glance .ce-whole-surface .ce-diff,
-body.glance .ce-whole-surface .ce-tc-block { display: none; }
+body.glance .ce-whole-surface .ce-tc-actions { display: none; }
 /* the injected one-line pitch under each heading */
 .ce-glance-pitch {
     font: 11.5px/1.45 var(--vscode-font-family);
