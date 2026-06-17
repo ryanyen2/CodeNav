@@ -11,6 +11,7 @@ import type { PMNode } from '../state/pm-doc';
 import type { Suggestion } from '../state/suggestion-model';
 import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
+import type { HoldDetail } from '../state/bindings-model';
 
 /** An autocomplete candidate for the `@`-triggered code-reference picker (U5).
  *  Sourced from the sidecar `by_file` (bound symbols only). */
@@ -139,6 +140,11 @@ export interface DocPayload {
      *  calm "being realized" badge in the single-surface model (U3); a faithful
      *  realization clears the feature from this set. Absent on legacy payloads. */
     awaitingAI?: string[];
+    /** Per-held-feature detail (kind + plain-language intent gloss) for the in-situ
+     *  pending-intent decoration's hover title — a subset of `awaitingAI` (only features
+     *  with a queued directive carry it). Lets the author confirm WHAT codoc understood,
+     *  not just that something is queued. Absent on legacy payloads. */
+    holdDetail?: Record<string, HoldDetail>;
     /** Features whose realization DIVERGED (U5): the agent changed this feature beyond
      *  the one you edited — flagged for "review what the AI did" (F3). `{fid → reason}`.
      *  The change itself renders as a pending proposal; this adds the at-a-glance cue.

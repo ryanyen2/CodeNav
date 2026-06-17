@@ -147,6 +147,35 @@ def test_sidecar_v4_changes_feed_and_holds(store, tmp_path):
     assert sidecar["holds"] == [auth.id]
 
 
+def test_sidecar_hold_detail_from_manifest(store, tmp_path):
+    """v5: each held feature with a QUEUED directive carries {kind, intent} so the IDE
+    can show WHAT codoc understood (the pending-intent rail's hover title), not just a
+    count. A feature held only by a live intent (no directive) is absent from the
+    detail map — it still gets the plain rail via `holds`."""
+    from codoc.loop import edits as edits_channel
+    from codoc.loop.filenames import REALIZE_FILENAME
+
+    auth, util, _, _ = _populate(store)
+    # Queue an AMEND directive for `auth`; realize.md must exist beside the manifest
+    # or read_manifest treats it as stale.
+    edits_channel.write_manifest(tmp_path, [
+        edits_channel.Directive(id="d-aaaa1111", feature_id=auth.id, kind="amend",
+                                caused_by="e-1", text="UPDATE FEATURE: ...")])
+    (tmp_path / REALIZE_FILENAME).write_text("### 1. ⟨d-aaaa1111⟩ UPDATE FEATURE: ...\n")
+    # `util` is held only by a live intent (no directive) → rail but no gloss.
+    edits_channel._write_edits_file(
+        tmp_path, edits=[],
+        intents=[{"id": "d-u", "feature_id": util.id, "actor": "human", "ts": 0}])
+    write_tree(store, tmp_path)
+    sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
+
+    assert set(sidecar["holds"]) == {auth.id, util.id}      # both held
+    detail = sidecar["hold_detail"]
+    assert auth.id in detail and util.id not in detail       # only the directive carries detail
+    assert detail[auth.id]["kind"] == "amend"
+    assert detail[auth.id]["intent"]                         # a non-empty plain-language gloss
+
+
 def test_sidecar_by_file_index(store, tmp_path):
     auth, _, _, _ = _populate(store)
     write_tree(store, tmp_path)

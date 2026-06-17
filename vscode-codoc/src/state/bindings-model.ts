@@ -66,6 +66,17 @@ export type FeatureKind = 'overview' | 'reference' | 'unclassified' | 'retired';
  *  a quiet shape/glyph badge (NOT a new hue — colour stays reserved for direction). */
 export type FeatureDrift = 'questioned' | 'binding-lost';
 
+/** Per-held-feature detail for the in-situ "pending intent" decoration (v5,
+ *  `hold_detail` slice): the queued directive's kind + a plain-language gloss of what
+ *  the agent will do. A subset of `holds` — only features with a queued realize
+ *  directive carry it; a feature held by a live intent alone gets the plain rail. */
+export interface HoldDetail {
+    /** NodeOpKind value of the queued directive (amend | add_node | retire_node | steer). */
+    kind: string;
+    /** One-line plain-language summary of the work — the pending rail's hover title. */
+    intent: string;
+}
+
 /** One See-Also neighbour (v5, `feature_see_also` slice): a coupled feature ranked by
  *  coupling `weight`, with the edge `kinds` (calls/imports) summarised as a one-line
  *  `rationale`. Emitted as DATA ONLY — the Connections panel already surfaces coupled
@@ -141,6 +152,9 @@ export interface SidecarData {
     changes?: ChangeEntry[];
     // v4: features with pending doc-ahead intent (doc-wins hold set).
     holds?: string[];
+    // v5: per-held-feature {kind, intent} for the pending-intent decoration's hover.
+    // A subset of `holds` (only features with a queued directive). Absent ⇒ none.
+    hold_detail?: Record<string, HoldDetail>;
     // v5: a derived Diátaxis-lite kind hint per feature (overview/reference/…).
     feature_kind?: Record<string, FeatureKind>;
     // v5: top-N coupled neighbours per feature (data only — the Connections panel
@@ -192,6 +206,14 @@ export function divergentFeatures(sidecar: SidecarData): Record<string, string> 
  *  Tolerant: a sidecar from before v4 has no `holds`, so default to none. */
 export function heldFeatures(sidecar: SidecarData): string[] {
     return sidecar.holds ?? [];
+}
+
+/** Per-held-feature detail (kind + intent gloss) for the in-situ pending-intent
+ *  decoration. A subset of `heldFeatures`: only features with a queued directive carry
+ *  detail; a feature held by a live intent alone is absent (it still gets the plain
+ *  rail). Tolerant: a sidecar before the `hold_detail` slice yields an empty map. */
+export function heldDetail(sidecar: SidecarData): Record<string, HoldDetail> {
+    return sidecar.hold_detail ?? {};
 }
 
 /** Latest applied agent-authored AMEND per feature (fid → agent actor id), from

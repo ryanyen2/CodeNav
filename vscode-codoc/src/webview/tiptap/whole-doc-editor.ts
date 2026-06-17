@@ -35,6 +35,7 @@ import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from '.
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
+import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
 import type { FeaturePhase } from '../../state/activity-model';
@@ -81,8 +82,10 @@ export interface WholeDocEditorHandle {
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
     /** Update the "awaiting AI realization" set (the daemon hold set) — drives the
-     *  calm being-realized badge on each held feature heading. */
-    setHeld: (fids: string[]) => void;
+     *  pending-intent rail + underline + being-realized badge. `detail` carries the
+     *  queued directive's kind + intent gloss per feature (a subset of `fids`) for the
+     *  rail's hover title; omit it (tests) for the plain rail. */
+    setHeld: (fids: string[], detail?: Record<string, HoldDetail>) => void;
     /** Per-feature one-line pitches (FeatureMeta.pitch) — feeds glance mode. */
     setPitches: (pitches: Record<string, string>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
@@ -158,6 +161,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentHeld = new Set<string>();   // features awaiting AI realization (badge)
+    let currentHoldDetail: Record<string, HoldDetail> = {};  // queued-directive {kind,intent} per held fid
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
@@ -187,7 +191,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onConsult: opts.onConsult,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
-            HoldDecorations.configure({ getHeld: () => currentHeld, onWithdraw: opts.onWithdrawRealization }),
+            HoldDecorations.configure({
+                getHeld: () => currentHeld,
+                getDetail: () => currentHoldDetail,
+                onWithdraw: opts.onWithdrawRealization,
+            }),
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',
@@ -786,8 +794,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             currentPhases = phases;
             editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
         },
-        setHeld: (fids: string[]) => {
+        setHeld: (fids: string[], detail?: Record<string, HoldDetail>) => {
             currentHeld = new Set(fids);
+            currentHoldDetail = detail ?? {};
             editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true));
         },
         setPitches: (pitches: Record<string, string>) => {

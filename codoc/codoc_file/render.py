@@ -537,6 +537,43 @@ def _live_resolution(store: Store, resolution: dict[str, str]) -> dict[str, str]
     return out
 
 
+def _intent_gloss(kind: str) -> str:
+    """A one-line, plain-language summary of what the queued directive will DO,
+    surfaced as the held feature's hover title. The point is recognition, not just
+    a count: the author can confirm codoc understood the *kind* of work their edit
+    implied (update vs implement vs remove vs steer), in their own words."""
+    k = (kind or "").lower()
+    if "steer" in k:
+        return "apply your note to this feature's code"
+    if "retire" in k:
+        return "remove this feature's code"
+    if "add" in k:
+        return "implement this feature in code"
+    return "update the code to match your new intent"  # amend / default
+
+
+def _hold_detail(store: Store, codoc_dir: str | Path) -> dict[str, dict]:
+    """Per-held-feature detail for the in-situ "pending intent" decoration: the
+    queued directive's ``kind`` + a plain-language intent gloss, keyed by feature id.
+
+    Read from the realize.json manifest — the same source ``hold_set`` reads, so a
+    feature that appears here always also appears in ``holds``. A held feature with
+    only a live (payload-less) intent and no queued directive is absent: it still
+    gets the plain hold rail via ``holds``, just no gloss. First directive per
+    feature wins. Pure derived state (no model fields)."""
+    from codoc.loop.edits import read_manifest
+
+    out: dict[str, dict] = {}
+    for d in read_manifest(codoc_dir):
+        if not d.feature_id or d.feature_id in out:
+            continue
+        f = store.get_feature(d.feature_id)
+        if f is None or f.retired:
+            continue
+        out[d.feature_id] = {"kind": d.kind, "intent": _intent_gloss(d.kind)}
+    return out
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -588,6 +625,12 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # (who/how/why-chained) + the doc-wins hold set.
         "changes": _changes_feed(store),
         "holds": sorted(hold_set(codoc_dir)),
+        # v5: per-held-feature detail for the in-situ "pending intent" decoration —
+        # the queued directive's kind + a plain-language intent gloss, so the IDE can
+        # show WHAT codoc understood (hover title on the pending rail), not just that
+        # something is queued. Keyed by feature id; a subset of `holds` (only features
+        # with a queued directive). Pure derived from the realize.json manifest.
+        "hold_detail": _hold_detail(store, codoc_dir),
         # v5: lightweight INFERRED structure (additive optional slices, no version
         # bump). `feature_kind` is a Diátaxis-lite hint rendered as a chip below the
         # feature title; `feature_see_also` is the top-N coupled neighbours emitted

@@ -532,6 +532,26 @@ span[data-change-id] { text-decoration-style: solid; }
 .ce-realize-withdraw:hover { opacity: 1; color: var(--vscode-foreground);
     background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); }
 
+/* Pending-intent rail + underline — the in-situ "what did I edit that's queued, and
+   did codoc recognise it" signal. The RAIL is a calm 2px accent tick in the left
+   margin of a held feature's description block: scanning down the tree, pending work
+   is visible at a glance with no panel (the ::before keeps it in the gutter, so no
+   reflow vs un-railed blocks). Its native `title` carries the plain-language gloss of
+   WHAT codoc understood. The UNDERLINE marks the bold "focus" runs codoc treats as the
+   actionable request, so a misread shows at the word. Both are STATIC — the appearance
+   itself is the recognition feedback (re-animating on every payload would jank) — and
+   stay on --accent (status axis, no new hue), so nothing here needs a motion gate. */
+.ce-pending-rail { position: relative; }
+.ce-pending-rail::before {
+    content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
+    width: 2px; border-radius: 1px;
+    background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.ce-intent-underline {
+    text-decoration: underline dotted color-mix(in srgb, var(--accent) 60%, transparent);
+    text-decoration-thickness: 1px; text-underline-offset: 3px;
+}
+
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }
 .codoc-feature-heading[data-level="2"] { font-size: 1.04rem; font-weight: 640; margin: 1.2em 0 0.35em; }

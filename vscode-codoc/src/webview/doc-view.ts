@@ -200,7 +200,7 @@ function reconcile(): void {
         wholeEditor.setSuggestions(payload.suggestions ?? []);
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
-        wholeEditor.setHeld(payload.awaitingAI ?? []);
+        wholeEditor.setHeld(payload.awaitingAI ?? [], payload.holdDetail ?? {});
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
         wholeEditor.setDoc(payload.doc);

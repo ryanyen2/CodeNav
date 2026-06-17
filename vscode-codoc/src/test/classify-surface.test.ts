@@ -41,16 +41,17 @@ describe('U3 — heldFeatures (host → payload mapping)', () => {
     });
 });
 
-describe('U3 — buildHoldDecorations (the "being realized" badge)', () => {
-    it('decorates ONLY held feature headings (one node deco + one chip widget each)', () => {
+describe('U3 — buildHoldDecorations (the "being realized" badge + pending rail)', () => {
+    it('decorates a held feature: heading node + chip + a rail on its description block', () => {
         const set = buildHoldDecorations(twoFeatureDoc(), new Set(['f-a']));
-        // f-a held → its heading gets a node decoration + a trailing chip widget; f-b none.
-        expect(set.find().length).toBe(2);
+        // f-a held → heading node deco + trailing chip widget + 1 rail on "Login and
+        // sessions." (no bold → no underline); f-b untouched.
+        expect(set.find().length).toBe(3);
     });
 
-    it('decorates every held heading when more than one is awaiting realization', () => {
+    it('decorates every held feature when more than one is awaiting realization', () => {
         const set = buildHoldDecorations(twoFeatureDoc(), new Set(['f-a', 'f-b']));
-        expect(set.find().length).toBe(4); // 2 headings × (node + widget)
+        expect(set.find().length).toBe(6); // 2 features × (heading node + chip + rail)
     });
 
     it('is empty when nothing is held (a pure-doc edit shows no badge — AE1)', () => {
@@ -59,5 +60,52 @@ describe('U3 — buildHoldDecorations (the "being realized" badge)', () => {
 
     it('ignores a held id with no matching heading (stale hold → no badge)', () => {
         expect(buildHoldDecorations(twoFeatureDoc(), new Set(['f-gone'])).find().length).toBe(0);
+    });
+});
+
+// A held feature whose description carries a bolded "focus" run — the case the
+// pending-intent underline marks (the recognised actionable request).
+function heldDocWithBold(): PMModelNode {
+    return codocSchema().nodeFromJSON({
+        type: 'doc',
+        content: [
+            { type: 'featureHeading', attrs: { fid: 'f-a', level: 0, retired: false, realized: true }, content: [{ type: 'text', text: 'Auth' }] },
+            { type: 'paragraph', content: [
+                { type: 'text', text: 'Login and sessions. ' },
+                { type: 'text', text: 'Should validate tokens', marks: [{ type: 'bold' }] },
+                { type: 'text', text: ' on each request.' },
+            ] },
+        ],
+    });
+}
+
+// The decoration's class/title live on its internal `type.attrs` (not on the public
+// Decoration type), so reach them through a narrow cast for assertions.
+function attrsOf(d: unknown): { class?: string; title?: string } | undefined {
+    return (d as { type?: { attrs?: { class?: string; title?: string } } }).type?.attrs;
+}
+
+function classesOf(set: ReturnType<typeof buildHoldDecorations>): string[] {
+    return set.find().map(d => attrsOf(d)?.class).filter(Boolean) as string[];
+}
+
+describe('pending-intent rail + underline (the in-situ "what is queued" signal)', () => {
+    it('rails the held feature description block AND underlines its bold focus run', () => {
+        const classes = classesOf(buildHoldDecorations(heldDocWithBold(), new Set(['f-a'])));
+        expect(classes).toContain('ce-pending-rail');
+        expect(classes).toContain('ce-intent-underline');
+    });
+
+    it('shows neither rail nor underline when the feature is not held', () => {
+        const classes = classesOf(buildHoldDecorations(heldDocWithBold(), new Set(['f-other'])));
+        expect(classes).not.toContain('ce-pending-rail');
+        expect(classes).not.toContain('ce-intent-underline');
+    });
+
+    it("carries the intent gloss as the rail's hover title (recognition, not just a count)", () => {
+        const set = buildHoldDecorations(heldDocWithBold(), new Set(['f-a']), undefined,
+            { 'f-a': { kind: 'amend', intent: 'update the code to match your new intent' } });
+        const rail = set.find().find(d => attrsOf(d)?.class === 'ce-pending-rail');
+        expect(attrsOf(rail)?.title).toContain('update the code to match your new intent');
     });
 });
