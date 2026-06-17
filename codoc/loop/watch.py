@@ -51,6 +51,14 @@ PARENT_POLL_MS = 3000
 @dataclass
 class WatchState:
     last_tree_hash: str = ""
+    # Self-write guards for the control files Loop B itself drains/clears:
+    # edits.json (annotation/steer/cancellation lists) and inbox.json (verdicts).
+    # Both are watched files, so Loop B clearing them is a filesystem event that
+    # would otherwise re-trigger a redundant no-op Loop B pass — the visible
+    # "edits 1" then "edits 0" double-fire. We record their post-Loop-B hash and
+    # ignore a batch whose only new signal is that self-write (mirrors last_tree_hash).
+    last_edits_hash: str = ""
+    last_inbox_hash: str = ""
     # Agent epoch state — managed by the process_batch epoch-transition logic.
     epoch_open: bool = False
     epoch_origin: str = ""       # "interactive" | "loop_b"
@@ -391,6 +399,16 @@ def process_batch(
     # edit — else a non-edit persist would ping-pong the loop.
     if doc_touched and not has_pending_doc_edits(codoc_dir):
         doc_touched = False
+    # edits.json / inbox.json: Loop B itself clears these (drain annotations/steers/
+    # cancellations, clear verdicts). That clear is a watched-file event that would
+    # re-route straight back into a no-op Loop B pass ("edits 1" → "edits 0"). Ignore
+    # it when the file is byte-identical to what the last Loop B pass left behind —
+    # the same self-write guard the tree.codoc hash provides above. A genuine host
+    # write (a new annotation / verdict) changes the bytes, so it is never suppressed.
+    if edits_touched and _hash(edits_path(codoc_dir)) == state.last_edits_hash:
+        edits_touched = False
+    if inbox_touched and _hash(inbox_path(codoc_dir)) == state.last_inbox_hash:
+        inbox_touched = False
 
     # ── Step 3: While an epoch is open, suppress independent Loop A AND Loop B. ──
     if state.epoch_open:
@@ -415,6 +433,11 @@ def process_batch(
         if codoc_touched or doc_touched:
             status.write_status(codoc_dir, status.TREE_DIRTY, detail="applying tree edits")
         res = loop_b(root_dir, codoc_dir, dry_run=dry_run or no_realize)
+        # Loop B just drained/cleared edits.json + inbox.json; record their new state
+        # so the resulting watch event (its own write) is recognised as a self-write
+        # on the next batch and not re-routed back into Loop B.
+        state.last_edits_hash = _hash(edits_path(codoc_dir))
+        state.last_inbox_hash = _hash(inbox_path(codoc_dir))
         label, summary = "codoc→code", res.summary()
     elif code_files:
         res = loop_a(root_dir, codoc_dir, file_scope=code_files)
@@ -498,7 +521,11 @@ def run_watch(
     atexit.register(clear_pidfile, codoc_dir)
 
     _render(codoc_dir)
-    state = WatchState(last_tree_hash=_hash(tree_path(codoc_dir)))
+    state = WatchState(
+        last_tree_hash=_hash(tree_path(codoc_dir)),
+        last_edits_hash=_hash(edits_path(codoc_dir)),
+        last_inbox_hash=_hash(inbox_path(codoc_dir)),
+    )
 
     # Startup drift reconcile: catch any code↔tree divergence that accumulated
     # while the daemon was down (or that a previously-crashed cycle missed). This

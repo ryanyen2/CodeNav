@@ -159,3 +159,42 @@ def test_edits_json_routes_to_loop_b(dirs):
     assert out and out[0] == "codoc→code"
     assert b.seen["called"]
     assert "called" not in a.seen
+
+
+def test_loop_b_self_clear_of_edits_does_not_refire(dirs):
+    """Loop B drains edits.json (clearing the annotation list); that clear is a
+    watched-file event but must NOT re-trigger a second no-op Loop B pass — the
+    "edits 1" then "edits 0" double-fire the daemon log showed. The self-write
+    guard recognises the daemon's own write and ignores it."""
+    from codoc.loop.edits import edits_path
+    root, codoc_dir, tp = dirs
+    ep = edits_path(codoc_dir)
+    ep.write_text(
+        '{"version":1,"edits":[{"feature_id":"f-1","fields":["description"],'
+        '"actor":"human","mode":"pen"}],"intents":[]}'
+    )
+    a = _spy(LoopAResult())
+
+    calls = {"n": 0}
+
+    def b_drain(root_dir, codoc_dir, **kw):
+        # Mimic drain_annotations: the only list is consumed → the file is removed.
+        edits_path(codoc_dir).unlink()
+        calls["n"] += 1
+        return LoopBResult(user_edits=1)
+
+    state = WatchState(last_tree_hash=_hash(tp))
+
+    # Batch 1 — the genuine host edit. Routes to Loop B, which drains edits.json.
+    out1 = process_batch([str(ep)], root, codoc_dir, state,
+                         loop_a=a, loop_b=b_drain, render=_noop_render)
+    assert out1 and out1[0] == "codoc→code"
+    assert calls["n"] == 1
+
+    # Batch 2 — the watch event from Loop B's OWN clear of edits.json. Ignored:
+    # no second pass, nothing routed.
+    out2 = process_batch([str(ep)], root, codoc_dir, state,
+                         loop_a=a, loop_b=b_drain, render=_noop_render)
+    assert out2 is None
+    assert calls["n"] == 1  # Loop B not re-fired
+    assert "called" not in a.seen
