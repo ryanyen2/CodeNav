@@ -447,21 +447,13 @@ function renderDocHost(): HTMLElement {
  *  by greying the whole tree would be noise, not signal). Returns whether the spotlight
  *  actually changed, so callers can skip the O(rows) re-tag on an unchanged focus
  *  (arrow-key nav usually stays within the same dependency cluster). */
-function sameFocus(a: typeof focusState, b: typeof focusState): boolean {
-    if (a === b) return true;
-    if (!a || !b || a.fid !== b.fid || a.on.size !== b.on.size || a.by.size !== b.by.size) return false;
-    for (const x of a.on) if (!b.on.has(x)) return false;
-    for (const x of a.by) if (!b.by.has(x)) return false;
-    return true;
-}
-function computeFocus(fid: string | null): boolean {
-    const t = fid ? payload.threads?.[fid] : undefined;
-    const on = new Set((t?.reads ?? []).map(r => r.toId));
-    const by = new Set((t?.usedBy ?? []).map(r => r.toId));
-    const next = fid && (on.size || by.size) ? { fid, on, by } : null;
-    const changed = !sameFocus(focusState, next);
-    focusState = next;
-    document.body.classList.toggle('focus-dimming', !!focusState);
+function computeFocus(_fid: string | null): boolean {
+    // Dependency spotlight removed (user request): no opacity dimming, no directional
+    // --dep-out/--dep-in tinting. Kept as a no-op clear so every caller stays valid and
+    // any prior dimming/tint is torn down on the next selection.
+    const changed = focusState !== null;
+    focusState = null;
+    document.body.classList.remove('focus-dimming');
     return changed;
 }
 
@@ -511,7 +503,13 @@ function setSelected(id: string | null, scrollDoc: boolean): void {
     document.querySelectorAll('.row.selected').forEach(r => r.classList.remove('selected'));
     if (!id) return;
     const rowEl = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(id) + '"]');
-    if (rowEl) { rowEl.classList.add('selected'); rowEl.scrollIntoView({ block: 'nearest' }); }
+    if (rowEl) {
+        rowEl.classList.add('selected');
+        // Only scroll the tree when the selection came from the tree itself (click /
+        // keyboard nav). An editor caret move (syncingFromEditor) just highlights the
+        // row — scrolling the tree on every keystroke is the "tree keeps scrolling" jank.
+        if (!syncingFromEditor) rowEl.scrollIntoView({ block: 'nearest' });
+    }
     // Scroll the editor to this feature — unless the selection came from the editor's
     // own caret (avoid fighting it) or the id is a pending ghost (no live heading).
     if (scrollDoc && !syncingFromEditor && wholeEditor && id.startsWith('f-')) {

@@ -745,6 +745,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
 
             const keepFid = activeFid();          // stable anchor for existing features
             const keepIndex = activeHeadingIndex(); // fallback for a brand-new (fid:null) heading
+            const savedPos = editor.state.selection.from; // the user's actual caret — keep it
             suppressUpdate = true;
             try {
                 // Replace the whole doc with a REFLECT-tagged transaction so the
@@ -762,13 +763,22 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 editor.commands.setContent(doc as unknown as Record<string, unknown>, false);
             }
             suppressUpdate = false;
-            // The pre-reload selection no longer maps onto the new doc — drop it so a
-            // toolbar/bubble action can't fall back to a stale range and stamp the wrong
-            // span (a clamp keeps it in-bounds but not in the right text).
+            // Keep the user's caret WHERE IT WAS instead of yanking it to the feature
+            // heading. The common case is a settle round-trip where the new doc is ~identical,
+            // so restoring the pre-reload absolute position (clamped) keeps the caret exactly
+            // put; a larger change just lands nearby. Only when there was no real caret
+            // (position at doc start) do we fall back to the active heading.
+            // `lastSelection` (the toolbar/bubble anchor) is still dropped — a stale range
+            // there could stamp the wrong span.
             lastSelection = null;
-            const restorePos = (keepFid ? headingPosForFid(editor, keepFid) : null) ?? headingPosAtIndex(keepIndex);
+            const maxPos = Math.max(1, editor.state.doc.content.size - 1);
+            let restorePos: number | null = savedPos > 0 ? Math.min(savedPos, maxPos) : null;
+            if (restorePos == null) {
+                const head = (keepFid ? headingPosForFid(editor, keepFid) : null) ?? headingPosAtIndex(keepIndex);
+                restorePos = head == null ? null : head + 1;
+            }
             if (restorePos != null) {
-                editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(restorePos + 1))));
+                editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(restorePos))));
             }
             markSaving('');
             rebuildRail();
