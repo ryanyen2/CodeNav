@@ -141,4 +141,18 @@ describe('changedRange (pending-change word diff)', () => {
     it('is null for a pure trailing deletion (nothing added in current)', () => {
         expect(changedRange('one two three', 'one two')).toBeNull();
     });
+
+    it('stable episode-start baseline keeps the WHOLE change visible across iterations', () => {
+        // The field bug: iterating eroded the baseline to the previous keystroke, so the
+        // diff collapsed and the decoration vanished. With the daemon freezing the baseline
+        // at episode start, the diff vs that stable baseline spans the entire addition even
+        // 3 edits deep — and an eroded baseline visibly collapses it (why the freeze matters).
+        const current = 'Caches values. Should also cache reads, writes, and evictions.';
+        const stable = changedRange('Caches values.', current)!;
+        expect(current.slice(stable.start, stable.end))
+            .toContain('Should also cache reads, writes, and evictions');
+        const eroded = changedRange('Caches values. Should also cache reads, writes, and', current);
+        const erodedSpan = eroded ? current.slice(eroded.start, eroded.end) : '';
+        expect(erodedSpan.length).toBeLessThan(current.slice(stable.start, stable.end).length);
+    });
 });
