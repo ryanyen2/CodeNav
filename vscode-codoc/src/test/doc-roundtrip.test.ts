@@ -21,9 +21,32 @@ import {
     descriptionToBlocks,
     blocksToDescriptionText,
     descriptionBlocksForFid,
+    normalizeDescription,
     PMNode,
 } from '../state/pm-doc';
 import { PENDING_SENTINEL } from '../state/tree-model';
+
+// R19 — the TS canonical normalization must match codoc/codoc_file/parse.py
+// (normalize_description). These cases mirror the Python test
+// tests/codoc_file/test_roundtrip_idempotency.py; both sides must agree byte-for-byte
+// or a description round-trips to a phantom diff between host and daemon.
+describe('normalizeDescription — canonical form, parity with parse.normalize_description', () => {
+    const cases: Array<[string, string]> = [
+        ['Holds brand colors. ', 'Holds brand colors.'],          // trailing space
+        ['Holds brand colors.\n', 'Holds brand colors.'],         // trailing newline
+        ['  leading and trailing  ', 'leading and trailing'],
+        ['a.\n\n\n\nb.', 'a.\n\nb.'],                              // collapse interior blank run
+        ['\n\nonly.\n\n', 'only.'],                               // drop edge blanks
+        ['First paragraph.\n\nSecond paragraph.', 'First paragraph.\n\nSecond paragraph.'], // fixed point
+    ];
+    it.each(cases)('normalizes %j', (input, expected) => {
+        expect(normalizeDescription(input)).toBe(expected);
+    });
+    it('blocksToDescriptionText emits canonical text (trailing whitespace stripped)', () => {
+        const blocks = [paragraphNode([textNode('Holds brand colors. ')])];
+        expect(blocksToDescriptionText(blocks)).toBe('Holds brand colors.');
+    });
+});
 
 /** Strip the stale leading `#` header + the pending-changes block + trailing blanks,
  *  yielding the headerless, ghost-less form today's `render_tree` emits. */

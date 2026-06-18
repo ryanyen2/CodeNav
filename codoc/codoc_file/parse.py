@@ -105,6 +105,30 @@ def extract_bold(text: str) -> list[str]:
     return list(dict.fromkeys(s for s in spans if s))
 
 
+def normalize_description(text: str) -> str:
+    """Canonical form for a feature description (R19): strip each line, drop
+    leading/trailing blank lines, and collapse interior runs of blank lines to a
+    single break.
+
+    The rich editor's paragraph model has no notion of trailing whitespace or of
+    multiple consecutive blank lines, so this is the ONE normalization that both
+    parsers (the ``tree.codoc`` text parser here and the ``tree.doc.json`` walker in
+    ``doc_parse``) and the diff comparison apply. Without it, a description differing
+    only by trailing whitespace round-trips to a phantom AMEND — the daemon re-applies
+    and re-renders in a loop. Idempotent: a canonical string is a fixed point."""
+    lines = [ln.strip() for ln in (text or "").split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    collapsed: list[str] = []
+    for ln in lines:
+        if not ln and collapsed and not collapsed[-1]:
+            continue  # drop a 2nd+ consecutive blank
+        collapsed.append(ln)
+    return "\n".join(collapsed)
+
+
 def parse_text(text: str) -> ParsedTree:
     tree = ParsedTree()
     stack: list[tuple[int, ParsedNode]] = []  # (indent, node)
@@ -128,22 +152,7 @@ def parse_text(text: str) -> ParsedTree:
         nonlocal desc_owner, desc_buf
         flush_comment()
         if desc_owner is not None:
-            lines = [dl.strip() for dl in desc_buf]
-            while lines and not lines[0]:
-                lines.pop(0)
-            while lines and not lines[-1]:
-                lines.pop()
-            # Collapse interior runs of blank lines to a SINGLE break (U7): the rich
-            # editor round-trips descriptions through a paragraph model that has no
-            # notion of multiple consecutive blank lines, so a raw-text edit with
-            # extra blanks must normalize to one — keeping the TS↔Python round-trip
-            # byte-identical (doc-serialize's blocksToDescriptionText does the same).
-            collapsed: list[str] = []
-            for ln in lines:
-                if not ln and collapsed and not collapsed[-1]:
-                    continue  # drop a 2nd+ consecutive blank
-                collapsed.append(ln)
-            desc_owner.description = "\n".join(collapsed)
+            desc_owner.description = normalize_description("\n".join(desc_buf))
             desc_owner.refs = extract_refs(desc_owner.description)
         desc_owner = None
         desc_buf = []

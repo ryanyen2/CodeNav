@@ -23,7 +23,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codoc.codoc_file.parse import ParsedNode, ParsedTree, extract_refs
+from codoc.codoc_file.parse import (
+    ParsedNode, ParsedTree, extract_refs, normalize_description,
+)
 from codoc.loop.filenames import DOC_FILENAME
 
 # Mark + node names — mirror pm-doc.ts / agent-proposals.ts (the TS side).
@@ -63,9 +65,11 @@ def _inline_text(content: list | None) -> str:
 def _description(paragraphs: list[list]) -> str:
     """Paragraph text projections → one description string, matching
     ``blocksToDescriptionText``: drop empty paragraphs, join the rest with a blank
-    line (one paragraph break). Equivalent to parse.py's collapsed form."""
+    line (one paragraph break), then apply the canonical normalization so the doc
+    path produces byte-identical text to the ``tree.codoc`` parser (R19 — otherwise
+    trailing whitespace from a doc edit round-trips to a phantom AMEND)."""
     texts = [t for t in (_inline_text(p) for p in paragraphs) if t.strip()]
-    return "\n\n".join(texts)
+    return normalize_description("\n\n".join(texts))
 
 
 def parse_doc(doc: dict) -> ParsedTree:

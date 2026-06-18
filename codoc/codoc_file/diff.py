@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from codoc.codoc_file.parse import ParsedTree, extract_bold
+from codoc.codoc_file.parse import ParsedTree, extract_bold, normalize_description
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.store.db import Store
 
@@ -68,7 +68,12 @@ def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
         for comment in node.comments:
             diff.comments.append((f.id, comment))
 
-        if node.title != f.title or node.description != (f.description or ""):
+        # Compare descriptions in canonical form so a trailing-whitespace-only delta
+        # is NOT a phantom edit (R19), regardless of how the store got its text (a
+        # parser, or a non-normalizing agent/bootstrap write). Emit the canonical form
+        # so the applied AMEND leaves the store canonical.
+        new_desc = normalize_description(node.description)
+        if node.title != f.title or new_desc != normalize_description(f.description or ""):
             old_bold = set(extract_bold(f.description or ""))
             newly = [b for b in extract_bold(node.description) if b not in old_bold]
             if newly:
@@ -77,7 +82,7 @@ def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
                 kind=NodeOpKind.AMEND,
                 feature_id=f.id,
                 title=node.title,
-                description=node.description,
+                description=new_desc,
             ))
         if node.parent_id != f.parent_id:
             diff.user_ops.append(NodeOp(

@@ -169,17 +169,38 @@ export function descriptionToBlocks(description: string): PMNode[] {
 }
 
 /**
+ * Canonical form for a feature description (R19) — the TS mirror of
+ * `parse.normalize_description` (codoc/codoc_file/parse.py). Strip each line, drop
+ * leading/trailing blank lines, collapse interior blank-line runs to one. Keeping
+ * the host's serialized description canonical means a trailing-whitespace-only edit
+ * never round-trips to a phantom diff against the daemon's parser. Must stay byte-for
+ * byte equal to the Python form — guarded by the parity test in doc-roundtrip.test.ts.
+ */
+export function normalizeDescription(text: string): string {
+    const lines = (text ?? '').split('\n').map(l => l.trim());
+    while (lines.length && !lines[0]) lines.shift();
+    while (lines.length && !lines[lines.length - 1]) lines.pop();
+    const collapsed: string[] = [];
+    for (const ln of lines) {
+        if (!ln && collapsed.length && !collapsed[collapsed.length - 1]) continue;
+        collapsed.push(ln);
+    }
+    return collapsed.join('\n');
+}
+
+/**
  * Paragraph blocks → description string (inverse of `descriptionToBlocks`).
- * Empty paragraphs are dropped; the rest join with a blank line. Marks (bold,
- * author, …) are projected away — only text + codeRef markdown survive, matching
- * what `tree.codoc` can carry.
+ * Empty paragraphs are dropped; the rest join with a blank line, then the result is
+ * canonicalized (`normalizeDescription`) so the host's serialized text matches the
+ * daemon's parser. Marks (bold, author, …) are projected away — only text + codeRef
+ * markdown survive, matching what `tree.codoc` can carry.
  */
 export function blocksToDescriptionText(blocks: PMNode[]): string {
-    return blocks
+    return normalizeDescription(blocks
         .filter(b => b.type === NODE_PARAGRAPH)
         .map(b => inlineRunsToText(b.content))
         .filter(s => s.trim().length > 0)
-        .join('\n\n');
+        .join('\n\n'));
 }
 
 /** Pull the paragraph blocks that belong to feature `fid` out of a whole-tree doc
