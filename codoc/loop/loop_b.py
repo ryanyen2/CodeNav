@@ -236,10 +236,18 @@ def _rewrite_queue(root_dir: str, codoc_dir: str, survivors: list) -> None:
         edits_channel.clear_manifest(codoc_dir)
         return
     edits_channel.write_manifest(codoc_dir, survivors)
-    renderable = [d for d in survivors if d.text]
-    if renderable:
+    # realize.md carries handed-off directives only; held drafts stay in the manifest
+    # (surfaced as the in-situ diff) without a trigger. No handed-off survivor ⇒ remove
+    # the trigger but keep the manifest (the drafts live on until hand-off).
+    handed = [d for d in survivors if d.text and d.handed_off]
+    if handed:
         _write_realize(codoc_dir, build_realize_prompt(
-            [d.text for d in renderable], root_dir, [d.id for d in renderable]))
+            [d.text for d in handed], root_dir, [d.id for d in handed]))
+    else:
+        try:
+            realize_path(codoc_dir).unlink()
+        except OSError:
+            pass
 
 
 def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
@@ -508,58 +516,54 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     if edited_fids and not dry_run:
         _supersede_directives(root_dir, codoc_dir, edited_fids)
 
-    if dry_run or not res.directives:
+    if dry_run:
         status.refresh_status(codoc_dir, store)
         return res
 
-    # 3. Hand the directives to the live session: write .codoc/realize.md (each
-    #    heading carries its minted ⟨d-id⟩) + the machine-readable realize.json
-    #    manifest (ids → features → causes: the hold set + causality chain), and
-    #    set status `awaiting_impl`. No headless `claude -p`. The session
-    #    implements via /codoc:sync; the loop closes when the Stop-hook
-    #    reflection (or the watch daemon's epoch-close Loop A) reflects the
-    #    written code back.
-    #    An in-flight queue is APPENDED to, not clobbered: unimplemented
-    #    directives from the existing manifest (those carrying their rendered
-    #    text) are re-rendered ahead of the new ones — this is what lets a
-    #    steering comment land while a realization is already underway.
+    # 3. Finalize the queue. Merge this pass's new directives into the manifest and
+    #    derive each directive's `handed_off` from the LIVE drafts set (the webview's
+    #    suggesting-mode holds): a held draft stays OUT of realize.md until the human
+    #    hands it off (the host removes it from `drafts`). realize.md — the agent's
+    #    trigger — is (re)built from handed-off directives ONLY, then status is
+    #    awaiting_impl. This block runs even with NO new directive, so a hand-off (a
+    #    drafts-set change with no fresh edit) is processed. With no drafts set, every
+    #    directive is handed off ⇒ today's immediate-realize (the gate is additive).
+    #    The session implements via /codoc:sync; the Stop-hook reflection / epoch-close
+    #    Loop A closes the loop. Drafts surface via the in-situ diff + pending dots
+    #    (hold_set reads the manifest), no realize.md needed.
     existing = edits_channel.read_manifest(codoc_dir)
-    legacy = [d for d in existing if not d.text]
+    if not existing and not res.directives:
+        status.refresh_status(codoc_dir, store)
+        return res
+
+    drafts_set = edits_channel.read_drafts(codoc_dir)
     res.directive_ids = [new_directive_id() for _ in rendered]
-    res.queued_total = len(existing) + len(res.directives)
-
-    if legacy:
-        # Pre-`text` manifest entries can't be re-rendered from the manifest —
-        # preserve the existing queue file verbatim and append the new sections
-        # after it, rather than silently dropping the in-flight directives.
-        try:
-            old_body = realize_path(codoc_dir).read_text()
-        except OSError:
-            old_body = ""
-        new_sections = "\n\n".join(
-            f"### {len(existing) + i + 1}. ⟨{did}⟩ {text}"
-            for i, (did, text) in enumerate(zip(res.directive_ids, res.directives)))
-        prompt = (f"{old_body.rstrip()}\n\n{new_sections}\n" if old_body.strip()
-                  else build_realize_prompt(res.directives, root_dir, res.directive_ids))
-    else:
-        all_texts = [d.text for d in existing] + res.directives
-        all_ids = [d.id for d in existing] + res.directive_ids
-        prompt = build_realize_prompt(all_texts, root_dir, all_ids)
-
-    # Manifest BEFORE the queue file: a crash between the two writes then leaves
-    # a manifest with no realize.md beside it — a state read_manifest already
-    # treats as stale (cleaned up, or self-healed on the in-flight append path).
-    # The reverse order would orphan realize.md: the next pass would see an
-    # empty manifest and clobber the queued items.
-    edits_channel.write_manifest(codoc_dir, existing + [
+    all_directives = existing + [
         edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text,
                                 baseline=baselines.get(fid, ""))
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
-    ])
-    _write_realize(codoc_dir, prompt)
-    res.queued = True
-    status.refresh_status(
-        codoc_dir, store, awaiting_impl=True, pending=res.queued_total,
-        detail=f"{res.queued_total} change(s) ready to implement — run /codoc:sync",
-    )
+    ]
+    for d in all_directives:
+        d.handed_off = d.feature_id not in drafts_set
+    # Manifest first (its no-realize.md-but-drafts state is the source of truth);
+    # realize.md (the agent trigger) is rebuilt from handed-off directives only.
+    edits_channel.write_manifest(codoc_dir, all_directives)
+    handed = [d for d in all_directives if d.handed_off and d.text]
+    if handed:
+        _write_realize(codoc_dir, build_realize_prompt(
+            [d.text for d in handed], root_dir, [d.id for d in handed]))
+        res.queued = True
+        res.queued_total = len(handed)
+        status.refresh_status(
+            codoc_dir, store, awaiting_impl=True, pending=len(handed),
+            detail=f"{len(handed)} change(s) ready to implement — run /codoc:sync",
+        )
+    else:
+        # Only held drafts (nothing handed off this pass) — remove the trigger; the
+        # drafts persist in the manifest and surface as the in-situ diff + pending dots.
+        try:
+            realize_path(codoc_dir).unlink()
+        except OSError:
+            pass
+        status.refresh_status(codoc_dir, store)
     return res

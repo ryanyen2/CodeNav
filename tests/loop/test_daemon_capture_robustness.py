@@ -18,8 +18,8 @@ from codoc.codoc_file.doc_parse import doc_path
 from codoc.codoc_file.parse import parse_tree_file
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.render import write_tree
-from codoc.loop.edits import read_manifest
-from codoc.loop.loop_b import run_loop_b
+from codoc.loop.edits import hold_set, read_manifest, set_drafts
+from codoc.loop.loop_b import realize_path, run_loop_b
 from codoc.model.binding import Binding
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -184,3 +184,66 @@ def test_baseline_is_stable_across_iterations(repo):
         _write_doc(codoc_dir, [(f.id, "Feat", [v])])
         _pass(root, codoc_dir)
         assert read_manifest(codoc_dir)[0].baseline == "Caches values.", "baseline eroded mid-episode"
+
+
+# ── U3/U4 — suggesting-mode drafts are HELD until hand-off ────────────────────
+
+def test_draft_edit_is_held_then_realized_on_handoff(repo):
+    """A code-implying edit on a feature the webview marks as a DRAFT stays held — in the
+    manifest + hold set (so it shows the in-situ diff) but NOT in realize.md (the agent
+    trigger) — until the host hands it off (removes it from `drafts`)."""
+    root, codoc_dir = repo
+    f = _seed(codoc_dir, description="Caches values.")
+    set_drafts(codoc_dir, [f.id])  # webview holds this feature's edit as a suggesting-mode draft
+    _write_doc(codoc_dir, [(f.id, "Feat", ["Should also cache reads."])])
+    _pass(root, codoc_dir)
+
+    m = read_manifest(codoc_dir)
+    assert len(m) == 1 and m[0].handed_off is False         # held, not handed off
+    assert not realize_path(codoc_dir).exists()             # no agent trigger yet
+    assert f.id in hold_set(codoc_dir)                       # but surfaces as in-situ diff / pending dot
+
+    # re-persisting the same draft doc must NOT clear it as stale, nor realize it
+    _pass(root, codoc_dir)
+    assert read_manifest(codoc_dir) and not realize_path(codoc_dir).exists()
+
+    # HAND OFF: host removes the feature from drafts → next pass promotes + writes the trigger
+    set_drafts(codoc_dir, [])
+    _pass(root, codoc_dir)
+    m2 = read_manifest(codoc_dir)
+    assert m2 and m2[0].handed_off is True
+    assert realize_path(codoc_dir).exists()                 # the agent trigger is now written
+
+
+def test_default_no_drafts_realizes_immediately(repo):
+    """Without any drafts signal (raw-text edits / today's flow), a code-implying edit
+    realizes immediately — the draft gate is additive, not a behavior change."""
+    root, codoc_dir = repo
+    f = _seed(codoc_dir, description="Caches values.")
+    _write_doc(codoc_dir, [(f.id, "Feat", ["Should also cache reads."])])
+    _pass(root, codoc_dir)
+    m = read_manifest(codoc_dir)
+    assert m and m[0].handed_off is True and realize_path(codoc_dir).exists()
+
+
+def test_mixed_draft_held_while_other_feature_realizes(repo):
+    """One feature held as a draft, another not: the non-draft realizes (in realize.md);
+    the draft stays held but in the hold set."""
+    root, codoc_dir = repo
+    fa = _seed(codoc_dir, title="A", description="A caches values.")
+    s = open_store(codoc_dir)
+    fb = Feature(title="B", description="B caches values.")
+    s.upsert_feature(fb)
+    s.upsert_binding(Binding(feature_id=fb.id, file="b.py", symbol_path="b.py::B", fingerprint="h"))
+    write_tree(s, codoc_dir); s.close()
+
+    set_drafts(codoc_dir, [fa.id])  # only A is held
+    _write_doc(codoc_dir, [(fa.id, "A", ["Should also cache reads."]),
+                           (fb.id, "B", ["Should also cache writes."])])
+    _pass(root, codoc_dir)
+
+    m = {d.feature_id: d for d in read_manifest(codoc_dir)}
+    assert m[fa.id].handed_off is False and m[fb.id].handed_off is True
+    body = realize_path(codoc_dir).read_text()
+    assert "cache writes" in body and "cache reads" not in body  # only B handed off
+    assert fa.id in hold_set(codoc_dir) and fb.id in hold_set(codoc_dir)

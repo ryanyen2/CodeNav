@@ -193,15 +193,19 @@ def test_steer_caused_by_matches_cooccurring_amend(dirs):
     assert amend.caused_by and steer.caused_by == amend.caused_by
 
 
-def test_legacy_textless_manifest_preserved_on_append(dirs):
-    """Pre-`text` manifest entries can't be re-rendered — the existing queue
-    file must be kept verbatim and the new sections appended, never dropped."""
+def test_in_flight_handed_directive_preserved_on_append(dirs):
+    """A handed-off directive already in flight must NOT be clobbered when a new one is
+    appended — the queue is rebuilt from the manifest (existing + new), so both survive.
+    (realize.md is rebuilt from the manifest's `text` each pass; pre-`text` text-less
+    entries no longer occur — Loop B always writes text.)"""
     root, codoc_dir = dirs
     f = _seed(codoc_dir)
-    old_body = '### 1. UPDATE FEATURE: "Color palette"\n  New intent: legacy directive body\n'
-    realize_path(codoc_dir).write_text(old_body)
     edits_channel.write_manifest(codoc_dir, [
-        edits_channel.Directive(id="d-legacy01", feature_id=f.id, kind="amend")])
+        edits_channel.Directive(
+            id="d-existing1", feature_id=f.id, kind="amend", handed_off=True,
+            text='UPDATE FEATURE: "Color palette"\n  New intent: existing directive body')])
+    realize_path(codoc_dir).write_text(
+        '### 1. ⟨d-existing1⟩ UPDATE FEATURE: "Color palette"\n  New intent: existing directive body\n')
 
     _edit_tree(codoc_dir, "Holds brand colors.",
                "Holds brand colors.\n  > also cache palette lookups")
@@ -209,10 +213,10 @@ def test_legacy_textless_manifest_preserved_on_append(dirs):
 
     assert res.steered == 1 and res.queued and res.queued_total == 2
     body = realize_path(codoc_dir).read_text()
-    assert "legacy directive body" in body          # old queue preserved verbatim
-    assert "### 2." in body and "STEER FEATURE" in body  # new section appended
+    assert "existing directive body" in body         # in-flight queue preserved
+    assert "STEER FEATURE" in body                    # new section appended
     manifest = edits_channel.read_manifest(codoc_dir)
-    assert [d.id for d in manifest][0] == "d-legacy01" and len(manifest) == 2
+    assert [d.id for d in manifest][0] == "d-existing1" and len(manifest) == 2
 
 
 # -- bold = focus -----------------------------------------------------------

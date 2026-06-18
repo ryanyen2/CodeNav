@@ -119,6 +119,11 @@ class Directive:
                        # old + new) instead of clobbering unimplemented items
     baseline: str = ""  # the feature's description BEFORE this edit (AMEND only) — lets
                         # the IDE diff baseline↔current and underline the changed text
+    handed_off: bool = True  # False = a DRAFT held in suggesting mode (in the manifest +
+                             # the in-situ diff/hold set, but NOT yet in realize.md / sent
+                             # to the agent) until the human hands it off. Default True so
+                             # legacy manifests + non-suggesting (raw-text) edits realize
+                             # immediately, exactly as before — the draft gate is additive.
 
 
 def edits_path(codoc_dir: str | Path) -> Path:
@@ -162,10 +167,15 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
     return out
 
 
-# The four edits.json lists. ``edits``/``cancellations``/``steers`` are loop-drained
-# one-shot; ``intents`` is host-owned (the loops only read it). Every writer
-# preserves the lists it isn't changing via ``_rewrite``.
-_LISTS = ("edits", "intents", "cancellations", "steers")
+# The edits.json lists. ``edits``/``cancellations``/``steers`` are loop-drained
+# one-shot; ``intents`` and ``drafts`` are host-owned (the loops only read them).
+# Every writer preserves the lists it isn't changing via ``_rewrite``.
+#   ``drafts`` = feature ids the webview is holding as suggesting-mode DRAFTS: their
+#   queued directive stays held (out of realize.md) until the human hands off. The host
+#   adds a fid on a code-implying draft edit and removes it on hand-off; the loop derives
+#   each directive's ``handed_off`` from this set every pass (so removing a fid releases
+#   it). Empty/absent → every directive is handed off, i.e. today's immediate-realize.
+_LISTS = ("edits", "intents", "cancellations", "steers", "drafts")
 
 
 def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
@@ -185,7 +195,7 @@ def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
     payload: dict = {"version": 1, "edits": merged["edits"], "intents": merged["intents"]}
     # Keep the optional lists out of the payload when empty (matches the prior shape
     # + keeps a plain annotations-only file byte-identical to before).
-    for k in ("cancellations", "steers"):
+    for k in ("cancellations", "steers", "drafts"):
         if merged[k]:
             payload[k] = merged[k]
     atomic_write_json(dest, payload)
@@ -283,6 +293,23 @@ def append_steer(codoc_dir: str | Path, steer: Steer) -> Path | None:
     return _rewrite(codoc_dir, steers=steers)
 
 
+def read_drafts(codoc_dir: str | Path) -> set[str]:
+    """Feature ids the webview is holding as suggesting-mode drafts (host-owned).
+    A directive for one of these stays held (out of realize.md) until hand-off."""
+    out: set[str] = set()
+    for d in _load(codoc_dir).get("drafts", []):
+        fid = d.get("feature_id") if isinstance(d, dict) else d
+        if isinstance(fid, str) and fid:
+            out.add(fid)
+    return out
+
+
+def set_drafts(codoc_dir: str | Path, feature_ids: list[str]) -> Path | None:
+    """Host/test seam: set the held-draft feature-id set wholesale (hand-off removes
+    ids; a draft edit adds them). Preserves the other edits.json lists."""
+    return _rewrite(codoc_dir, drafts=[{"feature_id": f} for f in feature_ids])
+
+
 # ─── realize.json — the directive manifest ───────────────────────────────────
 
 def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
@@ -290,27 +317,35 @@ def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(dest, {"version": 1, "directives": [
         {"id": d.id, "feature_id": d.feature_id, "kind": d.kind,
-         "caused_by": d.caused_by, "text": d.text, "baseline": d.baseline}
+         "caused_by": d.caused_by, "text": d.text, "baseline": d.baseline,
+         "handed_off": d.handed_off}
         for d in directives
     ]})
     return dest
 
 
 def read_manifest(codoc_dir: str | Path) -> list[Directive]:
-    """The queued directives. A manifest with no ``realize.md`` beside it is
-    stale (the agent deleted the queue but not the manifest) — ignored and
-    opportunistically removed."""
+    """The queued directives. A manifest with no ``realize.md`` beside it is stale —
+    the agent finished and deleted the queue — UNLESS it still holds DRAFT directives
+    (``handed_off=False``), which intentionally live without a realize.md until the
+    human hands them off. So: no realize.md + a held draft → keep; no realize.md + all
+    handed-off → stale (cleared)."""
     path = manifest_path(codoc_dir)
     if not path.exists():
         return []
+    data = read_json(path, default={})
+    directives = [Directive(id=d.get("id") or "", feature_id=d.get("feature_id") or "",
+                            kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
+                            text=d.get("text") or "", baseline=d.get("baseline") or "",
+                            handed_off=bool(d.get("handed_off", True)))
+                  for d in data.get("directives", [])]
     if not (Path(codoc_dir) / REALIZE_FILENAME).exists():
+        drafts = [d for d in directives if not d.handed_off]
+        if drafts:
+            return drafts  # held drafts survive without a realize.md
         clear_manifest(codoc_dir)
         return []
-    data = read_json(path, default={})
-    return [Directive(id=d.get("id") or "", feature_id=d.get("feature_id") or "",
-                      kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
-                      text=d.get("text") or "", baseline=d.get("baseline") or "")
-            for d in data.get("directives", [])]
+    return directives
 
 
 def clear_manifest(codoc_dir: str | Path) -> None:
