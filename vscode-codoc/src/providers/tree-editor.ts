@@ -31,7 +31,7 @@ import {
 import { directedEdges, agentAmendsByFeature, heldFeatures, heldDetail, divergentFeatures } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
-    annotationsForSettle, appendCancellation, appendSteer,
+    annotationsForSettle, appendCancellation, appendSteer, setDrafts,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -63,6 +63,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  payload in that window never reverts the user's just-settled edit. Cleared
      *  when tree.codoc catches up. */
     private docAhead = new Set<string>();
+    /** Suggesting-mode DRAFTS (U4), per doc uri: feature ids whose edit the human is
+     *  holding as a draft (the daemon keeps their code-implying directive out of the
+     *  agent queue until hand-off). The host is the SOLE writer of edits.json `drafts`
+     *  (marks on settle, clears on hand-off; the daemon only reads + preserves them), so
+     *  this in-memory mirror is authoritative for the synchronous buildPayload. Seeded
+     *  from edits.json on editor open so held drafts survive a reload. */
+    private draftFidsByUri = new Map<string, Set<string>>();
 
     async resolveCustomTextEditor(
         document: vscode.TextDocument,
@@ -79,6 +86,12 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         // (if any) so the first payload already carries authorship marks + diffs.
         const saved = await this.loadDocFile(document);
         if (saved) this.docFileByUri.set(document.uri.toString(), saved);
+
+        // Seed the held-draft mirror (U4) from edits.json so drafts the daemon is still
+        // holding survive a reload and re-raise the hand-off affordance.
+        const seedEdits = await this.readEditsFile(document);
+        const seedSet = this.draftSet(document);
+        for (const d of seedEdits.drafts ?? []) seedSet.add(d.feature_id);
 
         const post = (): void => {
             panel.webview.postMessage({ kind: 'doc', payload: this.buildPayload(document) });
@@ -109,6 +122,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;  // reflect the settle now (sourced from the saved doc)
                 case 'withdraw-realization':
                     await this.withdrawRealization(document, msg.featureId);
+                    return;
+                case 'hand-off':
+                    await this.handOff(document);
+                    post();  // drafts cleared → the hand-off button drops on the next paint
                     return;
                 case 'move':
                     await this.editMove(document, msg.sourceId, msg.newParentId);
@@ -429,6 +446,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         // serializer renders the marked doc back to the same tree.codoc. add/move/
         // retire stay compact widgets (suggestion-decorations.ts).
         const docForPayload = applyAgentProposals(doc, agentAmendsFrom(suggestions));
+        const held = heldFeatures(sidecar);  // hold set — reused for awaitingAI + the draft gate
 
         return {
             nodes,
@@ -444,9 +462,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             comments: docFile.comments,
             hoverCards,
             pitches,
-            awaitingAI: heldFeatures(sidecar),
+            awaitingAI: held,
             holdDetail: heldDetail(sidecar),
             divergent: divergentFeatures(sidecar),
+            // U4: only drafts the daemon is actually HOLDING surface the hand-off action —
+            // a prose-only edit produces no directive (never enters `held`), so it commits
+            // live and raises no affordance, exactly the "prose commits live; only
+            // code-implying drafts" decision.
+            drafts: [...(this.draftFidsByUri.get(uri) ?? [])].filter(fid => held.includes(fid)),
             prefs: this.prefsFor(document),
             rev: ++this.rev,
         };
@@ -518,7 +541,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         if (!anns.length) return;
         const file = await this.readEditsFile(document);
         file.edits.push(...anns);
-        await this.writeEditsFile(document, file);
+        // U4 suggesting mode: mark every edited feature as a draft. The daemon HOLDS only
+        // the code-implying ones (a prose-only edit produces no directive → nothing held →
+        // commits live), so over-marking is harmless and the hand-off affordance is gated
+        // host-side by `drafts ∩ held` (buildPayload). Reconcile with disk so a draft set
+        // by the daemon's edits.json rewrite (preserve-on-drain) is never dropped.
+        const set = this.draftSet(document);
+        for (const d of file.drafts ?? []) set.add(d.feature_id);
+        for (const a of anns) set.add(a.feature_id);
+        await this.writeEditsFile(document, setDrafts(file, [...set]));
     }
 
     private async loadDocFile(document: vscode.TextDocument): Promise<DocFile | null> {
@@ -588,6 +619,25 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     private async withdrawRealization(document: vscode.TextDocument, featureId: string): Promise<void> {
         const file = appendCancellation(await this.readEditsFile(document), featureId, Date.now());
         await this.writeEditsFile(document, file);
+    }
+
+    /** The in-memory held-draft set for a doc uri (U4); created empty on first use. */
+    private draftSet(document: vscode.TextDocument): Set<string> {
+        const uri = document.uri.toString();
+        let s = this.draftFidsByUri.get(uri);
+        if (!s) { s = new Set<string>(); this.draftFidsByUri.set(uri, s); }
+        return s;
+    }
+
+    /** Hand ALL held drafts to the agent (U4 — the one batch-commit action): clear the
+     *  edits.json `drafts` set. The daemon's next Loop B pass derives every held
+     *  directive's `handed_off` as true and writes realize.md (the agent trigger). The
+     *  committed prose is untouched. Reconciles with the on-disk drafts first so a draft
+     *  marked in another panel is also released. */
+    private async handOff(document: vscode.TextDocument): Promise<void> {
+        this.draftSet(document).clear();
+        const file = await this.readEditsFile(document);
+        await this.writeEditsFile(document, setDrafts(file, []));
     }
 
     /** Loop B / realize may stamp "done/total" progress into status.detail

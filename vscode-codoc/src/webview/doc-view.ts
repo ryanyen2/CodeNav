@@ -262,6 +262,19 @@ function renderToolbar(): HTMLElement {
         t.append(accAll, rejAll);
     }
 
+    // Hand to agent (U4): the one batch-commit action for held suggesting-mode drafts.
+    // Shown only when the daemon is holding code-implying edits (prose commits live, so
+    // it raises nothing). One click releases ALL of them to the agent at once.
+    const drafts = payload.drafts ?? [];
+    if (drafts.length) {
+        const hand = el('button', 'toggle bulk handoff', `→ Hand to agent (${drafts.length})`);
+        hand.title = drafts.length === 1
+            ? 'Hand this drafted edit to the agent — it will implement the code change now.'
+            : `Hand all ${drafts.length} drafted edits to the agent — it will implement the code changes now.`;
+        hand.onclick = () => vscode.postMessage({ kind: 'hand-off' });
+        t.append(hand);
+    }
+
     // (the "⇄ text" toggle was removed — the webview is the single surface, D1; the
     //  raw-text editor is still reachable via "Reopen Editor With… → Text Editor".)
     return t;

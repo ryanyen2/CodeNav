@@ -138,6 +138,17 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     border-color: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
 }
 .toolbar button.bulk { color: var(--vscode-foreground); }
+/* Hand to agent (U4): the one batch-commit action for held drafts. A quiet fill on the
+   doc-ahead direction hue (--dir-await: "agent resolves") — same grammar as the status
+   dot, no new accent axis. */
+.toolbar button.bulk.handoff {
+    background: color-mix(in srgb, var(--dir-await) 16%, transparent);
+    border-color: color-mix(in srgb, var(--dir-await) 38%, transparent);
+}
+.toolbar button.bulk.handoff:hover {
+    background: color-mix(in srgb, var(--dir-await) 26%, transparent);
+    border-color: color-mix(in srgb, var(--dir-await) 55%, transparent);
+}
 /* glance toggle (B-U2): active = a quiet structural-accent fill (no new hue) */
 .toolbar button.toggle.glance.active {
     background: color-mix(in srgb, var(--accent) 18%, transparent);

@@ -63,6 +63,14 @@ export interface SteerEntry {
     ts: number;                 // unix ms
 }
 
+/** A suggesting-mode DRAFT hold (U3/U4): the webview is holding feature `feature_id`'s
+ *  code-implying edit as a draft — its realize directive stays held (out of realize.md /
+ *  the agent) until the human hands off. The loop derives each directive's handed_off
+ *  from this set every pass; removing a fid (hand-off) releases it. */
+export interface DraftEntry {
+    feature_id: string;
+}
+
 export interface EditsFile {
     version: 1;
     edits: EditAnnotation[];
@@ -72,6 +80,9 @@ export interface EditsFile {
     cancellations?: CancellationEntry[];
     /** Pending one-shot comment steers (U2b). Omitted when empty. */
     steers?: SteerEntry[];
+    /** Held suggesting-mode drafts (U3/U4). Omitted when empty → no holds → the daemon
+     *  realizes code-implying edits immediately (today's behavior). */
+    drafts?: DraftEntry[];
 }
 
 export function emptyEditsFile(): EditsFile {
@@ -88,7 +99,24 @@ export function parseEditsFile(json: unknown): EditsFile {
     };
     if (Array.isArray(o.cancellations)) file.cancellations = o.cancellations as CancellationEntry[];
     if (Array.isArray(o.steers)) file.steers = o.steers as SteerEntry[];
+    if (Array.isArray(o.drafts)) file.drafts = o.drafts as DraftEntry[];
     return file;
+}
+
+/** Set the held-draft feature-id set wholesale (U3/U4). Pure. A code-implying draft edit
+ *  adds the fid; "hand to agent" clears it (or removes the handed ids). An empty set is
+ *  normalized to an absent `drafts` key so the file matches the Python omit-when-empty
+ *  shape and a no-drafts file is byte-identical to before the feature. */
+export function setDrafts(file: EditsFile, featureIds: readonly string[]): EditsFile {
+    const seen = new Set<string>();
+    const drafts: DraftEntry[] = [];
+    for (const id of featureIds) {
+        if (id && !seen.has(id)) { seen.add(id); drafts.push({ feature_id: id }); }
+    }
+    const next = { ...file };
+    if (drafts.length) next.drafts = drafts;
+    else delete next.drafts;
+    return next;
 }
 
 /** Append a realize-withdrawal for `featureId` (deduped). Pure — returns a new

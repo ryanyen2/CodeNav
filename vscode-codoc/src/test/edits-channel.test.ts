@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     parseEditsFile, emptyEditsFile, annotationsForSettle, intentsFromSuggestions,
-    appendCancellation, appendSteer,
+    appendCancellation, appendSteer, setDrafts,
 } from '../state/edits-channel';
 import { agentAmendsByFeature, type SidecarData } from '../state/bindings-model';
 import { codeAheadSuggestions, type Suggestion } from '../state/suggestion-model';
@@ -231,5 +231,53 @@ describe('codeAheadSuggestions — v4 provenance', () => {
         const [s] = codeAheadSuggestions(sc, () => '', () => '');
         expect(s.causedBy).toBeUndefined();
         expect(s.originRole).toBe('claude-code');
+    });
+});
+
+describe('U4 — suggesting-mode drafts (held until hand-off)', () => {
+    it('setDrafts records a deduped feature-id set under `drafts`', () => {
+        const file = setDrafts(emptyEditsFile(), ['f-a', 'f-b', 'f-a']);
+        expect(file.drafts).toEqual([{ feature_id: 'f-a' }, { feature_id: 'f-b' }]);
+    });
+
+    it('an empty set omits the `drafts` key (matches the Python omit-when-empty shape)', () => {
+        // hand-off clears all drafts → the file must be byte-identical to a no-drafts file
+        const held = setDrafts(emptyEditsFile(), ['f-a']);
+        const handed = setDrafts(held, []);
+        expect(handed.drafts).toBeUndefined();
+        expect('drafts' in handed).toBe(false);
+    });
+
+    it('drops empty / falsy ids', () => {
+        const file = setDrafts(emptyEditsFile(), ['f-a', '', 'f-b']);
+        expect(file.drafts).toEqual([{ feature_id: 'f-a' }, { feature_id: 'f-b' }]);
+    });
+
+    it('replaces wholesale (host is the sole writer — re-set, not append)', () => {
+        const first = setDrafts(emptyEditsFile(), ['f-a', 'f-b']);
+        const second = setDrafts(first, ['f-c']);
+        expect(second.drafts).toEqual([{ feature_id: 'f-c' }]);
+    });
+
+    it('preserves edits / intents / cancellations / steers alongside drafts', () => {
+        const base = parseEditsFile({
+            version: 1,
+            edits: [{ feature_id: 'f-a', fields: ['description'], actor: 'human', mode: 'pen', ts: 1 }],
+            intents: [{ id: 's1', feature_id: 'f-b', actor: 'human', ts: 1 }],
+            cancellations: [{ feature_id: 'f-c', ts: 2 }],
+            steers: [{ feature_id: 'f-d', text: 're: x', comment_id: 'c1', ts: 3 }],
+        });
+        const file = setDrafts(base, ['f-a']);
+        expect(file.edits).toHaveLength(1);
+        expect(file.intents).toHaveLength(1);
+        expect(file.cancellations).toHaveLength(1);
+        expect(file.steers).toHaveLength(1);
+        expect(file.drafts).toEqual([{ feature_id: 'f-a' }]);
+    });
+
+    it('parseEditsFile round-trips the drafts list; absent → undefined', () => {
+        const parsed = parseEditsFile({ version: 1, edits: [], intents: [], drafts: [{ feature_id: 'f-x' }] });
+        expect(parsed.drafts).toEqual([{ feature_id: 'f-x' }]);
+        expect(parseEditsFile({ version: 1, edits: [], intents: [] }).drafts).toBeUndefined();
     });
 });

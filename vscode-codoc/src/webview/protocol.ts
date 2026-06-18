@@ -150,6 +150,14 @@ export interface DocPayload {
      *  The change itself renders as a pending proposal; this adds the at-a-glance cue.
      *  Faithful realizations are absent. Legacy payloads omit it. */
     divergent?: Record<string, string>;
+    /** Suggesting-mode DRAFTS pending hand-off (U4): code-implying edits the human made
+     *  that the daemon is HOLDING out of the agent queue until the human commits them
+     *  with the one "hand to agent" action. The intersection of the host's draft set
+     *  (edits.json `drafts`) with the live hold set (`awaitingAI`) — so a prose-only
+     *  edit (no directive → never held) raises no hand-off affordance, and a handed-off
+     *  edit (drafts cleared) drops out even while the agent is still realizing it.
+     *  Absent/empty on legacy payloads and outside suggesting mode. */
+    drafts?: string[];
     /** Persisted webview prefs: the glance-mode toggle, restored from workspaceState so
      *  it survives a reload. */
     prefs?: WebviewPrefs;
@@ -174,6 +182,11 @@ export type WebviewMessage =
      *  The host appends a cancellation to edits.json; Loop B prunes the directive
      *  and releases the hold. The committed prose is kept. */
     | { kind: 'withdraw-realization'; featureId: string }
+    /** Hand off ALL held suggesting-mode drafts to the agent (U4): the one batch-commit
+     *  action. The host clears the edits.json `drafts` set; the daemon's next Loop B
+     *  pass derives every held directive's `handed_off` as true and writes realize.md
+     *  (the agent trigger). Prose stays exactly as committed. */
+    | { kind: 'hand-off' }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
     | { kind: 'open-binding'; file: string; symbol: string }
     /** Open an external Consult link (a description's `https://` link) in the browser. */
