@@ -56,6 +56,11 @@ class LoopBResult:
     directive_ids: list[str] = field(default_factory=list)  # d-… ids, parallel to directives
     queued: bool = False  # directives written to .codoc/realize.md for the session
     queued_total: int = 0  # whole queue size after this pass (existing + new)
+    # One human-readable note per applied user edit: the feature, a truncated snippet of
+    # the new text, and whether it queued a directive ("→ realize") or was documentation
+    # only ("doc-only"). Listed under the summary so a watcher can SEE what each edit was
+    # and why it did/didn't decorate — instead of an opaque "edits 2".
+    edit_notes: list[str] = field(default_factory=list)
     error: str = ""
 
     def summary(self) -> str:
@@ -69,7 +74,10 @@ class LoopBResult:
             parts.append(f"queued {total} directive(s) for the session")
         if self.error:
             parts.append(f"error: {self.error}")
-        return " · ".join(parts)
+        line = " · ".join(parts)
+        if self.edit_notes:
+            line += "".join(f"\n    • {n}" for n in self.edit_notes)
+        return line
 
 
 def _signal_lines(text: str | None, *, emphasis: list[str] | None = None) -> str:
@@ -85,6 +93,19 @@ def _signal_lines(text: str | None, *, emphasis: list[str] | None = None) -> str
         label = f"  ({link.label})" if link.label else ""
         lines.append(f"  Consult: {link.url}{label}")
     return ("\n" + "\n".join(lines)) if lines else ""
+
+
+def _edit_label(op: NodeOp, store: Store, will_queue: bool) -> str:
+    """A one-line note for the watch log: which feature an edit touched, a truncated
+    snippet of the new text, and whether it queued a code directive (``→ realize``) or
+    was documentation only (``doc-only``). Lets a watcher SEE what each edit was — and
+    why it did or didn't produce a pending decoration — instead of an opaque ``edits 2``."""
+    f = store.get_feature(op.feature_id) if op.feature_id else None
+    title = f.title if f else (op.title or op.feature_id or "?")
+    text = (op.description or op.title or "").replace("\n", " ").strip()
+    snippet = (text[:60] + "…") if len(text) > 60 else text
+    tag = "→ realize" if will_queue else "doc-only"
+    return f'{op.kind.value} "{title}" [{tag}]: {snippet!r}'
 
 
 def build_directive(op: NodeOp, store: Store, *, emphasis: list[str] | None = None) -> str:
@@ -369,7 +390,9 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         # description as a whole is descriptive — emphasis is a stronger intent
         # signal than other revision text.
         bolded = diff.emphasis.get(op.feature_id or "", [])
-        if implies_code(op, store) or any(is_imperative(s) for s in bolded):
+        will_queue = implies_code(op, store) or any(is_imperative(s) for s in bolded)
+        res.edit_notes.append(_edit_label(op, store, will_queue))
+        if will_queue:
             # The directive's cause: the doc-ahead suggestion this settle applied
             # (if the host told us), else the user-op event itself.
             cause = (ann.suggestion_id if ann and ann.suggestion_id else ev.id)
@@ -404,7 +427,9 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         apply_op(op, store, source="user", applied=True,
                  actor=intent.actor or "human", mode="suggest", caused_by=intent.id)
         res.user_edits += 1
-        if implies_code(op, store):
+        will_queue = implies_code(op, store)
+        res.edit_notes.append(_edit_label(op, store, will_queue))
+        if will_queue:
             directive_ops.append((op, f.id, intent.id))
 
     # 2.7 Steering comments (`> …` in the text, snapshotted in step 0) — explicit

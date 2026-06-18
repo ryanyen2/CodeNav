@@ -91,3 +91,22 @@ def test_editing_one_feature_keeps_anothers_queued_directive(dirs):
     m = read_manifest(codoc_dir)
     assert {d.feature_id for d in m} == {fa.id, fb.id}  # editing B did NOT drop A's directive
     assert len(m) == 2
+
+
+def test_edit_notes_label_each_edit_for_the_watch_log(dirs):
+    """The daemon log lists WHAT each edit was + whether it queued code — so a watcher
+    can tell a descriptive reword (no decoration) from a code-implying edit at a glance."""
+    root, codoc_dir = dirs
+    _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
+
+    # Descriptive reword → doc-only (this is exactly the "why no decoration" case).
+    _edit(codoc_dir, "Holds brand colors.", "Holds brand and accent colors.")
+    r = run_loop_b(root, codoc_dir, dry_run=False)
+    assert len(r.edit_notes) == 1
+    assert "Palette" in r.edit_notes[0] and "doc-only" in r.edit_notes[0]
+    assert "• " in r.summary() and "doc-only" in r.summary()  # surfaced in the log line
+
+    # Imperative edit → labeled "→ realize".
+    _edit(codoc_dir, "Holds brand and accent colors.", "Should also support dark-mode palettes.")
+    r2 = run_loop_b(root, codoc_dir, dry_run=False)
+    assert any("→ realize" in n for n in r2.edit_notes)
