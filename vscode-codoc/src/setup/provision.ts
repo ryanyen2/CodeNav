@@ -254,7 +254,7 @@ export async function resolvePaths(
     await context.globalState.update(KEY_CODOC_MCP, execs.codocMcp);
     await context.globalState.update(KEY_UV, uvPath);
     outputChannel().appendLine(`resolved codoc=${execs.codoc}  codoc-mcp=${execs.codocMcp}`);
-    return execs;
+    return applyServerPathOverride(execs);
 }
 
 /**
@@ -262,12 +262,28 @@ export async function resolvePaths(
  * checks. Returns `undefined` when either path is uncached or no longer on disk
  * (the caller should re-provision / re-resolve).
  */
+/** The `codoc.serverPath` override (trimmed) or undefined. When set, it wins over the
+ *  auto-provisioned uv-tool path for the daemon + `codoc init` — letting a developer
+ *  point the extension at updated server code (a dev checkout's venv binary) without
+ *  reinstalling the tool. */
+function serverPathOverride(): string | undefined {
+    const p = vscode.workspace.getConfiguration('codoc').get<string>('serverPath');
+    return p && p.trim() ? p.trim() : undefined;
+}
+
+/** Apply the `codoc.serverPath` override to a resolved set of executables (the CLI path
+ *  only — the file-based MCP config is written separately). No-op when unset. */
+export function applyServerPathOverride(execs: CodocExecutables): CodocExecutables {
+    const override = serverPathOverride();
+    return override ? { ...execs, codoc: override } : execs;
+}
+
 export function cachedExecutables(context: vscode.ExtensionContext): CodocExecutables | undefined {
     const codoc = context.globalState.get<string>(KEY_CODOC);
     const codocMcp = context.globalState.get<string>(KEY_CODOC_MCP);
     if (shouldReresolve(codoc, !!codoc && fs.existsSync(codoc))) return undefined;
     if (shouldReresolve(codocMcp, !!codocMcp && fs.existsSync(codocMcp))) return undefined;
-    return { codoc: codoc!, codocMcp: codocMcp! };
+    return applyServerPathOverride({ codoc: codoc!, codocMcp: codocMcp! });
 }
 
 /** The cached uv path (or `undefined` if not yet provisioned). */

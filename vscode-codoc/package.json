@@ -278,6 +278,12 @@
           "type": "boolean",
           "default": true,
           "description": "Show a gutter marker on features the coding agent is currently editing."
+        },
+        "codoc.serverPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Absolute path to the `codoc` CLI used for the watch daemon and `codoc init`. Leave empty to use the auto-provisioned uv-tool install. Point this at a development checkout (e.g. `/abs/path/CodeNav/.venv/bin/codoc`) to run updated server code without reinstalling the tool. Reload the window after changing."
         }
       }
     },
