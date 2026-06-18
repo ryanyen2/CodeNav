@@ -200,13 +200,33 @@ def _reinsert_comments(codoc_dir: str, targets: list[tuple[str, str]]) -> None:
     atomic_write_text(path, "\n".join(lines) + "\n")
 
 
+def _rewrite_queue(root_dir: str, codoc_dir: str, survivors: list) -> None:
+    """Persist ``survivors`` as the realization queue: rewrite ``realize.json`` and
+    rebuild ``realize.md`` from the survivors carrying rendered text — or remove BOTH
+    when the queue empties (so status falls back to in_sync/code_drift and no stale
+    directive lingers). Shared by withdraw (U6) and per-feature supersede. Legacy
+    text-less entries stay in the manifest (they still hold their feature) but can't be
+    re-rendered into realize.md; a later real pass rewrites the queue."""
+    if not survivors:
+        try:
+            realize_path(codoc_dir).unlink()
+        except OSError:
+            pass
+        edits_channel.clear_manifest(codoc_dir)
+        return
+    edits_channel.write_manifest(codoc_dir, survivors)
+    renderable = [d for d in survivors if d.text]
+    if renderable:
+        _write_realize(codoc_dir, build_realize_prompt(
+            [d.text for d in renderable], root_dir, [d.id for d in renderable]))
+
+
 def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
     """U6 — withdraw queued realizations. Drain the host's cancellations (feature
-    ids) and prune the matching directives from the queue: rewrite the manifest
-    without them, and rebuild ``realize.md`` from the survivors (or remove both when
-    the queue empties). Pruning the manifest releases the doc-wins hold for those
-    features (``hold_set`` reads the manifest). The committed prose is untouched —
-    withdraw cancels the code work, not the documented intent.
+    ids) and prune the matching directives from the queue (rewrite the manifest +
+    rebuild/remove ``realize.md`` via :func:`_rewrite_queue`). Pruning releases the
+    doc-wins hold for those features (``hold_set`` reads the manifest). The committed
+    prose is untouched — withdraw cancels the code work, not the documented intent.
 
     Returns the number of directives removed (0 when nothing matched — a cancel for
     an already-realized / never-queued feature is a harmless no-op)."""
@@ -216,26 +236,22 @@ def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
     existing = edits_channel.read_manifest(codoc_dir)
     survivors = [d for d in existing if d.feature_id not in cancels]
     removed = len(existing) - len(survivors)
-    if not removed:
-        return 0
-    if not survivors:
-        # The queue emptied — remove realize.md + the manifest so status falls back
-        # to in_sync/code_drift and no stale directive lingers.
-        try:
-            realize_path(codoc_dir).unlink()
-        except OSError:
-            pass
-        edits_channel.clear_manifest(codoc_dir)
-        return removed
-    edits_channel.write_manifest(codoc_dir, survivors)
-    # Rebuild realize.md from the survivors that carry their rendered text. (Legacy
-    # text-less entries can't be re-rendered; pruning the manifest still releases the
-    # canceled holds, and a later real pass rewrites the queue.)
-    renderable = [d for d in survivors if d.text]
-    if renderable:
-        texts = [d.text for d in renderable]
-        ids = [d.id for d in renderable]
-        _write_realize(codoc_dir, build_realize_prompt(texts, root_dir, ids))
+    if removed:
+        _rewrite_queue(root_dir, codoc_dir, survivors)
+    return removed
+
+
+def _supersede_directives(root_dir: str, codoc_dir: str, fids: set[str]) -> int:
+    """A fresh user AMEND to a feature SUPERSEDES its earlier un-synced directives:
+    drop them so iterating / undoing / rewording one feature doesn't stack N directives,
+    and reverting it to a descriptive (non code-implying) text withdraws the queued
+    change entirely. Steers (additive author notes) and other features' directives are
+    preserved. Returns the count dropped."""
+    existing = edits_channel.read_manifest(codoc_dir)
+    survivors = [d for d in existing if d.kind == "steer" or d.feature_id not in fids]
+    removed = len(existing) - len(survivors)
+    if removed:
+        _rewrite_queue(root_dir, codoc_dir, survivors)
     return removed
 
 
@@ -448,6 +464,17 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     rendered += [(text, fid, cause, "steer") for text, fid, cause in steered]
     rendered = [r for r in rendered if r[0]]
     res.directives = [r[0] for r in rendered]
+
+    # Coalesce per feature (fixes the "weird count": iterating one feature stacked N
+    # directives). A fresh user AMEND supersedes that feature's earlier un-synced
+    # directive — drop it BEFORE the early-return so a revert-to-descriptive (no new
+    # directive) still withdraws the queued change; step 3 then appends this pass's
+    # directives onto the pruned queue, yielding one per feature. Dry passes never
+    # mutate the live queue.
+    edited_fids = {op.feature_id for op in diff.user_ops
+                   if op.feature_id and op.kind is NodeOpKind.AMEND}
+    if edited_fids and not dry_run:
+        _supersede_directives(root_dir, codoc_dir, edited_fids)
 
     if dry_run or not res.directives:
         status.refresh_status(codoc_dir, store)
