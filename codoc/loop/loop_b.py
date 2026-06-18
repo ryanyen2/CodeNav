@@ -299,11 +299,18 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # (op, feature_id-or-"", caused_by) per code-implying edit — feature_id feeds
     # the doc-wins hold set, caused_by the causality chain (suggestion/event id).
     directive_ops: list[tuple[NodeOp, str, str]] = []
-    # feature_id → its description BEFORE this pass mutated it. Captured for AMEND user
-    # edits and carried into the manifest as the directive's `baseline`, so the IDE can
-    # diff baseline↔current and underline the text the user actually changed (the
-    # in-situ "what's pending" highlight). First edit per feature wins.
-    baselines: dict[str, str] = {}
+    # feature_id → the description at the START of its current pending episode (the
+    # STABLE baseline the IDE diffs against to render the in-situ inline diff). SEED
+    # from any directive already queued for the feature, so iterating/rewording/undo
+    # within one pending episode does NOT erode the baseline to the previous keystroke
+    # (R5/R6 — the field "decoration vanished when I deleted a char" bug). A feature
+    # with no pending directive captures a fresh baseline in step 2 (a new episode's
+    # first edit). Read before the cancellation drain so the seed survives the pass.
+    baselines: dict[str, str] = {
+        d.feature_id: d.baseline
+        for d in edits_channel.read_manifest(codoc_dir)
+        if d.feature_id and d.baseline
+    }
 
     # U6 — withdraw: prune any cancelled directives from the queue FIRST so the rest
     # of the pass (and step 3's manifest append) sees the survivors, and the hold for
