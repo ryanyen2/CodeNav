@@ -250,6 +250,8 @@ function featureLink(d: ThreadTarget, verb: string, onNavigate: (fid: string) =>
 // ── peek popover (the full neighbourhood, client-side) ────────────────────────
 let openPeekEl: HTMLElement | null = null;
 function closePeek(): void { openPeekEl?.remove(); openPeekEl = null; }
+// Close the transient threads peek on window resize so it never sits at a stale position (U5).
+if (typeof window !== 'undefined') window.addEventListener('resize', closePeek);
 
 function openThreadsPeek(
     anchor: HTMLElement, t: ThreadsData,

@@ -94,6 +94,14 @@ export interface WholeDocEditorHandle {
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
     setGlance: (on: boolean) => void;
     scrollToFeature: (fid: string) => void;
+    /** Caret position (selection.from) — persisted + restored across reload/reopen (U5). */
+    getCaretPos: () => number;
+    /** Restore the caret to an absolute position (clamped). Call AFTER the first setDoc settles
+     *  so its heading-fallback placement doesn't clobber the restored caret (KTD3). */
+    setCaretPos: (pos: number) => void;
+    /** Doc surface scroll offset — persisted + restored across reload/reopen (U5). */
+    getScrollTop: () => number;
+    setScrollTop: (n: number) => void;
     isDirty: () => boolean;
     destroy: () => void;
 }
@@ -773,6 +781,23 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         }, 100);
     });
 
+    // Window resize (U5): re-anchor the interactive floating surfaces (selection bubble +
+    // comment composer) against the new viewport so they don't sit at stale coordinates; the
+    // composer recomputes from its captured range live and dismisses if that text scrolled off.
+    // The transient hover popovers (threads peek, comment/hover card) close themselves on resize
+    // from their own modules.
+    function repositionFloatingSurfaces(): void {
+        if (bubble.style.display !== 'none') updateBubble();
+        if (composer && composeRange) {
+            const at = coordsRect(composeRange.from, composeRange.to);
+            if (!at) { closeComposer(); return; }
+            const w = composer.offsetWidth || 240;
+            composer.style.left = `${Math.max(8, Math.min(at.left, window.innerWidth - w - 8))}px`;
+            composer.style.top = `${Math.min(at.bottom + 6, window.innerHeight - composer.offsetHeight - 8)}px`;
+        }
+    }
+    window.addEventListener('resize', repositionFloatingSurfaces);
+
     return {
         element: wrap,
         setDoc: (doc: PMNode) => {
@@ -871,6 +896,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             editor.view.dispatch(editor.state.tr.setMeta(GLANCE_UPDATED, true));
         },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
+        getCaretPos: () => editor.state.selection.from,
+        setCaretPos: (pos: number) => {
+            const max = Math.max(1, editor.state.doc.content.size - 1);
+            const p = Math.max(0, Math.min(pos, max));
+            editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(p))));
+        },
+        getScrollTop: () => surface.scrollTop,
+        setScrollTop: (n: number) => { surface.scrollTop = Math.max(0, n); },
         isDirty: () => dirty,
         destroy: () => {
             if (settleTimer) clearTimeout(settleTimer);
@@ -878,6 +911,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (muteTimer) clearTimeout(muteTimer);
             if (blurTimer) clearTimeout(blurTimer);
             if (navTween) navTween.cancel();          // stop an in-flight momentum scroll
+            window.removeEventListener('resize', repositionFloatingSurfaces);
             if (spyRaf) cancelAnimationFrame(spyRaf); // else the RAF fires onActiveFeature on a destroyed editor
             closeComposer();
             bubble.remove();

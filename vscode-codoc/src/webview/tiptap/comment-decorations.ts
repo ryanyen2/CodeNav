@@ -54,6 +54,9 @@ function closePop(): void {
     openPopEl = null;
     popThreadId = null;
 }
+// Close the transient comment/hover card on window resize so it never sits at a stale
+// position (U5). Repositioning a hover card is pointless — it reopens on the next hover.
+if (typeof window !== 'undefined') window.addEventListener('resize', closePop);
 
 /** Tear down any open popover + pending hover timer. Called from the editor's
  *  destroy() — the popover state is module-level, so without this a hover timer

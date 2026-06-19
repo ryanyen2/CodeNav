@@ -14,9 +14,15 @@ import { AuthorController } from './tiptap/author-plugin';
 import { kindGlyph } from '../state/grammar';
 import { tweenScrollTop, TweenController } from './motion';
 import { shouldCenter, centerScrollTarget } from './tree-center';
+import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 
-declare function acquireVsCodeApi(): { postMessage(msg: WebviewMessage): void };
+declare function acquireVsCodeApi(): {
+    postMessage(msg: WebviewMessage): void;
+    // U5: webview-local persisted state (selection/expansion/caret/scroll) survives reload/reopen.
+    getState(): unknown;
+    setState(state: unknown): void;
+};
 const vscode = acquireVsCodeApi();
 
 const EMPTY: DocPayload = {
@@ -68,6 +74,12 @@ let treeTweenActive = false;      // true while OUR tween writes scrollTop → i
 let programmaticTreeScroll = false; // true while we restore scrollTop on a reconcile
 let suppressAutoCenter = false;   // true briefly after a real manual tree scroll/wheel
 let suppressTimer = 0;
+
+// UI-state persistence (U5): selection/expansion/caret/scroll survive close→reopen and a full
+// reload via vscode.getState/setState. Captured debounced (~400ms); restored on the first
+// payload (sync seed before first paint) + after the editor mounts (caret/scroll).
+let pendingRestore: UiState | null = null;
+let persistTimer = 0;
 
 function focusTree(): void {
     (document.querySelector('.tree') as HTMLElement | null)?.focus({ preventScroll: true });
@@ -215,6 +227,7 @@ function onManualTreeScroll(): void {
     suppressAutoCenter = true;
     if (suppressTimer) clearTimeout(suppressTimer);
     suppressTimer = window.setTimeout(() => { suppressAutoCenter = false; }, 800);
+    persistUiState(); // capture the new tree scroll position
 }
 
 /** Stop any in-flight auto-center tween (before a tree re-render, or when the user takes over). */
@@ -228,6 +241,39 @@ function setTreeScroll(treeEl: HTMLElement, top: number): void {
     programmaticTreeScroll = true;
     treeEl.scrollTop = top;
     requestAnimationFrame(() => { programmaticTreeScroll = false; });
+}
+
+// ─── UI-state persistence (U5) ───────────────────────────────────────────────
+/** Snapshot the current selection/expansion/caret/scroll into vscode.setState (debounced). */
+function persistUiState(): void {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(() => {
+        persistTimer = 0;
+        const tree = document.querySelector('.tree') as HTMLElement | null;
+        vscode.setState(serializeUiState({
+            selectedId,
+            expanded: [...expanded],
+            caretPos: wholeEditor ? wholeEditor.getCaretPos() : 0,
+            treeScroll: tree ? tree.scrollTop : 0,
+            docScroll: wholeEditor ? wholeEditor.getScrollTop() : 0,
+        }));
+    }, 400);
+}
+
+/** Apply the scroll + caret half of a restore after the first render: tree scroll now, and the
+ *  editor caret + doc scroll on the next frame so the editor's own first-setDoc placement
+ *  (heading fallback) has already run and doesn't clobber the restored caret (KTD3). */
+function applyPendingRestore(): void {
+    if (!pendingRestore) return;
+    const r = pendingRestore;
+    pendingRestore = null;
+    const tree = document.querySelector('.tree') as HTMLElement | null;
+    if (tree) setTreeScroll(tree, r.treeScroll);
+    requestAnimationFrame(() => {
+        if (!wholeEditor) return;
+        if (r.caretPos > 0) wholeEditor.setCaretPos(r.caretPos);
+        wholeEditor.setScrollTop(r.docScroll);
+    });
 }
 
 // ─── Top-level render ─────────────────────────────────────────────────────────
@@ -593,6 +639,7 @@ function setSelected(id: string | null, scrollDoc: boolean): void {
     if (scrollDoc && !syncingFromEditor && wholeEditor && id.startsWith('f-')) {
         wholeEditor.scrollToFeature(id);
     }
+    persistUiState();
 }
 
 /** Expand every ancestor of `id` so its tree row becomes visible. */
@@ -609,6 +656,7 @@ function revealAncestors(id: string): void {
 function toggle(id: string): void {
     if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
     rerenderTree(true);
+    persistUiState();
 }
 
 /** Re-render the tree pane in place (keeping the optimistic applying state); optionally re-focus. */
@@ -693,14 +741,24 @@ window.addEventListener('message', ev => {
     for (const id of [...expanded]) if (!payload.nodes[id]) expanded.delete(id);
     if (firstPayload) {
         firstPayload = false;
-        // Expand every parent so the whole tree is visible by default.
-        for (const id of Object.keys(payload.nodes)) {
-            if (payload.nodes[id].children.length) expanded.add(id);
+        // Restore persisted UI state (U5) if present — validated against the live payload — else
+        // fall back to expand-all. Seeding here (before renderAll) means the FIRST paint uses the
+        // restored expansion/selection, with no expand-all flash.
+        const restored = deserializeUiState(vscode.getState());
+        if (restored) {
+            for (const id of restored.expanded) if (payload.nodes[id]) expanded.add(id);
+            if (restored.selectedId && payload.nodes[restored.selectedId]) selectedId = restored.selectedId;
+            pendingRestore = restored; // scroll + caret applied after the editor mounts
+        } else {
+            // Expand every parent so the whole tree is visible by default.
+            for (const id of Object.keys(payload.nodes)) {
+                if (payload.nodes[id].children.length) expanded.add(id);
+            }
         }
         if (selectedId == null) selectedId = payload.roots[0] ?? null;
     }
 
-    if (!mounted) { mounted = true; renderAll(); } else { reconcile(); }
+    if (!mounted) { mounted = true; renderAll(); applyPendingRestore(); } else { reconcile(); }
 });
 
 vscode.postMessage({ kind: 'ready' });
