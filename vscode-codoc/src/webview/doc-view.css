@@ -46,8 +46,14 @@
        it is suppressed by the `body.vscode-reduce-motion` blanket gate below. */
     --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);     /* entrances: quick out, soft settle */
     --ease-spring: cubic-bezier(0.34, 1.32, 0.5, 1);  /* gentle overshoot, popovers only   */
+    /* momentum/nav motion (U1): the anime.js scroll tweens use their own ease strings
+       (outQuad/outExpo — see motion.ts); these tokens drive any CSS-side fallback + the
+       re-center deadband feel, and keep the durations in one place. */
+    --ease-momentum: cubic-bezier(0.22, 1, 0.36, 1);  /* decelerate — scroll momentum       */
     --dur-fast:   0.12s;
     --dur-base:   0.18s;
+    --dur-center: 0.20s;   /* tree re-center step (U2) */
+    --dur-nav:    0.34s;   /* doc momentum nav baseline (U3, distance-scaled in JS) */
     /* floating-surface elevation — diffuse, theme-tinted, never a hard black drop */
     --shadow-pop:    0 10px 30px -12px var(--vscode-widget-shadow, rgba(0,0,0,0.45)),
                      0 2px 8px -4px var(--vscode-widget-shadow, rgba(0,0,0,0.22));
