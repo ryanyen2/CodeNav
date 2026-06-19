@@ -54,6 +54,27 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None):
                 "capability": session.capability.value if session else "none",
             })
 
+        @app.post("/api/command")
+        async def api_command(request: Request) -> JSONResponse:
+            from codoc.serve.auth import capability_from_request
+            from codoc.serve.dispatch import CommandError, dispatch
+
+            # CSRF: state-changing requests must carry a custom header a cross-site
+            # form cannot set (it forces a CORS preflight). The network HostBridge
+            # sends it on every command.
+            if request.headers.get("x-codoc-csrf") is None:
+                return JSONResponse({"error": "missing CSRF header"}, status_code=403)
+            capability = capability_from_request(request, auth.store)
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse({"error": "invalid JSON"}, status_code=400)
+            try:
+                result = dispatch(body, capability, codoc_dir)
+            except CommandError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=exc.status)
+            return JSONResponse(result)
+
     @app.get("/api/payload")
     def api_payload() -> JSONResponse:
         from codoc.serve.payload import build_browser_payload

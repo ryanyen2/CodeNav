@@ -78,3 +78,35 @@ def test_whoami_absent_without_auth(tmp_path):
     client = TestClient(build_app(str(tmp_path)))
     r = client.get("/api/whoami")
     assert "codoc serve" in r.text  # placeholder, not a JSON whoami
+
+
+def test_command_route_enforces_csrf_and_capability(tmp_path):
+    from codoc.loop import inbox
+    from codoc.serve.auth import COOKIE_NAME, AuthContext, Capability, SessionStore
+
+    store = SessionStore()
+    suggester = store.create("maya", Capability.SUGGEST)
+    maintainer = store.create("ryan", Capability.HANDOFF)
+    cd = tmp_path / ".codoc"
+    cd.mkdir(parents=True)
+    client = TestClient(build_app(str(cd), auth=AuthContext(store=store)))
+
+    # missing CSRF header → 403 even with a valid maintainer session
+    client.cookies.set(COOKIE_NAME, maintainer.sid)
+    assert client.post("/api/command", json={"kind": "hand-off"}).status_code == 403
+
+    # suggester + csrf + verdict → 403 (capability gate)
+    client.cookies.set(COOKIE_NAME, suggester.sid)
+    r = client.post("/api/command",
+                    json={"kind": "verdict", "eventIds": ["e-1"], "accept": True},
+                    headers={"x-codoc-csrf": "1"})
+    assert r.status_code == 403
+    assert inbox.read_verdicts(str(cd)) == []
+
+    # maintainer + csrf + verdict → 200, written
+    client.cookies.set(COOKIE_NAME, maintainer.sid)
+    r = client.post("/api/command",
+                    json={"kind": "verdict", "eventIds": ["e-9"], "accept": True},
+                    headers={"x-codoc-csrf": "1"})
+    assert r.status_code == 200
+    assert {v.event_id for v in inbox.read_verdicts(str(cd))} == {"e-9"}
