@@ -24,11 +24,11 @@ describe('U6 — code→codoc diff carries a non-color direction label (R8)', ()
 });
 
 describe('U6 — lifecycle/stage indicator is orthogonal to the change-mark diff (R9 / KTD4)', () => {
-    it('the "being realized" dot rides the status axis (--accent), never a direction hue', () => {
+    it('the "being realized" dot rides the STAGED phase colour (--ce-staged), never the review direction hue', () => {
         const m = css.match(/\.ce-pending-dot\s*\{[^}]*\}/);
         expect(m).not.toBeNull();
-        expect(m![0]).toContain('--accent');
-        expect(m![0]).not.toContain('--dir-review');
+        expect(m![0]).toContain('--ce-staged');           // staged & sent = green phase
+        expect(m![0]).not.toContain('--dir-review');       // NOT the agent-review (code-ahead) hue
     });
     it('the diff is a separate concern (ins/del marks keyed on --author-color), not the dot', () => {
         const ins = css.match(/ins\[data-change-id\]\s*\{[^}]*\}/);
@@ -54,22 +54,34 @@ describe('U3/U4/U5 — the captured→pending→resolving lifecycle is one cohes
         expect(css).toMatch(/\.badge\.captured\s*\{/);
     });
 
-    it('captured rides the --accent STATUS axis, never a direction hue (it is who-neutral)', () => {
-        const dot = css.match(/\.ce-captured-dot\s*\{[^}]*\}/)?.[0] ?? '';
-        expect(dot).toContain('--accent');
-        expect(dot).not.toContain('--dir-review');
+    it('the three lifecycle PHASE colours are defined as tokens (editing/del/staged)', () => {
+        expect(css).toMatch(/--ce-editing:\s*rgb\(0,\s*142,\s*255\)/);  // editing = blue
+        expect(css).toMatch(/--ce-del:\s*rgb\(255,\s*185,\s*11\)/);     // deletion caret = amber
+        expect(css).toMatch(/--ce-staged:\s*rgb\(0,\s*150,\s*0\)/);     // staged & sent = green
+    });
+
+    it('captured (editing) keys off --ce-editing; pending (staged) off --ce-staged — distinct phases', () => {
+        const cap = css.match(/\.ce-captured-dot\s*\{[^}]*\}/)?.[0] ?? '';
+        expect(cap).toContain('--ce-editing');
+        const pend = css.match(/\.ce-pending-dot\s*\{[^}]*\}/)?.[0] ?? '';
+        expect(pend).toContain('--ce-staged');
+        expect(pend).not.toContain('--ce-editing');
+    });
+
+    it('the deletion caret rides the amber --ce-del (the one warranted removal hue)', () => {
+        // match the MAIN rule (the one carrying var(--ce-del)), not the earlier HC floor rule
+        expect(css).toMatch(/\.ce-captured-del\s*\{[^}]*var\(--ce-del\)/);
     });
 
     it('intensity ramps: captured is STATIC, pending BREATHES, resolving PULSES', () => {
-        // captured (recorded, not sent) is the calmest — no motion to gate.
         const cap = css.match(/\.ce-captured-dot\s*\{[^}]*\}/)?.[0] ?? '';
         expect(cap).not.toContain('animation');
-        // pending (staged & sent) breathes; resolving (agent mid-edit) pulses — both stronger.
         expect(css.match(/\.ce-pending-dot\s*\{[^}]*\}/)?.[0] ?? '').toContain('breathe');
         expect(css).toMatch(/ce-phase-editing[\s\S]{0,120}pulse/);
     });
 
-    it('captured has a high-contrast floor so "recorded, not sent" survives HC themes', () => {
+    it('the captured family has high-contrast floors so the phases survive HC themes', () => {
         expect(css).toMatch(/vscode-high-contrast\s+\.ce-captured-dot/);
+        expect(css).toMatch(/vscode-high-contrast\s+\.ce-captured-del/);
     });
 });

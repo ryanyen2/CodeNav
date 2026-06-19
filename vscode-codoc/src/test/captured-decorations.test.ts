@@ -106,10 +106,18 @@ describe('U3: blockDiffSpans (add underline range + deletion caret position)', (
         expect(spans.some(s => s.kind === 'add')).toBe(false); // pure deletion → no underline
     });
 
-    it('a word replacement yields both a caret and an added underline', () => {
+    it('a word REPLACEMENT (select-delete-retype) is editing → underline only, NO caret', () => {
+        // "the cat" → "the dog": del("cat") is adjacent to ins("dog") ⇒ replacement.
         const spans = blockDiffSpans('the cat', 'the dog', 1);
-        expect(spans.some(s => s.kind === 'del')).toBe(true);
-        expect(spans.some(s => s.kind === 'add')).toBe(true);
+        expect(spans.some(s => s.kind === 'add')).toBe(true);  // the new word is underlined
+        expect(spans.some(s => s.kind === 'del')).toBe(false); // no deletion caret
+    });
+
+    it('a pure deletion alongside a SEPARATE addition still carets the deletion', () => {
+        // "alpha beta gamma" → "alpha gamma delta": "beta" removed (pure), "delta" added.
+        const spans = blockDiffSpans('alpha beta gamma', 'alpha gamma delta', 1);
+        expect(spans.some(s => s.kind === 'del')).toBe(true);  // "beta" deletion → caret
+        expect(spans.some(s => s.kind === 'add')).toBe(true);  // "delta" addition → underline
     });
 
     it('no change → no spans', () => {

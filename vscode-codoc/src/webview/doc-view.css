@@ -21,6 +21,13 @@
     --accent:     var(--vscode-focusBorder, var(--vscode-charts-blue, #6aa9ff));
     --dir-review: var(--vscode-charts-blue, #6aa9ff);    /* code-ahead — you resolve   */
     --dir-await:  var(--vscode-charts-green, #66bb6a);   /* doc-ahead  — agent resolves */
+    /* edit-lifecycle PHASE colours (dark-mode tuned, per the author): editing/captured =
+       blue, pure deletion caret = amber, staged & sent = green; surfaced agent edits keep
+       the direction hue above. Fixed RGB by request (not theme tokens) so the phases read
+       consistently; the high-contrast block below pins legible floors. */
+    --ce-editing: rgb(0, 142, 255);   /* captured — you are editing, recorded locally   */
+    --ce-del:     rgb(255, 185, 11);  /* pure deletion caret (no text left to underline) */
+    --ce-staged:  rgb(0, 150, 0);     /* staged & sent — handed off, the agent will act  */
     /* authorship ink: the human is the DEFAULT author → neutral, no hue. This frees
        blue for the code-ahead direction and resolves the ink-vs-direction collision (H5). */
     --ink-human:  var(--vscode-foreground);
@@ -318,7 +325,7 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
    "realizing." Reduced-motion freezes the pulse to a steady dashed ring. */
 .badge.pending {
     background: transparent;
-    border: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--ce-staged) 85%, transparent);
     box-sizing: border-box;
     animation: breathe 2.6s ease-in-out infinite;
 }
@@ -558,7 +565,7 @@ span[data-change-id] { text-decoration-style: solid; }
    the tree row's .badge.pending. Means "queued for /codoc:sync", NOT "running now". */
 .ce-pending-dot {
     width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box;
-    border: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--ce-staged) 85%, transparent);
     background: transparent;
     animation: breathe 2.6s ease-in-out infinite;
 }
@@ -579,15 +586,15 @@ span[data-change-id] { text-decoration-style: solid; }
    WHAT codoc understood. The UNDERLINE marks the bold "focus" runs codoc treats as the
    actionable request, so a misread shows at the word. Both are STATIC — the appearance
    itself is the recognition feedback (re-animating on every payload would jank) — and
-   stay on --accent (status axis, no new hue), so nothing here needs a motion gate. */
+   ride the staged/green phase colour, so nothing here needs a motion gate. */
 .ce-pending-rail { position: relative; }
 .ce-pending-rail::before {
     content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
     width: 2px; border-radius: 1px;
-    background: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--ce-staged) 65%, transparent);
 }
 .ce-intent-underline {
-    text-decoration: underline dotted color-mix(in srgb, var(--accent) 60%, transparent);
+    text-decoration: underline dotted color-mix(in srgb, var(--ce-staged) 70%, transparent);
     text-decoration-thickness: 1px; text-underline-offset: 3px;
 }
 
@@ -602,15 +609,15 @@ span[data-change-id] { text-decoration-style: solid; }
     content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
     width: 2px; border-radius: 1px;
     background: repeating-linear-gradient(to bottom,
-        color-mix(in srgb, var(--accent) 45%, transparent) 0 2.5px, transparent 2.5px 5px);
+        color-mix(in srgb, var(--ce-editing) 55%, transparent) 0 2.5px, transparent 2.5px 5px);
 }
 .ce-captured-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
     margin-left: 10px; vertical-align: middle; user-select: none;
-    background: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--ce-editing) 70%, transparent);
 }
 /* tree-row twin: a small SOLID faint dot (vs pending's dashed breathing ring) */
-.badge.captured { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.badge.captured { background: color-mix(in srgb, var(--ce-editing) 70%, transparent); }
 
 /* In-situ captured DIFF (the user's own live edit, vs the last-committed baseline):
    ADDED words get a solid accent underline; DELETED text — which has no glyph left to
@@ -618,13 +625,13 @@ span[data-change-id] { text-decoration-style: solid; }
    persist until ⌘S/Commit. Static (no motion). The deletion caret is the one place a
    removal hue is warranted: there is no text to carry the signal, so colour does. */
 .ce-captured-add {
-    text-decoration: underline solid color-mix(in srgb, var(--accent) 70%, transparent);
+    text-decoration: underline solid color-mix(in srgb, var(--ce-editing) 85%, transparent);
     text-decoration-thickness: 1.5px; text-underline-offset: 3px;
 }
 .ce-captured-del {
     display: inline-block; width: 2px; height: 1.05em; margin: 0 -1px; border-radius: 1px;
     vertical-align: text-bottom; user-select: none;
-    background: var(--vscode-gitDecoration-deletedResourceForeground, #d1483f);
+    background: var(--ce-del);
 }
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }

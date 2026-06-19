@@ -112,19 +112,23 @@ and the agent's edits come back as a *sentence-level* accept/reject diff. Run wi
 
 ### Captured — every edit is recorded in situ (additions AND deletions), persists until commit
 
-- [ ] **Add** words to a description. The added words get an **underline** immediately (not only
-      after commit), plus the feature's gutter rail + "recorded" dot. No size threshold.
-- [ ] **Delete** words (e.g. "I don't think" → "I think"). A small **orange-red caret** appears at
-      the gap ("I |think") — the deletion is visible and counts; it does NOT just flash and vanish.
-- [ ] **Replace** a word ("the cat" → "the dog"): you see both a caret (at the removal) and an
-      underline (on the inserted word).
+Phase colours (dark-mode tuned): **editing = blue** `rgb(0,142,255)`, **deletion caret = amber**
+`rgb(255,185,11)`, **staged & sent = green** `rgb(0,150,0)`; surfaced agent edits keep their hue.
+
+- [ ] **Add** words. They get a **blue underline** immediately (not only after commit), plus the
+      feature's blue gutter rail + "recorded" dot. No size threshold.
+- [ ] **Pure delete** (e.g. "I don't think" → "I think"). A small **amber caret** appears at the
+      gap ("I |think") — visible and counts; it does NOT just flash and vanish.
+- [ ] **Replace** = select-delete-retype ("the cat" → "the dog"). This is *editing*, not deletion →
+      you see ONLY the **blue underline** on the new word, **no amber caret**.
+- [ ] A pure deletion AND a separate addition elsewhere in the same paragraph → caret at the
+      removal **and** underline on the addition (they're independent edits, not a replacement).
 - [ ] The captured marks **persist** after the ~1s autosave round-trip — they stay until you
-      **⌘S / Commit** (then they clear; code edits become pending). Previously they vanished.
-- [ ] A **whitespace-only** change (trailing space, extra blank line) does **not** register as a
-      captured edit (it normalizes away).
-- [ ] The captured marks are **calm/static** — quieter than the pending *breathing* dot and the
-      resolving *pulse* (the phases read as an intensity ramp). The tree pane shows a "captured"
-      badge on staged (code-implying) rows.
+      **⌘S / Commit** (then they clear; code edits become green pending). Previously they vanished.
+- [ ] A **whitespace-only** change (trailing space, extra blank line) does **not** register.
+- [ ] Captured (blue, static) reads as calmer than pending (green, *breathing*) and resolving
+      (*pulse*) — the phases form a coherent ramp. The tree pane shows a blue "captured" badge on
+      staged (code-implying) rows; the pending badge is green.
 
 ### Save = stage & send (one gesture)
 
