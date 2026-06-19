@@ -16,14 +16,13 @@ import { tweenScrollTop, TweenController } from './motion';
 import { shouldCenter, centerScrollTarget } from './tree-center';
 import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
+import { acquireHostApi } from './host-bridge';
 
-declare function acquireVsCodeApi(): {
-    postMessage(msg: WebviewMessage): void;
-    // U5: webview-local persisted state (selection/expansion/caret/scroll) survives reload/reopen.
-    getState(): unknown;
-    setState(state: unknown): void;
-};
-const vscode = acquireVsCodeApi();
+// One transport seam for both homes (U2): the real VS Code host API, or — in a
+// standalone browser served by `codoc serve` — a network shim that POSTs commands
+// to the hub and re-dispatches SSE payloads as the same `message` events the host
+// posts, so everything below is identical in either home (see ./host-bridge).
+const vscode = acquireHostApi();
 
 const EMPTY: DocPayload = {
     nodes: {}, roots: [],

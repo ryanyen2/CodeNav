@@ -155,8 +155,9 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
         }
     }
 
-    if (opts.eventSourceFactory) {
-        const es = opts.eventSourceFactory(`${base}${opts.eventsPath ?? '/api/events'}`);
+    const esFactory = opts.eventSourceFactory ?? _defaultEventSourceFactory();
+    if (esFactory) {
+        const es = esFactory(`${base}${opts.eventsPath ?? '/api/events'}`);
         es.addEventListener('message', (ev) => {
             let payload: DocPayload;
             try {
@@ -196,8 +197,43 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
     };
 }
 
+function _defaultEventSourceFactory(): ((url: string) => EventSourceLike) | undefined {
+    // Real EventSource in the browser; absent under node (tests inject a fake).
+    if (typeof EventSource === 'undefined') return undefined;
+    return (url) => new EventSource(url) as unknown as EventSourceLike;
+}
+
 /** Select the transport for the current home. The standalone shell passes
  *  `networkOptions`; inside VS Code the host API is present and wins. */
 export function createHostBridge(networkOptions?: NetworkBridgeOptions): HostBridge {
     return isVsCodeHost() ? createVsCodeBridge() : createNetworkBridge(networkOptions);
+}
+
+/**
+ * Return a VS Code-`acquireVsCodeApi()`-shaped object for the current home, so a
+ * webview built for VS Code runs unchanged in a standalone browser.
+ *
+ * In VS Code: the real host API. In a browser: a network-backed shim that POSTs
+ * commands to the hub and, on each SSE payload, RE-DISPATCHES a window `message`
+ * event of the same `{kind:'doc', payload}` shape the VS Code host posts — so the
+ * webview's existing message listener fires unchanged (the only edit a webview
+ * needs is to call this instead of `acquireVsCodeApi()` directly).
+ */
+export function acquireHostApi(networkOptions?: NetworkBridgeOptions): VsCodeApi {
+    if (isVsCodeHost()) return acquireVsCodeApi();
+
+    const bridge = createNetworkBridge(networkOptions);
+    bridge.onPayload((payload) => {
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new MessageEvent('message', { data: { kind: 'doc', payload } }));
+        }
+    });
+    if (typeof window !== 'undefined') {
+        window.addEventListener('online', () => { void bridge.flush(); });
+    }
+    return {
+        postMessage: (msg: unknown) => bridge.postMessage(msg as WebviewMessage),
+        getState: () => bridge.getState(),
+        setState: (state: unknown) => bridge.setState(state),
+    };
 }
