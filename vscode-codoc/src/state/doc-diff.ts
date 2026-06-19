@@ -1,11 +1,13 @@
 /**
- * doc-diff.ts — word-level diff between two strings (pure, testable).
+ * doc-diff.ts — string diff between two texts (pure, testable).
  *
- * The chosen diff model is "word-level look, block-level store": a suggestion
- * stores the settled `old` text and the proposed `new` text; the editor renders
- * the change as a word-level inline diff (struck deletions, highlighted
- * insertions). This is the diff engine for that rendering, extracted from the
- * former DOM-bound `renderInlineDiff` so it can be unit-tested and shared.
+ * The diff model is "tokenized look, block-level store": a suggestion stores the
+ * settled `old` text and the proposed `new` text; the editor renders the change as
+ * an inline diff (struck deletions, highlighted insertions). Two granularities are
+ * offered from one LCS core:
+ *   - `wordDiff`     — whitespace tokens (fine-grained, every changed word).
+ *   - `sentenceDiff` — sentence tokens (one accept/reject per changed sentence, the
+ *                      low-burden default for agent review; see agent-proposals.ts).
  */
 export type DiffOp = 'same' | 'del' | 'ins';
 
@@ -15,13 +17,12 @@ export interface DiffRun {
 }
 
 /**
- * Token-level LCS diff, split on whitespace runs (whitespace preserved as its own
- * tokens so spacing round-trips). Adjacent runs of the same op are merged so the
- * result is a clean sequence of same/del/ins spans.
+ * Token-level LCS diff over a pre-tokenized pair, returning merged same/del/ins
+ * runs (adjacent runs of the same op coalesce). Tokens are compared by exact
+ * equality and concatenate losslessly, so the original strings round-trip from the
+ * runs regardless of the tokenizer. Shared by wordDiff and sentenceDiff.
  */
-export function wordDiff(oldStr: string, newStr: string): DiffRun[] {
-    const a = String(oldStr).split(/(\s+)/);
-    const b = String(newStr).split(/(\s+)/);
+function tokenDiff(a: string[], b: string[]): DiffRun[] {
     const n = a.length;
     const m = b.length;
 
@@ -53,6 +54,69 @@ export function wordDiff(oldStr: string, newStr: string): DiffRun[] {
         else out.push({ ...run });
     }
     return out;
+}
+
+/**
+ * Word-level diff: split on whitespace runs (whitespace preserved as its own tokens
+ * so spacing round-trips). Adjacent runs of the same op are merged.
+ */
+export function wordDiff(oldStr: string, newStr: string): DiffRun[] {
+    return tokenDiff(String(oldStr).split(/(\s+)/), String(newStr).split(/(\s+)/));
+}
+
+/**
+ * Split a string into sentences, each keeping its trailing delimiter + whitespace
+ * so the parts concatenate back to the input exactly. A sentence ends at one or more
+ * of `. ! ?` that is followed by whitespace or end-of-string — so a mid-token dot
+ * ("3.11", a `codoc:` ref) does NOT split. A string with no such boundary is one
+ * sentence. Conservative by design (an abbreviation like "e.g." may over-split — the
+ * cost is one extra accept/reject unit, never a wrong diff).
+ */
+export function sentenceSplit(s: string): string[] {
+    const str = String(s);
+    if (str === '') return [];
+    const out: string[] = [];
+    // A sentence chunk: minimal text up to boundary punctuation (followed by space/end),
+    // plus the trailing whitespace; or the final remainder with no boundary punctuation.
+    const re = /.*?[.!?]+(?=\s|$)\s*|.+$/gs;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(str)) !== null) {
+        if (m[0] === '') { re.lastIndex++; continue; } // guard against a zero-width match
+        out.push(m[0]);
+    }
+    return out.length ? out : [str];
+}
+
+/**
+ * Sentence tokens for diffing: like sentenceSplit, but the trailing whitespace of
+ * each sentence is peeled into its own token (the same trick wordDiff uses for spaces).
+ * This keeps a sentence *core* identical whether or not a neighbour follows it — so
+ * removing the final sentence diffs as one deletion, not a spurious del+ins on the
+ * sentence that lost its trailing space — and makes each changed sentence its own
+ * del+ins unit (one accept/reject per sentence).
+ */
+function sentenceTokens(s: string): string[] {
+    const out: string[] = [];
+    for (const chunk of sentenceSplit(s)) {
+        const ws = /\s+$/.exec(chunk);
+        if (ws && ws[0].length < chunk.length) {
+            out.push(chunk.slice(0, chunk.length - ws[0].length)); // sentence core
+            out.push(ws[0]);                                        // trailing whitespace
+        } else {
+            out.push(chunk); // no trailing whitespace
+        }
+    }
+    return out;
+}
+
+/**
+ * Sentence-level diff: LCS over sentence cores (whitespace peeled out as its own
+ * tokens). A changed sentence surfaces as one `del` (its old form) + one `ins` (its
+ * new form), separated from neighbours by unchanged whitespace. This is the low-burden
+ * granularity for agent-edit review — one accept/reject per changed sentence, not per word.
+ */
+export function sentenceDiff(oldStr: string, newStr: string): DiffRun[] {
+    return tokenDiff(sentenceTokens(String(oldStr)), sentenceTokens(String(newStr)));
 }
 
 /** True when the two strings differ (cheap guard before computing a full diff). */
