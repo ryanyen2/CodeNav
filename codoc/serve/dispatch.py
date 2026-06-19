@@ -86,6 +86,17 @@ def _noop(_message: dict, _codoc_dir: str) -> dict:
 
 
 def _settle(message: dict, codoc_dir: str) -> dict:
+    # Optimistic concurrency (U9): if the client tells us which version it edited
+    # from (`baseRev`) and the hub has since advanced past it, another writer's
+    # change would be clobbered — reject so the browser reloads the fresh snapshot.
+    # A whole-doc last-write-wins guarded by the store-derived version; finer
+    # per-feature CRDT merge is the deferred Tier-2 work. Absent baseRev → no guard.
+    base_rev = message.get("baseRev")
+    if isinstance(base_rev, int):
+        from codoc.serve.payload import payload_version
+
+        if base_rev < payload_version(codoc_dir):
+            raise CommandError("stale doc — reload and retry", status=409)
     # Held settle: persist the doc; execution waits for an explicit hand-off (U7).
     _persist_doc(message, codoc_dir)
     return {"ok": True, "held": True}
