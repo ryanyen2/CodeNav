@@ -92,6 +92,11 @@ body.vscode-high-contrast .ce-peek {
 body.vscode-high-contrast .row.selected {
     box-shadow: inset -2px 0 0 0 var(--vscode-contrastBorder, var(--vscode-foreground));
 }
+/* HC floor for the captured family (U3): the faint --accent fills wash out under high
+   contrast → pin them to the foreground so "recorded, not sent" stays legible. */
+body.vscode-high-contrast .ce-captured-dot,
+body.vscode-high-contrast .badge.captured { background: var(--vscode-foreground); }
+body.vscode-high-contrast .ce-captured-rail::before { background: var(--vscode-foreground); }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -582,6 +587,27 @@ span[data-change-id] { text-decoration-style: solid; }
     text-decoration: underline dotted color-mix(in srgb, var(--accent) 60%, transparent);
     text-decoration-thickness: 1px; text-underline-offset: 3px;
 }
+
+/* "Captured" (U3) = lifecycle phase 1: EVERY user edit, recorded & staged LOCALLY but
+   NOT yet sent. The calmest member of the rail family — a DOTTED accent rail + a small
+   solid faint dot — softer than pending (dashed, breathing) and resolving (pulsing), so
+   the progression captured → pending → resolving reads as intensifying. Static (the
+   appearance is the recognition; nothing to gate). Save / Commit (hand-off) graduates a
+   captured feature to pending; a prose edit clears once the daemon renders it back. */
+.ce-captured-rail { position: relative; }
+.ce-captured-rail::before {
+    content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
+    width: 2px; border-radius: 1px;
+    background: repeating-linear-gradient(to bottom,
+        color-mix(in srgb, var(--accent) 45%, transparent) 0 2.5px, transparent 2.5px 5px);
+}
+.ce-captured-dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    margin-left: 10px; vertical-align: middle; user-select: none;
+    background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* tree-row twin: a small SOLID faint dot (vs pending's dashed breathing ring) */
+.badge.captured { background: color-mix(in srgb, var(--accent) 55%, transparent); }
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }

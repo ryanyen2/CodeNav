@@ -30,6 +30,7 @@ import {
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
+import { CapturedDecorations, CAPTURED_UPDATED, featureTextFromJson } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
@@ -89,6 +90,9 @@ export interface WholeDocEditorHandle {
      *  queued directive's kind + intent gloss per feature (a subset of `fids`) for the
      *  rail's hover title; omit it (tests) for the plain rail. */
     setHeld: (fids: string[], detail?: Record<string, HoldDetail>) => void;
+    /** Held drafts (U3): edits recorded & staged locally but NOT yet handed off — drives
+     *  the "captured" mark (alongside the client-side changed-vs-baseline set). */
+    setDrafts: (fids: string[]) => void;
     /** Per-feature one-line pitches (FeatureMeta.pitch) — feeds glance mode. */
     setPitches: (pitches: Record<string, string>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
@@ -171,8 +175,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let lastProposalsSig = '';
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
-    let currentHeld = new Set<string>();   // features awaiting AI realization (badge)
+    let currentHeld = new Set<string>();   // handed-off features (staged & sent) → pending badge
     let currentHoldDetail: Record<string, HoldDetail> = {};  // queued-directive {kind,intent} per held fid
+    // Edit-lifecycle phase 1 (U3): the "captured" set is computed in the plugin from
+    // (live doc vs baseline) ∪ drafts, minus handed-off. The baseline is the canonical
+    // feature text as last loaded from a payload; drafts are held-but-not-sent edits.
+    let capturedBaseline = new Map<string, string>();
+    let currentDrafts = new Set<string>();
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
@@ -206,6 +215,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 getHeld: () => currentHeld,
                 getDetail: () => currentHoldDetail,
                 onWithdraw: opts.onWithdrawRealization,
+            }),
+            CapturedDecorations.configure({
+                // Phase 1 of the lifecycle: every user edit gets the "recorded, not sent"
+                // mark — client-side, so it never waits on the daemon's classification.
+                getBaseline: () => capturedBaseline,
+                getDrafts: () => currentDrafts,
+                getHandedOff: () => currentHeld, // handed-off features show pending, not captured
             }),
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
@@ -819,6 +835,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // the captured range under it (the "selection vanished mid-comment" bug).
             // Defer the WHOLE update — the next payload reloads cleanly.
             if (composer || bubble.style.display !== 'none') return;
+            // This payload IS the new canonical state (we're not mid-edit) → re-baseline
+            // the captured set against it. A prose edit the daemon just rendered back now
+            // matches the baseline → its captured mark clears; a code-implying draft stays
+            // captured via the explicit drafts union until hand-off.
+            capturedBaseline = featureTextFromJson(doc);
             // Skip the reload when BOTH the baseline text AND the agent-proposal set
             // are unchanged — the common case right after a settle round-trips;
             // reloading would reset the caret. Reload when the baseline text changed
@@ -826,7 +847,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // render to the same baseline, so a text-only compare would miss them).
             const sig = proposalsSig();
             const sameText = renderTreeFromDoc(doc) === renderTreeFromDoc(editor.getJSON() as PMNode);
-            if (sameText && sig === lastProposalsSig) { markSaving(''); return; }
+            if (sameText && sig === lastProposalsSig) {
+                markSaving('');
+                // No reload, but the baseline moved → recompute captured (clears a round-tripped edit).
+                editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
+                return;
+            }
             lastProposalsSig = sig;
 
             const keepFid = activeFid();          // stable anchor for existing features
@@ -891,9 +917,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
         },
         setHeld: (fids: string[], detail?: Record<string, HoldDetail>) => {
-            currentHeld = new Set(fids);
+            currentHeld = new Set(fids);   // the HANDED-OFF set (staged & sent) → pending badge
             currentHoldDetail = detail ?? {};
-            editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true));
+            // Held changes also move the captured set (handed-off suppresses captured), so
+            // recompute both families in one transaction.
+            editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true).setMeta(CAPTURED_UPDATED, true));
+        },
+        setDrafts: (fids: string[]) => {
+            currentDrafts = new Set(fids);  // recorded, not yet handed off → captured
+            editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
         },
         setPitches: (pitches: Record<string, string>) => {
             currentPitches = pitches;

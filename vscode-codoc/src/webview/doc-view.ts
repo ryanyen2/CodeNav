@@ -51,6 +51,10 @@ let selectedId: string | null = null;
 // Features awaiting AI realization (the daemon's hold set) — drives the calm
 // "being realized" badge on tree rows. Mirrors the editor's heading badge.
 let awaitingAI = new Set<string>();
+// Held drafts (U3/U4): code-implying edits recorded & staged but NOT yet handed off.
+// `awaitingAI` minus `draftSet` = handed-off (sent). Partitions the tree-row badge into
+// "captured" (draft) vs "pending" (sent), matching the doc-pane decoration families.
+let draftSet = new Set<string>();
 // Features whose realization DIVERGED (U5) — the agent changed them beyond the
 // feature you edited; flagged "review what the AI did" alongside the surfaced
 // proposal. fid → reason ("scope").
@@ -101,6 +105,14 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 function cssEsc(s: string): string {
     return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&');
+}
+
+/** Handed-off features (staged & sent) = the daemon hold set MINUS the still-drafted
+ *  (recorded, not yet sent) ones. The two partition the hold set across the
+ *  captured (drafts) and pending (handed-off) lifecycle phases. */
+function handedOff(p: DocPayload): string[] {
+    const d = new Set(p.drafts ?? []);
+    return (p.awaitingAI ?? []).filter(f => !d.has(f));
 }
 
 function statusLabel(s: string, n: number): string {
@@ -314,7 +326,11 @@ function reconcile(): void {
         wholeEditor.setSuggestions(payload.suggestions ?? []);
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
-        wholeEditor.setHeld(payload.awaitingAI ?? [], payload.holdDetail ?? {});
+        // Lifecycle split (U3/U4): drafts = recorded-but-not-sent → "captured"; held minus
+        // drafts = handed-off (staged & sent) → "pending". Save/Commit (hand-off) moves a
+        // feature from drafts → handed-off.
+        wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
+        wholeEditor.setDrafts(payload.drafts ?? []);
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
         wholeEditor.setDoc(payload.doc);
@@ -484,11 +500,16 @@ function appendRow(parent: HTMLElement, id: string): void {
 
     if (n.activeMode === 'write') row.append(el('span', 'badge active-write'));
     else if (n.activeMode === 'read') row.append(el('span', 'badge active-read'));
-    // "pending": a code-implying edit is QUEUED for the agent (daemon hold set) — NOT
-    // running. Implemented when you run /codoc:sync. The active shimmer is separate.
-    if (awaitingAI.has(id)) {
+    // Edit lifecycle (U3/U4): a held DRAFT is "captured" — recorded & staged locally but
+    // NOT sent (Save / Commit hands it off). A handed-off edit is "pending" — sent, the
+    // agent will implement it. The active shimmer (write/read) is a separate axis.
+    if (draftSet.has(id)) {
+        const b = el('span', 'badge captured');
+        b.title = 'Captured — recorded & staged locally. Save (⌘S) or Commit to send it to the agent.';
+        row.append(b);
+    } else if (awaitingAI.has(id)) {
         const b = el('span', 'badge pending');
-        b.title = 'Pending — this edit is queued for the agent; run /codoc:sync to implement it (nothing is running yet).';
+        b.title = 'Pending — staged & sent; the agent will implement it (run /codoc:sync if no daemon).';
         row.append(b);
     }
     // "review what the AI did": a realization changed this feature beyond the one you
@@ -567,7 +588,8 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setSuggestions(payload.suggestions ?? []); // before setDoc — see reconcile()
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
-    wholeEditor.setHeld(payload.awaitingAI ?? []);
+    wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
+    wholeEditor.setDrafts(payload.drafts ?? []);
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
     wholeEditor.setDoc(payload.doc);
@@ -738,6 +760,7 @@ window.addEventListener('message', ev => {
     lastRev = msg.payload.rev;
     payload = msg.payload;
     awaitingAI = new Set(payload.awaitingAI ?? []);
+    draftSet = new Set(payload.drafts ?? []);
     divergent = payload.divergent ?? {};
     // endApplying MUST stay after the stale-rev guard — a stale (dropped) post must
     // not clear the optimistic applying state for a verdict still in flight.
