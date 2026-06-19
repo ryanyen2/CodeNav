@@ -26,18 +26,33 @@ _PLACEHOLDER = (
 )
 
 
-def build_app(codoc_dir: str, *, static_dir: str | None = None):
+def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None):
     """Build the FastAPI app for ``codoc serve``.
 
     ``static_dir`` is the built standalone SPA (U2); when absent the catch-all
-    serves a placeholder so the hub is runnable before the SPA exists. API and
-    SSE routes are registered before the catch-all so it never shadows them."""
+    serves a placeholder so the hub is runnable before the SPA exists. ``auth`` is
+    an optional :class:`codoc.serve.auth.AuthContext`; when present the hub exposes
+    ``/api/whoami`` and (in later units) gates state-changing routes on capability.
+    API and SSE routes are registered before the catch-all so it never shadows them."""
     app = FastAPI(title="codoc serve", docs_url=None, redoc_url=None)
     app.state.codoc_dir = codoc_dir
+    app.state.auth = auth
 
     @app.get("/healthz")
     def healthz() -> JSONResponse:
         return JSONResponse({"ok": True, "service": "codoc-serve"})
+
+    if auth is not None:
+        @app.get("/api/whoami")
+        def whoami(request: Request) -> JSONResponse:
+            from codoc.serve.auth import COOKIE_NAME
+
+            session = auth.store.get(request.cookies.get(COOKIE_NAME))
+            return JSONResponse({
+                "authenticated": session is not None,
+                "login": session.login if session else None,
+                "capability": session.capability.value if session else "none",
+            })
 
     @app.get("/api/payload")
     def api_payload() -> JSONResponse:

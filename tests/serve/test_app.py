@@ -57,3 +57,24 @@ def test_api_payload_returns_snapshot(tmp_path):
     body = r.json()
     assert "f" in body["nodes"]
     assert body["rev"] > 0
+
+
+def test_whoami_reflects_session_capability(tmp_path):
+    from codoc.serve.auth import AuthContext, COOKIE_NAME, Capability, SessionStore
+
+    store = SessionStore()
+    session = store.create("maya", Capability.SUGGEST)
+    client = TestClient(build_app(str(tmp_path), auth=AuthContext(store=store)))
+
+    assert client.get("/api/whoami").json()["authenticated"] is False
+
+    client.cookies.set(COOKIE_NAME, session.sid)
+    body = client.get("/api/whoami").json()
+    assert body == {"authenticated": True, "login": "maya", "capability": "suggest"}
+
+
+def test_whoami_absent_without_auth(tmp_path):
+    # No AuthContext → the route isn't registered (catch-all serves the SPA).
+    client = TestClient(build_app(str(tmp_path)))
+    r = client.get("/api/whoami")
+    assert "codoc serve" in r.text  # placeholder, not a JSON whoami
