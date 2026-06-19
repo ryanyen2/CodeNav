@@ -46,3 +46,30 @@ describe('U6 — one direction hue, no per-op rainbow (cohesion R7)', () => {
         expect(css).toMatch(/\.ce-diff\.code-ahead\s*\{[^}]*var\(--dir-review\)/);
     });
 });
+
+describe('U3/U4/U5 — the captured→pending→resolving lifecycle is one cohesive ramp', () => {
+    it('the captured family (phase 1) has CSS rules: body rail, heading dot, tree badge', () => {
+        expect(css).toMatch(/\.ce-captured-rail::before\s*\{/);
+        expect(css).toMatch(/\.ce-captured-dot\s*\{/);
+        expect(css).toMatch(/\.badge\.captured\s*\{/);
+    });
+
+    it('captured rides the --accent STATUS axis, never a direction hue (it is who-neutral)', () => {
+        const dot = css.match(/\.ce-captured-dot\s*\{[^}]*\}/)?.[0] ?? '';
+        expect(dot).toContain('--accent');
+        expect(dot).not.toContain('--dir-review');
+    });
+
+    it('intensity ramps: captured is STATIC, pending BREATHES, resolving PULSES', () => {
+        // captured (recorded, not sent) is the calmest — no motion to gate.
+        const cap = css.match(/\.ce-captured-dot\s*\{[^}]*\}/)?.[0] ?? '';
+        expect(cap).not.toContain('animation');
+        // pending (staged & sent) breathes; resolving (agent mid-edit) pulses — both stronger.
+        expect(css.match(/\.ce-pending-dot\s*\{[^}]*\}/)?.[0] ?? '').toContain('breathe');
+        expect(css).toMatch(/ce-phase-editing[\s\S]{0,120}pulse/);
+    });
+
+    it('captured has a high-contrast floor so "recorded, not sent" survives HC themes', () => {
+        expect(css).toMatch(/vscode-high-contrast\s+\.ce-captured-dot/);
+    });
+});
