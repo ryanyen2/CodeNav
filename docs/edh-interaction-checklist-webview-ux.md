@@ -105,6 +105,46 @@ Mark each box `[x]` pass / `[ ]` fail; a failed box blocks ship.
 - [ ] Switch to a **high-contrast** theme. The **focus line**, the **minimap ticks** (incl. active),
       and the **"▲ from code"** diff label all stay clearly legible (no washed-out low-opacity tints).
 
+## Edit staging lifecycle (plan 2026-06-19-001 — captured → staged & sent → resolving → review)
+
+The load-bearing new behavior: every edit is visibly *captured*, an explicit *Save* sends it,
+and the agent's edits come back as a *sentence-level* accept/reject diff. Run with `codoc watch`.
+
+### Captured — every edit is recorded (no "is it big enough?" gate)
+
+- [ ] Type a **small** prose edit (even one character) in a description. The feature immediately
+      shows the **captured** mark — a dotted left rail + a small solid "recorded" dot — and the
+      toolbar reads "saving…" then "saved". No waiting on the daemon; no size threshold.
+- [ ] The captured mark is **calm** (static, faint) — clearly quieter than the pending dashed
+      *breathing* dot and the resolving *pulse* (the three phases read as an intensity ramp).
+- [ ] Edit several features; **each** carries its own captured mark. The tree pane shows a
+      "captured" badge on the staged (code-implying) rows.
+
+### Save = stage & send (one gesture)
+
+- [ ] With captured edits pending, press **⌘S** (or **Ctrl+S**). No native save dialog flashes;
+      the staged code-implying edits flip from **captured → pending** (staged & sent) and the
+      status bar moves toward `awaiting_impl` / `realizing` — the agent picks them up.
+- [ ] The **"↑ Commit & send (N)"** toolbar button does the same as ⌘S.
+- [ ] A **prose-only** edit: captured shows, then **clears on its own** once the daemon renders it
+      back — it never gets stuck as pending and never needs a send (nothing went to the agent).
+- [ ] A handed-off feature shows **pending only** (no double captured+pending mark on the same row).
+
+### Review — agent edits come back at sentence level
+
+- [ ] When the agent amends a **multi-sentence** description, only the **changed sentence(s)**
+      render as struck-old + inserted-new — **one ✓/✗ per amend**, not a word-by-word peppering.
+- [ ] A **title** edit still diffs at **word** level (a one-word title fix doesn't strike the whole title).
+- [ ] Accept / reject resolves the amend cleanly (marks clear, tree.codoc unaffected until the verdict).
+
+### Lifecycle legibility + accessibility
+
+- [ ] Scanning the surface, the four phases (captured · pending · resolving · review) read as **one
+      language**, not four unrelated treatments — and you can always tell which phase a feature is in.
+- [ ] **High-contrast** theme: the captured rail/dot + tree badge stay legible (HC floor holds).
+- [ ] **Reduce Motion**: pending stops breathing / resolving stops pulsing; captured is unaffected
+      (it was already static).
+
 ## Aesthetic verdict gate (the subjective goal)
 
 - [ ] Compare before/after side-by-side. Answer honestly: does the redesign read as **more
