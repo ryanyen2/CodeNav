@@ -38,3 +38,22 @@ def test_healthz_not_shadowed_by_catch_all(tmp_path):
     (spa / "index.html").write_text("INDEX")
     client = TestClient(build_app(str(tmp_path), static_dir=str(spa)))
     assert client.get("/healthz").json()["ok"] is True
+
+
+def test_api_payload_returns_snapshot(tmp_path):
+    import json
+
+    from codoc.model.hlc import HLC
+
+    cd = tmp_path / ".codoc"
+    cd.mkdir(parents=True)
+    (cd / "tree.bindings.json").write_text(json.dumps(
+        {"features": {"f": {"title": "X", "parent_id": None}}, "by_feature": {}}))
+    (cd / "status.json").write_text(json.dumps(
+        {"state": "in_sync", "pending": 0, "at": HLC.now().to_str()}))
+    client = TestClient(build_app(str(cd)))
+    r = client.get("/api/payload")
+    assert r.status_code == 200
+    body = r.json()
+    assert "f" in body["nodes"]
+    assert body["rev"] > 0

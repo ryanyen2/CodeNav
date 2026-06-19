@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.staticfiles import StaticFiles
+
 _PLACEHOLDER = (
     "<!doctype html><meta charset=utf-8><title>codoc</title>"
     "<body style='font:14px/1.5 system-ui;margin:3rem;max-width:40rem'>"
@@ -28,16 +32,28 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None):
     ``static_dir`` is the built standalone SPA (U2); when absent the catch-all
     serves a placeholder so the hub is runnable before the SPA exists. API and
     SSE routes are registered before the catch-all so it never shadows them."""
-    from fastapi import FastAPI
-    from fastapi.responses import HTMLResponse, JSONResponse
-    from starlette.staticfiles import StaticFiles
-
     app = FastAPI(title="codoc serve", docs_url=None, redoc_url=None)
     app.state.codoc_dir = codoc_dir
 
     @app.get("/healthz")
     def healthz() -> JSONResponse:
         return JSONResponse({"ok": True, "service": "codoc-serve"})
+
+    @app.get("/api/payload")
+    def api_payload() -> JSONResponse:
+        from codoc.serve.payload import build_browser_payload
+
+        return JSONResponse(build_browser_payload(codoc_dir))
+
+    @app.get("/api/events")
+    async def api_events(request: "Request"):
+        from sse_starlette.sse import EventSourceResponse
+
+        from codoc.serve.push import event_source
+
+        return EventSourceResponse(
+            event_source(codoc_dir, is_disconnected=request.is_disconnected)
+        )
 
     spa = Path(static_dir) if static_dir else None
     index = (spa / "index.html") if spa else None
