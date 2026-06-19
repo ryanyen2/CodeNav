@@ -265,8 +265,14 @@ default), via `loop/fsio.py`.
 
 ### VSCode extension (`vscode-codoc/`)
 
-File-based; no HTTP server, no port. `WorkspaceState` watches the `.codoc/*`
-control files, reparses on change, and drives the status bar off `status.json`.
+The local extension is file-based: no HTTP server, no port. `WorkspaceState`
+watches the `.codoc/*` control files, reparses on change, and drives the status
+bar off `status.json`. (The **deployed hub** — `codoc serve`, `codoc/serve/` —
+*does* run an HTTP/SSE server, but as a **separate process** that supervises the
+daemon and is a file-channel client: it reads `.codoc/*` to derive the browser UI
+and writes only the verdict/draft channels, never `tree.codoc`. So the "no HTTP
+server" property holds for the local extension; the hub is the deliberate
+exception. See `docs/serve-deployment.md`.)
 
 The **`Codoc Tree` webview** (`providers/tree-editor.ts`) is the default editor for
 `tree.codoc`; the raw-text editor is the secondary surface (ghost hunks + decorations

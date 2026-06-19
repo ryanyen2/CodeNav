@@ -157,6 +157,33 @@ Phase colours (dark-mode tuned): **editing = blue** `rgb(0,142,255)`, **deletion
 - [ ] **Reduce Motion**: pending stops breathing / resolving stops pulsing; captured is unaffected
       (it was already static).
 
+## Deployed hub — the browser surface (`codoc serve`, plan 2026-06-19-002)
+
+The same webview bundle now runs in a **standalone browser** served by `codoc serve`
+(via `acquireHostApi()`), against the hub over HTTP POST + SSE. This is a SECOND
+runtime the type-checker / vitest / esbuild cannot exercise — verify it by hand.
+
+How to run: `pip install -e '.[serve]'` → `codoc serve --root <repo> --port 8787`
+→ open `http://127.0.0.1:8787` (build the bundle first: `cd vscode-codoc && npm run
+build`, and point `--static-dir` at a dir holding `index.html` + `doc-view.{js,css}`).
+
+- [ ] The tree + editor render in the browser identically to the VS Code webview
+      (no missing decorations, no console CSP violations — the strict CSP is in
+      `web/index.html`).
+- [ ] **Live catch-up:** edit `tree.codoc` (or run a loop pass) and the browser
+      updates within a pass over SSE; a no-op render produces **no** flicker/redraw
+      (the dedup guard holds — no broadcast storm).
+- [ ] **Keystroke-jank guard** (same as the VS Code surface) holds in the browser —
+      caret/scroll stay stable while the SSE channel is live.
+- [ ] **Offline resilience:** stop the hub mid-edit, make a suggestion, restart —
+      the suggestion syncs on reconnect (the outbox), and the browser resyncs from a
+      fresh snapshot. Nothing is lost.
+- [ ] **Safe-by-default:** a read-collaborator session cannot hand off or write a
+      verdict (the UI affordances are gated; the server rejects with 403); a remote
+      edit is HELD, not auto-realized, until an explicit hand-off.
+- [ ] **No secret/markup execution:** a description containing a `javascript:` link
+      or `<img onerror>` does not execute (CSP + sanitization).
+
 ## Aesthetic verdict gate (the subjective goal)
 
 - [ ] Compare before/after side-by-side. Answer honestly: does the redesign read as **more
