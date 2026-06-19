@@ -30,7 +30,7 @@ import {
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
-import { CapturedDecorations, CAPTURED_UPDATED, featureTextFromJson } from './captured-decorations';
+import { CapturedDecorations, CAPTURED_UPDATED, featureBlocks, type FeatureText } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
@@ -187,9 +187,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentHeld = new Set<string>();   // handed-off features (staged & sent) → pending badge
     let currentHoldDetail: Record<string, HoldDetail> = {};  // queued-directive {kind,intent} per held fid
     // Edit-lifecycle phase 1 (U3): the "captured" set is computed in the plugin from
-    // (live doc vs baseline) ∪ drafts, minus handed-off. The baseline is the canonical
-    // feature text as last loaded from a payload; drafts are held-but-not-sent edits.
-    let capturedBaseline = new Map<string, string>();
+    // (live doc vs baseline) ∪ drafts, minus handed-off. The baseline is the feature text
+    // as of the LAST COMMIT (or last external reload) — frozen across the daemon's
+    // self-echo round-trip so a captured edit (add OR delete) persists until ⌘S/Commit.
+    let capturedBaseline = new Map<string, FeatureText>();
     let currentDrafts = new Set<string>();
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
@@ -356,7 +357,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     function commitNow(): void {
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = 0; }
         dirty = false;
-        opts.onCommit?.(editor.getJSON() as PMNode);
+        const doc = editor.getJSON() as PMNode;
+        // Re-baseline to the committed text: a prose edit's captured marks clear now, and a
+        // code edit graduates to pending once the host's repost marks it handed-off. This is
+        // the SECOND re-baseline point (the other is a real reload in setDoc).
+        capturedBaseline = featureBlocks(doc);
+        editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
+        opts.onCommit?.(doc);
         markSaving('sent');
     }
 
@@ -856,11 +863,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // the captured range under it (the "selection vanished mid-comment" bug).
             // Defer the WHOLE update — the next payload reloads cleanly.
             if (composer || bubble.style.display !== 'none') return;
-            // This payload IS the new canonical state (we're not mid-edit) → re-baseline
-            // the captured set against it. A prose edit the daemon just rendered back now
-            // matches the baseline → its captured mark clears; a code-implying draft stays
-            // captured via the explicit drafts union until hand-off.
-            capturedBaseline = featureTextFromJson(doc);
             // Skip the reload when BOTH the baseline text AND the agent-proposal set
             // are unchanged — the common case right after a settle round-trips;
             // reloading would reset the caret. Reload when the baseline text changed
@@ -870,10 +872,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             const sameText = renderTreeFromDoc(doc) === renderTreeFromDoc(editor.getJSON() as PMNode);
             if (sameText && sig === lastProposalsSig) {
                 markSaving('');
-                // No reload, but the baseline moved → recompute captured (clears a round-tripped edit).
-                editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
+                // The daemon just echoed back what the user already has — do NOT re-baseline.
+                // The captured edit persists (visible) until the user stages & sends (commit).
                 return;
             }
+            // A real reload (external/agent change, or first load) → re-baseline the captured
+            // set against the new canonical doc. Commit is the other re-baseline point
+            // (commitNow), so a user's own uncommitted edits don't clear here.
+            capturedBaseline = featureBlocks(doc);
             lastProposalsSig = sig;
 
             const keepFid = activeFid();          // stable anchor for existing features

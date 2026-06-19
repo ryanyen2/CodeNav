@@ -97,6 +97,9 @@ body.vscode-high-contrast .row.selected {
 body.vscode-high-contrast .ce-captured-dot,
 body.vscode-high-contrast .badge.captured { background: var(--vscode-foreground); }
 body.vscode-high-contrast .ce-captured-rail::before { background: var(--vscode-foreground); }
+/* the deletion caret stays vivid in HC (pin to the contrast border); the add underline to fg */
+body.vscode-high-contrast .ce-captured-del { background: var(--vscode-contrastBorder, #d1483f); }
+body.vscode-high-contrast .ce-captured-add { text-decoration-color: var(--vscode-foreground); }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -608,6 +611,21 @@ span[data-change-id] { text-decoration-style: solid; }
 }
 /* tree-row twin: a small SOLID faint dot (vs pending's dashed breathing ring) */
 .badge.captured { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+/* In-situ captured DIFF (the user's own live edit, vs the last-committed baseline):
+   ADDED words get a solid accent underline; DELETED text — which has no glyph left to
+   mark — gets a thin orange-red caret at the gap ("I don't think" → "I| think"). Both
+   persist until ⌘S/Commit. Static (no motion). The deletion caret is the one place a
+   removal hue is warranted: there is no text to carry the signal, so colour does. */
+.ce-captured-add {
+    text-decoration: underline solid color-mix(in srgb, var(--accent) 70%, transparent);
+    text-decoration-thickness: 1.5px; text-underline-offset: 3px;
+}
+.ce-captured-del {
+    display: inline-block; width: 2px; height: 1.05em; margin: 0 -1px; border-radius: 1px;
+    vertical-align: text-bottom; user-select: none;
+    background: var(--vscode-gitDecoration-deletedResourceForeground, #d1483f);
+}
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }

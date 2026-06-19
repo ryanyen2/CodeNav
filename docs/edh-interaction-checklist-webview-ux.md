@@ -110,15 +110,21 @@ Mark each box `[x]` pass / `[ ]` fail; a failed box blocks ship.
 The load-bearing new behavior: every edit is visibly *captured*, an explicit *Save* sends it,
 and the agent's edits come back as a *sentence-level* accept/reject diff. Run with `codoc watch`.
 
-### Captured — every edit is recorded (no "is it big enough?" gate)
+### Captured — every edit is recorded in situ (additions AND deletions), persists until commit
 
-- [ ] Type a **small** prose edit (even one character) in a description. The feature immediately
-      shows the **captured** mark — a dotted left rail + a small solid "recorded" dot — and the
-      toolbar reads "saving…" then "saved". No waiting on the daemon; no size threshold.
-- [ ] The captured mark is **calm** (static, faint) — clearly quieter than the pending dashed
-      *breathing* dot and the resolving *pulse* (the three phases read as an intensity ramp).
-- [ ] Edit several features; **each** carries its own captured mark. The tree pane shows a
-      "captured" badge on the staged (code-implying) rows.
+- [ ] **Add** words to a description. The added words get an **underline** immediately (not only
+      after commit), plus the feature's gutter rail + "recorded" dot. No size threshold.
+- [ ] **Delete** words (e.g. "I don't think" → "I think"). A small **orange-red caret** appears at
+      the gap ("I |think") — the deletion is visible and counts; it does NOT just flash and vanish.
+- [ ] **Replace** a word ("the cat" → "the dog"): you see both a caret (at the removal) and an
+      underline (on the inserted word).
+- [ ] The captured marks **persist** after the ~1s autosave round-trip — they stay until you
+      **⌘S / Commit** (then they clear; code edits become pending). Previously they vanished.
+- [ ] A **whitespace-only** change (trailing space, extra blank line) does **not** register as a
+      captured edit (it normalizes away).
+- [ ] The captured marks are **calm/static** — quieter than the pending *breathing* dot and the
+      resolving *pulse* (the phases read as an intensity ramp). The tree pane shows a "captured"
+      badge on staged (code-implying) rows.
 
 ### Save = stage & send (one gesture)
 
