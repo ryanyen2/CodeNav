@@ -393,16 +393,17 @@ function renderToolbar(): HTMLElement {
         t.append(accAll, rejAll);
     }
 
-    // Hand to agent (U4): the one batch-commit action for held suggesting-mode drafts.
-    // Shown only when the daemon is holding code-implying edits (prose commits live, so
-    // it raises nothing). One click releases ALL of them to the agent at once.
+    // Commit & send (U4 — save = stage & send): the one gesture that hands the staged
+    // (captured) code-implying edits to the agent. Shown only when the daemon is holding
+    // such edits (prose commits live, so it raises nothing). Equivalent to ⌘S in the
+    // editor; routes through the editor so the latest unsettled keystroke is flushed first.
     const drafts = payload.drafts ?? [];
     if (drafts.length) {
-        const hand = el('button', 'toggle bulk handoff', `→ Hand to agent (${drafts.length})`);
+        const hand = el('button', 'toggle bulk handoff', `↑ Commit & send (${drafts.length})`);
         hand.title = drafts.length === 1
-            ? 'Hand this drafted edit to the agent — it will implement the code change now.'
-            : `Hand all ${drafts.length} drafted edits to the agent — it will implement the code changes now.`;
-        hand.onclick = () => vscode.postMessage({ kind: 'hand-off' });
+            ? 'Commit & send (⌘S) — hand this staged edit to the agent to implement now.'
+            : `Commit & send (⌘S) — hand all ${drafts.length} staged edits to the agent to implement now.`;
+        hand.onclick = () => wholeEditor?.commit();
         t.append(hand);
     }
 
@@ -566,6 +567,7 @@ function renderDocHost(): HTMLElement {
         controller: authorController,
         getSymbols: () => payload.symbols ?? [],
         onSettle: doc => vscode.postMessage({ kind: 'doc-settle', doc }),
+        onCommit: doc => vscode.postMessage({ kind: 'commit', doc }),
         onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdrawRealization: featureId => vscode.postMessage({ kind: 'withdraw-realization', featureId }),

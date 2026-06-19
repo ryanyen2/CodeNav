@@ -178,6 +178,11 @@ export type WebviewMessage =
      *  persists it to tree.doc.json (single writer); the daemon's Loop B derives the
      *  AMEND / MOVE / ADD / RETIRE op from it and renders tree.codoc. */
     | { kind: 'doc-settle'; doc: PMNode }
+    /** Stage & SEND (U4 — save = stage & send): the explicit ⌘S / Commit gesture. The host
+     *  flushes this doc (persist + mark drafts), then hands the staged code-implying edits
+     *  to the agent in one step (settle + hand-off). The single send gesture; the debounced
+     *  `doc-settle` only captures (records locally, never sends). */
+    | { kind: 'commit'; doc: PMNode }
     /** Withdraw a queued realization (U6): cancel feature `featureId`'s directive.
      *  The host appends a cancellation to edits.json; Loop B prunes the directive
      *  and releases the hold. The committed prose is kept. */

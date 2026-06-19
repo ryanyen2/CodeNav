@@ -46,8 +46,11 @@ import type { ThreadsData } from '../protocol';
 export interface WholeDocEditorOptions {
     controller: AuthorController;
     getSymbols: () => RefSymbol[];
-    /** Commit the whole settled doc (debounced). The single edit path. */
+    /** Commit the whole settled doc (debounced). The single edit path — captures locally. */
     onSettle: (doc: PMNode) => void;
+    /** Stage & SEND (U4): the explicit Save/Commit gesture (⌘S or the Commit button).
+     *  Flushes the latest edit and hands the staged code-implying edits to the agent. */
+    onCommit?: (doc: PMNode) => void;
     onAccept: (s: Suggestion) => void;
     onReject: (s: Suggestion) => void;
     /** Withdraw a queued realization for a feature (U6) — the ✕ on its "realizing"
@@ -98,6 +101,8 @@ export interface WholeDocEditorHandle {
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
     setGlance: (on: boolean) => void;
     scrollToFeature: (fid: string) => void;
+    /** Stage & send now (U4) — the Commit button's entry point; same as ⌘S in the editor. */
+    commit: () => void;
     /** Caret position (selection.from) — persisted + restored across reload/reopen (U5). */
     getCaretPos: () => number;
     /** Restore the caret to an absolute position (clamped). Call AFTER the first setDoc settles
@@ -124,8 +129,8 @@ function iconButton(label: string, title: string, onClick: () => void, cls = '')
 }
 
 /** Keymap for the outliner: Tab/Shift-Tab restructure; Enter in a heading drops to
- *  its description rather than splitting the heading. */
-function makeKeymap(): Extension {
+ *  its description rather than splitting the heading; ⌘S/Ctrl-S stages & sends (U4). */
+function makeKeymap(commit: () => void): Extension {
     return Extension.create({
         name: 'codocOutlinerKeymap',
         addKeyboardShortcuts() {
@@ -133,6 +138,10 @@ function makeKeymap(): Extension {
             return {
                 Tab: () => indentHeading(ed),
                 'Shift-Tab': () => outdentHeading(ed),
+                // ⌘S / Ctrl-S = "save the file" → stage & send (U4). The host never dirties
+                // the text document (single-writer), so the native save is a no-op we
+                // repurpose; returning true preventDefaults it so no save dialog flashes.
+                'Mod-s': () => { commit(); return true; },
                 Enter: () => {
                     const { $from } = ed.state.selection;
                     if ($from.parent.type.name !== 'featureHeading') return false; // normal paragraph split
@@ -234,7 +243,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                     edit: (thread: CommentThread) => openComposerForEdit(thread),
                 },
             }),
-            makeKeymap(),
+            makeKeymap(() => commitNow()),
         ],
         content: { type: 'doc', content: [{ type: 'paragraph' }] },
         autofocus: false,
@@ -337,6 +346,18 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         opts.onSettle(editor.getJSON() as PMNode);
         markSaving('saved');
         rebuildRail();
+    }
+
+    /** Stage & SEND (U4): the explicit Save/Commit gesture. Cancels the pending debounce
+     *  and hands the WHOLE current doc to the host in one shot — the host persists it (so
+     *  the latest keystroke isn't lost) and hands the staged code-implying edits to the
+     *  agent. A no-op-ish call when nothing is staged (the host's settle short-circuits and
+     *  hand-off clears an empty draft set). */
+    function commitNow(): void {
+        if (settleTimer) { clearTimeout(settleTimer); settleTimer = 0; }
+        dirty = false;
+        opts.onCommit?.(editor.getJSON() as PMNode);
+        markSaving('sent');
     }
 
     // ── toolbar: marks + structure ────────────────────────────────────────────
@@ -940,6 +961,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             editor.view.dispatch(editor.state.tr.setMeta(GLANCE_UPDATED, true));
         },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
+        commit: () => commitNow(),
         getCaretPos: () => editor.state.selection.from,
         setCaretPos: (pos: number) => {
             const max = Math.max(1, editor.state.doc.content.size - 1);

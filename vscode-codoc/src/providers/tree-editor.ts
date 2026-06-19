@@ -120,6 +120,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await this.settleDoc(document, msg.doc);
                     post();  // U2b: no tree.codoc write → repost so the tree pane/badges
                     return;  // reflect the settle now (sourced from the saved doc)
+                case 'commit':
+                    // Save = stage & send (U4): persist the latest doc (marks drafts), then
+                    // hand the staged code-implying edits to the agent in the same turn.
+                    await this.settleDoc(document, msg.doc);
+                    await this.handOff(document);
+                    post();
+                    return;
                 case 'withdraw-realization':
                     await this.withdrawRealization(document, msg.featureId);
                     return;
