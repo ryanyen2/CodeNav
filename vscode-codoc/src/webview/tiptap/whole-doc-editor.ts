@@ -38,7 +38,7 @@ import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
-import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, type TweenController } from '../motion';
+import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, staggerHover, type TweenController } from '../motion';
 import type { FeaturePhase } from '../../state/activity-model';
 import type { ThreadsData } from '../protocol';
 
@@ -346,6 +346,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
 
     // ── TOC rail + scroll-spy (rehomed scroll indicator) ──────────────────────
     const tickByFid = new Map<string, HTMLElement>();
+    const tickList: HTMLElement[] = [];   // ticks in document order — the wave band (U4)
     function headingDom(pos: number): HTMLElement | null {
         const dom = editor.view.nodeDOM(pos) as Node | null;
         return dom && dom.nodeType === 1 ? (dom as HTMLElement) : (dom?.parentElement ?? null);
@@ -396,6 +397,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     function rebuildRail(): void {
         rail.replaceChildren();
         tickByFid.clear();
+        tickList.length = 0;
         editor.state.doc.forEach(node => {
             if (node.type.name !== 'featureHeading') return;
             const fid = node.attrs.fid as string | null;
@@ -408,10 +410,31 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             tick.title = node.textContent || '(untitled)';
             tick.addEventListener('click', () => scrollToFeatureInternal(fid, true));
             tickByFid.set(fid, tick);
+            tickList.push(tick);
             rail.append(tick);
         });
         updateSpy();
     }
+    // Wave hover (U4): sweeping the cursor down the rail ripples a horizontal scaleX out from
+    // the hovered tick (±3 neighbours, falloff), settling back together on leave. Listeners
+    // live on the stable `rail` (rebuildRail only swaps its children), deduped on the hovered
+    // index so the wave re-fires once per tick, not per pixel. Reduced motion → no wave (the
+    // CSS :hover gives the single-tick feedback). Peak scales per index-distance from centre.
+    const WAVE_PEAKS = [1.6, 1.35, 1.18, 1.06];
+    let lastWaveIndex = -1;
+    rail.addEventListener('mouseover', ev => {
+        const tick = (ev.target as HTMLElement).closest('.ce-tick') as HTMLElement | null;
+        if (!tick) return;
+        const idx = tickList.indexOf(tick);
+        if (idx < 0 || idx === lastWaveIndex) return;
+        lastWaveIndex = idx;
+        staggerHover(tickList, idx, 'scaleX', d => WAVE_PEAKS[d] ?? 1, { radius: 3, step: 30, duration: 120 });
+    });
+    rail.addEventListener('mouseleave', () => {
+        if (lastWaveIndex < 0) return;
+        lastWaveIndex = -1;
+        staggerHover(tickList, 0, 'scaleX', () => 1, { radius: tickList.length, step: 0, duration: 140 });
+    });
     let spyRaf = 0;
     let lastSpyFid: string | null = null; // dedupe scroll-spy onActiveFeature notifications
     function updateSpy(): void {

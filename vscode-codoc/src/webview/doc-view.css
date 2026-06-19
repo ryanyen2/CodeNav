@@ -625,17 +625,27 @@ span[data-change-id] { text-decoration-style: solid; }
     border-left: var(--rule); overflow-y: auto; overflow-x: hidden; scrollbar-width: none;
 }
 .ce-toc-rail::-webkit-scrollbar { width: 0; }
+/* width tapers by depth (a stronger taper than before, so nesting reads at a glance), and the
+   wave grows leftward (into the content) from the right edge. The JS wave (U4, anime.js scaleX)
+   drives `transform`; only `background` transitions in CSS so the two never fight. */
 .ce-tick {
     flex: 0 0 auto; height: 3px; border-radius: 2px; cursor: pointer;
-    width: calc(14px - var(--d, 0) * 2px); margin-left: calc(var(--d, 0) * 2px);
+    width: calc(16px - var(--d, 0) * 2.5px); margin-left: calc(var(--d, 0) * 2.5px);
     background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
-    transition: background 120ms ease, transform 120ms ease, width 120ms ease;
+    transform-origin: right center;
+    transition: background 120ms ease;
 }
-.ce-tick:hover { background: var(--vscode-foreground); transform: scaleY(2.2); }
+/* hover feedback: under full motion the anime.js wave sets an inline scaleX that overrides this;
+   under reduced motion the wave no-ops, so this gives an INSTANT single-tick grow + colour. */
+.ce-tick:hover { background: var(--vscode-foreground); transform: scaleX(1.4); }
 .ce-tick.active { background: var(--accent); width: 16px; height: 4px; }
 /* status axis on the rail (no hue): retired = muted, unrealized = hollow dashed */
 .ce-tick.retired { background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent); opacity: 0.5; }
 .ce-tick.unrealized { background: transparent; outline: 1px dashed color-mix(in srgb, var(--vscode-foreground) 45%, transparent); }
+/* HC floor (U4): the low-% tint vanishes under high contrast — pin ticks to solid foreground,
+   the active tick to the contrast border, so the position map stays legible. */
+body.vscode-high-contrast .ce-tick { background: var(--vscode-foreground); }
+body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBorder, var(--vscode-foreground)); }
 
 /* ── Persistent diff cards (suggestions) ──────────────────────────────────── */
 /* ── pending change — a slim IN-SITU strip, not a card. Shows only the change + a little
