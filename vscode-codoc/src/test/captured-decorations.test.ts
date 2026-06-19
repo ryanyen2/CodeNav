@@ -12,6 +12,13 @@ import { describe, it, expect } from 'vitest';
 import { featureTextFromJson, capturedFids } from '../webview/tiptap/captured-decorations';
 import { makeDoc, featureHeadingNode, paragraphNode, textToInlineRuns, type PMNode } from '../state/pm-doc';
 
+function feat(fid: string, title: string, desc: string): PMNode[] {
+    return [
+        featureHeadingNode({ fid, level: 0, retired: false, realized: true }, textToInlineRuns(title)),
+        paragraphNode(textToInlineRuns(desc)),
+    ];
+}
+
 function doc(): PMNode {
     return makeDoc([
         featureHeadingNode({ fid: 'f-a', level: 0, retired: false, realized: true }, textToInlineRuns('Auth')),
@@ -32,6 +39,18 @@ describe('U3: featureTextFromJson', () => {
         const a = featureTextFromJson(doc());
         const b = featureTextFromJson(doc());
         for (const [fid, text] of a) expect(b.get(fid)).toBe(text);
+    });
+
+    it('normalizes whitespace so a round-tripped edit is not falsely captured (review Finding 1)', () => {
+        // The daemon strips trailing/leading whitespace + blank-line runs on render. The
+        // projection must apply the SAME normalization, else a feature whose only change was
+        // whitespace stays "captured" forever after the round-trip.
+        const withWs = makeDoc(feat('f-a', 'Auth ', 'Login and sessions.   '));
+        const clean = makeDoc(feat('f-a', 'Auth', 'Login and sessions.'));
+        expect(featureTextFromJson(withWs).get('f-a')).toBe(featureTextFromJson(clean).get('f-a'));
+        // → capturedFids sees no diff once the daemon renders the whitespace away
+        const empty = new Set<string>();
+        expect(capturedFids(featureTextFromJson(clean), featureTextFromJson(withWs), empty, empty).size).toBe(0);
     });
 });
 

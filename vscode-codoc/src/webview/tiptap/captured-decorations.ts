@@ -25,7 +25,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
-import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
+import { inlineRunsToText, blocksToDescriptionText, type PMNode } from '../../state/pm-doc';
 
 export const CAPTURED_UPDATED = 'codocCapturedUpdated';
 const capturedKey = new PluginKey('codocCapturedDecorations');
@@ -40,21 +40,26 @@ export interface CapturedDecorationsOptions {
     getHandedOff: () => Set<string>;
 }
 
-/** fid → concatenated text (heading title + each description paragraph) for a doc in
- *  the JSON PMNode shape. The canonical projection used for BOTH the baseline and the
- *  live current (via `doc.toJSON()`), so the comparison is whitespace/ref-consistent. */
+/** fid → canonical text (trimmed title + normalized description) for a doc in the JSON
+ *  PMNode shape. The description runs through the SAME `blocksToDescriptionText` /
+ *  `normalizeDescription` the renderer uses, so the projection is INVARIANT under the
+ *  daemon round-trip (render → parse → doc): a whitespace-only edit the daemon strips
+ *  away does not keep a feature falsely "captured". Used for BOTH the baseline and the
+ *  live current (via `doc.toJSON()`), so the two compare consistently. */
 export function featureTextFromJson(doc: PMNode): Map<string, string> {
     const map = new Map<string, string>();
     let fid: string | null = null;
-    let buf: string[] = [];
-    const flush = (): void => { if (fid) map.set(fid, buf.join('\n')); };
+    let title = '';
+    let paras: PMNode[] = [];
+    const flush = (): void => { if (fid) map.set(fid, title + '\n' + blocksToDescriptionText(paras)); };
     for (const node of doc.content ?? []) {
         if (node.type === 'featureHeading') {
             flush();
             fid = (node.attrs as { fid?: string | null } | undefined)?.fid ?? null;
-            buf = [inlineRunsToText(node.content ?? [])];
+            title = inlineRunsToText(node.content ?? []).trim();
+            paras = [];
         } else if (fid && node.type === 'paragraph') {
-            buf.push(inlineRunsToText(node.content ?? []));
+            paras.push(node);
         }
     }
     flush();

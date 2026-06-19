@@ -122,10 +122,12 @@ and the agent's edits come back as a *sentence-level* accept/reject diff. Run wi
 
 ### Save = stage & send (one gesture)
 
-- [ ] With captured edits pending, press **⌘S** (or **Ctrl+S**). No native save dialog flashes;
-      the staged code-implying edits flip from **captured → pending** (staged & sent) and the
-      status bar moves toward `awaiting_impl` / `realizing` — the agent picks them up.
-- [ ] The **"↑ Commit & send (N)"** toolbar button does the same as ⌘S.
+- [ ] With captured edits pending and the **caret in the editor**, press **⌘S** (or **Ctrl+S**).
+      No native save dialog flashes; the staged code-implying edits flip from **captured →
+      pending** (staged & sent) and the status bar moves toward `awaiting_impl` / `realizing` —
+      the agent picks them up. (⌘S is editor-focus-scoped; with focus on the tree/toolbar use the
+      button.)
+- [ ] The **"↑ Commit & send (N)"** toolbar button does the same as ⌘S, from any focus.
 - [ ] A **prose-only** edit: captured shows, then **clears on its own** once the daemon renders it
       back — it never gets stuck as pending and never needs a send (nothing went to the agent).
 - [ ] A handed-off feature shows **pending only** (no double captured+pending mark on the same row).
