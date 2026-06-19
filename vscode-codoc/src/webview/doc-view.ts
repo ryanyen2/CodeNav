@@ -218,16 +218,25 @@ function centerTreeRow(fid: string): void {
     });
 }
 
-/** A real user scroll/wheel of the tree pane: cancel any auto-center tween and open an ~800ms
- *  window where the scroll-spy won't yank the pane back. Ignores our own tween + reconcile
- *  scroll writes so it only reacts to genuine manual scrolling. */
-function onManualTreeScroll(): void {
-    if (treeTweenActive || programmaticTreeScroll) return;
+/** Begin a manual-scroll suppression: cancel any auto-center tween (the user takes over) and
+ *  open an ~800ms window where the scroll-spy won't yank the pane back. */
+function beginManualScroll(): void {
     cancelCenter();
     suppressAutoCenter = true;
     if (suppressTimer) clearTimeout(suppressTimer);
     suppressTimer = window.setTimeout(() => { suppressAutoCenter = false; }, 800);
     persistUiState(); // capture the new tree scroll position
+}
+/** From the tree's `scroll` event — could be the user OR our own tween / reconcile restore, so
+ *  ignore those so we don't suppress ourselves. Catches scrollbar-drag (which fires no wheel). */
+function onManualTreeScroll(): void {
+    if (treeTweenActive || programmaticTreeScroll) return;
+    beginManualScroll();
+}
+/** From the tree's `wheel` event — ALWAYS a user action (our tween writes scrollTop, never
+ *  wheels), so it cancels an in-flight center tween immediately rather than waiting it out. */
+function onTreeWheel(): void {
+    beginManualScroll();
 }
 
 /** Stop any in-flight auto-center tween (before a tree re-render, or when the user takes over). */
@@ -390,6 +399,7 @@ function renderTree(): HTMLElement {
     const wrap = el('div', 'tree');
     wrap.tabIndex = 0;
     wrap.addEventListener('scroll', onManualTreeScroll, { passive: true });
+    wrap.addEventListener('wheel', onTreeWheel, { passive: true });
     if (payload.roots.length === 0) {
         wrap.append(el('div', 'empty', 'No features yet. Run `codoc init` to bootstrap the tree.'));
         return wrap;
