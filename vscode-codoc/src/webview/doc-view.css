@@ -699,6 +699,9 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
 }
 .ce-tc-mark { font-size: 9px; }
 .ce-tc-actions.code-ahead .ce-tc-mark { color: var(--dir-review); }
+/* the non-color direction label (U6/R8): "from code" beside the ▲ marker — plain text so the
+   diff's origin reads without hue or hover. Muted weight; the marker carries the direction hue. */
+.ce-tc-dir { font: 10px var(--vscode-font-family); color: var(--fg-muted); letter-spacing: 0.01em; }
 .ce-tc-cascade { font-size: 10px; opacity: 0.8; color: var(--dir-review); }
 .ce-tc-btns { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
 .ce-tc-actions:hover .ce-tc-btns, .ce-tc-btns.applying { opacity: 1; }

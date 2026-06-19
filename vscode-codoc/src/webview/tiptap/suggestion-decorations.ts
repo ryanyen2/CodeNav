@@ -126,6 +126,12 @@ function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement 
     const mark = elc('span', 'ce-tc-mark', planned ? '△' : '▲');
     mark.title = directionLabel(s.direction) + (planned ? ' · not yet in code' : '') + (s.tag ? ' · ' + s.tag : '');
     row.append(mark);
+    // Non-color direction label (U6/R8): the diff's origin reads WITHOUT relying on hue or a
+    // hover tooltip — "from code" for a code-ahead amend (the code→codoc update the user wants
+    // to see), so colourblind + high-contrast users get the direction in plain text.
+    if (s.direction === 'code-ahead') {
+        row.append(elc('span', 'ce-tc-dir', planned ? 'from code · planned' : 'from code'));
+    }
     if (s.causedBy) {
         const c = elc('span', 'ce-tc-cascade', '↳ from your edit');
         c.title = `implements ${s.causedBy}`;
