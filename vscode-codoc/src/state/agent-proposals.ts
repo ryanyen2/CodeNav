@@ -25,7 +25,7 @@ import {
     textNode, codeRefNode, paragraphNode, textToInlineRuns,
     type CodeRefAttrs,
 } from './pm-doc';
-import { wordDiff } from './doc-diff';
+import { wordDiff, sentenceDiff, type DiffRun } from './doc-diff';
 import { rebuildFeatures } from './suggestion-model';
 
 /** One agent code-ahead AMEND, flattened for materialization. `changeId` is the
@@ -50,10 +50,16 @@ function mark(type: string, a: AgentAmend): PMMark {
 }
 
 /** old → new as inline runs with ins/del marks: `same` plain, `del` deletion-marked,
- *  `ins` insertion-marked. Refs in a run become codeRef nodes carrying the same mark. */
-function markedRuns(oldStr: string, newStr: string, a: AgentAmend): PMNode[] {
+ *  `ins` insertion-marked. Refs in a run become codeRef nodes carrying the same mark.
+ *  `diff` chooses the granularity — sentence-level for prose descriptions (one
+ *  struck old / one new sentence per change; the low-burden review default), word-level
+ *  for short titles (a whole-title strike would over-state a one-word fix). */
+function markedRuns(
+    oldStr: string, newStr: string, a: AgentAmend,
+    diff: (o: string, n: string) => DiffRun[] = sentenceDiff,
+): PMNode[] {
     const out: PMNode[] = [];
-    for (const run of wordDiff(oldStr, newStr)) {
+    for (const run of diff(oldStr, newStr)) {
         const marks: PMMark[] | undefined =
             run.t === 'del' ? [mark(MARK_DELETION, a)] :
             run.t === 'ins' ? [mark(MARK_INSERTION, a)] : undefined;
@@ -94,7 +100,7 @@ export function applyAgentProposals(doc: PMNode, amends: AgentAmend[]): PMNode {
         const descChanged = a.descOld !== a.descNew;
         if (!titleChanged && !descChanged) return null;
         return {
-            heading: titleChanged ? { ...heading, content: markedRuns(a.titleOld, a.titleNew, a) } : heading,
+            heading: titleChanged ? { ...heading, content: markedRuns(a.titleOld, a.titleNew, a, wordDiff) } : heading,
             descBlocks: descChanged ? markedDescBlocks(a.descOld, a.descNew, a) : descBlocks,
         };
     });

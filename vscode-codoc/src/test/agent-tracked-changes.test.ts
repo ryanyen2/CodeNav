@@ -70,6 +70,33 @@ describe('U4 — applyAgentProposals materializes engine marks', () => {
         expect(del.map(d => d.text).join(' ')).toMatch(/and|sessions/);
     });
 
+    it('U2: marks only the changed sentence in a multi-sentence description (sentence-level)', () => {
+        const marked = applyAgentProposals(doc(), [amend({
+            descOld: 'Login and sessions. OAuth via Google.',
+            descNew: 'Login and sessions. OAuth via Google or GitHub.',
+        })]);
+        const del = marksOfType(marked, MARK_DELETION).map(d => d.text).join('');
+        const ins = marksOfType(marked, MARK_INSERTION).map(i => i.text).join('');
+        // the unchanged first sentence is NOT wrapped in a del/ins mark (low review burden)
+        expect(del).not.toContain('Login and sessions');
+        expect(ins).not.toContain('Login and sessions');
+        // only the changed sentence surfaces: struck old + inserted new (whole sentences)
+        expect(del).toContain('OAuth via Google.');
+        expect(ins).toContain('OAuth via Google or GitHub.');
+    });
+
+    it('U2: a one-word title fix stays word-level (no whole-title strike)', () => {
+        const marked = applyAgentProposals(doc(), [amend({ titleOld: 'User authentcation', titleNew: 'User authentication' })]);
+        const del = marksOfType(marked, MARK_DELETION).map(d => d.text).join('');
+        const ins = marksOfType(marked, MARK_INSERTION).map(i => i.text).join('');
+        // word-level for titles: only the typo'd word is struck/inserted; "User" stays unmarked
+        // (sentence-level would strike the whole title, so this discriminates the granularity)
+        expect(del).not.toContain('User');
+        expect(ins).not.toContain('User');
+        expect(del).toContain('authentcation');
+        expect(ins).toContain('authentication');
+    });
+
     it('tints two agents distinctly (F7): each mark carries its own author id', () => {
         const marked = applyAgentProposals(doc(), [
             amend({ featureId: 'f-a', authorId: 'claude-code', descNew: 'Login and OAuth sessions.' }),
