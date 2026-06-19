@@ -87,6 +87,11 @@ body.vscode-high-contrast .ce-diff,
 body.vscode-high-contrast .ce-peek {
     outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
 }
+/* HC floor for the U2 focus line: the --accent box-shadow can wash out under high contrast —
+   pin it to the contrast border so the "you are here" line stays legible. */
+body.vscode-high-contrast .row.selected {
+    box-shadow: inset -2px 0 0 0 var(--vscode-contrastBorder, var(--vscode-foreground));
+}
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -191,6 +196,11 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
     left: 0; top: 4px; bottom: 4px;
     width: 2px; background: var(--accent); border-radius: 1px;
 }
+/* right-edge focus line (U2): marks the centred/active (scroll-spy) node — the "you are here"
+   the user reads while scrolling the doc. Drawn as an inset box-shadow, NOT a ::after, so it
+   never collides with the dependency-spotlight right-rail rule (.row.dep-*::after). */
+.row.selected { box-shadow: inset -2px 0 0 0 var(--accent); }
+.row.selected.unrealized { box-shadow: inset -2px 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
 
 /* ── Dependency spotlight (WS5) ──────────────────────────────────────────────
    When a feature is focused, its neighbours stay lit and everything else recedes.

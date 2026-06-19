@@ -78,11 +78,12 @@ export function waveDelays(
 export function tweenScrollTop(
     el: HTMLElement,
     to: number,
-    opts: { duration?: number; ease?: string } = {},
+    opts: { duration?: number; ease?: string; onComplete?: () => void } = {},
 ): TweenController {
     const target = Math.round(to);
     if (prefersReducedMotion()) {
         el.scrollTop = target;
+        opts.onComplete?.();   // keep the caller's lifecycle symmetric (e.g. clear a busy flag)
         return NOOP_CONTROLLER;
     }
     const proxy = { v: el.scrollTop };
@@ -91,6 +92,7 @@ export function tweenScrollTop(
         duration: opts.duration ?? 320,
         ease: opts.ease ?? 'outQuad',
         onUpdate: () => { el.scrollTop = proxy.v; },
+        onComplete: () => { opts.onComplete?.(); },
     });
     // pause() stops where it is (cancel() would revert to the original value — wrong here).
     return { cancel() { anim.pause(); } };

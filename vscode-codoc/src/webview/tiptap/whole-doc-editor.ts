@@ -60,8 +60,10 @@ export interface WholeDocEditorOptions {
     onCommentEdit: (id: string, body: string) => void;
     /** Resolve a comment: the whole doc (anchor mark removed) + the thread id. */
     onCommentResolve: (doc: PMNode, id: string) => void;
-    /** Selection moved into a feature — drives tree-pane highlight. */
-    onActiveFeature?: (fid: string | null) => void;
+    /** The active feature changed — drives the tree-pane highlight, and (only when
+     *  `source==='scroll'`) the eased tree re-center. `'selection'` fires on every caret move,
+     *  so re-centering on it would animate the tree on every keystroke (KTD2). */
+    onActiveFeature?: (fid: string | null, source: 'scroll' | 'selection') => void;
     /** Pointer hovering a depends-on / used-by link — drives a transient tree-pane
      *  highlight + scroll-to (preview navigation). null on leave. */
     onHoverFeature?: (fid: string | null) => void;
@@ -221,7 +223,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             const { from, to, empty } = editor.state.selection;
             if (!empty && to > from) lastSelection = { from, to };
             updateBubble();
-            if (opts.onActiveFeature) opts.onActiveFeature(activeFid());
+            if (opts.onActiveFeature) opts.onActiveFeature(activeFid(), 'selection');
         },
     });
 
@@ -406,7 +408,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // Only notify on an actual section change — scroll-spy runs every RAF frame,
             // and onActiveFeature drives the tree highlight + dependency spotlight recompute
             // (an O(rows) DOM pass), so firing it per-frame thrashes a large tree.
-            if (current && current !== lastSpyFid) { lastSpyFid = current; opts.onActiveFeature?.(current); }
+            if (current && current !== lastSpyFid) { lastSpyFid = current; opts.onActiveFeature?.(current, 'scroll'); }
         });
     }
     let railTimer = 0;

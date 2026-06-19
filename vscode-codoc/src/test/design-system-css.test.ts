@@ -70,6 +70,14 @@ describe('U1 — accessibility + editorial type', () => {
     });
 });
 
+describe('U2 — tree re-center focus line', () => {
+    it('marks the selected (centred) row with a right-edge focus line via box-shadow, not a colliding ::after', () => {
+        // inset box-shadow with a negative x offset = the right-edge line; deliberately NOT a
+        // .row.selected::after (which would clash with the dependency-spotlight right rail).
+        expect(css).toMatch(/\.row\.selected\s*\{[^}]*box-shadow:\s*inset\s+-2px/);
+    });
+});
+
 describe('U2a — authorship ink (H5 collision fix)', () => {
     it('human ink reads the NEUTRAL token, not the code-ahead blue', () => {
         const m = css.match(/\.codoc-role-human\s*\{[^}]*\}/);

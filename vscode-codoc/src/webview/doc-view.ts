@@ -12,6 +12,8 @@ import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
 import { AuthorController } from './tiptap/author-plugin';
 import { kindGlyph } from '../state/grammar';
+import { tweenScrollTop, TweenController } from './motion';
+import { shouldCenter, centerScrollTarget } from './tree-center';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: WebviewMessage): void };
@@ -56,6 +58,16 @@ let dragSourceId: string | null = null;
 let lastRev = -1;
 let didFocusTree = false;
 let mounted = false; // first payload builds the shell; the rest reconcile
+
+// Tree auto-center (U2): the active feature (scroll-spy) eases to the vertical centre of the
+// tree pane. ONLY the scroll source re-centers (KTD2 — caret moves just highlight); a manual
+// tree scroll/wheel opens a suppress window so the two don't fight; keyboard nav + tree
+// re-renders cancel any in-flight tween.
+let centerTween: TweenController | null = null;
+let treeTweenActive = false;      // true while OUR tween writes scrollTop → ignore its scroll events
+let programmaticTreeScroll = false; // true while we restore scrollTop on a reconcile
+let suppressAutoCenter = false;   // true briefly after a real manual tree scroll/wheel
+let suppressTimer = 0;
 
 function focusTree(): void {
     (document.querySelector('.tree') as HTMLElement | null)?.focus({ preventScroll: true });
@@ -172,6 +184,52 @@ function flatVisible(): string[] {
     return out;
 }
 
+// ─── Tree auto-center (U2) ───────────────────────────────────────────────────
+/** Ease the active feature's row to the vertical centre of the tree pane — scroll-driven only.
+ *  No-op while a manual-scroll suppress window is open or the row is already centred (deadband).
+ *  Cancels any in-flight tween first so rapid section changes don't queue. */
+function centerTreeRow(fid: string): void {
+    if (suppressAutoCenter) return;
+    const tree = document.querySelector('.tree') as HTMLElement | null;
+    if (!tree) return;
+    const row = tree.querySelector<HTMLElement>('.row[data-id="' + cssEsc(fid) + '"]');
+    if (!row) return;
+    const target = centerScrollTarget(
+        row.offsetTop, row.offsetHeight, tree.clientHeight, tree.scrollHeight, tree.scrollTop,
+    );
+    if (target === tree.scrollTop) return; // within the centre deadband — nothing to do
+    if (centerTween) centerTween.cancel();
+    treeTweenActive = true;
+    centerTween = tweenScrollTop(tree, target, {
+        duration: 200, ease: 'outQuad',
+        onComplete: () => { treeTweenActive = false; centerTween = null; },
+    });
+}
+
+/** A real user scroll/wheel of the tree pane: cancel any auto-center tween and open an ~800ms
+ *  window where the scroll-spy won't yank the pane back. Ignores our own tween + reconcile
+ *  scroll writes so it only reacts to genuine manual scrolling. */
+function onManualTreeScroll(): void {
+    if (treeTweenActive || programmaticTreeScroll) return;
+    cancelCenter();
+    suppressAutoCenter = true;
+    if (suppressTimer) clearTimeout(suppressTimer);
+    suppressTimer = window.setTimeout(() => { suppressAutoCenter = false; }, 800);
+}
+
+/** Stop any in-flight auto-center tween (before a tree re-render, or when the user takes over). */
+function cancelCenter(): void {
+    if (centerTween) { centerTween.cancel(); centerTween = null; }
+    treeTweenActive = false;
+}
+
+/** Restore a tree scrollTop programmatically WITHOUT tripping the manual-scroll suppression. */
+function setTreeScroll(treeEl: HTMLElement, top: number): void {
+    programmaticTreeScroll = true;
+    treeEl.scrollTop = top;
+    requestAnimationFrame(() => { programmaticTreeScroll = false; });
+}
+
 // ─── Top-level render ─────────────────────────────────────────────────────────
 function renderAll(): void {
     app.replaceChildren();
@@ -213,11 +271,12 @@ function reconcile(): void {
 function reconcileTree(): void {
     const tree = document.querySelector('.tree') as HTMLElement | null;
     if (!tree) return;
+    cancelCenter();                  // a tween into the about-to-be-replaced element would orphan
     const scroll = tree.scrollTop;
     const had = treeHasFocus();
     const next = renderTree();
     tree.replaceWith(next);
-    next.scrollTop = scroll;
+    setTreeScroll(next, scroll);     // restore without tripping the manual-scroll suppression
     if (had) next.focus({ preventScroll: true });
 }
 
@@ -284,6 +343,7 @@ function renderToolbar(): HTMLElement {
 function renderTree(): HTMLElement {
     const wrap = el('div', 'tree');
     wrap.tabIndex = 0;
+    wrap.addEventListener('scroll', onManualTreeScroll, { passive: true });
     if (payload.roots.length === 0) {
         wrap.append(el('div', 'empty', 'No features yet. Run `codoc init` to bootstrap the tree.'));
         return wrap;
@@ -436,11 +496,14 @@ function renderDocHost(): HTMLElement {
         onCommentCreate: (doc, thread) => vscode.postMessage({ kind: 'comment-create', doc, thread }),
         onCommentEdit: (id, body) => vscode.postMessage({ kind: 'comment-edit', id, body }),
         onCommentResolve: (doc, id) => vscode.postMessage({ kind: 'comment-resolve', doc, id }),
-        onActiveFeature: fid => {
+        onActiveFeature: (fid, source) => {
             if (!fid) return;
             syncingFromEditor = true;
             setSelected(fid, false); // highlight the tree row, don't re-scroll the editor
             syncingFromEditor = false;
+            // Eased re-center ONLY on the scroll-driven spy — a caret move (source==='selection')
+            // just highlights, else typing would animate the tree on every keystroke (KTD2).
+            if (shouldCenter(source)) centerTreeRow(fid);
         },
         onHoverFeature: fid => peekTreeRow(fid), // WS5: preview a dependency link's target
     });
@@ -520,9 +583,10 @@ function setSelected(id: string | null, scrollDoc: boolean): void {
     if (rowEl) {
         rowEl.classList.add('selected');
         // Only scroll the tree when the selection came from the tree itself (click /
-        // keyboard nav). An editor caret move (syncingFromEditor) just highlights the
-        // row — scrolling the tree on every keystroke is the "tree keeps scrolling" jank.
-        if (!syncingFromEditor) rowEl.scrollIntoView({ block: 'nearest' });
+        // keyboard nav) — that path SNAPS and cancels any eased auto-center so the two don't
+        // fight. An editor caret move (syncingFromEditor) just highlights the row; the eased
+        // re-center is driven separately by the scroll-spy via centerTreeRow.
+        if (!syncingFromEditor) { cancelCenter(); rowEl.scrollIntoView({ block: 'nearest' }); }
     }
     // Scroll the editor to this feature — unless the selection came from the editor's
     // own caret (avoid fighting it) or the id is a pending ghost (no live heading).
@@ -551,6 +615,7 @@ function toggle(id: string): void {
 function rerenderTree(focus = false): void {
     const tree = document.querySelector('.tree');
     if (!tree) return;
+    cancelCenter();
     const next = renderTree();
     tree.replaceWith(next);
     reapplyApplyingTo(next);
