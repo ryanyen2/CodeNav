@@ -24,6 +24,10 @@ dist/
 .ruff_cache/
 .mypy_cache/
 
+# Personal editor settings (launch.json + tasks.json are shared/tracked;
+# settings.json holds machine-local overrides like codoc.serverPath).
+.vscode/settings.json
+
 # Claude Code
 .claude/
 .agents/
