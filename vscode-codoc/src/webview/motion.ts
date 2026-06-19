@@ -81,6 +81,9 @@ export function tweenScrollTop(
     opts: { duration?: number; ease?: string; onComplete?: () => void } = {},
 ): TweenController {
     const target = Math.round(to);
+    // Guard the onComplete-always-fires contract: a non-finite target must not start a tween
+    // that may never complete (which would leak a caller's busy flag). Fire onComplete and bail.
+    if (!Number.isFinite(target)) { opts.onComplete?.(); return NOOP_CONTROLLER; }
     if (prefersReducedMotion()) {
         el.scrollTop = target;
         opts.onComplete?.();   // keep the caller's lifecycle symmetric (e.g. clear a busy flag)

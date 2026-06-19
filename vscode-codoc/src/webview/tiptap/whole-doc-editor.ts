@@ -355,6 +355,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // ── TOC rail + scroll-spy (rehomed scroll indicator) ──────────────────────
     const tickByFid = new Map<string, HTMLElement>();
     const tickList: HTMLElement[] = [];   // ticks in document order — the wave band (U4)
+    let lastWaveIndex = -1;               // dedupe the wave to once per hovered tick
     function headingDom(pos: number): HTMLElement | null {
         const dom = editor.view.nodeDOM(pos) as Node | null;
         return dom && dom.nodeType === 1 ? (dom as HTMLElement) : (dom?.parentElement ?? null);
@@ -394,7 +395,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         if (animated) {
             navTween = tweenScrollTop(surface, target, {
                 duration, ease: 'outExpo',
-                onComplete: () => { navTween = null; },
+                // clear muteSpy in the tween's OWN completion (the timer below is only a floor) —
+                // anime.js pause() doesn't fire onComplete, so the wheel-cancel path clears it too.
+                onComplete: () => { navTween = null; muteSpy = false; },
             });
             muteTimer = window.setTimeout(() => { muteSpy = false; }, muteWindowFor(duration));
         } else {
@@ -406,6 +409,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         rail.replaceChildren();
         tickByFid.clear();
         tickList.length = 0;
+        lastWaveIndex = -1; // fresh tick DOM → re-arm the wave (else a rebuild mid-hover dead-zones it)
         editor.state.doc.forEach(node => {
             if (node.type.name !== 'featureHeading') return;
             const fid = node.attrs.fid as string | null;
@@ -429,7 +433,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // index so the wave re-fires once per tick, not per pixel. Reduced motion → no wave (the
     // CSS :hover gives the single-tick feedback). Peak scales per index-distance from centre.
     const WAVE_PEAKS = [1.6, 1.35, 1.18, 1.06];
-    let lastWaveIndex = -1;
     rail.addEventListener('mouseover', ev => {
         const tick = (ev.target as HTMLElement).closest('.ce-tick') as HTMLElement | null;
         if (!tick) return;
@@ -472,6 +475,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         railTimer = window.setTimeout(rebuildRail, 250);
     }
     surface.addEventListener('scroll', updateSpy, { passive: true });
+    // A user wheel during a momentum glide cancels it immediately so the tween doesn't fight the
+    // user — the 'scroll' handler (updateSpy) is muted during the glide and can't do this itself.
+    // Mirrors the tree pane's onTreeWheel; after cancel the spy un-mutes so the active feature tracks.
+    surface.addEventListener('wheel', () => {
+        if (!navTween) return;
+        navTween.cancel(); navTween = null;
+        muteSpy = false;
+        if (muteTimer) { clearTimeout(muteTimer); muteTimer = 0; }
+    }, { passive: true });
 
     // Code-ref chip click → navigate.
     editor.view.dom.addEventListener('click', ev => {

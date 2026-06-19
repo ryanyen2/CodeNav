@@ -278,8 +278,9 @@ function applyPendingRestore(): void {
     pendingRestore = null;
     const tree = document.querySelector('.tree') as HTMLElement | null;
     if (tree) setTreeScroll(tree, r.treeScroll);
+    const ed = wholeEditor; // capture identity — a re-mount before the rAF must not get a stale restore
     requestAnimationFrame(() => {
-        if (!wholeEditor) return;
+        if (!wholeEditor || wholeEditor !== ed) return;
         if (r.caretPos > 0) wholeEditor.setCaretPos(r.caretPos);
         wholeEditor.setScrollTop(r.docScroll);
     });
