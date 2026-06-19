@@ -38,6 +38,7 @@ import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
+import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, type TweenController } from '../motion';
 import type { FeaturePhase } from '../../state/activity-model';
 import type { ThreadsData } from '../protocol';
 
@@ -358,16 +359,39 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
     let muteSpy = false;
     let muteTimer = 0;
+    let navTween: TweenController | null = null;
+    // Land the heading just below the scroll-spy's active threshold (surface top + 72), so the
+    // section we glide to is the one the spy then marks active.
+    const SPY_TOP_INSET = 72;
     function scrollToFeatureInternal(fid: string, smooth: boolean): void {
         const pos = headingPosForFid(editor, fid);
         if (pos == null) return;
-        headingDom(pos)?.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' });
-        // The navigation IS the selection — set it directly and mute the spy briefly
-        // so intermediate scroll positions don't flicker-select a neighbour.
+        const dom = headingDom(pos);
+        if (!dom) return;
+        // Tween the SURFACE's scrollTop (the real scroll container — it owns the spy listener),
+        // not scrollIntoView, so the motion has momentum and we control the landing offset.
+        const surfTop = surface.getBoundingClientRect().top;
+        const target = Math.max(0, surface.scrollTop + (dom.getBoundingClientRect().top - surfTop) - SPY_TOP_INSET + 1);
+        const distance = Math.abs(target - surface.scrollTop);
+        const animated = smooth && !prefersReducedMotion();
+        const duration = animated ? navDuration(distance) : 0;
+        // The navigation IS the selection — set it directly and mute the spy for the WHOLE glide
+        // so intermediate scroll positions don't flicker-select a neighbour. A second nav cancels
+        // the in-flight tween rather than queuing.
         markCurrent(fid);
+        if (navTween) { navTween.cancel(); navTween = null; }
         muteSpy = true;
         clearTimeout(muteTimer);
-        muteTimer = window.setTimeout(() => { muteSpy = false; }, 350);
+        if (animated) {
+            navTween = tweenScrollTop(surface, target, {
+                duration, ease: 'outExpo',
+                onComplete: () => { navTween = null; },
+            });
+            muteTimer = window.setTimeout(() => { muteSpy = false; }, muteWindowFor(duration));
+        } else {
+            surface.scrollTop = Math.round(target);
+            muteTimer = window.setTimeout(() => { muteSpy = false; }, 350);
+        }
     }
     function rebuildRail(): void {
         rail.replaceChildren();
@@ -830,6 +854,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (railTimer) clearTimeout(railTimer);
             if (muteTimer) clearTimeout(muteTimer);
             if (blurTimer) clearTimeout(blurTimer);
+            if (navTween) navTween.cancel();          // stop an in-flight momentum scroll
             if (spyRaf) cancelAnimationFrame(spyRaf); // else the RAF fires onActiveFeature on a destroyed editor
             closeComposer();
             bubble.remove();
