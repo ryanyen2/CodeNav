@@ -26,7 +26,7 @@ _PLACEHOLDER = (
 )
 
 
-def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None):
+def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None, rate_limiter=None):
     """Build the FastAPI app for ``codoc serve``.
 
     ``static_dir`` is the built standalone SPA (U2); when absent the catch-all
@@ -56,7 +56,7 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None):
 
         @app.post("/api/command")
         async def api_command(request: Request) -> JSONResponse:
-            from codoc.serve.auth import capability_from_request
+            from codoc.serve.auth import COOKIE_NAME, Capability
             from codoc.serve.dispatch import CommandError, dispatch
 
             # CSRF: state-changing requests must carry a custom header a cross-site
@@ -64,7 +64,11 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None):
             # sends it on every command.
             if request.headers.get("x-codoc-csrf") is None:
                 return JSONResponse({"error": "missing CSRF header"}, status_code=403)
-            capability = capability_from_request(request, auth.store)
+            session = auth.store.get(request.cookies.get(COOKIE_NAME))
+            key = session.login if session else "anon"
+            if rate_limiter is not None and not rate_limiter.allow(key):
+                return JSONResponse({"error": "rate limited"}, status_code=429)
+            capability = session.capability if session else Capability.NONE
             try:
                 body = await request.json()
             except Exception:

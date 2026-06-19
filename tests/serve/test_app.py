@@ -110,3 +110,22 @@ def test_command_route_enforces_csrf_and_capability(tmp_path):
                     headers={"x-codoc-csrf": "1"})
     assert r.status_code == 200
     assert {v.event_id for v in inbox.read_verdicts(str(cd))} == {"e-9"}
+
+
+def test_command_route_rate_limits(tmp_path):
+    from codoc.serve.auth import COOKIE_NAME, AuthContext, Capability, SessionStore
+    from codoc.serve.ratelimit import RateLimiter
+
+    store = SessionStore()
+    session = store.create("maya", Capability.SUGGEST)
+    limiter = RateLimiter(capacity=2, refill_per_sec=0.0001)  # ~no refill in-test
+    cd = tmp_path / ".codoc"
+    cd.mkdir(parents=True)
+    client = TestClient(build_app(str(cd), auth=AuthContext(store=store), rate_limiter=limiter))
+    client.cookies.set(COOKIE_NAME, session.sid)
+
+    body = {"kind": "comment-create", "thread": {"featureId": "f", "body": "x", "id": "c"}}
+    headers = {"x-codoc-csrf": "1"}
+    assert client.post("/api/command", json=body, headers=headers).status_code == 200
+    assert client.post("/api/command", json=body, headers=headers).status_code == 200
+    assert client.post("/api/command", json=body, headers=headers).status_code == 429

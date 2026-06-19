@@ -93,6 +93,10 @@ def serve(
     port: int = typer.Option(8787, "--port", help="Local port for the hub."),
     static_dir: str = typer.Option(
         None, "--static-dir", help="Built standalone SPA directory (unit U2)."),
+    tunnel: bool = typer.Option(
+        False, "--tunnel",
+        help="Expose the hub over a cloudflared tunnel (needs cloudflared + a "
+             "Cloudflare Access policy — see docs/serve-deployment.md)."),
 ):
     """Serve codoc as a web app from this machine, supervising the daemon.
 
@@ -104,6 +108,7 @@ def serve(
     import uvicorn
 
     from codoc.serve.app import build_app
+    from codoc.serve.ratelimit import RateLimiter
     from codoc.serve.supervise import DaemonSupervisor, OwnershipError
 
     cd = _codoc_dir(root)
@@ -113,11 +118,26 @@ def serve(
     except OwnershipError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+    tunnel_proc = None
+    if tunnel:
+        from codoc.serve.tunnel import launch_tunnel
+        try:
+            tunnel_proc = launch_tunnel(port)
+            typer.echo("  ↳ cloudflared tunnel launched — gate it with Cloudflare Access.")
+        except FileNotFoundError:
+            typer.echo("  ⚠ cloudflared not found — install it (see docs/serve-deployment.md).", err=True)
+
+    # Per-identity write rate limit: ~2 writes/s sustained, burst 60. Bounds a
+    # remote flood from DoSing the daemon / amplifying the SSE fan-out.
+    rate_limiter = RateLimiter(capacity=60, refill_per_sec=2)
     typer.echo(f"codoc serve · http://{host}:{port} · supervising daemon · {cd}")
     try:
-        uvicorn.run(build_app(cd, static_dir=static_dir),
+        uvicorn.run(build_app(cd, static_dir=static_dir, rate_limiter=rate_limiter),
                     host=host, port=port, log_level="warning")
     finally:
+        if tunnel_proc is not None:
+            tunnel_proc.terminate()
         supervisor.stop()
 
 
