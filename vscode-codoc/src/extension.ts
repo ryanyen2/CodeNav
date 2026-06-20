@@ -13,6 +13,8 @@ import { CodocInlayHintsProvider } from './providers/inlay';
 import { CodocFoldingProvider } from './providers/folding';
 import { CodocSymbolProvider } from './providers/symbol';
 import { applyDecorations, applyPendingCodeDecorations, createDecorations } from './providers/decoration';
+import { BridgeController } from './providers/bridge-controller';
+import { BridgeCodeLensProvider } from './providers/bridge-lens';
 import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
 import { bindingsForFeature } from './state/bindings-model';
 import { symbolLeaf } from './state/registry-model';
@@ -524,6 +526,20 @@ export function activate(context: vscode.ExtensionContext): void {
         applyPendingCodeDecorations(ed, decorations, state.pendingCodeForFile(rel));
     };
     refreshDecorations();
+
+    // ── Live cross-surface bridge (P2 / §A) — doc→code green highlight + live lens ──
+    const bridge = new BridgeController(context, state, decorations);
+    context.subscriptions.push(
+        vscode.languages.registerCodeLensProvider(
+            [{ language: 'python' }, { language: 'typescript' }, { language: 'javascript' }],
+            new BridgeCodeLensProvider(state, bridge),
+        ),
+        // §A.6 (P2 fix 3): on a visible-editors change, let the bridge detect whether ITS pane
+        // was closed → remember the dismissal so it stops auto-reopening this session, then repaint.
+        vscode.window.onDidChangeVisibleTextEditors(() => bridge.noteVisibleEditorsChanged()),
+        { dispose: () => bridge.dispose() },
+    );
+
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(refreshDecorations),
         vscode.workspace.onDidChangeTextDocument(e => {
@@ -531,8 +547,8 @@ export function activate(context: vscode.ExtensionContext): void {
             if (ed && ed.document === e.document) refreshDecorations(ed);
         }),
         // Sidecar / realize.md reload must repaint overlays + pending-code marks
-        // across every visible editor (the changed file may not be active).
-        state.onDidChange(() => vscode.window.visibleTextEditors.forEach(refreshDecorations)),
+        // across every visible editor (the changed file may not be active) + the bridge.
+        state.onDidChange(() => { vscode.window.visibleTextEditors.forEach(refreshDecorations); bridge.repaint(); }),
     );
 
     // ── Dependency focus (opacity dimming on cursor) ───────────────────────────
@@ -549,7 +565,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider(
             CodocTreeEditorProvider.viewType,
-            new CodocTreeEditorProvider(context, state),
+            new CodocTreeEditorProvider(context, state, bridge),
             { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false },
         ),
     );

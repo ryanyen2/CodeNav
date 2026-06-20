@@ -39,7 +39,8 @@ import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
-import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, staggerHover, type TweenController } from '../motion';
+import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, staggerHover, sparkIn, type TweenController } from '../motion';
+import { icon } from '../icons';
 import type { FeaturePhase } from '../../state/activity-model';
 import type { ThreadsData } from '../protocol';
 
@@ -72,6 +73,10 @@ export interface WholeDocEditorOptions {
     /** Pointer hovering a depends-on / used-by link — drives a transient tree-pane
      *  highlight + scroll-to (preview navigation). null on leave. */
     onHoverFeature?: (fid: string | null) => void;
+    /** The user edited the feature the caret is in (P2 / §A.1 doc→code bridge). Fires on
+     *  every keystroke with the owning fid (null when not in a feature); the webview
+     *  debounces it 180 ms and opens that feature's bound code Beside. */
+    onEditFeature?: (fid: string | null) => void;
 }
 
 export interface WholeDocEditorHandle {
@@ -103,6 +108,9 @@ export interface WholeDocEditorHandle {
     scrollToFeature: (fid: string) => void;
     /** Stage & send now (U4) — the Commit button's entry point; same as ⌘S in the editor. */
     commit: () => void;
+    /** Mint a new top-level feature with `title` (P4 / §D.3 ⌘K "Create feature"). Appends a
+     *  level-0 heading and commits so the host mints the fid. */
+    createFeature: (title: string) => void;
     /** Caret position (selection.from) — persisted + restored across reload/reopen (U5). */
     getCaretPos: () => number;
     /** Restore the caret to an absolute position (clamped). Call AFTER the first setDoc settles
@@ -112,6 +120,11 @@ export interface WholeDocEditorHandle {
     getScrollTop: () => number;
     setScrollTop: (n: number) => void;
     isDirty: () => boolean;
+    /** Code→doc spark (P2 / §A.3): a bound source file was edited — land an inbound glyph
+     *  on each fid's heading, hold ~2.5 s, then settle to a persistent blue underline tick.
+     *  `big` fids (a large change Loop A will likely re-question) also get the divergent halo.
+     *  Reduced motion: the glyph just appears (sparkIn jumps to its final frame). */
+    touchFeatures: (fids: string[], big?: Set<string>) => void;
     destroy: () => void;
 }
 
@@ -253,6 +266,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             dirty = true;
             scheduleSettle();
             scheduleRail();
+            // P2 doc→code bridge: the live edit's owning feature — the webview debounces
+            // this and opens that feature's bound code Beside (§A.1).
+            const editedFid = activeFid();
+            opts.onEditFeature?.(editedFid);
+            // P2 fix 2: editing the feature means the user is now reviewing it → clear its
+            // code-touched tick (it has served its purpose).
+            if (editedFid) clearTouchTick(editedFid);
         },
         onSelectionUpdate: () => {
             const { from, to, empty } = editor.state.selection;
@@ -411,6 +431,54 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         const pos = headingPosForFid(editor, fid);
         if (pos != null) headingDom(pos)?.classList.add('ce-current');
     }
+
+    // Code→doc spark (P2 / §A.3): per-fid timers so a re-touch re-arms cleanly rather than
+    // stacking glyphs. The glyph rises (sparkIn), holds ~2.5 s, then the heading keeps a quiet
+    // blue underline tick (.ce-code-touched).
+    const touchTimers = new Map<string, number>();   // spark hold → remove the inbound glyph
+    const tickTimers = new Map<string, number>();    // P2 fix 2: bounded tick lifetime → clear the class
+    const TOUCH_HOLD_MS = 2500;
+    const TICK_LIFETIME_MS = 8000;   // the blue tick must not haunt the heading forever
+    function headingDomForFid(fid: string): HTMLElement | null {
+        return surface.querySelector<HTMLElement>(`.codoc-feature-heading[data-fid="${CSS.escape(fid)}"]`);
+    }
+    /** Deterministically clear the code-touched tick on a feature (P2 fix 2) — doesn't depend on
+     *  a full setDoc rebuild (which early-returns while the user is editing). */
+    function clearTouchTick(fid: string): void {
+        const t = tickTimers.get(fid); if (t) { clearTimeout(t); tickTimers.delete(fid); }
+        const dom = headingDomForFid(fid);
+        dom?.classList.remove('ce-code-touched', 'ce-code-touched-big');
+        dom?.querySelector('.ce-code-touch')?.remove();
+    }
+    function touchFeaturesInternal(fids: string[], big?: Set<string>): void {
+        for (const fid of fids) {
+            const dom = headingDomForFid(fid);
+            if (!dom) continue;
+            dom.classList.add('ce-code-touched');
+            if (big?.has(fid)) dom.classList.add('ce-code-touched-big'); // a large change → divergent-grade emphasis (§A.3)
+            // one inbound glyph per heading (drop a stale one first so re-touch doesn't stack)
+            dom.querySelector('.ce-code-touch')?.remove();
+            const spark = document.createElement('span');
+            spark.className = 'ce-code-touch';
+            spark.contentEditable = 'false';
+            spark.title = 'A code edit touched this feature — review on the next sync.';
+            spark.append(icon('arrow-bend-down-left'));
+            dom.append(spark);
+            sparkIn(spark);
+            const prev = touchTimers.get(fid);
+            if (prev) clearTimeout(prev);
+            touchTimers.set(fid, window.setTimeout(() => {
+                touchTimers.delete(fid);
+                headingDomForFid(fid)?.querySelector('.ce-code-touch')?.remove(); // settle to the tick
+            }, TOUCH_HOLD_MS));
+            // P2 fix 2: the tick itself has a BOUNDED lifetime — re-armed on each touch — so a
+            // stale blue underline can never accumulate even if no setDoc rebuild ever fires.
+            const prevTick = tickTimers.get(fid);
+            if (prevTick) clearTimeout(prevTick);
+            tickTimers.set(fid, window.setTimeout(() => clearTouchTick(fid), TICK_LIFETIME_MS));
+        }
+    }
+
     let muteSpy = false;
     let muteTimer = 0;
     let navTween: TweenController | null = null;
@@ -968,6 +1036,24 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
         commit: () => commitNow(),
+        createFeature: (title: string) => {
+            // P4 / §D.3: mint a new top-level feature from the ⌘K "Create feature" affordance —
+            // append a level-0 featureHeading (fid:null; the host mints the id on settle) at the
+            // end of the doc with the title, move the caret into it, and let the normal settle
+            // flow persist + mint it (the same path the `#`-input-rule heading uses).
+            const t = title.trim();
+            if (!t) return;
+            const heading = editor.schema.nodes.featureHeading.create(
+                { fid: null, level: 0, retired: false, realized: true },
+                editor.schema.text(t),
+            );
+            const end = editor.state.doc.content.size;
+            const tr = editor.state.tr.insert(end, heading);
+            tr.setSelection(TextSelection.near(tr.doc.resolve(end + t.length + 1)));
+            editor.view.dispatch(tr.scrollIntoView());
+            editor.commands.focus();
+            commitNow();   // persist + hand to the host so it mints the fid
+        },
         getCaretPos: () => editor.state.selection.from,
         setCaretPos: (pos: number) => {
             const max = Math.max(1, editor.state.doc.content.size - 1);
@@ -977,12 +1063,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         getScrollTop: () => surface.scrollTop,
         setScrollTop: (n: number) => { surface.scrollTop = Math.max(0, n); },
         isDirty: () => dirty,
+        touchFeatures: (fids: string[], big?: Set<string>) => touchFeaturesInternal(fids, big),
         destroy: () => {
             if (settleTimer) clearTimeout(settleTimer);
             if (railTimer) clearTimeout(railTimer);
             if (muteTimer) clearTimeout(muteTimer);
             if (blurTimer) clearTimeout(blurTimer);
             if (navTween) navTween.cancel();          // stop an in-flight momentum scroll
+            for (const t of touchTimers.values()) clearTimeout(t); // P2 code→doc spark timers
+            for (const t of tickTimers.values()) clearTimeout(t);   // P2 fix 2 tick-lifetime timers
             window.removeEventListener('resize', repositionFloatingSurfaces);
             if (spyRaf) cancelAnimationFrame(spyRaf); // else the RAF fires onActiveFeature on a destroyed editor
             closeComposer();

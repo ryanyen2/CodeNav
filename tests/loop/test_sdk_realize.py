@@ -13,7 +13,12 @@ import pytest
 
 from codoc.loop import autorealize
 from codoc.loop.activity import read_activity
-from codoc.loop.sdk_realize import RealizeMonitor, _collect_feature_ids, consume_stream
+from codoc.loop.sdk_realize import (
+    RealizeMonitor,
+    _collect_feature_ids,
+    consume_stream,
+    format_realize_detail,
+)
 
 
 @pytest.fixture
@@ -27,6 +32,9 @@ def repo(tmp_path):
             {"symbol": "src/colors.py::PALETTE", "feature_id": "f-0000aaaa",
              "feature_title": "Color palette"},
         ]},
+        # The `features` slice resolves a directive's feature_id → title for the
+        # live realize-progress detail (status.json).
+        "features": {"f-0000aaaa": {"title": "Color palette", "parent_id": None}},
     }))
     return str(root), str(codoc)
 
@@ -196,6 +204,113 @@ def test_collect_feature_ids_is_recursive_and_deduped():
         "feature_id": "f-1",
         "ops": [{"feature_id": "f-2"}, {"nested": {"feature_id": "f-1"}}],
     }) == ["f-1", "f-2"]
+
+
+# -- live realize-progress detail (status.json) -------------------------------
+#
+# The IDE parses status.detail with `parseRealizeProgress` in
+# vscode-codoc/src/providers/tree-editor.ts (~:652-656):
+#   /(\d+)\s*\/\s*(\d+)(?:\s*[:\-]\s*(.*))?/  → {done, total, current=group3}
+# These tests pin our producer (format_realize_detail / RealizeMonitor) to that
+# exact shape. _parse_realize_progress below is the Python mirror of that regex.
+
+import re
+
+_TS_RE = re.compile(r"(\d+)\s*/\s*(\d+)(?:\s*[:\-]\s*(.*))?")
+
+
+def _parse_realize_progress(detail: str):
+    """Python mirror of the TS `parseRealizeProgress` regex — the host parser
+    our detail string must satisfy."""
+    m = _TS_RE.search(detail or "")
+    if not m:
+        return None
+    return {"done": int(m.group(1)), "total": int(m.group(2)),
+            "current": (m.group(3) or "").strip()}
+
+
+def test_format_realize_detail_matches_the_ts_parser():
+    detail = format_realize_detail(2, 5, "Color palette")
+    assert detail == "implementing 2/5: Color palette"
+    # The string the IDE actually consumes — round-trips through the host regex.
+    assert _parse_realize_progress(detail) == {"done": 2, "total": 5,
+                                               "current": "Color palette"}
+
+
+def test_format_realize_detail_degrades_without_a_title():
+    detail = format_realize_detail(1, 3, "")
+    assert detail == "implementing 1/3"
+    # Still parses — the title capture group is optional in the TS regex.
+    assert _parse_realize_progress(detail) == {"done": 1, "total": 3, "current": ""}
+    # A whitespace-only title is treated as absent (no dangling ": ").
+    assert format_realize_detail(1, 3, "   ") == "implementing 1/3"
+
+
+def _seed_manifest(codoc, directives):
+    from codoc.loop.edits import Directive, write_manifest
+
+    (Path(codoc) / "realize.md").write_text(
+        "".join(f'### {i}. AMEND FEATURE\n  body\n' for i in range(1, len(directives) + 1)))
+    write_manifest(codoc, [Directive(**d) for d in directives])
+
+
+def test_reflect_advances_progress_and_writes_parseable_detail(repo):
+    """As each directive's codoc_reflect lands, status.detail reports
+    done/total: <feature title> in the shape parseRealizeProgress consumes."""
+    root, codoc = repo
+    _seed_manifest(codoc, [
+        {"id": "d-aaaa1111", "feature_id": "f-0000aaaa", "kind": "amend"},
+        {"id": "d-bbbb2222", "feature_id": "f-0000aaaa", "kind": "amend"},
+    ])
+    lines: list[str] = []
+    m = _monitor(repo, lines)
+    assert m._total == 2
+
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-aaaa1111"})
+    state = json.loads((Path(codoc) / "status.json").read_text())
+    assert state["state"] == "realizing"
+    assert state["detail"] == "implementing 1/2: Color palette"
+    assert _parse_realize_progress(state["detail"])["current"] == "Color palette"
+
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-bbbb2222"})
+    state = json.loads((Path(codoc) / "status.json").read_text())
+    assert state["detail"] == "implementing 2/2: Color palette"
+
+
+def test_progress_is_idempotent_per_directive_and_clamps(repo):
+    """A directive that reflects twice is counted once; done never exceeds total."""
+    root, codoc = repo
+    _seed_manifest(codoc, [{"id": "d-aaaa1111", "feature_id": "f-0000aaaa", "kind": "amend"}])
+    m = _monitor(repo, [])
+
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-aaaa1111"})
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-aaaa1111"})  # repeat
+    assert m._done == 1
+    state = json.loads((Path(codoc) / "status.json").read_text())
+    assert state["detail"] == "implementing 1/1: Color palette"
+
+
+def test_no_manifest_leaves_detail_alone(repo):
+    """Zero directives (no manifest) → no per-directive progress is written; the
+    reflect path must not crash and must not emit a status.json."""
+    root, codoc = repo
+    m = _monitor(repo, [])
+    assert m._total == 0
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-zzzz9999"})
+    assert m._done == 0
+    assert not (Path(codoc) / "status.json").exists()  # static detail untouched
+
+
+def test_unknown_feature_id_falls_back_to_the_id(repo):
+    """A directive whose feature_id is absent from the sidecar degrades the title
+    to the feature id (graceful, still parses)."""
+    root, codoc = repo
+    _seed_manifest(codoc, [{"id": "d-cccc3333", "feature_id": "f-ffffffff", "kind": "amend"}])
+    m = _monitor(repo, [])
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-cccc3333"})
+    state = json.loads((Path(codoc) / "status.json").read_text())
+    assert state["detail"] == "implementing 1/1: f-ffffffff"
+    assert _parse_realize_progress(state["detail"])["current"] == "f-ffffffff"
 
 
 # -- engine selection -----------------------------------------------------------

@@ -11,6 +11,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import { directionLabel, directionActions } from '../../state/grammar';
+import { collapseRowOut } from '../motion';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { ThreadsData, ThreadTarget } from '../protocol';
 import { THREADS_COLLAPSE_AT } from '../protocol';
@@ -95,18 +96,21 @@ function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
 
     const actions = elc('span', 'ce-diff-actions');
     // Disable the row after the first click so the card can't fire twice while it's
-    // still on screen (the authoritative removal arrives with the next payload).
-    const once = (fn: (s: Suggestion) => void) => () => {
+    // still on screen (the authoritative removal arrives with the next payload). On ACCEPT
+    // (§C.3) the row also height-collapses to 0 before the payload drops it — never a hard
+    // vanish; gated in collapseRowOut (reduced motion → instant). Reject stays a quiet vanish.
+    const once = (fn: (s: Suggestion) => void, collapse: boolean) => () => {
         actions.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
         actions.classList.add('applying');
         fn(s);
+        if (collapse) collapseRowOut(box, () => { /* payload removal is authoritative; keep collapsed */ });
     };
     // All suggestions are agent code-ahead proposals (the human commits directly
     // since U3) → Reject / Accept, the human's verdict over the agent's change.
     const [secondary, primary] = directionActions(s.direction);
     actions.append(
-        actionButton(secondary, 'reject', once(handlers.reject)),
-        actionButton(primary, 'accept', once(handlers.accept)),
+        actionButton(secondary, 'reject', once(handlers.reject, false)),
+        actionButton(primary, 'accept', once(handlers.accept, true)),
     );
     box.append(actions);
     return box;

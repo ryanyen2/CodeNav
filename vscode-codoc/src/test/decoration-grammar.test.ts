@@ -55,9 +55,11 @@ describe('U3/U4/U5 — the captured→pending→resolving lifecycle is one cohes
     });
 
     it('the three lifecycle PHASE colours are defined as tokens (editing/del/staged)', () => {
-        expect(css).toMatch(/--ce-editing:\s*rgb\(0,\s*142,\s*255\)/);  // editing = blue
-        expect(css).toMatch(/--ce-del:\s*rgb\(255,\s*185,\s*11\)/);     // deletion caret = amber
-        expect(css).toMatch(/--ce-staged:\s*rgb\(0,\s*150,\s*0\)/);     // staged & sent = green
+        // P1/§E.2 retuned these toward pastel (calmer blue / softer amber / sage) — still the
+        // three distinct phases (editing = blue-ish, del = amber, staged = green), just desaturated.
+        expect(css).toMatch(/--ce-editing:\s*#5aa6e0/);  // editing = calmer blue
+        expect(css).toMatch(/--ce-del:\s*#e0b46a/);      // deletion caret = softer amber
+        expect(css).toMatch(/--ce-staged:\s*#6fae74/);   // staged & sent = sage
     });
 
     it('captured (editing) keys off --ce-editing; pending (staged) off --ce-staged — distinct phases', () => {

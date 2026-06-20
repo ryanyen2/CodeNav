@@ -12,8 +12,14 @@ import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
 import { AuthorController } from './tiptap/author-plugin';
 import { kindGlyph } from '../state/grammar';
-import { tweenScrollTop, TweenController } from './motion';
+import { icon, iconMaskDataUri } from './icons';
+import { tweenScrollTop, TweenController, popLanded, spinReject, saveShimmer, launchPlane } from './motion';
 import { shouldCenter, centerScrollTarget } from './tree-center';
+import { BridgeDebounce } from '../state/bridge';
+import { deriveAgentPresences, type PresencePhase } from '../state/presence';
+import { PresenceLayer } from './presence-layer';
+import { CommandPalette } from './palette-view';
+import type { PaletteContext, PaletteItem } from './palette';
 import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 
@@ -84,6 +90,111 @@ let suppressTimer = 0;
 // payload (sync seed before first paint) + after the editor mounts (caret/scroll).
 let pendingRestore: UiState | null = null;
 let persistTimer = 0;
+
+// ── Cross-surface bridge (P2 / §A) ───────────────────────────────────────────
+// Doc→code: an edit inside a bound feature opens its code Beside, debounced 180 ms so a fast
+// typist doesn't thrash the split (§A.1/§A.5). The last fid we opened the bridge for, so a
+// caret-leave (active feature changes with no edit) clears the code-side highlight via
+// `bridge-dim` but never closes the pane (opening is eager, closing is the user's call, §A.1).
+const bridgeDebounce = new BridgeDebounce(180,
+    (fn, ms) => window.setTimeout(fn, ms), id => clearTimeout(id));
+let bridgeFid: string | null = null;
+
+// ── Agent presence (P3 / §B) ──────────────────────────────────────────────────
+// A floating avatar glides to the feature an agent is touching, whispering what it does.
+// Driven off the already-plumbed sync.phase / activeRead / sync.realize (no new backend).
+const presence = new PresenceLayer({
+    docHost: () => document.querySelector<HTMLElement>('.doc-host'),
+    docSurface: () => document.querySelector<HTMLElement>('.ce-whole-surface'),
+    treePane: () => document.querySelector<HTMLElement>('.tree'),
+    scrollToFeature: fid => { setSelected(fid, true); },
+});
+
+/** Push the latest sync signal into the presence layer. The activity schema carries no
+ *  per-agent identity, so all live features attribute to the single keyless-Claude default
+ *  (presence.ts); a future per-agent signal drops in there without touching this. */
+function updatePresence(): void {
+    const phase = (payload.sync.phase ?? {}) as Record<string, PresencePhase>;
+    presence.update(deriveAgentPresences(phase, payload.sync.activeRead ?? []), payload.sync.realize);
+}
+
+// ── Command palette (P4 / §D) ──────────────────────────────────────────────────
+// The last few features the user selected (most-recent first) — the §D.3 welcome dashboard's
+// "Recent" list. In-memory (resets on reload; the spec only needs it useful with zero typing).
+const recentFids: string[] = [];
+function noteRecent(fid: string | null): void {
+    if (!fid || !fid.startsWith('f-')) return;
+    const i = recentFids.indexOf(fid);
+    if (i >= 0) recentFids.splice(i, 1);
+    recentFids.unshift(fid);
+    if (recentFids.length > 8) recentFids.length = 8;
+}
+
+const palette = new CommandPalette({
+    context: () => buildPaletteContext(),
+    recentFids: () => recentFids,
+    run: (item, shift) => runPaletteAction(item, shift),
+});
+
+/** A DOM-free snapshot of the live state the palette reads (§D.2). */
+function buildPaletteContext(): PaletteContext {
+    const features = payload.roots.length
+        ? Object.values(payload.nodes)
+            .filter(n => !n.isProposal && n.id.startsWith('f-'))
+            .map(n => ({
+                id: n.id,
+                title: n.title,
+                bound: (n.bindings?.length ?? 0) > 0,
+                detail: n.bindings?.length
+                    ? `${n.bindings.length} ref${n.bindings.length === 1 ? '' : 's'} · ${n.bindings[0].file}`
+                    : undefined,
+            }))
+        : [];
+    const pendingFids = Object.values(payload.nodes).filter(n => n.proposal && !n.isProposal).map(n => n.id);
+    const active = selectedId && payload.nodes[selectedId] ? payload.nodes[selectedId] : null;
+    return {
+        features,
+        driftFids: [],   // drift isn't in the webview payload (host-side decoration only)
+        pendingFids,
+        divergentFids: Object.keys(divergent),
+        activeFid: active?.id ?? null,
+        activeTitle: active?.title ?? '',
+        activeHeld: !!(active && awaitingAI.has(active.id)),
+        activeBound: !!(active && (active.bindings?.length ?? 0) > 0),
+        pendingEventCount: payload.pendingEventIds.length,
+        draftCount: (payload.drafts ?? []).length,
+        caretInProposal: !!(active && active.proposal),
+        glance: prefs.glance,
+        featureCount: features.length,
+    };
+}
+
+/** Interpret a chosen palette item (§D.2/§D.4). Reuses existing callbacks + postMessage kinds;
+ *  no new host messages (`bridge-open` is shared with the bridge). `shift` = ⇧↵ secondary. */
+function runPaletteAction(item: PaletteItem, shift: boolean): void {
+    switch (item.action) {
+        case 'goto':
+            if (item.arg) {
+                if (shift) { bridgeFid = item.arg; vscode.postMessage({ kind: 'bridge-open', fid: item.arg }); }
+                setSelected(item.arg, true);
+            }
+            return;
+        case 'open-code':
+            if (item.arg) { bridgeFid = item.arg; vscode.postMessage({ kind: 'bridge-open', fid: item.arg }); }
+            return;
+        case 'accept-all': if (payload.pendingEventIds.length) { beginApplying(null); postVerdict(payload.pendingEventIds.slice(), true); } return;
+        case 'reject-all': if (payload.pendingEventIds.length) { beginApplying(null); postVerdict(payload.pendingEventIds.slice(), false); } return;
+        case 'accept-cursor': { const id = selectedId && payload.nodes[selectedId]?.proposal?.eventId; if (id) { beginApplying(null); postVerdict([id], true); } return; }
+        case 'reject-cursor': { const id = selectedId && payload.nodes[selectedId]?.proposal?.eventId; if (id) { beginApplying(null); postVerdict([id], false); } return; }
+        case 'hand-off': triggerCommit(); return;
+        case 'withdraw': if (item.arg) vscode.postMessage({ kind: 'withdraw-realization', featureId: item.arg }); return;
+        case 'toggle-glance': setPref('glance', !prefs.glance); applyGlance(); rerenderToolbar(); return;
+        case 'collapse-all': for (const id of [...expanded]) expanded.delete(id); rerenderTree(); persistUiState(); return;
+        case 'expand-all': for (const id of Object.keys(payload.nodes)) if (payload.nodes[id].children.length) expanded.add(id); rerenderTree(); persistUiState(); return;
+        case 'create': if (item.arg) wholeEditor?.createFeature(item.arg); return;
+        case 'noop': return;
+    }
+}
 
 function focusTree(): void {
     (document.querySelector('.tree') as HTMLElement | null)?.focus({ preventScroll: true });
@@ -179,12 +290,106 @@ function reapplyApplyingTo(root: ParentNode): void {
 
 function verdictButtons(eventId: string): HTMLElement {
     const wrap = el('span', 'verdict');
-    const acc = el('button', 'v-accept', '✓'); acc.title = 'Accept';
-    acc.onclick = ev => { ev.stopPropagation(); beginApplying(wrap); postVerdict([eventId], true); };
-    const rej = el('button', 'v-reject', '✗'); rej.title = 'Reject';
-    rej.onclick = ev => { ev.stopPropagation(); beginApplying(wrap); postVerdict([eventId], false); };
+    const acc = el('button', 'v-accept'); acc.title = 'Accept';
+    acc.append(icon('check-circle')); // §C.1: filled check = landed
+    acc.onclick = ev => {
+        ev.stopPropagation();
+        // §C.3 accept: an optimistic "landed" pop on the glyph + a green row flash. The
+        // authoritative removal arrives async (or the 5s applyingTimer reverts) — we never
+        // fake-collapse the row here, the next payload drops it once the verdict drains.
+        popLanded(acc.querySelector<HTMLElement>('.ce-icon'));
+        flashAccept(wrap.closest<HTMLElement>('.row'));
+        beginApplying(wrap); postVerdict([eventId], true);
+    };
+    const rej = el('button', 'v-reject'); rej.title = 'Reject';
+    rej.append(icon('x-circle'));     // §C.1: x-circle = dismissed
+    rej.onclick = ev => {
+        ev.stopPropagation();
+        spinReject(rej.querySelector<HTMLElement>('.ce-icon')); // §C.3: quieter than accept
+        beginApplying(wrap); postVerdict([eventId], false);
+    };
     wrap.append(rej, acc);
     return wrap;
+}
+
+/** §C.3 accept: a brief (1px-flash-grade) green row flash ("this is now yours") — held for
+ *  --dur-fast (120 ms), not a lingering wash. A pure CSS class toggle, so reduced motion (the
+ *  blanket gate) zeroes the transition automatically. */
+function flashAccept(row: HTMLElement | null): void {
+    if (!row) return;
+    row.classList.add('ce-accept-flash');
+    window.setTimeout(() => row.classList.remove('ce-accept-flash'), 120);
+}
+
+/** The ⌘S save-shimmer (§C.3): EVERY captured rail in view recolours blue→green staggered
+ *  top-to-bottom — the doc margin shimmers green on one keystroke. Fired from `onCommit`, so
+ *  it covers BOTH commit paths (⌘S inside the editor and the toolbar button). Gated in
+ *  motion.ts (reduced motion → no shimmer; the rails still graduate to pending on reconcile). */
+function fireSaveShimmer(): void {
+    saveShimmer([...document.querySelectorAll<HTMLElement>('.ce-captured-rail')]);
+}
+
+/** Toolbar Commit & send (§C.3): the plane launches "sent" (the shimmer rides `onCommit`).
+ *  Routes through the editor's commit so the latest keystroke is flushed first. */
+function triggerCommit(plane?: SVGElement | null): void {
+    if (plane) launchPlane(plane);
+    wholeEditor?.commit();
+}
+
+// ── Cross-surface bridge handlers (P2 / §A) ──────────────────────────────────
+/** A keystroke inside feature `fid` (§A.1 doc→code). Debounce 180 ms, then ask the host to
+ *  open that feature's bound code Beside + light the implicated lines. Only features with ≥1
+ *  binding OR an unrealized placeholder are bridged; a realized-but-bound-less feature has no
+ *  code to show (the host's no-binding path A.4 covers the unrealized case). */
+function onBridgeEdit(fid: string | null): void {
+    if (!fid) { bridgeDebounce.clear(); return; }
+    const node = payload.nodes[fid];
+    if (!node) { bridgeDebounce.clear(); return; }
+    // Eager: a feature with a binding, or an unrealized plan placeholder (A.4 file-level lens).
+    const bridgeable = (node.bindings && node.bindings.length > 0) || node.realized === false;
+    if (!bridgeable) { bridgeDebounce.clear(); return; }
+    bridgeDebounce.fire(() => {
+        bridgeFid = fid;
+        vscode.postMessage({ kind: 'bridge-open', fid });
+    });
+}
+
+/** The caret left the bridged feature (§A.1): cancel a pending open and clear the code-side
+ *  highlight — the pane STAYS open (opening is eager, closing is the user's call). */
+function onBridgeCaretLeave(): void {
+    bridgeDebounce.clear();
+    if (bridgeFid === null) return;
+    const prev = bridgeFid;
+    bridgeFid = null;
+    vscode.postMessage({ kind: 'bridge-dim', fid: prev });
+}
+
+/** Code→doc (§A.3): a bound source file was edited — spark the touched headings in the doc
+ *  pane and briefly pulse their tree rows (so the navigator shows where the action is even
+ *  when that section is scrolled off). The persistent blue underline tick settles after the
+ *  spark holds; a payload reconcile clears it. */
+const treePulseTimers = new Map<string, number>();
+function onCodeTouch(fids: string[], big: string[]): void {
+    if (!fids.length) return;
+    wholeEditor?.touchFeatures(fids, new Set(big));
+    for (const fid of fids) {
+        const row = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(fid) + '"]');
+        if (!row) continue;
+        // a transient blue active-write pulse on the row's badge (§A.3) — add a momentary
+        // badge if the row has none, then drop it after the 1.4s pulse so the resting row
+        // is unchanged.
+        let badge = row.querySelector<HTMLElement>('.badge.active-write.ce-touch-pulse');
+        if (!badge) {
+            badge = el('span', 'badge active-write ce-touch-pulse');
+            row.append(badge);
+        }
+        const prev = treePulseTimers.get(fid);
+        if (prev) clearTimeout(prev);
+        treePulseTimers.set(fid, window.setTimeout(() => {
+            treePulseTimers.delete(fid);
+            document.querySelector('.row[data-id="' + cssEsc(fid) + '"] .ce-touch-pulse')?.remove();
+        }, 1400));
+    }
 }
 
 function isDescendant(ancestorId: string, candidateId: string): boolean {
@@ -399,11 +604,15 @@ function renderToolbar(): HTMLElement {
     // editor; routes through the editor so the latest unsettled keystroke is flushed first.
     const drafts = payload.drafts ?? [];
     if (drafts.length) {
-        const hand = el('button', 'toggle bulk handoff', `↑ Commit & send (${drafts.length})`);
+        const hand = el('button', 'toggle bulk handoff');
+        // §C.1/§C.3: a paper-plane glyph = "sent". On click it launches (up-right) and the
+        // captured rails shimmer blue→green — the two big save-moments chained into one.
+        const plane = icon('paper-plane-tilt', { className: 'ce-handoff-plane' });
+        hand.append(plane, document.createTextNode(` Commit & send (${drafts.length})`));
         hand.title = drafts.length === 1
             ? 'Commit & send (⌘S) — hand this staged edit to the agent to implement now.'
             : `Commit & send (⌘S) — hand all ${drafts.length} staged edits to the agent to implement now.`;
-        hand.onclick = () => wholeEditor?.commit();
+        hand.onclick = () => triggerCommit(plane);
         t.append(hand);
     }
 
@@ -507,10 +716,14 @@ function appendRow(parent: HTMLElement, id: string): void {
     if (draftSet.has(id)) {
         const b = el('span', 'badge captured');
         b.title = 'Captured — recorded & staged locally. Save (⌘S) or Commit to send it to the agent.';
+        b.append(icon('circle-dashed')); // §C.1: thin dashed circle = mine, local
         row.append(b);
     } else if (awaitingAI.has(id)) {
         const b = el('span', 'badge pending');
         b.title = 'Pending — staged & sent; the agent will implement it (run /codoc:sync if no daemon).';
+        // §C.1 "open/fill = phase": captured (draft) draws the hollow circle; once handed off
+        // (sent & queued) the badge advances to the FILLED diamond — "◆ queued".
+        b.append(icon('diamond-fill'));
         row.append(b);
     }
     // "review what the AI did": a realization changed this feature beyond the one you
@@ -518,9 +731,14 @@ function appendRow(parent: HTMLElement, id: string): void {
     if (divergent[id]) {
         const b = el('span', 'badge divergent');
         b.title = 'Review — the AI changed this while realizing another of your edits.';
+        b.append(icon('warning-diamond')); // §C.1: warning-diamond = divergent
         row.append(b);
     }
-    if (!n.realized) row.append(el('span', 'badge unrealized'));
+    if (!n.realized) {
+        const b = el('span', 'badge unrealized');
+        b.append(icon('circle-dashed')); // §C.1: thin dashed circle = accepted plan, no code yet
+        row.append(b);
+    }
     if (n.proposal?.op === 'amend') row.append(el('span', 'badge amend'));
     if (n.proposal?.op === 'retire') row.append(el('span', 'badge retire'));
 
@@ -567,7 +785,7 @@ function renderDocHost(): HTMLElement {
         controller: authorController,
         getSymbols: () => payload.symbols ?? [],
         onSettle: doc => vscode.postMessage({ kind: 'doc-settle', doc }),
-        onCommit: doc => vscode.postMessage({ kind: 'commit', doc }),
+        onCommit: doc => { fireSaveShimmer(); vscode.postMessage({ kind: 'commit', doc }); },
         onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdrawRealization: featureId => vscode.postMessage({ kind: 'withdraw-realization', featureId }),
@@ -577,7 +795,10 @@ function renderDocHost(): HTMLElement {
         onCommentEdit: (id, body) => vscode.postMessage({ kind: 'comment-edit', id, body }),
         onCommentResolve: (doc, id) => vscode.postMessage({ kind: 'comment-resolve', doc, id }),
         onActiveFeature: (fid, source) => {
-            if (!fid) return;
+            if (!fid) { onBridgeCaretLeave(); return; }
+            // Caret moved to a different feature without an intervening edit → clear the
+            // code-side bridge highlight (the pane stays open, §A.1). An edit re-opens it.
+            if (fid !== bridgeFid) onBridgeCaretLeave();
             syncingFromEditor = true;
             setSelected(fid, false); // highlight the tree row, don't re-scroll the editor
             syncingFromEditor = false;
@@ -585,6 +806,7 @@ function renderDocHost(): HTMLElement {
             // just highlights, else typing would animate the tree on every keystroke (KTD2).
             if (shouldCenter(source)) centerTreeRow(fid);
         },
+        onEditFeature: fid => onBridgeEdit(fid),  // P2 doc→code (§A.1), debounced below
         onHoverFeature: fid => peekTreeRow(fid), // WS5: preview a dependency link's target
     });
     wholeEditor.setSuggestions(payload.suggestions ?? []); // before setDoc — see reconcile()
@@ -596,6 +818,10 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
     wholeEditor.setDoc(payload.doc);
     applyGlance();      // seed pitch + glance state into the fresh editor
+    // Presence rides the doc surface — re-place the avatar as the surface scrolls (the agent's
+    // heading moves under a static avatar). The surface is recreated here, so re-bind.
+    host.querySelector<HTMLElement>('.ce-whole-surface')
+        ?.addEventListener('scroll', () => presence.reposition(), { passive: true });
     return host;
 }
 
@@ -651,6 +877,7 @@ function peekTreeRow(fid: string | null): void {
 // ─── Selection (tree ↔ editor) ───────────────────────────────────────────────
 function setSelected(id: string | null, scrollDoc: boolean): void {
     selectedId = id;
+    noteRecent(id);   // P4 §D.3: feed the ⌘K "Recent features" welcome list
     // Reveal a selected node's ancestors so its tree row exists and can be marked
     // .selected (cheap — only re-renders when an ancestor was actually collapsed).
     if (id) revealAncestors(id);
@@ -738,7 +965,24 @@ function treeHasFocus(): boolean {
     return !!(ae && ae.closest && ae.closest('.tree'));
 }
 
+// ⌘K command palette (P4 / §D.4): a CAPTURE-phase listener on document so the editor keymap
+// can't swallow it, and so the palette's own ↑/↓/↵/Esc are handled before anything else while
+// it's open. ⌘K toggles; the input owns plain typing. The accelerator is ⌘ on macOS and Ctrl
+// elsewhere — gating Ctrl off mac avoids colliding with the native Ctrl+K (delete-to-EOL) inside
+// text inputs.
+const IS_MAC = typeof navigator !== 'undefined'
+    && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
 document.addEventListener('keydown', ev => {
+    if (palette.isOpen && palette.onKeydown(ev)) return;
+    if ((IS_MAC ? ev.metaKey : ev.ctrlKey) && (ev.key === 'k' || ev.key === 'K')) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        palette.toggle();
+    }
+}, true);
+
+document.addEventListener('keydown', ev => {
+    if (palette.isOpen) return;                        // the palette owns keys while open
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if (tag === 'INPUT' || tag === 'TEXTAREA') return; // inputs own Esc/Enter
     if (!treeHasFocus()) return;                       // editor focus → native scroll
@@ -756,7 +1000,10 @@ document.addEventListener('keydown', ev => {
 
 // ─── Message bus ────────────────────────────────────────────────────────────
 window.addEventListener('message', ev => {
-    const msg = ev.data as { kind: string; payload: DocPayload };
+    const msg = ev.data as { kind: string; payload: DocPayload; fids?: string[]; big?: string[] };
+    // Code→doc spark (P2 / §A.3): a bound source file was edited — land the inbound glyph on
+    // each touched heading and pulse its tree row, even when that section is scrolled off.
+    if (msg.kind === 'code-touch') { onCodeTouch(msg.fids ?? [], msg.big ?? []); return; }
     if (msg.kind !== 'doc') return;
     if (msg.payload.rev < lastRev) return; // ignore stale posts
     lastRev = msg.payload.rev;
@@ -795,6 +1042,22 @@ window.addEventListener('message', ev => {
     }
 
     if (!mounted) { mounted = true; renderAll(); applyPendingRestore(); } else { reconcile(); }
+    // Presence rides every payload: a new sync.phase / realize moves the avatar (§B). Deferred
+    // a frame so the freshly-rendered headings/rows exist for the anchor query.
+    requestAnimationFrame(updatePresence);
 });
+
+// Re-place the (static) avatar when its anchor heading/row moves under it.
+window.addEventListener('resize', () => presence.reposition(), { passive: true });
+
+/** Single-source the resolving-phase mask glyphs (§C.4): the CSS pseudo-elements read
+ *  `--phase-glyph-{editing,reflecting}`, which we set from the icon registry so the heading
+ *  glyph can never drift from `icon('pen-nib'/'arrows-clockwise')`. */
+function setPhaseGlyphVars(): void {
+    const root = document.documentElement.style;
+    root.setProperty('--phase-glyph-editing', iconMaskDataUri('pen-nib'));
+    root.setProperty('--phase-glyph-reflecting', iconMaskDataUri('arrows-clockwise'));
+}
+setPhaseGlyphVars();
 
 vscode.postMessage({ kind: 'ready' });

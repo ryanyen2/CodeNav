@@ -55,12 +55,27 @@ describe('U1 — accessibility + editorial type', () => {
         expect(css).toMatch(/--vscode-contrastBorder/);
     });
 
-    it('navigator titles use the UI sans family, not the editor mono', () => {
-        // the .title rule should read the UI font, not --vscode-editor-font-family
+    it('navigator titles use the editorial doc family, not the editor mono', () => {
+        // P1/§E.2: the .title rule reads --font-doc (Inter → falls back to --vscode-font-family),
+        // never --vscode-editor-font-family (the code mono).
         const m = css.match(/\.title\s*\{[^}]*\}/);
+        expect(m).not.toBeNull();
+        expect(m![0]).toContain('--font-doc');
+        expect(m![0]).not.toContain('--vscode-editor-font-family');
+    });
+
+    it('the --font-doc token falls back to the UI sans (not the editor mono)', () => {
+        const m = css.match(/--font-doc:\s*[^;]+;/);
         expect(m).not.toBeNull();
         expect(m![0]).toContain('--vscode-font-family');
         expect(m![0]).not.toContain('--vscode-editor-font-family');
+    });
+
+    it('bundles Inter + JetBrains Mono via @font-face with font-display: swap (P1/§E.1)', () => {
+        expect(css).toMatch(/@font-face\s*\{[^}]*font-family:\s*'Inter'/);
+        expect(css).toMatch(/@font-face\s*\{[^}]*font-family:\s*'JetBrains Mono'/);
+        expect(css).toContain('font-display: swap');
+        expect(css).toMatch(/--font-mono:\s*'JetBrains Mono'/);
     });
 
     it('the L3 heading is not an all-caps eyebrow', () => {

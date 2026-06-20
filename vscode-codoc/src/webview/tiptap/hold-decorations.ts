@@ -22,6 +22,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import type { HoldDetail } from '../../state/bindings-model';
+import { icon } from '../icons';
 
 export const HOLDS_UPDATED = 'codocHoldsUpdated';
 const holdKey = new PluginKey('codocHoldDecorations');
@@ -107,8 +108,11 @@ export function buildHoldDecorations(
                 chip.title = 'Pending — this edit is queued for the agent and is implemented when you '
                     + 'run /codoc:sync (nothing is running yet)'
                     + (gloss ? `: the agent will ${gloss}.` : '.');
+                // pending = phase 2 → a FILLED DIAMOND glyph (§C.1 "open/fill = phase"): the
+                // captured note crystallised into a task and was sent — "◆ queued."
                 const dot = document.createElement('span');
                 dot.className = 'ce-pending-dot';
+                dot.append(icon('diamond-fill'));
                 chip.append(dot);
                 if (onWithdraw) {
                     const x = document.createElement('button');

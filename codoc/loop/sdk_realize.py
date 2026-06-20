@@ -41,6 +41,24 @@ _READ_TOOLS = frozenset({"Read"})
 # Tools that are pure orchestration noise in a compact readout.
 _QUIET_TOOLS = frozenset({"TodoWrite", "Task", "Glob", "Grep", "AskUserQuestion"})
 
+# The static detail when there is no per-directive progress to report yet (the
+# realize epoch just started). ``format_realize_detail`` replaces it as each
+# directive lands.
+_STATIC_DETAIL = "implementing (sdk) — codoc realize"
+
+
+def format_realize_detail(done: int, total: int, title: str) -> str:
+    """The live realize-progress string the IDE parses out of ``status.detail``.
+
+    Shaped ``"implementing <done>/<total>: <title>"`` to match
+    ``parseRealizeProgress`` in ``vscode-codoc/src/providers/tree-editor.ts``
+    (the regex ``/(\\d+)\\s*\\/\\s*(\\d+)(?:\\s*[:\\-]\\s*(.*))?/`` → ``{done,
+    total, current=title}``). Degrades to the bare ``done/total`` when no title
+    is available — still parses (the title group is optional)."""
+    head = f"implementing {done}/{total}"
+    title = (title or "").strip()
+    return f"{head}: {title}" if title else head
+
 
 def sdk_available() -> bool:
     import importlib.util
@@ -90,6 +108,16 @@ class RealizeMonitor:
         self.result_text = ""
         self._started = time.monotonic()
         self._sidecar: dict | None = None  # lazy; invalidated on each reflection
+        # Live realize-progress state for status.detail (cosmetic — the IDE's
+        # "feature N of M" presence indicator). ``_total`` is the queued directive
+        # count; ``_done`` counts directives whose realization has landed. A directive
+        # lands when the agent calls ``codoc_reflect(caused_by=⟨d-id⟩)``; we map that
+        # back to the directive's feature title via the manifest + sidecar.
+        self._done = 0
+        self._total = 0
+        self._dir_seen: set[str] = set()  # caused_by ids already counted (idempotent)
+        self._dir_title: dict[str, str] = {}  # caused_by id → feature title
+        self._load_manifest()
 
     # -- helpers ---------------------------------------------------------
 
@@ -107,6 +135,60 @@ class RealizeMonitor:
         entries = (self._sidecar.get("by_file") or {}).get(rel, [])
         return list(dict.fromkeys(e["feature_title"] for e in entries
                                   if e.get("feature_title")))
+
+    def _feature_title(self, feature_id: str) -> str:
+        """Resolve a feature_id → its title via the sidecar ``features`` slice.
+        Falls back to the id itself when the title is unavailable."""
+        if not feature_id:
+            return ""
+        if self._sidecar is None:
+            from codoc.agent.hook import BINDINGS_FILENAME
+            from codoc.loop.fsio import read_json
+
+            self._sidecar = read_json(Path(self.codoc_dir) / BINDINGS_FILENAME, default={})
+        meta = (self._sidecar.get("features") or {}).get(feature_id) or {}
+        return (meta.get("title") or "").strip() or feature_id
+
+    def _load_manifest(self) -> None:
+        """Read the realize manifest to seed ``_total`` (directive count) and the
+        ``caused_by → feature title`` map for live progress. Best-effort: a
+        missing/corrupt manifest just leaves progress unreported (status keeps the
+        static detail) — the progress string is cosmetic, never load-bearing."""
+        try:
+            from codoc.loop.edits import read_manifest
+
+            directives = read_manifest(self.codoc_dir)
+        except Exception:  # noqa: BLE001 — cosmetic signal; never break the run
+            return
+        self._total = len(directives)
+        for d in directives:
+            # A directive is identified at reflect time by the ⟨d-id⟩ the agent
+            # passes as caused_by. Loop B sets caused_by to the originating
+            # suggestion/event; the directive's own id is the stable key the agent
+            # echoes, so index on both.
+            title = self._feature_title(d.feature_id)
+            for key in (d.id, d.caused_by):
+                if key:
+                    self._dir_title.setdefault(key, title)
+
+    def _advance_progress(self, caused_by: str) -> None:
+        """A directive landed (its ``codoc_reflect`` fired) — bump ``_done`` and
+        write the live progress into ``status.detail``. Idempotent per directive
+        id; degrades to the static detail when there's nothing to report."""
+        if self._total <= 0:
+            return  # no manifest → no per-directive progress (keep static detail)
+        if caused_by and caused_by in self._dir_seen:
+            return  # already counted this directive
+        if caused_by:
+            self._dir_seen.add(caused_by)
+        self._done = min(self._done + 1, self._total)
+        title = self._dir_title.get(caused_by, "")
+        try:
+            status_mod.write_status(
+                self.codoc_dir, status_mod.REALIZING,
+                detail=format_realize_detail(self._done, self._total, title))
+        except Exception:  # noqa: BLE001 — status is advisory, never break realize
+            pass
 
     def _line(self, glyph: str, verb: str, detail: str, *, quiet: bool = False) -> None:
         text = f"  {glyph} {verb:<8}{detail}"
@@ -153,6 +235,7 @@ class RealizeMonitor:
                 mark_feature_phase(self.codoc_dir, fids, PHASE_REFLECTING)
             self.reflections += 1
             caused = tool_input.get("caused_by") or ""
+            self._advance_progress(caused)
             tail = f"  ⟨{caused}⟩" if caused else ""
             self._line("⊙", "reflect", name.removeprefix("mcp__codoc__") + tail)
             return
@@ -218,7 +301,7 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
     monitor = RealizeMonitor(root_dir, codoc_dir, printer=printer)
     try:
         status_mod.write_status(codoc_dir, status_mod.REALIZING,
-                                detail="implementing (sdk) — codoc realize")
+                                detail=_STATIC_DETAIL)
     except Exception:  # noqa: BLE001 — status is advisory
         pass
 

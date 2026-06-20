@@ -207,4 +207,21 @@ export type WebviewMessage =
     | { kind: 'comment-resolve'; doc: PMNode; id: string }
     /** Persist a webview pref (glance toggle) into the host's per-workspace
      *  `workspaceState`. Decoration-only — never touches tree.doc.json. */
-    | { kind: 'set-pref'; pref: 'glance'; value: boolean };
+    | { kind: 'set-pref'; pref: 'glance'; value: boolean }
+    /** Live cross-surface bridge (P2 / §A.1): the user is editing feature `fid`'s prose —
+     *  open its primary binding file Beside (non-focus-stealing) and light the implicated
+     *  decl lines green. The host resolves file/symbols/lines from the sidecar bindings, so
+     *  the webview only sends the fid. Debounced 180 ms after the last keystroke. */
+    | { kind: 'bridge-open'; fid: string }
+    /** Clear the code-side bridge highlight when the caret leaves the feature (§A.1). The
+     *  code pane STAYS open (opening is eager, closing is the user's call). */
+    | { kind: 'bridge-dim'; fid: string | null };
+
+/** Messages the HOST posts to the webview. The webview message bus keys on `kind`. */
+export type HostMessage =
+    /** The full doc payload (the common case). */
+    | { kind: 'doc'; payload: DocPayload }
+    /** Code→doc spark (P2 / §A.3): a bound source file was edited — light up these feature
+     *  headings with a travelling inbound glyph + a brief tree-row pulse. `big` marks fids
+     *  whose change was large enough to likely re-question the prose (gets the divergent halo). */
+    | { kind: 'code-touch'; fids: string[]; big?: string[] };

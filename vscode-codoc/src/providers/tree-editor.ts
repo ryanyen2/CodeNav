@@ -35,6 +35,9 @@ import {
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
+import { BridgeController } from './bridge-controller';
+import { declLines, featureIdsForChangedLines, changedLineNumbers, userTouchedFids } from '../state/bridge';
+import { isAgentActive } from '../state/activity-model';
 import type { SidecarData } from '../state/bindings-model';
 import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData, WebviewPrefs } from '../webview/protocol';
 
@@ -50,6 +53,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly state: WorkspaceState,
+        private readonly bridge: BridgeController,
     ) {}
 
     private rev = 0;
@@ -106,6 +110,25 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 // Clear docAhead → buildPayload sources from tree.codoc (with minted ids).
                 this.docAhead.delete(document.uri.toString());
                 post();
+            }),
+            // P2 code→doc (§A.3): a bound SOURCE file was edited → map the changed line ranges
+            // through this file's bindings to feature ids and spark their doc headings.
+            vscode.workspace.onDidChangeTextDocument(e => {
+                if (e.document.languageId === 'codoc' || e.contentChanges.length === 0) return;
+                const touched = this.featuresTouchedBy(e);
+                // P2 fix 4: suppress the spark for features the AGENT owns right now (its own
+                // realize writes must not read as "external code drift to review"). The spark is
+                // for the user hand-editing code; with no open epoch nothing is filtered.
+                const fids = userTouchedFids(touched, {
+                    epochOpen: isAgentActive(this.state.activity),
+                    phase: Object.fromEntries(featurePhases(this.state.activity)),
+                    held: new Set(heldFeatures(this.state.sidecar)),
+                });
+                if (!fids.length) return;
+                // §A.3: a large change (multi-line or a big replacement) will likely re-question
+                // the prose → mark those fids `big` (the doc tick gets divergent-grade weight).
+                const big = this.isLargeChange(e) ? fids : undefined;
+                panel.webview.postMessage({ kind: 'code-touch', fids, big });
             }),
             this.state.onDidChange(() => post()),
         ];
@@ -175,6 +198,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await this.setPref(document, msg.pref, msg.value);
                     // No payload repost needed — the webview already applied it
                     // optimistically; persistence is all the host owes here.
+                    return;
+                case 'bridge-open':
+                    // P2 doc→code (§A.1): open the edited feature's bound code Beside + light it.
+                    await this.bridge.open(msg.fid);
+                    return;
+                case 'bridge-dim':
+                    // Caret left the feature (§A.1): clear the code-side highlight (pane stays open).
+                    this.bridge.clear(msg.fid);
                     return;
             }
         });
@@ -653,6 +684,37 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const m = /(\d+)\s*\/\s*(\d+)(?:\s*[:\-]\s*(.*))?/.exec(detail || '');
         if (!m) return undefined;
         return { done: Number(m[1]), total: Number(m[2]), current: (m[3] ?? '').trim() };
+    }
+
+    /** P2 code→doc (§A.3): the feature ids a source-file text change touched. Maps each
+     *  changed line range → the enclosing declaration → the feature(s) bound to it via this
+     *  file's `by_file` bindings. Empty when the file has no bindings or no change hit a
+     *  bound decl. Pure logic in state/bridge.ts; this only reads the document + sidecar. */
+    private featuresTouchedBy(e: vscode.TextDocumentChangeEvent): string[] {
+        const rel = vscode.workspace.asRelativePath(e.document.fileName);
+        const fileEntries = this.state.sidecar.by_file[rel];
+        if (!fileEntries || fileEntries.length === 0) return [];
+        const lineTexts: string[] = [];
+        for (let i = 0; i < e.document.lineCount; i++) lineTexts.push(e.document.lineAt(i).text);
+        const decls = declLines(lineTexts);
+        const changed = new Set<number>();
+        for (const c of e.contentChanges) {
+            for (const ln of changedLineNumbers(c.range.start.line, c.range.end.line, e.document.lineCount)) {
+                changed.add(ln);
+            }
+        }
+        return featureIdsForChangedLines(fileEntries, decls, [...changed]);
+    }
+
+    /** §A.3 heuristic: "large enough that Loop A will likely re-question the prose" — a change
+     *  that spans multiple lines or replaces/inserts a sizeable chunk. Cheap + deterministic;
+     *  the real verdict still comes from Loop A, this only picks the doc tick's weight. */
+    private isLargeChange(e: vscode.TextDocumentChangeEvent): boolean {
+        const LARGE_CHARS = 80;
+        return e.contentChanges.some(c =>
+            c.range.end.line > c.range.start.line          // multi-line edit
+            || c.text.length >= LARGE_CHARS                // big insertion
+            || c.rangeLength >= LARGE_CHARS);              // big deletion/replacement
     }
 
     /** Move a feature (and its subtree) under a new parent (or to root if null).

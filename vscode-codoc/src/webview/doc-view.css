@@ -1,9 +1,44 @@
+/* ── Bundled webfonts (P1 / spec §E.1) ───────────────────────────────────────────
+   The doc claims to be "a one-page article", not a settings panel — so it gets a real
+   editorial typeface. Inter (variable, OFL) carries the doc body + headings + navigator;
+   JetBrains Mono (OFL) carries the code-ref / mono surfaces. Both ship as bundled .woff2
+   (no CDN, CSP-safe) copied to dist/webview/fonts/ by esbuild; the urls resolve relative
+   to this stylesheet's webview URI. `font-display: swap` keeps text visible while they
+   load (and renders correctly via the token fallbacks if a binary is ever missing). */
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 100 900;           /* one variable file covers the whole weight ramp */
+    font-display: swap;
+    src: url('./fonts/Inter.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('./fonts/JetBrainsMono.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('./fonts/JetBrainsMono-Bold.woff2') format('woff2');
+}
+
 :root {
     --row-h: 28px;
     --indent: 20px;
     --pad-x: 18px;
     --rule: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
-    --fg-muted: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+    /* text muting ladder (P1/§E.2) — ALL hierarchy lives here, NOT in hue. Strong → faint is
+       the foreground at four mix levels; the grammar/ink hues stay reserved for direction +
+       presence, so the resting doc is near-monochrome and calm. */
+    --fg-strong: var(--vscode-foreground);
+    --fg-body:   color-mix(in srgb, var(--vscode-foreground) 82%, transparent);
+    --fg-muted:  color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+    --fg-faint:  color-mix(in srgb, var(--vscode-foreground) 38%, transparent);
     --hover-bg: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
     --select-bg: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 35%, transparent);
 
@@ -19,25 +54,40 @@
        a separate, mutually-exclusive context (the dimmed tree + the inline threads line),
        so they do not collide in practice with the grammar's code/doc-ahead hues. */
     --accent:     var(--vscode-focusBorder, var(--vscode-charts-blue, #6aa9ff));
-    --dir-review: var(--vscode-charts-blue, #6aa9ff);    /* code-ahead — you resolve   */
-    --dir-await:  var(--vscode-charts-green, #66bb6a);   /* doc-ahead  — agent resolves */
-    /* edit-lifecycle PHASE colours (dark-mode tuned, per the author): editing/captured =
-       blue, pure deletion caret = amber, staged & sent = green; surfaced agent edits keep
-       the direction hue above. Fixed RGB by request (not theme tokens) so the phases read
-       consistently; the high-contrast block below pins legible floors. */
-    --ce-editing: rgb(0, 142, 255);   /* captured — you are editing, recorded locally   */
-    --ce-del:     rgb(255, 185, 11);  /* pure deletion caret (no text left to underline) */
-    --ce-staged:  rgb(0, 150, 0);     /* staged & sent — handed off, the agent will act  */
+    /* directional grammar (P1/§E.2) — desaturated, dark-tuned. The theme chart token leads
+       (so a user's theme still wins), with a hand-tuned muted slate-blue / sage as the
+       fallback when the theme has none, so the two grammar hues never come in over-saturated.
+       Rule of thumb: at most these TWO saturated hues in view at once. */
+    --dir-review: var(--vscode-charts-blue,  #7aa2d6);   /* code-ahead — muted slate-blue */
+    --dir-await:  var(--vscode-charts-green, #84b08a);   /* doc-ahead  — muted sage        */
+    /* edit-lifecycle PHASE colours — the author's tuned values, nudged toward pastel (P1/§E.2):
+       editing/captured = calmer blue, pure deletion caret = softer amber, staged & sent = sage
+       (matches --dir-await). Fixed hex (not theme tokens) so the phases read consistently; the
+       high-contrast block below pins legible floors. */
+    --ce-editing: #5aa6e0;   /* captured — calmer than rgb(0,142,255)            */
+    --ce-del:     #e0b46a;   /* pure deletion caret — softer amber                */
+    --ce-staged:  #6fae74;   /* staged & sent — sage, matches --dir-await          */
     /* authorship ink: the human is the DEFAULT author → neutral, no hue. This frees
-       blue for the code-ahead direction and resolves the ink-vs-direction collision (H5). */
+       blue for the code-ahead direction and resolves the ink-vs-direction collision (H5).
+       Agent inks are PASTEL, never neon (P1/§E.2) — they only appear when an agent is
+       actually present, so the resting doc stays near-monochrome and an arriving avatar lands. */
     --ink-human:  var(--vscode-foreground);
-    --ink-claude: var(--vscode-charts-purple, #b58fff);
-    --ink-codex:  var(--vscode-charts-green,  #66bb6a);
-    --ink-gemini: var(--vscode-charts-yellow, #e6c200);
-    --ink-cursor: var(--vscode-charts-orange, #e08f4f);
+    --ink-claude: #b9a3e8;   /* soft lilac */
+    --ink-codex:  #8fc0a0;   /* soft mint  */
+    --ink-gemini: #d8c486;   /* soft wheat */
+    --ink-cursor: #d6a583;   /* soft clay  */
     /* spacing — 8px base grid — and the radius scale */
     --space-1: 4px;  --space-2: 8px;  --space-3: 12px;  --space-4: 16px;  --space-6: 24px;
     --radius-ctrl: 4px;  --radius-card: 6px;
+
+    /* ── Typography tokens (P1 / spec §E.1) ──────────────────────────────────────
+       One editorial body family across the doc + navigator, one calm mono family for the
+       code surfaces — both bundled above. A token layer so a future swap is one line; the
+       theme fonts stay the fallback (so a missing binary degrades to the old look, never to
+       nothing). The doc-typography call sites below reach for --font-doc; code-ref / binding
+       / mono surfaces reach for --font-mono. */
+    --font-doc:  'Inter', var(--vscode-font-family, system-ui);
+    --font-mono: 'JetBrains Mono', var(--vscode-editor-font-family, monospace);
 
     /* remaining non-grammar accents: refs = code-ref chips + status default; amend =
        highlight / comment marks; add / retire = the accept/reject action affordances.
@@ -61,6 +111,39 @@
     --dur-base:   0.18s;
     --dur-center: 0.20s;   /* tree re-center step (U2) */
     --dur-nav:    0.34s;   /* doc momentum nav baseline (U3, distance-scaled in JS) */
+    /* ── Lifecycle micro-interaction durations (P0 / spec §C.4) ───────────────────
+       The icon family (icons.ts) morphs through the lifecycle ramp via motion.ts; these
+       keep the durations in one place (the JS tweens read literals matched to these). The
+       reduced-motion blanket below zeroes every animation that uses them. */
+    --dur-morph:    0.16s;   /* lifecycle icon cross-fade           */
+    --dur-pop:      0.26s;   /* accept / done celebratory pop        */
+    --dur-collapse: 0.18s;   /* row remove height-collapse           */
+    --ease-pop:     var(--ease-spring);
+    /* ── Cross-surface bridge (P2 / spec §A.5) ───────────────────────────────────
+       The two panes breathe together: doc→code lights green (doc-ahead — the doc moved,
+       the code will follow), code→doc sparks blue (code-ahead — the code moved, the doc
+       may follow). Hue stays direction-only; both directions share one curve. The code side
+       lives in decoration.ts (literal rgba — VS Code decorations don't read CSS vars); these
+       tokens drive the DOC side (the spark + settled tick). */
+    --dur-bridge:    0.18s;                 /* highlight settle / spark fade-in       */
+    --bridge-await:  var(--dir-await);      /* doc→code rail + lens + gutter (green)   */
+    --bridge-review: var(--dir-review);     /* code→doc spark + tick (blue)           */
+    --ease-bridge:   var(--ease-out);       /* both directions share one curve         */
+    /* ── Agent presence (P3 / spec §B.5) ─────────────────────────────────────────
+       A small labelled avatar glides to the feature an agent is touching. The role tint is the
+       pastel --ink-* family (only here, so the resting doc stays near-monochrome and an
+       arriving avatar lands); the glide is distance-scaled in JS (motion.ts). */
+    --presence-size:  16px;
+    --presence-trail: 4px;
+    --dur-presence:   var(--dur-nav);       /* glide baseline, distance-scaled in JS   */
+    --ease-presence:  var(--ease-spring);
+    /* ── Command palette (P4 / spec §D.4) ────────────────────────────────────────
+       A centered fuzzy palette over a calm scrim. Reuses the popover chrome; the scrim is a
+       light blur (calm, not modal-heavy). */
+    --palette-w:    min(560px, 92vw);
+    --palette-top:  18vh;
+    --scrim-blur:   4px;
+    --scrim-bg:     color-mix(in srgb, var(--vscode-editor-background) 60%, transparent);
     /* floating-surface elevation — diffuse, theme-tinted, never a hard black drop */
     --shadow-pop:    0 10px 30px -12px var(--vscode-widget-shadow, rgba(0,0,0,0.45)),
                      0 2px 8px -4px var(--vscode-widget-shadow, rgba(0,0,0,0.22));
@@ -78,6 +161,19 @@
 @keyframes ce-pop-in {
     from { opacity: 0; transform: translateY(5px) scale(0.97); }
     to   { opacity: 1; transform: none; }
+}
+
+/* ── Lifecycle iconography (P0 / spec §C.1) ──────────────────────────────────
+   ONE Phosphor shape family (icons.ts) carries the lifecycle vocabulary: SHAPE is the
+   family (dashed circle = mine/local, diamond = sent, filled pen = AI on it), WEIGHT is
+   the intensity ramp (thin→regular→fill), and HUE stays direction-only via the existing
+   tokens. The inline <svg> fills with `currentColor`, so each call site just sets `color`
+   + size below; transforms (morph/pop) are driven by motion.ts and gated by the global
+   reduced-motion blanket. The base size matches the old 6–7px dots it replaces. */
+.ce-icon {
+    display: inline-block; width: 13px; height: 13px;
+    vertical-align: -0.16em; flex-shrink: 0;
+    fill: currentColor; transform-origin: center;
 }
 
 /* ── High-contrast themes (U1 a11y) ─────────────────────────────────────────────
@@ -100,9 +196,15 @@ body.vscode-high-contrast .row.selected {
     box-shadow: inset -2px 0 0 0 var(--vscode-contrastBorder, var(--vscode-foreground));
 }
 /* HC floor for the captured family (U3): the faint --accent fills wash out under high
-   contrast → pin them to the foreground so "recorded, not sent" stays legible. */
+   contrast → pin them to the foreground so "recorded, not sent" stays legible. The lifecycle
+   glyphs (P0) fill with currentColor, so pin the icon-bearing badges + the heading dot via
+   `color`; the gutter rail stays a background. */
 body.vscode-high-contrast .ce-captured-dot,
-body.vscode-high-contrast .badge.captured { background: var(--vscode-foreground); }
+body.vscode-high-contrast .ce-pending-dot,
+body.vscode-high-contrast .badge.captured,
+body.vscode-high-contrast .badge.pending,
+body.vscode-high-contrast .badge.unrealized,
+body.vscode-high-contrast .badge.divergent { color: var(--vscode-foreground); }
 body.vscode-high-contrast .ce-captured-rail::before { background: var(--vscode-foreground); }
 /* the deletion caret stays vivid in HC (pin to the contrast border); the add underline to fg */
 body.vscode-high-contrast .ce-captured-del { background: var(--vscode-contrastBorder, #d1483f); }
@@ -174,6 +276,12 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .toolbar button.bulk.handoff:hover {
     background: color-mix(in srgb, var(--dir-await) 26%, transparent);
     border-color: color-mix(in srgb, var(--dir-await) 55%, transparent);
+}
+/* the paper-plane glyph (§C.1 "sent") leads the Commit & send label, in the doc-ahead hue;
+   it launches up-right on click (motion.ts launchPlane). */
+.toolbar button.bulk.handoff .ce-handoff-plane {
+    width: 12px; height: 12px; vertical-align: -0.12em;
+    color: var(--dir-await); margin-right: 2px;
 }
 /* glance toggle (B-U2): active = a quiet structural-accent fill (no new hue) */
 .toolbar button.toggle.glance.active {
@@ -277,8 +385,9 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .disclosure.leaf { visibility: visible; color: color-mix(in srgb, var(--vscode-foreground) 22%, transparent); cursor: default; font-size: 8px; }
 
 .title {
-    /* editorial sans for the navigator label — a document outline, not a code listing (U1) */
-    font-family: var(--vscode-font-family, system-ui);
+    /* editorial sans (Inter) for the navigator label — a document outline, not a code
+       listing (U1/P1). --font-doc falls back to --vscode-font-family, never the editor mono. */
+    font-family: var(--font-doc);
     font-size: 12.5px; margin-left: 8px;
     flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
     letter-spacing: -0.005em;
@@ -301,32 +410,35 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .row.has-retire { background: color-mix(in srgb, var(--dir-review) 4%, transparent); }
 
 .badge { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-left: 10px; }
-/* lifecycle = STATUS axis (no hue, U3/H4): unrealized = hollow dashed ring */
-.badge.unrealized { background: transparent; border: 1px dashed var(--fg-muted); box-sizing: border-box; }
+/* Lifecycle badges (U3) now host an inline Phosphor glyph (P0/§C.1) instead of a bare dot:
+   the SHAPE carries the phase, HUE stays the existing token. An icon-bearing badge drops the
+   dot box (auto-size to the glyph); the dot families (active-write/read, amend/retire) keep
+   the 6px circle below. */
+.badge:has(.ce-icon) {
+    width: auto; height: auto; border-radius: 0;
+    background: none !important; border: none !important; box-shadow: none !important;
+    display: inline-flex; align-items: center;
+}
+/* lifecycle = STATUS axis (no hue, U3/H4): unrealized = dashed-circle glyph, muted */
+.badge.unrealized { color: var(--fg-muted); }
 /* pending code-ahead change → direction colour (kind is shown by shape, not the dot) */
 .badge.amend, .badge.retire { background: var(--dir-review); }
-/* divergent realization (U5) → a review dot in the direction colour with a faint halo,
-   so "the AI changed this beyond your edit" reads as needing attention next to the
-   plain amend/retire dot. Status axis: no new hue (reuses --dir-review). */
-.badge.divergent {
-    background: var(--dir-review);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--dir-review) 35%, transparent);
-}
+/* divergent realization (U5) → a warning-diamond glyph in the direction colour, so "the AI
+   changed this beyond your edit" reads as needing attention. Status axis: no new hue. */
+.badge.divergent { color: var(--dir-review); }
 
 /* live agent activity = STATUS axis: MOTION distinguishes write (pulsing) from read (steady), not hue */
 .badge.active-write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }
 .badge.active-read { background: var(--fg-muted); }
 
-/* "pending" = STATUS axis (no hue beyond --accent): a code-implying doc edit (yours or
-   an AI's) that is QUEUED for the agent — it is NOT running. It is implemented only when
-   you run /codoc:sync. A dashed hollow ring with a slow pulse: distinct from active-write
-   (solid fast pulse) and unrealized (static dashed ring). The live ce-phase-* shimmer
-   layers on top ONLY while the agent is actually mid-edit during a sync — THAT is the real
-   "realizing." Reduced-motion freezes the pulse to a steady dashed ring. */
+/* "captured" (recorded, not sent) = the calmest member of the ramp: a thin dashed-circle
+   glyph in the editing/captured hue. "pending" (staged & sent, queued for /codoc:sync — NOT
+   running) = a diamond glyph in the staged hue with a slow breathe. The live ce-phase-*
+   shimmer layers on top ONLY while the agent is actually mid-edit during a sync — THAT is the
+   real "realizing." Reduced-motion freezes the pulse. */
+.badge.captured { color: color-mix(in srgb, var(--ce-editing) 80%, transparent); }
 .badge.pending {
-    background: transparent;
-    border: 1px dashed color-mix(in srgb, var(--ce-staged) 85%, transparent);
-    box-sizing: border-box;
+    color: color-mix(in srgb, var(--ce-staged) 90%, transparent);
     animation: breathe 2.6s ease-in-out infinite;
 }
 @keyframes breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.95; } }
@@ -343,13 +455,21 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 
 .row .verdict { display: inline-flex; gap: 4px; margin-left: 12px; flex-shrink: 0; opacity: 0; transition: opacity 100ms ease; }
 .row:hover .verdict, .row.selected .verdict, .row.proposal .verdict { opacity: 1; }
+/* the verdict buttons now hold a Phosphor glyph (§C.1): a filled check (accept) / x-circle
+   (reject). The icon carries the meaning + hue; the button is a quiet hit target. */
 .row .verdict button {
-    font: 11px var(--vscode-font-family); width: 20px; height: 18px; line-height: 1; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 18px; line-height: 1; padding: 0;
     border-radius: 3px; border: 1px solid color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
-    background: transparent; color: var(--vscode-foreground); cursor: pointer;
+    background: transparent; color: var(--fg-muted); cursor: pointer;
+    transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
 }
-.verdict .v-accept:hover { background: color-mix(in srgb, var(--accent-add) 30%, transparent); border-color: var(--accent-add); }
-.verdict .v-reject:hover { background: color-mix(in srgb, var(--accent-retire) 30%, transparent); border-color: var(--accent-retire); }
+.row .verdict button .ce-icon { width: 12px; height: 12px; }
+.verdict .v-accept:hover { background: color-mix(in srgb, var(--accent-add) 30%, transparent); border-color: var(--accent-add); color: var(--accent-add); }
+.verdict .v-reject:hover { background: color-mix(in srgb, var(--accent-retire) 30%, transparent); border-color: var(--accent-retire); color: var(--accent-retire); }
+/* §C.3 accept tactile: a brief green row flash ("this is now yours"). Gated by the
+   reduced-motion blanket (it zeroes the transition). */
+.row.ce-accept-flash { background: color-mix(in srgb, var(--accent-add) 22%, transparent); transition: background 120ms ease; }
 
 /* ── Doc pane (the one-page article) ─────────────────────────────────────── */
 .doc-host { display: flex; overflow: hidden; position: relative; }
@@ -431,9 +551,9 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 .ce-surface .ProseMirror p:last-child { margin-bottom: 0; }
 .ce-surface .ProseMirror:focus { outline: none; }
 
-/* code-ref chip inside the editor */
+/* code-ref chip inside the editor — mono (JetBrains Mono, P1) so code reads as code */
 .codoc-code-ref {
-    font: 11.5px var(--vscode-editor-font-family);
+    font: 11.5px var(--font-mono);
     color: var(--accent-refs);
     background: color-mix(in srgb, var(--accent-refs) 12%, transparent);
     border-radius: 3px; padding: 0 5px; white-space: nowrap; cursor: pointer;
@@ -502,7 +622,7 @@ span[data-change-id] { text-decoration-style: solid; }
 }
 .cr-item { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-radius: 5px; cursor: pointer; }
 .cr-item.active { background: var(--vscode-editorSuggestWidget-selectedBackground, var(--select-bg)); }
-.cr-name { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
+.cr-name { font-family: var(--font-mono); color: var(--vscode-foreground); }
 .cr-detail { font-size: 10.5px; color: var(--fg-muted); margin-left: auto; white-space: nowrap; }
 .cr-empty { padding: 6px 8px; color: var(--fg-muted); font-style: italic; }
 
@@ -523,12 +643,15 @@ span[data-change-id] { text-decoration-style: solid; }
 .ce-savestate { font: 10.5px var(--vscode-font-family); color: var(--fg-muted); min-width: 48px; text-align: right; }
 
 .ce-whole-surface { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 28px 90px; }
-.ce-whole-surface .ProseMirror { outline: none; max-width: 78ch; }
+/* the one-page article reads in the editorial body family (Inter, P1) — the single
+   biggest "document, not panel" lever. --font-doc falls back to the UI font. */
+.ce-whole-surface .ProseMirror { outline: none; max-width: 78ch; font-family: var(--font-doc); }
 .ce-whole-surface .ProseMirror:focus { outline: none; }
 
 /* feature headings — Notion-style: flush-left, hierarchy by a STRONG type scale
    (size + weight + color), generous space above to break sections. No indent. */
 .codoc-feature-heading {
+    font-family: var(--font-doc);
     color: var(--vscode-foreground); line-height: 1.25; letter-spacing: -0.015em;
     scroll-margin-top: 12px; position: relative;
 }
@@ -537,19 +660,61 @@ span[data-change-id] { text-decoration-style: solid; }
 .codoc-feature-heading[data-retired="true"] { text-decoration: line-through; color: var(--fg-muted); opacity: 0.7; }
 .codoc-feature-heading[data-realized="false"] { color: var(--fg-muted); font-style: italic; }
 /* live agent activity (STATUS axis — hooks → activity.json → sync.phase): a
-   small dot trails the title — pulsing while the agent edits this feature's
-   code, hollow while it reflects the work back. Same vocabulary as the tree
-   pane's active-write badge; the reduced-motion gates stop the pulse. */
+   small Phosphor glyph trails the title — the FILLED PEN-NIB pulses while the agent
+   edits this feature's code (P0/§C.1 "resolving: mid-edit"), the ARROWS-CLOCKWISE shows
+   while it reflects the work back (§C.1 "resolving: syncing the tree"). It is a node
+   decoration (no DOM widget), so the glyph rides a CSS mask-image — currentColor fill,
+   neutral foreground (status axis). The mask data-URIs are NOT hand-copied here (they would
+   drift from icons.ts): the webview sets --phase-glyph-{editing,reflecting} from the icon
+   registry at startup via iconMaskDataUri() (setPhaseGlyphVars). The reduced-motion gates
+   stop the pulse. */
 .codoc-feature-heading.ce-phase-editing::after,
 .codoc-feature-heading.ce-phase-reflecting::after {
-    content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-    margin-left: 10px; vertical-align: middle; box-sizing: border-box;
+    content: ''; display: inline-block; width: 13px; height: 13px;
+    margin-left: 10px; vertical-align: -0.16em;
+    background: var(--vscode-foreground);
+    -webkit-mask: var(--phase-glyph) center / contain no-repeat;
+    mask: var(--phase-glyph) center / contain no-repeat;
 }
-.codoc-feature-heading.ce-phase-editing::after {
-    background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite;
-}
+/* pen-nib (fill) PULSES while the agent edits — the rhythm reads as "it started". */
+.codoc-feature-heading.ce-phase-editing::after { animation: pulse 1.4s ease-in-out infinite; }
+.codoc-feature-heading.ce-phase-editing::after { --phase-glyph: var(--phase-glyph-editing); }
 .codoc-feature-heading.ce-phase-reflecting::after {
-    border: 1px solid var(--vscode-foreground); opacity: 0.7;
+    /* arrows-clockwise (regular) — the agent is syncing the tree back */
+    --phase-glyph: var(--phase-glyph-reflecting);
+    opacity: 0.75;
+}
+
+/* ── Code→doc spark (P2 / spec §A.3) ──────────────────────────────────────────
+   A bound source file was edited → an INBOUND glyph (arrow-bend-down-left, §C.1) lands at
+   the heading's right edge in the code-ahead BLUE (the code moved, the doc may follow),
+   sparkIn()-rises (motion.ts, gated), holds ~2.5 s, then the host clears the spark and the
+   heading keeps a quiet persistent blue underline tick until the next Loop A pass reconciles.
+   Hue = direction only; shape carries the meaning. */
+.ce-code-touch {
+    display: inline-flex; align-items: center;
+    margin-left: 10px; vertical-align: middle; user-select: none;
+    color: var(--bridge-review);
+}
+/* the settled tick: a thin blue underline under the heading, "code touched this — review on
+   the next sync." A BIG change (Loop A will likely re-question the prose) thickens the tick —
+   the same "needs attention" weight as a divergent dot, no new visual. The --dur-bridge /
+   --ease-bridge tokens give the tick's colour a CSS-side settle as the spark hands off to it
+   (the global reduced-motion blanket zeroes this transition). */
+.codoc-feature-heading.ce-code-touched {
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--bridge-review) 70%, transparent);
+    text-decoration-thickness: 1.5px; text-underline-offset: 4px;
+    transition: text-decoration-color var(--dur-bridge) var(--ease-bridge);
+}
+.codoc-feature-heading.ce-code-touched-big {
+    text-decoration-color: var(--bridge-review);
+    text-decoration-thickness: 2.5px;
+}
+/* HC floor: pin the spark + tick to a legible value under high contrast. */
+body.vscode-high-contrast .ce-code-touch { color: var(--vscode-foreground); }
+body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
+    text-decoration-color: var(--vscode-contrastBorder, var(--vscode-foreground));
 }
 
 /* "being realized" badge (U3): a calm chip after a held feature's heading — the
@@ -561,12 +726,12 @@ span[data-change-id] { text-decoration-style: solid; }
     display: inline-flex; align-items: center; gap: 5px;
     margin-left: 10px; vertical-align: middle; user-select: none;
 }
-/* the pending marker: a dashed hollow accent ring, slow pulse — the heading-pane twin of
-   the tree row's .badge.pending. Means "queued for /codoc:sync", NOT "running now". */
+/* the pending marker: a DIAMOND glyph (P0/§C.1 "sent"), slow breathe — the heading-pane
+   twin of the tree row's .badge.pending. Means "queued for /codoc:sync", NOT "running now".
+   Hosts the inline icon, fills with the staged hue. */
 .ce-pending-dot {
-    width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box;
-    border: 1px dashed color-mix(in srgb, var(--ce-staged) 85%, transparent);
-    background: transparent;
+    display: inline-flex; align-items: center;
+    color: color-mix(in srgb, var(--ce-staged) 90%, transparent);
     animation: breathe 2.6s ease-in-out infinite;
 }
 /* withdraw ✕ — cancels the AI realization (keeps the text). Quiet until hover. */
@@ -603,21 +768,25 @@ span[data-change-id] { text-decoration-style: solid; }
    solid faint dot — softer than pending (dashed, breathing) and resolving (pulsing), so
    the progression captured → pending → resolving reads as intensifying. Static (the
    appearance is the recognition; nothing to gate). Save / Commit (hand-off) graduates a
-   captured feature to pending; a prose edit clears once the daemon renders it back. */
-.ce-captured-rail { position: relative; }
+   captured feature to pending; a prose edit clears once the daemon renders it back.
+
+   The rail draws from a `--shimmer` colour (default = the captured/editing hue): on ⌘S /
+   Commit, motion.ts tweens that var blue→green top-to-bottom (the §C.3 save-shimmer), so the
+   whole doc margin sweeps to the staged hue in one keystroke. Reduced motion skips the tween;
+   the rails simply graduate to pending on the next reconcile. */
+.ce-captured-rail { position: relative; --shimmer: var(--ce-editing); }
 .ce-captured-rail::before {
     content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
     width: 2px; border-radius: 1px;
     background: repeating-linear-gradient(to bottom,
-        color-mix(in srgb, var(--ce-editing) 55%, transparent) 0 2.5px, transparent 2.5px 5px);
+        color-mix(in srgb, var(--shimmer) 55%, transparent) 0 2.5px, transparent 2.5px 5px);
 }
 .ce-captured-dot {
-    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    display: inline-flex; align-items: center;
     margin-left: 10px; vertical-align: middle; user-select: none;
-    background: color-mix(in srgb, var(--ce-editing) 70%, transparent);
+    color: color-mix(in srgb, var(--ce-editing) 80%, transparent);
 }
-/* tree-row twin: a small SOLID faint dot (vs pending's dashed breathing ring) */
-.badge.captured { background: color-mix(in srgb, var(--ce-editing) 70%, transparent); }
+/* (the tree-row twin .badge.captured now hosts a circle-dashed glyph — see the badges block) */
 
 /* In-situ captured DIFF (the user's own live edit, vs the last-committed baseline):
    ADDED words get a solid accent underline; DELETED text — which has no glyph left to
@@ -660,7 +829,7 @@ span[data-change-id] { text-decoration-style: solid; }
 .ce-whole-surface .ProseMirror p {
     margin: 0 0 0.6em; white-space: pre-wrap; max-width: 70ch;
     color: color-mix(in srgb, var(--vscode-foreground) 82%, transparent);
-    font: 13.5px/1.7 var(--vscode-font-family);
+    font: 13.5px/1.7 var(--font-doc);
 }
 
 /* the hidden ⟨f-id⟩ never reaches the editor (held as a node attr), so no id leaks. */
@@ -928,7 +1097,7 @@ body.vscode-high-contrast .ce-bub-btn.ce-bub-hl:hover {
 .ce-hc-meta { color: var(--fg-muted); font-size: 10.5px; margin-top: 7px; letter-spacing: 0.01em; }
 .ce-hc-plan { color: var(--fg-muted); }
 .ce-hc-target {
-    font: 11px var(--vscode-editor-font-family, monospace); color: var(--fg-muted);
+    font: 11px var(--font-mono); color: var(--fg-muted);
     word-break: break-all; margin: 3px 0 4px;
 }
 .ce-hc-note { color: var(--fg-muted); font-size: 10.5px; line-height: 1.45; }
@@ -968,9 +1137,135 @@ body.glance .ce-whole-surface .ce-diff,
 body.glance .ce-whole-surface .ce-tc-actions { display: none; }
 /* the injected one-line pitch under each heading */
 .ce-glance-pitch {
-    font: 11.5px/1.45 var(--vscode-font-family);
+    font: 11.5px/1.45 var(--font-doc);
     color: color-mix(in srgb, var(--vscode-foreground) 62%, transparent);
     margin: 0.1em 0 0.2em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70ch;
     user-select: none; cursor: default;
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   AGENT PRESENCE (P3 / spec §B) — a Figma-multiplayer avatar that glides to the
+   feature an agent is touching, whispering what it does. The role tint is the pastel
+   --ink-* family (set via data-ink); the inner glyph is the icon registry (pen-nib /
+   arrows-clockwise / eye). All motion runs through motion.ts — reduced motion → the
+   avatar just APPEARS (the global blanket zeroes the breathe; JS skips glide/trail).
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-presence {
+    position: absolute; z-index: 40; pointer-events: auto;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: opacity var(--dur-base) var(--ease-out);
+}
+/* the 16px ring avatar — background = a faint ink wash, border = the solid ink, glyph inside */
+.ce-presence-glyph {
+    width: var(--presence-size); height: var(--presence-size);
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%; box-sizing: border-box;
+    border: 1.5px solid var(--ce-ink); background: color-mix(in srgb, var(--ce-ink) 22%, transparent);
+    color: var(--ce-ink); flex-shrink: 0;
+}
+.ce-presence-glyph .ce-icon { width: 10px; height: 10px; }
+/* role tint (set via data-ink): claude lilac / codex mint / gemini wheat / cursor clay */
+.ce-presence[data-ink="claude"], .ce-presence-trail[data-ink="claude"] { --ce-ink: var(--ink-claude); }
+.ce-presence[data-ink="codex"],  .ce-presence-trail[data-ink="codex"]  { --ce-ink: var(--ink-codex); }
+.ce-presence[data-ink="gemini"], .ce-presence-trail[data-ink="gemini"] { --ce-ink: var(--ink-gemini); }
+.ce-presence[data-ink="cursor"], .ce-presence-trail[data-ink="cursor"] { --ce-ink: var(--ink-cursor); }
+/* working pulse: editing → slow 2.6s breathe on the ring (reflecting spins the glyph in JS) */
+.ce-presence[data-phase="editing"] .ce-presence-glyph { animation: breathe 2.6s ease-in-out infinite; }
+.ce-presence[data-phase="reflecting"] .ce-presence-glyph { background: transparent; } /* hollow while reflecting */
+.ce-presence.fading { opacity: 0; }
+
+/* the whisper label — phase verb + title, italic muted, auto-hidden after 4s (JS) */
+.ce-presence-label {
+    font: italic 11px var(--font-doc); color: var(--fg-muted);
+    white-space: nowrap; max-width: 32ch; overflow: hidden; text-overflow: ellipsis;
+    background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
+    padding: 1px 6px; border-radius: 6px;
+    transition: opacity var(--dur-base) var(--ease-out);
+}
+.ce-presence-label.hidden { opacity: 0; }
+
+/* the soft comet trail — fading ink dots along the glide path (JS animates opacity→0) */
+.ce-presence-trail {
+    position: absolute; z-index: 39; pointer-events: none;
+    width: var(--presence-trail); height: var(--presence-trail); border-radius: 50%;
+    background: var(--ce-ink); opacity: 0.35;
+}
+
+/* the tree-pane twin — just the avatar (no label), riding the active row's right edge (§B.3) */
+.ce-presence-twin { gap: 0; }
+.ce-presence-twin .ce-presence-label { display: none; }
+.ce-presence-twin .ce-presence-glyph { width: 14px; height: 14px; }
+.ce-presence-twin .ce-presence-glyph .ce-icon { width: 9px; height: 9px; }
+/* §B.3: the twin REPLACES the row's own active-write dot (set by presence-layer.placeTwin) —
+   hide the row's active-write badge (+ the P2 code-touch pulse) so one fact isn't double-shown. */
+.row.ce-twin-here .badge.active-write,
+.row.ce-twin-here .ce-touch-pulse { display: none; }
+
+/* off-screen clamp (§B.5): a tiny chevron next to the avatar, Figma off-screen-cursor style */
+.ce-presence.offscreen { cursor: pointer; }
+.ce-presence.offscreen::after {
+    content: attr(data-chevron); font-size: 10px; color: var(--ce-ink); margin-left: 1px;
+}
+
+/* the done "landed" check on the heading (§B.2, shares the accept pop) */
+.ce-presence-landed {
+    display: inline-flex; align-items: center; margin-left: 8px;
+    color: var(--accent-add); vertical-align: middle;
+}
+
+/* HC floor: the faint ink washes vanish under high contrast — pin the ring + glyph to the
+   foreground so "who is here" stays legible (the role distinction is lost in HC, acceptable). */
+body.vscode-high-contrast .ce-presence-glyph {
+    border-color: var(--vscode-foreground); color: var(--vscode-foreground);
+    background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+}
+body.vscode-high-contrast .ce-presence-trail { background: var(--vscode-foreground); }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   COMMAND PALETTE (P4 / spec §D) — ⌘K drops a centered fuzzy palette over a calm
+   scrim. Reuses the popover chrome (--shadow-pop, 10px radius, hairline, ce-pop-in).
+   The palette is also the lifecycle LEGEND: every action row carries its C-icon.
+   Reduced motion: the scrim blur stays (static), ce-pop-in is gated to instant (JS).
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-palette-scrim {
+    position: fixed; inset: 0; z-index: 100;
+    background: var(--scrim-bg);
+    -webkit-backdrop-filter: blur(var(--scrim-blur)); backdrop-filter: blur(var(--scrim-blur));
+    display: flex; justify-content: center;
+}
+.ce-palette {
+    position: fixed; top: var(--palette-top); left: 50%; transform: translateX(-50%);
+    width: var(--palette-w); max-height: 64vh; display: flex; flex-direction: column;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
+    border-radius: 10px; box-shadow: var(--shadow-pop); overflow: hidden;
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
+}
+.ce-palette-input { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: var(--rule); }
+.ce-palette-search { width: 16px; height: 16px; color: var(--fg-muted); flex-shrink: 0; }
+.ce-palette-input input {
+    flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+    font: 15px var(--font-doc); color: var(--vscode-input-foreground);
+}
+.ce-palette-input input::placeholder { color: var(--fg-muted); }
+.ce-palette-hint { font: 10.5px var(--font-mono); color: var(--fg-faint); white-space: nowrap; flex-shrink: 0; }
+
+.ce-palette-list { overflow-y: auto; padding: 6px; }
+.ce-palette-list .ce-peek-label { padding: 4px 8px 2px; }
+.ce-palette-row {
+    display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 8px;
+    border-radius: 6px; cursor: pointer; position: relative;
+    border-left: 2px solid transparent;
+}
+.ce-palette-row.active { background: var(--select-bg); border-left-color: var(--accent); }
+.ce-palette-icon { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--fg-muted); flex-shrink: 0; }
+.ce-palette-icon .ce-icon { width: 13px; height: 13px; }
+.ce-palette-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 13px var(--font-doc); color: var(--vscode-foreground); }
+.ce-palette-match { color: var(--accent); font-weight: 700; }
+.ce-palette-detail { font: 11px var(--font-mono); color: var(--fg-muted); white-space: nowrap; flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.ce-palette .cr-empty { padding: 12px 10px 6px; text-align: center; }
+
+/* HC floor: the faint select wash + accent tick can wash out — pin the active row to a border. */
+body.vscode-high-contrast .ce-palette { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
+body.vscode-high-contrast .ce-palette-row.active { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); border-left-color: var(--vscode-contrastBorder, var(--vscode-foreground)); }
