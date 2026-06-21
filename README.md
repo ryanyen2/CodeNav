@@ -39,6 +39,38 @@ in your interactive session, with your permissions.
    back into the tree, refining it if the implementation revealed more than the
    description captured.
 
+## Flow 3 — Remote suggestions via the deployed hub (`codoc serve`)
+
+The first two flows are local — you, in your editor, on your machine. The
+**deployed hub** opens the tree to *remote* collaborators **without giving up the
+local, file-based model**: it serves the same editor as a web app **from your own
+always-on machine** (reached over a tunnel — no cloud holds your repo, keys, or
+agent).
+
+How it works, end to end:
+
+1. You run `codoc serve` on your machine and share the GitHub-authorized link. The
+   hub is a *separate process* that supervises your daemon and is a file-channel
+   client — it reads `.codoc/*` to render the browser UI and writes only the
+   verdict/draft channels, **never** `tree.codoc`.
+2. A collaborator opens the link and signs in with GitHub. Their repo-collaborator
+   permission sets what they can do: **read → suggest** (suggest edits, comment),
+   **write → hand-off** (also accept and hand work to the agent). Non-collaborators
+   are denied.
+3. They edit intent in the browser. Code-implying edits are **held by default** —
+   nothing touches your repo or spends budget. They watch suggestion status live
+   over an SSE channel (an offline edit is queued and syncs on reconnect).
+4. You (or any write-collaborator) **hand off** an accepted suggestion. Only then
+   does the hub realize it: on an isolated **git worktree**, with the agent in an
+   enforced sandbox (no token, can't read secrets or touch CI/settings), opening a
+   **code PR** — never a push to `main`.
+5. After the PR merges, the daemon re-indexes and everyone's tree catches up.
+
+This is **Tier 1** (async suggest → hand-off → PR). Real-time co-editing is a
+planned fast-follow. Setup, the GitHub App, and the Cloudflare/Tailscale tunnel
+are in [`docs/serve-deployment.md`](docs/serve-deployment.md); the module map is in
+[`docs/architecture.md`](docs/architecture.md).
+
 ## Requirements
 
 - The **codoc VS Code extension** (it provisions everything else for you).

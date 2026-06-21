@@ -83,6 +83,65 @@ def watch(
 
 
 @app.command()
+def serve(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    host: str = typer.Option(
+        "127.0.0.1", "--host",
+        help="Bind address. Localhost only by default — remote reach is via the "
+             "tunnel (--tunnel, unit U6), never by binding 0.0.0.0.",
+    ),
+    port: int = typer.Option(8787, "--port", help="Local port for the hub."),
+    static_dir: str = typer.Option(
+        None, "--static-dir", help="Built standalone SPA directory (unit U2)."),
+    tunnel: bool = typer.Option(
+        False, "--tunnel",
+        help="Expose the hub over a cloudflared tunnel (needs cloudflared + a "
+             "Cloudflare Access policy — see docs/serve-deployment.md)."),
+):
+    """Serve codoc as a web app from this machine, supervising the daemon.
+
+    The hub is a separate process (peer to the VS Code extension): it atomically
+    claims single ownership of the repo, keeps one ``codoc watch`` daemon alive,
+    and serves the intent-tree editor. The listener binds localhost; remote,
+    GitHub-authorized access arrives over a tunnel in a later unit.
+    """
+    import uvicorn
+
+    from codoc.serve.app import build_app
+    from codoc.serve.ratelimit import RateLimiter
+    from codoc.serve.supervise import DaemonSupervisor, OwnershipError
+
+    cd = _codoc_dir(root)
+    supervisor = DaemonSupervisor(root, cd)
+    try:
+        supervisor.start()
+    except OwnershipError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    tunnel_proc = None
+    if tunnel:
+        from codoc.serve.tunnel import launch_tunnel
+        try:
+            tunnel_proc = launch_tunnel(port)
+            typer.echo("  ↳ cloudflared tunnel launched — gate it with Cloudflare Access.")
+        except FileNotFoundError:
+            typer.echo("  ⚠ cloudflared not found — install it (see docs/serve-deployment.md).", err=True)
+
+    # Per-identity write rate limit: ~2 writes/s sustained, burst 60. Bounds a
+    # remote flood from DoSing the daemon / amplifying the SSE fan-out.
+    rate_limiter = RateLimiter(capacity=60, refill_per_sec=2)
+    typer.echo(f"codoc serve · http://{host}:{port} · supervising daemon · {cd}")
+    try:
+        uvicorn.run(build_app(cd, static_dir=static_dir, rate_limiter=rate_limiter),
+                    host=host, port=port, log_level="warning")
+    finally:
+        if tunnel_proc is not None:
+            tunnel_proc.terminate()
+        supervisor.stop()
+
+
+@app.command()
 def realize(
     root: str = typer.Option(".", "--root", help="Repository root."),
     engine: str = typer.Option(

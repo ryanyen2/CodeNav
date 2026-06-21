@@ -177,7 +177,43 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
 #   it). Empty/absent → every directive is handed off, i.e. today's immediate-realize.
 _LISTS = ("edits", "intents", "cancellations", "steers", "drafts")
 
+# Cached, reentrant FileLock per repo guarding every edits.json read-modify-write.
+_edit_locks: dict[str, object] = {}
 
+
+def _edits_lock(codoc_dir: str | Path):
+    """The shared cross-process lock for edits.json mutations.
+
+    edits.json is no longer single-host: the ``codoc serve`` hub writes remote
+    suggestions' intents/drafts/steers while the daemon drains them. An atomic
+    write alone stops torn READS but not lost UPDATES across two read-modify-write
+    cycles, so every mutator holds this lock across its read AND its write. The
+    lock is cached per repo and reentrant, so a drain/append that internally calls
+    the (also-locked) :func:`_rewrite` re-enters the same lock instead of
+    deadlocking; the daemon shares it by using these same functions."""
+    from filelock import FileLock
+
+    key = str(Path(codoc_dir) / (EDITS_FILENAME + ".lock"))
+    lock = _edit_locks.get(key)
+    if lock is None:
+        lock = FileLock(key, timeout=5)
+        _edit_locks[key] = lock
+    return lock
+
+
+def _locked(fn):
+    """Hold :func:`_edits_lock` across the decorated mutator's read + write."""
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapper(codoc_dir, *args, **kwargs):
+        with _edits_lock(codoc_dir):
+            return fn(codoc_dir, *args, **kwargs)
+
+    return wrapper
+
+
+@_locked
 def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
     """Read edits.json, overlay the changed lists, write it back (or delete the file
     when every list is empty). One funnel so a drain/append never drops a sibling
@@ -213,6 +249,7 @@ def _write_edits_file(
                     cancellations=cancellations or [], steers=steers or [])
 
 
+@_locked
 def drain_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
     """Consume the ``edits`` list (returning it keyed by feature), KEEPING the
     host-owned ``intents`` + the one-shot ``cancellations``/``steers`` in place."""
@@ -235,6 +272,7 @@ def read_cancellations(codoc_dir: str | Path) -> list[str]:
     return out
 
 
+@_locked
 def drain_cancellations(codoc_dir: str | Path) -> list[str]:
     """Consume the ``cancellations`` list (feature ids), keeping the others — Loop B
     prunes the matching directives from the queue."""
@@ -255,6 +293,7 @@ def read_steers(codoc_dir: str | Path) -> list[Steer]:
     return out
 
 
+@_locked
 def drain_steers(codoc_dir: str | Path) -> list[Steer]:
     """Consume the ``steers`` list (one-shot), keeping the others — Loop B turns each
     into a STEER directive exactly once (no re-queue: the list is cleared here)."""
@@ -264,6 +303,7 @@ def drain_steers(codoc_dir: str | Path) -> list[Steer]:
     return steers
 
 
+@_locked
 def append_annotation(codoc_dir: str | Path, ann: EditAnnotation) -> Path | None:
     """Append a settle annotation (used by the CLI/tests; the IDE host writes
     this file too)."""
@@ -275,6 +315,7 @@ def append_annotation(codoc_dir: str | Path, ann: EditAnnotation) -> Path | None
     return _rewrite(codoc_dir, edits=edits)
 
 
+@_locked
 def append_cancellation(codoc_dir: str | Path, feature_id: str) -> Path | None:
     """Append a realize-withdrawal request for ``feature_id`` (host withdraw
     affordance; CLI/tests). Drained by Loop B."""
@@ -283,6 +324,7 @@ def append_cancellation(codoc_dir: str | Path, feature_id: str) -> Path | None:
     return _rewrite(codoc_dir, cancellations=cancellations)
 
 
+@_locked
 def append_steer(codoc_dir: str | Path, steer: Steer) -> Path | None:
     """Append a one-shot inline-comment steer (U2b host comment-create; CLI/tests).
     Drained by Loop B into a STEER directive."""

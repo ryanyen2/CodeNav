@@ -48,24 +48,46 @@ def clear(codoc_dir: str | Path) -> None:
         pass
 
 
+_inbox_locks: dict[str, object] = {}
+
+
+def _inbox_lock(codoc_dir: str | Path):
+    """Cached, reentrant FileLock guarding inbox.json read-modify-write.
+
+    inbox.json gains a second concurrent writer once the ``codoc serve`` hub
+    writes remote verdicts alongside the daemon's drain; an atomic write stops
+    torn reads but not lost updates across two read-modify-write cycles, so the
+    append/drop paths hold this lock across their read AND write."""
+    from filelock import FileLock
+
+    key = str(inbox_path(codoc_dir)) + ".lock"
+    lock = _inbox_locks.get(key)
+    if lock is None:
+        lock = FileLock(key, timeout=5)
+        _inbox_locks[key] = lock
+    return lock
+
+
 def drop_verdicts(codoc_dir: str | Path, event_ids: set[str]) -> None:
     """Remove only the named verdicts, leaving any others for the daemon/loop.
 
     Used by the blocking ``codoc_await_verdicts`` tool so it consumes just the
     proposals it is waiting on without clobbering unrelated verdicts in the inbox.
     """
-    remaining = [v for v in read_verdicts(codoc_dir) if v.event_id not in event_ids]
-    if remaining:
-        _write(codoc_dir, remaining)
-    else:
-        clear(codoc_dir)
+    with _inbox_lock(codoc_dir):
+        remaining = [v for v in read_verdicts(codoc_dir) if v.event_id not in event_ids]
+        if remaining:
+            _write(codoc_dir, remaining)
+        else:
+            clear(codoc_dir)
 
 
 def append_verdict(codoc_dir: str | Path, event_id: str, accept: bool) -> Path:
     """Append a verdict (used by the CLI/tests; the IDE writes this file too)."""
-    verdicts = read_verdicts(codoc_dir)
-    verdicts.append(Verdict(event_id=event_id, accept=accept))
-    return _write(codoc_dir, verdicts)
+    with _inbox_lock(codoc_dir):
+        verdicts = read_verdicts(codoc_dir)
+        verdicts.append(Verdict(event_id=event_id, accept=accept))
+        return _write(codoc_dir, verdicts)
 
 
 def _write(codoc_dir: str | Path, verdicts: list[Verdict]) -> Path:

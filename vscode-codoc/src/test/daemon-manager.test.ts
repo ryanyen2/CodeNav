@@ -97,4 +97,11 @@ describe('shouldSpawn', () => {
     it('defers even when the live lock is owned by us (any live daemon wins)', () => {
         expect(shouldSpawn({ pid: 1, owner: 'me', startedAt: 0 }, 'me', alive)).toBe(false);
     });
+
+    it('defers to a live hub-owned daemon (owner "serve" — the codoc serve hub owns it)', () => {
+        // The `codoc serve` hub spawns the daemon with CODOC_WATCH_OWNER="serve",
+        // so its watch.pid carries owner "serve". A window opening the repo while
+        // the hub runs must defer, not double-spawn (plan U1).
+        expect(shouldSpawn({ pid: 55, owner: 'serve', startedAt: 0 }, 'me', alive)).toBe(false);
+    });
 });
