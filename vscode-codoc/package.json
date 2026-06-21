@@ -121,12 +121,28 @@
         "title": "codoc: Set up codoc"
       },
       {
+        "command": "codoc.bridge.rearm",
+        "title": "codoc: Re-enable code-pane bridge (auto-open)"
+      },
+      {
         "command": "codoc.repair",
         "title": "codoc: Repair / re-run setup"
       },
       {
         "command": "codoc.sync",
         "title": "codoc: Sync"
+      },
+      {
+        "command": "codoc.serve.start",
+        "title": "codoc: Share — start the deployed hub (browser editor)"
+      },
+      {
+        "command": "codoc.serve.startTunnel",
+        "title": "codoc: Share remotely — start the hub over a tunnel"
+      },
+      {
+        "command": "codoc.serve.stop",
+        "title": "codoc: Stop the deployed hub"
       },
       {
         "command": "codoc.open",

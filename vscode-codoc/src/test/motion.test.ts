@@ -5,10 +5,8 @@
 import { describe, it, expect } from 'vitest';
 import {
     prefersReducedMotion,
-    motionGuard,
     navDuration,
     muteWindowFor,
-    waveDelays,
 } from '../webview/motion';
 
 const fakeBody = (...classes: string[]) => ({
@@ -24,23 +22,6 @@ describe('U1 — prefersReducedMotion gate', () => {
     });
     it('is false with neither preference set', () => {
         expect(prefersReducedMotion(fakeBody('vscode-high-contrast'))).toBe(false);
-    });
-});
-
-describe('U1 — motionGuard branch', () => {
-    it('runs applyFinal (not the tween) when motion is reduced', () => {
-        let final = 0, tween = 0;
-        const r = motionGuard(true, () => { final++; return 'instant'; }, () => { tween++; return 'tween'; });
-        expect(r).toBe('instant');
-        expect(final).toBe(1);
-        expect(tween).toBe(0);
-    });
-    it('runs the tween factory when motion is allowed', () => {
-        let final = 0, tween = 0;
-        const r = motionGuard(false, () => { final++; return 'instant'; }, () => { tween++; return 'tween'; });
-        expect(r).toBe('tween');
-        expect(final).toBe(0);
-        expect(tween).toBe(1);
     });
 });
 
@@ -62,26 +43,5 @@ describe('U1 — muteWindowFor covers the glide', () => {
     it('returns the tween duration plus a buffer', () => {
         expect(muteWindowFor(400)).toBe(480);
         expect(muteWindowFor(520, 100)).toBe(620);
-    });
-});
-
-describe('U1 — waveDelays symmetric falloff (R4)', () => {
-    it('the hovered tick has zero delay; neighbours grow with distance', () => {
-        const d = waveDelays(3, 7, { step: 30, maxDelay: 1000 });
-        expect(d[3]).toBe(0);
-        expect(d[2]).toBe(30);
-        expect(d[4]).toBe(30);
-        expect(d[0]).toBe(90);
-        expect(d[6]).toBe(90);
-    });
-    it('is symmetric around the hovered index', () => {
-        const d = waveDelays(3, 7);
-        expect(d[2]).toBe(d[4]);
-        expect(d[1]).toBe(d[5]);
-        expect(d[0]).toBe(d[6]);
-    });
-    it('bounds far ticks to maxDelay', () => {
-        const d = waveDelays(0, 20, { step: 30, maxDelay: 180 });
-        expect(Math.max(...d)).toBe(180);
     });
 });

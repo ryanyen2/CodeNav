@@ -12,8 +12,10 @@ You (or Claude Code) edit or add features in `tree.codoc` → codoc builds a cod
 
 ## How codoc and Claude Code work together
 
-codoc ships as a **Claude Code plugin**. There is no server process and no port —
-`codoc init` wires four file-based integration surfaces into your repo:
+codoc ships as a **Claude Code plugin**. The local integration is fully
+file-based — no server, no port (the optional [deployed hub](#flow-3--remote-suggestions-via-the-deployed-hub-codoc-serve)
+for remote contributors is the one exception). `codoc init` wires four file-based
+integration surfaces into your repo:
 
 | Surface | Installed to | Role |
 |---|---|---|
@@ -184,8 +186,11 @@ Verdicts flow through `.codoc/inbox.json`; the loop applies them.
 
 ```
 .codoc/
-  tree.codoc          — human-authored feature tree (commit with your code)
-  tree.bindings.json  — IDE sidecar: feature↔symbol index + dependency edges + proposals + change feed (v4)
+  # ── shared intent (commit these) ───────────────────────────────────────────
+  tree.codoc          — human-authored feature tree (the team's shared intent map)
+  tree.doc.json       — the webview's authored rich doc (tree.codoc is its byte-identical render)
+  # ── derived per checkout (gitignored; rebuilt by `codoc init` / `codoc watch`) ─
+  tree.bindings.json  — IDE sidecar: feature↔symbol index + dependency edges + proposals + change feed (v5)
   status.json         — loop lifecycle: in_sync / code_drift / tree_dirty / awaiting_impl / realizing
   inbox.json          — verdict channel: Accept/Reject writes here, the loop drains it
   edits.json          — provenance/intent channel: settle authorship + live doc-ahead suggestions
@@ -197,8 +202,41 @@ Verdicts flow through `.codoc/inbox.json`; the loop applies them.
   cocoindex.db/       — cocoindex internal memoization (resumes interrupted indexing)
 ```
 
-Commit `tree.codoc` (and optionally `codoc.db`) alongside source so the intent
-map is versioned with the code.
+### Working as a team (multi-user)
+
+There are two collaboration models — pick by how your contributors reach the repo.
+For a task-oriented walkthrough of all three workflows (solo, team-via-git, and the
+deployed hub), see **[docs/user-workflows.md](docs/user-workflows.md)**.
+
+**1. Local + git (each contributor has their own checkout).** The default, and
+fully local: codoc runs on each person's machine with **no shared server, no
+database service, no network calls, and no codoc-specific auth** — collaboration
+rides whatever git remote you already use (GitHub, GitLab, a bare repo…). The only
+credential codoc touches is your **LLM provider** (an `OPENAI_API_KEY` /
+`ANTHROPIC_API_KEY`, or *nothing* when it reuses your local Claude Code login).
+
+- **Commit** `.codoc/tree.codoc` (and the webview's `.codoc/tree.doc.json`) — the
+  authored feature tree is the team's shared intent, versioned alongside the code.
+- **Don't commit** the rest of `.codoc/`. `codoc.db`, `lancedb/`, `cocoindex.db/`
+  and the transient control files are **derived per checkout**; after a clone,
+  `codoc init` then `codoc watch` rebuilds them locally. The shipped `.gitignore`
+  already encodes this split (it tracks only `tree.codoc` + `tree.doc.json`).
+
+Each teammate runs their own `codoc watch` over their own checkout — no shared
+daemon. A feature-tree edit is an ordinary text change to `tree.codoc`, so two
+people editing it **resolve through a normal git text merge**; codoc re-attributes
+code to the merged tree on the next Loop A pass. (codoc is single-writer *per
+checkout*. Per-author identity in the change ledger — *which* teammate edited — is
+not modeled yet; every human edit records `actor=human`.)
+
+**2. The deployed hub (`codoc serve`) — for *remote* contributors without a
+checkout.** [Flow 3](#flow-3--remote-suggestions-via-the-deployed-hub-codoc-serve)
+serves the same editor as a web app from your always-on machine. **This mode does
+use GitHub auth:** a **GitHub App** gates access, and a visitor's repo-collaborator
+permission sets their capability (read → *suggest*, write → *hand-off*,
+non-collaborator → denied). The GitHub App (client id/secret + installation key)
+and the tunnel are deploy-time configuration — see
+[`docs/serve-deployment.md`](docs/serve-deployment.md).
 
 ## Architecture — two loops
 
@@ -219,30 +257,41 @@ A single LLM pass with the full change set plus every existing node title preven
 duplicates. `UNIQUE(file, symbol_path)` in the store ensures a chunk binds to at
 most one feature.
 
-## Sidecar schema (v4)
+## Sidecar schema (v5)
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "by_feature": { "f-id": [{"file": "path.py", "symbol": "path.py::Class.method"}] },
   "by_file":    { "path.py": [{"symbol": "...", "feature_id": "f-id", "feature_title": "Title"}] },
-  "features":   { "f-id": {"title": "Title", "parent_id": null, "realized": true} },
+  "features":   { "f-id": {"title": "Title", "parent_id": null, "lifecycle": "active", "realized": true} },
   "feature_edges": { "f-id": [{"to": "f-other", "weight": 4, "kinds": ["call"]}] },
   "proposals":  { "by_feature": {"f-id": {"op": "amend", "event_id": "e-id", "actor": "…", "mode": "…", "caused_by": "…"}},
                   "by_event": {"e-id": {"op": "add_node", "title": "…"}} },
   "changes":    [{"event_id": "e-id", "at": "…", "kind": "amend", "feature_id": "f-id",
                   "actor": "agent", "mode": "auto", "caused_by": "d-…"}],
-  "holds":      ["f-id"]
+  "feature_phase":      { "f-id": "queued" },
+  "holds":              ["f-id"],
+  "hold_detail":        { "f-id": {"kind": "amend", "intent": "update the code to match your new intent", "baseline": "…"} },
+  "feature_drift":      { "f-id": "questioned" },
+  "feature_resolution": { "f-id": "scope" }
 }
 ```
 
 `feature_edges` aggregates `code_edges` (call/import) into feature-level coupling
 (the IDE dims unrelated features when the cursor rests on a coupled node).
-`features[].realized` drives the unrealized-placeholder decoration; `proposals`
-drives the in-place retire/amend overlays + Accept/Reject on the live node.
-v4's `changes` (the last ~50 applied events, newest first) drives the agent-pencil
-re-stamp in the doc view; `holds` is the doc-wins hold set; proposal `caused_by`
-drives the "↳ from your edit" cascade cue.
+`features[].lifecycle` (`planned | active | retired`) is the named feature state
+(`realized` is the legacy derived view, kept for back-compat); `proposals` drives
+the in-place retire/amend overlays + Accept/Reject on the live node. `changes`
+(the last ~50 applied events, newest first) drives the agent-pencil re-stamp in
+the doc view; proposal `caused_by` drives the "↳ from your edit" cascade cue.
+
+The **mid-flight slices** are all thin views of one projection
+(`codoc/loop/phase.py`): `feature_phase` is the single per-feature state
+(`synced` omitted), and `holds` / `hold_detail` / `feature_drift` /
+`feature_resolution` are derived from the same pass. Doc-wins is resolved in
+`feature_phase` (a held feature reads `drafting`/`queued`, never
+`drifted`/`divergent`); the drift/resolution slices keep their prior filters.
 
 ## Environment variables
 

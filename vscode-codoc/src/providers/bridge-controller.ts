@@ -18,7 +18,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
 import { CodocDecorations, applyBridgeDecorations, BRIDGE_FLASH_MS } from './decoration';
-import { primaryBinding, implicatedLeaves, BridgeBinding } from '../state/bridge';
+import { primaryBinding, implicatedLeaves, bridgeDismissals, BridgeBinding } from '../state/bridge';
 import { isRefResolved } from '../state/registry-model';
 
 /** The persisted "the user dismissed the code pane this session" flag (§A.6) — once set, the
@@ -119,22 +119,36 @@ export class BridgeController {
         void this.context.workspaceState.update(BRIDGE_OPEN_KEY, false);
     }
 
+    /** Re-arm auto-open after a dismissal (§6 re-arm path): the user explicitly wants the
+     *  bridge back, so the next caret-into-a-feature opens Beside again. Wired to the
+     *  `codoc.bridge.rearm` command — the affordance the old code lacked. */
+    rearm(): void {
+        void this.context.workspaceState.update(BRIDGE_OPEN_KEY, true);
+    }
+
+    /** The workspace-relative paths of every OPEN tab (including hidden-but-open tabs),
+     *  so dismissal-detection can tell a true close from a tab switch. */
+    private openTabFiles(): Set<string> {
+        const out = new Set<string>();
+        for (const group of vscode.window.tabGroups.all) {
+            for (const tab of group.tabs) {
+                const input = tab.input as { uri?: vscode.Uri } | undefined;
+                if (input?.uri) out.add(vscode.workspace.asRelativePath(input.uri));
+            }
+        }
+        return out;
+    }
+
     /**
-     * §A.6 dismiss-memory (P2 fix 3): the host calls this on every visible-editors change. The
-     * bridge tracks which files IT has opened; when one of those leaves the visible set while
-     * the bridge would still want it shown, the user closed it on purpose → remember the
-     * dismissal so we don't auto-reopen it this session. Then repaint (a closed file's
-     * decorations are gone with it; an unrelated change just refreshes).
+     * §A.6 dismiss-memory (P2 fix 3, §6 hardening): the host calls this on every editor/tab
+     * change. The bridge tracks which files IT opened; one counts as a dismissal only when it
+     * has left the OPEN-TAB set entirely (a true close), NOT merely the visible set — a tab
+     * switch / split reshuffle hides a file without closing it, and treating that as a
+     * dismissal used to permanently disable the bridge for the session. Then repaint.
      */
     noteVisibleEditorsChanged(): void {
-        const visible = new Set(vscode.window.visibleTextEditors
-            .filter(ed => ed.document.languageId !== 'codoc')
-            .map(ed => vscode.workspace.asRelativePath(ed.document.fileName)));
-        // any bridge-opened file that is no longer visible = an explicit dismissal.
-        let dismissed = false;
-        for (const f of this.openedByBridge) {
-            if (!visible.has(f)) { this.openedByBridge.delete(f); dismissed = true; }
-        }
+        const { closed, dismissed } = bridgeDismissals(this.openedByBridge, this.openTabFiles());
+        for (const f of closed) this.openedByBridge.delete(f);
         if (dismissed) this.rememberDismissed();
         this.repaint();
     }

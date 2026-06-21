@@ -297,6 +297,52 @@ def _pick_parsed(codoc_dir: str, store: Store):
     return parse_tree_file(codoc_dir)
 
 
+@dataclass
+class _PreMutation:
+    """Everything the rest of a Loop B pass diffs against, captured BEFORE any
+    store mutation — the ordering invariant (D6) made structural.
+
+    The danger this guards: verdict accepts and intent applies move the store
+    *ahead* of the on-disk text. If the text diff were recomputed after them, the
+    now-stale text would read as a human edit and silently REVERT the accepted
+    change. Bundling the snapshot into one object built by
+    :func:`_snapshot_pre_mutation` — and passing it into the mutation phases —
+    means there is no second ``diff_codoc`` call to misorder: a future reordering
+    of the phases cannot reintroduce the bug because the diff is a frozen input,
+    not a line that happens to sit early.
+
+    ``baselines`` is SEEDED here (from the manifest, before any mutation) and then
+    AUGMENTED per-feature in the edit phase (each capture reads the pre-edit
+    description before its own ``apply_op``), so it stays a live dict, not frozen.
+    """
+    diff: object                       # CodocDiff — the text↔store delta (the load-bearing snapshot)
+    annotations: dict                  # edits.json authorship annotations (drained)
+    baselines: dict[str, str]          # feature_id → pre-episode description baseline (seeded; augmented later)
+    errors: list[str] = field(default_factory=list)
+
+
+def _snapshot_pre_mutation(store: Store, codoc_dir: str) -> _PreMutation:
+    """Capture the pre-mutation snapshot in ONE place, doing NO store mutation.
+
+    Order matters and is fixed here so callers never have to get it right:
+    1. seed ``baselines`` from the manifest (must precede any later cancellation
+       drain so a still-pending episode keeps its stable diff baseline — R5/R6);
+    2. drain edits.json authorship annotations (a control-file read/clear, not a
+       store write);
+    3. parse the edit source and diff it against the PRE-mutation store.
+    """
+    baselines: dict[str, str] = {
+        d.feature_id: d.baseline
+        for d in edits_channel.read_manifest(codoc_dir)
+        if d.feature_id and d.baseline
+    }
+    annotations = edits_channel.drain_annotations(codoc_dir)
+    parsed = _pick_parsed(codoc_dir, store)
+    diff = diff_codoc(parsed, store)
+    return _PreMutation(diff=diff, annotations=annotations, baselines=baselines,
+                        errors=list(parsed.errors))
+
+
 def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False) -> LoopBResult:
     with open_store(codoc_dir) as store:
         return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
@@ -307,37 +353,32 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # (op, feature_id-or-"", caused_by) per code-implying edit — feature_id feeds
     # the doc-wins hold set, caused_by the causality chain (suggestion/event id).
     directive_ops: list[tuple[NodeOp, str, str]] = []
-    # feature_id → the description at the START of its current pending episode (the
-    # STABLE baseline the IDE diffs against to render the in-situ inline diff). SEED
-    # from any directive already queued for the feature, so iterating/rewording/undo
-    # within one pending episode does NOT erode the baseline to the previous keystroke
-    # (R5/R6 — the field "decoration vanished when I deleted a char" bug). A feature
-    # with no pending directive captures a fresh baseline in step 2 (a new episode's
-    # first edit). Read before the cancellation drain so the seed survives the pass.
-    baselines: dict[str, str] = {
-        d.feature_id: d.baseline
-        for d in edits_channel.read_manifest(codoc_dir)
-        if d.feature_id and d.baseline
-    }
 
-    # U6 — withdraw: prune any cancelled directives from the queue FIRST so the rest
-    # of the pass (and step 3's manifest append) sees the survivors, and the hold for
-    # a withdrawn feature is released this pass. A dry pass still drains the request
-    # (withdraw is a real intent, not a directive to defer).
-    res.canceled = _apply_cancellations(root_dir, codoc_dir)
-
-    # 0. Snapshot the text diff BEFORE any store mutation. Verdict accepts and
-    #    intent applies move the store ahead of the on-disk text; diffing after
-    #    them would read the stale text as a human edit and revert the change.
-    annotations = edits_channel.drain_annotations(codoc_dir)
-    parsed = _pick_parsed(codoc_dir, store)
-    if parsed.errors:
+    # 0. Snapshot EVERYTHING this pass diffs against, BEFORE any store mutation —
+    #    captured as one explicit object so the ordering invariant is structural,
+    #    not a fragile "this line must come first" (D6). ``baselines`` is the
+    #    feature_id → start-of-episode description map the IDE diffs against for the
+    #    in-situ inline diff (seeded from the manifest so iterating/undo within one
+    #    episode doesn't erode it to the previous keystroke — R5/R6); it is seeded
+    #    here and augmented per-feature in step 2.
+    snap = _snapshot_pre_mutation(store, codoc_dir)
+    diff = snap.diff
+    annotations = snap.annotations
+    baselines = snap.baselines
+    if snap.errors:
         import logging
         _log = logging.getLogger(__name__)
-        for err in parsed.errors:
+        for err in snap.errors:
             _log.warning("tree.codoc parse warning: %s", err)
-        res.error = "; ".join(parsed.errors)
-    diff = diff_codoc(parsed, store)
+        res.error = "; ".join(snap.errors)
+
+    # U6 — withdraw: prune any cancelled directives from the queue so the rest of
+    # the pass (and step 3's manifest append) sees the survivors, and the hold for a
+    # withdrawn feature is released this pass. Runs AFTER the snapshot: it mutates
+    # only the control-file queue (never the store), and the baselines were already
+    # seeded from the pre-cancellation manifest, so a dry pass still drains the
+    # request (withdraw is a real intent, not a directive to defer).
+    res.canceled = _apply_cancellations(root_dir, codoc_dir)
 
     def _accept_with_fid(op: NodeOp) -> str:
         """Apply an accepted op, recovering a freshly-minted ADD feature id by

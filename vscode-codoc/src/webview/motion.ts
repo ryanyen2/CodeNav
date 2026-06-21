@@ -10,8 +10,8 @@
  * same (suppress non-essential motion).
  *
  * The DOM-touching helpers (tweenScrollTop, staggerHover) are verified in the manual EDH
- * gate (U7); the pure decision/shape helpers (prefersReducedMotion, motionGuard,
- * navDuration, waveDelays) are unit-tested in motion.test.ts.
+ * gate (U7); the pure decision/shape helpers (prefersReducedMotion, navDuration,
+ * muteWindowFor) are unit-tested in motion.test.ts.
  */
 import { animate } from 'animejs';
 
@@ -34,12 +34,6 @@ export function prefersReducedMotion(body?: BodyLike | null): boolean {
         || b.classList.contains('vscode-using-screen-reader');
 }
 
-/** Pure gate: run `applyFinal` (instant) when motion is reduced, else `runTween`. Keeps the
- *  branch testable without a DOM (callers pass `prefersReducedMotion()`). */
-export function motionGuard<T>(reduced: boolean, applyFinal: () => T, runTween: () => T): T {
-    return reduced ? applyFinal() : runTween();
-}
-
 /** Distance-scaled, clamped tween duration for programmatic navigation — short hops snappier,
  *  long jumps longer (R3). Pure. */
 export function navDuration(
@@ -55,21 +49,6 @@ export function navDuration(
  *  so the scroll-spy doesn't flicker-select a neighbour mid-glide (U3). Pure. */
 export function muteWindowFor(tweenDuration: number, buffer = 80): number {
     return Math.round(tweenDuration + buffer);
-}
-
-/** Per-tick wave delays around the hovered index — a symmetric falloff (delay grows with
- *  index distance), bounded so a long rail's far ticks don't lag forever (U4). Pure. */
-export function waveDelays(
-    fromIndex: number,
-    count: number,
-    opts: { step?: number; maxDelay?: number } = {},
-): number[] {
-    const { step = 30, maxDelay = 180 } = opts;
-    const out: number[] = [];
-    for (let i = 0; i < count; i++) {
-        out.push(Math.min(Math.abs(i - fromIndex) * step, maxDelay));
-    }
-    return out;
 }
 
 /** Tween an element's scrollTop with momentum. Reduced motion → set scrollTop instantly and
@@ -135,30 +114,6 @@ export function staggerHover(
 /** A motion target: an HTML or SVG element (the lifecycle glyphs are inline <svg>). Both
  *  carry `.style`, which is all these helpers read; anime.js animates either. */
 type MotionEl = HTMLElement | SVGElement;
-
-/** Cross-fade + scale between two stacked inline lifecycle icons that share an anchor
- *  (spec §C.2). `from` shrinks to 0.6 + fades out; `to` scales 0.6→1 + fades in with a
- *  small overshoot, after a brief stagger so the "old crystallises into the new" reads.
- *  Reduced motion → `from` hidden, `to` shown at the final frame instantly. */
-export function morphLifecycle(
-    from: MotionEl | null,
-    to: MotionEl | null,
-    opts: { out?: number; in?: number; stagger?: number } = {},
-): void {
-    const { out = 140, in: inDur = 180, stagger = 40 } = opts;
-    if (prefersReducedMotion()) {
-        if (from) { from.style.opacity = '0'; from.style.transform = 'scale(0.6)'; }
-        if (to) { to.style.opacity = '1'; to.style.transform = 'none'; }
-        return;
-    }
-    if (from) {
-        animate(from, { opacity: [1, 0], scale: [1, 0.6], duration: out, ease: 'outQuad' });
-    }
-    if (to) {
-        to.style.opacity = '0';
-        animate(to, { opacity: [0, 1], scale: [0.6, 1], duration: inDur, delay: stagger, ease: 'outBack' });
-    }
-}
 
 /** The "it landed" pop shared by accept + resolving→done (spec §C.2/§C.3): a single
  *  satisfying spring `scale [0 → 1.15 → 1]` over ~260 ms. Reduced motion → instant final

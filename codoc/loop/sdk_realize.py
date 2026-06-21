@@ -109,10 +109,11 @@ class RealizeMonitor:
         self._started = time.monotonic()
         self._sidecar: dict | None = None  # lazy; invalidated on each reflection
         # Live realize-progress state for status.detail (cosmetic — the IDE's
-        # "feature N of M" presence indicator). ``_total`` is the queued directive
-        # count; ``_done`` counts directives whose realization has landed. A directive
-        # lands when the agent calls ``codoc_reflect(caused_by=⟨d-id⟩)``; we map that
-        # back to the directive's feature title via the manifest + sidecar.
+        # "feature N of M" presence indicator). ``_total`` is the count of REALIZABLE
+        # (handed-off) directives; ``_done`` counts those whose realization has landed.
+        # A directive lands when the agent calls ``codoc_reflect(caused_by=⟨d-id⟩)``
+        # with the directive's id (an empty/untagged caused_by never counts); we map
+        # that id back to the directive's feature title via the manifest + sidecar.
         self._done = 0
         self._total = 0
         self._dir_seen: set[str] = set()  # caused_by ids already counted (idempotent)
@@ -150,14 +151,19 @@ class RealizeMonitor:
         return (meta.get("title") or "").strip() or feature_id
 
     def _load_manifest(self) -> None:
-        """Read the realize manifest to seed ``_total`` (directive count) and the
-        ``caused_by → feature title`` map for live progress. Best-effort: a
-        missing/corrupt manifest just leaves progress unreported (status keeps the
-        static detail) — the progress string is cosmetic, never load-bearing."""
+        """Read the realize manifest to seed ``_total`` (the count of REALIZABLE
+        directives) and the ``caused_by → feature title`` map for live progress.
+        Only ``handed_off`` directives count: a draft (``handed_off=False``) lives
+        in the manifest but is NOT in ``realize.md`` and won't be realized this
+        epoch, so counting it would inflate the denominator and the avatar would
+        never reach ``done/done``. Best-effort: a missing/corrupt manifest just
+        leaves progress unreported (status keeps the static detail) — the progress
+        string is cosmetic, never load-bearing. Safe to re-call (it refreshes the
+        denominator as the append-only queue grows mid-epoch)."""
         try:
             from codoc.loop.edits import read_manifest
 
-            directives = read_manifest(self.codoc_dir)
+            directives = [d for d in read_manifest(self.codoc_dir) if d.handed_off]
         except Exception:  # noqa: BLE001 — cosmetic signal; never break the run
             return
         self._total = len(directives)
@@ -173,14 +179,23 @@ class RealizeMonitor:
 
     def _advance_progress(self, caused_by: str) -> None:
         """A directive landed (its ``codoc_reflect`` fired) — bump ``_done`` and
-        write the live progress into ``status.detail``. Idempotent per directive
-        id; degrades to the static detail when there's nothing to report."""
+        write the live progress into ``status.detail``. Idempotent per directive id.
+
+        Only a NON-EMPTY ``caused_by`` counts: every codoc MCP tool defaults
+        ``caused_by=""`` and ``on_tool_use`` routes the bookkeeping reflect calls
+        here too, so an untagged reflect can't be attributed to a directive and must
+        not advance the count (the falsy-string path used to bypass the dedup guard
+        and inflate ``_done`` to N/N while the agent was still on directive 1). We
+        re-read the manifest each time because the realize queue APPENDS mid-epoch
+        (never clobbers), so a denominator captured once at construction goes stale."""
+        if not caused_by:
+            return  # untagged reflect → not attributable to a directive; never counts
+        self._load_manifest()  # append-only queue → refresh the (handed-off) denominator
         if self._total <= 0:
-            return  # no manifest → no per-directive progress (keep static detail)
-        if caused_by and caused_by in self._dir_seen:
+            return  # no realizable manifest → no per-directive progress (static detail)
+        if caused_by in self._dir_seen:
             return  # already counted this directive
-        if caused_by:
-            self._dir_seen.add(caused_by)
+        self._dir_seen.add(caused_by)
         self._done = min(self._done + 1, self._total)
         title = self._dir_title.get(caused_by, "")
         try:

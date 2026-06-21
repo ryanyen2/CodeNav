@@ -88,11 +88,12 @@ detailed in `docs/architecture.md`.
 model/       # Pydantic: Feature, Binding, Event/NodeOp/NodeOpKind, HLC; ids.py
 store/       # db.py — Store over 3 SQLite tables + 1 derived graph cache (WAL)
 graph/       # code dependency graph (derived, rebuildable): extract.py, query.py
-loop/        # the two loops + pieces: classify.py (decision table), diff.py
-             #   (compute_changeset), apply.py, loop_a.py / loop_b.py, edits.py
+loop/        # the two loops + pieces: classify.py (decision table), phase.py (the
+             #   single feature-phase projection — holds/drift/resolution are views),
+             #   diff.py (compute_changeset), apply.py, loop_a.py / loop_b.py, edits.py
              #   (edits.json + realize.json), inbox.py, status.py, fsio.py (atomic
-             #   IO), subtree.py, bootstrap_hier.py, sdk_realize.py / autorealize.py,
-             #   watch.py (run_watch / process_batch)
+             #   IO), subtree.py, bootstrap_hier.py, title_dedup.py (opt-in semantic
+             #   title dedup), sdk_realize.py / autorealize.py, watch.py
 agent/       # base.py, tree_update.py (the incremental LLM call), bootstrap_agent.py,
              # paths.py, hook.py / install_hooks.py, propose.py
 mcp/         # codoc MCP server (FastMCP, stdio): tools.py + server.py (codoc-mcp script)

@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     phaseGlyph, phaseVerb, realizeWhisper, presenceWhisper, deriveAgentPresences,
-    agentStack, stackTooltip, clampToViewport, overlayAnchor, roleName, roleInk, Rect,
+    clampToViewport, overlayAnchor, roleName, roleInk, Rect,
 } from '../state/presence';
 
 describe('phase → glyph / verb (§B.1 / §B.4)', () => {
@@ -84,17 +84,6 @@ describe('deriveAgentPresences — from the live sync signal (§B.1)', () => {
     });
     it('honours a non-default role', () => {
         expect(deriveAgentPresences({ 'f-a': 'editing' }, [], 'codex')[0]).toMatchObject({ role: 'codex', name: 'Codex' });
-    });
-});
-
-describe('agentStack / stackTooltip — multi-agent cap (§B.1/§B.4)', () => {
-    it('shows up to the cap, reporting overflow as +N', () => {
-        expect(agentStack(['a', 'b'], 3)).toEqual({ visible: ['a', 'b'], overflow: 0 });
-        expect(agentStack(['a', 'b', 'c', 'd', 'e'], 3)).toEqual({ visible: ['a', 'b', 'c'], overflow: 2 });
-    });
-    it('builds the hover tooltip from the names', () => {
-        expect(stackTooltip(['Claude', 'Codex'])).toBe('Claude, Codex working');
-        expect(stackTooltip([])).toBe('');
     });
 });
 

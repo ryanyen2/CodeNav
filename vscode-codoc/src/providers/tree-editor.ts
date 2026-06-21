@@ -678,10 +678,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         await this.writeEditsFile(document, setDrafts(file, []));
     }
 
-    /** Loop B / realize may stamp "done/total" progress into status.detail
-     *  (e.g. "implementing 2/5: <title>"). Best-effort parse for the doc header. */
+    /** Loop B / realize stamps progress into status.detail in ONE shape —
+     *  "implementing <done>/<total>: <title>" (codoc/loop/sdk_realize.py
+     *  format_realize_detail, shared by the MCP realize_progress tool). The parse
+     *  is ANCHORED to that `implementing N/M` head so an unrelated `status.detail`
+     *  carrying a stray "d/d" (a path, a date, "N change(s)") is never misread as
+     *  realize progress. */
     private parseRealizeProgress(detail: string): SyncState['realize'] {
-        const m = /(\d+)\s*\/\s*(\d+)(?:\s*[:\-]\s*(.*))?/.exec(detail || '');
+        const m = /^\s*implementing\s+(\d+)\s*\/\s*(\d+)(?:\s*[:\-]\s*(.*))?/i.exec(detail || '');
         if (!m) return undefined;
         return { done: Number(m[1]), total: Number(m[2]), current: (m[3] ?? '').trim() };
     }

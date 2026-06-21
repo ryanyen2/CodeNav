@@ -29,6 +29,7 @@ import {
 import { bootstrapCredentials, syncCredentialsToEnv, SECRET_OPENAI_KEY } from './setup/credentials';
 import { startDaemon, stopDaemon, reapStaleLock } from './daemon/daemon-manager';
 import { SETUP_STEPS, needsSetup } from './setup/setup-flow';
+import { DEFAULT_HUB_PORT, hubUrl, serveCommandLine } from './serve/serve-manager';
 
 /** Shared "codoc" OutputChannel — same name provision.ts / credentials.ts / daemon-manager.ts use. */
 let _channel: vscode.OutputChannel | undefined;
@@ -243,6 +244,71 @@ export function activate(context: vscode.ExtensionContext): void {
             terminal.show();
             terminal.sendText('codoc sync');
         }),
+    );
+
+    // ── codoc serve — the deployed hub (page deployment + multi-user editing) ──
+    // The hub is a SEPARATE process (peer to the extension): it supervises the
+    // daemon and serves the same intent-tree editor as a web app — localhost by
+    // default; remote contributors reach it over a tunnel + GitHub App. The
+    // extension just makes it easy to START and SHARE; it never owns the hub's
+    // lifecycle (the hub owns the daemon, and the local daemon-manager defers to
+    // it). We launch it in a dedicated integrated terminal so the user sees the
+    // live log and can Ctrl-C to stop. Pure argv/URL logic is in serve-manager.ts.
+    let _hubTerminal: vscode.Terminal | undefined;
+    const startHub = async (tunnel: boolean): Promise<void> => {
+        const root = state.rootDir ?? setupRootDir(state);
+        if (!root) { void vscode.window.showInformationMessage('No codoc tree found. Run `codoc init` first.'); return; }
+        // Same Workspace-Trust gate the daemon spawn uses (KTD6): the hub runs a
+        // server + can realize code, so never auto-launch in an untrusted folder.
+        if (!vscode.workspace.isTrusted) {
+            void vscode.window.showWarningMessage('codoc serve needs a trusted workspace.');
+            return;
+        }
+        // The standalone SPA the hub serves ships inside the extension (assembled
+        // into dist/webview by esbuild). Pointing --static-dir here makes the hub
+        // serve the REAL editor instead of the placeholder page.
+        const staticDir = path.join(context.extensionPath, 'dist', 'webview');
+        const cmd = serveCommandLine({
+            root, port: DEFAULT_HUB_PORT,
+            staticDir: fs.existsSync(staticDir) ? staticDir : undefined,
+            tunnel,
+        });
+        _hubTerminal?.dispose();
+        _hubTerminal = vscode.window.createTerminal({ name: 'codoc hub', cwd: root });
+        _hubTerminal.show();
+        _hubTerminal.sendText(cmd);
+
+        const url = hubUrl(DEFAULT_HUB_PORT);
+        const open = 'Open in browser', copy = 'Copy link', remote = 'Remote access…';
+        const msg = tunnel
+            ? `codoc hub starting with a tunnel — gate it with the GitHub App / Cloudflare Access (see the deploy doc). Local: ${url}`
+            : `codoc hub starting at ${url} — anyone on this machine can edit the tree. For remote contributors, set up the tunnel + GitHub App.`;
+        const pick = await vscode.window.showInformationMessage(msg, open, copy, remote);
+        if (pick === open) void vscode.env.openExternal(vscode.Uri.parse(url));
+        else if (pick === copy) await vscode.env.clipboard.writeText(url);
+        else if (pick === remote) void vscode.env.openExternal(vscode.Uri.parse(
+            'https://github.com/ryanyen2/CodeNav/blob/main/docs/serve-deployment.md'));
+    };
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.serve.start', () => startHub(false)),
+        vscode.commands.registerCommand('codoc.serve.startTunnel', () => startHub(true)),
+        vscode.commands.registerCommand('codoc.serve.stop', () => {
+            if (!_hubTerminal) { void vscode.window.showInformationMessage('codoc hub is not running from this window.'); return; }
+            _hubTerminal.dispose();   // SIGINT → uvicorn shutdown → supervisor.stop()
+            _hubTerminal = undefined;
+        }),
+        { dispose: () => _hubTerminal?.dispose() },
+    );
+
+    // A discoverable status-bar affordance for sharing (like a "Go Live" button).
+    const shareItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
+    shareItem.text = '$(broadcast) Share';
+    shareItem.tooltip = 'codoc: start the deployed hub (browser editor for collaborators)';
+    shareItem.command = 'codoc.serve.start';
+    if (state.rootDir) shareItem.show();
+    context.subscriptions.push(
+        shareItem,
+        state.onDidChange(() => { if (state.rootDir) shareItem.show(); else shareItem.hide(); }),
     );
 
     // ── Proposal verdicts → .codoc/inbox.json (the daemon applies them) ───────
@@ -534,9 +600,12 @@ export function activate(context: vscode.ExtensionContext): void {
             [{ language: 'python' }, { language: 'typescript' }, { language: 'javascript' }],
             new BridgeCodeLensProvider(state, bridge),
         ),
-        // §A.6 (P2 fix 3): on a visible-editors change, let the bridge detect whether ITS pane
-        // was closed → remember the dismissal so it stops auto-reopening this session, then repaint.
+        // §A.6 (P2 fix 3 / §6 hardening): the bridge remembers a dismissal only on a true TAB
+        // close, not a tab switch — so listen to BOTH visible-editor changes (repaint) and tab
+        // close/open (the dismissal signal). The `bridge.rearm` command re-enables auto-open.
         vscode.window.onDidChangeVisibleTextEditors(() => bridge.noteVisibleEditorsChanged()),
+        vscode.window.tabGroups.onDidChangeTabs(() => bridge.noteVisibleEditorsChanged()),
+        vscode.commands.registerCommand('codoc.bridge.rearm', () => bridge.rearm()),
         { dispose: () => bridge.dispose() },
     );
 

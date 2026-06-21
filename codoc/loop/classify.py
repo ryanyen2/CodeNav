@@ -134,7 +134,13 @@ def suppressed_by_hold(op: NodeOp, held: set[str]) -> bool:
     """Row 13: True if ``op`` is an intent-level code→doc op targeting a feature
     with pending doc-ahead intent (a live suggestion or a queued directive).
     The doc edit wins; the code-side observation is deferred until the hold
-    releases — binding maintenance (ATTACH/DETACH/REFRESH) is never suppressed."""
+    releases — binding maintenance (ATTACH/DETACH/REFRESH) is never suppressed.
+
+    The "is this feature held?" test is delegated to the single
+    :func:`~codoc.loop.phase.is_held` predicate (D5), so this suppression and the
+    other two loop guards (``emptied`` detection, drift) share one definition."""
     if not held or op.kind not in _INTENT_OPS:
         return False
-    return bool(op.feature_id and op.feature_id in held)
+    from codoc.loop.phase import is_held
+
+    return is_held(op.feature_id, held)

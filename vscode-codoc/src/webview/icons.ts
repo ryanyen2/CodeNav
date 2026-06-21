@@ -67,11 +67,6 @@ export interface IconOpts {
     title?: string;
 }
 
-/** True when `name` is a known glyph — keeps `icon()` total over arbitrary strings. */
-export function hasIcon(name: string): name is IconName {
-    return Object.prototype.hasOwnProperty.call(PATHS, name);
-}
-
 /** The raw `<svg>…</svg>` markup string for a glyph (pure — unit-tested). Always carries
  *  the `ce-icon` base class (size + vertical rhythm), `fill="currentColor"` (hue from CSS),
  *  and `aria-hidden` (the meaning rides the host element's title/label, not the glyph). */

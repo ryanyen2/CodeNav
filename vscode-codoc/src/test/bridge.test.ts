@@ -10,7 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
     bindingLeaf, primaryBinding, implicatedLeaves, declLines, implicatedDeclLines,
-    featureIdsForChangedLines, changedLineNumbers, userTouchedFids, BridgeDebounce,
+    featureIdsForChangedLines, changedLineNumbers, userTouchedFids, bridgeDismissals, BridgeDebounce,
 } from '../state/bridge';
 
 describe('bindingLeaf — the declared name a binding anchor resolves to', () => {
@@ -59,10 +59,25 @@ describe('declLines — declaration scan (shared with code-lens)', () => {
             'export function build() {}',// 5
         ];
         expect(declLines(src)).toEqual([
-            { name: 'run_loop_a', line: 1 },
-            { name: 'Store', line: 3 },
-            { name: 'upsert', line: 4 },
-            { name: 'build', line: 5 },
+            { name: 'run_loop_a', line: 1, qualified: 'run_loop_a' },
+            { name: 'Store', line: 3, qualified: 'Store' },
+            { name: 'upsert', line: 4, qualified: 'Store.upsert' },  // nested under Store
+            { name: 'build', line: 5, qualified: 'build' },          // popped back to top level
+        ]);
+    });
+
+    it('qualifies two same-leaf methods by their enclosing class', () => {
+        const src = [
+            'class A:',                  // 0
+            '    def run(self): ...',    // 1
+            'class B:',                  // 2
+            '    def run(self): ...',    // 3
+        ];
+        expect(declLines(src)).toEqual([
+            { name: 'A', line: 0, qualified: 'A' },
+            { name: 'run', line: 1, qualified: 'A.run' },
+            { name: 'B', line: 2, qualified: 'B' },
+            { name: 'run', line: 3, qualified: 'B.run' },
         ]);
     });
 });
@@ -106,6 +121,30 @@ describe('featureIdsForChangedLines — code→doc mapping (§A.3)', () => {
     });
     it('is empty when the file has no bindings', () => {
         expect(featureIdsForChangedLines([], decls, [3])).toEqual([]);
+    });
+
+    it('disambiguates two same-leaf methods by qualified path (§6 — no cross-spark)', () => {
+        // Two `run` methods in different classes, each bound to its OWN feature.
+        const entries = [
+            { symbol: 'm.py::A.run', feature_id: 'f-a' },
+            { symbol: 'm.py::B.run', feature_id: 'f-b' },
+        ];
+        const qdecls = [
+            { name: 'A', line: 0, qualified: 'A' },
+            { name: 'run', line: 1, qualified: 'A.run' },
+            { name: 'B', line: 2, qualified: 'B' },
+            { name: 'run', line: 3, qualified: 'B.run' },
+        ];
+        // Editing inside A.run sparks ONLY f-a (not f-b, despite the shared leaf).
+        expect(featureIdsForChangedLines(entries, qdecls, [1])).toEqual(['f-a']);
+        expect(featureIdsForChangedLines(entries, qdecls, [3])).toEqual(['f-b']);
+    });
+
+    it('falls back to leaf matching when a decl carries no qualified path', () => {
+        // A binding with only a partial/leaf symbol still resolves via the leaf index.
+        const entries = [{ symbol: 'm.py::solo', feature_id: 'f-solo' }];
+        const d = [{ name: 'solo', line: 0 }];  // no `qualified`
+        expect(featureIdsForChangedLines(entries, d, [1])).toEqual(['f-solo']);
     });
 });
 
@@ -167,5 +206,25 @@ describe('userTouchedFids — suppress the spark for the agent\'s own writes (P2
     it('keeps a feature in phase `done` (the agent finished — a later user edit is the user\'s)', () => {
         expect(userTouchedFids(['f-a'], { epochOpen: true, phase: { 'f-a': 'done' }, held: new Set() }))
             .toEqual(['f-a']);
+    });
+});
+
+describe('bridgeDismissals — true close vs tab switch (§6 hardening)', () => {
+    it('a bridge-opened file still OPEN as a (hidden) tab is NOT a dismissal', () => {
+        const opened = ['a.py', 'b.py'];
+        const openTabs = new Set(['a.py', 'b.py', 'codoc.tree']);  // both still open, just not visible
+        const { closed, dismissed } = bridgeDismissals(opened, openTabs);
+        expect(closed).toEqual([]);
+        expect(dismissed).toBe(false);
+    });
+
+    it('a bridge-opened file gone from ALL tabs IS a dismissal', () => {
+        const { closed, dismissed } = bridgeDismissals(['a.py', 'b.py'], new Set(['b.py']));
+        expect(closed).toEqual(['a.py']);   // a.py truly closed → forget it
+        expect(dismissed).toBe(true);
+    });
+
+    it('no bridge-opened files → never a dismissal', () => {
+        expect(bridgeDismissals([], new Set(['a.py']))).toEqual({ closed: [], dismissed: false });
     });
 });

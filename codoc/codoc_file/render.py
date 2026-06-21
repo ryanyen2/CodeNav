@@ -487,99 +487,6 @@ def _compute_see_also(edges: dict[str, list[dict]]) -> dict[str, list[dict]]:
     return out
 
 
-def _live_drift(store: Store, drift: dict[str, str]) -> dict[str, str]:
-    """Filter a loop-computed drift map against live store state (pure store
-    reads — NO index access, keeping render index-free).
-
-    An interactive re-emit (MCP reflect ATTACH, Accept/Reject) re-writes the
-    sidecar without recomputing drift, so a stale entry can outlive the state it
-    described until the next loop pass. We drop the entries that are now provably
-    contradicted by the store:
-
-    - ``binding-lost`` for a feature that NOW owns >=1 binding (an ATTACH re-bound
-      it) — the badge would directly contradict the visible bindings.
-    - any entry for a feature that is now retired or absent.
-
-    ``questioned`` entries (the prose may be stale) are kept: only a loop pass
-    with a fresh index can tell whether the code drift was resolved, so render
-    must not guess. From the same module's :data:`~codoc.loop.edits.DRIFT_*`."""
-    if not drift:
-        return drift
-    from codoc.loop.edits import DRIFT_BINDING_LOST
-
-    out: dict[str, str] = {}
-    for fid, state in drift.items():
-        f = store.get_feature(fid)
-        if f is None or f.retired:
-            continue  # feature gone/retired — its badge is meaningless now
-        if state == DRIFT_BINDING_LOST and store.bindings_for_feature(fid):
-            continue  # re-bound since the loop pass — badge contradicts state
-        out[fid] = state
-    return out
-
-
-def _live_resolution(store: Store, resolution: dict[str, str]) -> dict[str, str]:
-    """Filter the loop-computed realize-divergence map (U5) against live store state
-    (pure store reads). A divergence flag is only meaningful while its surfaced
-    proposal is still pending review: an interactive re-emit after the human
-    accepts/rejects that proposal must drop the flag (the loop's own prune handles
-    the daemon path; this covers the no-loop re-render). Also drop gone/retired
-    features."""
-    if not resolution:
-        return resolution
-    pend = {e.op.feature_id for e in store.pending_events() if e.op.feature_id}
-    out: dict[str, str] = {}
-    for fid, reason in resolution.items():
-        f = store.get_feature(fid)
-        if f is None or f.retired or fid not in pend:
-            continue
-        out[fid] = reason
-    return out
-
-
-def _intent_gloss(kind: str) -> str:
-    """A one-line, plain-language summary of what the queued directive will DO,
-    surfaced as the held feature's hover title. The point is recognition, not just
-    a count: the author can confirm codoc understood the *kind* of work their edit
-    implied (update vs implement vs remove vs steer), in their own words."""
-    k = (kind or "").lower()
-    if "steer" in k:
-        return "apply your note to this feature's code"
-    if "retire" in k:
-        return "remove this feature's code"
-    if "add" in k:
-        return "implement this feature in code"
-    return "update the code to match your new intent"  # amend / default
-
-
-def _hold_detail(store: Store, codoc_dir: str | Path) -> dict[str, dict]:
-    """Per-held-feature detail for the in-situ "pending intent" decoration: the
-    queued directive's ``kind`` + a plain-language intent gloss, keyed by feature id.
-
-    Read from the realize.json manifest — the same source ``hold_set`` reads, so a
-    feature that appears here always also appears in ``holds``. A held feature with
-    only a live (payload-less) intent and no queued directive is absent: it still
-    gets the plain hold rail via ``holds``, just no gloss. First directive per
-    feature wins. Pure derived state (no model fields)."""
-    from codoc.loop.edits import read_manifest
-
-    out: dict[str, dict] = {}
-    for d in read_manifest(codoc_dir):
-        if not d.feature_id or d.feature_id in out:
-            continue
-        f = store.get_feature(d.feature_id)
-        if f is None or f.retired:
-            continue
-        out[d.feature_id] = {
-            "kind": d.kind,
-            "intent": _intent_gloss(d.kind),
-            # The pre-edit description (AMEND only) — the IDE diffs it against the live
-            # text to underline what changed. Empty for ADD/RETIRE/steer.
-            "baseline": d.baseline,
-        }
-    return out
-
-
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -604,6 +511,8 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         feats_meta[f.id] = {
             "title": f.title,
             "parent_id": f.parent_id,
+            # A1: the authoritative named state; `realized` kept for back-compat.
+            "lifecycle": f.lifecycle.value,
             "realized": f.realized,
             # v5: a derived one-line pitch (first sentence of the prose, refs
             # flattened to labels, else the title) for overview / glance rendering.
@@ -614,7 +523,16 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
                 {"symbol": b.symbol_path, "feature_id": f.id, "feature_title": f.title}
             )
 
-    from codoc.loop.edits import hold_set, read_drift, read_resolution
+    from codoc.loop.phase import project_from_store
+
+    # The SINGLE mid-flight projection (Proposal B): one pure pass over the
+    # authoritative + loop-computed inputs produces holds / hold_detail /
+    # feature_drift / feature_resolution as thin views off one source of truth,
+    # plus the new per-feature `feature_phase` slice. Replaces the four hand-synced
+    # helpers (_live_drift / _live_resolution / _hold_detail / _intent_gloss) this
+    # file used to carry. Doc-wins is resolved in the primary `feature_phase` slice;
+    # the drift/resolution slices keep the former filters (see phase.Projection).
+    proj = project_from_store(store, codoc_dir)
 
     # Compute feature-coupling edges ONCE and share them between the feature_edges
     # slot and _compute_see_also (which is derived from the same edges).
@@ -630,13 +548,13 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # v4: the provenance ledger surfaced to the IDE — recent applied events
         # (who/how/why-chained) + the doc-wins hold set.
         "changes": _changes_feed(store),
-        "holds": sorted(hold_set(codoc_dir)),
+        "holds": proj.holds,
         # v5: per-held-feature detail for the in-situ "pending intent" decoration —
         # the queued directive's kind + a plain-language intent gloss, so the IDE can
         # show WHAT codoc understood (hover title on the pending rail), not just that
         # something is queued. Keyed by feature id; a subset of `holds` (only features
-        # with a queued directive). Pure derived from the realize.json manifest.
-        "hold_detail": _hold_detail(store, codoc_dir),
+        # with a queued directive). A thin view of the single phase projection.
+        "hold_detail": proj.hold_detail,
         # v5: lightweight INFERRED structure (additive optional slices, no version
         # bump). `feature_kind` is a Diátaxis-lite hint rendered as a chip below the
         # feature title; `feature_see_also` is the top-N coupled neighbours emitted
@@ -652,13 +570,19 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # (`_live_drift`) so an ATTACH that re-bound a `binding-lost` feature, or a
         # retired/removed feature, no longer shows a contradictory badge before the
         # next loop pass. `followed` features are absent.
-        "feature_drift": _live_drift(store, read_drift(codoc_dir)),
+        "feature_drift": proj.drift,
         # v5 (U5): the per-feature realize-divergence signal — a feature changed
         # BEYOND a directive's target ("scope") during a realization, surfaced for
         # "review what the AI did" (F3). Re-emitted from the loop-computed
         # resolution.json, filtered to features whose surfaced proposal is still
         # pending (a resolved one drops the flag). Faithful realizations are absent.
-        "feature_resolution": _live_resolution(store, read_resolution(codoc_dir)),
+        "feature_resolution": proj.resolution,
+        # v5 (Proposal B): the SINGLE mid-flight phase per feature — the one place
+        # "where is this feature in its lifecycle?" is named, from which holds /
+        # hold_detail / feature_drift / feature_resolution are thin views above.
+        # `synced` features are absent (no dot); doc-wins is applied here once (a
+        # held feature is `drafting`/`queued`, never also `drifted`/`divergent`).
+        "feature_phase": proj.phase,
     }
     # Route through the shared atomic writer (per-writer-unique tmp) rather than a
     # hand-rolled fixed-name tmp: two writers of this sidecar (two daemons, or a daemon

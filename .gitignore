@@ -1,11 +1,15 @@
 .env
 .env.*
 
-# codoc runtime state (per-repo; not committed)
-**/.codoc/codoc.db
-**/.codoc/log.jsonl
-**/.codoc/faiss/
-**/.codoc/unattributed.json
+# codoc — share the AUTHORED INTENT, keep the DERIVED state local.
+# Commit `tree.codoc` (and the webview's `tree.doc.json`): the feature tree is the
+# team's shared intent map, versioned with the code. Everything else under .codoc/
+# (the chunk index, the SQLite db + event log, and the transient control files) is
+# rebuilt per checkout by `codoc init` / `codoc watch`, so it is NOT committed.
+# (To also share the binding db, force-add it: `git add -f .codoc/codoc.db`.)
+**/.codoc/*
+!**/.codoc/tree.codoc
+!**/.codoc/tree.doc.json
 
 # Python
 __pycache__/
@@ -48,8 +52,6 @@ vscode-codoc/bundled/*.whl
 
 # Packaged extension — a build artifact produced by `vsce package`, never committed.
 vscode-codoc/*.vsix
-
-.codoc/
 
 # Root-level real-world corpora only (requests/, altair/, …); anchored so it does
 # NOT swallow nested source test dirs like vscode-codoc/src/test/.

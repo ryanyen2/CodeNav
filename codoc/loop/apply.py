@@ -15,7 +15,7 @@ from difflib import SequenceMatcher
 from codoc.loop.diff import ChangeSet
 from codoc.model.binding import Binding
 from codoc.model.event import SAFE_OPS, Event, NodeOp, NodeOpKind, default_provenance
-from codoc.model.feature import Feature
+from codoc.model.feature import Feature, Lifecycle
 from codoc.model.hlc import HLC
 from codoc.store.db import Store
 
@@ -106,11 +106,13 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
             store.upsert_binding(Binding(feature_id=op.feature_id, file=file,
                                          symbol_path=symbol, fingerprint=fp.get((file, symbol), ""),
                                          types_hash=th.get((file, symbol), "")))
-        # Realization transition: the first code bound to a plan placeholder makes
-        # it a real, implemented feature.
+        # Named lifecycle transition (A1): the first code bound to a plan
+        # placeholder promotes it planned→active. store.mark_realized is guarded to
+        # `planned` rows, so this is the one explicit transition point — no silent
+        # bool flip, and a retired feature can never be resurrected by a stray bind.
         if op.bindings and op.feature_id:
             owner = store.get_feature(op.feature_id)
-            if owner and not owner.realized:
+            if owner and owner.lifecycle is Lifecycle.PLANNED:
                 store.mark_realized(op.feature_id)
     elif k is NodeOpKind.DETACH:
         for file, symbol in op.bindings:

@@ -15,6 +15,10 @@ codoc keeps a **feature tree** — a small, navigable map of what your code is
 
 There is **one file** you ever look at — `.codoc/tree.codoc`.
 
+> Working solo, as a team, or sharing the tree with remote contributors? See the
+> [supported user workflows](user-workflows.md) for which path fits and what (if
+> any) auth each needs.
+
 ---
 
 ## 1. Install
@@ -292,7 +296,7 @@ agent reflecting via MCP and you Accepting in the IDE.)
 ```
 .codoc/
   tree.codoc          # the one human surface (commit with your code)
-  tree.bindings.json  # IDE sidecar: feature↔symbol index + dependency edges + proposals + change feed + holds (v4)
+  tree.bindings.json  # IDE sidecar: feature↔symbol index + edges + proposals + change feed + feature_phase/holds (v5)
   status.json         # loop lifecycle: in_sync / code_drift / tree_dirty / awaiting_impl / realizing
   inbox.json          # verdict channel: Accept/Reject writes here, the loop drains it
   realize.md          # realization queue: directives the live session implements via /codoc:sync
@@ -313,9 +317,20 @@ agent reflecting via MCP and you Accepting in the IDE.)
 .mcp.json             # registers the codoc MCP server (codoc-mcp, stdio)
 ```
 
-Commit `.codoc/tree.codoc` (and optionally `codoc.db`) alongside your code so
-the intent map is versioned with it. The `.claude/` directory and `.mcp.json` are
-normally committed too, so the integration travels with the repo.
+Commit `.codoc/tree.codoc` (and the webview's `.codoc/tree.doc.json`) alongside
+your code so the intent map is versioned and shared with your team. The rest of
+`.codoc/` — `codoc.db`, `lancedb/`, `cocoindex.db/`, and the transient control
+files — is **derived per checkout** and rebuilt by `codoc init` / `codoc watch`,
+so it stays gitignored (the shipped `.gitignore` already does this). The
+`.claude/` directory and `.mcp.json` are normally committed too, so the
+integration travels with the repo.
+
+> **Auth.** The local flow needs **no codoc or GitHub auth** — it's file-based and
+> rides your existing git remote; the only credential is your LLM provider key (or
+> the keyless Claude Code login). The *optional* deployed hub (`codoc serve`, for
+> remote contributors) is the exception — it gates access with a **GitHub App**
+> ([`serve-deployment.md`](serve-deployment.md)). See
+> [Working as a team (multi-user)](../README.md#working-as-a-team-multi-user).
 
 ## 10. Re-installing after a fresh clone
 

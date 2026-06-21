@@ -209,14 +209,17 @@ def test_collect_feature_ids_is_recursive_and_deduped():
 # -- live realize-progress detail (status.json) -------------------------------
 #
 # The IDE parses status.detail with `parseRealizeProgress` in
-# vscode-codoc/src/providers/tree-editor.ts (~:652-656):
-#   /(\d+)\s*\/\s*(\d+)(?:\s*[:\-]\s*(.*))?/  → {done, total, current=group3}
+# vscode-codoc/src/providers/tree-editor.ts. The regex is ANCHORED to the
+# "implementing N/M" head (§6 robustness fix), so a stray "d/d" elsewhere in a
+# detail string is never misread as progress:
+#   /^\s*implementing\s+(\d+)\s*\/\s*(\d+)(?:\s*[:\-]\s*(.*))?/i
 # These tests pin our producer (format_realize_detail / RealizeMonitor) to that
 # exact shape. _parse_realize_progress below is the Python mirror of that regex.
 
 import re
 
-_TS_RE = re.compile(r"(\d+)\s*/\s*(\d+)(?:\s*[:\-]\s*(.*))?")
+_TS_RE = re.compile(r"^\s*implementing\s+(\d+)\s*/\s*(\d+)(?:\s*[:\-]\s*(.*))?",
+                    re.IGNORECASE)
 
 
 def _parse_realize_progress(detail: str):
@@ -227,6 +230,14 @@ def _parse_realize_progress(detail: str):
         return None
     return {"done": int(m.group(1)), "total": int(m.group(2)),
             "current": (m.group(3) or "").strip()}
+
+
+def test_parse_realize_progress_ignores_stray_slash_detail():
+    """The anchored parser does NOT misread a non-progress detail that happens to
+    carry a "d/d" (a path, a date, "N change(s) ready ... /codoc:sync")."""
+    assert _parse_realize_progress("3 change(s) ready to implement — run /codoc:sync") is None
+    assert _parse_realize_progress("edited src/a/2.py") is None
+    assert _parse_realize_progress("implementing 2/5: x") == {"done": 2, "total": 5, "current": "x"}
 
 
 def test_format_realize_detail_matches_the_ts_parser():
@@ -311,6 +322,75 @@ def test_unknown_feature_id_falls_back_to_the_id(repo):
     state = json.loads((Path(codoc) / "status.json").read_text())
     assert state["detail"] == "implementing 1/1: f-ffffffff"
     assert _parse_realize_progress(state["detail"])["current"] == "f-ffffffff"
+
+
+def test_empty_caused_by_never_advances_progress(repo):
+    """Every codoc MCP tool defaults ``caused_by=""`` and bookkeeping reflect/attach
+    calls flow through ``_advance_progress`` too — an untagged call must NOT count as
+    directive progress (regression: the falsy-string path used to bypass the dedup
+    guard and bump ``_done`` to N/N while the agent was still on directive 1)."""
+    root, codoc = repo
+    _seed_manifest(codoc, [
+        {"id": "d-aaaa1111", "feature_id": "f-0000aaaa", "kind": "amend"},
+        {"id": "d-bbbb2222", "feature_id": "f-0000aaaa", "kind": "amend"},
+    ])
+    m = _monitor(repo, [])
+    assert m._total == 2
+
+    # A reflect with no caused_by, and a plain bookkeeping MCP tool (also caused_by=""):
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"ops": []})
+    m.on_tool_use("mcp__codoc__codoc_attach", {"feature_id": "f-0000aaaa"})
+    assert m._done == 0
+    assert not (Path(codoc) / "status.json").exists()  # no spurious progress written
+
+    # A genuinely tagged reflect still advances exactly one.
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-aaaa1111"})
+    assert m._done == 1
+    assert json.loads((Path(codoc) / "status.json").read_text())["detail"] == \
+        "implementing 1/2: Color palette"
+
+
+def test_total_counts_only_handed_off_directives(repo):
+    """A DRAFT directive (``handed_off=False``) lives in the manifest but is not in
+    realize.md and won't realize this epoch — it must not inflate the denominator,
+    else the avatar can never reach done/done."""
+    root, codoc = repo
+    _seed_manifest(codoc, [
+        {"id": "d-aaaa1111", "feature_id": "f-0000aaaa", "kind": "amend"},
+        {"id": "d-bbbb2222", "feature_id": "f-0000aaaa", "kind": "amend",
+         "handed_off": False},  # a held draft — not realizable this epoch
+    ])
+    m = _monitor(repo, [])
+    assert m._total == 1  # only the handed-off directive
+
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-aaaa1111"})
+    assert json.loads((Path(codoc) / "status.json").read_text())["detail"] == \
+        "implementing 1/1: Color palette"
+
+
+def test_total_tracks_directives_appended_mid_epoch(repo):
+    """The realize queue APPENDS, never clobbers (CLAUDE.md). The denominator is
+    re-read on each landing, so a directive queued after the monitor started still
+    grows ``_total`` instead of the progress sticking past 'done'."""
+    from codoc.loop.edits import Directive, write_manifest
+
+    root, codoc = repo
+    _seed_manifest(codoc, [{"id": "d-aaaa1111", "feature_id": "f-0000aaaa", "kind": "amend"}])
+    m = _monitor(repo, [])
+    assert m._total == 1
+
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-aaaa1111"})
+    assert json.loads((Path(codoc) / "status.json").read_text())["detail"] == \
+        "implementing 1/1: Color palette"
+
+    # Loop B appends a second handed-off directive mid-epoch.
+    write_manifest(codoc, [
+        Directive(id="d-aaaa1111", feature_id="f-0000aaaa", kind="amend"),
+        Directive(id="d-bbbb2222", feature_id="f-0000aaaa", kind="amend"),
+    ])
+    m.on_tool_use("mcp__codoc__codoc_reflect", {"caused_by": "d-bbbb2222"})
+    assert json.loads((Path(codoc) / "status.json").read_text())["detail"] == \
+        "implementing 2/2: Color palette"
 
 
 # -- engine selection -----------------------------------------------------------

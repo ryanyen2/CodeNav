@@ -5,7 +5,7 @@
  * redesign reads off, so a missing/malformed glyph is a real regression.
  */
 import { describe, it, expect } from 'vitest';
-import { iconSvg, hasIcon, iconMaskDataUri, IconName } from '../webview/icons';
+import { iconSvg, iconMaskDataUri, IconName } from '../webview/icons';
 
 const ALL: IconName[] = [
     'circle-dashed', 'diamond', 'diamond-fill', 'pen-nib', 'arrows-clockwise',
@@ -25,13 +25,6 @@ describe('icons — the §C.1 lifecycle sprite', () => {
             expect(svg).toMatch(/<path d="M[\d.,-]/);          // real path data, not empty
             expect(svg).toContain('class="ce-icon"');          // base sizing class
         }
-    });
-
-    it('hasIcon is a total guard over arbitrary strings', () => {
-        expect(hasIcon('diamond')).toBe(true);
-        expect(hasIcon('check-circle')).toBe(true);
-        expect(hasIcon('not-a-glyph')).toBe(false);
-        expect(hasIcon('')).toBe(false);
     });
 
     it('an extra className composes onto the base ce-icon class', () => {

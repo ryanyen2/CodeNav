@@ -292,8 +292,12 @@ def realize_progress(codoc_dir: str, *, done: int, total: int, current: str = ""
     """Stamp ``done/total`` realize progress into ``status.json`` so the IDE shows
     "implementing M of N" while the live session works through ``.codoc/realize.md``.
     """
+    from codoc.loop.sdk_realize import format_realize_detail
     from codoc.loop.status import REALIZING, write_status
-    detail = f"{done}/{total}" + (f": {current}" if current else "")
+    # One shared shape ("implementing N/M: title") for BOTH progress producers (this
+    # MCP tool + sdk_realize), so the IDE's anchored parser has a single head to
+    # match and a stray "d/d" in some other detail can't be misread as progress.
+    detail = format_realize_detail(done, total, current)
     try:
         write_status(codoc_dir, REALIZING, pending=max(0, total - done), detail=detail)
     except Exception:  # noqa: BLE001 — progress is advisory

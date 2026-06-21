@@ -12,14 +12,21 @@ control files, environment variables, and the deployed hub.
 
 ## Data model
 
-- **`Feature`** (`model/feature.py`): `{id, title, description, parent_id, retired,
-  realized, created_at, updated_at}`. `id` = stable `f-xxxxxxxx`, rendered as
-  `⟨f-id⟩`. ONE prose field. `retired`/`realized` are the only lifecycle bits:
-  `realized=False` marks an accepted `/codoc:plan` placeholder with no code yet;
-  the first binding flips it True.
+- **`Feature`** (`model/feature.py`): `{id, title, description, parent_id, lifecycle,
+  created_at, updated_at}`. `id` = stable `f-xxxxxxxx`, rendered as `⟨f-id⟩`. ONE
+  prose field. **`lifecycle`** (`Lifecycle` enum: `planned | active | retired`) is
+  the single authoritative named state (Proposal A1); `retired`/`realized` remain as
+  derived read-only `@computed_field` views, and the legacy `retired=`/`realized=`
+  kwargs still construct via a validator. A `planned` placeholder (an accepted
+  `/codoc:plan` node with no code) is promoted `planned→active` by `feature.realize()`
+  / `store.mark_realized` on its first binding — the one explicit transition point
+  (guarded to `planned` rows). The DB keeps the `lifecycle` column authoritative +
+  the `retired`/`realized` columns in sync, and a pre-A1 db backfills `lifecycle`
+  from the bools on open.
 - **`Binding`** (`model/binding.py`): `{id, feature_id, file, symbol_path,
-  fingerprint, updated_at}`. Anchor `(file, symbol_path)` is the index join key;
-  `fingerprint` = the chunk's `tokens_hash`.
+  fingerprint, types_hash, updated_at}`. Anchor `(file, symbol_path)` is the index
+  join key; `fingerprint` = the chunk's `tokens_hash`; `types_hash` = its
+  name-invariant AST shape (drives rename detection; backfilled when missing).
 - **`NodeOp`** (`model/event.py`): `{kind, feature_id?, parent_id?, title?,
   description?, bindings, rationale, realized?}`.
 - **`Event`** (`model/event.py`): `{id, at, source, op, applied, accepted_at,
@@ -62,13 +69,22 @@ down as a LanceDB predicate; only bootstrap reads embeddings.
 `(file, symbol_path)` on `tokens_hash` → `ChangeSet{added, removed, modified}`.
 `apply_changeset` has five phases: (1) **auto-ops** — modified-bound → REFRESH,
 removed-bound → DETACH; (2) **correspondence** — `_detect_relocations` pairs
-removed↔added that are the same code relocated (move via `tokens_hash`, rename via
-same-file unique `types_hash`) → deterministic ATTACH, no dropped attribution;
+removed↔added that are the same code relocated (move via `tokens_hash`; rename via
+same-file unique `types_hash`, then **cross-file** when the `types_hash` is
+*globally 1:1-unique* — D3) → deterministic ATTACH, no dropped attribution;
 (3) **LLM pass** — for unbound additions / a feature that lost its last binding /
 a stale-prose modification, safe ops apply and structural ops become proposals;
 (4) **may-impact** — surface upstream dependents for the prompt; (5) **coverage
 net** — `_cover_uncovered_adds` attaches to the best `neighbor_feature` or surfaces
 a pending ADD, so nothing is silently dropped.
+
+**Merge-edge robustness (D1–D4).** The LLM-pass apply folds a re-proposed node by
+exact title (`_unbound_features_by_title`), by `(normalized_title, parent_id)` for
+binding-less theme parents (the D2 identity guard the `UNIQUE` binding constraint
+can't give), and — opt-in via `CODOC_SEMANTIC_DEDUP` — by *embedding* near-duplicate
+title (`loop/title_dedup.py`, D1, fails-safe inert without the embedder).
+`reconcile_drift` opportunistically backfills empty `types_hash` on bound chunks
+(D4) so rename detection isn't permanently blind for legacy/MCP binds.
 
 Two caller-set authority flags gate the LLM pass: `allow_retire` and
 `amend_on_change`. `run_loop_a` (mid-edit diff) passes both `False`;
@@ -77,14 +93,18 @@ RETIRE only ever surfaces from the authoritative view. **Stale-proposal GC** run
 first each pass (drops ADDs already bound elsewhere, RETIREs whose feature still
 owns code), so a no-op `codoc sync` converges to `in_sync`. **Doc-wins holds:**
 `held` features (live doc-ahead intents ∪ queued directives) suppress code-side
-AMEND/RETIRE/MOVE — doc wins; binding maintenance is never suppressed. While
-`realize.json` exists, applied ops are stamped `caused_by=⟨directive⟩`.
+AMEND/RETIRE/MOVE — doc wins; binding maintenance is never suppressed. The hold
+check is the SINGLE `phase.is_held` predicate (D5), shared by all three guards (the
+`emptied` detection, `suppressed_by_hold`, and `_compute_drift`) so they can't drift
+apart. While `realize.json` exists, applied ops are stamped `caused_by=⟨directive⟩`.
 
 ## Loop B in detail (codoc → code)
 
 `run_loop_b` (1) snapshots the text diff **against the pre-mutation store** (diffing
-after verdicts would misread the text and revert the accepted change), (2) drains
-`inbox.json` verdicts, (3) applies user ops stamped with the annotating actor/mode
+after verdicts would misread the text and revert the accepted change) — captured as
+ONE explicit `_PreMutation` object by `_snapshot_pre_mutation` (D6: the ordering
+invariant is structural, not a "this line must run first"), (2) drains `inbox.json`
+verdicts, (3) applies user ops stamped with the annotating actor/mode
 (default human/pen), (4) drains live **payload intents** (doc-ahead suggestions,
 `mode=suggest`), (5) re-renders `tree.codoc`, (6) builds a directive from each
 code-implying op. Each gets a `d-…` id (in its `### N.` heading + the
@@ -126,10 +146,17 @@ state** and is re-emitted on every pass even when the text render is held back
   citations. Bindings are *not* printed (they ride in the sidecar). Pending ADD/MOVE
   render as ghost hunks; RETIRE/AMEND emit no text.
 - **`tree.bindings.json`** (v5) — the IDE/browser sidecar: `by_feature`/`by_file`
-  bindings, `features{}`, `proposals` (drives in-place overlays + Accept/Reject),
-  `changes` (recent applied events), `holds`, and derived reading slices (`pitch`,
-  `feature_kind`, `feature_see_also`, `feature_drift`). The TS reader (and the hub's
-  `payload.py`) key on field presence, so older sidecars still parse.
+  bindings, `features{}` (each carries `lifecycle` + the legacy `realized`),
+  `proposals` (drives in-place overlays + Accept/Reject), `changes` (recent applied
+  events), and derived reading slices (`pitch`, `feature_kind`, `feature_see_also`).
+  The **mid-flight slices** — `feature_phase` (the single per-feature Phase),
+  `holds`, `hold_detail`, `feature_drift`, `feature_resolution` — are ALL thin views
+  of ONE `loop/phase.py:compute_phases` pass (Proposal B), off one source of truth.
+  Doc-wins is resolved in the primary `feature_phase` slice (a held feature reads
+  `drafting`/`queued`, never `drifted`/`divergent`); the `feature_drift`/
+  `feature_resolution` slices keep the former `_live_*` filters unchanged. The TS
+  reader (and the hub's `payload.py`) key on field presence, so older sidecars
+  still parse.
 - **`status.json`** — `{state ∈ in_sync | code_drift | tree_dirty | awaiting_impl |
   realizing, pending, at, …}`; drives the status bar + header CodeLens (and the
   hub's restart-safe payload version via its `at` HLC). A non-empty `realize.md` is
@@ -162,6 +189,7 @@ state** and is re-emitted on every pass even when the text render is held back
 | `CODOC_EMBEDDER_PROVIDER` / `CODOC_EMBEDDER_MODEL` | `sentence-transformers` / `all-MiniLM-L6-v2` | embedder (dedup/similarity) |
 | `COCOINDEX_DB` / `CODOC_LANCE_PATH` | `.codoc/cocoindex.db` / `.codoc/lancedb` | index state paths (auto-set) |
 | `CODOC_LOG_PROMPTS` | — | `1` → log LLM prompt+response to stderr |
+| `CODOC_SEMANTIC_DEDUP` | — | `1` → enable D1 embedding near-duplicate title dedup in Loop A (off by default; needs a corpus-tuned threshold) |
 | `CODOC_EPOCH_ORIGIN` | `interactive` | `loop_b` marks an agent-owned epoch |
 | `CODOC_NO_STOP_REFLECT` | — | disable the Stop-hook recovery reflection |
 

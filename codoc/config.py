@@ -358,6 +358,25 @@ def embed(texts: list[str], config: EmbedderConfig | None = None) -> list[list[f
         raise ValueError(f"Unknown embedder provider: {config.provider!r}")
 
 
+def make_embedder(config: EmbedderConfig | None = None):
+    """Return a WARM embed callable ``(list[str]) -> list[list[float]]`` that loads
+    its model ONCE, so repeated ``encode`` calls within a single pass don't reload
+    it (unlike :func:`embed`, which rebuilds the model every call). Used by the
+    opt-in semantic title dedup (D1), which embeds existing titles + candidates in
+    the same pass. Raises ImportError when the provider's package is missing — the
+    caller is expected to degrade gracefully (semantic dedup simply stays off)."""
+    if config is None:
+        config = get_embedder_config()
+    if config.provider == "sentence-transformers":
+        from sentence_transformers import SentenceTransformer
+
+        model = SentenceTransformer(config.model)
+        return lambda texts: model.encode(list(texts)).tolist()
+    if config.provider == "openai":
+        return lambda texts: _embed_openai(list(texts), config)
+    raise ValueError(f"Unknown embedder provider: {config.provider!r}")
+
+
 def _embed_sentence_transformers(texts: list[str], config: EmbedderConfig) -> list[list[float]]:
     try:
         from sentence_transformers import SentenceTransformer

@@ -35,14 +35,29 @@ export interface FileEntry {
 export interface FeatureMeta {
     title: string;
     parent_id: string | null;
+    // A1: the authoritative named lifecycle state (planned|active|retired).
+    // Optional so older sidecars (which carried only `realized`) still parse.
+    lifecycle?: FeatureLifecycle;
     // Optional for backward compat — sidecar < v3 has no realization bit (treat
-    // absent as realized=true so old trees render normally).
+    // absent as realized=true so old trees render normally). Derived view of
+    // `lifecycle`; prefer `lifecycle` for new code.
     realized?: boolean;
     // v5: a derived one-line pitch (first sentence of the description, refs
     // flattened, else the title). Python derives it; the TS side only reads it.
     // Optional so older (< v5) sidecars still parse.
     pitch?: string;
 }
+
+/** A1: the named, persistent lifecycle state on a feature. */
+export type FeatureLifecycle = 'planned' | 'active' | 'retired';
+
+/** The single mid-flight phase per feature (Proposal B `feature_phase` slice):
+ *  the one place "where is this feature in its lifecycle?" is named, from which
+ *  holds / drift / resolution are derived. `synced` features are absent (no dot).
+ *  Doc-wins is applied at projection time (a held feature reads drafting/queued,
+ *  never drifted/divergent). */
+export type FeaturePhase =
+    | 'retired' | 'drafting' | 'queued' | 'divergent' | 'drifted' | 'planned';
 
 export interface FeatureEdge {
     to: string;
@@ -172,6 +187,9 @@ export interface SidecarData {
     // features whose surfaced proposal is still pending. Faithful realizations are
     // absent (their badge just clears).
     feature_resolution?: Record<string, string>;
+    // Proposal B: the SINGLE mid-flight projection — feature_id → phase. The one
+    // source the slices above are thin views of; `synced` features are absent.
+    feature_phase?: Record<string, FeaturePhase>;
 }
 
 /** The derived kind hint for a feature, if any (v5). Suppressed/retired tags are
@@ -247,9 +265,28 @@ export function proposalForFeature(sidecar: SidecarData, featureId: string): Fea
     return sidecar.proposals?.by_feature[featureId];
 }
 
-/** True when the feature is an accepted plan placeholder with no code yet. */
+/** True when the feature is an accepted plan placeholder with no code yet.
+ *  Prefers the A1 named `lifecycle`; falls back to the legacy `realized` view for
+ *  sidecars written before A1. */
 export function isUnrealized(sidecar: SidecarData, featureId: string): boolean {
-    return sidecar.features[featureId]?.realized === false;
+    const meta = sidecar.features[featureId];
+    if (meta?.lifecycle) return meta.lifecycle === 'planned';
+    return meta?.realized === false;
+}
+
+/** A1: the named lifecycle state for a feature (planned|active|retired). Falls
+ *  back to deriving it from the legacy `realized` view for pre-A1 sidecars. */
+export function lifecycleForFeature(sidecar: SidecarData, featureId: string): FeatureLifecycle {
+    const meta = sidecar.features[featureId];
+    if (meta?.lifecycle) return meta.lifecycle;
+    return meta?.realized === false ? 'planned' : 'active';
+}
+
+/** Proposal B: the single mid-flight phase for a feature, if any. `undefined`
+ *  means `synced` (the common case) — no dot. Holds / drift / resolution are
+ *  thin views of this same projection. */
+export function phaseForFeature(sidecar: SidecarData, featureId: string): FeaturePhase | undefined {
+    return sidecar.feature_phase?.[featureId];
 }
 
 /** Look up all feature entries for a given repo-relative file path. */

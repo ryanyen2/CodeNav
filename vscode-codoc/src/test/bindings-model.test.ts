@@ -9,6 +9,9 @@ import {
     kindForFeature,
     seeAlsoForFeature,
     driftForFeature,
+    isUnrealized,
+    lifecycleForFeature,
+    phaseForFeature,
 } from '../state/bindings-model';
 
 // The TS side only READS the pitch (Python derives it). These tests pin the
@@ -128,5 +131,56 @@ describe('sidecar v5 / drift (feature_drift)', () => {
         };
         expect(legacy.feature_drift).toBeUndefined();
         expect(driftForFeature(legacy, 'f-a')).toBeUndefined();
+    });
+});
+
+describe('A1 lifecycle + Proposal B feature_phase', () => {
+    it('lifecycleForFeature prefers the named state, falls back to realized', () => {
+        const sidecar: SidecarData = {
+            ...emptySidecar(),
+            features: {
+                'f-plan': { title: 'Plan', parent_id: null, lifecycle: 'planned' },
+                'f-act': { title: 'Active', parent_id: null, lifecycle: 'active' },
+                // pre-A1 meta: only the legacy `realized` view present.
+                'f-legacy-plan': { title: 'Legacy plan', parent_id: null, realized: false },
+                'f-legacy-act': { title: 'Legacy active', parent_id: null },
+            },
+        };
+        expect(lifecycleForFeature(sidecar, 'f-plan')).toBe('planned');
+        expect(lifecycleForFeature(sidecar, 'f-act')).toBe('active');
+        expect(lifecycleForFeature(sidecar, 'f-legacy-plan')).toBe('planned');
+        expect(lifecycleForFeature(sidecar, 'f-legacy-act')).toBe('active');
+    });
+
+    it('isUnrealized reads the named lifecycle when present', () => {
+        const sidecar: SidecarData = {
+            ...emptySidecar(),
+            features: {
+                'f-plan': { title: 'Plan', parent_id: null, lifecycle: 'planned' },
+                'f-act': { title: 'Active', parent_id: null, lifecycle: 'active' },
+            },
+        };
+        expect(isUnrealized(sidecar, 'f-plan')).toBe(true);
+        expect(isUnrealized(sidecar, 'f-act')).toBe(false);
+    });
+
+    it('phaseForFeature surfaces the projection; synced (absent) is undefined', () => {
+        const sidecar: SidecarData = {
+            ...emptySidecar(),
+            feature_phase: { 'f-q': 'queued', 'f-d': 'drifted' },
+        };
+        expect(phaseForFeature(sidecar, 'f-q')).toBe('queued');
+        expect(phaseForFeature(sidecar, 'f-d')).toBe('drifted');
+        expect(phaseForFeature(sidecar, 'f-synced')).toBeUndefined();
+    });
+
+    it('the slices are optional — a pre-A1/B sidecar still parses', () => {
+        const legacy: SidecarData = {
+            version: 4, by_feature: {}, by_file: {},
+            features: { 'f-a': { title: 'Legacy', parent_id: null } },
+        };
+        expect(legacy.feature_phase).toBeUndefined();
+        expect(phaseForFeature(legacy, 'f-a')).toBeUndefined();
+        expect(lifecycleForFeature(legacy, 'f-a')).toBe('active');
     });
 });

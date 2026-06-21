@@ -14,6 +14,7 @@
  * The decl-line regex is the SAME shape the existing code-lens / pending-code decorations
  * use (decoration.ts:183, code-lens.ts:30), so the bridge lights the same lines those do.
  */
+import { symbolLeaf } from './registry-model';
 
 /** A binding anchor as it rides in the sidecar (`by_feature` / `by_file`). Only the symbol
  *  path matters here; the file is the join key the host already has. */
@@ -23,19 +24,36 @@ export interface BridgeBinding {
     symbol: string;
 }
 
-/** A declaration line in a source file: the matched declared name + its 0-based line. */
+/** A declaration line in a source file: the matched declared name, its 0-based
+ *  line, and its `qualified` nesting path (`Class.method`) reconstructed from
+ *  indentation. `qualified` is what disambiguates two same-leaf decls (e.g. `run`
+ *  in two classes) so they don't spark each other (§6 fix). */
 export interface DeclLine {
     name: string;
     line: number;
+    /** The nesting path (`Class.method`) from indentation. Always set by
+     *  `declLines`; optional so a hand-built decl (or an older caller) without it
+     *  falls back to leaf matching. */
+    qualified?: string;
 }
 
 /** The leaf (actually-declared) name of a binding symbol path. `file.py::Class.method`
- *  → `method`; `file.py::func` → `func`; a `__module__` anchor → '' (file-level, no decl). */
+ *  → `method`; `file.py::func` → `func`; a `__module__` anchor → '' (file-level, no decl).
+ *  Wraps the canonical `symbolLeaf` (registry-model) — same `::`/`.` rule — adding only the
+ *  file-level sentinel → '' mapping, per the "wrap this, not fork it" convention. */
 export function bindingLeaf(symbol: string): string {
-    const afterFile = symbol.includes('::') ? symbol.split('::').pop()! : symbol;
-    const leaf = afterFile.includes('.') ? afterFile.split('.').pop()! : afterFile;
+    const leaf = symbolLeaf(symbol);
     if (leaf === '__module__' || leaf === '<module>' || leaf === '‹module›') return '';
     return leaf;
+}
+
+/** The qualified path of a binding symbol path = everything after the `file::`
+ *  prefix (`m.py::A.run` → `A.run`; `m.py::run` → `run`). The exact-match key used
+ *  to disambiguate same-leaf decls in `featureIdsForChangedLines`. */
+export function symbolQualified(symbol: string): string {
+    const after = symbol.split('::', 2)[1] ?? symbol;
+    if (after === '__module__' || after === '<module>' || after === '‹module›') return '';
+    return after;
 }
 
 /** The primary (highest-weight) binding of a feature = the FIRST entry. The sidecar emits
@@ -71,10 +89,19 @@ const DECL_NAME_RE = /(?:def |class |function |async def )\s*(\w+)/;
  *  implicated leaves; code→doc maps an edited line back to the decl that owns it. */
 export function declLines(lines: readonly string[]): DeclLine[] {
     const out: DeclLine[] = [];
+    // Indentation stack of enclosing decls → reconstruct each decl's qualified path
+    // (`Class.method`), mirroring the indexer's symbol_path. A new decl pops every
+    // entry at the same or deeper indent (it has left those scopes) before nesting.
+    const stack: { indent: number; name: string }[] = [];
     for (let i = 0; i < lines.length; i++) {
         if (!DECL_RE.test(lines[i])) continue;
         const name = (DECL_NAME_RE.exec(lines[i]) ?? [])[1];
-        if (name) out.push({ name, line: i });
+        if (!name) continue;
+        const indent = lines[i].length - lines[i].replace(/^\s*/, '').length;
+        while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+        const qualified = [...stack.map(s => s.name), name].join('.');
+        out.push({ name, line: i, qualified });
+        stack.push({ indent, name });
     }
     return out;
 }
@@ -98,12 +125,18 @@ export function featureIdsForChangedLines(
     changedLines: readonly number[],
 ): string[] {
     if (!fileEntries.length || !decls.length || !changedLines.length) return [];
-    // name → owning feature ids (a decl can belong to several features).
+    // Two indices: the precise QUALIFIED path (`Class.method`) and the bare leaf.
+    // Qualified is tried first so two same-leaf decls (e.g. `run` in two classes)
+    // map to their OWN feature instead of sparking each other (§6 fix); the leaf
+    // index is the fallback for bindings/decls without a qualified path (an
+    // authored partial ref, or a decl scan that didn't reconstruct nesting).
+    const byQualified = new Map<string, Set<string>>();
     const byName = new Map<string, Set<string>>();
     for (const e of fileEntries) {
         const leaf = bindingLeaf(e.symbol);
-        if (!leaf) continue;
-        (byName.get(leaf) ?? byName.set(leaf, new Set()).get(leaf)!).add(e.feature_id);
+        if (leaf) (byName.get(leaf) ?? byName.set(leaf, new Set()).get(leaf)!).add(e.feature_id);
+        const q = symbolQualified(e.symbol);
+        if (q) (byQualified.get(q) ?? byQualified.set(q, new Set()).get(q)!).add(e.feature_id);
     }
     // decls sorted ascending by line so "nearest enclosing" is the last one ≤ the change.
     const sorted = [...decls].sort((a, b) => a.line - b.line);
@@ -114,7 +147,12 @@ export function featureIdsForChangedLines(
             if (d.line <= ln) owner = d; else break;
         }
         if (!owner) continue;
-        for (const fid of byName.get(owner.name) ?? []) out.add(fid);
+        // Prefer an exact qualified match; only fall back to the leaf when the
+        // qualified path resolves nothing (so a precise binding wins over a
+        // coincidental same-leaf one).
+        const exact = owner.qualified ? byQualified.get(owner.qualified) : undefined;
+        const fids = exact ?? byName.get(owner.name);
+        for (const fid of fids ?? []) out.add(fid);
     }
     return [...out];
 }
@@ -152,6 +190,28 @@ export function userTouchedFids(
         const agentOwned = ph === 'editing' || ph === 'reflecting' || opts.held.has(fid);
         return !agentOwned;
     });
+}
+
+/**
+ * §A.6 dismiss-detection (P2 fix 3, §6 hardening). A bridge-opened file counts as a real
+ * DISMISSAL only when it has left the set of OPEN TABS entirely — NOT merely the *visible*
+ * set. A tab switch or editor-group reshuffle hides a bridge-opened file (drops it from
+ * `visibleTextEditors`) without closing it; reading that as a dismissal would permanently
+ * disable auto-open for the session on a benign interaction. Passing the open-TAB set (which
+ * includes hidden-but-open tabs) instead distinguishes a true close from a switch.
+ *
+ * Returns the bridge-opened files that are truly `closed` (caller forgets them) and whether
+ * any close happened (`dismissed` → caller persists the dismissal). Pure.
+ */
+export function bridgeDismissals(
+    openedByBridge: Iterable<string>,
+    openTabFiles: ReadonlySet<string>,
+): { closed: string[]; dismissed: boolean } {
+    const closed: string[] = [];
+    for (const f of openedByBridge) {
+        if (!openTabFiles.has(f)) closed.push(f);
+    }
+    return { closed, dismissed: closed.length > 0 };
 }
 
 /** A trailing-edge debounce gate (spec A.1/A.5): coalesce a burst of keystrokes into one

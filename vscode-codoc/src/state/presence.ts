@@ -124,17 +124,6 @@ export function deriveAgentPresences(
     return [{ role, name: roleName(role), fid, phase: p }];
 }
 
-/** Cap the avatar stack at `cap` (§B.1): show the first `cap`, report the overflow as `+N`.
- *  Pure — unit-tested. */
-export function agentStack<T>(agents: readonly T[], cap = 3): { visible: T[]; overflow: number } {
-    return { visible: agents.slice(0, cap), overflow: Math.max(0, agents.length - cap) };
-}
-
-/** The hover tooltip for a multi-agent stack (§B.4): `Claude, Codex working`. */
-export function stackTooltip(names: readonly string[]): string {
-    return names.length ? `${names.join(', ')} working` : '';
-}
-
 /** Off-screen clamp (§B.5): when the target heading is above/below the doc viewport, pin the
  *  avatar to the nearer edge and report which chevron (↑ above / ↓ below) to show. `pad` keeps
  *  it off the very edge. Pure — unit-tested.

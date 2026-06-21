@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-    morphLifecycle, popLanded, spinReject, launchPlane, sparkIn, saveShimmer, collapseRowOut,
+    popLanded, spinReject, launchPlane, sparkIn, saveShimmer, collapseRowOut,
     glideTo, presenceTrail, spinForever,
 } from '../webview/motion';
 
@@ -36,15 +36,6 @@ function setReduceMotion(on: boolean): void {
 describe('P0 lifecycle motion — reduced-motion gate (§C.5)', () => {
     beforeEach(() => setReduceMotion(true));
     afterEach(() => { (globalThis as { document?: unknown }).document = orig; });
-
-    it('morphLifecycle jumps both glyphs to their final frame, no tween', () => {
-        const from = fakeEl(), to = fakeEl();
-        morphLifecycle(from as never, to as never);
-        expect(from.style.opacity).toBe('0');
-        expect(from.style.transform).toBe('scale(0.6)');
-        expect(to.style.opacity).toBe('1');
-        expect(to.style.transform).toBe('none');
-    });
 
     it('popLanded shows the final frame (opacity 1, no transform) with no bounce', () => {
         const el = fakeEl();

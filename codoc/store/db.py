@@ -17,7 +17,7 @@ from pathlib import Path
 
 from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp
-from codoc.model.feature import Feature
+from codoc.model.feature import Feature, Lifecycle
 from codoc.model.hlc import HLC
 
 _SCHEMA = """
@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS features (
     title       TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     parent_id   TEXT,
+    -- `lifecycle` (planned|active|retired) is the authoritative named state
+    -- (Proposal A1). `retired`/`realized` are kept in sync as derived columns so
+    -- a reader from before A1 still sees correct values.
+    lifecycle   TEXT NOT NULL DEFAULT 'active',
     retired     INTEGER NOT NULL DEFAULT 0,
     realized    INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
@@ -96,6 +100,20 @@ class Store:
             self.conn.execute(
                 "ALTER TABLE features ADD COLUMN realized INTEGER NOT NULL DEFAULT 1"
             )
+            cols.add("realized")
+        if "lifecycle" not in cols:
+            # Proposal A1: add the authoritative named state column, then backfill
+            # it from the legacy bool pair so existing rows get a correct lifecycle
+            # without a data-loss window (retired dominates; unrealized → planned).
+            self.conn.execute(
+                "ALTER TABLE features ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active'"
+            )
+            self.conn.execute(
+                "UPDATE features SET lifecycle = CASE"
+                " WHEN retired=1 THEN 'retired'"
+                " WHEN realized=0 THEN 'planned'"
+                " ELSE 'active' END"
+            )
         bcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(bindings)")}
         if "types_hash" not in bcols:
             # Default '' ⇒ pre-existing bindings have no recorded AST shape; rename
@@ -133,12 +151,13 @@ class Store:
     def upsert_feature(self, f: Feature) -> None:
         self.conn.execute(
             """
-            INSERT INTO features (id, title, description, parent_id, retired, realized, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO features (id, title, description, parent_id, lifecycle, retired, realized, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title,
                 description=excluded.description,
                 parent_id=excluded.parent_id,
+                lifecycle=excluded.lifecycle,
                 retired=excluded.retired,
                 realized=excluded.realized,
                 updated_at=excluded.updated_at
@@ -148,6 +167,9 @@ class Store:
                 f.title,
                 f.description,
                 f.parent_id,
+                f.lifecycle.value,
+                # retired/realized are derived (computed) views of lifecycle, kept
+                # in the row for pre-A1 back-compat readers.
                 int(f.retired),
                 int(f.realized),
                 f.created_at.to_str(),
@@ -180,16 +202,20 @@ class Store:
         return [_row_to_feature(r) for r in rows]
 
     def retire_feature(self, feature_id: str) -> None:
+        # lifecycle is authoritative; retired=1 kept in sync for back-compat readers.
         self.conn.execute(
-            "UPDATE features SET retired=1, updated_at=? WHERE id=?",
+            "UPDATE features SET lifecycle='retired', retired=1, updated_at=? WHERE id=?",
             (HLC.now().to_str(), feature_id),
         )
         self.conn.commit()
 
     def mark_realized(self, feature_id: str) -> None:
-        """Flip a plan placeholder to realized (code now binds to it)."""
+        """Promote a plan placeholder to ``active`` (code now binds to it) — the
+        named planned→active lifecycle transition. Guarded to ``planned`` rows so
+        it can never resurrect a retired feature; ``realized=1`` is kept in sync."""
         self.conn.execute(
-            "UPDATE features SET realized=1, updated_at=? WHERE id=?",
+            "UPDATE features SET lifecycle='active', realized=1, updated_at=?"
+            " WHERE id=? AND lifecycle='planned'",
             (HLC.now().to_str(), feature_id),
         )
         self.conn.commit()
@@ -220,6 +246,22 @@ class Store:
             "DELETE FROM bindings WHERE file=? AND symbol_path=?", (file, symbol_path)
         )
         self.conn.commit()
+
+    def backfill_types_hash(self, file: str, symbol_path: str, types_hash: str) -> bool:
+        """D4: record a binding's AST-shape hash when it was attributed WITHOUT one
+        (a legacy row, or an MCP/propose bind that carried no hash). Only fills an
+        EMPTY ``types_hash`` and only with a non-empty value, so it never overwrites
+        a known shape — pure index maintenance, no event. Returns True if a row was
+        filled. Without this, a binding that never got a ``types_hash`` would
+        silently disable rename detection forever."""
+        if not types_hash:
+            return False
+        cur = self.conn.execute(
+            "UPDATE bindings SET types_hash=? WHERE file=? AND symbol_path=? AND types_hash=''",
+            (types_hash, file, symbol_path),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def bindings_for_feature(self, feature_id: str) -> list[Binding]:
         rows = self.conn.execute(
@@ -348,13 +390,20 @@ class Store:
 # Row ↔ model
 # ---------------------------------------------------------------------------
 def _row_to_feature(r: sqlite3.Row) -> Feature:
+    keys = r.keys()
+    # Prefer the authoritative lifecycle column; fall back to the legacy bool pair
+    # for a row written before the A1 migration ran (tolerant read).
+    if "lifecycle" in keys and r["lifecycle"]:
+        lifecycle = Lifecycle(r["lifecycle"])
+    else:
+        from codoc.model.feature import _lifecycle_from_bools
+        lifecycle = _lifecycle_from_bools(bool(r["retired"]), bool(r["realized"]))
     return Feature(
         id=r["id"],
         title=r["title"],
         description=r["description"],
         parent_id=r["parent_id"],
-        retired=bool(r["retired"]),
-        realized=bool(r["realized"]),
+        lifecycle=lifecycle,
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )

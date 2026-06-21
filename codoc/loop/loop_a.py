@@ -24,7 +24,14 @@ from codoc.loop.edits import (
 from codoc.loop.classify import suppressed_by_hold
 from codoc.loop.divergence import Divergence, Realization, classify_realization
 from codoc.loop.diff import ChangeSet, ChunkRef, compute_changeset
+from codoc.loop.phase import is_held
 from codoc.loop.subtree import select_relevant_subtree
+from codoc.loop.title_dedup import (
+    DEFAULT_THRESHOLD,
+    SemanticTitleMatcher,
+    make_loop_embedder,
+    semantic_dedup_enabled,
+)
 from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
 from codoc.store.db import Store, open_store
 
@@ -37,11 +44,12 @@ def _detect_relocations(
 ) -> list[tuple[ChunkRef, ChunkRef, str]]:
     """Pair removed↔added chunks that are the same code relocated.
 
-    A *move* is an exact content match (``tokens_hash``); a *rename* is an
-    AST-shape match (``types_hash``) in the same file, required to be 1:1 so an
-    incidental shape collision never mis-pairs unrelated symbols. Only removed
-    chunks that were actually bound (in ``removed_owner``) are candidates, since
-    the point is to carry an existing feature attribution across.
+    A *move* is an exact content match (``tokens_hash``, any file); a *rename* is
+    an AST-shape match (``types_hash``) — first same-file (pass 2), then cross-file
+    (pass 3, D3) when the shape is *globally 1:1-unique* among the still-unmatched
+    chunks, so an incidental shape collision never mis-pairs unrelated symbols.
+    Only removed chunks that were actually bound (in ``removed_owner``) are
+    candidates, since the point is to carry an existing feature attribution across.
     Returns ``(added, removed, kind)`` triples.
     """
     added = [a for a in cs.added]
@@ -81,6 +89,46 @@ def _detect_relocations(
         if len(cands) == 1 and add_typ_count[a.types_hash] == 1:
             cand = cands[0]
             used_removed.add((cand.file, cand.symbol_path))
+            matched_added.add((a.file, a.symbol_path))
+            out.append((a, cand, "rename"))
+
+    # Pass 3 — cross-file rename (D3): same AST-shape across DIFFERENT files. A
+    # cross-file rename changes name + file + content at once, so it falls through
+    # passes 1–2; the LLM would then re-place it as a NEW node, dropping the
+    # attribution. We recover it ONLY when the shape is GLOBALLY 1:1-unique among
+    # the still-unmatched chunks — exactly one unmatched add and exactly one
+    # unmatched bound-removed carry that ``types_hash``. That strict uniqueness gate
+    # is what keeps a common/trivial shape (shared by many chunks) from mis-pairing
+    # unrelated symbols across the repo (the "moderate risk" the design flagged).
+    rem_added = [a for a in added
+                 if (a.file, a.symbol_path) not in matched_added and a.types_hash]
+    # Pairing carries attribution, so only BOUND removed chunks (`removed`) are
+    # candidates — but UNIQUENESS must be judged over the FULL change set
+    # (`cs.removed`, bound + unbound). An unbound removed chunk that shares the
+    # shape still makes it ambiguous; counting only bound removals here would let a
+    # bound removal be mis-paired with an added chunk that is really the rename of
+    # the unbound one — the exact false-attribution the gate exists to prevent.
+    rem_removed = [c for c in removed
+                   if (c.file, c.symbol_path) not in used_removed and c.types_hash]
+    rem_add_count = Counter(a.types_hash for a in rem_added)
+    rem_rem_count = Counter(
+        c.types_hash for c in cs.removed
+        if (c.file, c.symbol_path) not in used_removed and c.types_hash
+    )
+    for a in rem_added:
+        if (a.file, a.symbol_path) in matched_added:
+            continue
+        if rem_add_count[a.types_hash] != 1 or rem_rem_count[a.types_hash] != 1:
+            continue  # ambiguous shape — fall through to the LLM rather than guess
+        cand = next(
+            (c for c in rem_removed
+             if c.types_hash == a.types_hash
+             and (c.file, c.symbol_path) not in used_removed),
+            None,
+        )
+        if cand:
+            used_removed.add((cand.file, cand.symbol_path))
+            matched_added.add((a.file, a.symbol_path))
             out.append((a, cand, "rename"))
 
     return out
@@ -113,6 +161,18 @@ def _pending_coverage(store: Store) -> tuple[set[tuple[str, str]], set[str]]:
 
 def _norm_title(t: str | None) -> str:
     return re.sub(r"\s+", " ", (t or "").strip().lower())
+
+
+def _live_title_parent_keys(feats) -> set[tuple[str, str | None]]:
+    """``(normalized_title, parent_id)`` for every live feature — the soft
+    feature-identity key (D2).
+
+    ``UNIQUE(file, symbol_path)`` structurally dedups *bound* nodes but is silent
+    on binding-LESS ones (org-pass theme parents, plan placeholders), so the LLM /
+    org pass can re-propose a same-named sibling under the same parent. This set
+    lets the apply loop recognise that collision and FOLD the duplicate instead of
+    minting it."""
+    return {(_norm_title(f.title), f.parent_id) for f in feats if not f.retired}
 
 
 def _unbound_features_by_title(feats, bound_ids: set[str]) -> dict[str, str]:
@@ -259,7 +319,9 @@ def _compute_drift(
     out: dict[str, str] = {}
 
     def _realized_live(fid: str) -> bool:
-        if not fid or fid in held:
+        # doc-wins: a held feature is never badged drifted (D5 — same is_held
+        # predicate as the emptied detection and suppressed_by_hold).
+        if is_held(fid, held):
             return False
         f = store.get_feature(fid)
         return bool(f and f.realized and not f.retired)
@@ -376,6 +438,13 @@ def apply_changeset(
     # (those owning a binding in scope) have their entry refreshed; out-of-scope
     # badges survive. None ⇒ a full pass that examined every file ⇒ full-replace.
     file_scope: set[str] | None = None,
+    # D1 — semantic title dedup (opt-in). When ``embed_fn`` is given, an ADD_NODE
+    # whose title is embedding-close (≥ ``semantic_threshold``) to an adoptable
+    # unbound feature folds into it instead of minting a paraphrased duplicate.
+    # None ⇒ exact-string dedup only (today's behavior); the run entrypoints pass a
+    # warm embedder iff CODOC_SEMANTIC_DEDUP is set. Tests inject a deterministic fake.
+    embed_fn=None,
+    semantic_threshold: float = DEFAULT_THRESHOLD,
 ) -> LoopAResult:
     held = held or set()
     caused_by_map = caused_by_map or {}
@@ -514,7 +583,9 @@ def apply_changeset(
     #    so it is never a retire candidate (guards the plan→implement window).
     emptied = {
         fid for fid in set(removed_owner.values())
-        if fid not in held  # doc-wins: a held feature is being re-specified, not emptied
+        # doc-wins: a held feature is being re-specified, not emptied (D5 — the
+        # single is_held predicate shared by all three loop hold-guards).
+        if not is_held(fid, held)
         and not store.bindings_for_feature(fid)
         and (f := store.get_feature(fid)) and not f.retired and f.realized
     }
@@ -617,7 +688,19 @@ def apply_changeset(
     #    (title) already names a live, still-unbound feature is the SAME concept
     #    (e.g. a hand-added empty node the model re-proposed) — rewrite it to an
     #    ATTACH onto that node so we never mint a duplicate-titled sibling.
-    unbound_titles = _unbound_features_by_title(feats, store.bound_feature_ids())
+    bound_ids_now = store.bound_feature_ids()
+    unbound_titles = _unbound_features_by_title(feats, bound_ids_now)
+    # D1 — semantic dedup (opt-in): a matcher over the SAME adoptable unbound nodes,
+    # used only as the fallback when the exact-string title match misses.
+    matcher = None
+    if embed_fn is not None:
+        unbound_pairs = [(f.title, f.id) for f in feats
+                         if not f.retired and f.id not in bound_ids_now]
+        matcher = SemanticTitleMatcher(embed_fn, unbound_pairs, threshold=semantic_threshold)
+    # D2 — feature-identity guard: the soft-unique (normalized_title, parent_id)
+    # key for every live node, grown as this batch emits ADDs so two identical
+    # binding-less ADDs in one LLM response also collapse to one.
+    live_title_parent = _live_title_parent_keys(feats)
     for op in ops:
         # The temporal index diff (run_loop_a) is twitchy — a feature can look
         # "emptied" mid-edit and rebind a save later. Never let that path surface a
@@ -633,14 +716,30 @@ def apply_changeset(
             continue
         if op.kind is NodeOpKind.ADD_NODE and op.bindings:
             existing = unbound_titles.get(_norm_title(op.title))
+            rationale = "dedup: bound to existing same-title node"
+            if not existing and matcher is not None:
+                # D1: exact match missed — try a semantic (paraphrase) match.
+                existing = matcher.best_match(op.title)
+                if existing:
+                    rationale = "dedup: bound to existing near-duplicate-title node (semantic)"
             if existing:
                 dedup = NodeOp(kind=NodeOpKind.ATTACH, feature_id=existing,
-                               bindings=op.bindings,
-                               rationale="dedup: bound to existing same-title node")
+                               bindings=op.bindings, rationale=rationale)
                 apply_op(dedup, store, source=source, applied=True, fp_lookup=fp,
                          th_lookup=th, caused_by=_cause(dedup))
                 result.auto["attach"] = result.auto.get("attach", 0) + 1
                 continue
+        # D2 — feature-identity guard for binding-LESS ADDs: a new theme parent /
+        # placeholder whose (normalized title, parent) already names a live feature
+        # is that same node (the org pass re-proposing it, or a duplicate within
+        # this batch). Fold it — minting would create the duplicate the UNIQUE
+        # binding constraint can't catch, since the node carries no binding.
+        if op.kind is NodeOpKind.ADD_NODE and not op.bindings:
+            key = (_norm_title(op.title), op.parent_id)
+            if key in live_title_parent:
+                result.auto["dedup_node"] = result.auto.get("dedup_node", 0) + 1
+                continue
+            live_title_parent.add(key)
         # An AMEND (applied small one, or a proposed larger one) means the prose
         # for this feature was addressed this pass → it is no longer `questioned`.
         if op.kind is NodeOpKind.AMEND and op.feature_id:
@@ -733,6 +832,11 @@ def run_loop_a(
 
     cs = compute_changeset(root_dir, codoc_dir, file_scope=file_scope)
     held, cb_map, default_cb = _doc_intent(codoc_dir)
+    # Only pay the (heavy) embedder model load when there are ADDITIONS that could
+    # need semantic dedup — a pure modify/remove/refresh pass never mints an
+    # ADD_NODE, so it never consults the matcher (the common watch-save case).
+    embed_fn = (make_loop_embedder()
+                if cs.added and semantic_dedup_enabled() else None)
     with open_store(codoc_dir) as store:
         update_graph(store, cs.rows, cs.touched_files())
         # Temporal index diff: never retire (a mid-edit "emptied" can rebind on the
@@ -741,7 +845,8 @@ def run_loop_a(
                                  config=config, adopt_placeholders=adopt_placeholders,
                                  allow_retire=False, held=held,
                                  caused_by_map=cb_map, default_caused_by=default_cb,
-                                 codoc_dir=codoc_dir, file_scope=file_scope)
+                                 codoc_dir=codoc_dir, file_scope=file_scope,
+                                 embed_fn=embed_fn)
         from codoc.loop.status import refresh_status
 
         refresh_status(codoc_dir, store)
@@ -760,6 +865,25 @@ def _doc_intent(codoc_dir: str) -> tuple[set[str], dict[str, str], str]:
     cb_map = {d.feature_id: d.id for d in manifest if d.feature_id}
     default_cb = manifest[0].id if len(manifest) == 1 else ""
     return held, cb_map, default_cb
+
+
+def _backfill_types_hashes(store: Store, rows) -> int:
+    """D4: backfill ``types_hash`` on bound chunks attributed without an AST shape
+    (legacy rows, MCP/propose binds), reading the shape from the current index.
+    Idempotent (only fills empties) and event-free — so rename detection works on
+    the NEXT edit instead of staying permanently blind for those bindings. Returns
+    the number of bindings filled. Runs in the authoritative reconcile pass, which
+    already holds the full index ``rows``."""
+    row_th = {(r.file, r.symbol_path): r.types_hash for r in rows if r.types_hash}
+    if not row_th:
+        return 0
+    filled = 0
+    for b in store.all_bindings():
+        if not b.types_hash:
+            th = row_th.get((b.file, b.symbol_path))
+            if th and store.backfill_types_hash(b.file, b.symbol_path, th):
+                filled += 1
+    return filled
 
 
 def _state_changeset(rows, store: Store, file_scope: set[str] | None) -> ChangeSet:
@@ -823,7 +947,12 @@ def reconcile_drift(
     rows = read_all_chunks(codoc_dir, with_embeddings=False)
     held, cb_map, default_cb = _doc_intent(codoc_dir)
     with open_store(codoc_dir) as store:
+        _backfill_types_hashes(store, rows)
         cs = _state_changeset(rows, store, file_scope)
+        # Only pay the embedder model load when there are additions to dedup
+        # (built after the changeset, so a pure-drift pass skips it entirely).
+        embed_fn = (make_loop_embedder()
+                    if cs.added and semantic_dedup_enabled() else None)
         update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
         # Authoritative full-state reconciliation — the only pass allowed to raise
         # retires (a feature empty *in current state* genuinely lost its code) and
@@ -832,6 +961,7 @@ def reconcile_drift(
                                  config=config, adopt_placeholders=adopt_placeholders,
                                  allow_retire=True, amend_on_change=True, held=held,
                                  caused_by_map=cb_map, default_caused_by=default_cb,
-                                 codoc_dir=codoc_dir, file_scope=file_scope)
+                                 codoc_dir=codoc_dir, file_scope=file_scope,
+                                 embed_fn=embed_fn)
         refresh_status(codoc_dir, store)
         return result

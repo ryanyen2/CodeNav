@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from codoc.loop.diff import ChangeSet, ChunkRef
-from codoc.loop.loop_a import _state_changeset, apply_changeset
+from codoc.loop.loop_a import _backfill_types_hashes, _state_changeset, apply_changeset
 from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
@@ -211,19 +211,80 @@ def test_rename_relocates_binding_same_file(store):
     assert renamed is not None and renamed.feature_id == f.id
 
 
-def test_rename_not_matched_across_files(store):
-    """A types_hash match across DIFFERENT files is not a rename — fall through."""
+def test_backfill_types_hashes_fills_empty_only(store):
+    """D4: a binding attributed WITHOUT an AST shape (legacy / MCP / propose bind)
+    gets its ``types_hash`` backfilled from the live index, so rename detection
+    works on the next edit. Idempotent, and never overwrites a known shape."""
+    f = _feature(store, title="X")
+    store.upsert_binding(Binding(feature_id=f.id, file="a.py", symbol_path="a.py::g",
+                                 fingerprint="h", types_hash=""))        # no shape recorded
+    store.upsert_binding(Binding(feature_id=f.id, file="b.py", symbol_path="b.py::k",
+                                 fingerprint="h", types_hash="KNOWN"))   # already has one
+
+    rows = [SimpleNamespace(file="a.py", symbol_path="a.py::g", types_hash="SHAPE"),
+            SimpleNamespace(file="b.py", symbol_path="b.py::k", types_hash="OTHER")]
+
+    assert _backfill_types_hashes(store, rows) == 1                       # only the empty one
+    assert store.binding_at("a.py", "a.py::g").types_hash == "SHAPE"
+    assert store.binding_at("b.py", "b.py::k").types_hash == "KNOWN"      # never overwritten
+    assert _backfill_types_hashes(store, rows) == 0                       # idempotent
+
+
+def test_cross_file_rename_carries_attribution_when_shape_unique(store):
+    """D3: a GLOBALLY 1:1-unique AST-shape (types_hash) that moved to a DIFFERENT
+    file under a new name is a cross-file rename — the attribution is carried
+    deterministically (no LLM), recovering what would otherwise re-place as a new
+    node and drop the binding."""
     f = _feature(store, title="Owner")
     _bind(store, f.id, "a.py", "a.py::x", fp="H1")
     cs = ChangeSet(
         removed=[ChunkRef("a.py", "a.py::x", "H1", "", "SHAPE")],
         added=[ChunkRef("b.py", "b.py::y", "H2", "def y(): ...", "SHAPE")],
     )
-    res = apply_changeset(cs, store, propose=_propose([]))  # no neighbor, no LLM op
-    assert res.llm_called                                   # treated as a genuine add
-    # not silently bound to f by a (wrong) relocation; coverage proposes a home
-    assert store.binding_at("b.py", "b.py::y") is None
-    assert res.proposed and res.proposed[0].kind is NodeOpKind.ADD_NODE
+    res = apply_changeset(cs, store, propose=_raising)  # deterministic, no LLM
+    assert not res.llm_called
+    assert store.binding_at("a.py", "a.py::x") is None
+    moved = store.binding_at("b.py", "b.py::y")
+    assert moved is not None and moved.feature_id == f.id
+
+
+def test_cross_file_rename_skipped_when_shape_ambiguous(store):
+    """The cross-file rename gate is STRICT: when the same AST-shape is shared by
+    more than one unmatched chunk it is NOT a rename (it could mis-pair unrelated
+    symbols across the repo) — fall through to the LLM, never a blind relocation."""
+    f = _feature(store, title="Owner")
+    _bind(store, f.id, "a.py", "a.py::x", fp="H1")
+    # Two added chunks share SHAPE → not globally 1:1-unique → no cross-file pair.
+    cs = ChangeSet(
+        removed=[ChunkRef("a.py", "a.py::x", "H1", "", "SHAPE")],
+        added=[ChunkRef("b.py", "b.py::y", "H2", "def y(): ...", "SHAPE"),
+               ChunkRef("c.py", "c.py::z", "H3", "def z(): ...", "SHAPE")],
+    )
+    res = apply_changeset(cs, store, propose=_propose([]))
+    assert res.llm_called                                   # ambiguous → LLM decides
+    assert store.binding_at("b.py", "b.py::y") is None      # not silently bound
+    assert store.binding_at("c.py", "c.py::z") is None
+
+
+def test_cross_file_rename_gate_counts_unbound_removed_too(store):
+    """The uniqueness gate is judged over the FULL change set: an UNBOUND removed
+    chunk sharing the shape makes the pairing ambiguous, so a bound removal is NOT
+    mis-attributed to an added chunk that is really the rename of the unbound one.
+    (Regression — counting only bound removals let this false-attribution through.)"""
+    f = _feature(store, title="Owner")
+    _bind(store, f.id, "a.py", "a.py::x", fp="H1")          # bound, shape SHAPE
+    # b.py::y (unbound) also has SHAPE and is removed; c.py::z (added) has SHAPE.
+    cs = ChangeSet(
+        removed=[ChunkRef("a.py", "a.py::x", "H1", "", "SHAPE"),   # bound (feature f)
+                 ChunkRef("b.py", "b.py::y", "H2", "", "SHAPE")],  # UNBOUND, same shape
+        added=[ChunkRef("c.py", "c.py::z", "H3", "def z(): ...", "SHAPE")],
+    )
+    res = apply_changeset(cs, store, propose=_propose([]))
+    # Two removed chunks carry SHAPE → ambiguous → NOT a deterministic rename;
+    # f must NOT be silently attributed to c.py::z.
+    bound = store.binding_at("c.py", "c.py::z")
+    assert bound is None or bound.feature_id != f.id
+    assert res.llm_called
 
 
 # -----------------------------------------------------------------------
@@ -276,6 +337,44 @@ def test_add_node_same_title_as_unbound_node_attaches_not_duplicates(store):
     titles = [f.title for f in store.list_features()]
     assert titles.count("CLI argument parsing") == 1
     assert not res.proposed
+
+
+def test_binding_less_add_deduped_by_title_parent(store):
+    """D2 — feature-identity guard: a binding-LESS ADD_NODE whose (title, parent)
+    already names a live feature is folded, not re-proposed as a duplicate theme
+    parent (the UNIQUE binding constraint can't catch a binding-less duplicate)."""
+    parent = _feature(store, title="Subsystems")
+    _feature(store, title="Indexing", parent_id=parent.id)  # existing binding-less theme
+    cs = ChangeSet(added=[ChunkRef("idx.py", "idx.py::run", "h", "def run(): ...")])
+
+    # The org/LLM pass re-proposes the SAME theme parent (case-insensitive match).
+    res = apply_changeset(cs, store, propose=_propose([
+        NodeOp(kind=NodeOpKind.ADD_NODE, title="indexing", parent_id=parent.id),
+    ]))
+
+    assert res.auto.get("dedup_node") == 1
+    # No second "Indexing" exists or is pending.
+    assert [f.title for f in store.list_features()].count("Indexing") == 1
+    pending_add_titles = [(e.op.title or "").lower() for e in store.pending_events()
+                          if e.op.kind is NodeOpKind.ADD_NODE]
+    assert "indexing" not in pending_add_titles
+
+
+def test_binding_less_add_kept_when_parent_differs(store):
+    """The identity key includes the PARENT: a same-titled node under a DIFFERENT
+    parent is a distinct concept and is NOT folded."""
+    p1 = _feature(store, title="Backend")
+    p2 = _feature(store, title="Frontend")
+    _feature(store, title="Caching", parent_id=p1.id)
+    cs = ChangeSet(added=[ChunkRef("c.py", "c.py::cache", "h", "def cache(): ...")])
+
+    res = apply_changeset(cs, store, propose=_propose([
+        NodeOp(kind=NodeOpKind.ADD_NODE, title="Caching", parent_id=p2.id),  # different parent
+    ]))
+
+    assert res.auto.get("dedup_node") is None  # not folded — distinct (title, parent)
+    assert any(e.op.kind is NodeOpKind.ADD_NODE and e.op.title == "Caching"
+               for e in store.pending_events())
 
 
 def test_unrealized_placeholder_adopts_new_code(store):
