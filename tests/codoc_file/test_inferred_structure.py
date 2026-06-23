@@ -208,7 +208,7 @@ def test_sidecar_emits_kind_and_see_also_slices(store, tmp_path):
     write_tree(store, tmp_path)
     sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
 
-    assert sidecar["version"] == 5  # additive — no further bump
+    assert sidecar["version"] == 6  # v6 added the `blocks` slice (additive)
     assert sidecar["feature_kind"][theme.id] == "overview"
     assert sidecar["feature_kind"][bound.id] == "reference"
     assert sidecar["feature_see_also"][bound.id][0]["to"] == other.id

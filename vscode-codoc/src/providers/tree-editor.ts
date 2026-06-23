@@ -28,10 +28,10 @@ import {
     CommentThread, commentNoteText, reconcileComments, reanchorComments,
     stripOrphanComments,
 } from '../state/comment-model';
-import { directedEdges, agentAmendsByFeature, heldFeatures, heldDetail, divergentFeatures } from '../state/bindings-model';
+import { directedEdges, agentAmendsByFeature, heldFeatures, heldDetail, divergentFeatures, blocksForFeature, mintedByLocalId } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
-    annotationsForSettle, appendCancellation, appendSteer, setDrafts,
+    annotationsForSettle, appendCancellation, appendSteer, setDrafts, appendBlockEdit,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -194,6 +194,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await this.resolveComment(document, msg.doc, msg.id);
                     post();
                     return;
+                case 'block-edit':
+                    // v6: the webview edited a typed-media block (diagram/latex/…). Hand
+                    // it to Loop B's `lower` dispatch through edits.json. A pure move
+                    // (ord-only) never sends this — only content edits / adds / removes.
+                    await this.handleBlockEdit(document, msg.block);
+                    post();  // reflect the queued directive / dropped projection
+                    return;
                 case 'set-pref':
                     await this.setPref(document, msg.pref, msg.value);
                     // No payload repost needed — the webview already applied it
@@ -240,6 +247,23 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     //    on edits.json (the same channel as authorship annotations); the thread is
     //    marked `sent` (handed off) and lingers in the UI until the realize cycle
     //    settles. The webview owns the anchor mark; the host owns the thread store.
+
+    /** Hand a typed-media block edit to Loop B (v6). Keyed by the STABLE block id
+     *  (KTD8), so a move is never a block-edit and a delete+undo nets to nothing.
+     *  Loop B dispatches `lower` by the block's declared capability. */
+    private async handleBlockEdit(
+        document: vscode.TextDocument,
+        block: { block_id: string; feature_id: string; kind: string;
+                 action: 'edit' | 'add' | 'remove'; content?: string; prev_content?: string },
+    ): Promise<void> {
+        if (!block?.block_id || !block.feature_id || !block.kind) return;
+        const file = appendBlockEdit(await this.readEditsFile(document), {
+            block_id: block.block_id, feature_id: block.feature_id, kind: block.kind,
+            action: block.action, content: block.content ?? '',
+            prev_content: block.prev_content ?? '', ts: Date.now(),
+        });
+        await this.writeEditsFile(document, file);
+    }
 
     /** Hand a thread's note to Loop B as a one-shot steer, and mark it sent. */
     private async steerComment(document: vscode.TextDocument, thread: CommentThread): Promise<void> {
@@ -486,6 +510,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const docForPayload = applyAgentProposals(doc, agentAmendsFrom(suggestions));
         const held = heldFeatures(sidecar);  // hold set — reused for awaitingAI + the draft gate
 
+        // v6: per-feature typed-media blocks for the webview to render below each
+        // feature. Persistent only (the sidecar slice already excludes transient);
+        // a feature with no typed media is omitted so the map stays small.
+        const blocks: Record<string, ReturnType<typeof blocksForFeature>> = {};
+        for (const fid of Object.keys(sidecar.features)) {
+            const fb = blocksForFeature(sidecar, fid);
+            if (fb.length) blocks[fid] = fb;
+        }
+
         return {
             nodes,
             roots,
@@ -508,6 +541,8 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             // live and raises no affordance, exactly the "prose commits live; only
             // code-implying drafts" decision.
             drafts: [...(this.draftFidsByUri.get(uri) ?? [])].filter(fid => held.includes(fid)),
+            blocks,
+            mintedByLocalId: mintedByLocalId(sidecar),
             prefs: this.prefsFor(document),
             rev: ++this.rev,
         };

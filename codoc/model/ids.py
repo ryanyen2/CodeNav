@@ -27,3 +27,12 @@ def new_event_id() -> str:
 
 def new_directive_id() -> str:
     return _short("d")
+
+
+def new_block_id() -> str:
+    """A typed-media block on a feature (diagram / image / latex / url / …).
+
+    Stable per KTD8: assigned once and never re-derived from content, so a block's
+    identity survives arbitrary host edits (move, delete+undo, type-change). 12 hex
+    chars — blocks are more numerous than features and short-lived ones churn."""
+    return _short("blk", 12)

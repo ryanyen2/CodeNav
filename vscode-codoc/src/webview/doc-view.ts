@@ -535,8 +535,10 @@ function reconcile(): void {
         // feature from drafts → handed-off.
         wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
         wholeEditor.setDrafts(payload.drafts ?? []);
+        wholeEditor.setBlocks(payload.blocks ?? {});
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
+        wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
         wholeEditor.setDoc(payload.doc);
         applyGlance();     // refresh pitch map (a loop pass may have rewritten pitches)
     } else {
@@ -807,14 +809,17 @@ function renderDocHost(): HTMLElement {
         },
         onEditFeature: fid => onBridgeEdit(fid),  // P2 doc→code (§A.1), debounced below
         onHoverFeature: fid => peekTreeRow(fid), // WS5: preview a dependency link's target
+        onBlockEdit: edit => vscode.postMessage({ kind: 'block-edit', block: edit }),  // v6
     });
     wholeEditor.setSuggestions(payload.suggestions ?? []); // before setDoc — see reconcile()
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
     wholeEditor.setDrafts(payload.drafts ?? []);
+    wholeEditor.setBlocks(payload.blocks ?? {});
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
+    wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
     wholeEditor.setDoc(payload.doc);
     applyGlance();      // seed pitch + glance state into the fresh editor
     // Presence rides the doc surface — re-place the avatar as the surface scrolls (the agent's

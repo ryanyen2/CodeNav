@@ -847,6 +847,16 @@ def run_loop_a(
                                  caused_by_map=cb_map, default_caused_by=default_cb,
                                  codoc_dir=codoc_dir, file_scope=file_scope,
                                  embed_fn=embed_fn)
+        # Block `lift` (U3): re-derive persistent, LIFT-capable blocks (e.g. diagrams)
+        # from the freshly-updated graph/bindings. Read-only on code (attribution),
+        # and doc-wins — a block on a held feature is skipped, so a human's pending
+        # edit is never clobbered. Re-render the sidecar so a refreshed diagram shows.
+        from codoc.blocks.refresh import refresh_lift_blocks
+
+        if refresh_lift_blocks(store, codoc_dir):
+            from codoc.codoc_file.render import write_sidecar
+            write_sidecar(store, codoc_dir)
+
         from codoc.loop.status import refresh_status
 
         refresh_status(codoc_dir, store)

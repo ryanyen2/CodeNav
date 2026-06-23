@@ -46,6 +46,10 @@ export interface FeatureMeta {
     // flattened, else the title). Python derives it; the TS side only reads it.
     // Optional so older (< v5) sidecars still parse.
     pitch?: string;
+    // v6: the hand-authored node's client id (KTD8), present only for a feature
+    // minted from a webview ADD. Lets the host map a freshly-minted fid back to the
+    // exact in-progress node (localId→fid) instead of guessing by title/order.
+    local_id?: string;
 }
 
 /** A1: the named, persistent lifecycle state on a feature. */
@@ -190,6 +194,25 @@ export interface SidecarData {
     // Proposal B: the SINGLE mid-flight projection — feature_id → phase. The one
     // source the slices above are thin views of; `synced` features are absent.
     feature_phase?: Record<string, FeaturePhase>;
+    // v6: typed-media blocks per feature (diagram | image | latex | url | …),
+    // persistent only (transient blocks ride the steers channel; prose is the
+    // feature description = block-zero, not here). A feature with no typed media is
+    // absent. The reader keys on presence, so a v5 sidecar (no `blocks`) still parses.
+    blocks?: Record<string, BlockEntry[]>;
+}
+
+/** A typed-media block on a feature (v6, `blocks` slice). `content` is opaque —
+ *  its schema belongs to the plugin named by `kind` (mermaid for diagram, a URL
+ *  for url, an attachment ref for image). `id` is stable (KTD8): the host MUST
+ *  preserve it across edits (move/type-change/undo) so identity is never inferred
+ *  from content. */
+export interface BlockEntry {
+    id: string;
+    kind: string;
+    content: string;
+    lifecycle: 'persistent' | 'transient';
+    provenance: 'human' | 'agent' | 'derived';
+    ord: number;
 }
 
 /** The derived kind hint for a feature, if any (v5). Suppressed/retired tags are
@@ -255,9 +278,38 @@ export function agentAmendsByFeature(sidecar: SidecarData): Map<string, string> 
     return out;
 }
 
+/** Map a hand-authored node's client id → its minted fid, from the sidecar (v6).
+ *  The host uses this to patch a freshly-minted fid onto the exact in-progress node
+ *  (replacing the fragile title/order matching that spawned duplicate/orphan adds). */
+export function mintedByLocalId(sidecar: SidecarData): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [fid, meta] of Object.entries(sidecar.features)) {
+        if (meta?.local_id) out[meta.local_id] = fid;
+    }
+    return out;
+}
+
 /** Return an empty sidecar (used when the file hasn't been created yet). */
 export function emptySidecar(): SidecarData {
-    return { version: 5, by_feature: {}, by_file: {}, features: {}, proposals: { by_feature: {}, by_event: {} } };
+    return { version: 6, by_feature: {}, by_file: {}, features: {}, proposals: { by_feature: {}, by_event: {} } };
+}
+
+/** The typed-media blocks for a feature (v6), normalized + ordered by `ord` — the
+ *  canonical host block view (mirrors codoc/blocks/conformance.py:canonical_block_view
+ *  so every host renders the SAME blocks). Empty for a feature with no typed media
+ *  or a pre-v6 sidecar. */
+export function blocksForFeature(sidecar: SidecarData, featureId: string): BlockEntry[] {
+    const raw = sidecar.blocks?.[featureId] ?? [];
+    return raw
+        .map((e) => ({
+            id: e.id ?? '',
+            kind: e.kind ?? '',
+            content: e.content ?? '',
+            lifecycle: e.lifecycle ?? 'persistent',
+            provenance: e.provenance ?? 'human',
+            ord: e.ord ?? 0,
+        }))
+        .sort((a, b) => a.ord - b.ord);
 }
 
 /** The in-place overlay proposal for a feature, if any (retire/amend). */

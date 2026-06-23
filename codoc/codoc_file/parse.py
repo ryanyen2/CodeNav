@@ -73,6 +73,7 @@ class ParsedNode:
     description: str
     parent_id: str | None
     retired: bool
+    local_id: str = ""  # the webview's client-side node id (KTD8), when authored in the doc
     refs: list[Ref] = field(default_factory=list)
     # Steering comments (`> …` runs) — notes to the agent, not part of the prose.
     comments: list[str] = field(default_factory=list)

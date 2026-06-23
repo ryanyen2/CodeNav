@@ -99,7 +99,7 @@ def test_sidecar_emits_pitch_and_bumps_version(store, tmp_path):
     write_tree(store, tmp_path)
     sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
 
-    assert sidecar["version"] == 5
+    assert sidecar["version"] == 6
     feats = sidecar["features"]
     assert feats[multi.id]["pitch"] == "Handles login and session creation."
     assert feats[empty.id]["pitch"] == "Utilities"  # fallback to title

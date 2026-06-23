@@ -107,6 +107,7 @@ def parse_doc(doc: dict) -> ParsedTree:
             description=description,
             parent_id=parent_id,
             retired=bool(attrs.get("retired")),
+            local_id=attrs.get("localId") or "",
         )
         node.refs = extract_refs(description)
         tree.nodes.append(node)

@@ -30,7 +30,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codoc.agent.base import format_prompt, load_prompt
+from codoc.blocks.base import Capability, LowerContext
+from codoc.blocks.builtins import ensure_builtins
 from codoc.codoc_file.diff import diff_codoc
+from codoc.loop.doc_presence import reconcile_doc_presence
 from codoc.codoc_file.doc_parse import parse_doc_file
 from codoc.codoc_file.parse import extract_bold, extract_links, parse_tree_file
 from codoc.codoc_file.render import tree_path, write_tree
@@ -40,6 +43,7 @@ from codoc.loop.apply import apply_op
 from codoc.loop.classify import implies_code, is_imperative
 from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop.fsio import atomic_write_text
+from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_directive_id
 from codoc.store.db import Store, open_store
@@ -52,6 +56,8 @@ class LoopBResult:
     user_edits: int = 0
     steered: int = 0  # inline `> …` steering comments drained this pass
     canceled: int = 0  # queued directives withdrawn this pass (U6)
+    soft_retired: int = 0  # nodes the human deleted from the doc → soft (detach-only) retire
+    unretired: int = 0     # nodes that re-appeared (undo / re-author) → un-retired
     directives: list[str] = field(default_factory=list)
     directive_ids: list[str] = field(default_factory=list)  # d-… ids, parallel to directives
     queued: bool = False  # directives written to .codoc/realize.md for the session
@@ -69,6 +75,10 @@ class LoopBResult:
             parts.append(f"steered {self.steered}")
         if self.canceled:
             parts.append(f"withdrew {self.canceled} directive(s)")
+        if self.soft_retired:
+            parts.append(f"soft-retired {self.soft_retired} deleted node(s)")
+        if self.unretired:
+            parts.append(f"restored {self.unretired} node(s)")
         if self.queued:
             total = self.queued_total or len(self.directives)
             parts.append(f"queued {total} directive(s) for the session")
@@ -149,6 +159,24 @@ def build_steer_directive(feature_id: str, comment: str, store: Store) -> str:
             f'  Apply the note to this feature\'s code; where it conflicts with the '
             f'description, the note wins.'
             + _signal_lines(comment))
+
+
+def build_block_directive(feature_id: str, kind: str, intent_text: str, store: Store) -> str:
+    """Wrap a block plugin's ``lower`` intent in the same Bound-code/Edit-only
+    scaffolding a steer directive carries, so the realizing agent gets a precise,
+    scoped instruction. The plugin supplies the *intended change* (the deterministic
+    delta or a declared-prompt result); the realizing agent performs the code edit
+    (KTD5: dispatch=agent means the agent transforms, the mapping was structural)."""
+    f = store.get_feature(feature_id)
+    if f is None or not intent_text.strip():
+        return ""
+    loc, files = _bound_code(feature_id, store)
+    loc = loc or "(no bound code yet)"
+    scope = ", ".join(files) if files else "(none yet — create where it fits)"
+    note = intent_text.replace("\n", "\n    ")
+    return (f'BLOCK EDIT [{kind}]: "{f.title}"\n  Intended change: {note}\n'
+            f'  Bound code: {loc}\n  Edit only: {scope}\n'
+            f"  Apply the intended change to this feature's code.")
 
 
 def _bound_code(feature_id: str | None, store: Store) -> tuple[str, list[str]]:
@@ -380,6 +408,16 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # request (withdraw is a real intent, not a directive to defer).
     res.canceled = _apply_cancellations(root_dir, codoc_dir)
 
+    # Soft-delete reconciliation (doc-vs-previous-doc): a feature the human removed
+    # from the doc since the last pass is soft-retired (detach-only, recoverable — NO
+    # code deletion); a re-appeared one is un-retired (undo / re-author). Safe against
+    # agent-added features (only a previously-seen fid can be "removed"), so this is
+    # what finally STOPS a deleted node from resurrecting on the next render. Skipped
+    # on dry runs (it mutates the tree). Runs before the edit loops so the rest of the
+    # pass and the re-render see the post-retire state.
+    if not dry_run:
+        res.soft_retired, res.unretired = reconcile_doc_presence(store, codoc_dir)
+
     def _accept_with_fid(op: NodeOp) -> str:
         """Apply an accepted op, recovering a freshly-minted ADD feature id by
         set-diff (the op itself carries none until applied)."""
@@ -523,6 +561,56 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                 steered.append((d, s.feature_id, s.comment_id or amend_cause.get(s.feature_id, "")))
     res.steered = len(steered)
 
+    # 2.9 Typed-media block edits (U3) — the block→code (`lower`) direction. The host
+    #     hands an edit to a diagram/latex/… block through edits.json (stable block
+    #     id, KTD8). We dispatch by DECLARED capability (KTD5): only a plugin that
+    #     declares LOWER produces a directive; consult-only media (url/image) never do.
+    #     The store is the source of truth for block content, so an add/edit upserts
+    #     the block row and a remove drops it — but a REMOVE drops only the projection,
+    #     NEVER the code (destructive asymmetry, KTD2): no directive is queued for it.
+    #     Drained one-shot only on a real pass (a dry/no-realize pass leaves them for a
+    #     later real pass — same guard as steers). The resulting directives flow into
+    #     the SAME manifest/realize.md pipeline below, inheriting the draft gate.
+    block_specs: list[tuple[str, str, str, str]] = []  # (text, fid, cause, kind)
+    force_draft_fids: set[str] = set()                 # lossy `lower` → held draft (KTD2)
+    block_store_changed = False
+    if not dry_run:
+        registry = ensure_builtins()
+        for be in edits_channel.drain_block_edits(codoc_dir):
+            f = store.get_feature(be.feature_id)
+            if f is None or f.retired:
+                continue
+            if be.action == "remove":
+                # Drop the projection only. The code stays; at most a future opt-in
+                # could propose a removal — v1 default queues nothing.
+                store.delete_block(be.block_id)
+                block_store_changed = True
+                continue
+            # add / edit: persist the block as the store's source of truth.
+            existing = store.get_block(be.block_id)
+            ordv = existing.ord if existing else len(store.blocks_for_feature(be.feature_id))
+            store.upsert_block(Block(
+                id=be.block_id, feature_id=be.feature_id, kind=be.kind,
+                content=be.content, lifecycle=BlockLifecycle.PERSISTENT,
+                provenance=Provenance.HUMAN, ord=ordv))
+            block_store_changed = True
+            plugin = registry.for_capability(be.kind, Capability.LOWER)
+            if plugin is None:
+                continue  # consult-only / lift-only medium: a content edit implies no code
+            prev = (existing if existing else None)
+            new_block = store.get_block(be.block_id)
+            result = plugin.lower(LowerContext(
+                feature=f, old_block=prev, new_block=new_block,
+                bindings=store.bindings_for_feature(be.feature_id), store=store))
+            if result.kind == "noop" or not result.text.strip():
+                continue
+            text = build_block_directive(be.feature_id, be.kind, result.text, store)
+            if not text:
+                continue
+            block_specs.append((text, be.feature_id, be.block_id, f"block:{be.kind}"))
+            if result.kind == "draft":
+                force_draft_fids.add(be.feature_id)  # ambiguous → held for confirmation
+
     # Re-render tree.codoc when this pass moved the store ahead of the text
     # (verdict accepts / intent applies) or consumed steering comments —
     # otherwise the next pass would diff the stale text and read it as a human
@@ -531,7 +619,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # Steering comments are consumed ONLY when their directives will actually be
     # queued: a dry/no-realize pass must leave the `>` lines in the text for a
     # later real pass — consuming without queueing would destroy the note.
-    if res.accepted or res.user_edits or (res.steered and not dry_run):
+    if (res.accepted or res.user_edits or block_store_changed or res.soft_retired
+            or res.unretired or (res.steered and not dry_run)):
         write_tree(store, codoc_dir)
         if dry_run and comment_targets:
             # The dry re-render (store-driven) just dropped the `> …` lines even
@@ -543,6 +632,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         for op, fid, cause in directive_ops
     ]
     rendered += [(text, fid, cause, "steer") for text, fid, cause in steered]
+    rendered += block_specs  # block `lower` directives (U3); already (text, fid, cause, kind)
     rendered = [r for r in rendered if r[0]]
     res.directives = [r[0] for r in rendered]
 
@@ -585,7 +675,9 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ]
     for d in all_directives:
-        d.handed_off = d.feature_id not in drafts_set
+        # A lossy block `lower` (KTD2) forces a held draft even absent a webview
+        # suggesting-mode hold, so an ambiguous diagram edit awaits confirmation.
+        d.handed_off = d.feature_id not in drafts_set and d.feature_id not in force_draft_fids
     # Manifest first (its no-realize.md-but-drafts state is the source of truth);
     # realize.md (the agent trigger) is rebuilt from handed-off directives only.
     edits_channel.write_manifest(codoc_dir, all_directives)

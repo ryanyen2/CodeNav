@@ -54,7 +54,7 @@ def test_attach_applies_immediately_and_writes_tree(codoc_dir):
         s.close()
     # tree.codoc + sidecar were rendered
     sidecar = json.loads((__import__("pathlib").Path(codoc_dir) / "tree.bindings.json").read_text())
-    assert sidecar["version"] == 5
+    assert sidecar["version"] == 6
 
 
 def test_reflect_mixes_safe_and_structural(codoc_dir):

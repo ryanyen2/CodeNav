@@ -95,6 +95,29 @@ class Steer:
 
 
 @dataclass
+class BlockEdit:
+    """A host edit to a typed-media block (U2), handed to Loop B for ``lower``
+    dispatch. Keyed by the STABLE block id (KTD8) so identity is never inferred
+    from content. ``action`` distinguishes the intent of the edit:
+
+    - ``edit``   — content changed; dispatch the plugin's ``lower``.
+    - ``add``    — a new block authored; dispatch ``lower`` (it may imply code).
+    - ``remove`` — the block (its *projection*) was deleted. **Destructive
+      asymmetry (KTD2): a removal NEVER auto-deletes code** — Loop B at most lets
+      the plugin propose a change; by default it just drops the projection.
+
+    A pure reorder (``ord`` change / move) is NOT a block-edit: it has no code
+    effect, so the host does not emit one (e.g. moving an image)."""
+    block_id: str
+    feature_id: str
+    kind: str
+    action: str = "edit"      # "edit" | "add" | "remove"
+    content: str = ""         # new content (empty for remove)
+    prev_content: str = ""    # content before the edit (for the lower delta / diff)
+    ts: int = 0               # unix ms
+
+
+@dataclass
 class Intent:
     id: str            # suggestion id (host-minted, e.g. "d-<fid>")
     feature_id: str
@@ -175,7 +198,7 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
 #   adds a fid on a code-implying draft edit and removes it on hand-off; the loop derives
 #   each directive's ``handed_off`` from this set every pass (so removing a fid releases
 #   it). Empty/absent → every directive is handed off, i.e. today's immediate-realize.
-_LISTS = ("edits", "intents", "cancellations", "steers", "drafts")
+_LISTS = ("edits", "intents", "cancellations", "steers", "drafts", "block_edits")
 
 # Cached, reentrant FileLock per repo guarding every edits.json read-modify-write.
 _edit_locks: dict[str, object] = {}
@@ -231,7 +254,7 @@ def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
     payload: dict = {"version": 1, "edits": merged["edits"], "intents": merged["intents"]}
     # Keep the optional lists out of the payload when empty (matches the prior shape
     # + keeps a plain annotations-only file byte-identical to before).
-    for k in ("cancellations", "steers", "drafts"):
+    for k in ("cancellations", "steers", "drafts", "block_edits"):
         if merged[k]:
             payload[k] = merged[k]
     atomic_write_json(dest, payload)
@@ -333,6 +356,42 @@ def append_steer(codoc_dir: str | Path, steer: Steer) -> Path | None:
         "comment_id": steer.comment_id, "ts": steer.ts or int(time.time() * 1000),
     }]
     return _rewrite(codoc_dir, steers=steers)
+
+
+def read_block_edits(codoc_dir: str | Path) -> list[BlockEdit]:
+    """Pending typed-media block edits (U2): host edits to diagram/image/latex/url
+    blocks, handed to Loop B for ``lower`` dispatch. Order-preserving."""
+    out: list[BlockEdit] = []
+    for b in _load(codoc_dir).get("block_edits", []):
+        if isinstance(b, dict) and b.get("block_id") and b.get("feature_id"):
+            out.append(BlockEdit(
+                block_id=b["block_id"], feature_id=b["feature_id"],
+                kind=b.get("kind") or "", action=b.get("action") or "edit",
+                content=b.get("content") or "", prev_content=b.get("prev_content") or "",
+                ts=int(b.get("ts") or 0)))
+    return out
+
+
+@_locked
+def drain_block_edits(codoc_dir: str | Path) -> list[BlockEdit]:
+    """Consume the ``block_edits`` list (one-shot), keeping the others — Loop B
+    dispatches each through the block plugin's ``lower``."""
+    edits = read_block_edits(codoc_dir)
+    if edits:
+        _rewrite(codoc_dir, block_edits=[])
+    return edits
+
+
+@_locked
+def append_block_edit(codoc_dir: str | Path, edit: BlockEdit) -> Path | None:
+    """Append a typed-media block edit (host edit affordance; CLI/tests). Drained by
+    Loop B into a ``lower`` dispatch."""
+    block_edits = (_load(codoc_dir).get("block_edits") or []) + [{
+        "block_id": edit.block_id, "feature_id": edit.feature_id, "kind": edit.kind,
+        "action": edit.action, "content": edit.content, "prev_content": edit.prev_content,
+        "ts": edit.ts or int(time.time() * 1000),
+    }]
+    return _rewrite(codoc_dir, block_edits=block_edits)
 
 
 def read_drafts(codoc_dir: str | Path) -> set[str]:

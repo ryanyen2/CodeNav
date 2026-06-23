@@ -8,6 +8,7 @@
  * styled by CSS per level (a custom outliner, not h1–h6 semantics).
  */
 import { Node, mergeAttributes, textblockTypeInputRule } from '@tiptap/core';
+import { newLocalId } from './local-id';
 
 export interface FeatureHeadingOptions {
     HTMLAttributes: Record<string, unknown>;
@@ -33,6 +34,14 @@ export const FeatureHeading = Node.create<FeatureHeadingOptions>({
                 parseHTML: el => (el as HTMLElement).getAttribute('data-fid') || null,
                 renderHTML: attrs => (attrs.fid ? { 'data-fid': attrs.fid } : {}),
             },
+            // Stable client-side identity (KTD8) — minted at creation, survives the
+            // pre-mint window + moves/type-changes/undo so decorations and gestures
+            // never confuse one node for another. Coexists with `fid` (server identity).
+            localId: {
+                default: null,
+                parseHTML: el => (el as HTMLElement).getAttribute('data-local-id') || null,
+                renderHTML: attrs => (attrs.localId ? { 'data-local-id': attrs.localId } : {}),
+            },
             level: {
                 default: 0,
                 parseHTML: el => Number((el as HTMLElement).getAttribute('data-level')) || 0,
@@ -53,14 +62,20 @@ export const FeatureHeading = Node.create<FeatureHeadingOptions>({
 
     addInputRules() {
         // Markdown `#`..`####` + space at the start of a block → a feature heading at
-        // level 0..3 (H1–H4). Converting a description paragraph this way splits the
-        // feature (a new heading mid-description = a new feature, minted on settle).
+        // level 0..3 (H1–H4). The proven block-start conversion; a fresh localId (KTD8)
+        // gives the new node stable identity immediately. (Splitting a new heading from
+        // the END of a populated paragraph — the `headingFromInputRule` transform in
+        // structure-commands.ts, unit-tested — is deferred until it can be verified in a
+        // live editor; for now, press Enter for a new line, then type `## `.)
         return Array.from({ length: MAX_HEADING_LEVEL }, (_unused, idx) => {
             const hashes = idx + 1;
             return textblockTypeInputRule({
                 find: new RegExp(`^#{${hashes}}\\s$`),
                 type: this.type,
-                getAttributes: () => ({ fid: null, level: hashes - 1, retired: false, realized: true }),
+                getAttributes: () => ({
+                    fid: null, level: hashes - 1, retired: false, realized: true,
+                    localId: newLocalId(),
+                }),
             });
         });
     },

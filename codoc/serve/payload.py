@@ -167,5 +167,11 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
         "holdDetail": sidecar.get("hold_detail") or {},
         "drafts": drafts,
         "pitches": pitches,
+        # v6: typed-media blocks per feature, surfaced READ-ONLY (the hub renders
+        # diagrams/images but does not offer block editing — a per-host policy the
+        # host contract allows). Re-shaped straight from the sidecar slice, no
+        # re-derivation — the hub is a file-channel client (KTD7). This is the
+        # "many surfaces" evidence: a second host rendering the same blocks.
+        "blocks": _sidecar(codoc_dir).get("blocks") or {},
         "rev": payload_version(codoc_dir),
     }

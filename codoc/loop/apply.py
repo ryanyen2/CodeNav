@@ -134,7 +134,7 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
         # legitimately binding-less yet fully real, and marking them placeholders
         # would mis-fire the IDE's unrealized decoration on every theme node.
         f = Feature(title=op.title or "Untitled", description=op.description or "",
-                    parent_id=op.parent_id,
+                    parent_id=op.parent_id, local_id=op.local_id,
                     realized=(op.realized if op.realized is not None else True))
         if op.feature_id:
             f.id = op.feature_id

@@ -94,6 +94,11 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   (edits.json + realize.json), inbox.py, status.py, fsio.py (atomic
              #   IO), subtree.py, bootstrap_hier.py, title_dedup.py (opt-in semantic
              #   title dedup), sdk_realize.py / autorealize.py, watch.py
+blocks/      # typed-media blocks + plugin codecs (agent-native notebook protocol):
+             #   base.py (Capability LIFT/LOWER/CONSULT + BlockPlugin), registry.py,
+             #   builtins.py, prose.py (plugin-zero), diagram.py (graph→mermaid lift +
+             #   edge-delta lower), screenshot.py (transient + url/image consult media),
+             #   refresh.py (Loop A lift pass), conformance.py (host parity harness)
 agent/       # base.py, tree_update.py (the incremental LLM call), bootstrap_agent.py,
              # paths.py, hook.py / install_hooks.py, propose.py
 mcp/         # codoc MCP server (FastMCP, stdio): tools.py + server.py (codoc-mcp script)

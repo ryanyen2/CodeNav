@@ -12,6 +12,7 @@ import {
     isUnrealized,
     lifecycleForFeature,
     phaseForFeature,
+    blocksForFeature,
 } from '../state/bindings-model';
 
 // The TS side only READS the pitch (Python derives it). These tests pin the
@@ -19,8 +20,8 @@ import {
 // FeatureMeta carries an optional `pitch` the model surfaces.
 
 describe('sidecar v5 / pitch', () => {
-    it('emptySidecar reports version 5', () => {
-        expect(emptySidecar().version).toBe(5);
+    it('emptySidecar reports version 6', () => {
+        expect(emptySidecar().version).toBe(6);
     });
 
     it('FeatureMeta carries pitch from a v5 sidecar', () => {
@@ -182,5 +183,49 @@ describe('A1 lifecycle + Proposal B feature_phase', () => {
         expect(legacy.feature_phase).toBeUndefined();
         expect(phaseForFeature(legacy, 'f-a')).toBeUndefined();
         expect(lifecycleForFeature(legacy, 'f-a')).toBe('active');
+    });
+});
+
+// v6 blocks — the TS host's parse must reproduce the canonical block view
+// (codoc/blocks/conformance.py:canonical_block_view) so every host renders the
+// SAME blocks. This mirrors the shared fixture tests/fixtures/blocks_conformance.json.
+describe('sidecar v6 / blocks', () => {
+    it('blocksForFeature returns ordered, normalized blocks', () => {
+        const sidecar: SidecarData = {
+            ...emptySidecar(),
+            blocks: {
+                'f-auth': [
+                    { id: 'blk-url-1', kind: 'url', content: 'https://docs.example/auth', lifecycle: 'persistent', provenance: 'human', ord: 1 },
+                    { id: 'blk-diagram-1', kind: 'diagram', content: 'flowchart TB\n  login --> make_token', lifecycle: 'persistent', provenance: 'derived', ord: 0 },
+                ],
+            },
+        };
+        const blocks = blocksForFeature(sidecar, 'f-auth');
+        expect(blocks.map((b) => b.kind)).toEqual(['diagram', 'url']); // ordered by ord
+        expect(blocks[0].id).toBe('blk-diagram-1');
+        expect(blocks[0].provenance).toBe('derived');
+    });
+
+    it('a feature with no typed media has an empty block view', () => {
+        expect(blocksForFeature(emptySidecar(), 'f-none')).toEqual([]);
+    });
+
+    it('a pre-v6 sidecar (no blocks slice) yields no blocks', () => {
+        const legacy: SidecarData = { version: 5, by_feature: {}, by_file: {}, features: {} };
+        expect(blocksForFeature(legacy, 'f-a')).toEqual([]);
+    });
+});
+
+describe('v6 minted-id reconciliation', () => {
+    it('mintedByLocalId maps a hand-authored node localId → its minted fid', async () => {
+        const { mintedByLocalId } = await import('../state/bindings-model');
+        const sidecar: SidecarData = {
+            ...emptySidecar(),
+            features: {
+                'f-minted': { title: 'My new node', parent_id: null, local_id: 'lid-abc' },
+                'f-code': { title: 'Code feature', parent_id: null },  // no local_id (code-derived)
+            },
+        };
+        expect(mintedByLocalId(sidecar)).toEqual({ 'lid-abc': 'f-minted' });  // only authored nodes
     });
 });

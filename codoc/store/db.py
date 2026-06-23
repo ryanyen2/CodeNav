@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from codoc.model.binding import Binding
+from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import Event, NodeOp
 from codoc.model.feature import Feature, Lifecycle
 from codoc.model.hlc import HLC
@@ -32,6 +33,9 @@ CREATE TABLE IF NOT EXISTS features (
     lifecycle   TEXT NOT NULL DEFAULT 'active',
     retired     INTEGER NOT NULL DEFAULT 0,
     realized    INTEGER NOT NULL DEFAULT 1,
+    -- The webview's client-side node id for a hand-authored feature (KTD8), so a
+    -- minted fid matches back to the exact in-progress node. '' for code-derived nodes.
+    local_id    TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -59,6 +63,25 @@ CREATE TABLE IF NOT EXISTS events (
     accepted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_applied ON events(applied);
+
+-- Typed-media blocks on a feature (diagram / image / latex / url / …). Prose is
+-- NOT here — it is the implicit block-zero backed by features.description, so an
+-- existing feature owns zero block rows and loads unchanged. Blocks carry a
+-- STABLE id (KTD8) that survives host edits; `ord` is the position within the
+-- feature, so a "move" is an ord update, not a delete+create. Binding stays
+-- feature-level (KTD1) — there is deliberately no (file, symbol_path) column here.
+CREATE TABLE IF NOT EXISTS blocks (
+    id          TEXT PRIMARY KEY,
+    feature_id  TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    content     TEXT NOT NULL DEFAULT '',
+    lifecycle   TEXT NOT NULL DEFAULT 'persistent',
+    provenance  TEXT NOT NULL DEFAULT 'human',
+    ord         INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_feature ON blocks(feature_id);
 
 CREATE TABLE IF NOT EXISTS code_edges (
     src_file    TEXT NOT NULL,
@@ -114,6 +137,14 @@ class Store:
                 " WHEN realized=0 THEN 'planned'"
                 " ELSE 'active' END"
             )
+        if "local_id" not in cols:
+            # Additive: hand-authored-node id for minted-fid reconciliation. '' for
+            # every pre-existing row (they were never authored through the webview's
+            # localId path), which is the correct "no client id" sentinel.
+            self.conn.execute(
+                "ALTER TABLE features ADD COLUMN local_id TEXT NOT NULL DEFAULT ''"
+            )
+            cols.add("local_id")
         bcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(bindings)")}
         if "types_hash" not in bcols:
             # Default '' ⇒ pre-existing bindings have no recorded AST shape; rename
@@ -151,8 +182,8 @@ class Store:
     def upsert_feature(self, f: Feature) -> None:
         self.conn.execute(
             """
-            INSERT INTO features (id, title, description, parent_id, lifecycle, retired, realized, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO features (id, title, description, parent_id, lifecycle, retired, realized, local_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title,
                 description=excluded.description,
@@ -160,6 +191,8 @@ class Store:
                 lifecycle=excluded.lifecycle,
                 retired=excluded.retired,
                 realized=excluded.realized,
+                -- keep a known local_id if a re-upsert (refresh/move) carries none
+                local_id=CASE WHEN excluded.local_id != '' THEN excluded.local_id ELSE features.local_id END,
                 updated_at=excluded.updated_at
             """,
             (
@@ -172,6 +205,7 @@ class Store:
                 # in the row for pre-A1 back-compat readers.
                 int(f.retired),
                 int(f.realized),
+                f.local_id,
                 f.created_at.to_str(),
                 f.updated_at.to_str(),
             ),
@@ -205,6 +239,18 @@ class Store:
         # lifecycle is authoritative; retired=1 kept in sync for back-compat readers.
         self.conn.execute(
             "UPDATE features SET lifecycle='retired', retired=1, updated_at=? WHERE id=?",
+            (HLC.now().to_str(), feature_id),
+        )
+        self.conn.commit()
+
+    def unretire_feature(self, feature_id: str) -> None:
+        """Bring a retired feature back to ``active`` — the undo of a soft delete.
+        Guarded to ``retired`` rows so it only ever resurrects a tombstone (a
+        planned/active feature is untouched). Used when a deleted node reappears in
+        the doc (the human pressed undo / re-added it)."""
+        self.conn.execute(
+            "UPDATE features SET lifecycle='active', retired=0, realized=1, updated_at=?"
+            " WHERE id=? AND lifecycle='retired'",
             (HLC.now().to_str(), feature_id),
         )
         self.conn.commit()
@@ -294,6 +340,61 @@ class Store:
         ``bindings_for_feature`` round-trip."""
         rows = self.conn.execute("SELECT DISTINCT feature_id FROM bindings").fetchall()
         return {r["feature_id"] for r in rows}
+
+    # -- blocks (typed media on a feature) --------------------------------
+    def upsert_block(self, b: Block) -> None:
+        """Insert or update a block by its stable id (KTD8). Re-upserting the same
+        id (e.g. after a move = ``ord`` change, or a content edit) keeps identity."""
+        self.conn.execute(
+            """
+            INSERT INTO blocks (id, feature_id, kind, content, lifecycle, provenance, ord, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                feature_id=excluded.feature_id,
+                kind=excluded.kind,
+                content=excluded.content,
+                lifecycle=excluded.lifecycle,
+                provenance=excluded.provenance,
+                ord=excluded.ord,
+                updated_at=excluded.updated_at
+            """,
+            (
+                b.id, b.feature_id, b.kind, b.content, b.lifecycle.value,
+                b.provenance.value, b.ord, b.created_at.to_str(), b.updated_at.to_str(),
+            ),
+        )
+        self.conn.commit()
+
+    def get_block(self, block_id: str) -> Block | None:
+        row = self.conn.execute("SELECT * FROM blocks WHERE id=?", (block_id,)).fetchone()
+        return _row_to_block(row) if row else None
+
+    def blocks_for_feature(self, feature_id: str) -> list[Block]:
+        rows = self.conn.execute(
+            "SELECT * FROM blocks WHERE feature_id=? ORDER BY ord, created_at", (feature_id,)
+        ).fetchall()
+        return [_row_to_block(r) for r in rows]
+
+    def blocks_for_features(self, feature_ids: set[str]) -> list[Block]:
+        if not feature_ids:
+            return []
+        placeholders = ",".join("?" * len(feature_ids))
+        rows = self.conn.execute(
+            f"SELECT * FROM blocks WHERE feature_id IN ({placeholders}) ORDER BY feature_id, ord",
+            tuple(feature_ids),
+        ).fetchall()
+        return [_row_to_block(r) for r in rows]
+
+    def all_blocks(self) -> list[Block]:
+        return [_row_to_block(r) for r in self.conn.execute("SELECT * FROM blocks").fetchall()]
+
+    def delete_block(self, block_id: str) -> None:
+        self.conn.execute("DELETE FROM blocks WHERE id=?", (block_id,))
+        self.conn.commit()
+
+    def delete_blocks_for_feature(self, feature_id: str) -> None:
+        self.conn.execute("DELETE FROM blocks WHERE feature_id=?", (feature_id,))
+        self.conn.commit()
 
     # -- events -----------------------------------------------------------
     def append_event(self, e: Event) -> None:
@@ -404,6 +505,7 @@ def _row_to_feature(r: sqlite3.Row) -> Feature:
         description=r["description"],
         parent_id=r["parent_id"],
         lifecycle=lifecycle,
+        local_id=(r["local_id"] if "local_id" in keys else ""),
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )
@@ -418,6 +520,20 @@ def _row_to_binding(r: sqlite3.Row) -> Binding:
         symbol_path=r["symbol_path"],
         fingerprint=r["fingerprint"],
         types_hash=(r["types_hash"] if "types_hash" in keys else ""),
+        updated_at=HLC.from_str(r["updated_at"]),
+    )
+
+
+def _row_to_block(r: sqlite3.Row) -> Block:
+    return Block(
+        id=r["id"],
+        feature_id=r["feature_id"],
+        kind=r["kind"],
+        content=r["content"],
+        lifecycle=BlockLifecycle(r["lifecycle"]),
+        provenance=Provenance(r["provenance"]),
+        ord=r["ord"],
+        created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )
 

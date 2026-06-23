@@ -487,6 +487,31 @@ def _compute_see_also(edges: dict[str, list[dict]]) -> dict[str, list[dict]]:
     return out
 
 
+def _blocks_map(store: Store, feature_ids: set[str]) -> dict[str, list[dict]]:
+    """The sidecar ``blocks`` slice: persistent typed-media blocks per feature
+    (v6). Prose is NOT here — it is block-zero, carried by the feature description
+    that ``by_feature``/``feats_meta`` already render. Transient blocks (a bug
+    screenshot) are NOT here either — they ride the one-shot steers channel and are
+    consumed by realization, never a durable sidecar row (KTD4).
+
+    Each entry carries the stable block ``id`` (KTD8) so a host preserves identity
+    across renders, plus ``kind``/``content``/``lifecycle``/``provenance``/``ord``
+    so any host renders by kind with no host-side derivation. Ordered by ``ord``."""
+    from codoc.model.block import BlockLifecycle
+
+    out: dict[str, list[dict]] = {}
+    for b in store.blocks_for_features(feature_ids):
+        if b.lifecycle is not BlockLifecycle.PERSISTENT:
+            continue
+        out.setdefault(b.feature_id, []).append({
+            "id": b.id, "kind": b.kind, "content": b.content,
+            "lifecycle": b.lifecycle.value, "provenance": b.provenance.value, "ord": b.ord,
+        })
+    for entries in out.values():
+        entries.sort(key=lambda e: e["ord"])
+    return out
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -514,6 +539,10 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
             # A1: the authoritative named state; `realized` kept for back-compat.
             "lifecycle": f.lifecycle.value,
             "realized": f.realized,
+            # v6: the hand-authored node's client id (KTD8), present only for features
+            # minted from a webview ADD. Lets the host match a freshly-minted fid back to
+            # the exact in-progress node (localId→fid), killing the title/order guesswork.
+            **({"local_id": f.local_id} if f.local_id else {}),
             # v5: a derived one-line pitch (first sentence of the prose, refs
             # flattened to labels, else the title) for overview / glance rendering.
             "pitch": _pitch(f.description, f.title),
@@ -539,7 +568,10 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     edges = _compute_feature_edges(store)
 
     sidecar = {
-        "version": 5,
+        # v6: adds the `blocks` slice (typed-media blocks). Presence-keyed — the TS
+        # reader and the hub key on field presence, so a v5 sidecar (no `blocks`)
+        # still parses and a host that predates blocks ignores the slice.
+        "version": 6,
         "by_feature": by_feature,
         "by_file": by_file,
         "features": feats_meta,
@@ -583,6 +615,10 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # `synced` features are absent (no dot); doc-wins is applied here once (a
         # held feature is `drafting`/`queued`, never also `drifted`/`divergent`).
         "feature_phase": proj.phase,
+        # v6: typed-media blocks per feature (diagram / image / latex / url / …),
+        # persistent only — prose is block-zero (the description) and transient
+        # blocks ride the steers channel. A feature with no typed media is absent.
+        "blocks": _blocks_map(store, {f.id for f in features}),
     }
     # Route through the shared atomic writer (per-writer-unique tmp) rather than a
     # hand-rolled fixed-name tmp: two writers of this sidecar (two daemons, or a daemon

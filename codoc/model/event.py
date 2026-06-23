@@ -82,6 +82,9 @@ class NodeOp(BaseModel):
     bindings: list[tuple[str, str]] = Field(default_factory=list)  # (file, symbol_path)
     rationale: str = ""            # one-line justification, shown in proposal hunks
     realized: bool | None = None   # ADD_NODE realization (None ⇒ default True); False = plan placeholder
+    local_id: str = ""             # ADD_NODE: the webview's client-side node id (KTD8). Persisted on the
+                                   #   minted feature so the host matches the minted fid back to the exact
+                                   #   in-progress node (no title/order guessing → no duplicate/orphan adds).
     delete_code: bool = False      # RETIRE_NODE: True ⇒ also remove the bound code (explicit intent —
                                    #   an agent via MCP, or a human `~`); False ⇒ detach-only untrack
 

@@ -161,8 +161,31 @@ export interface DocPayload {
     /** Persisted webview prefs: the glance-mode toggle, restored from workspaceState so
      *  it survives a reload. */
     prefs?: WebviewPrefs;
+    /** Per-feature typed-media blocks (v6) — diagrams, images, latex, urls — keyed by
+     *  feature id, ordered by `ord`. Persistent blocks only (prose is the description;
+     *  transient blocks ride the steers channel). The webview renders each by `kind`
+     *  below the feature; an unknown kind degrades to an inert placeholder. Absent on
+     *  legacy payloads / features with no typed media. */
+    blocks?: Record<string, UIBlock[]>;
+    /** Hand-authored node client id → minted fid (v6). The webview patches a freshly
+     *  minted fid onto the exact in-progress node by its localId, instead of guessing
+     *  by title/order (which spawned duplicate/orphan nodes + caret jumps). */
+    mintedByLocalId?: Record<string, string>;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
+}
+
+/** A typed-media block surfaced to the webview (v6). Mirrors the sidecar
+ *  `blocks` slice / `bindings-model.ts:BlockEntry`. `id` is stable (KTD8): the
+ *  webview MUST preserve it across edits so identity is never inferred from
+ *  content. `content` is opaque — its schema belongs to the plugin named by `kind`. */
+export interface UIBlock {
+    id: string;
+    kind: string;
+    content: string;
+    lifecycle: 'persistent' | 'transient';
+    provenance: 'human' | 'agent' | 'derived';
+    ord: number;
 }
 
 /** Per-workspace webview preferences persisted in the host's `workspaceState`. */

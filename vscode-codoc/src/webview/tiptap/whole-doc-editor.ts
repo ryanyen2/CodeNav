@@ -30,6 +30,8 @@ import {
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
+import { BlockDecorations, BLOCKS_UPDATED, type BlockEditMsg } from './block-decorations';
+import type { UIBlock } from '../protocol';
 import { CapturedDecorations, CAPTURED_UPDATED, featureBlocks, type FeatureText } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
@@ -77,6 +79,9 @@ export interface WholeDocEditorOptions {
      *  every keystroke with the owning fid (null when not in a feature); the webview
      *  debounces it 180 ms and opens that feature's bound code Beside. */
     onEditFeature?: (fid: string | null) => void;
+    /** A typed-media block (v6) was edited — handed to the host → edits.json → Loop B
+     *  `lower`. A pure move (ord change) never fires this; only content edits. */
+    onBlockEdit?: (edit: BlockEditMsg) => void;
 }
 
 export interface WholeDocEditorHandle {
@@ -101,6 +106,12 @@ export interface WholeDocEditorHandle {
     /** Held drafts (U3): edits recorded & staged locally but NOT yet handed off — drives
      *  the "captured" mark (alongside the client-side changed-vs-baseline set). */
     setDrafts: (fids: string[]) => void;
+    /** Per-feature typed-media blocks (v6) — diagrams/images/latex/urls rendered below
+     *  each feature heading. Persistent only; ordered host-side. */
+    setBlocks: (blocks: Record<string, UIBlock[]>) => void;
+    /** localId→minted-fid map (v6) — the exact reconciliation table patchMintedIds uses
+     *  to stamp a freshly-minted fid onto the right in-progress node. Set before setDoc. */
+    setMintedMap: (m: Record<string, string>) => void;
     /** Per-feature one-line pitches (FeatureMeta.pitch) — feeds glance mode. */
     setPitches: (pitches: Record<string, string>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
@@ -205,6 +216,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // self-echo round-trip so a captured edit (add OR delete) persists until ⌘S/Commit.
     let capturedBaseline = new Map<string, FeatureText>();
     let currentDrafts = new Set<string>();
+    let currentBlocks: Record<string, UIBlock[]> = {};  // v6 typed-media blocks per feature
+    let currentMintedByLocalId: Record<string, string> = {};  // v6 localId→minted fid (exact reconcile)
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
@@ -238,6 +251,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 getHeld: () => currentHeld,
                 getDetail: () => currentHoldDetail,
                 onWithdraw: opts.onWithdrawRealization,
+            }),
+            BlockDecorations.configure({
+                getBlocks: () => currentBlocks,
+                onEdit: opts.onBlockEdit,
             }),
             CapturedDecorations.configure({
                 // Phase 1 of the lifecycle: every user edit gets the "recorded, not sent"
@@ -648,22 +665,36 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         editor.state.doc.forEach(node => {
             if (node.type.name === 'featureHeading' && node.attrs.fid) localFids.add(node.attrs.fid as string);
         });
+        // Title/order candidates from the incoming doc — the LEGACY fallback, used only
+        // for null-fid nodes that have no localId match (e.g. a raw-text-editor add).
         const minted: { title: string; fid: string }[] = [];
         for (const b of incoming.content ?? []) {
             if (b.type !== 'featureHeading') continue;
             const fid = (b.attrs as { fid?: string | null } | undefined)?.fid;
             if (fid && !localFids.has(fid)) minted.push({ title: inlineRunsToText(b.content).trim(), fid });
         }
-        if (!minted.length) return;
 
         const used = new Set<number>();
         let tr = editor.state.tr;
         let changed = false;
         editor.state.doc.forEach((node, pos) => {
             if (node.type.name !== 'featureHeading' || node.attrs.fid != null) return;
+            // v6: EXACT match by localId → fid (the daemon persisted the localId on the
+            // minted feature). No title/order guessing, so a node with an empty/edited
+            // title or a shifted position still reconciles to the right fid — killing the
+            // duplicate/orphan "Untitled" + "new node" churn and the caret jump.
+            const lid = node.attrs.localId as string | null;
+            const exact = lid ? currentMintedByLocalId[lid] : undefined;
+            if (exact && !localFids.has(exact)) {
+                tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, fid: exact });
+                localFids.add(exact);
+                changed = true;
+                return;
+            }
+            // Legacy fallback (no localId match): title then order.
             const title = (node.textContent || '').trim();
             let pick = minted.findIndex((m, i) => !used.has(i) && m.title === title);
-            if (pick < 0) pick = minted.findIndex((_m, i) => !used.has(i)); // order fallback
+            if (pick < 0) pick = minted.findIndex((_m, i) => !used.has(i));
             if (pick < 0) return;
             used.add(pick);
             tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, fid: minted[pick].fid });
@@ -1022,6 +1053,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             currentDrafts = new Set(fids);  // recorded, not yet handed off → captured
             editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
         },
+        setBlocks: (blocks: Record<string, UIBlock[]>) => {
+            currentBlocks = blocks;
+            editor.view.dispatch(editor.state.tr.setMeta(BLOCKS_UPDATED, true));
+        },
+        setMintedMap: (m: Record<string, string>) => { currentMintedByLocalId = m; },
         setPitches: (pitches: Record<string, string>) => {
             currentPitches = pitches;
             // Refresh glance widgets if glance is currently on (no-op decoration when off).

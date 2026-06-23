@@ -63,6 +63,10 @@ class Feature(BaseModel):
     # bootstrap node is born real; a plan placeholder is created PLANNED and
     # promoted on its first binding.
     lifecycle: Lifecycle = Lifecycle.ACTIVE
+    # The webview's client-side node id (KTD8) for a hand-authored feature, persisted
+    # so a freshly-minted fid can be matched back to the exact in-progress node. Empty
+    # for code-derived / bootstrap / agent-added features (they never had a localId).
+    local_id: str = ""
     created_at: HLC = Field(default_factory=HLC.now)
     updated_at: HLC = Field(default_factory=HLC.now)  # advances on any field mutation
 

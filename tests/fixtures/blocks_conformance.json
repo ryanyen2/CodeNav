@@ -1,0 +1,13 @@
+{
+  "version": 6,
+  "by_feature": {"f-auth": [{"file": "a.py", "symbol": "a.py::login"}]},
+  "by_file": {},
+  "features": {"f-auth": {"title": "Auth", "parent_id": null, "lifecycle": "active", "realized": true, "pitch": "Auth"}},
+  "proposals": {"by_feature": {}, "by_event": {}, "by_parent": {}},
+  "blocks": {
+    "f-auth": [
+      {"id": "blk-diagram-1", "kind": "diagram", "content": "flowchart TB\n  login --> make_token", "lifecycle": "persistent", "provenance": "derived", "ord": 0},
+      {"id": "blk-url-1", "kind": "url", "content": "https://docs.example/auth", "lifecycle": "persistent", "provenance": "human", "ord": 1}
+    ]
+  }
+}

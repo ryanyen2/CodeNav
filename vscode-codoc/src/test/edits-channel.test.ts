@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     parseEditsFile, emptyEditsFile, annotationsForSettle, intentsFromSuggestions,
-    appendCancellation, appendSteer, setDrafts,
+    appendCancellation, appendSteer, setDrafts, appendBlockEdit,
 } from '../state/edits-channel';
 import { agentAmendsByFeature, type SidecarData } from '../state/bindings-model';
 import { codeAheadSuggestions, type Suggestion } from '../state/suggestion-model';
@@ -279,5 +279,24 @@ describe('U4 — suggesting-mode drafts (held until hand-off)', () => {
         const parsed = parseEditsFile({ version: 1, edits: [], intents: [], drafts: [{ feature_id: 'f-x' }] });
         expect(parsed.drafts).toEqual([{ feature_id: 'f-x' }]);
         expect(parseEditsFile({ version: 1, edits: [], intents: [] }).drafts).toBeUndefined();
+    });
+
+    it('appendBlockEdit adds a v6 block edit, superseding a prior pending one by id', () => {
+        let file = emptyEditsFile();
+        file = appendBlockEdit(file, { block_id: 'blk-1', feature_id: 'f-a', kind: 'diagram', action: 'edit', content: 'v1', ts: 1 });
+        file = appendBlockEdit(file, { block_id: 'blk-1', feature_id: 'f-a', kind: 'diagram', action: 'edit', content: 'v2', ts: 2 });
+        // iterating the same block doesn't stack entries — the latest wins
+        expect(file.block_edits).toHaveLength(1);
+        expect(file.block_edits![0].content).toBe('v2');
+    });
+
+    it('appendBlockEdit carries a remove verbatim and round-trips through parse', () => {
+        let file = emptyEditsFile();
+        file = appendBlockEdit(file, { block_id: 'blk-x', feature_id: 'f-a', kind: 'latex', action: 'remove', ts: 1 });
+        const parsed = parseEditsFile(JSON.parse(JSON.stringify(file)));
+        expect(parsed.block_edits).toEqual([
+            { block_id: 'blk-x', feature_id: 'f-a', kind: 'latex', action: 'remove', content: '', prev_content: '', ts: 1 },
+        ]);
+        expect(parseEditsFile({ version: 1, edits: [], intents: [] }).block_edits).toBeUndefined();
     });
 });

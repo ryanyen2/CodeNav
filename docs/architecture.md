@@ -125,6 +125,47 @@ daemon) and `codoc watch --auto-realize` (no session), via `loop/sdk_realize.py`
 (preferred) or a blind `claude -p /codoc:sync`. The unified `/codoc:sync` reads
 `status.json` and dispatches direction.
 
+## Blocks — typed media + plugin codecs (agent-native notebook protocol)
+
+The feature node generalizes to a typed, bindable, lifecycled **block**. Prose stays
+the implicit *block-zero* (`feature.description`), so an existing feature owns zero
+block rows and is unchanged; non-prose media (diagram, image, latex, url, screenshot)
+are rows in the new `blocks` table (`codoc/store/db.py`). The whole subsystem lives in
+`codoc/blocks/`.
+
+A **plugin** (`blocks/base.py:BlockPlugin`) declares which of three capabilities a
+medium supports — `LIFT` (code→block, ungated attribution, read-only on code),
+`LOWER` (block→code directive, hold-gated, lossy→held draft), `CONSULT` (passive
+context, no round-trip) — plus binding mode (`bound` inherits the feature's binding
+set; `ambient` has none), lifecycle (`persistent`/`transient`), and per-direction
+dispatch (`deterministic`/`agent`). The registry (`registry.py`) validates that each
+declared capability has its method and is the loops' **dispatch table**.
+
+Two invariants make this robust and deterministic:
+- **KTD1 — binding stays feature-level.** A block's binding view derives from
+  `bindings_for_feature`; `UNIQUE(file, symbol_path)` is untouched (no per-block key).
+- **KTD8 — structure is deterministic, only transformation is the LLM.** Every block
+  carries a stable `id` (`ids.new_block_id`) that survives arbitrary host edits (move =
+  `ord` change, delete+undo, type-change); the loops diff the settled block-id set
+  against a baseline, so the LLM never tracks identity — it only transforms content.
+
+Loop integration (no parallel pipeline — block directives ARE directives):
+- **Loop A** (`loop_a.run_loop_a` → `blocks/refresh.py:refresh_lift_blocks`) re-derives
+  persistent `LIFT` blocks from the fresh graph after `apply_changeset`. It is doc-wins:
+  a block on a *held* feature is skipped so a human's in-progress edit is never clobbered.
+- **Loop B** (`loop_b._apply_edits` step 2.9) drains the `edits.json` `block_edits`
+  channel, dispatches each by declared `LOWER` capability, and feeds the result into the
+  same manifest → `realize.md` queue (inheriting the draft gate, append-never-clobber,
+  filelock). A `remove` drops only the projection (block row), never code/bindings; an
+  ambiguous `lower` returns a `draft` held for confirmation; a `move` emits nothing.
+
+Reference plugins: prose (`prose.py`, plugin-zero), diagram (`diagram.py` — deterministic
+`lift` from the dependency graph, deterministic edge-delta `lower`), and the consult media
+(`screenshot.py` — transient screenshot riding the steers channel + url/image). Hosts
+render blocks from the sidecar `blocks` slice (v6); the VS Code webview and the `codoc serve`
+hub (read-only) are two hosts on the one protocol, kept in parity by
+`blocks/conformance.py:canonical_block_view` (mirrored by `bindings-model.ts:blocksForFeature`).
+
 ## Bootstrap in detail
 
 `run_bootstrap` → `bootstrap_hier_from_chunks`, two phases: (1) a per-file
@@ -145,7 +186,7 @@ state** and is re-emitted on every pass even when the text render is held back
   free-prose multi-paragraph descriptions; inline `[label](codoc:file#symbol)`
   citations. Bindings are *not* printed (they ride in the sidecar). Pending ADD/MOVE
   render as ghost hunks; RETIRE/AMEND emit no text.
-- **`tree.bindings.json`** (v5) — the IDE/browser sidecar: `by_feature`/`by_file`
+- **`tree.bindings.json`** (v6) — the IDE/browser sidecar: `by_feature`/`by_file`
   bindings, `features{}` (each carries `lifecycle` + the legacy `realized`),
   `proposals` (drives in-place overlays + Accept/Reject), `changes` (recent applied
   events), and derived reading slices (`pitch`, `feature_kind`, `feature_see_also`).
@@ -173,7 +214,8 @@ state** and is re-emitted on every pass even when the text render is held back
   drained by Loop B, then cleared. Read-modify-write is `filelock`-guarded.
 - **`edits.json`** — the host's provenance/intent channel: `edits` (authorship
   annotations), `intents`/`drafts` (live doc-ahead suggestions + held pending edits
-  — the doc-wins hold set), `cancellations`/`steers`. Read-modify-write is
+  — the doc-wins hold set), `cancellations`/`steers`, and `block_edits` (v6 —
+  typed-media block edits drained by Loop B's `lower` dispatch). Read-modify-write is
   `filelock`-guarded (the hub is a second writer).
 
 ## Environment variables

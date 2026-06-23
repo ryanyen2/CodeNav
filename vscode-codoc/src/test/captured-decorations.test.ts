@@ -76,10 +76,13 @@ describe('U3: capturedFids', () => {
         expect(capturedFids(base, cur, new Set(['f-a']), new Set(['f-a'])).size).toBe(0);
     });
 
-    it('does NOT capture a brand-new feature absent from the baseline (left to the ADD flow)', () => {
+    it('captures a brand-new authored node absent from the baseline (U4: recorded immediately)', () => {
+        // A new heading is keyed by its localId (no fid yet); it has no baseline entry,
+        // so it now reads as recorded — the author sees the "recorded" dot at once
+        // instead of silent nothing. (Supersedes the old "left to the ADD flow" behavior.)
         const cur = new Map(base);
-        cur.set('f-new', ft('Brand new', 'fresh node'));
-        expect([...capturedFids(base, cur, empty, empty)]).not.toContain('f-new');
+        cur.set('lid-new', ft('Brand new', 'fresh node'));
+        expect([...capturedFids(base, cur, empty, empty)]).toContain('lid-new');
     });
 });
 

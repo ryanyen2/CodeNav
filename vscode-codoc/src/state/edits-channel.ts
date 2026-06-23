@@ -71,6 +71,20 @@ export interface DraftEntry {
     feature_id: string;
 }
 
+/** A typed-media block edit (v6) handed to Loop B for `lower` dispatch. Keyed by
+ *  the STABLE block id (KTD8) — identity is never inferred from content, so a move
+ *  (ord change) emits NO entry and a delete+undo nets to nothing. `action`:
+ *  `edit`/`add` dispatch `lower`; `remove` drops the projection (NEVER the code). */
+export interface BlockEditEntry {
+    block_id: string;
+    feature_id: string;
+    kind: string;
+    action: 'edit' | 'add' | 'remove';
+    content: string;        // new content (empty for remove)
+    prev_content: string;   // content before the edit (the lower delta)
+    ts: number;             // unix ms
+}
+
 export interface EditsFile {
     version: 1;
     edits: EditAnnotation[];
@@ -83,6 +97,8 @@ export interface EditsFile {
     /** Held suggesting-mode drafts (U3/U4). Omitted when empty → no holds → the daemon
      *  realizes code-implying edits immediately (today's behavior). */
     drafts?: DraftEntry[];
+    /** Pending typed-media block edits (v6). Omitted when empty. */
+    block_edits?: BlockEditEntry[];
 }
 
 export function emptyEditsFile(): EditsFile {
@@ -100,6 +116,7 @@ export function parseEditsFile(json: unknown): EditsFile {
     if (Array.isArray(o.cancellations)) file.cancellations = o.cancellations as CancellationEntry[];
     if (Array.isArray(o.steers)) file.steers = o.steers as SteerEntry[];
     if (Array.isArray(o.drafts)) file.drafts = o.drafts as DraftEntry[];
+    if (Array.isArray(o.block_edits)) file.block_edits = o.block_edits as BlockEditEntry[];
     return file;
 }
 
@@ -135,6 +152,24 @@ export function appendSteer(
     const steers = (file.steers ?? []).filter(s => s.comment_id !== entry.comment_id);
     steers.push(entry);
     return { ...file, steers };
+}
+
+/** Append a typed-media block edit (v6). A pure reorder/move is NOT a block edit
+ *  (it has no code effect), so the host only calls this for content edits, adds,
+ *  and removes. A later edit to the same block supersedes the prior pending one
+ *  (keyed by block_id) so iterating a block doesn't stack entries. Pure — Loop B
+ *  drains the list once and dispatches `lower`. */
+export function appendBlockEdit(
+    file: EditsFile,
+    entry: { block_id: string; feature_id: string; kind: string; action: 'edit' | 'add' | 'remove'; content?: string; prev_content?: string; ts: number },
+): EditsFile {
+    const block_edits = (file.block_edits ?? []).filter(b => b.block_id !== entry.block_id);
+    block_edits.push({
+        block_id: entry.block_id, feature_id: entry.feature_id, kind: entry.kind,
+        action: entry.action, content: entry.content ?? '', prev_content: entry.prev_content ?? '',
+        ts: entry.ts,
+    });
+    return { ...file, block_edits };
 }
 
 /** A minimal parsed-feature shape (matches tree-model's ParsedFeature fields we need). */

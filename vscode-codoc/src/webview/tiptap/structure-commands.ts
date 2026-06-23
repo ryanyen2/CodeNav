@@ -10,8 +10,9 @@
  * the editor state + dispatch, ProseMirror-style.
  */
 import { Editor } from '@tiptap/core';
-import { Node as PMModelNode } from '@tiptap/pm/model';
-import { TextSelection } from '@tiptap/pm/state';
+import { Node as PMModelNode, NodeType } from '@tiptap/pm/model';
+import { TextSelection, Transaction, EditorState } from '@tiptap/pm/state';
+import { newLocalId } from './local-id';
 
 interface HeadingHit {
     node: PMModelNode;
@@ -101,7 +102,7 @@ export function newFeatureHeading(editor: Editor): boolean {
     }
     const placeholder = 'New feature';
     const heading = editor.schema.nodes.featureHeading.create(
-        { fid: null, level, retired: false, realized: true },
+        { fid: null, level, retired: false, realized: true, localId: newLocalId() },
         editor.schema.text(placeholder),
     );
     const para = editor.schema.nodes.paragraph.create();
@@ -113,6 +114,44 @@ export function newFeatureHeading(editor: Editor): boolean {
     editor.view.dispatch(tr);
     editor.view.focus();
     return true;
+}
+
+/**
+ * The transform behind the `#{n} ` heading input rule (U2). PURE + unit-tested.
+ *
+ * `[start, end)` is the matched `#{n} ` range. Two cases, so the gesture is uniform
+ * across all four levels and never silently becomes literal text:
+ *  - **At block start** (no preceding text): convert the current block in place.
+ *  - **Preceding text** (typed `## ` at the end of / within a populated paragraph,
+ *    the reported bug): SPLIT at the caret — the text before stays as the prior
+ *    feature's paragraph, and a NEW empty featureHeading begins after it. The
+ *    author then types the title. No content is consumed from the previous feature.
+ *
+ * A fresh `localId` (KTD8) is minted onto the new heading so it has stable identity
+ * before the daemon assigns a `fid`. Returns the transaction, or null if the schema
+ * lacks the node (defensive).
+ */
+export function headingFromInputRule(
+    state: EditorState, level: number, start: number, end: number, localId?: string,
+): Transaction | null {
+    const type: NodeType | undefined = state.schema.nodes.featureHeading;
+    if (!type) return null;
+    const attrs = { fid: null, level, retired: false, realized: true, localId: localId ?? newLocalId() };
+    const $start = state.doc.resolve(start);
+    const blockStart = $start.start();
+    const tr = state.tr.delete(start, end);
+    if (start === blockStart) {
+        // Block start → convert this (empty/own-line) block in place to a heading.
+        return tr.setBlockType(start, start, type, attrs);
+    }
+    // Preceding text → keep the current paragraph as the prior feature's description
+    // and INSERT a fresh empty heading right after it (no content is consumed). The
+    // caret lands inside the new heading so the author types the title.
+    const $after = tr.doc.resolve(start);
+    const insertAt = $after.after($after.depth);
+    tr.insert(insertAt, type.create(attrs));
+    tr.setSelection(TextSelection.create(tr.doc, insertAt + 1));
+    return tr;
 }
 
 /** Toggle the retired flag on the current heading (→ `~` marker → RETIRE on commit). */

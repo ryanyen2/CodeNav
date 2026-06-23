@@ -217,7 +217,7 @@ def test_write_sidecar_reemits_drift_without_reading_index(store, codoc_dir, mon
     from codoc.codoc_file.render import BINDINGS_FILENAME
     from pathlib import Path
     sidecar = json.loads((Path(codoc_dir) / BINDINGS_FILENAME).read_text())
-    assert sidecar["version"] == 5
+    assert sidecar["version"] == 6
     assert sidecar["feature_drift"] == {f.id: DRIFT_QUESTIONED}  # re-emitted unchanged
 
 
