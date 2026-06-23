@@ -54,6 +54,7 @@ def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
                 title=node.title,
                 description=node.description,
                 parent_id=node.parent_id,
+                local_id=node.local_id,  # carry the webview's node id so the minted fid matches back
             ))
             for comment in node.comments:
                 diff.new_node_comments.append((node.title, comment))
@@ -73,7 +74,11 @@ def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
         # parser, or a non-normalizing agent/bootstrap write). Emit the canonical form
         # so the applied AMEND leaves the store canonical.
         new_desc = normalize_description(node.description)
-        if node.title != f.title or new_desc != normalize_description(f.description or ""):
+        # A blank parsed title must NOT overwrite the real one — that produced the
+        # empty `-   ⟨f-id⟩` node (a transient mid-edit/parse blank persisted as the
+        # canonical title). Keep the stored title when the parsed one is empty.
+        new_title = node.title if node.title.strip() else f.title
+        if new_title != f.title or new_desc != normalize_description(f.description or ""):
             old_bold = set(extract_bold(f.description or ""))
             newly = [b for b in extract_bold(node.description) if b not in old_bold]
             if newly:
@@ -81,7 +86,7 @@ def diff_codoc(parsed: ParsedTree, store: Store) -> CodocDiff:
             diff.user_ops.append(NodeOp(
                 kind=NodeOpKind.AMEND,
                 feature_id=f.id,
-                title=node.title,
+                title=new_title,
                 description=new_desc,
             ))
         if node.parent_id != f.parent_id:
