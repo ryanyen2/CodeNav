@@ -31,7 +31,7 @@ import {
 import { directedEdges, agentAmendsByFeature, heldFeatures, heldDetail, divergentFeatures, blocksForFeature, mintedByLocalId } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile,
-    annotationsForSettle, appendCancellation, appendSteer, setDrafts, appendBlockEdit,
+    annotationsForSettle, appendCancellation, appendSteer, setDrafts, appendBlockEdit, appendHandoffs,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -693,16 +693,28 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      */
     private async settleDoc(document: vscode.TextDocument, doc: PMNode): Promise<void> {
         const df = this.docFileFor(document);
+        // INV4: capture the previously-saved doc BEFORE overwriting. When docAhead is set,
+        // the on-disk tree.codoc is stale (daemon hasn't rendered yet) — using document.getText()
+        // as prevText would compare against the OLD pre-settle text and misattribute which fields
+        // changed. Using the prior saved-doc render ensures annotationsForSettle only sees the
+        // delta since the last settle, not since the last daemon render (attacks A1, A5, D4).
+        const prevDoc = df.doc;
+        const uri = document.uri.toString();
+
         df.doc = doc;
         await this.persistDocFile(document, df);
 
         const next = renderTreeFromDoc(doc);
-        const uri = document.uri.toString();
         if (next === document.getText()) { this.docAhead.delete(uri); return; } // no change
 
-        // Tell the loops WHO authored this settle (per changed feature). The diff is
-        // prev on-disk text (== store state) vs the new doc render.
-        await this.annotateSettle(document, document.getText(), next);
+        // When docAhead is set, use the previously-saved doc's render as the baseline so
+        // rapid successive settles accumulate correctly. When docAhead is clear, the on-disk
+        // tree.codoc IS the store state and is the correct baseline.
+        const prevText = (this.docAhead.has(uri) && prevDoc)
+            ? renderTreeFromDoc(prevDoc)
+            : document.getText();
+
+        await this.annotateSettle(document, prevText, next);
         // The saved doc now leads the on-disk tree.codoc until the daemon renders it
         // back — buildPayload sources from the saved doc meanwhile (no reversion).
         this.docAhead.add(uri);
@@ -731,9 +743,16 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  committed prose is untouched. Reconciles with the on-disk drafts first so a draft
      *  marked in another panel is also released. */
     private async handOff(document: vscode.TextDocument): Promise<void> {
-        this.draftSet(document).clear();
+        // Held-draft model: a doc AMEND is born HELD; hand-off is the POSITIVE realize
+        // signal. Write the currently-held draft fids to `handoffs` (the daemon flips
+        // their held directives to handed_off → realize.md) AND clear the drafts set
+        // (the "captured" UI drops). Writing handoffs is what actually realizes — under
+        // the held-draft model, merely clearing drafts no longer hands anything off.
+        const set = this.draftSet(document);
+        const fids = [...set];
+        set.clear();
         const file = await this.readEditsFile(document);
-        await this.writeEditsFile(document, setDrafts(file, []));
+        await this.writeEditsFile(document, setDrafts(appendHandoffs(file, fids), []));
     }
 
     /** Loop B / realize stamps progress into status.detail in ONE shape —

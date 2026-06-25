@@ -77,6 +77,14 @@ export interface DraftEntry {
     feature_id: string;
 }
 
+/** A hand-off request: the human explicitly chose to realize feature `feature_id`'s
+ *  held draft (commit / ⌘S, or the per-feature hand-off action). The positive realize
+ *  signal in the held-draft model — Loop B flips the matching held directive to
+ *  handed_off and (re)builds realize.md. One-shot (drained by the loop). */
+export interface HandoffEntry {
+    feature_id: string;
+}
+
 /** A typed-media block edit (v6) handed to Loop B for `lower` dispatch. Keyed by
  *  the STABLE block id (KTD8) — identity is never inferred from content, so a move
  *  (ord change) emits NO entry and a delete+undo nets to nothing. `action`:
@@ -100,11 +108,16 @@ export interface EditsFile {
     cancellations?: CancellationEntry[];
     /** Pending one-shot comment steers (U2b). Omitted when empty. */
     steers?: SteerEntry[];
-    /** Held suggesting-mode drafts (U3/U4). Omitted when empty → no holds → the daemon
-     *  realizes code-implying edits immediately (today's behavior). */
+    /** Held suggesting-mode drafts (U3/U4). Omitted when empty. In the held-draft model
+     *  the daemon holds every doc AMEND by default; this set drives the "captured" UI. */
     drafts?: DraftEntry[];
     /** Pending typed-media block edits (v6). Omitted when empty. */
     block_edits?: BlockEditEntry[];
+    /** Pending hand-off requests: feature ids the human EXPLICITLY chose to realize
+     *  (commit / ⌘S). The POSITIVE realize signal in the held-draft model — Loop B
+     *  flips the matching held directives to handed_off. One-shot (drained). Omitted
+     *  when empty. */
+    handoffs?: HandoffEntry[];
 }
 
 export function emptyEditsFile(): EditsFile {
@@ -123,6 +136,7 @@ export function parseEditsFile(json: unknown): EditsFile {
     if (Array.isArray(o.steers)) file.steers = o.steers as SteerEntry[];
     if (Array.isArray(o.drafts)) file.drafts = o.drafts as DraftEntry[];
     if (Array.isArray(o.block_edits)) file.block_edits = o.block_edits as BlockEditEntry[];
+    if (Array.isArray(o.handoffs)) file.handoffs = o.handoffs as HandoffEntry[];
     return file;
 }
 
@@ -148,6 +162,22 @@ export function appendCancellation(file: EditsFile, featureId: string, ts: numbe
     const cancellations = (file.cancellations ?? []).filter(c => c.feature_id !== featureId);
     cancellations.push({ feature_id: featureId, ts });
     return { ...file, cancellations };
+}
+
+/** Append hand-off requests for the given feature ids (deduped, order-preserving) —
+ *  the POSITIVE realize signal in the held-draft model. Pure; the host persists it and
+ *  Loop B drains the `handoffs` list, flipping the matching held drafts to handed_off.
+ *  An empty result normalizes to an absent `handoffs` key (Python omit-when-empty shape). */
+export function appendHandoffs(file: EditsFile, featureIds: readonly string[]): EditsFile {
+    const seen = new Set((file.handoffs ?? []).map(h => h.feature_id));
+    const handoffs: HandoffEntry[] = [...(file.handoffs ?? [])];
+    for (const id of featureIds) {
+        if (id && !seen.has(id)) { seen.add(id); handoffs.push({ feature_id: id }); }
+    }
+    const next = { ...file };
+    if (handoffs.length) next.handoffs = handoffs;
+    else delete next.handoffs;
+    return next;
 }
 
 /** Append a one-shot comment steer (U2b), replacing any prior steer for the same

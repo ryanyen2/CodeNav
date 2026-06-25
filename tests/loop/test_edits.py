@@ -116,10 +116,9 @@ def test_loop_b_defaults_to_human_pen_without_annotation(dirs):
     s.close()
 
 
-def test_queued_directives_get_ids_in_heading_and_manifest(dirs):
+def test_directives_get_ids_in_manifest_and_heading_after_handoff(dirs):
     root, codoc_dir = dirs
     fid = _seed_feature(codoc_dir)
-    # imperative edit → directive; settle applied a doc-ahead suggestion
     edits.append_annotation(codoc_dir, edits.EditAnnotation(
         feature_id=fid, fields=["description"], actor="human", mode="pen",
         suggestion_id="d-sugg1"))
@@ -127,18 +126,24 @@ def test_queued_directives_get_ids_in_heading_and_manifest(dirs):
     tp.write_text(tp.read_text().replace(
         "Validates input.", "Rewrite the validator; it should reject tabs."))
 
+    # Held-draft model: the AMEND mints a directive with a stable id + caused_by, held
+    # in the manifest (handed_off=False) — NOT yet in realize.md.
     res = run_loop_b(root, codoc_dir, dry_run=False)
-
-    assert res.queued and len(res.directive_ids) == 1
+    assert res.queued is False and len(res.directive_ids) == 1
     did = res.directive_ids[0]
     assert did.startswith("d-")
+    manifest = edits.read_manifest(codoc_dir)
+    assert [(d.id, d.feature_id, d.kind, d.caused_by, d.handed_off) for d in manifest] == \
+        [(did, fid, "amend", "d-sugg1", False)]
+    assert not realize_path(codoc_dir).exists()
+    # the held feature is in the hold set (doc wins) even while held
+    assert edits.hold_set(codoc_dir) == {fid}
+
+    # Hand off → the directive's ⟨id⟩ appears in the realize.md heading.
+    edits.append_handoffs(codoc_dir, [fid])
+    run_loop_b(root, codoc_dir, dry_run=False)
     body = realize_path(codoc_dir).read_text()
     assert f"⟨{did}⟩" in body and "UPDATE FEATURE" in body
-    manifest = edits.read_manifest(codoc_dir)
-    assert [(d.id, d.feature_id, d.kind, d.caused_by) for d in manifest] == \
-        [(did, fid, "amend", "d-sugg1")]
-    # the queued feature is now held (doc wins)
-    assert edits.hold_set(codoc_dir) == {fid}
 
 
 # ─── the intent drain — Loop B applies doc-ahead suggestions (row 9) ──────────
@@ -162,11 +167,12 @@ def test_read_intents_payload_fields(dirs):
     assert got["d-c"].title is None and got["d-c"].description is None
 
 
-def test_intent_drain_applies_and_queues_with_causality(dirs):
-    """An imperative payload intent is applied by Loop B (the agent-side apply):
-    store updated, event stamped human/suggest/caused_by=suggestion id, a
-    directive queued with the same caused_by, and tree.codoc re-rendered so the
-    text catches up (no phantom revert on the next pass)."""
+def test_intent_drain_applies_and_holds_draft_with_causality(dirs):
+    """A payload intent (doc-ahead suggestion) is applied by Loop B (the agent-side
+    apply): store updated, event stamped human/suggest/caused_by=suggestion id, a
+    HELD-draft directive minted with the same caused_by, and tree.codoc re-rendered so
+    the text catches up. Held (not realized) — an applied suggestion is a doc edit, not
+    surprise code; the maintainer hands it off to realize."""
     root, codoc_dir = dirs
     fid = _seed_feature(codoc_dir)
     _write_intents(codoc_dir, [{"id": "d-sugg9", "feature_id": fid, "actor": "human",
@@ -174,13 +180,14 @@ def test_intent_drain_applies_and_queues_with_causality(dirs):
 
     res = run_loop_b(root, codoc_dir, dry_run=False)
 
-    assert res.user_edits == 1 and res.queued
+    assert res.user_edits == 1 and res.queued is False
     s = open_store(codoc_dir)
     assert s.get_feature(fid).description == "Should reject empty payloads."
     ev = [e for e in s.recent_events(10) if e.op.kind.value == "amend"][0]
     assert (ev.actor, ev.mode, ev.caused_by) == ("human", "suggest", "d-sugg9")
     s.close()
-    assert [d.caused_by for d in edits.read_manifest(codoc_dir)] == ["d-sugg9"]
+    manifest = edits.read_manifest(codoc_dir)
+    assert [(d.caused_by, d.handed_off) for d in manifest] == [("d-sugg9", False)]
     assert "Should reject empty payloads." in tree_path(codoc_dir).read_text()
 
 

@@ -79,10 +79,16 @@ def test_steering_comment_appends_to_inflight_queue(dirs):
     _seed(codoc_dir)
     _edit_tree(codoc_dir, "Holds brand colors.",
                "Holds brand colors. Should also expose dark-mode variants.")
+    run_loop_b(root, codoc_dir, dry_run=False)
+    # The AMEND mints a held draft; hand it off so it is genuinely in-flight in realize.md.
+    with open_store(codoc_dir) as s:
+        fid = next(f.id for f in s.list_features() if f.title == "Color palette")
+    edits_channel.append_handoffs(codoc_dir, [fid])
     first = run_loop_b(root, codoc_dir, dry_run=False)
-    assert first.queued and len(first.directives) == 1
+    assert first.queued and "UPDATE FEATURE" in realize_path(codoc_dir).read_text()
 
-    # Mid-realization, the user steers with a comment.
+    # Mid-realization, the user steers with a comment — a steer is handed off on mint,
+    # so it APPENDS to the in-flight realize.md (does not clobber the UPDATE).
     _edit_tree(codoc_dir, "dark-mode variants.",
                "dark-mode variants.\n  > use CSS custom properties, not a JS map")
     second = run_loop_b(root, codoc_dir, dry_run=False)
@@ -237,15 +243,22 @@ def test_newly_bolded_imperative_span_queues_despite_descriptive_prose(dirs):
     assert '"validate hex inputs"' in res.directives[0]
 
 
-def test_bold_descriptive_span_does_not_queue(dirs):
+def test_bold_span_no_longer_gates_realization(dirs):
+    """Bold lost its queuing role (is_imperative is deleted — no prose heuristic). It
+    is now a pure presentation signal: the AMEND mints a HELD draft like any other
+    edit, carrying the bolded span as a Focus: line, and stays held until hand-off."""
     root, codoc_dir = dirs
     _seed(codoc_dir)
     _edit_tree(codoc_dir, "Holds brand colors.", "Holds **brand** colors.")
 
-    res = run_loop_b(root, codoc_dir, dry_run=True)
+    res = run_loop_b(root, codoc_dir, dry_run=False)
 
     assert res.user_edits == 1
-    assert res.directives == []  # emphasis without imperative intent stays prose
+    assert res.queued is False            # held — bold does not force realization
+    from codoc.loop.edits import read_manifest
+    manifest = read_manifest(codoc_dir)
+    assert len(manifest) == 1 and manifest[0].handed_off is False
+    assert "Focus:" in manifest[0].text and '"brand"' in manifest[0].text
 
 
 def test_focus_lists_only_newly_bolded_spans(dirs):

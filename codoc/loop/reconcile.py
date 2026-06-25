@@ -47,7 +47,10 @@ def has_pending_doc_edits(codoc_dir: str) -> bool:
     if parse_doc_file(codoc_dir) is None:
         return False
     with open_store(codoc_dir) as store:
-        return not diff_codoc(parse_doc_file(codoc_dir), store).is_empty()
+        # Doc channel → has_local_ids=True so a TipTap-undo'd node (fid reset to null,
+        # local_id intact) is recognized as the existing feature, not a false-positive
+        # pending ADD that would wake Loop B on a no-op.
+        return not diff_codoc(parse_doc_file(codoc_dir), store, has_local_ids=True).is_empty()
 
 
 def safe_write_tree(store: Store, codoc_dir: str) -> bool:
@@ -60,15 +63,22 @@ def safe_write_tree(store: Store, codoc_dir: str) -> bool:
     when it diverges the text write is skipped so the edit survives until Loop B
     absorbs it. Returns True if the text was (re)written, False if it was skipped.
     """
-    write_sidecar(store, codoc_dir)
-    if not pending_user_edits(store, codoc_dir).is_empty():
-        return False
-    # U2b: also yield to a pending WEBVIEW edit (tree.doc.json ahead of the store).
-    # Rendering tree.codoc from the old store while a doc edit awaits Loop B would
-    # push stale text the host then adopts — reverting the user's settle. Only Loop B
-    # applies the doc edit; once it has, the doc is in sync and this renders normally.
-    doc_parsed = parse_doc_file(codoc_dir)
-    if doc_parsed is not None and not diff_codoc(doc_parsed, store).is_empty():
-        return False
-    write_tree(store, codoc_dir)
-    return True
+    # Hold the shared codoc-loop lock for the whole render so this derived re-render
+    # cannot race a concurrent loop's write_tree (a torn / stale tree.codoc). Safe:
+    # this only READS the store and writes the derived .codoc files (no SQLite writes),
+    # so it cannot deadlock against a loop that holds the lock and writes the store.
+    from codoc.loop.locks import loop_lock
+
+    with loop_lock(codoc_dir):
+        write_sidecar(store, codoc_dir)
+        if not pending_user_edits(store, codoc_dir).is_empty():
+            return False
+        # U2b: also yield to a pending WEBVIEW edit (tree.doc.json ahead of the store).
+        # Rendering tree.codoc from the old store while a doc edit awaits Loop B would
+        # push stale text the host then adopts — reverting the user's settle. Only Loop B
+        # applies the doc edit; once it has, the doc is in sync and this renders normally.
+        doc_parsed = parse_doc_file(codoc_dir)
+        if doc_parsed is not None and not diff_codoc(doc_parsed, store, has_local_ids=True).is_empty():
+            return False
+        write_tree(store, codoc_dir)
+        return True

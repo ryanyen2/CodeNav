@@ -422,6 +422,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         iconButton('＋ feature', 'New feature (sibling)', () => { newFeatureHeading(editor); }, 'ce-new'),
         // indent / outdent are Tab / Shift-Tab (makeKeymap) — no redundant toolbar buttons (U5).
         iconButton('~ retire', 'Toggle retire on this feature', () => { toggleRetireHeading(editor); editor.commands.focus(); }, 'ce-retire'),
+        // Create a NEW feature as a plan/build request (realized=false) — born plan, so
+        // committing it asks the agent to build the feature. This is the typed "build
+        // this" gesture that replaced the deleted is_imperative prose guess.
+        iconButton('◇ plan', 'New build-request feature (plan — the agent implements it on commit)',
+            () => { newFeatureHeading(editor, { realized: false }); }, 'ce-plan'),
     );
 
     const spacer = document.createElement('div');

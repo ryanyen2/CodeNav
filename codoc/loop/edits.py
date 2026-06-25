@@ -153,11 +153,17 @@ class Directive:
                        # old + new) instead of clobbering unimplemented items
     baseline: str = ""  # the feature's description BEFORE this edit (AMEND only) — lets
                         # the IDE diff baseline↔current and underline the changed text
-    handed_off: bool = True  # False = a DRAFT held in suggesting mode (in the manifest +
-                             # the in-situ diff/hold set, but NOT yet in realize.md / sent
-                             # to the agent) until the human hands it off. Default True so
-                             # legacy manifests + non-suggesting (raw-text) edits realize
-                             # immediately, exactly as before — the draft gate is additive.
+    handed_off: bool = True  # True = in realize.md / sent to the agent. False = a HELD
+                             # DRAFT (in the manifest + the in-situ diff/hold set, but NOT
+                             # yet realized) until an explicit hand-off (commit / steer /
+                             # plan-flag / RETIRE-with-code / `codoc realize`). The
+                             # held-draft model: Loop B's finalize derives this per-KIND —
+                             # an AMEND/block edit is born held (constructed handed_off=False)
+                             # and flips True only when its feature appears in the one-shot
+                             # ``handoffs`` channel; an explicit gesture (steer/retire/plan)
+                             # is handed off on mint. Once True it is STICKY (never demoted).
+                             # Default True here so a LEGACY manifest entry (written before
+                             # the held-draft model, lacking the field) still realizes.
 
 
 def edits_path(codoc_dir: str | Path) -> Path:
@@ -209,7 +215,7 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
 #   adds a fid on a code-implying draft edit and removes it on hand-off; the loop derives
 #   each directive's ``handed_off`` from this set every pass (so removing a fid releases
 #   it). Empty/absent → every directive is handed off, i.e. today's immediate-realize.
-_LISTS = ("edits", "intents", "cancellations", "steers", "drafts", "block_edits")
+_LISTS = ("edits", "intents", "cancellations", "steers", "drafts", "block_edits", "handoffs")
 
 # Cached, reentrant FileLock per repo guarding every edits.json read-modify-write.
 _edit_locks: dict[str, object] = {}
@@ -265,7 +271,7 @@ def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
     payload: dict = {"version": 1, "edits": merged["edits"], "intents": merged["intents"]}
     # Keep the optional lists out of the payload when empty (matches the prior shape
     # + keeps a plain annotations-only file byte-identical to before).
-    for k in ("cancellations", "steers", "drafts", "block_edits"):
+    for k in ("cancellations", "steers", "drafts", "block_edits", "handoffs"):
         if merged[k]:
             payload[k] = merged[k]
     atomic_write_json(dest, payload)
@@ -426,6 +432,42 @@ def set_drafts(codoc_dir: str | Path, feature_ids: list[str]) -> Path | None:
     """Host/test seam: set the held-draft feature-id set wholesale (hand-off removes
     ids; a draft edit adds them). Preserves the other edits.json lists."""
     return _rewrite(codoc_dir, drafts=[{"feature_id": f} for f in feature_ids])
+
+
+def read_handoffs(codoc_dir: str | Path) -> list[str]:
+    """Pending hand-off requests: feature ids the human EXPLICITLY chose to realize
+    (the webview's commit / ⌘S, or ``codoc realize``). This is the POSITIVE realize
+    signal in the held-draft model — a doc AMEND mints a directive that stays held
+    until its feature appears here. Order-preserving, deduped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for h in _load(codoc_dir).get("handoffs", []):
+        fid = h.get("feature_id") if isinstance(h, dict) else h
+        if isinstance(fid, str) and fid and fid not in seen:
+            seen.add(fid)
+            out.append(fid)
+    return out
+
+
+@_locked
+def drain_handoffs(codoc_dir: str | Path) -> list[str]:
+    """Consume the ``handoffs`` list (feature ids), keeping the others. Loop B flips
+    the matching held directives to handed_off=True (→ realize.md). One-shot: a
+    hand-off is an event, not durable state — once a directive is handed off the
+    manifest records it (handed_off is sticky there)."""
+    handoffs = read_handoffs(codoc_dir)
+    if handoffs:
+        _rewrite(codoc_dir, handoffs=[])
+    return handoffs
+
+
+@_locked
+def append_handoffs(codoc_dir: str | Path, feature_ids: list[str]) -> Path | None:
+    """Host/CLI seam: append feature ids to the one-shot hand-off list (preserves the
+    others). The webview's commit/hand-off and ``codoc realize`` both write here."""
+    existing = read_handoffs(codoc_dir)
+    merged = existing + [f for f in feature_ids if f and f not in existing]
+    return _rewrite(codoc_dir, handoffs=[{"feature_id": f} for f in merged])
 
 
 # ─── realize.json — the directive manifest ───────────────────────────────────

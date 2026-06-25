@@ -108,6 +108,9 @@ def parse_doc(doc: dict) -> ParsedTree:
             parent_id=parent_id,
             retired=bool(attrs.get("retired")),
             local_id=attrs.get("localId") or "",
+            # A heading the webview's "plan" toggle marked unbuilt carries realized=False
+            # — an explicit build request. Read it so a NEW plan node mints a directive.
+            realized=attrs.get("realized") if "realized" in attrs else None,
         )
         node.refs = extract_refs(description)
         tree.nodes.append(node)

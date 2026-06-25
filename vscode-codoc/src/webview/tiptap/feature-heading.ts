@@ -8,6 +8,8 @@
  * styled by CSS per level (a custom outliner, not h1–h6 semantics).
  */
 import { Node, mergeAttributes, textblockTypeInputRule } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { NodeType } from '@tiptap/pm/model';
 import { newLocalId } from './local-id';
 
 export interface FeatureHeadingOptions {
@@ -94,4 +96,50 @@ export const FeatureHeading = Node.create<FeatureHeadingOptions>({
             0,
         ];
     },
+
+    addProseMirrorPlugins() {
+        const type = this.type;
+        return [uniqueLocalIdPlugin(type)];
+    },
 });
+
+const uniqueLocalIdKey = new PluginKey('codocUniqueLocalId');
+
+/**
+ * Enforce the invariant Step 3's Python `local_id` keying depends on: a `localId` is
+ * UNIQUE among the live feature headings. Copy-paste of a subtree and a heading split
+ * both clone node attrs — so two live headings can momentarily share one `localId`,
+ * and the local_id-keyed diff would then emit two AMEND/MOVE ops for one feature
+ * (clobbering one, vanishing the paste). After every doc-changing transaction this
+ * appendTransaction scans the headings and re-mints the localId (and clears `fid`, since
+ * a clone is a NEW node, not the original) on any DUPLICATE occurrence — the FIRST
+ * keeps the id, later collisions get a fresh one. Convergent: once ids are unique the
+ * next run finds no duplicate and returns null, so there is no transaction loop.
+ */
+export function uniqueLocalIdPlugin(headingType: NodeType) {
+    return new Plugin({
+        key: uniqueLocalIdKey,
+        appendTransaction(transactions, _oldState, newState) {
+            if (!transactions.some(tr => tr.docChanged)) return null;
+            const seen = new Set<string>();
+            const fixes: { pos: number; attrs: Record<string, unknown> }[] = [];
+            newState.doc.forEach((node, pos) => {
+                if (node.type !== headingType) return;
+                const lid = node.attrs.localId as string | null;
+                if (!lid) return;            // no id yet — nothing to dedup
+                if (seen.has(lid)) {
+                    // A clone: give it its own identity, and drop any inherited fid so the
+                    // daemon mints a fresh feature instead of binding it to the original.
+                    fixes.push({ pos, attrs: { ...node.attrs, localId: newLocalId(), fid: null } });
+                } else {
+                    seen.add(lid);
+                }
+            });
+            if (!fixes.length) return null;
+            const tr = newState.tr;
+            for (const f of fixes) tr.setNodeMarkup(f.pos, undefined, f.attrs);
+            tr.setMeta('addToHistory', false);  // a structural repair, not a user undo step
+            return tr;
+        },
+    });
+}

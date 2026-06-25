@@ -22,6 +22,7 @@ from codoc.loop.activity import PHASE_DONE, PHASE_EDITING, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
 from codoc.loop.inbox import drop_verdicts as _inbox_drop
 from codoc.loop.inbox import read_verdicts as inbox_read
+from codoc.loop.locks import loop_lock
 from codoc.loop.reconcile import safe_write_tree
 from codoc.model.event import (
     LOOP_A_AGENT_SOURCE,
@@ -163,7 +164,10 @@ def read_status(codoc_dir: str) -> dict:
 
 def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
                   caused_by: str = "", actor: str = "") -> dict:
-    with open_store(codoc_dir) as store:
+    # Hold the shared codoc-loop lock across the agent's mutation + re-render so an MCP
+    # op never interleaves with a concurrent Loop A/Loop B pass (loop/locks.py). Reentrant,
+    # so safe_write_tree re-acquiring it inside is fine.
+    with loop_lock(codoc_dir), open_store(codoc_dir) as store:
         # Validation: targets must exist for ops that reference them.
         if op.kind in (NodeOpKind.AMEND, NodeOpKind.RETIRE_NODE, NodeOpKind.MOVE_NODE,
                        NodeOpKind.ATTACH):
@@ -244,7 +248,8 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
     results: list[dict] = []
     applied_ops: list[NodeOp] = []
     applied_n = proposed_n = 0
-    with open_store(codoc_dir) as store:
+    # Serialize the whole reflection (mutation + render) against the loops (loop/locks.py).
+    with loop_lock(codoc_dir), open_store(codoc_dir) as store:
         for raw in ops:
             try:
                 kind = NodeOpKind(raw["kind"])
@@ -347,7 +352,8 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
     def _resolve_once() -> None:
         verdicts = {v.event_id: v.accept for v in inbox_read(codoc_dir)}
         consumed: set[str] = set()
-        with open_store(codoc_dir) as store:
+        # Serialize verdict application + render against the loops (loop/locks.py).
+        with loop_lock(codoc_dir), open_store(codoc_dir) as store:
             for eid in targets:
                 if eid in resolved:
                     continue

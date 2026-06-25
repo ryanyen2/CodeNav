@@ -74,6 +74,12 @@ class ParsedNode:
     parent_id: str | None
     retired: bool
     local_id: str = ""  # the webview's client-side node id (KTD8), when authored in the doc
+    # Authored lifecycle intent for a NEW node: realized=False marks an explicit PLAN
+    # placeholder (a build request — the webview's "plan" toggle / MCP plan_add). None =
+    # unspecified → a real, descriptive node. Only the doc channel carries it (tree.codoc
+    # text has no plan marker); the diff passes it onto the ADD op so the held-draft gate
+    # mints a directive for a plan even though its prose is descriptive.
+    realized: bool | None = None
     refs: list[Ref] = field(default_factory=list)
     # Steering comments (`> …` runs) — notes to the agent, not part of the prose.
     comments: list[str] = field(default_factory=list)
