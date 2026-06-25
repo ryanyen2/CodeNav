@@ -221,8 +221,11 @@ export type WebviewMessage =
     | { kind: 'open-link'; url: string }
     | { kind: 'verdict'; eventIds: string[]; accept: boolean }
     /** Create an inline comment: persist the thread + the doc (carrying its new
-     *  `comment` mark) and queue the note as a `> …` steering line for the agent. */
-    | { kind: 'comment-create'; doc: PMNode; thread: CommentThread }
+     *  `comment` mark) and queue the note as a `> …` steering line for the agent.
+     *  `mediaData` (base64) + `mediaMime` carry an optional TRANSIENT screenshot
+     *  attachment (U6) — the host writes the bytes under `.codoc/media/` and sets
+     *  `thread.media.ref`; the bytes never enter tree.doc.json. */
+    | { kind: 'comment-create'; doc: PMNode; thread: CommentThread; mediaData?: string; mediaMime?: string }
     /** Edit a comment's body in place (the anchor + mark are unchanged). */
     | { kind: 'comment-edit'; id: string; body: string }
     /** Resolve / delete a comment: drop the thread + its `> …` line; the doc carries

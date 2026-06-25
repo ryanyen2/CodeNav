@@ -87,10 +87,21 @@ class EditAnnotation:
 class Steer:
     """A one-shot inline-comment steer (U2b): the webview hands an inline `> …`
     comment to Loop B through edits.json instead of the tree.codoc text round-trip
-    (the host no longer writes tree.codoc). Drained once → a STEER directive."""
+    (the host no longer writes tree.codoc). Drained once → a STEER directive.
+
+    A steer may carry a TRANSIENT consult attachment (U6) — e.g. a bug screenshot
+    dropped in the comment thread. ``media`` is an opaque ref (a stored attachment
+    path / url) and ``media_kind`` names the CONSULT-capable plugin (``screenshot``)
+    that turns it into a ``Consult:`` line for the realizing agent. The attachment
+    is consumed with the steer (drained-once) and never persisted as a block —
+    that is the transient lifecycle (KTD4), reusing the steer channel, not new
+    machinery. Identity is the (author-minted) ``comment_id`` (KTD4: id-scoped, not
+    ``(feature_id, text)`` — two byte-identical notes stay distinct)."""
     feature_id: str
     text: str
     comment_id: str = ""  # the doc thread id (so the host can mark it sent)
+    media: str = ""       # opaque attachment ref (transient consult media, U6)
+    media_kind: str = ""  # CONSULT plugin key for the attachment (e.g. "screenshot")
     ts: int = 0           # unix ms
 
 
@@ -310,9 +321,11 @@ def read_steers(codoc_dir: str | Path) -> list[Steer]:
     Loop B through edits.json (the host no longer writes them into tree.codoc)."""
     out: list[Steer] = []
     for s in _load(codoc_dir).get("steers", []):
-        if isinstance(s, dict) and s.get("feature_id") and s.get("text"):
-            out.append(Steer(feature_id=s["feature_id"], text=s["text"],
-                             comment_id=s.get("comment_id") or "", ts=int(s.get("ts") or 0)))
+        if isinstance(s, dict) and s.get("feature_id") and (s.get("text") or s.get("media")):
+            out.append(Steer(feature_id=s["feature_id"], text=s.get("text") or "",
+                             comment_id=s.get("comment_id") or "",
+                             media=s.get("media") or "", media_kind=s.get("media_kind") or "",
+                             ts=int(s.get("ts") or 0)))
     return out
 
 
@@ -351,10 +364,14 @@ def append_cancellation(codoc_dir: str | Path, feature_id: str) -> Path | None:
 def append_steer(codoc_dir: str | Path, steer: Steer) -> Path | None:
     """Append a one-shot inline-comment steer (U2b host comment-create; CLI/tests).
     Drained by Loop B into a STEER directive."""
-    steers = (_load(codoc_dir).get("steers") or []) + [{
+    entry = {
         "feature_id": steer.feature_id, "text": steer.text,
         "comment_id": steer.comment_id, "ts": steer.ts or int(time.time() * 1000),
-    }]
+    }
+    if steer.media:
+        entry["media"] = steer.media
+        entry["media_kind"] = steer.media_kind or "screenshot"
+    steers = (_load(codoc_dir).get("steers") or []) + [entry]
     return _rewrite(codoc_dir, steers=steers)
 
 

@@ -105,6 +105,42 @@ def _signal_lines(text: str | None, *, emphasis: list[str] | None = None) -> str
     return ("\n" + "\n".join(lines)) if lines else ""
 
 
+def _consult_block_lines(feature_id: str, store: Store) -> str:
+    """``Consult:`` suffix lines from a feature's CONSULT-capable PERSISTENT blocks
+    (url / image / …) — the consult arrow (KTD5). A reference medium feeds the
+    realizing agent context without round-tripping to code: Loop B dispatches by
+    DECLARED capability and lets the plugin render its own consult text. Empty when
+    the feature has no such media, so a feature with only prose is unchanged."""
+    if not feature_id:
+        return ""
+    registry = ensure_builtins()
+    lines: list[str] = []
+    for b in store.blocks_for_feature(feature_id):
+        plugin = registry.for_capability(b.kind, Capability.CONSULT)
+        if plugin is None:
+            continue
+        text = plugin.consult(b).strip()
+        if text:
+            lines.append(f"  {text}")
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
+def _media_consult_line(kind: str, ref: str, feature_id: str) -> str:
+    """One ``Consult:`` line for a TRANSIENT attachment riding a steer (U6) — e.g.
+    a bug screenshot in a comment thread. The attachment is never a stored block;
+    we build a throwaway transient :class:`Block` purely to dispatch the named
+    CONSULT plugin, so realization reads it once and it is gone (KTD4)."""
+    if not (kind and ref.strip()):
+        return ""
+    plugin = ensure_builtins().for_capability(kind, Capability.CONSULT)
+    if plugin is None:
+        return ""
+    block = Block(feature_id=feature_id or "transient", kind=kind, content=ref,
+                  lifecycle=BlockLifecycle.TRANSIENT, provenance=Provenance.HUMAN)
+    text = plugin.consult(block).strip()
+    return ("\n  " + text) if text else ""
+
+
 def _edit_label(op: NodeOp, store: Store, will_queue: bool) -> str:
     """A one-line note for the watch log: which feature an edit touched, a truncated
     snippet of the new text, and whether it queued a code directive (``→ realize``) or
@@ -557,6 +593,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     if not dry_run:
         for s in edits_channel.drain_steers(codoc_dir):
             d = build_steer_directive(s.feature_id, s.text, store)
+            # A transient consult attachment (U6) — a bug screenshot — rides the
+            # steer and is folded into its directive as a `Consult:` line, then
+            # discarded (the steer is already drained-once). Never a stored block.
+            if d and s.media:
+                d += _media_consult_line(s.media_kind or "screenshot", s.media, s.feature_id)
             if d:
                 steered.append((d, s.feature_id, s.comment_id or amend_cause.get(s.feature_id, "")))
     res.steered = len(steered)
@@ -634,6 +675,18 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     rendered += [(text, fid, cause, "steer") for text, fid, cause in steered]
     rendered += block_specs  # block `lower` directives (U3); already (text, fid, cause, kind)
     rendered = [r for r in rendered if r[0]]
+    # Attach CONSULT-capable persistent-block context (url/image/…) once per feature
+    # whose directive is realized this pass — the consult arrow (KTD5/AE3). Ambient
+    # reference media never produce a directive of their own; they enrich the
+    # directive a code-implying edit already queued for the same feature.
+    consulted: set[str] = set()
+    with_consult: list[tuple[str, str, str, str]] = []
+    for text, fid, cause, kind in rendered:
+        if fid and fid not in consulted:
+            consulted.add(fid)
+            text += _consult_block_lines(fid, store)
+        with_consult.append((text, fid, cause, kind))
+    rendered = with_consult
     res.directives = [r[0] for r in rendered]
 
     # Coalesce per feature (fixes the "weird count": iterating one feature stacked N

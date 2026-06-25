@@ -183,7 +183,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 }
                 case 'comment-create':
-                    await this.createComment(document, msg.doc, msg.thread);
+                    await this.createComment(document, msg.doc, msg.thread, msg.mediaData, msg.mediaMime);
                     post();  // U2b: no tree.codoc write → repost so the marker/threads refresh
                     return;
                 case 'comment-edit':
@@ -265,22 +265,45 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         await this.writeEditsFile(document, file);
     }
 
-    /** Hand a thread's note to Loop B as a one-shot steer, and mark it sent. */
+    /** Hand a thread's note to Loop B as a one-shot steer, and mark it sent. A
+     *  thread carrying a screenshot attachment (U6) rides its stored ref + kind on
+     *  the steer; Loop B folds it into the directive as a transient `Consult:` line. */
     private async steerComment(document: vscode.TextDocument, thread: CommentThread): Promise<void> {
         if (!thread.featureId) return;  // a null-fid comment waits for the mint
         const file = appendSteer(await this.readEditsFile(document), {
             feature_id: thread.featureId, text: commentNoteText(thread),
-            comment_id: thread.id, ts: Date.now(),
+            comment_id: thread.id,
+            ...(thread.media ? { media: thread.media.ref, media_kind: thread.media.kind } : {}),
+            ts: Date.now(),
         });
         await this.writeEditsFile(document, file);
     }
 
-    /** Create a comment: persist the doc (with its anchor mark) + the thread, and
-     *  hand the note to Loop B as a steer. */
-    private async createComment(document: vscode.TextDocument, doc: PMNode, thread: CommentThread): Promise<void> {
+    /** Persist a comment's screenshot attachment (U6) under `.codoc/media/` and
+     *  return a repo-relative ref the realizing agent can open. Keyed by the thread
+     *  id so two attachments never collide. Returns null on any write failure
+     *  (a missing attachment must not block the comment). */
+    private async writeMediaAttachment(document: vscode.TextDocument, threadId: string, dataB64: string, mime?: string): Promise<string | null> {
+        try {
+            const ext = (mime?.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+            const safe = threadId.replace(/[^a-zA-Z0-9_-]/g, '') || 'shot';
+            const dir = vscode.Uri.joinPath(document.uri, '..', 'media');
+            await vscode.workspace.fs.createDirectory(dir);
+            await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, `${safe}.${ext}`), Buffer.from(dataB64, 'base64'));
+            return path.posix.join('.codoc', 'media', `${safe}.${ext}`);
+        } catch { return null; }
+    }
+
+    /** Create a comment: persist the doc (with its anchor mark) + the thread, store
+     *  any screenshot attachment, and hand the note to Loop B as a steer. */
+    private async createComment(document: vscode.TextDocument, doc: PMNode, thread: CommentThread, mediaData?: string, mediaMime?: string): Promise<void> {
         const df = this.docFileFor(document);
         df.doc = doc;
-        const norm: CommentThread = { ...thread, status: 'sent', serialized: true };
+        let norm: CommentThread = { ...thread, status: 'sent', serialized: true };
+        if (mediaData) {
+            const ref = await this.writeMediaAttachment(document, thread.id, mediaData, mediaMime);
+            if (ref) norm = { ...norm, media: { kind: 'screenshot', ref } };
+        }
         df.comments = [...df.comments.filter(c => c.id !== norm.id), norm];
         await this.persistDocFile(document, df);
         await this.steerComment(document, norm);

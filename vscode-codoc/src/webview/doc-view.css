@@ -1053,6 +1053,15 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
 }
 .ce-cmt-send:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
 .ce-cmt-send:active { transform: scale(0.97); }
+/* Attach-screenshot affordance (U6) — a transient consult attachment for the steer. */
+.ce-cmt-shot {
+    font: 11px var(--vscode-font-family); cursor: pointer; max-width: 130px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: transparent; color: var(--fg-muted);
+    border: 1px solid var(--vscode-input-border, transparent); border-radius: 7px; padding: 3px 8px;
+    transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.ce-cmt-shot:hover { color: var(--fg-body); border-color: var(--vscode-focusBorder); }
 .ce-cmt-body { color: var(--vscode-foreground); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .ce-cmt-action {
     font: 11px var(--vscode-font-family); cursor: pointer; color: var(--vscode-foreground);

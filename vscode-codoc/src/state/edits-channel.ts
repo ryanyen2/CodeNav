@@ -60,6 +60,12 @@ export interface SteerEntry {
     feature_id: string;
     text: string;               // the note (commentNoteText: `re "…": body`)
     comment_id: string;         // the doc thread id
+    /** A TRANSIENT consult attachment (U6) — a bug screenshot dropped in the
+     *  thread. `media` is the stored attachment ref (a `.codoc/media/…` path);
+     *  `media_kind` names the CONSULT plugin (`screenshot`). Consumed with the
+     *  steer, never persisted as a block. Omitted when the comment has no media. */
+    media?: string;
+    media_kind?: string;
     ts: number;                 // unix ms
 }
 
@@ -146,9 +152,7 @@ export function appendCancellation(file: EditsFile, featureId: string, ts: numbe
 
 /** Append a one-shot comment steer (U2b), replacing any prior steer for the same
  *  thread (an edit re-hands the latest note). Pure — Loop B drains the list once. */
-export function appendSteer(
-    file: EditsFile, entry: { feature_id: string; text: string; comment_id: string; ts: number },
-): EditsFile {
+export function appendSteer(file: EditsFile, entry: SteerEntry): EditsFile {
     const steers = (file.steers ?? []).filter(s => s.comment_id !== entry.comment_id);
     steers.push(entry);
     return { ...file, steers };

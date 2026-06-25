@@ -44,6 +44,11 @@ export interface CommentThread {
      *  Distinguishes "open, never written" (keep, will emit) from "open, drained"
      *  (line vanished → mark sent), closing the resurrection race. */
     serialized?: boolean;
+    /** A TRANSIENT consult attachment (U6) — a bug screenshot the author dropped on
+     *  this thread. `ref` is the stored attachment path the host wrote under
+     *  `.codoc/media/`; `kind` names the CONSULT plugin (`screenshot`). It rides the
+     *  steer and is consumed once by realization — never a durable block. */
+    media?: { kind: string; ref: string };
 }
 
 const ANCHOR_MAX = 60;

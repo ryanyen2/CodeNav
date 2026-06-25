@@ -1,12 +1,39 @@
 ---
 title: "feat: Agent-Native Notebook Protocol (typed bindable blocks + plugin codecs)"
-status: active
+status: complete
 date: 2026-06-22
 type: feat
 origin: docs/brainstorms/2026-06-22-agent-native-notebook-protocol-requirements.md
 ---
 
 # feat: Agent-Native Notebook Protocol
+
+## Implementation status (2026-06-24)
+
+All eight units shipped. U1–U5, U7, U8 landed in `4ba4b74`. U6 completed here:
+
+- **Consult arrow wired (R6/R7, AE3).** `plugin.consult()` is now dispatched in
+  Loop B: CONSULT-capable *persistent* blocks (url/image) ride a feature's realize
+  directive as `Consult:` lines once per feature (`loop_b._consult_block_lines`),
+  and a *transient* screenshot rides a one-shot steer (`loop_b._media_consult_line`)
+  consumed exactly once. Previously the consult media were registered but inert.
+- **Transient screenshot→steer path.** `Steer` carries an author/id-scoped
+  (`comment_id`) `media`/`media_kind` attachment; the webview composer gained a
+  "📎 attach screenshot" affordance that stores bytes under `.codoc/media/` and
+  hands the ref on the steer (never `tree.codoc`).
+- **Tests:** `tests/blocks/test_screenshot_plugin.py`, `tests/loop/test_consult_wiring.py`,
+  `tests/loop/test_phase_blocks.py`, `tests/serve/test_payload_blocks.py`, plus a TS
+  steer-media round-trip. (U3 dispatch was already covered by `test_block_lift/lower/
+  edit_robustness/edits_channel.py` rather than the plan's original filenames.)
+
+**Deliberate deviations from the plan as written:**
+- No `prompts/block_diagram_lower.txt` / `block_screenshot_consult.txt` — the
+  diagram `lower` delta is deterministic and the screenshot consult is a one-liner,
+  so both live inline rather than as prompt files.
+- KTD3 "feed block lifecycle into `compute_phases`" is satisfied *by omission*:
+  transient blocks aren't features (no phase) and persistent blocks inherit their
+  feature's single phase, so no block-keyed phase state exists. Guarded by
+  `tests/loop/test_phase_blocks.py`.
 
 ## Summary
 

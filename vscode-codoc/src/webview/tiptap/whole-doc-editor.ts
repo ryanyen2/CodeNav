@@ -62,8 +62,10 @@ export interface WholeDocEditorOptions {
     onOpenBinding: (file: string, symbol: string) => void;
     /** Open a Consult strand link (a description's external `https://` page). */
     onConsult: (url: string) => void;
-    /** Create an inline comment: the whole doc (carrying the new anchor mark) + the thread. */
-    onCommentCreate: (doc: PMNode, thread: CommentThread) => void;
+    /** Create an inline comment: the whole doc (carrying the new anchor mark) + the
+     *  thread. `media` carries an optional TRANSIENT screenshot attachment (U6) as
+     *  base64 bytes for the host to store under `.codoc/media/`. */
+    onCommentCreate: (doc: PMNode, thread: CommentThread, media?: { data: string; mime: string }) => void;
     /** Edit a comment's body in place. */
     onCommentEdit: (id: string, body: string) => void;
     /** Resolve a comment: the whole doc (anchor mark removed) + the thread id. */
@@ -747,6 +749,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let composeFid: string | null = null;
     let composeAnchor = '';
     let composeThreadId = '';
+    // A TRANSIENT screenshot attachment (U6) captured in the composer, sent with the
+    // comment on save and discarded after. Base64 bytes — the host stores them.
+    let composeMedia: { data: string; mime: string; name: string } | null = null;
 
 
     function updateBubble(): void {
@@ -777,6 +782,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         composeFid = activeFid();
         composeAnchor = selectedText(from, to);
         composeThreadId = mintCommentId(Date.now(), String(from));
+        composeMedia = null;
         // Anchor the composer to the captured range (the live rect may be gone if the
         // selection collapsed) so it always opens beside the text it comments on.
         openComposer(coordsRect(from, to), '');
@@ -831,6 +837,38 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         const hint = document.createElement('span');
         hint.className = 'ce-cmt-hint';
         hint.textContent = '⏎ send · esc cancel';
+        // Attach a transient screenshot (U6) — create mode only (an edit re-hands the
+        // note text, not the one-shot attachment). The chosen image rides the steer
+        // as consult media and is consumed once by realization.
+        if (composeMode !== 'edit') {
+            const file = document.createElement('input');
+            file.type = 'file';
+            file.accept = 'image/*';
+            file.className = 'ce-cmt-shot-input';
+            file.style.display = 'none';
+            const clip = document.createElement('button');
+            clip.type = 'button';
+            clip.className = 'ce-cmt-shot';
+            clip.title = 'Attach a screenshot — the agent consults it before implementing';
+            const paint = () => { clip.textContent = composeMedia ? `📎 ${composeMedia.name}` : '📎'; };
+            paint();
+            clip.addEventListener('mousedown', ev => ev.preventDefault());
+            clip.addEventListener('click', ev => { ev.preventDefault(); file.click(); });
+            file.addEventListener('change', () => {
+                const f = file.files && file.files[0];
+                if (!f) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const res = String(reader.result || '');
+                    const comma = res.indexOf(',');
+                    composeMedia = { data: comma >= 0 ? res.slice(comma + 1) : res, mime: f.type || 'image/png', name: f.name || 'screenshot' };
+                    paint();
+                };
+                reader.readAsDataURL(f);
+            });
+            box.append(file);
+            foot.append(clip);
+        }
         const send = document.createElement('button');
         send.type = 'button';
         send.className = 'ce-cmt-send';
@@ -885,7 +923,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
 
     function saveComposer(value: string): void {
         const body = value.trim();
-        if (!body) { closeComposer(); editor.commands.focus(); return; }
+        // An empty note is fine when a screenshot is attached — the image is the note.
+        if (!body && !(composeMode !== 'edit' && composeMedia)) { closeComposer(); editor.commands.focus(); return; }
         if (composeMode === 'edit') {
             closeComposer();
             opts.onCommentEdit(composeThreadId, body);
@@ -907,12 +946,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             id: composeThreadId,
             featureId: composeFid,
             anchorText: composeAnchor,
-            body,
+            body: body || '(see screenshot)',
             status: 'open',
             author: 'human',
             createdAt: Date.now(),
         };
-        opts.onCommentCreate(editor.getJSON() as PMNode, thread);
+        const media = composeMedia ? { data: composeMedia.data, mime: composeMedia.mime } : undefined;
+        composeMedia = null;
+        opts.onCommentCreate(editor.getJSON() as PMNode, thread, media);
         editor.commands.focus();
     }
 

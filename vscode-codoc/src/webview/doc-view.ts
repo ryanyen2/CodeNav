@@ -792,7 +792,7 @@ function renderDocHost(): HTMLElement {
         onWithdrawRealization: featureId => vscode.postMessage({ kind: 'withdraw-realization', featureId }),
         onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
         onConsult: url => vscode.postMessage({ kind: 'open-link', url }),
-        onCommentCreate: (doc, thread) => vscode.postMessage({ kind: 'comment-create', doc, thread }),
+        onCommentCreate: (doc, thread, media) => vscode.postMessage({ kind: 'comment-create', doc, thread, mediaData: media?.data, mediaMime: media?.mime }),
         onCommentEdit: (id, body) => vscode.postMessage({ kind: 'comment-edit', id, body }),
         onCommentResolve: (doc, id) => vscode.postMessage({ kind: 'comment-resolve', doc, id }),
         onActiveFeature: (fid, source) => {

@@ -61,6 +61,16 @@ describe('U2b — comment steers (single-writer)', () => {
         expect(file.steers).toEqual([{ ...entry, text: 're "x": use argon2', ts: 9 }]);
     });
 
+    it('carries a transient screenshot attachment (U6) on the steer', () => {
+        const shot = { ...entry, comment_id: 'cm-shot', media: '.codoc/media/cm-shot.png', media_kind: 'screenshot' };
+        const file = appendSteer(emptyEditsFile(), shot);
+        expect(file.steers).toEqual([shot]);
+        // round-trips through parse (presence-keyed: omitted when absent).
+        const reparsed = parseEditsFile(JSON.parse(JSON.stringify({ version: 1, steers: file.steers })));
+        expect(reparsed.steers?.[0].media).toBe('.codoc/media/cm-shot.png');
+        expect(reparsed.steers?.[0].media_kind).toBe('screenshot');
+    });
+
     it('preserves edits / intents / cancellations alongside a steer', () => {
         const base = parseEditsFile({
             version: 1,
