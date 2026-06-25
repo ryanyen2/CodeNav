@@ -22,6 +22,7 @@ from codoc.loop.edits import (
     read_resolution, write_resolution,
 )
 from codoc.loop.classify import suppressed_by_hold
+from codoc.loop.locks import loop_lock
 from codoc.loop.divergence import Divergence, Realization, classify_realization
 from codoc.loop.diff import ChangeSet, ChunkRef, compute_changeset
 from codoc.loop.phase import is_held
@@ -830,37 +831,41 @@ def run_loop_a(
 ) -> LoopAResult:
     from codoc.graph.query import update_graph
 
-    cs = compute_changeset(root_dir, codoc_dir, file_scope=file_scope)
-    held, cb_map, default_cb = _doc_intent(codoc_dir)
-    # Only pay the (heavy) embedder model load when there are ADDITIONS that could
-    # need semantic dedup — a pure modify/remove/refresh pass never mints an
-    # ADD_NODE, so it never consults the matcher (the common watch-save case).
-    embed_fn = (make_loop_embedder()
-                if cs.added and semantic_dedup_enabled() else None)
-    with open_store(codoc_dir) as store:
-        update_graph(store, cs.rows, cs.touched_files())
-        # Temporal index diff: never retire (a mid-edit "emptied" can rebind on the
-        # next save). Retires are the authoritative state pass's job (reconcile_drift).
-        result = apply_changeset(cs, store, source=source, repo_name=repo_name,
-                                 config=config, adopt_placeholders=adopt_placeholders,
-                                 allow_retire=False, held=held,
-                                 caused_by_map=cb_map, default_caused_by=default_cb,
-                                 codoc_dir=codoc_dir, file_scope=file_scope,
-                                 embed_fn=embed_fn)
-        # Block `lift` (U3): re-derive persistent, LIFT-capable blocks (e.g. diagrams)
-        # from the freshly-updated graph/bindings. Read-only on code (attribution),
-        # and doc-wins — a block on a held feature is skipped, so a human's pending
-        # edit is never clobbered. Re-render the sidecar so a refreshed diagram shows.
-        from codoc.blocks.refresh import refresh_lift_blocks
+    # Shared codoc-loop lock: serialize this whole pass against Loop B and any other
+    # Loop A across processes (daemon / CLI / hub / Stop-hook), so the store + tree.codoc
+    # never interleave between this pass's diff and its render (loop/locks.py).
+    with loop_lock(codoc_dir):
+        cs = compute_changeset(root_dir, codoc_dir, file_scope=file_scope)
+        held, cb_map, default_cb = _doc_intent(codoc_dir)
+        # Only pay the (heavy) embedder model load when there are ADDITIONS that could
+        # need semantic dedup — a pure modify/remove/refresh pass never mints an
+        # ADD_NODE, so it never consults the matcher (the common watch-save case).
+        embed_fn = (make_loop_embedder()
+                    if cs.added and semantic_dedup_enabled() else None)
+        with open_store(codoc_dir) as store:
+            update_graph(store, cs.rows, cs.touched_files())
+            # Temporal index diff: never retire (a mid-edit "emptied" can rebind on the
+            # next save). Retires are the authoritative state pass's job (reconcile_drift).
+            result = apply_changeset(cs, store, source=source, repo_name=repo_name,
+                                     config=config, adopt_placeholders=adopt_placeholders,
+                                     allow_retire=False, held=held,
+                                     caused_by_map=cb_map, default_caused_by=default_cb,
+                                     codoc_dir=codoc_dir, file_scope=file_scope,
+                                     embed_fn=embed_fn)
+            # Block `lift` (U3): re-derive persistent, LIFT-capable blocks (e.g. diagrams)
+            # from the freshly-updated graph/bindings. Read-only on code (attribution),
+            # and doc-wins — a block on a held feature is skipped, so a human's pending
+            # edit is never clobbered. Re-render the sidecar so a refreshed diagram shows.
+            from codoc.blocks.refresh import refresh_lift_blocks
 
-        if refresh_lift_blocks(store, codoc_dir):
-            from codoc.codoc_file.render import write_sidecar
-            write_sidecar(store, codoc_dir)
+            if refresh_lift_blocks(store, codoc_dir):
+                from codoc.codoc_file.render import write_sidecar
+                write_sidecar(store, codoc_dir)
 
-        from codoc.loop.status import refresh_status
+            from codoc.loop.status import refresh_status
 
-        refresh_status(codoc_dir, store)
-        return result
+            refresh_status(codoc_dir, store)
+            return result
 
 
 def _doc_intent(codoc_dir: str) -> tuple[set[str], dict[str, str], str]:
@@ -952,26 +957,30 @@ def reconcile_drift(
     from codoc.pipelines.indexing.reader import read_all_chunks
     from codoc.pipelines.indexing.runner import update_index
 
-    update_index(root_dir, codoc_dir)
-    # The authority pass walks the whole index, but never needs embeddings.
-    rows = read_all_chunks(codoc_dir, with_embeddings=False)
-    held, cb_map, default_cb = _doc_intent(codoc_dir)
-    with open_store(codoc_dir) as store:
-        _backfill_types_hashes(store, rows)
-        cs = _state_changeset(rows, store, file_scope)
-        # Only pay the embedder model load when there are additions to dedup
-        # (built after the changeset, so a pure-drift pass skips it entirely).
-        embed_fn = (make_loop_embedder()
-                    if cs.added and semantic_dedup_enabled() else None)
-        update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
-        # Authoritative full-state reconciliation — the only pass allowed to raise
-        # retires (a feature empty *in current state* genuinely lost its code) and
-        # to propose description amends when bound code changed in place.
-        result = apply_changeset(cs, store, source=source, repo_name=repo_name,
-                                 config=config, adopt_placeholders=adopt_placeholders,
-                                 allow_retire=True, amend_on_change=True, held=held,
-                                 caused_by_map=cb_map, default_caused_by=default_cb,
-                                 codoc_dir=codoc_dir, file_scope=file_scope,
-                                 embed_fn=embed_fn)
-        refresh_status(codoc_dir, store)
-        return result
+    # Shared codoc-loop lock: the authority pass updates the index, mutates the store,
+    # and re-renders — serialize the whole thing against Loop B and any other Loop A
+    # across processes so nothing interleaves between diff and render (loop/locks.py).
+    with loop_lock(codoc_dir):
+        update_index(root_dir, codoc_dir)
+        # The authority pass walks the whole index, but never needs embeddings.
+        rows = read_all_chunks(codoc_dir, with_embeddings=False)
+        held, cb_map, default_cb = _doc_intent(codoc_dir)
+        with open_store(codoc_dir) as store:
+            _backfill_types_hashes(store, rows)
+            cs = _state_changeset(rows, store, file_scope)
+            # Only pay the embedder model load when there are additions to dedup
+            # (built after the changeset, so a pure-drift pass skips it entirely).
+            embed_fn = (make_loop_embedder()
+                        if cs.added and semantic_dedup_enabled() else None)
+            update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
+            # Authoritative full-state reconciliation — the only pass allowed to raise
+            # retires (a feature empty *in current state* genuinely lost its code) and
+            # to propose description amends when bound code changed in place.
+            result = apply_changeset(cs, store, source=source, repo_name=repo_name,
+                                     config=config, adopt_placeholders=adopt_placeholders,
+                                     allow_retire=True, amend_on_change=True, held=held,
+                                     caused_by_map=cb_map, default_caused_by=default_cb,
+                                     codoc_dir=codoc_dir, file_scope=file_scope,
+                                     embed_fn=embed_fn)
+            refresh_status(codoc_dir, store)
+            return result

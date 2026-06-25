@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from codoc.loop.apply import apply_op
-from codoc.loop.classify import implies_code, is_imperative, suppressed_by_hold
+from codoc.loop.classify import edit_mints_directive, suppressed_by_hold
 from codoc.model.binding import Binding
 from codoc.model.event import (
     ACTOR_HUMAN,
@@ -28,55 +28,58 @@ def store(tmp_path):
     s.close()
 
 
-# -- rows 7/8: the imperative gate ----------------------------------------
-@pytest.mark.parametrize("text,expected", [
-    ("Validates request headers before dispatch.", False),       # descriptive 3rd person
-    ("Add retry logic with exponential backoff.", True),         # sentence-initial bare verb
-    ("The parser should reject unterminated strings.", True),    # obligation cue
-    ("TODO: cover the unicode path.", True),                     # TODO cue
-    ("Handles retries; adds backoff.", False),                   # 3rd person, no cue
-    ("", False),
-    (None, False),
+# -- rows 7/8: the STRUCTURAL directive gate (no prose heuristic) -----------
+# is_imperative is DELETED. edit_mints_directive decides STRUCTURALLY whether a tree
+# edit mints a directive at all — never by inspecting English mood. Whether the minted
+# directive realizes now or is held as a draft is the finalize hand-off decision
+# (tested in test_loop_b.py / test_u2b_single_writer.py).
+
+@pytest.mark.parametrize("description", [
+    "Parses the tree file into nodes.",          # descriptive 3rd person
+    "Rewrite the parser; it should reject tabs.",  # was "imperative" — now no special case
+    "Add retry logic.",                          # sentence-initial verb — no special case
+    "",
+    None,
 ])
-def test_is_imperative(text, expected):
-    assert is_imperative(text) is expected
+def test_amend_always_mints_a_directive(store, description):
+    """Every AMEND mints a directive (held as a draft by default) — the SYSTEM never
+    guesses from prose whether the edit 'requests code'. No more false positives on
+    descriptive prose that opens with a verb, no more typo-fix re-fires."""
+    op = NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1", description=description)
+    assert edit_mints_directive(op, store) is True
 
 
-def test_descriptive_amend_is_row_7_no_directive(store):
-    op = NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1",
-                description="Parses the tree file into nodes.")
-    assert implies_code(op, store) is False
-
-
-def test_imperative_amend_is_row_8_directive(store):
-    op = NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1",
-                description="Rewrite the parser; it should reject tabs.")
-    assert implies_code(op, store) is True
-
-
-def test_plan_placeholder_add_is_row_8_directive(store):
+def test_plan_placeholder_add_mints_directive(store):
     op = NodeOp(kind=NodeOpKind.ADD_NODE, title="Rate limiting",
                 description="Caps request rates per client.", realized=False)
-    assert implies_code(op, store) is True
+    assert edit_mints_directive(op, store) is True
 
 
-def test_descriptive_add_is_row_7_node_only(store):
+def test_descriptive_add_is_node_only(store):
+    """A hand-added node that is NOT an explicit plan (realized defaults True) is a
+    node, not a build request — no directive. The 'plan' authoring gesture sets
+    realized=False to request a build."""
     op = NodeOp(kind=NodeOpKind.ADD_NODE, title="Rate limiting",
                 description="Caps request rates per client.")
-    assert implies_code(op, store) is False
+    assert edit_mints_directive(op, store) is False
 
 
-def test_retire_with_bound_code_is_row_8(store):
+def test_retire_with_bound_code_mints_directive(store):
     f = Feature(title="Old path")
     store.upsert_feature(f)
     store.upsert_binding(Binding(feature_id=f.id, file="a.py",
                                  symbol_path="a.py::old", fingerprint="x"))
     op = NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=f.id)
-    assert implies_code(op, store) is True
+    assert edit_mints_directive(op, store) is True
     # unbound feature: nothing to remove → no directive
     g = Feature(title="Empty")
     store.upsert_feature(g)
-    assert implies_code(NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=g.id), store) is False
+    assert edit_mints_directive(NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=g.id), store) is False
+
+
+def test_move_never_mints_directive(store):
+    op = NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id="f-1", parent_id="f-p")
+    assert edit_mints_directive(op, store) is False
 
 
 # -- row 13: doc-wins holds ------------------------------------------------

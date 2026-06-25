@@ -59,17 +59,26 @@ def test_iterating_one_feature_coalesces_to_one_directive(dirs):
     assert "high-contrast" in m[0].text  # the latest edit won
 
 
-def test_reverting_to_descriptive_withdraws_the_queued_directive(dirs):
+def test_iterating_coalesces_and_never_auto_realizes(dirs):
+    """Held-draft model: every edit mints a held draft (no prose-guessing). Iterating
+    one feature coalesces to a SINGLE held draft reflecting the latest text, and NONE of
+    it auto-realizes — realize.md stays absent until an explicit hand-off. (This replaces
+    the old 'revert-to-descriptive withdraws the queued directive' test: there is no
+    auto-queue to withdraw any more — the directive was held all along.)"""
     root, codoc_dir = dirs
     _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
     _edit(codoc_dir, "Holds brand colors.", "Should also support dark-mode palettes.")
     run_loop_b(root, codoc_dir, dry_run=False)
-    assert len(read_manifest(codoc_dir)) == 1
+    m = read_manifest(codoc_dir)
+    assert len(m) == 1 and m[0].handed_off is False
+    assert not realize_path(codoc_dir).exists()  # held, never auto-realized
 
-    # Remove the imperative sentence (revert to descriptive) → withdraw the queued change.
+    # Iterate to a descriptive phrasing → still ONE held draft, latest text, still held.
     _edit(codoc_dir, "Should also support dark-mode palettes.", "Holds brand and dark-mode colors.")
     run_loop_b(root, codoc_dir, dry_run=False)
-    assert read_manifest(codoc_dir) == []
+    m2 = read_manifest(codoc_dir)
+    assert len(m2) == 1 and m2[0].handed_off is False
+    assert "dark-mode colors" in m2[0].text
     assert not realize_path(codoc_dir).exists()
 
 
@@ -94,19 +103,20 @@ def test_editing_one_feature_keeps_anothers_queued_directive(dirs):
 
 
 def test_edit_notes_label_each_edit_for_the_watch_log(dirs):
-    """The daemon log lists WHAT each edit was + whether it queued code — so a watcher
-    can tell a descriptive reword (no decoration) from a code-implying edit at a glance."""
+    """The daemon log lists WHAT each edit was + what it produced. In the held-draft
+    model an AMEND mints a held draft → labeled ``→ draft`` (awaiting hand-off), never
+    surprise code. A retire-with-code or plan ADD is an explicit gesture → ``→ realize``."""
     root, codoc_dir = dirs
-    _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
+    f = _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
 
-    # Descriptive reword → doc-only (this is exactly the "why no decoration" case).
+    # Any description edit → a held draft, labeled "→ draft".
     _edit(codoc_dir, "Holds brand colors.", "Holds brand and accent colors.")
     r = run_loop_b(root, codoc_dir, dry_run=False)
     assert len(r.edit_notes) == 1
-    assert "Palette" in r.edit_notes[0] and "doc-only" in r.edit_notes[0]
-    assert "• " in r.summary() and "doc-only" in r.summary()  # surfaced in the log line
+    assert "Palette" in r.edit_notes[0] and "→ draft" in r.edit_notes[0]
+    assert "• " in r.summary() and "→ draft" in r.summary()  # surfaced in the log line
 
-    # Imperative edit → labeled "→ realize".
-    _edit(codoc_dir, "Holds brand and accent colors.", "Should also support dark-mode palettes.")
+    # Retiring a feature that owns bound code → an explicit realize gesture.
+    _edit(codoc_dir, "- Palette", "~ Palette")
     r2 = run_loop_b(root, codoc_dir, dry_run=False)
     assert any("→ realize" in n for n in r2.edit_notes)

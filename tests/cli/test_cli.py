@@ -56,6 +56,36 @@ def test_realize_with_no_queue_exits_clean(tmp_path):
     assert "Nothing queued" in r.output
 
 
+def test_realize_flushes_held_drafts(tmp_path):
+    """Held-draft model: `codoc realize` IS the CLI hand-off gesture. With a held draft
+    in the manifest and no realize.md, it appends the hand-off signal and runs a Loop B
+    pass that (re)builds realize.md — so the flush produces the agent trigger even though
+    the (absent) claude CLI then exits non-zero."""
+    from codoc.codoc_file.render import write_tree
+    from codoc.loop import edits as edits_channel
+    from codoc.loop.loop_b import realize_path
+    from codoc.model.binding import Binding
+
+    cd = tmp_path / ".codoc"; cd.mkdir()
+    s = open_store(str(cd))
+    f = Feature(title="Cache", description="Caches values.")
+    s.upsert_feature(f)
+    s.upsert_binding(Binding(feature_id=f.id, file="c.py", symbol_path="c.py::C", fingerprint="h"))
+    write_tree(s, str(cd))
+    s.close()
+    # A held draft (handed_off=False) sitting in the manifest, no realize.md.
+    edits_channel.write_manifest(str(cd), [edits_channel.Directive(
+        id="d-held1", feature_id=f.id, kind="amend",
+        text='UPDATE FEATURE: "Cache"\n  New intent: …', handed_off=False)])
+    assert not realize_path(str(cd)).exists()
+
+    r = runner.invoke(app, ["realize", "--root", str(tmp_path), "--engine", "cli"])
+    # The flush ran before the engine: realize.md now exists (the held draft was handed off).
+    assert realize_path(str(cd)).exists()
+    assert "d-held1" in realize_path(str(cd)).read_text()
+    # (exit code reflects the absent claude CLI / sdk — not our concern here.)
+
+
 def test_help_lists_new_commands():
     r = runner.invoke(app, ["--help"])
     assert r.exit_code == 0

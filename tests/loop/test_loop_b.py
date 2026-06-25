@@ -39,12 +39,15 @@ def _state(codoc_dir) -> str:
 
 
 # -----------------------------------------------------------------------
-def test_accept_proposal_applies_and_builds_directive(dirs):
+def test_accept_plan_proposal_applies_and_builds_directive(dirs):
+    """Accepting a PLAN proposal (realized=False — code does NOT yet exist) builds a
+    NEW FEATURE directive. A plan is an explicit build request, so it is handed off on
+    accept (not held). Contrast test_accept_unbound_add_does_not_build below."""
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     e = Event(source="loop_a", applied=False,
-              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Theme system",
-                        description="Add a light/dark theme switcher.", rationale="no node fits"))
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Theme system", realized=False,
+                        description="A light/dark theme switcher.", rationale="planned"))
     s.append_event(e)
     write_tree(s, codoc_dir)
     s.close()
@@ -57,6 +60,30 @@ def test_accept_proposal_applies_and_builds_directive(dirs):
     s2 = open_store(codoc_dir)
     assert any(f.title == "Theme system" for f in s2.list_features())
     assert s2.pending_events() == []
+    s2.close()
+
+
+def test_accept_unbound_add_does_not_build(dirs):
+    """Accepting a Loop-A ADD for UNBOUND code (realized defaults None — the code
+    already exists) creates the feature but mints NO directive: realizing it would ask
+    the agent to re-implement code that is already there. Only an explicit plan builds."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Theme system",
+                        description="Switches between light and dark themes.",
+                        rationale="no node fits"))
+    s.append_event(e)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.accepted == 1
+    assert res.directives == []          # code exists → no realize directive
+    s2 = open_store(codoc_dir)
+    assert any(f.title == "Theme system" for f in s2.list_features())
     s2.close()
 
 
@@ -97,9 +124,11 @@ def test_user_amend_builds_directive_with_bindings(dirs):
                and "dark-mode variants" in d for d in res.directives)
 
 
-def test_descriptive_amend_does_not_queue(dirs):
-    """Documenting existing code (descriptive prose) never queues a directive —
-    only imperative intent does."""
+def test_amend_mints_held_draft_not_realized_until_handoff(dirs):
+    """Held-draft model: a doc AMEND mints a directive but it is HELD — not written to
+    realize.md and not sent to the agent — until an explicit hand-off. The SYSTEM no
+    longer guesses from prose whether the edit 'requests code'; the USER decides by
+    handing off. A typo fix therefore never surprises the agent with code."""
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     f = Feature(title="Color palette", description="Holds brand colors.")
@@ -109,19 +138,28 @@ def test_descriptive_amend_does_not_queue(dirs):
     write_tree(s, codoc_dir)
     s.close()
 
-    # A purely descriptive elaboration — no "should/must/add/implement…".
     _edit_file(tree_path(codoc_dir), "Holds brand colors.",
                "Holds brand colors and their dark-mode variants for the UI.")
     res = run_loop_b(root, codoc_dir, dry_run=False)
 
     assert res.user_edits >= 1          # the prose edit IS applied
-    assert res.directives == []         # …but it does not imply code
-    assert res.queued is False
+    assert res.queued is False          # …but HELD — not realized
     assert not realize_path(codoc_dir).exists()
-    # And the prose persisted to the store.
+    # The directive exists in the manifest as a held draft (handed_off=False).
+    from codoc.loop.edits import read_manifest
+    manifest = read_manifest(codoc_dir)
+    assert len(manifest) == 1 and manifest[0].handed_off is False
+    # The prose persisted to the store regardless.
     s2 = open_store(codoc_dir)
     assert "dark-mode variants" in (s2.get_feature(f.id).description or "")
     s2.close()
+
+    # Explicit hand-off (the CLI/webview gesture) → the held draft realizes.
+    from codoc.loop.edits import append_handoffs
+    append_handoffs(codoc_dir, [f.id])
+    res2 = run_loop_b(root, codoc_dir, dry_run=False)
+    assert res2.queued is True
+    assert realize_path(codoc_dir).exists()
 
 
 def test_code_implying_edit_queues_realize_for_session(dirs):
@@ -130,8 +168,8 @@ def test_code_implying_edit_queues_realize_for_session(dirs):
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     e = Event(source="loop_a", applied=False,
-              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="New mod",
-                        description="Add a new.py module with a new() helper."))
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="New mod", realized=False,
+                        description="A new.py module with a new() helper."))
     s.append_event(e)
     write_tree(s, codoc_dir)
     s.close()
@@ -153,8 +191,8 @@ def test_dry_run_builds_directive_but_does_not_queue(dirs):
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     e = Event(source="loop_a", applied=False,
-              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="X",
-                        description="Add an x() helper."))
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="X", realized=False,
+                        description="An x() helper."))
     s.append_event(e)
     write_tree(s, codoc_dir)
     s.close()

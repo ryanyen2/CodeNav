@@ -34,8 +34,8 @@ on load. Nothing downstream may *require* provenance; it only enriches.
 | 4 | code | added unbound chunk | any | ONE LLM placement pass → ATTACH (auto) or ADD/MOVE proposal (`suggest`); graph-neighbor coverage net as fallback |
 | 5 | code | in-place modify on a realized feature with prose, **not held** | any | stale-description AMEND via the LLM (small → auto, large → `suggest`) |
 | 6 | code | any change while a realize queue is open | agent | rows 1–5, ops stamped `caused_by=⟨directive id⟩` → the IDE groups them as a cascade under the user's edit |
-| 7 | doc | descriptive AMEND / title edit | human/`pen` | apply immediately; **no** code directive (documenting code never writes code) |
-| 8 | doc | imperative AMEND · plan ADD (`realized=False`) · imperative ADD · RETIRE with bound code | human/`pen` | apply + mint directive `d-…` + queue `realize.md` (+ machine manifest `realize.json`) |
+| 7 | doc | AMEND / title edit | human/`pen` | apply + mint a **held-draft** directive `d-…` (`handed_off=False`): in the manifest + hold set (in-situ diff) but **not** in `realize.md`. No prose heuristic — the SYSTEM never guesses from English mood whether the edit "requests code" |
+| 8 | doc | hand-off (commit / `codoc realize`) · plan ADD (`realized=False`) · RETIRE with bound code · steer (`> …`) · block `lower` | human | the EXPLICIT realize gestures — handed off the moment they are minted (or, for a held draft, when its feature appears in the one-shot `handoffs` channel) → `realize.md` is (re)built. `is_imperative` is **deleted**: intent is a typed gesture, never inferred from prose |
 | 9 | doc | any edit in Suggesting stance | human/`suggest` | doc-ahead suggestion: registered as a pending *intent* (a hold) carrying the suggested text. **Applied by Loop B's intent drain** — the agent-side apply — through row 7/8 (`mode=suggest`, `caused_by=` the suggestion id). The human's only verb on their own suggestion is **Withdraw**, which removes the intent before the drain |
 | 10 | doc | structural op via MCP | agent | pending proposal (`suggest`; renders code-ahead) |
 | 11 | doc | safe op via MCP (reflect/attach/refresh) | agent | auto-apply, recorded in the sidecar changes feed as `actor=agent / mode=auto` → the IDE inks the prose as that agent's pencil |
@@ -46,8 +46,12 @@ Two structural properties make the table sound:
 
 - **Bindings are attribution, not intent.** Rows 1/3 (and DETACH) always run —
   even on held features — so the code↔feature index never goes stale. Only
-  *intent-level* ops (AMEND/RETIRE/MOVE/ADD) are subject to holds, review, or
-  the imperative gate.
+  *intent-level* ops (AMEND/RETIRE/MOVE/ADD) are subject to holds or review.
+- **Documentation never writes code by itself.** A doc AMEND mints a held draft
+  (row 7); code is realized only by an explicit, typed gesture (row 8) — never by a
+  regex guessing whether prose "sounds imperative". The old `is_imperative` gate was
+  deleted (2026-06): it false-fired on descriptive prose opening with a verb and
+  re-fired on typo fixes. The USER decides what realizes, by handing off.
 - **Destructive asymmetry.** A RETIRE can delete code only when a human typed
   `~` in the text or an agent explicitly passed `delete_code=True`. An accepted
   auto-raised retire merely untracks.

@@ -56,14 +56,17 @@ def test_accept_two_reject_one_lands_only_the_accepted_nodes(world):
     assert (res.accepted, res.rejected) == (2, 1)
 
 
-def test_only_accepted_imperative_edits_trigger_a_realize_directive(world):
-    """Accepting a documentation proposal records intent silently; accepting a
-    proposal that *requests* code queues exactly one realize directive."""
+def test_only_accepted_plan_proposals_trigger_a_realize_directive(world):
+    """Held-draft model: accepting a proposal that binds / documents EXISTING code
+    records intent silently (no realize — the code is already there). Accepting an
+    explicit PLAN placeholder (realized=False — code does NOT yet exist) queues exactly
+    one realize directive. Intent is the typed plan flag, never imperative prose."""
     documents = world.given_pending_add(
         "Request logging", binds=[("log.py", "log.py::emit")],
-        description="Writes one structured line per request.")          # descriptive → no code work
+        description="Writes one structured line per request.")          # bound code → no work
     requests = world.given_pending_add(
-        "Dark mode", description="Add a light/dark theme toggle to settings.")  # imperative → code work
+        "Dark mode", realized=False,
+        description="A light/dark theme toggle in settings.")           # plan → build it
 
     world.when_accept(documents)
     world.when_accept(requests)
@@ -72,7 +75,7 @@ def test_only_accepted_imperative_edits_trigger_a_realize_directive(world):
     # Both became real features…
     world.then_feature_exists("Request logging")
     world.then_feature_exists("Dark mode")
-    # …but only the imperative one is queued for the live session to implement.
+    # …but only the explicit plan is queued for the live session to implement.
     world.then_directive_mentions("NEW FEATURE", "Dark mode")
     assert "Request logging" not in "\n".join(res.directives)
     assert res.queued is True

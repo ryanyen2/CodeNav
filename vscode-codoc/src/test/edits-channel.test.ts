@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     parseEditsFile, emptyEditsFile, annotationsForSettle, intentsFromSuggestions,
-    appendCancellation, appendSteer, setDrafts, appendBlockEdit,
+    appendCancellation, appendSteer, setDrafts, appendBlockEdit, appendHandoffs,
 } from '../state/edits-channel';
 import { agentAmendsByFeature, type SidecarData } from '../state/bindings-model';
 import { codeAheadSuggestions, type Suggestion } from '../state/suggestion-model';
@@ -16,6 +16,31 @@ import { MARK_AUTHOR, type PMNode } from '../state/pm-doc';
 
 const F = (id: string | null, title: string, description = ''): { id: string | null; title: string; description: string } =>
     ({ id, title, description });
+
+describe('held-draft hand-off (the positive realize signal)', () => {
+    it('appendHandoffs adds feature ids the loop will drain to realize held drafts', () => {
+        const file = appendHandoffs(emptyEditsFile(), ['f-a', 'f-b']);
+        expect(file.handoffs).toEqual([{ feature_id: 'f-a' }, { feature_id: 'f-b' }]);
+    });
+
+    it('dedups and preserves prior handoffs (order-preserving)', () => {
+        let file = appendHandoffs(emptyEditsFile(), ['f-a']);
+        file = appendHandoffs(file, ['f-a', 'f-c']);
+        expect(file.handoffs).toEqual([{ feature_id: 'f-a' }, { feature_id: 'f-c' }]);
+    });
+
+    it('round-trips through parseEditsFile', () => {
+        const file = parseEditsFile({
+            version: 1, edits: [], intents: [], handoffs: [{ feature_id: 'f-z' }],
+        });
+        expect(file.handoffs).toEqual([{ feature_id: 'f-z' }]);
+    });
+
+    it('an empty hand-off set leaves no handoffs key (Python omit-when-empty shape)', () => {
+        const file = appendHandoffs(emptyEditsFile(), []);
+        expect(file.handoffs).toBeUndefined();
+    });
+});
 
 describe('U6 — cancellations (realize withdraw)', () => {
     it('appendCancellation adds an entry the loop will drain', () => {

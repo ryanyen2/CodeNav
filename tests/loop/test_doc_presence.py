@@ -1,6 +1,13 @@
-"""U3 — doc presence reconciliation: a human deletion becomes a soft (detach-only)
+"""U3 — doc presence reconciliation: a human deletion becomes a soft (lifecycle-only)
 retire that never resurrects, a re-appearance un-retires, and an agent-added feature
-not yet in the human doc is NEVER falsely retired."""
+not yet in the human doc is NEVER falsely retired.
+
+INV2: soft-retire is lifecycle-only — bindings are NOT deleted, they survive and
+reactivate on un-retire. Only explicit ~ marker retire destroys bindings.
+
+INV5: reconcile_doc_presence returns (retired, unretired, current_fids) and the
+CALLER writes doc-fids.json after write_tree. Tests simulate this with _reconcile().
+"""
 from __future__ import annotations
 
 import json
@@ -8,7 +15,7 @@ import json
 import pytest
 
 from codoc.codoc_file.doc_parse import doc_path
-from codoc.loop.doc_presence import reconcile_doc_presence, read_doc_fids
+from codoc.loop.doc_presence import reconcile_doc_presence, read_doc_fids, write_doc_fids
 from codoc.model.binding import Binding
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -31,6 +38,13 @@ def _write_doc(codoc_dir, features):
     (doc_path(codoc_dir)).write_text(json.dumps({"type": "doc", "content": content}))
 
 
+def _reconcile(store, codoc_dir):
+    """Simulate one Loop B pass: reconcile + write doc-fids (as _apply_edits does)."""
+    retired, unretired, current_fids = reconcile_doc_presence(store, codoc_dir)
+    write_doc_fids(codoc_dir, current_fids)
+    return retired, unretired
+
+
 def test_deletion_soft_retires_and_does_not_resurrect(codoc):
     with open_store(codoc) as s:
         a = Feature(title="Keep me"); b = Feature(title="Delete me")
@@ -39,28 +53,28 @@ def test_deletion_soft_retires_and_does_not_resurrect(codoc):
 
         # Pass 1: both present → seed the previous-doc fid set, no deletions.
         _write_doc(codoc, [(a.id, "Keep me"), (b.id, "Delete me")])
-        assert reconcile_doc_presence(s, codoc) == (0, 0)
+        assert _reconcile(s, codoc) == (0, 0)
         assert read_doc_fids(codoc) == {a.id, b.id}
 
-        # Pass 2: the human removed "Delete me" → soft retire, detach bindings.
+        # Pass 2: the human removed "Delete me" → soft retire, bindings PRESERVED (INV2).
         _write_doc(codoc, [(a.id, "Keep me")])
-        retired, unretired = reconcile_doc_presence(s, codoc)
+        retired, unretired = _reconcile(s, codoc)
         assert (retired, unretired) == (1, 0)
-        assert s.get_feature(b.id).retired is True          # tombstoned, recoverable
-        assert s.bindings_for_feature(b.id) == []           # detached (code freed)
-        assert s.get_feature(a.id).retired is False         # untouched
+        assert s.get_feature(b.id).retired is True           # tombstoned, recoverable
+        assert len(s.bindings_for_feature(b.id)) == 1        # INV2: bindings preserved
+        assert s.get_feature(a.id).retired is False          # untouched
 
 
 def test_reappearance_unretires(codoc):
     with open_store(codoc) as s:
         a = Feature(title="A"); b = Feature(title="B")
         s.upsert_feature(a); s.upsert_feature(b)
-        _write_doc(codoc, [(a.id, "A"), (b.id, "B")]); reconcile_doc_presence(s, codoc)
-        _write_doc(codoc, [(a.id, "A")]); reconcile_doc_presence(s, codoc)   # delete B
+        _write_doc(codoc, [(a.id, "A"), (b.id, "B")]); _reconcile(s, codoc)
+        _write_doc(codoc, [(a.id, "A")]); _reconcile(s, codoc)   # delete B
         assert s.get_feature(b.id).retired is True
         # undo: B reappears in the doc → un-retired (resurrected intentionally).
         _write_doc(codoc, [(a.id, "A"), (b.id, "B")])
-        retired, unretired = reconcile_doc_presence(s, codoc)
+        retired, unretired = _reconcile(s, codoc)
         assert (retired, unretired) == (0, 1)
         assert s.get_feature(b.id).retired is False
 
@@ -71,11 +85,11 @@ def test_agent_added_feature_not_in_doc_is_never_retired(codoc):
     with open_store(codoc) as s:
         a = Feature(title="A")
         s.upsert_feature(a)
-        _write_doc(codoc, [(a.id, "A")]); reconcile_doc_presence(s, codoc)  # prev = {a}
+        _write_doc(codoc, [(a.id, "A")]); _reconcile(s, codoc)  # prev = {a}
         # Agent adds C directly to the store; the human doc still only has A.
         c = Feature(title="Agent feature")
         s.upsert_feature(c)
-        retired, unretired = reconcile_doc_presence(s, codoc)
+        retired, unretired = _reconcile(s, codoc)
         assert retired == 0                       # C was never in the doc → not "removed"
         assert s.get_feature(c.id).retired is False
 
@@ -83,4 +97,5 @@ def test_agent_added_feature_not_in_doc_is_never_retired(codoc):
 def test_no_doc_is_a_noop(codoc):
     with open_store(codoc) as s:
         s.upsert_feature(Feature(title="A"))
-        assert reconcile_doc_presence(s, codoc) == (0, 0)   # no tree.doc.json → never infers
+        retired, unretired = _reconcile(s, codoc)
+        assert (retired, unretired) == (0, 0)    # no tree.doc.json → never infers

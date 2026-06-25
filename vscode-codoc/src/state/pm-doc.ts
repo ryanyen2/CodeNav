@@ -62,6 +62,10 @@ export interface FeatureHeadingAttrs {
     level: number;
     retired: boolean;
     realized: boolean;
+    /** Stable client-side identity (KTD8), minted before the daemon assigns `fid`. The
+     *  diff keys on it (Step 3) and the uniqueness plugin (Step 5) keeps it distinct per
+     *  live node. Optional in the model type — only authored headings carry one. */
+    localId?: string | null;
 }
 
 export interface CodeRefAttrs {

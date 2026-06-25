@@ -87,5 +87,21 @@ describe('U1: newFeatureHeading mints a localId', () => {
         const blocks = (dispatched!.doc.toJSON() as PMNode).content!;
         const created = blocks.find(b => b.type === 'featureHeading' && b.attrs!.fid == null)!;
         expect(created.attrs!.localId).toMatch(/^lid-/);
+        expect(created.attrs!.realized).toBe(true);  // a normal new feature is real
+    });
+
+    it('Step 10: the plan variant is born realized=false (a build request)', () => {
+        const doc = makeDoc([featureHeadingNode({ fid: 'f-a', level: 0, retired: false, realized: true }, textToInlineRuns('A'))]);
+        let dispatched: import('@tiptap/pm/state').Transaction | null = null;
+        const state = stateFromDoc(doc);
+        const editor = {
+            state, schema,
+            view: { dispatch: (tr: import('@tiptap/pm/state').Transaction) => { dispatched = tr; }, focus: () => {} },
+        } as never;
+        newFeatureHeading(editor, { realized: false });
+        const blocks = (dispatched!.doc.toJSON() as PMNode).content!;
+        const created = blocks.find(b => b.type === 'featureHeading' && b.attrs!.fid == null)!;
+        expect(created.attrs!.realized).toBe(false);  // born plan → its ADD mints a build directive
+        expect(created.attrs!.localId).toMatch(/^lid-/);
     });
 });

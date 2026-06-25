@@ -89,8 +89,13 @@ export function outdentHeading(editor: Editor): boolean {
     return shiftLevels(editor, hs, start, end, -1);
 }
 
-/** Insert a new sibling feature heading right after the current heading's subtree. */
-export function newFeatureHeading(editor: Editor): boolean {
+/** Insert a new sibling feature heading right after the current heading's subtree.
+ *  `realized: false` (the "plan" variant) marks it an explicit BUILD REQUEST so its ADD
+ *  mints a realize directive on commit — born plan, so it is timing-safe (the very first
+ *  settle that applies the ADD already carries realized=false; no toggle-after-create
+ *  race, and no need for the diff to detect a realized transition on an existing node). */
+export function newFeatureHeading(editor: Editor, opts: { realized?: boolean } = {}): boolean {
+    const realized = opts.realized ?? true;
     const hs = headings(editor);
     const i = currentHeadingIndex(editor, hs);
     const level = i >= 0 ? hs[i].level : 0;
@@ -100,9 +105,9 @@ export function newFeatureHeading(editor: Editor): boolean {
         const [, end] = subtreeRange(hs, i);
         insertPos = end < hs.length ? hs[end].pos : editor.state.doc.content.size;
     }
-    const placeholder = 'New feature';
+    const placeholder = realized ? 'New feature' : 'New feature (plan)';
     const heading = editor.schema.nodes.featureHeading.create(
-        { fid: null, level, retired: false, realized: true, localId: newLocalId() },
+        { fid: null, level, retired: false, realized, localId: newLocalId() },
         editor.schema.text(placeholder),
     );
     const para = editor.schema.nodes.paragraph.create();
@@ -161,6 +166,23 @@ export function toggleRetireHeading(editor: Editor): boolean {
     if (i < 0) return false;
     const h = hs[i];
     const tr = editor.state.tr.setNodeMarkup(h.pos, undefined, { ...h.node.attrs, retired: !h.node.attrs.retired });
+    editor.view.dispatch(tr);
+    return true;
+}
+
+/** Toggle the PLAN flag on the current heading (`realized` false⇄true). A new heading
+ *  marked plan (realized=false) is an explicit BUILD REQUEST: on commit its ADD mints a
+ *  realize directive even though its prose is descriptive — the held-draft model's typed
+ *  way to ask for a NEW feature to be built (the replacement for the deleted is_imperative
+ *  guess). Only meaningful on a not-yet-minted heading; toggling an existing realized
+ *  feature back to plan is a no-op on the realize path (the diff carries realized only on
+ *  ADD). */
+export function togglePlanHeading(editor: Editor): boolean {
+    const hs = headings(editor);
+    const i = currentHeadingIndex(editor, hs);
+    if (i < 0) return false;
+    const h = hs[i];
+    const tr = editor.state.tr.setNodeMarkup(h.pos, undefined, { ...h.node.attrs, realized: !h.node.attrs.realized });
     editor.view.dispatch(tr);
     return true;
 }

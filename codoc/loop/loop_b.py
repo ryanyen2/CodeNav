@@ -25,6 +25,7 @@ Two ordering invariants keep text↔store coherent:
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,7 +33,7 @@ from pathlib import Path
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.blocks.base import Capability, LowerContext
 from codoc.blocks.builtins import ensure_builtins
-from codoc.codoc_file.diff import diff_codoc
+from codoc.codoc_file.diff import CodocDiff, diff_codoc
 from codoc.loop.doc_presence import reconcile_doc_presence
 from codoc.codoc_file.doc_parse import parse_doc_file
 from codoc.codoc_file.parse import extract_bold, extract_links, parse_tree_file
@@ -40,13 +41,25 @@ from codoc.codoc_file.render import tree_path, write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
-from codoc.loop.classify import implies_code, is_imperative
+from codoc.loop.classify import edit_mints_directive
 from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop.fsio import atomic_write_text
+from codoc.loop.locks import loop_lock
 from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_directive_id
 from codoc.store.db import Store, open_store
+
+_DIRECTIVE_ID_RE = re.compile(r"⟨(d-[0-9a-f]+)⟩")
+
+# Directive kinds that are handed off to the agent the moment they are minted — an
+# EXPLICIT code request, not a held documentation draft: a steer (a `> …` note
+# addressed to the agent), a RETIRE (the destructive `~` marker), and a plan ADD
+# (realized=False, an authored build placeholder). Everything else (an AMEND, a block
+# content edit) is born held and realizes only on an explicit hand-off.
+_EXPLICIT_REALIZE_KINDS = frozenset({
+    "steer", NodeOpKind.RETIRE_NODE.value, NodeOpKind.ADD_NODE.value,
+})
 
 
 @dataclass
@@ -143,14 +156,20 @@ def _media_consult_line(kind: str, ref: str, feature_id: str) -> str:
 
 def _edit_label(op: NodeOp, store: Store, will_queue: bool) -> str:
     """A one-line note for the watch log: which feature an edit touched, a truncated
-    snippet of the new text, and whether it queued a code directive (``→ realize``) or
-    was documentation only (``doc-only``). Lets a watcher SEE what each edit was — and
-    why it did or didn't produce a pending decoration — instead of an opaque ``edits 2``."""
+    snippet of the new text, and what it produced — a held draft (``→ draft``, awaiting
+    hand-off), an explicit realize (``→ realize`` — a RETIRE-with-code or plan ADD), or
+    nothing code-bearing (``doc-only`` — a MOVE or a descriptive new node). Lets a
+    watcher SEE what each edit was instead of an opaque ``edits 2``."""
     f = store.get_feature(op.feature_id) if op.feature_id else None
     title = f.title if f else (op.title or op.feature_id or "?")
     text = (op.description or op.title or "").replace("\n", " ").strip()
     snippet = (text[:60] + "…") if len(text) > 60 else text
-    tag = "→ realize" if will_queue else "doc-only"
+    if not will_queue:
+        tag = "doc-only"
+    elif op.kind is NodeOpKind.RETIRE_NODE or (op.kind is NodeOpKind.ADD_NODE and op.realized is False):
+        tag = "→ realize"  # explicit gesture — handed off on mint
+    else:
+        tag = "→ draft"    # AMEND — held until an explicit hand-off
     return f'{op.kind.value} "{title}" [{tag}]: {snippet!r}'
 
 
@@ -341,24 +360,109 @@ def _supersede_directives(root_dir: str, codoc_dir: str, fids: set[str]) -> int:
     change entirely. Steers (additive author notes) and other features' directives are
     preserved. Returns the count dropped."""
     existing = edits_channel.read_manifest(codoc_dir)
-    survivors = [d for d in existing if d.kind == "steer" or d.feature_id not in fids]
+    # INV8: directives currently in realize.md are being actively realized by the
+    # agent. Superseding them mid-realization would waste the agent's in-progress
+    # work and break the caused_by causality chain (the agent's reflect call cites
+    # the directive id). A superseded in-flight directive is re-queued after the
+    # epoch closes if the user's new description is still imperative.
+    in_flight = _in_flight_directive_ids(codoc_dir)
+    # Steers (additive notes) and block directives (independent structural edits) are
+    # never superseded by a description AMEND — only AMEND/RETIRE directives are
+    # replaced by the fresh directive for the same feature (R3-A / INV11).
+    survivors = [d for d in existing
+                 if d.kind == "steer" or d.kind.startswith("block:")
+                 or d.feature_id not in fids
+                 or (d.id and d.id in in_flight)]
     removed = len(existing) - len(survivors)
     if removed:
         _rewrite_queue(root_dir, codoc_dir, survivors)
     return removed
 
 
-def _pick_parsed(codoc_dir: str, store: Store):
-    """U2b — choose the edit-detection source. Prefer ``tree.doc.json`` (the
-    webview's authored intent; the single-writer model means the host no longer
-    writes ``tree.codoc``) when it carries a pending feature edit; otherwise the
-    daemon-owned ``tree.codoc`` text — which still serves raw-text-editor edits and
-    is the only source before any webview has authored a doc. Read-only (the
-    ``diff_codoc`` probe never mutates), so it is safe ahead of the step-0 snapshot."""
+def _in_flight_directive_ids(codoc_dir: str) -> frozenset[str]:
+    """Directive ids that have been HANDED OFF to the agent — the ids in ``realize.md``.
+
+    These are protected from supersede: dropping a directive the agent may be
+    mid-implementing would break its ``caused_by`` causality chain and waste work.
+    ``realize.md`` is the structural signal — the held-draft model writes ONLY
+    handed-off directives there (a held draft never appears), so a fresh edit's held
+    draft (the default) coalesces freely, while a genuinely handed-off directive is
+    protected. This deliberately does NOT consult ``activity.json``'s epoch: depending
+    on that file made protection fragile (a stale/missing epoch would wrongly allow a
+    being-realized directive to be superseded). Conservative by design — anything handed
+    off is protected whether or not the agent has visibly started; a re-edit after
+    hand-off becomes a new held draft rather than clobbering the in-flight one.
+    """
+    try:
+        text = realize_path(codoc_dir).read_text()
+        return frozenset(m.group(1) for m in _DIRECTIVE_ID_RE.finditer(text))
+    except OSError:
+        return frozenset()
+
+
+def _merge_channels(codoc_dir: str, store: Store) -> tuple[CodocDiff, list[str]]:
+    """Merge both edit channels at the feature level (INV3), after first restoring
+    minted fids to new nodes in both channels (INV7).
+
+    Channel arbitration rules:
+    - doc-path AMEND/MOVE/ADD is authoritative for features it has edits for.
+    - text-path ops cover features not in the doc's edit set (raw-text-editor edits,
+      CLI-only repos, first run).
+    - RETIRE_NODE from the text path beats a concurrent AMEND from the doc path for
+      the same feature — lifecycle intent is always stronger than description intent.
+    - Steers (``> …`` comments) from both channels are additive and always included.
+
+    Returns ``(merged_diff, errors)`` where ``merged_diff`` feeds ``_snapshot_pre_mutation``
+    as the frozen pre-mutation snapshot and ``errors`` are parse warnings.
+
+    This replaces the previous ``_pick_parsed`` winner-take-all approach, which would
+    silently drop a raw-text-editor edit to feature B whenever the webview had a
+    pending edit for feature A (attack A2/A6).
+    """
     doc_parsed = parse_doc_file(codoc_dir)
-    if doc_parsed is not None and not diff_codoc(doc_parsed, store).is_empty():
-        return doc_parsed
-    return parse_tree_file(codoc_dir)
+    text_parsed = parse_tree_file(codoc_dir)
+
+    errors = list((doc_parsed.errors if doc_parsed else []) + text_parsed.errors)
+
+    # Identity is resolved INSIDE diff_codoc now (INV7): the doc channel diffs with
+    # has_local_ids=True, so a heading whose author-stable local_id maps to an
+    # existing feature is recognized as that feature — even when TipTap's undo reset
+    # its fid to null. No pre-pass mutation of the parsed tree. The text channel has
+    # no local_id signal, so it keeps the fid+title snapshot diff.
+    if doc_parsed is None:
+        # CLI-only / first run — no webview doc yet: text is the only source.
+        return diff_codoc(text_parsed, store), errors
+
+    doc_diff = diff_codoc(doc_parsed, store, has_local_ids=True)
+    if doc_diff.is_empty():
+        # Doc has no pending edits (store is caught up): text path is authoritative.
+        return diff_codoc(text_parsed, store), errors
+
+    # Both channels have ops. Merge per-feature.
+    doc_fids = {op.feature_id for op in doc_diff.user_ops if op.feature_id}
+    text_diff = diff_codoc(text_parsed, store)
+
+    # RETIRE from text beats AMEND from doc for the same feature (lifecycle > description).
+    text_retire_fids = {
+        op.feature_id for op in text_diff.user_ops
+        if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id in doc_fids
+    }
+    doc_ops = [op for op in doc_diff.user_ops if op.feature_id not in text_retire_fids]
+    text_extra_ops = [
+        op for op in text_diff.user_ops
+        if not op.feature_id or op.feature_id not in doc_fids
+        or op.feature_id in text_retire_fids
+    ]
+
+    return CodocDiff(
+        user_ops=doc_ops + text_extra_ops,
+        # Steers (> …) only come from the text path; doc_diff.comments is always empty.
+        # Merging preserves steers for both doc-path and text-path features.
+        comments=doc_diff.comments + text_diff.comments,
+        new_node_comments=doc_diff.new_node_comments + text_diff.new_node_comments,
+        # Doc emphasis wins (bold spans in the webview are the stronger signal).
+        emphasis={**text_diff.emphasis, **doc_diff.emphasis},
+    ), errors
 
 
 @dataclass
@@ -393,7 +497,7 @@ def _snapshot_pre_mutation(store: Store, codoc_dir: str) -> _PreMutation:
        drain so a still-pending episode keeps its stable diff baseline — R5/R6);
     2. drain edits.json authorship annotations (a control-file read/clear, not a
        store write);
-    3. parse the edit source and diff it against the PRE-mutation store.
+    3. merge both edit channels (INV3/INV7) and diff against the PRE-mutation store.
     """
     baselines: dict[str, str] = {
         d.feature_id: d.baseline
@@ -401,15 +505,18 @@ def _snapshot_pre_mutation(store: Store, codoc_dir: str) -> _PreMutation:
         if d.feature_id and d.baseline
     }
     annotations = edits_channel.drain_annotations(codoc_dir)
-    parsed = _pick_parsed(codoc_dir, store)
-    diff = diff_codoc(parsed, store)
+    diff, errors = _merge_channels(codoc_dir, store)
     return _PreMutation(diff=diff, annotations=annotations, baselines=baselines,
-                        errors=list(parsed.errors))
+                        errors=errors)
 
 
 def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False) -> LoopBResult:
-    with open_store(codoc_dir) as store:
-        return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
+    # The shared codoc-loop lock serializes this whole pass against Loop A and any other
+    # Loop B (daemon / CLI / hub / Stop-hook) so no two passes interleave between store
+    # mutation and the write_tree re-render (the phantom-revert race). See loop/locks.py.
+    with loop_lock(codoc_dir):
+        with open_store(codoc_dir) as store:
+            return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
 
 
 def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
@@ -451,8 +558,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # what finally STOPS a deleted node from resurrecting on the next render. Skipped
     # on dry runs (it mutates the tree). Runs before the edit loops so the rest of the
     # pass and the re-render see the post-retire state.
+    _current_doc_fids: set[str] = set()
     if not dry_run:
-        res.soft_retired, res.unretired = reconcile_doc_presence(store, codoc_dir)
+        res.soft_retired, res.unretired, _current_doc_fids = reconcile_doc_presence(
+            store, codoc_dir
+        )
 
     def _accept_with_fid(op: NodeOp) -> str:
         """Apply an accepted op, recovering a freshly-minted ADD feature id by
@@ -488,12 +598,20 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
             #   exactly like the human text path (step 2). The code is removed by the
             #   agent and reconcile detaches then.
             if e.op.kind is NodeOpKind.RETIRE_NODE:
-                if e.op.delete_code and implies_code(e.op, store):
+                if e.op.delete_code and edit_mints_directive(e.op, store):
                     directive_ops.append((e.op, fid, e.id))
                 else:
                     for b in store.bindings_for_feature(e.op.feature_id):
                         store.delete_binding(b.file, b.symbol_path)
-            elif implies_code(e.op, store):
+            elif e.op.kind is NodeOpKind.ADD_NODE and e.op.realized is False:
+                # An accepted PLAN placeholder (realized=False) is a build request →
+                # mint a directive. Every other accepted proposal (a descriptive AMEND
+                # reflecting code that already changed, an ADD binding existing code, a
+                # MOVE) reconciles the tree to EXISTING code — it must NOT mint a realize
+                # directive (that would tell the agent to re-write code to match a
+                # description derived from that very code). This deliberately does NOT
+                # route through edit_mints_directive, whose AMEND→always-True is for the
+                # doc-AUTHORING path, not for reconciling-to-code accepts.
                 directive_ops.append((e.op, fid, e.id))
         else:
             store.delete_event(e.id)
@@ -515,14 +633,19 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                       actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
                       caused_by=(ann.suggestion_id if ann else ""))
         res.user_edits += 1
-        # Boldening amplifies the imperative gate: a span the author NEWLY
-        # bolded that itself reads imperative queues a directive even when the
-        # description as a whole is descriptive — emphasis is a stronger intent
-        # signal than other revision text.
-        bolded = diff.emphasis.get(op.feature_id or "", [])
-        will_queue = implies_code(op, store) or any(is_imperative(s) for s in bolded)
+        # Structural gate (no prose heuristic): AMEND always mints a directive,
+        # plan-ADD/RETIRE-with-code do too. Whether it realizes now or waits as a
+        # held draft is the finalize step's hand-off decision. Newly-bolded spans
+        # still ride into the directive as a `Focus:` line (diff.emphasis →
+        # build_directive); they no longer gate whether a directive is minted.
+        will_queue = edit_mints_directive(op, store)
         res.edit_notes.append(_edit_label(op, store, will_queue))
         if will_queue:
+            # RETIRE supersedes any prior pending directives for this feature
+            # (add+retire churn prevention — INV1/N15). A retire intent is always
+            # stronger than a queued code-add or code-update for the same feature.
+            if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
+                _supersede_directives(root_dir, codoc_dir, {op.feature_id})
             # The directive's cause: the doc-ahead suggestion this settle applied
             # (if the host told us), else the user-op event itself.
             cause = (ann.suggestion_id if ann and ann.suggestion_id else ev.id)
@@ -557,7 +680,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         apply_op(op, store, source="user", applied=True,
                  actor=intent.actor or "human", mode="suggest", caused_by=intent.id)
         res.user_edits += 1
-        will_queue = implies_code(op, store)
+        will_queue = edit_mints_directive(op, store)
         res.edit_notes.append(_edit_label(op, store, will_queue))
         if will_queue:
             directive_ops.append((op, f.id, intent.id))
@@ -667,6 +790,13 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
             # The dry re-render (store-driven) just dropped the `> …` lines even
             # though we are not queueing them — put them back.
             _reinsert_comments(codoc_dir, comment_targets)
+        # INV5: write doc-fids.json AFTER write_tree so the two files stay
+        # co-consistent. A crash between reconcile and write_tree leaves doc-fids.json
+        # at the old state — the zombie-clone guard in diff_codoc (N8) catches the
+        # resulting stale live marker in tree.codoc on restart.
+        if not dry_run and _current_doc_fids:
+            from codoc.loop.doc_presence import write_doc_fids
+            write_doc_fids(codoc_dir, _current_doc_fids)
 
     rendered = [
         (build_directive(op, store, emphasis=diff.emphasis.get(fid)), fid, cause, op.kind.value)
@@ -720,17 +850,38 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         status.refresh_status(codoc_dir, store)
         return res
 
-    drafts_set = edits_channel.read_drafts(codoc_dir)
+    # Held-draft model: a doc AMEND/block edit is born HELD (handed_off=False) and
+    # reaches the agent only via an explicit hand-off. An explicit gesture — a steer
+    # (note addressed to the agent), a RETIRE (the destructive ~ marker), or a plan
+    # ADD (realized=False) — is handed off the moment it is minted. The positive
+    # hand-off signal for held drafts is the one-shot ``handoffs`` channel (the
+    # webview's commit / ⌘S, or ``codoc realize``). This is the deletion of the
+    # is_imperative prose-guess: the SYSTEM never decides from English mood; the USER
+    # decides by handing off.
+    handoffs = set(edits_channel.drain_handoffs(codoc_dir))
     res.directive_ids = [new_directive_id() for _ in rendered]
     all_directives = existing + [
         edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text,
-                                baseline=baselines.get(fid, ""))
+                                baseline=baselines.get(fid, ""), handed_off=False)
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ]
     for d in all_directives:
-        # A lossy block `lower` (KTD2) forces a held draft even absent a webview
-        # suggesting-mode hold, so an ambiguous diagram edit awaits confirmation.
-        d.handed_off = d.feature_id not in drafts_set and d.feature_id not in force_draft_fids
+        if d.handed_off:
+            continue  # STICKY: a directive already in realize.md / sent to the agent is
+                      # never demoted (legacy manifest, or handed off on a prior pass) —
+                      # demoting it mid-realization would break the caused_by chain.
+        if d.feature_id in force_draft_fids:
+            d.handed_off = False  # lossy block `lower` (KTD2) → held until confirmed
+        elif d.kind in _EXPLICIT_REALIZE_KINDS or d.kind.startswith("block:"):
+            # An explicit / deterministic code request realizes on mint: a steer (note
+            # to the agent), a RETIRE (the destructive ~), a plan ADD (realized=False),
+            # or a block `lower` (a diagram/latex edit has an UNAMBIGUOUS code delta —
+            # not the prose ambiguity the held-draft default guards against).
+            d.handed_off = True
+        else:
+            # AMEND (a prose description edit) — held until its feature is explicitly
+            # handed off. The SYSTEM never guesses from prose whether to realize.
+            d.handed_off = d.feature_id in handoffs
     # Manifest first (its no-realize.md-but-drafts state is the source of truth);
     # realize.md (the agent trigger) is rebuilt from handed-off directives only.
     edits_channel.write_manifest(codoc_dir, all_directives)

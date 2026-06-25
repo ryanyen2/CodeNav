@@ -47,37 +47,51 @@ def write_doc_fids(codoc_dir: str | Path, fids: set[str]) -> None:
     atomic_write_json(_path(codoc_dir), {"version": 1, "fids": sorted(fids)})
 
 
-def reconcile_doc_presence(store: Store, codoc_dir: str | Path) -> tuple[int, int]:
+def reconcile_doc_presence(store: Store, codoc_dir: str | Path) -> tuple[int, int, set[str]]:
     """Soft-retire features the human removed from the doc since the last pass, and
-    un-retire ones that re-appeared. Returns ``(retired, unretired)``.
+    un-retire ones that re-appeared. Returns ``(retired, unretired, current_fids)``.
+
+    The caller (_apply_edits) writes ``doc-fids.json`` AFTER ``write_tree`` completes
+    so the two files stay co-consistent (INV5). This function no longer calls
+    ``write_doc_fids`` — it returns the computed ``current_fids`` set instead.
 
     Safe-by-construction: only fids that were in the *previous* doc and are now
     absent are retired — so an agent-added feature not yet in the human doc is never
-    touched. A no-op (returns ``(0, 0)``) when there is no authoritative doc yet
-    (CLI-only repo, or first run before any webview edit) or the parse errored — the
-    guard against ever mass-retiring from a partial/unreadable doc.
+    touched.
+
+    Guard: skip entirely when the doc is missing or corrupt (``parsed is None`` or
+    ``parsed.errors``). An *explicit* empty doc (all features deleted by the user)
+    has ``parsed.nodes == []`` but a readable file — that IS a valid mass-delete
+    signal and is NOT skipped here (fix for R3-B).
+
+    INV2 — soft-retire is lifecycle-only: bindings are intentionally NOT deleted.
+    They survive soft-retire and reactivate on un-retire (undo / re-author). Only
+    an explicit ``~`` marker retire (RETIRE_NODE op) or an accepted RETIRE with
+    ``delete_code=True`` may delete bindings. This prevents undo-after-delete from
+    permanently orphaning code attribution (attack A3).
     """
     parsed = parse_doc_file(codoc_dir)
-    if parsed is None or parsed.errors or not parsed.nodes:
-        return (0, 0)  # no authoritative doc / unreadable → never infer deletions
+    if parsed is None or parsed.errors:
+        # Missing or corrupt doc — never infer deletions.
+        # NOTE: parsed.nodes == [] with a *readable* file is a valid mass-delete
+        # signal (all features removed by the user) and is NOT skipped here (R3-B).
+        return (0, 0, read_doc_fids(codoc_dir))
 
     current = {n.id for n in parsed.nodes if n.id}
     prev = read_doc_fids(codoc_dir)
-    live = {f.id for f in store.list_features()}                 # active only
+    live = {f.id for f in store.list_features()}
     retired_ids = {f.id for f in store.list_features(include_retired=True)} - live
 
     retired = 0
     for fid in (prev - current) & live:
-        # Soft, detach-only retire — recoverable, never deletes code.
         store.retire_feature(fid)
-        for b in store.bindings_for_feature(fid):
-            store.delete_binding(b.file, b.symbol_path)
+        # Bindings are deliberately NOT deleted here (INV2).
         retired += 1
 
     unretired = 0
     for fid in current & retired_ids:
-        store.unretire_feature(fid)  # the node re-appeared (undo / re-author)
+        store.unretire_feature(fid)
         unretired += 1
 
-    write_doc_fids(codoc_dir, current)
-    return (retired, unretired)
+    # Caller writes doc-fids.json after write_tree (INV5) — we only return current.
+    return (retired, unretired, current)

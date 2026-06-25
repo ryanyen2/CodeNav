@@ -162,11 +162,23 @@ def realize(
     """
     import subprocess
 
-    from codoc.loop.loop_b import realize_path
+    from codoc.loop.edits import append_handoffs, read_manifest
+    from codoc.loop.loop_b import realize_path, run_loop_b
     from codoc.loop.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
 
-    if not realize_path(_codoc_dir(root)).exists():
-        typer.echo("Nothing queued (.codoc/realize.md absent). Edit tree.codoc, then `codoc sync`.")
+    codoc_dir = _codoc_dir(root)
+    # `codoc realize` IS the CLI hand-off gesture (held-draft model): a doc AMEND
+    # mints a HELD draft, not surprise code. Flush every held draft now — write the
+    # positive hand-off signal and run one Loop B pass to (re)build realize.md.
+    if not realize_path(codoc_dir).exists():
+        held = [d.feature_id for d in read_manifest(codoc_dir)
+                if not d.handed_off and d.feature_id]
+        if held:
+            append_handoffs(codoc_dir, held)
+            run_loop_b(root, codoc_dir)
+    if not realize_path(codoc_dir).exists():
+        typer.echo("Nothing queued — no held drafts and no realize.md. "
+                   "Edit tree.codoc, then `codoc realize` to hand off the change.")
         raise typer.Exit(0)
 
     if engine not in ("auto", "sdk", "cli"):
