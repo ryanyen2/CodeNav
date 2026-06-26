@@ -215,7 +215,8 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
 #   adds a fid on a code-implying draft edit and removes it on hand-off; the loop derives
 #   each directive's ``handed_off`` from this set every pass (so removing a fid releases
 #   it). Empty/absent → every directive is handed off, i.e. today's immediate-realize.
-_LISTS = ("edits", "intents", "cancellations", "steers", "drafts", "block_edits", "handoffs")
+_LISTS = ("edits", "intents", "cancellations", "steers", "drafts", "block_edits",
+          "handoffs", "node_ops")
 
 # Cached, reentrant FileLock per repo guarding every edits.json read-modify-write.
 _edit_locks: dict[str, object] = {}
@@ -271,7 +272,7 @@ def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
     payload: dict = {"version": 1, "edits": merged["edits"], "intents": merged["intents"]}
     # Keep the optional lists out of the payload when empty (matches the prior shape
     # + keeps a plain annotations-only file byte-identical to before).
-    for k in ("cancellations", "steers", "drafts", "block_edits", "handoffs"):
+    for k in ("cancellations", "steers", "drafts", "block_edits", "handoffs", "node_ops"):
         if merged[k]:
             payload[k] = merged[k]
     atomic_write_json(dest, payload)
@@ -415,6 +416,52 @@ def append_block_edit(codoc_dir: str | Path, edit: BlockEdit) -> Path | None:
         "ts": edit.ts or int(time.time() * 1000),
     }]
     return _rewrite(codoc_dir, block_edits=block_edits)
+
+
+# ``node_ops`` — structural user ops (ADD / AMEND / MOVE / RETIRE) from a non-doc
+# host that has no authoritative doc surface of its own (the Notion bridge). The
+# webview/text hosts express these through tree.doc.json / tree.codoc, which Loop B
+# diffs; a host that cannot own a doc surface writes pre-diffed NodeOps here instead.
+# One-shot drained (like steers): the host re-diffs each pass, so an unchanged tree
+# produces no ops — the same idempotency the doc-surface diff has. Auto-handoff is
+# the default: these ops carry no draft id, so Loop B's finalize hands their
+# directives off immediately (the "authoritative" posture).
+def read_node_ops(codoc_dir: str | Path) -> list["NodeOp"]:
+    """Pending structural ops from a non-doc host. Order-preserving; a malformed
+    entry is skipped rather than crashing the drain."""
+    from codoc.model.event import NodeOp
+
+    out: list[NodeOp] = []
+    for o in _load(codoc_dir).get("node_ops", []):
+        if not isinstance(o, dict):
+            continue
+        try:
+            out.append(NodeOp.model_validate(o))
+        except Exception:
+            continue  # tolerate a bad entry (forward/back-compat); never crash Loop B
+    return out
+
+
+@_locked
+def drain_node_ops(codoc_dir: str | Path) -> list["NodeOp"]:
+    """Consume the ``node_ops`` list (one-shot), keeping the others — Loop B applies
+    each op and mints an auto-handed-off directive, exactly once."""
+    ops = read_node_ops(codoc_dir)
+    if ops:
+        _rewrite(codoc_dir, node_ops=[])
+    return ops
+
+
+@_locked
+def append_node_ops(codoc_dir: str | Path, ops: list["NodeOp"]) -> Path | None:
+    """Append structural ops from a non-doc host (the Notion bridge). Serialized via
+    pydantic so the enum kind round-trips as its string value."""
+    if not ops:
+        return None
+    serialized = (_load(codoc_dir).get("node_ops") or []) + [
+        op.model_dump(mode="json") for op in ops
+    ]
+    return _rewrite(codoc_dir, node_ops=serialized)
 
 
 def read_drafts(codoc_dir: str | Path) -> set[str]:
