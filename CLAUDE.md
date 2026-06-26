@@ -139,6 +139,23 @@ a file-channel client (reads `.codoc/*`, writes only the verdict/draft channels,
 never `tree.codoc`). See `docs/serve-deployment.md` (setup) and `docs/architecture.md`
 (modules). README "Flow 3" is the user-facing overview.
 
+### The Notion bridge (`codoc notion`)
+
+An optional host (`codoc/notion/`) that makes a **Notion page** an ongoing authoring
+surface for the tree: a Notion user edits intent, sees ADD/MOVE/RETIRE/AMEND
+proposals as callouts, accepts/rejects via comment commands (`/accept` · `/reject`),
+and watches code follow. It is a **separate process** that **defers** to an existing
+`codoc watch`/`codoc serve` owner (never double-spawns) and is a file-channel client
+(reuses the `node_ops`/`steers`/`inbox` channels; never writes `tree.codoc`).
+Structural edits ride a new append-only `edits.json` `node_ops` channel, auto-handed
+off. Render/parse use **nested toggle blocks** (arbitrary depth, exact round-trip)
+with a `block_id ↔ feature_id` map (`notion_map.json`). **Invariant update:** the
+"no HTTP server, no port" note above is local-extension-scoped; the deployed hub
+already runs an HTTP server, and the Notion bridge adds the repo's **first inbound
+network boundary** (a signature-verified webhook — or polling-only when no public
+endpoint is exposed). Install with `pip install -e '.[notion]'`; see
+`docs/notion-deployment.md`.
+
 ## Tests
 
 - `tests/` — Python unit + integration (`loop/`, `store/`, `graph/`, `codoc_file/`,

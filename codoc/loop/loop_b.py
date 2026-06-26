@@ -685,6 +685,27 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         if will_queue:
             directive_ops.append((op, f.id, intent.id))
 
+    # 2.6 Structural ops from a non-doc host (the Notion bridge). A host that cannot
+    #     own an authoritative doc surface (tree.doc.json / tree.codoc) writes
+    #     pre-diffed NodeOps to edits.json instead; apply each like a direct user edit
+    #     (step 2) and mint an AUTO-HANDED-OFF directive — these ops carry no draft id,
+    #     so finalize hands the directive off immediately (the "authoritative" posture
+    #     the Notion host chose). One-shot drain: the host re-diffs Notion↔store each
+    #     pass, so an unchanged tree produces no ops (the same idempotency the
+    #     doc-surface diff has, and the echo-loop guard the host relies on).
+    for op in edits_channel.drain_node_ops(codoc_dir):
+        if op.kind is NodeOpKind.AMEND and op.feature_id and op.feature_id not in baselines:
+            prev = store.get_feature(op.feature_id)
+            baselines[op.feature_id] = (prev.description or "") if prev else ""
+        ev = apply_op(op, store, source="user", applied=True, actor="notion", mode="pen")
+        res.user_edits += 1
+        will_queue = edit_mints_directive(op, store)
+        res.edit_notes.append(_edit_label(op, store, will_queue))
+        if will_queue:
+            if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
+                _supersede_directives(root_dir, codoc_dir, {op.feature_id})
+            directive_ops.append((op, op.feature_id or "", ev.id))
+
     # 2.7 Steering comments (`> …` in the text, snapshotted in step 0) — explicit
     #     notes to the agent, imperative by construction. Each becomes a STEER
     #     directive; the end-of-pass re-render consumes them from the text (the
