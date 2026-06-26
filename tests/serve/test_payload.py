@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from codoc.model.feature import Feature
 from codoc.model.hlc import HLC
 from codoc.serve.payload import build_browser_payload, payload_version
+from codoc.store.db import open_store
 
 
 def _seed(tmp_path, *, sidecar=None, status=None, doc=None, drafts=None, activity=None) -> str:
@@ -190,6 +192,29 @@ def test_parent_cycle_is_safe(tmp_path):
     cd = _seed(tmp_path, sidecar=sidecar, status=_status_at(HLC.now()))
     p = build_browser_payload(cd)  # must terminate
     assert set(p["nodes"]) == {"a", "b"}
+
+
+# Flow 6 — the store is the source of truth: when codoc.db exists, the doc is the
+# store projection (R3), carrying localId + per-feature version on the heading.
+def test_payload_doc_uses_store_projection_when_db_present(tmp_path):
+    cd = _seed(tmp_path, status=_status_at(HLC.now()))
+    with open_store(cd) as s:
+        f = Feature(title="Auth", description="Login and sessions.", local_id="lid-1")
+        s.upsert_feature(f)
+    doc = build_browser_payload(cd)["doc"]
+    head = next(b for b in doc["content"] if b["type"] == "featureHeading")
+    assert head["attrs"]["fid"] == f.id
+    assert head["attrs"]["localId"] == "lid-1"
+    assert "version" in head["attrs"]
+    assert head["content"][0]["text"] == "Auth"
+
+
+def test_payload_doc_falls_back_to_text_without_db(tmp_path):
+    # No codoc.db → the existing tree.doc.json / tree.codoc behavior is preserved.
+    cd = _seed(tmp_path, status=_status_at(HLC.now()), doc={"type": "doc", "content": []})
+    (Path(cd) / "tree.codoc").write_text("- Auth  ⟨f-1⟩\n    Login.\n")
+    doc = build_browser_payload(cd)["doc"]
+    assert [b["attrs"]["fid"] for b in doc["content"] if b["type"] == "featureHeading"] == ["f-1"]
 
 
 def test_payload_version_monotonic_and_restart_safe(tmp_path):

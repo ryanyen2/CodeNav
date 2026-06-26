@@ -42,11 +42,21 @@ def _status(codoc_dir: str | Path) -> dict:
 _TREE_FILENAME = "tree.codoc"
 
 
+_DB_FILENAME = "codoc.db"
+
+
 def _doc(codoc_dir: str | Path):
-    """The webview-authored rich doc, or — when it is absent/empty because the
-    workspace was never opened in VS Code — one rendered from ``tree.codoc`` so the
-    hub is self-sufficient (it has no editor to author the doc itself)."""
+    """The store projection (store is the single source of truth, R3) when the store
+    exists; else the webview-authored rich doc; else — when both are absent/empty
+    because the workspace was never opened in VS Code — one rendered from
+    ``tree.codoc`` so the hub is self-sufficient (it has no editor to author the doc)."""
     codoc_dir = Path(codoc_dir)
+    if (codoc_dir / _DB_FILENAME).is_file():
+        from codoc.codoc_file.doc_render import build_doc_from_store
+        from codoc.store.db import open_store
+
+        with open_store(codoc_dir) as store:
+            return build_doc_from_store(store)
     doc = read_json(codoc_dir / _DOC_FILENAME, default=None)
     if isinstance(doc, dict) and (doc.get("content") or []):
         return doc

@@ -102,3 +102,15 @@ def test_ae6_second_pass_is_a_noop(codoc_dir):
             apply_op(op, s, source="user", applied=True)
         # second pass over the SAME doc (host re-persist) must be a no-op
         assert diff_codoc(parse_doc(doc), s).is_empty()
+
+
+def test_build_doc_from_store_is_idempotent(codoc_dir):
+    """AE1 prerequisite — projecting an unchanged store twice is byte-identical."""
+    from codoc.codoc_file.doc_render import build_doc_from_store
+
+    with open_store(codoc_dir) as s:
+        s.upsert_feature(Feature(title="Auth", description="Login and sessions.", local_id="lid-1"))
+        s.upsert_feature(Feature(title="Billing", description="Charges and invoices."))
+        first = build_doc_from_store(s)
+        second = build_doc_from_store(s)
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
