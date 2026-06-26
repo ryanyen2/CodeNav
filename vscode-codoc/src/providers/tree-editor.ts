@@ -14,24 +14,22 @@
 
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
 import { parseTreeCodoc, extractLinks } from '../state/tree-model';
 import { activeFeatureModes, featurePhases, featureSteps } from '../state/activity-model';
-import { reconcileDoc } from '../state/doc-reconcile';
-import { renderTreeFromDoc } from '../state/doc-serialize';
-import { moveFeatureInDoc } from '../state/doc-move';
 import { PMNode } from '../state/pm-doc';
-import { DocFile, parseDocFile, emptyDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
+import { DocFile, parseDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
 import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
+import { commandsForSettle, moveCommand, featureUnits, FeatureUnit } from '../state/commands-from-doc';
 import {
-    CommentThread, commentNoteText, reconcileComments, reanchorComments,
-    stripOrphanComments,
+    CommentThread, commentNoteText, reconcileComments,
 } from '../state/comment-model';
-import { directedEdges, agentAmendsByFeature, heldFeatures, heldDetail, divergentFeatures, blocksForFeature, mintedByLocalId } from '../state/bindings-model';
+import { directedEdges, heldFeatures, heldDetail, divergentFeatures, blocksForFeature, mintedByLocalId } from '../state/bindings-model';
 import {
-    EditsFile, parseEditsFile, emptyEditsFile,
-    annotationsForSettle, appendCancellation, appendSteer, setDrafts, appendBlockEdit, appendHandoffs,
+    EditsFile, parseEditsFile, emptyEditsFile, CommandEntry,
+    appendCancellation, appendSteer, appendCommand, setDrafts, appendBlockEdit, appendHandoffs,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -57,16 +55,18 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     ) {}
 
     private rev = 0;
-    /** The authoritative rich doc per open tree.codoc (carries authorship marks +
-     *  inline comment threads). Loaded from tree.doc.json, reconciled with the text on
-     *  each payload, and persisted on a user doc-commit. */
+    /** The store projection per open tree (the daemon-written tree.doc.json, U4/KTD9).
+     *  The webview is a pure projection consumer — this is the LAST projection the host
+     *  rendered the editor from, NOT an authoritative copy the host writes back. It is
+     *  the identity-keyed baseline a settle diffs against to emit commands (the host
+     *  never persists tree.doc.json). Re-read on every buildPayload (the daemon is its
+     *  sole writer); the in-memory copy is just the diff baseline + the live comment
+     *  thread store. */
     private docFileByUri = new Map<string, DocFile>();
-    /** Single-writer (U2b): uris whose saved doc is AHEAD of the on-disk tree.codoc
-     *  — the webview committed an edit the daemon hasn't rendered back yet. While set,
-     *  buildPayload sources the tree from the saved doc (not the stale text) so a
-     *  payload in that window never reverts the user's just-settled edit. Cleared
-     *  when tree.codoc catches up. */
-    private docAhead = new Set<string>();
+    /** The feature units of the last projection rendered to the editor, per uri — the
+     *  identity-keyed baseline `settleDoc` diffs against (commandsForSettle). Refreshed
+     *  whenever a new projection is read in buildPayload. */
+    private projectedUnitsByUri = new Map<string, FeatureUnit[]>();
     /** Suggesting-mode DRAFTS (U4), per doc uri: feature ids whose edit the human is
      *  holding as a draft (the daemon keeps their code-implying directive out of the
      *  agent queue until hand-off). The host is the SOLE writer of edits.json `drafts`
@@ -86,8 +86,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         };
         panel.webview.html = this.html(panel.webview);
 
-        // Seed the in-memory authoritative doc + suggestions from tree.doc.json
-        // (if any) so the first payload already carries authorship marks + diffs.
+        // Seed the live comment-thread store from the last-persisted tree.doc.json (if any).
+        // U4: the host no longer WRITES tree.doc.json — the daemon is its sole writer — but a
+        // pre-U4 workspace may carry comment threads in it; we read them once so open threads
+        // survive the migration. The projection (build_doc_from_store) carries the comment
+        // MARKS; the thread bodies live here until U8 migrates them into the store.
         const saved = await this.loadDocFile(document);
         if (saved) this.docFileByUri.set(document.uri.toString(), saved);
 
@@ -102,15 +105,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         };
 
         const subs: vscode.Disposable[] = [
-            vscode.workspace.onDidChangeTextDocument(e => {
-                if (e.document.uri.toString() !== document.uri.toString()) return;
-                // U2b: the host never writes tree.codoc now, so this fires only when the
-                // DAEMON rendered it — and the daemon yields until Loop B has applied any
-                // pending doc edit (safe_write_tree), so the new text is authoritative.
-                // Clear docAhead → buildPayload sources from tree.codoc (with minted ids).
-                this.docAhead.delete(document.uri.toString());
-                post();
-            }),
             // P2 code→doc (§A.3): a bound SOURCE file was edited → map the changed line ranges
             // through this file's bindings to feature ids and spark their doc headings.
             vscode.workspace.onDidChangeTextDocument(e => {
@@ -294,56 +288,49 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         } catch { return null; }
     }
 
-    /** Create a comment: persist the doc (with its anchor mark) + the thread, store
-     *  any screenshot attachment, and hand the note to Loop B as a steer. */
-    private async createComment(document: vscode.TextDocument, doc: PMNode, thread: CommentThread, mediaData?: string, mediaMime?: string): Promise<void> {
+    /** Create a comment (U4): store any screenshot attachment, keep the thread in the
+     *  live in-memory store (the projection carries the anchor MARK; the body lives
+     *  here until U8 promotes it into the store `comments` table), and hand the note
+     *  to Loop B as a steer. The host NO LONGER persists tree.doc.json (KTD9). */
+    private async createComment(document: vscode.TextDocument, _doc: PMNode, thread: CommentThread, mediaData?: string, mediaMime?: string): Promise<void> {
         const df = this.docFileFor(document);
-        df.doc = doc;
         let norm: CommentThread = { ...thread, status: 'sent', serialized: true };
         if (mediaData) {
             const ref = await this.writeMediaAttachment(document, thread.id, mediaData, mediaMime);
             if (ref) norm = { ...norm, media: { kind: 'screenshot', ref } };
         }
         df.comments = [...df.comments.filter(c => c.id !== norm.id), norm];
-        await this.persistDocFile(document, df);
         await this.steerComment(document, norm);
     }
 
-    /** Edit a comment's body — re-hands the replacing note as a steer. */
+    /** Edit a comment's body (U4) — update the live thread + re-hand the note as a
+     *  steer. No tree.doc.json write. */
     private async editComment(document: vscode.TextDocument, id: string, body: string): Promise<void> {
         const df = this.docFileFor(document);
         const t = df.comments.find(c => c.id === id);
         if (!t) return;
         t.body = body;
-        await this.persistDocFile(document, df);
         await this.steerComment(document, t);
     }
 
-    /** Resolve / delete a comment: drop the thread; the doc carries the anchor-mark
-     *  removal. No tree.codoc write (single-writer). */
-    private async resolveComment(document: vscode.TextDocument, doc: PMNode, id: string): Promise<void> {
+    /** Resolve / delete a comment (U4): drop the thread from the live store. The
+     *  projection's comment mark clears when the daemon next renders; no tree.doc.json
+     *  write (the daemon is its sole writer). */
+    private async resolveComment(document: vscode.TextDocument, _doc: PMNode, id: string): Promise<void> {
         const df = this.docFileFor(document);
-        df.doc = doc;
         df.comments = df.comments.filter(c => c.id !== id);
-        await this.persistDocFile(document, df);
-        this.docFileByUri.set(document.uri.toString(), df);  // refresh the panel
     }
 
     private buildPayload(document: vscode.TextDocument): DocPayload {
         const uri = document.uri.toString();
-        // U2b single-writer: when the saved doc LEADS the on-disk tree.codoc (a
-        // webview edit the daemon hasn't rendered back yet), source the tree from the
-        // saved doc — otherwise a payload triggered in that window (a sidecar/status
-        // change) would reconcile from the stale text and revert the user's settle.
-        // Clear the flag once tree.codoc catches up.
-        const savedDoc = this.docFileByUri.get(uri)?.doc;
-        let sourceText = document.getText();
-        if (this.docAhead.has(uri) && savedDoc) {
-            const savedText = renderTreeFromDoc(savedDoc);
-            if (savedText === document.getText()) this.docAhead.delete(uri);
-            else sourceText = savedText;
-        }
-        const { features } = parseTreeCodoc(sourceText);
+        // U4 (store-authoritative): the webview is a pure PROJECTION CONSUMER. The
+        // authoritative rich doc is the daemon-written tree.doc.json (KTD9 — the daemon
+        // is its sole writer, rendered from the store projection per U2). The host reads
+        // it; it does NOT parse tree.codoc text into a doc, hold a docAhead gate, or
+        // re-persist (all removed, R18). The left-pane node tree still derives from the
+        // daemon-rendered tree.codoc (read-only export, U6) which is identity-stable.
+        const projectionDoc = this.readProjectionDoc(document);
+        const { features } = parseTreeCodoc(document.getText());
         const sidecar = this.state.sidecar;
         const status = this.state.status;
         const activity = this.state.activity;
@@ -450,32 +437,25 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             steps: Object.fromEntries(featureSteps(activity, sidecar)),   // P2b agent ribbon
         };
 
-        // Authoritative rich doc: structure from `sourceText` (the saved doc while it
-        // leads, else the on-disk text), authorship marks borrowed from the in-memory
-        // saved doc by fid (re-anchored where text is unchanged).
-        const realized = (fid: string): boolean => sidecar.features[fid]?.realized !== false;
+        // Authoritative rich doc (U4): the daemon-written store projection, read above.
+        // The host borrows the in-memory comment threads (lifecycle below) but never
+        // re-sources structure from text and never re-persists tree.doc.json.
         const prevFile = this.docFileByUri.get(uri) ?? null;
-        // v4 changes feed → descriptions an agent amended get pencil ink (instead
-        // of a mark reset) when their text drifted under the saved doc.
-        const reconciled = reconcileDoc(sourceText, prevFile?.doc ?? null, realized,
-            agentAmendsByFeature(sidecar));
+        const doc = projectionDoc;
+        // Record the projection's feature units as the identity-keyed baseline the next
+        // settle diffs against (commandsForSettle) — replaces the docAhead text compare.
+        this.projectedUnitsByUri.set(uri, featureUnits(doc));
 
-        // Comment lifecycle: first re-anchor any null-fid thread whose feature has
-        // since been minted (its anchor mark now sits under a fid'd heading), then
-        // harvest raw-editor `> …` notes into threads, flip a serialized-then-
-        // vanished thread to `sent` (Loop B drained it), drop feature-gone /
-        // settled ones. Then GC anchor marks for any dropped thread.
-        const anchored = reanchorComments(reconciled, prevFile?.comments ?? []);
-        const rc = reconcileComments(features, anchored.threads, {
+        // Comment lifecycle (U4): the projection carries the anchor MARKS; the thread
+        // bodies live in the in-memory store (seeded from the last tree.doc.json, kept
+        // live by the comment handlers via the steer channel). Drop feature-gone /
+        // settled threads — but no doc mutation / persist (the daemon owns the doc).
+        const rc = reconcileComments(features, prevFile?.comments ?? [], {
             inSync: status.state === 'in_sync',
         });
-        rc.changed = rc.changed || anchored.changed;
-        const liveIds = new Set(rc.threads.map(t => t.id));
-        const doc = stripOrphanComments(reconciled, liveIds);
 
         const docFile: DocFile = { version: 1, doc, suggestions: prevFile?.suggestions ?? [], comments: rc.threads };
         this.docFileByUri.set(uri, docFile);
-        if (rc.changed) void this.persistDocFile(document, docFile); // harvest / drain survive a reload
 
         // Unified pending diffs: code-ahead (from sidecar proposals) + doc-ahead
         // (Old text for amend diffs comes from the parsed features.) Since U3/U2b the
@@ -620,33 +600,44 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         await fs.rename(tmp, target);
     }
 
-    /** Append per-feature authorship annotations for a settle. Written alongside the
-     *  tree.doc.json persist (same debounced daemon batch) so the resulting Loop B
-     *  pass sees them. Loop B drains `edits`; `intents` stay host-owned. */
-    private async annotateSettle(
-        document: vscode.TextDocument,
-        prevText: string,
-        nextText: string,
-        opts: { actor?: string; mode?: string; suggestionId?: string } = {},
-    ): Promise<void> {
-        const anns = annotationsForSettle(
-            parseTreeCodoc(prevText).features,
-            parseTreeCodoc(nextText).features,
-            { actor: opts.actor ?? 'human', mode: opts.mode ?? 'pen',
-              suggestionId: opts.suggestionId, ts: Date.now() },
-        );
-        if (!anns.length) return;
+    /** Mark the held-draft set for a batch of edited feature ids (U4 suggesting mode).
+     *  The daemon HOLDS only the code-implying ones (a prose-only edit produces no
+     *  directive → nothing held → commits live), so over-marking is harmless; the
+     *  hand-off affordance is gated host-side by `drafts ∩ held` (buildPayload).
+     *  Reconciles with the on-disk drafts so a set the daemon preserved isn't dropped.
+     *  A fresh `add` (no fid yet) is skipped — it has no feature id to hold. */
+    private async markDrafts(document: vscode.TextDocument, featureIds: readonly string[]): Promise<void> {
+        const fids = featureIds.filter(Boolean);
+        if (!fids.length) return;
         const file = await this.readEditsFile(document);
-        file.edits.push(...anns);
-        // U4 suggesting mode: mark every edited feature as a draft. The daemon HOLDS only
-        // the code-implying ones (a prose-only edit produces no directive → nothing held →
-        // commits live), so over-marking is harmless and the hand-off affordance is gated
-        // host-side by `drafts ∩ held` (buildPayload). Reconcile with disk so a draft set
-        // by the daemon's edits.json rewrite (preserve-on-drain) is never dropped.
         const set = this.draftSet(document);
         for (const d of file.drafts ?? []) set.add(d.feature_id);
-        for (const a of anns) set.add(a.feature_id);
+        for (const fid of fids) set.add(fid);
         await this.writeEditsFile(document, setDrafts(file, [...set]));
+    }
+
+    /** Append identity-keyed commands (U3) to edits.json (preserving the other lists).
+     *  This is the ONLY channel a structural/description edit reaches Loop B now — the
+     *  host never persists tree.doc.json (KTD9). Idempotent on the store ledger (KTD8). */
+    private async emitCommands(document: vscode.TextDocument, commands: readonly CommandEntry[]): Promise<void> {
+        if (!commands.length) return;
+        let file = await this.readEditsFile(document);
+        for (const c of commands) file = appendCommand(file, c);
+        await this.writeEditsFile(document, file);
+    }
+
+    /** Read the daemon-written store projection (tree.doc.json) for this tree (U4/KTD9).
+     *  Synchronous so buildPayload stays sync; tolerant — a missing/corrupt projection
+     *  degrades to an empty doc (the daemon writes it on the first Loop B pass). */
+    private readProjectionDoc(document: vscode.TextDocument): PMNode {
+        try {
+            const raw = fsSync.readFileSync(this.docUri(document).fsPath, 'utf-8');
+            // tree.doc.json is the bare PM doc the daemon renders (build_doc_from_store);
+            // parseDocFile tolerates both a bare {type:'doc'} doc and a {doc,…} envelope.
+            const parsed = parseDocFile(JSON.parse(raw));
+            if (parsed?.doc?.type === 'doc') return parsed.doc;
+        } catch { /* not written yet / corrupt → empty doc */ }
+        return { type: 'doc', content: [] };
     }
 
     private async loadDocFile(document: vscode.TextDocument): Promise<DocFile | null> {
@@ -658,67 +649,42 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         }
     }
 
-    private docFileWriteSeq = 0;
-
-    /** Persist tree.doc.json (doc + doc-ahead suggestions + comments) atomically
-     *  (tmp → rename). Watched by neither the VS Code WorkspaceState nor the
-     *  Python daemon, so this write never loops back. The tmp name carries a
-     *  per-write counter: buildPayload can fire two fire-and-forget persists in one
-     *  pass (comment reconcile + suggestion rebase), and a shared tmp path would
-     *  let the second writeFile clobber the first mid-rename. */
-    private async persistDocFile(document: vscode.TextDocument, docFile: DocFile): Promise<void> {
-        const target = this.docUri(document).fsPath;
-        const tmp = path.join(path.dirname(target), `.${DOC_FILENAME}.${++this.docFileWriteSeq}.tmp`);
-        await fs.writeFile(tmp, JSON.stringify(docFile), 'utf-8');
-        await fs.rename(tmp, target);
-    }
-
     private docFileFor(document: vscode.TextDocument): DocFile {
         const uri = document.uri.toString();
         let df = this.docFileByUri.get(uri);
         if (!df) {
-            df = emptyDocFile(reconcileDoc(document.getText(), null));
+            df = { version: 1, doc: this.readProjectionDoc(document), suggestions: [], comments: [] };
             this.docFileByUri.set(uri, df);
         }
         return df;
     }
 
     /**
-     * Whole-doc settle (R3 / U2b single-writer): persist the entire edited doc (with
-     * marks) to tree.doc.json — and that is ALL the host writes. It does NOT touch
-     * tree.codoc; the daemon is the sole writer of that file. Loop B learns this edit
-     * from tree.doc.json (parse_doc_file) — woken by the doc.json write (the daemon
-     * watches it) and the authorship annotation below — applies the AMEND/MOVE/ADD/
-     * RETIRE op, and re-renders tree.codoc itself. Removing the host's
-     * applyEdit+document.save() is what fully closes the "content is newer" conflict.
+     * Whole-doc settle (U4 — store-authoritative): the webview is a projection consumer
+     * + COMMAND EMITTER. The host diffs the settled doc against the last projection it
+     * rendered — KEYED BY IDENTITY (fid, else localId) — and emits the minimal command
+     * set (add / set_title / set_description / move / retire) to edits.json (U3). It does
+     * NOT persist tree.doc.json (the daemon is its sole writer, KTD9) and never writes
+     * tree.codoc. Loop B applies the commands via apply_op (no doc-diff inference) and
+     * re-renders both files; the file-watch repaint closes the loop.
      */
     private async settleDoc(document: vscode.TextDocument, doc: PMNode): Promise<void> {
-        const df = this.docFileFor(document);
-        // INV4: capture the previously-saved doc BEFORE overwriting. When docAhead is set,
-        // the on-disk tree.codoc is stale (daemon hasn't rendered yet) — using document.getText()
-        // as prevText would compare against the OLD pre-settle text and misattribute which fields
-        // changed. Using the prior saved-doc render ensures annotationsForSettle only sees the
-        // delta since the last settle, not since the last daemon render (attacks A1, A5, D4).
-        const prevDoc = df.doc;
         const uri = document.uri.toString();
-
-        df.doc = doc;
-        await this.persistDocFile(document, df);
-
-        const next = renderTreeFromDoc(doc);
-        if (next === document.getText()) { this.docAhead.delete(uri); return; } // no change
-
-        // When docAhead is set, use the previously-saved doc's render as the baseline so
-        // rapid successive settles accumulate correctly. When docAhead is clear, the on-disk
-        // tree.codoc IS the store state and is the correct baseline.
-        const prevText = (this.docAhead.has(uri) && prevDoc)
-            ? renderTreeFromDoc(prevDoc)
-            : document.getText();
-
-        await this.annotateSettle(document, prevText, next);
-        // The saved doc now leads the on-disk tree.codoc until the daemon renders it
-        // back — buildPayload sources from the saved doc meanwhile (no reversion).
-        this.docAhead.add(uri);
+        // Baseline = the feature units of the last projection rendered to the editor
+        // (recorded in buildPayload). Falls back to the current projection on disk.
+        const prevUnits = this.projectedUnitsByUri.get(uri)
+            ?? featureUnits(this.readProjectionDoc(document));
+        const nextUnits = featureUnits(doc);
+        const commands = commandsForSettle(prevUnits, nextUnits, Date.now());
+        if (!commands.length) return;  // no identity-keyed change
+        await this.emitCommands(document, commands);
+        // Held-draft gate (U4): mark every touched EXISTING feature a draft so its
+        // code-implying directive stays held until hand-off. A retire/add carries its
+        // own hand-off semantics (retire is destructive; add mints), so only the
+        // amend-style kinds seed the draft set.
+        await this.markDrafts(document, commands
+            .filter(c => c.kind === 'set_title' || c.kind === 'set_description' || c.kind === 'move')
+            .map(c => c.feature_id ?? ''));
     }
 
     /** Withdraw a queued realization (U6): append a cancellation to edits.json. The
@@ -800,17 +766,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     }
 
     /** Move a feature (and its subtree) under a new parent (or to root if null).
-     *  U2b: a pure transform on the authored doc (moveFeatureInDoc) persisted to
-     *  tree.doc.json — NOT a tree.codoc text rewrite. Loop B derives the MOVE_NODE
-     *  from parse_doc_file; the daemon renders tree.codoc. */
+     *  U4 (store-authoritative): emit an identity-keyed `move` command (U3) keyed by the
+     *  source fid — NOT a doc/text rewrite and no tree.doc.json persist (the daemon is
+     *  its sole writer, KTD9). Loop B applies MOVE_NODE via apply_op. A move targeting a
+     *  not-yet-minted node (no fid) is dropped: it has no stable store identity to move. */
     private async editMove(document: vscode.TextDocument, sourceId: string, newParentId: string | null): Promise<void> {
-        const df = this.docFileFor(document);
-        const moved = moveFeatureInDoc(df.doc, sourceId, newParentId);
-        if (!moved) return;  // no-op / invalid / cycle
-        df.doc = moved;
-        await this.persistDocFile(document, df);
-        await this.annotateSettle(document, document.getText(), renderTreeFromDoc(moved));
-        this.docAhead.add(document.uri.toString());
+        if (!sourceId) return;
+        await this.emitCommands(document, [moveCommand(sourceId, newParentId, Date.now())]);
+        await this.markDrafts(document, [sourceId]);
     }
 
     private html(webview: vscode.Webview): string {

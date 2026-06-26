@@ -11,8 +11,6 @@ import {
 } from '../state/edits-channel';
 import { agentAmendsByFeature, type SidecarData } from '../state/bindings-model';
 import { codeAheadSuggestions, type Suggestion } from '../state/suggestion-model';
-import { reconcileDoc, groupByHeading } from '../state/doc-reconcile';
-import { MARK_AUTHOR, type PMNode } from '../state/pm-doc';
 
 const F = (id: string | null, title: string, description = ''): { id: string | null; title: string; description: string } =>
     ({ id, title, description });
@@ -215,29 +213,11 @@ describe('agentAmendsByFeature (v4 changes feed)', () => {
     });
 });
 
-describe('reconcileDoc — agent pencil re-stamp', () => {
-    const TREE = '- Auth  ⟨f-aaaaaaaa⟩\n    Validates and sanitizes input.\n';
-    const SAVED_TREE = '- Auth  ⟨f-aaaaaaaa⟩\n    Validates input.\n';
-
-    const savedDoc = (): PMNode => reconcileDoc(SAVED_TREE, null);
-
-    it('stamps changed descriptions as the agent pencil when the feed names an agent', () => {
-        const doc = reconcileDoc(TREE, savedDoc(), undefined, new Map([['f-aaaaaaaa', 'claude-code']]));
-        const [g] = groupByHeading(doc);
-        const run = g.blocks[0]?.content?.[0];
-        const author = (run?.marks ?? []).find(m => m.type === MARK_AUTHOR);
-        expect(author).toBeDefined();
-        expect(author?.attrs?.role).toBe('claude-code');
-        expect(author?.attrs?.mode).toBe('pencil');
-    });
-
-    it('still resets marks when no agent is attributed (human/raw-text drift)', () => {
-        const doc = reconcileDoc(TREE, savedDoc(), undefined, new Map());
-        const [g] = groupByHeading(doc);
-        const run = g.blocks[0]?.content?.[0];
-        expect((run?.marks ?? []).find(m => m.type === MARK_AUTHOR)).toBeUndefined();
-    });
-});
+// U4: the text→doc reconcile (`reconcileDoc`/`doc-reconcile.ts`) is deleted — its role
+// is replaced by the store→doc projection (build_doc_from_store) the daemon writes and
+// the host reads. The agent-pencil re-stamp now lives in the projection's marks (U2), so
+// the host no longer re-derives it from text. The former `reconcileDoc — agent pencil
+// re-stamp` describe block is removed with the module.
 
 describe('codeAheadSuggestions — v4 provenance', () => {
     it('carries caused_by and prefers the ledger actor for the role', () => {

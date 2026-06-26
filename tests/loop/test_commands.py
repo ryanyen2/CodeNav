@@ -13,9 +13,13 @@ from pathlib import Path
 
 import pytest
 
+import json
+
+from codoc.codoc_file.doc_render import build_doc_from_store
 from codoc.codoc_file.render import tree_path, write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop.edits import Command, append_command
+from codoc.loop.filenames import DOC_FILENAME
 from codoc.loop.loop_b import run_loop_b
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -218,3 +222,40 @@ def test_command_with_vanished_feature_id_is_skipped(dirs):
     s.close()
     # And the channel was drained.
     assert edits_channel.read_commands(codoc_dir) == []
+
+
+# ── KTD9: the daemon is the sole writer of tree.doc.json (U4) ────────────────
+def test_loop_b_pass_writes_tree_doc_json_matching_projection(dirs):
+    """A Loop B pass that moved the store re-renders tree.doc.json from the store
+    projection (KTD9), so the file content matches ``build_doc_from_store`` exactly."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir)  # empty tree
+    append_command(codoc_dir, Command(
+        id="cmd-doc", kind="add", local_id="local-7",
+        payload={"title": "Theme system", "description": "Light/dark switcher."}))
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    doc_file = Path(codoc_dir) / DOC_FILENAME
+    assert doc_file.exists()
+    written = json.loads(doc_file.read_text())
+    s = open_store(codoc_dir)
+    expected = build_doc_from_store(s)
+    s.close()
+    assert written == expected
+    # The projection actually carries the just-added feature (not an empty doc).
+    headings = [n for n in written["content"] if n["type"] == "featureHeading"]
+    assert any(h.get("content", [{}])[0].get("text") == "Theme system" for h in headings)
+
+
+def test_dry_run_does_not_write_tree_doc_json(dirs):
+    """A dry pass mutates no durable state — it must not write the projection."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir)
+    append_command(codoc_dir, Command(
+        id="cmd-dry", kind="add", local_id="local-d",
+        payload={"title": "Dry feature", "description": "x"}))
+
+    run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert not (Path(codoc_dir) / DOC_FILENAME).exists()

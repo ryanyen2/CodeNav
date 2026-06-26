@@ -36,14 +36,15 @@ from codoc.blocks.builtins import ensure_builtins
 from codoc.codoc_file.diff import CodocDiff, diff_codoc
 from codoc.loop.doc_presence import reconcile_doc_presence
 from codoc.codoc_file.doc_parse import parse_doc_file
+from codoc.codoc_file.doc_render import build_doc_from_store
 from codoc.codoc_file.parse import extract_bold, extract_links, parse_tree_file
 from codoc.codoc_file.render import tree_path, write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
 from codoc.loop.classify import edit_mints_directive
-from codoc.loop.filenames import REALIZE_FILENAME
-from codoc.loop.fsio import atomic_write_text
+from codoc.loop.filenames import DOC_FILENAME, REALIZE_FILENAME
+from codoc.loop.fsio import atomic_write_json, atomic_write_text
 from codoc.loop.locks import loop_lock
 from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import NodeOp, NodeOpKind
@@ -303,6 +304,23 @@ def build_realize_prompt(directives: list[str], root_dir: str,
 
 def realize_path(codoc_dir: str | os.PathLike) -> Path:
     return Path(codoc_dir) / REALIZE_FILENAME
+
+
+def doc_path(codoc_dir: str | os.PathLike) -> Path:
+    return Path(codoc_dir) / DOC_FILENAME
+
+
+def write_tree_doc(store: Store, codoc_dir: str | Path) -> Path:
+    """Render the store's live feature tree into ``tree.doc.json`` (KTD9).
+
+    The daemon is the SOLE writer of this file: the webview reads it as the
+    store projection (identity + marks + comments per U2) and emits identity-keyed
+    commands instead of authoring it. Written atomically alongside ``write_tree``
+    at the end of a Loop B pass so a file-watch re-read repaints the webview."""
+    dest = doc_path(codoc_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(dest, build_doc_from_store(store))
+    return dest
 
 
 def _write_realize(codoc_dir: str, prompt: str) -> None:
@@ -881,6 +899,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
             # The dry re-render (store-driven) just dropped the `> …` lines even
             # though we are not queueing them — put them back.
             _reinsert_comments(codoc_dir, comment_targets)
+        # KTD9: the daemon is the sole writer of tree.doc.json — re-render the store
+        # projection so the webview's file-watch re-read repaints from the source of
+        # truth. Skipped on a dry pass (no durable state mutation).
+        if not dry_run:
+            write_tree_doc(store, codoc_dir)
         # INV5: write doc-fids.json AFTER write_tree so the two files stay
         # co-consistent. A crash between reconcile and write_tree leaves doc-fids.json
         # at the old state — the zombie-clone guard in diff_codoc (N8) catches the

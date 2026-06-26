@@ -62,6 +62,7 @@ export class WorkspaceState {
         const reload = (): void => { this._rootDir = this.detectRootDir(); this._reload(); };
         for (const glob of [
             '**/.codoc/tree.codoc',
+            '**/.codoc/tree.doc.json',  // KTD9: daemon-written store projection — repaint the webview
             '**/.codoc/tree.bindings.json',
             '**/.codoc/tree.index.json',
             '**/.codoc/status.json',
