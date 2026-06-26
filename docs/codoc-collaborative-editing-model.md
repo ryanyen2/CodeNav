@@ -13,6 +13,22 @@ from real editor transactions — not a snapshot text-diff.
 > · plan: `docs/plans/2026-06-16-001-feat-codoc-collaborative-editing-model-plan.md`.
 > This document describes the model **as shipped** (units U1–U8).
 
+> **⚠ Coordination model superseded (2026-06).** The "Single-writer & persistence"
+> section below described a **webview-authoritative** model: the webview owned
+> `tree.doc.json` and the daemon derived `tree.codoc` from it, with the claim that
+> one writer per file "removes the content-is-newer race." That race *recurred*
+> live (deletions resurrected, one node duplicated into 3–5 features, "content is
+> newer" save dialogs) because Loop B was diffing the daemon's own output back as
+> input. The coordination model is now **inverted to store-authoritative**: the
+> SQLite store is the single source of truth, both `tree.doc.json` and `tree.codoc`
+> are daemon-written derived projections (`tree.codoc` is a read-only export), and
+> the webview emits identity-keyed *commands* instead of persisting a doc. The
+> human-facing model in this document (one surface, two directions, doc-wins holds,
+> the change ledger) is unchanged; only the file-coordination mechanics inverted.
+> See `docs/plans/2026-06-26-001-refactor-store-authoritative-coordination-plan.md`
+> (origin brainstorm under `docs/brainstorms/`). The superseded mechanics are kept
+> below struck-through for provenance.
+
 ---
 
 ## The core shift: one surface, two directions
@@ -104,26 +120,46 @@ One rich-text document **is** the feature tree:
 
 ---
 
-## Single-writer & persistence (the data model)
+## Store-authoritative coordination & persistence (the data model)
 
-The webview's authoritative artifact is **`.codoc/tree.doc.json`** — the rich
-ProseMirror doc (authored intent + authorship/comment marks). The host writes only
-that file (+ the `edits.json` provenance channel); it **never writes `tree.codoc`**.
+The single source of truth is the **SQLite store** (`.codoc/codoc.db`). The webview
+is a *projection* of the store plus a *command emitter*; it persists no document.
 
-- **`tree.codoc`** is derived, and the **daemon is its sole writer** — which removes
-  the two-writer mtime race ("content of the file is newer" is gone). It stays the
-  canonical, byte-stable text the loops and the change ledger consume.
-- **Loop B reads `tree.doc.json`** (`codoc/codoc_file/doc_parse.py` → the same
-  `ParsedTree` shape as the text parser) to learn webview edits, falling back to the
-  `tree.codoc` text for raw-text-editor edits. The daemon watches `tree.doc.json` and
-  renders `tree.codoc` itself after applying; `safe_write_tree` yields while a doc
-  edit is pending so it never overwrites an unabsorbed edit.
-- Agent tracked-change marks live only in the **payload** doc the webview renders
-  (materialized host-side from the sidecar proposals); `tree.doc.json` and
-  `tree.codoc` stay the clean baseline. The baseline-aware serializer (insertions
-  excluded, deletions kept) guarantees a marked doc renders back to the exact
-  pre-proposal text — old + new coexist for review without leaking into canonical
-  state.
+- **Both `tree.doc.json` and `tree.codoc` are daemon-written derived projections.**
+  The daemon is the sole writer of each (`loop_b.write_tree_doc` /
+  `codoc_file.render.write_tree`); `tree.codoc` is a **read-only export**. The
+  webview *consumes* the daemon-written `tree.doc.json`
+  (`codoc_file/doc_render.build_doc_from_store`), which carries each feature's
+  `localId` + per-feature `updated_at` HLC and re-emits the store's marks/comments.
+- **Edits flow as identity-keyed commands, not a doc diff.** Editing actions emit
+  `{id, kind, fid|localId, baseRev, payload}` (add/set_title/set_description/move/
+  retire) on the `edits.json` `commands` channel; Loop B applies each via `apply_op`
+  with an applied-command-id ledger (idempotent) and a `(normalized_title,
+  parent_id)` dedup guard. Loop B no longer reads `tree.doc.json`/`tree.codoc` back
+  as input — that inference (`doc_presence` / `doc-fids.json`) is **retired**: a
+  deletion is now an explicit `retire` command, not an absence inferred from the doc.
+- **A per-feature HLC version gate** (replacing the old `rev` / exact-text-equality
+  `docAhead`) keeps a returning projection from clobbering a newer un-acked local
+  edit on a *different* feature; an advance on feature B never reverts a pending edit
+  on feature A.
+- **Marks and comment threads live in the store** (`marks` / `comments` tables,
+  `model/annotation.py`) so they survive a reload; the projection re-emits them onto
+  the inline runs. Agent tracked-change marks still materialize host-side from the
+  sidecar proposals for review; the baseline-aware serializer (insertions excluded,
+  deletions kept) guarantees a marked doc renders back to the exact pre-proposal
+  text, so old + new coexist without leaking into canonical state.
+- **Migration.** A one-time idempotent heal (`codoc/loop/migrate.py`, run by
+  `codoc migrate` and once on daemon startup) lifts pre-existing `tree.doc.json`
+  comment threads into the store and converges re-minted duplicate features onto the
+  binding-owner — so a diverged workspace converges instead of multiplying.
+
+> **Superseded mechanics (webview-authoritative, pre-2026-06 — kept for provenance):**
+> *~~The webview's authoritative artifact was `.codoc/tree.doc.json`; the host wrote
+> only that file and never `tree.codoc`. `tree.codoc` was derived (daemon sole
+> writer), claimed to remove the two-writer mtime race. Loop B read `tree.doc.json`
+> via `doc_parse.py` to learn webview edits, falling back to `tree.codoc` text, and
+> `safe_write_tree` yielded while a doc edit was pending. This is what broke: the
+> daemon diffing its own output re-minted nodes and resurrected deletions.~~*
 
 ### The `edits.json` channel — three one-shot lists + the hold set
 
@@ -161,11 +197,14 @@ editor for `tree.codoc`, plus the Python daemon:
 - **Agent proposals → engine marks** (`state/agent-proposals.ts` materializes them;
   `tiptap/suggestion-decorations.ts` anchors the inline ✓/✗ + the add/move/retire
   widgets).
-- **Single-writer host** (`providers/tree-editor.ts`): `settleDoc` / `editMove`
-  (a pure `state/doc-move.ts` transform) / comments persist `tree.doc.json` +
-  `edits.json`; `buildPayload` sources from the saved doc while it leads `tree.codoc`
-  so a payload never reverts a just-settled edit.
-- **Daemon** (`codoc/loop/`): `loop_b._pick_parsed` chooses `tree.doc.json` vs
-  `tree.codoc`; `loop_a` classifies divergence + persists `resolution.json`;
-  `watch.py` routes a `tree.doc.json` change to Loop B (guarded);
-  `reconcile.safe_write_tree` yields to pending doc edits.
+- **Projection consumer + command emitter** (`providers/tree-editor.ts`):
+  `settleDoc` / `editMove` (a pure `state/doc-move.ts` transform) / delete handlers
+  emit identity-keyed `commands` on `edits.json` (not a persisted doc); `buildPayload`
+  sources only from the daemon-written `tree.doc.json` projection, gated by the
+  per-feature version (U5) so a returning projection never reverts a newer pending
+  edit. The host writes no document file.
+- **Daemon** (`codoc/loop/`): Loop B drains the `commands` channel and applies via
+  `apply_op` (ledger + dedup guard), then re-renders `tree.doc.json` **and**
+  `tree.codoc` from the store (`write_tree_doc` + `write_tree`); `loop_a` classifies
+  divergence + persists `resolution.json`; `watch.py` routes an `edits.json` change
+  to Loop B; `migrate.py` self-heals diverged legacy workspaces on startup.

@@ -124,10 +124,19 @@ is the default editor for `tree.codoc`; both it and the raw-text editor render
 **every** proposal type inline (ADD/MOVE ghost rows, RETIRE strike, AMEND
 word-level diff) with inline `✓`/`✗` Accept/Reject.
 
-Single-writer editing model: the webview is authoritative (`tree.doc.json`),
-`tree.codoc` is the byte-identical derived render; a **draft / hand-off** gate
-keeps code-implying edits safe-by-default. The editing-model details + key source
-files are in `docs/architecture.md`.
+Store-authoritative editing model (2026-06 refactor — see
+`docs/plans/2026-06-26-001-refactor-store-authoritative-coordination-plan.md`):
+the **SQLite store is the single source of truth**. The webview is a pure
+*projection* of the store (it consumes the daemon-written `tree.doc.json`) plus an
+identity-keyed *command emitter* — editing actions emit `{id, kind, fid|localId,
+baseRev, payload}` commands (add/set_title/set_description/move/retire) on
+`edits.json`, applied to the store via `apply_op`; nothing is inferred from a doc
+diff. Both `tree.doc.json` AND `tree.codoc` are daemon-written **derived
+artifacts** (`tree.codoc` is a read-only export; the daemon is their sole writer).
+A per-feature HLC version gate keeps a returning projection from clobbering a newer
+local edit, and a **draft / hand-off** gate keeps code-implying edits
+safe-by-default. The editing-model details + key source files are in
+`docs/architecture.md`.
 
 ### The deployed hub (`codoc serve`)
 

@@ -398,6 +398,23 @@ def propose(
         raise typer.Exit(code=1) from exc
 
 
+@app.command()
+def migrate(root: str = typer.Option(".", "--root", help="Repository root.")):
+    """One-time, idempotent heal for workspaces predating the store-authoritative
+    refactor: migrate ``tree.doc.json`` comment threads into the store and converge
+    duplicate (re-minted) features onto a single keeper.
+
+    Safe to rerun — a clean workspace is a no-op. The watch daemon runs this once
+    on startup, so most workspaces self-heal; this is the manual escape hatch.
+    """
+    from codoc.loop.migrate import migrate_workspace
+
+    res = migrate_workspace(_codoc_dir(root))
+    typer.echo(f"▸ migrate  {res.summary()}")
+    for note in res.notes:
+        typer.echo(f"  ⚠ {note}")
+
+
 @app.command(name="install-hooks")
 def install_hooks_cmd(
     root: str = typer.Option(".", "--root", help="Repository root."),

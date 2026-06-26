@@ -520,6 +520,19 @@ def run_watch(
     write_pidfile(codoc_dir)  # let the Stop hook know a daemon owns this repo
     atexit.register(clear_pidfile, codoc_dir)
 
+    # One-time, idempotent self-heal for workspaces predating the store-authoritative
+    # refactor (U8). Must run BEFORE _render rebuilds tree.doc.json from the store —
+    # it reads the pre-existing tree.doc.json comment threads into the store, then
+    # converges any re-minted duplicate features. A clean workspace is a no-op.
+    try:
+        from codoc.loop.migrate import migrate_workspace
+
+        res = migrate_workspace(codoc_dir)
+        if res.changed():
+            printer(f"▸ migrate  {res.summary()}")
+    except Exception as e:  # noqa: BLE001
+        printer(f"⚠ startup migrate failed (continuing to watch): {e}")
+
     _render(codoc_dir)
     state = WatchState(
         last_tree_hash=_hash(tree_path(codoc_dir)),

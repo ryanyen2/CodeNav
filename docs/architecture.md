@@ -100,16 +100,24 @@ apart. While `realize.json` exists, applied ops are stamped `caused_by=⟨direct
 
 ## Loop B in detail (codoc → code)
 
-`run_loop_b` (1) snapshots the text diff **against the pre-mutation store** (diffing
-after verdicts would misread the text and revert the accepted change) — captured as
-ONE explicit `_PreMutation` object by `_snapshot_pre_mutation` (D6: the ordering
-invariant is structural, not a "this line must run first"), (2) drains `inbox.json`
-verdicts, (3) applies user ops stamped with the annotating actor/mode
+`run_loop_b` (1) drains the `edits.json` **`commands`** channel — the
+identity-keyed authored edits (add/set_title/set_description/move/retire) the
+webview now emits (U3/U4) — and applies each via `apply_op` against the store,
+gated by an applied-command-id ledger (idempotent under a daemon-down replay) and a
+`(normalized_title, parent_id)` dedup guard so a re-sent `add` can't duplicate-mint;
+a minted `fid` is echoed back keyed to its submitted `localId`. Authored edits are
+**no longer inferred from a `tree.codoc` / `tree.doc.json` text diff** — once the
+daemon became the sole writer of both files (U4/U6), reading either back as input
+was the daemon diffing its own output, which re-minted nodes and resurrected
+deletions; that inference (`doc_presence` / `doc-fids.json`) is retired (U7), and a
+deletion is now an explicit `retire` command. It then (2) drains `inbox.json`
+verdicts, (3) applies legacy annotation ops stamped with the annotating actor/mode
 (default human/pen), (4) drains live **payload intents** (doc-ahead suggestions,
-`mode=suggest`), (5) re-renders `tree.codoc`, (6) builds a directive from each
-code-implying op. Each gets a `d-…` id (in its `### N.` heading + the
-`realize.json` manifest) and is written to `realize.md` with status
-`awaiting_impl` for the live session — the queue **appends, never clobbers**.
+`mode=suggest`), (5) re-renders `tree.codoc` **and** `tree.doc.json`
+(`write_tree` + `write_tree_doc` — the store projection the webview re-reads), and
+(6) builds a directive from each code-implying op. Each gets a `d-…` id (in its
+`### N.` heading + the `realize.json` manifest) and is written to `realize.md` with
+status `awaiting_impl` for the live session — the queue **appends, never clobbers**.
 `> …` steering, `**bold**` focus, and external links drain here into
 STEER / `Focus:` / `Consult:` lines.
 
@@ -237,15 +245,36 @@ state** and is re-emitted on every pass even when the text render is held back
 
 ## VS Code extension internals (`vscode-codoc/`)
 
-**Editing model.** Single-writer: the webview is authoritative (`tree.doc.json`),
-`tree.codoc` is the byte-identical derived render. Human edits surface **in situ**
-as a derived `changedRange` underline against a stable per-episode baseline;
-agent→human changes surface via the vendored MIT track-changes engine's marks
-(`webview/tiptap/track-changes/`). A **draft / hand-off** gate keeps code-implying
-edits safe-by-default: the host marks pending edits as `drafts` in `edits.json`,
-the daemon holds their directives, and "Hand to agent" clears the drafts → queues
-`realize.md`. Inline comments and `> …` steering serialize to the same `> …`
-channel Loop B drains.
+**Editing model.** Store-authoritative (2026-06 refactor —
+`docs/plans/2026-06-26-001-refactor-store-authoritative-coordination-plan.md`,
+origin brainstorm under `docs/brainstorms/`). The **SQLite store is the single
+source of truth**; the webview is a pure *projection* of the store plus an
+identity-keyed *command emitter*. Both `tree.doc.json` and `tree.codoc` are
+daemon-written derived artifacts — the daemon (`loop_b.write_tree_doc` /
+`write_tree`) is their sole writer, `tree.codoc` is a read-only export, and there
+is no shared-writer file. The webview *consumes* the daemon-written `tree.doc.json`
+projection (built by `codoc_file/doc_render.build_doc_from_store`, which carries
+each feature's `localId` + per-feature `updated_at` HLC, plus marks/comments lifted
+from the store tables); editing actions emit identity-keyed commands `{id, kind,
+fid|localId, baseRev, payload}` (kinds: add/set_title/set_description/move/retire)
+on `edits.json`, applied to the store via `apply_op` with an applied-command-id
+ledger for idempotency — nothing is inferred from a doc diff (the old
+`doc_presence` / `doc-fids.json` deletion-inference is retired). A **per-feature
+HLC version gate** (replacing the old `rev`/`docAhead` exact-text equality)
+prevents a returning projection from clobbering a newer un-acked local edit on a
+different feature. Human edits surface **in situ** as a derived `changedRange`
+underline against a stable per-episode baseline; agent→human changes surface via
+the vendored MIT track-changes engine's marks (`webview/tiptap/track-changes/`). A
+**draft / hand-off** gate keeps code-implying edits safe-by-default: the host marks
+pending edits as `drafts` in `edits.json`, the daemon holds their directives, and
+"Hand to agent" clears the drafts → queues `realize.md`. Marks (tracked-change
+authorship ink) and inline comment threads now live in the store `marks` /
+`comments` tables (`model/annotation.py`) so they survive a reload; the projection
+re-emits them onto the inline runs. A one-time idempotent migration
+(`loop/migrate.py`, run by `codoc migrate` and once on daemon startup) heals
+workspaces that predate the refactor: it lifts pre-existing `tree.doc.json`
+comment threads into the store and converges re-minted duplicate features onto the
+binding-owner.
 
 Key source files: `state/workspace-state.ts` (root/reload/status, `writeVerdict`),
 `state/tree-model.ts` (TS port of `parse.py`, parity-tested), `state/bindings-model.ts`,
