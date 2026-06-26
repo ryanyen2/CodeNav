@@ -15,6 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from codoc.model.annotation import CommentStatus, CommentThread, Mark, MarkKind
 from codoc.model.binding import Binding
 from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import Event, NodeOp
@@ -96,6 +97,41 @@ CREATE TABLE IF NOT EXISTS code_edges (
 CREATE INDEX IF NOT EXISTS idx_edges_src_symbol ON code_edges(src_symbol);
 CREATE INDEX IF NOT EXISTS idx_edges_dst_symbol ON code_edges(dst_symbol);
 CREATE INDEX IF NOT EXISTS idx_edges_src_file   ON code_edges(src_file);
+
+-- Tracked-change authorship marks on a feature's description span (R8). The
+-- store-authoritative home for the webview's ProseMirror authorship ink, so the
+-- store→doc projection (doc_render.build_doc_from_store) re-emits them instead of
+-- the host holding them in tree.doc.json. Anchors are char offsets into the
+-- normalized description.
+CREATE TABLE IF NOT EXISTS marks (
+    id           TEXT PRIMARY KEY,
+    feature_id   TEXT NOT NULL,
+    kind         TEXT NOT NULL DEFAULT 'amend',
+    provenance   TEXT NOT NULL DEFAULT 'human',
+    anchor_start INTEGER NOT NULL DEFAULT 0,
+    anchor_end   INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marks_feature ON marks(feature_id);
+
+-- Inline comment threads anchored to a feature's description span (R9). The
+-- durable home for what currently lives only in tree.doc.json DocFile.comments;
+-- migrated in on first run (U8) so threads survive the host no longer writing the
+-- doc file.
+CREATE TABLE IF NOT EXISTS comments (
+    id           TEXT PRIMARY KEY,
+    feature_id   TEXT NOT NULL,
+    body         TEXT NOT NULL DEFAULT '',
+    author       TEXT NOT NULL DEFAULT 'human',
+    status       TEXT NOT NULL DEFAULT 'open',
+    anchor_start INTEGER NOT NULL DEFAULT 0,
+    anchor_end   INTEGER NOT NULL DEFAULT 0,
+    media_ref    TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_feature ON comments(feature_id);
 """
 
 
@@ -396,6 +432,87 @@ class Store:
         self.conn.execute("DELETE FROM blocks WHERE feature_id=?", (feature_id,))
         self.conn.commit()
 
+    # -- marks (tracked-change authorship spans, R8) ----------------------
+    def upsert_mark(self, m: Mark) -> None:
+        """Insert or update an authorship mark by its stable id."""
+        self.conn.execute(
+            """
+            INSERT INTO marks (id, feature_id, kind, provenance, anchor_start, anchor_end, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                feature_id=excluded.feature_id,
+                kind=excluded.kind,
+                provenance=excluded.provenance,
+                anchor_start=excluded.anchor_start,
+                anchor_end=excluded.anchor_end,
+                updated_at=excluded.updated_at
+            """,
+            (
+                m.id, m.feature_id, m.kind.value, m.provenance.value,
+                m.anchor_start, m.anchor_end, m.created_at.to_str(), m.updated_at.to_str(),
+            ),
+        )
+        self.conn.commit()
+
+    def marks_for_feature(self, feature_id: str) -> list[Mark]:
+        rows = self.conn.execute(
+            "SELECT * FROM marks WHERE feature_id=? ORDER BY anchor_start, created_at", (feature_id,)
+        ).fetchall()
+        return [_row_to_mark(r) for r in rows]
+
+    def all_marks(self) -> list[Mark]:
+        return [_row_to_mark(r) for r in self.conn.execute("SELECT * FROM marks").fetchall()]
+
+    def delete_mark(self, mark_id: str) -> None:
+        self.conn.execute("DELETE FROM marks WHERE id=?", (mark_id,))
+        self.conn.commit()
+
+    def delete_marks_for_feature(self, feature_id: str) -> None:
+        self.conn.execute("DELETE FROM marks WHERE feature_id=?", (feature_id,))
+        self.conn.commit()
+
+    # -- comments (inline steering threads, R9) ---------------------------
+    def upsert_comment(self, c: CommentThread) -> None:
+        """Insert or update a comment thread by its stable id."""
+        self.conn.execute(
+            """
+            INSERT INTO comments (id, feature_id, body, author, status, anchor_start, anchor_end, media_ref, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                feature_id=excluded.feature_id,
+                body=excluded.body,
+                author=excluded.author,
+                status=excluded.status,
+                anchor_start=excluded.anchor_start,
+                anchor_end=excluded.anchor_end,
+                media_ref=excluded.media_ref,
+                updated_at=excluded.updated_at
+            """,
+            (
+                c.id, c.feature_id, c.body, c.author.value, c.status.value,
+                c.anchor_start, c.anchor_end, c.media_ref,
+                c.created_at.to_str(), c.updated_at.to_str(),
+            ),
+        )
+        self.conn.commit()
+
+    def comments_for_feature(self, feature_id: str) -> list[CommentThread]:
+        rows = self.conn.execute(
+            "SELECT * FROM comments WHERE feature_id=? ORDER BY anchor_start, created_at", (feature_id,)
+        ).fetchall()
+        return [_row_to_comment(r) for r in rows]
+
+    def all_comments(self) -> list[CommentThread]:
+        return [_row_to_comment(r) for r in self.conn.execute("SELECT * FROM comments").fetchall()]
+
+    def delete_comment(self, comment_id: str) -> None:
+        self.conn.execute("DELETE FROM comments WHERE id=?", (comment_id,))
+        self.conn.commit()
+
+    def delete_comments_for_feature(self, feature_id: str) -> None:
+        self.conn.execute("DELETE FROM comments WHERE feature_id=?", (feature_id,))
+        self.conn.commit()
+
     # -- events -----------------------------------------------------------
     def append_event(self, e: Event) -> None:
         self.conn.execute(
@@ -533,6 +650,34 @@ def _row_to_block(r: sqlite3.Row) -> Block:
         lifecycle=BlockLifecycle(r["lifecycle"]),
         provenance=Provenance(r["provenance"]),
         ord=r["ord"],
+        created_at=HLC.from_str(r["created_at"]),
+        updated_at=HLC.from_str(r["updated_at"]),
+    )
+
+
+def _row_to_mark(r: sqlite3.Row) -> Mark:
+    return Mark(
+        id=r["id"],
+        feature_id=r["feature_id"],
+        kind=MarkKind(r["kind"]),
+        provenance=Provenance(r["provenance"]),
+        anchor_start=r["anchor_start"],
+        anchor_end=r["anchor_end"],
+        created_at=HLC.from_str(r["created_at"]),
+        updated_at=HLC.from_str(r["updated_at"]),
+    )
+
+
+def _row_to_comment(r: sqlite3.Row) -> CommentThread:
+    return CommentThread(
+        id=r["id"],
+        feature_id=r["feature_id"],
+        body=r["body"],
+        author=Provenance(r["author"]),
+        status=CommentStatus(r["status"]),
+        anchor_start=r["anchor_start"],
+        anchor_end=r["anchor_end"],
+        media_ref=r["media_ref"],
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )
