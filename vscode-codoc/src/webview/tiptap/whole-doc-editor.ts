@@ -39,6 +39,7 @@ import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
+import { gateProjection } from '../doc-gate';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
@@ -235,6 +236,18 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // on if focus moved and the live selection collapsed (the "comment did nothing" bug).
     let lastSelection: { from: number; to: number } | null = null;
 
+    // ── per-feature HLC version gate (U5 / R14 / KTD4) ────────────────────────────
+    // Replaces the removed whole-doc docAhead/rev gate. `localVersions` is the
+    // per-fid version (HLC `to_str()`) we last ADOPTED from a projection; `pendingFids`
+    // is the set of fids with an un-acked local edit since that adopt. When a new
+    // projection arrives, setDoc gates PER FEATURE (doc-gate.ts): a feature with no
+    // pending edit always adopts the projection; a feature with a pending edit adopts
+    // only when its projected version is strictly newer — else the optimistic local
+    // copy is kept (no cross-feature clobber). Reset on a full reload (the in-memory
+    // state is intentionally empty after a window reload → the first projection adopts).
+    const localVersions = new Map<string, string>();
+    const pendingFids = new Set<string>();
+
     const editor = new Editor({
         element: surface,
         extensions: [
@@ -291,6 +304,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // P2 doc→code bridge: the live edit's owning feature — the webview debounces
             // this and opens that feature's bound code Beside (§A.1).
             const editedFid = activeFid();
+            // U5 version gate: this feature now has an un-acked local edit, so a returning
+            // projection must not clobber it unless its per-feature version is newer.
+            if (editedFid) pendingFids.add(editedFid);
             opts.onEditFeature?.(editedFid);
             // P2 fix 2: editing the feature means the user is now reviewing it → clear its
             // code-touched tick (it has served its purpose).
@@ -1105,20 +1121,34 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
 
     return {
         element: wrap,
-        setDoc: (doc: PMNode) => {
-            patchMintedIds(doc); // learn minted ids even mid-edit (prevents a double-add)
-            if (dirty) return;   // otherwise don't clobber unsettled edits
+        setDoc: (incoming: PMNode) => {
+            patchMintedIds(incoming); // learn minted ids even mid-edit (prevents a double-add)
             // A reload while a comment composer / bubble is open would remap or destroy
             // the captured range under it (the "selection vanished mid-comment" bug).
             // Defer the WHOLE update — the next payload reloads cleanly.
             if (composer || bubble.style.display !== 'none') return;
+            // U5 per-feature HLC version gate (R14 / KTD4) — replaces the whole-doc
+            // `if (dirty) return`. Merge the incoming projection with the live doc PER
+            // FEATURE: a feature with no pending local edit adopts the projection; a
+            // feature with a pending edit keeps its optimistic local copy UNLESS the
+            // projected per-feature version is strictly newer. An advance on an
+            // unrelated feature therefore never reverts a pending edit on another.
+            const local = editor.getJSON() as PMNode;
+            const gate = gateProjection({ incoming, local, localVersions, pendingFids });
+            const doc = gate.doc;
+            // Fold the adopted per-feature versions into the local tracking and clear
+            // their pending edits — those features are now in sync with the projection.
+            for (const [fid, v] of gate.adopted) {
+                localVersions.set(fid, v);
+                pendingFids.delete(fid);
+            }
             // Skip the reload when BOTH the baseline text AND the agent-proposal set
             // are unchanged — the common case right after a settle round-trips;
             // reloading would reset the caret. Reload when the baseline text changed
             // OR an agent proposal appeared/resolved (its marks live in `doc` but
             // render to the same baseline, so a text-only compare would miss them).
             const sig = proposalsSig();
-            const sameText = renderTreeFromDoc(doc) === renderTreeFromDoc(editor.getJSON() as PMNode);
+            const sameText = renderTreeFromDoc(doc) === renderTreeFromDoc(local);
             if (sameText && sig === lastProposalsSig) {
                 markSaving('');
                 // The daemon just echoed back what the user already has — do NOT re-baseline.
