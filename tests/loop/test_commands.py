@@ -16,7 +16,7 @@ import pytest
 import json
 
 from codoc.codoc_file.doc_render import build_doc_from_store
-from codoc.codoc_file.render import tree_path, write_tree
+from codoc.codoc_file.render import write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop.edits import Command, append_command
 from codoc.loop.filenames import DOC_FILENAME
@@ -164,39 +164,34 @@ def test_set_title_and_description_amend_in_place(dirs):
 
 # ── drain order: commands apply BEFORE the legacy annotation edits list ──────
 def test_commands_apply_before_legacy_annotation(dirs):
-    """A pass carrying BOTH a `commands` entry and a legacy `edits` annotation for the
-    same feature applies the command (step 0.5) first; the legacy text edit (step 2)
-    then lands on the post-command state, stamped with the annotation's authorship.
-
-    Command renames the TITLE; the raw-text edit (the annotation describes it) rewrites
-    the DESCRIPTION and carries the SAME renamed title (the doc agrees with the command,
-    as it will in the real flow), so the step-2 doc-diff AMEND doesn't revert the
-    command. (Phase A still runs the doc-diff path; U7 retires it.)"""
+    """A pass carrying BOTH `commands` and a matching `edits` annotation for the same
+    feature applies the command (step 0.5) AND stamps the command's AMEND event with the
+    annotation's authorship — the annotation channel survives (the loop consults it on
+    the command apply path), even though the doc-diff text inference it used to stamp is
+    retired (U7). Two commands (rename TITLE then rewrite DESCRIPTION) land in order; the
+    description AMEND carries the declared author from the annotation."""
     root, codoc_dir = dirs
     f = Feature(title="Feature A", description="Original prose.")
     _seed_tree(codoc_dir, f)
 
-    # Command: rename the title (applied in step 0.5, before any annotation use).
+    # Command 1: rename the title (applied first, in submission order).
     append_command(codoc_dir, Command(id="cmd-x", kind="set_title",
                                       feature_id=f.id, payload={"title": "Feature A renamed"}))
-    # Legacy annotation: a raw-text DESCRIPTION edit authored by an agent.
+    # Command 2: rewrite the description.
+    append_command(codoc_dir, Command(id="cmd-y", kind="set_description",
+                                      feature_id=f.id, payload={"description": "Rewritten prose."}))
+    # Annotation: the IDE host declares who authored the edit for this feature.
     edits_channel.append_annotation(codoc_dir, edits_channel.EditAnnotation(
         feature_id=f.id, fields=["description"], actor="claude-code", mode="pen"))
-    # tree.codoc carries the rename (matching the command) + the description rewrite.
-    tp = tree_path(codoc_dir)
-    text = tp.read_text().replace("Feature A", "Feature A renamed").replace(
-        "Original prose.", "Rewritten prose.")
-    tp.write_text(text)
 
     run_loop_b(root, codoc_dir, dry_run=False)
 
     s = open_store(codoc_dir)
     g = s.get_feature(f.id)
-    # The command applied (title renamed) AND the post-command text edit landed.
+    # Both commands applied (title renamed AND description rewritten).
     assert g.title == "Feature A renamed"
     assert g.description == "Rewritten prose."
-    # The annotation stamped the text edit's AMEND event with the declared author —
-    # the command's own AMEND was logged earlier (step 0.5), proving the order.
+    # The annotation stamped the command's AMEND events with the declared author.
     fid_events = [e for e in s.recent_events(limit=20) if e.op.feature_id == f.id]
     cmd_titles = [e for e in fid_events if e.op.title == "Feature A renamed"
                   and e.op.description is None]

@@ -91,8 +91,9 @@ def diff_codoc(parsed: ParsedTree, store: Store, *, has_local_ids: bool = False)
         f = live.get(resolved_fid) if resolved_fid else None
         if f is None:
             # A local_id / fid that maps to a RETIRED feature is a reappearing node
-            # (undo / re-author) or stale crash debris — never a new ADD. Skip it;
-            # reconcile_doc_presence performs the un-retire from the doc-presence delta.
+            # (undo / re-author) or stale crash debris — never a new ADD. Skip it; an
+            # un-retire arrives as an explicit identity-keyed command (U3/U4), not from
+            # a doc-presence delta (the doc-vs-previous-doc inference was retired in U7).
             if resolved_fid and resolved_fid in retired_ids:
                 continue
             # A featureHeading with no title is a mid-creation state (user typed `## `
