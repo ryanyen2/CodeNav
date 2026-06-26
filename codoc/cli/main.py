@@ -109,9 +109,20 @@ def serve(
 
     from codoc.serve.app import build_app
     from codoc.serve.ratelimit import RateLimiter
+    from codoc.serve.static import resolve_static_dir
     from codoc.serve.supervise import DaemonSupervisor, OwnershipError
 
     cd = _codoc_dir(root)
+
+    # Auto-discover the built SPA so the U2 placeholder only shows when the bundle
+    # genuinely is not built (run `npm run build` in vscode-codoc/).
+    spa_dir = resolve_static_dir(root, static_dir)
+    if spa_dir is None:
+        typer.echo(
+            "  ⚠ standalone editor bundle not found — serving placeholder. "
+            "Build it with `npm run build` in vscode-codoc/, or pass --static-dir.",
+            err=True,
+        )
     supervisor = DaemonSupervisor(root, cd)
     try:
         supervisor.start()
@@ -132,8 +143,10 @@ def serve(
     # remote flood from DoSing the daemon / amplifying the SSE fan-out.
     rate_limiter = RateLimiter(capacity=60, refill_per_sec=2)
     typer.echo(f"codoc serve · http://{host}:{port} · supervising daemon · {cd}")
+    if spa_dir is not None:
+        typer.echo(f"  ↳ editor bundle · {spa_dir}")
     try:
-        uvicorn.run(build_app(cd, static_dir=static_dir, rate_limiter=rate_limiter),
+        uvicorn.run(build_app(cd, static_dir=spa_dir, rate_limiter=rate_limiter),
                     host=host, port=port, log_level="warning")
     finally:
         if tunnel_proc is not None:

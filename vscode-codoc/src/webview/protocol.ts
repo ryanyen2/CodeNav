@@ -96,6 +96,10 @@ export interface UINode {
     activeMode?: 'write' | 'read' | null;
 }
 
+/** One line in a feature's live agent-action ribbon (e.g. "editing agent.py").
+ *  Derived from activity.json `touched`; `done` marks a step the agent moved past. */
+export interface AgentStep { label: string; done: boolean }
+
 export interface SyncState {
     state: string;
     pending: number;
@@ -103,6 +107,9 @@ export interface SyncState {
     activeRead: string[];
     phase: Record<string, FeaturePhase>;
     realize?: { done: number; total: number; current: string };
+    /** Per-feature ordered agent-action steps for the inline ribbon (P2b). Optional on
+     *  the wire — a stale payload / a host not tracking touches omits it. */
+    steps?: Record<string, AgentStep[]>;
 }
 
 export interface DocPayload {

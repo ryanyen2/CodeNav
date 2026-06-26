@@ -13,7 +13,7 @@ import { Node as PMModelNode } from '@tiptap/pm/model';
 import { directionLabel, directionActions } from '../../state/grammar';
 import { collapseRowOut } from '../motion';
 import type { Suggestion } from '../../state/suggestion-model';
-import type { ThreadsData, ThreadTarget } from '../protocol';
+import type { ThreadsData } from '../protocol';
 import { THREADS_COLLAPSE_AT } from '../protocol';
 
 export interface SuggestionHandlers {
@@ -235,10 +235,6 @@ function kindShape(kinds: string[] | undefined): string {
     return '';
 }
 
-function threadsEmpty(t: ThreadsData): boolean {
-    return !t.reads.length && !t.usedBy.length && !t.refs.length && !(t.consult ?? []).length;
-}
-
 function threadLink(text: string, title: string, onClick: () => void, fid?: string, shape?: string): HTMLElement {
     const a = elc('span', 'ce-thread', text || '(untitled)');
     a.title = title;
@@ -250,11 +246,6 @@ function threadLink(text: string, title: string, onClick: () => void, fid?: stri
     a.addEventListener('mousedown', ev => ev.preventDefault());
     a.addEventListener('click', ev => { ev.preventDefault(); onClick(); });
     return a;
-}
-
-/** A feature thread link carrying its shape (kind) marker. */
-function featureLink(d: ThreadTarget, verb: string, onNavigate: (fid: string) => void): HTMLElement {
-    return threadLink(d.toTitle, `${verb} ${d.toTitle} — go to it`, () => onNavigate(d.toId), d.toId, kindShape(d.kinds));
 }
 
 // ── peek popover (the full neighbourhood, client-side) ────────────────────────
@@ -326,11 +317,20 @@ function makeThreadsRow(
         }
         row.append(s);
     };
-    strand('reads', '↳', 'depends on', t.reads.map(d => featureLink(d, 'depends on', onNavigate)), 'depends on');
-    strand('used', '↰', 'used by', t.usedBy.map(d => featureLink(d, 'used by', onNavigate)), 'used by');
+    // The in-situ line now carries only this feature's OWN attachments — bound code +
+    // external consults. Feature-to-feature relationships (depends-on / used-by) moved to
+    // the navigator's Focus mode (the tree dims to a feature's dependency neighbourhood),
+    // so the doc stays calm and uncluttered. The full ranked depends-on / used-by lists are
+    // still reachable from the "+N" peek below.
     strand('refs', '⟢', 'bound code', t.refs.map(r => threadLink(leafSym(r.symbol), r.file + ' › ' + leafSym(r.symbol), () => onOpenBinding(r.file, r.symbol))), 'bound code');
     strand('consult', '◷', 'consult', (t.consult ?? []).map(l => threadLink(l.label, l.url, () => onConsult(l.url))), 'consult links');
     return row;
+}
+
+/** The inline line renders only refs + consult now; reads/usedBy live in the tree's Focus
+ *  mode. So a feature with ONLY relationships (no bound code, no consult) renders no line. */
+function inlineThreadsEmpty(t: ThreadsData): boolean {
+    return !t.refs.length && !(t.consult ?? []).length;
 }
 
 function buildThreadDecorations(
@@ -344,7 +344,7 @@ function buildThreadDecorations(
         const fid = node.attrs.fid as string | null;
         if (!fid) return;
         const t = threadsMap[fid];
-        if (!t || threadsEmpty(t)) return;
+        if (!t || inlineThreadsEmpty(t)) return;
         const after = pos + node.nodeSize;
         decos.push(Decoration.widget(after, () => makeThreadsRow(t, onNavigate, onOpenBinding, onConsult), { side: -1, key: 'thr-' + fid }));
     });

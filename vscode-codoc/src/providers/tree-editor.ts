@@ -17,7 +17,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
 import { parseTreeCodoc, extractLinks } from '../state/tree-model';
-import { activeFeatureModes, featurePhases } from '../state/activity-model';
+import { activeFeatureModes, featurePhases, featureSteps } from '../state/activity-model';
 import { reconcileDoc } from '../state/doc-reconcile';
 import { renderTreeFromDoc } from '../state/doc-serialize';
 import { moveFeatureInDoc } from '../state/doc-move';
@@ -447,6 +447,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             activeRead: [...activeModes].filter(([, m]) => m === 'read').map(([id]) => id),
             phase: Object.fromEntries(phases),
             realize: this.parseRealizeProgress(status.detail),
+            steps: Object.fromEntries(featureSteps(activity, sidecar)),   // P2b agent ribbon
         };
 
         // Authoritative rich doc: structure from `sourceText` (the saved doc while it

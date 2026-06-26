@@ -29,12 +29,14 @@ import {
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
+import { RevealDecorations, REVEAL_UPDATED } from './reveal-decorations';
+import { AgentRibbon, STEPS_UPDATED } from './agent-ribbon';
 import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
 import { BlockDecorations, BLOCKS_UPDATED, type BlockEditMsg } from './block-decorations';
 import type { UIBlock } from '../protocol';
 import { CapturedDecorations, CAPTURED_UPDATED, featureBlocks, type FeatureText } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
-import { CommentDecorations, COMMENTS_UPDATED, resetCommentDecorations } from './comment-decorations';
+import { resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
@@ -44,7 +46,7 @@ import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
 import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, staggerHover, sparkIn, type TweenController } from '../motion';
 import { icon } from '../icons';
 import type { FeaturePhase } from '../../state/activity-model';
-import type { ThreadsData } from '../protocol';
+import type { ThreadsData, AgentStep } from '../protocol';
 
 export interface WholeDocEditorOptions {
     controller: AuthorController;
@@ -100,6 +102,7 @@ export interface WholeDocEditorHandle {
     setHoverCards: (cards: HoverCardData | null) => void;
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
+    setSteps: (steps: Record<string, AgentStep[]>) => void;
     /** Update the "awaiting AI realization" set (the daemon hold set) — drives the
      *  pending-intent rail + underline + being-realized badge. `detail` carries the
      *  queued directive's kind + intent gloss per feature (a subset of `fids`) for the
@@ -210,6 +213,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let lastProposalsSig = '';
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
+    let currentSteps: Record<string, AgentStep[]> = {};   // P2b agent-action ribbon
     let currentHeld = new Set<string>();   // handed-off features (staged & sent) → pending badge
     let currentHoldDetail: Record<string, HoldDetail> = {};  // queued-directive {kind,intent} per held fid
     // Edit-lifecycle phase 1 (U3): the "captured" set is computed in the plugin from
@@ -249,6 +253,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onConsult: opts.onConsult,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
+            RevealDecorations.configure({ getPhases: () => currentPhases }),
+            AgentRibbon.configure({ getSteps: () => currentSteps }),
             HoldDecorations.configure({
                 getHeld: () => currentHeld,
                 getDetail: () => currentHoldDetail,
@@ -269,13 +275,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',
             }),
-            CommentDecorations.configure({
-                getComments: () => currentComments,
-                handlers: {
-                    resolve: (id: string) => resolveComment(id),
-                    edit: (thread: CommentThread) => openComposerForEdit(thread),
-                },
-            }),
             makeKeymap(() => commitNow()),
         ],
         content: { type: 'doc', content: [{ type: 'paragraph' }] },
@@ -285,6 +284,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             dirty = true;
             scheduleSettle();
             scheduleRail();
+            if (currentComments.length || composer) scheduleCommentReflow(); // anchors shift as you type
             // P2 doc→code bridge: the live edit's owning feature — the webview debounces
             // this and opens that feature's bound code Beside (§A.1).
             const editedFid = activeFid();
@@ -788,9 +788,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         composeAnchor = selectedText(from, to);
         composeThreadId = mintCommentId(Date.now(), String(from));
         composeMedia = null;
-        // Anchor the composer to the captured range (the live rect may be gone if the
-        // selection collapsed) so it always opens beside the text it comments on.
-        openComposer(coordsRect(from, to), '');
+        // The composer opens in the right margin, aligned to the captured range (which
+        // survives a collapsed selection), so it always sits beside the text it comments on.
+        openComposer('');
     }
 
     function openComposerForEdit(thread: CommentThread): void {
@@ -799,8 +799,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         composeRange = commentMarkRange(thread.id);
         composeFid = thread.featureId;
         composeAnchor = thread.anchorText;
-        const at = composeRange ? coordsRect(composeRange.from, composeRange.to) : null;
-        openComposer(at, thread.body);
+        openComposer(thread.body);
     }
 
     /** Bounding rect of the doc range [from,to) — the anchor for the bubble + composer.
@@ -816,7 +815,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         } catch { return null; }
     }
 
-    function openComposer(at: DOMRect | null, initial: string): void {
+    function openComposer(initial: string): void {
         closeComposer();
         closeBubble();
         const box = document.createElement('div');
@@ -882,13 +881,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         send.addEventListener('click', ev => { ev.preventDefault(); saveComposer(ta.value); });
         foot.append(hint, send);
         box.append(ta, foot);
-        document.body.append(box);
+        box.classList.add('in-margin');
+        surface.appendChild(box);   // inside the scroll surface → scrolls with the anchored text
         composer = box;
-        const w = box.offsetWidth || 240;
-        const left = at ? Math.max(8, Math.min(at.left, window.innerWidth - w - 8)) : (window.innerWidth - w) / 2;
-        const top = at ? Math.min(at.bottom + 6, window.innerHeight - box.offsetHeight - 8) : 120;
-        box.style.left = `${left}px`;
-        box.style.top = `${top}px`;
+        syncCommentsPresence();     // open the margin (shift the prose left to make room)
+        positionComposerInMargin(); // align the composer to the anchored text's vertical offset
+        renderCommentMargin();      // re-place any existing thread cards beside it
         ta.focus();
         // dismiss on outside click
         setTimeout(() => document.addEventListener('mousedown', onComposerOutside, true), 0);
@@ -900,6 +898,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         document.removeEventListener('mousedown', onComposerOutside, true);
         composer?.remove();
         composer = null;
+        syncCommentsPresence();   // close the margin if no threads remain (prose slides back)
+        renderCommentMargin();    // re-place cards now that the prose width changed
     }
 
     function commentMarkRange(threadId: string): { from: number; to: number } | null {
@@ -970,6 +970,111 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         opts.onCommentResolve(editor.getJSON() as PMNode, id);
     }
 
+    // ── comment margin (Notion-style cards in the right whitespace) ───────────────
+    // Threads render as persistent cards in the doc's right margin, vertically aligned to
+    // their anchored text and de-overlapped top-to-bottom. They live INSIDE the scrolling
+    // surface (absolute, content-space `top`) so they scroll with the prose for free — only
+    // a doc/width change moves an anchor, so we only re-lay-out then (not on scroll). The
+    // surface gains `.has-comments` (CSS shifts the prose left to make room) whenever a
+    // thread or the composer is present — otherwise the margin is empty whitespace ("collapsed").
+    const CMT_STACK_GAP = 10;
+    function elc(tag: string, cls?: string, text?: string): HTMLElement {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text != null) e.textContent = text;
+        return e;
+    }
+    function clearMarginCards(): void {
+        surface.querySelectorAll('.ce-cmt-card').forEach(n => n.remove());
+    }
+    /** A doc position's top in the surface's SCROLL (content) space — stable across scroll. */
+    function anchorTopInContent(pos: number): number | null {
+        try {
+            const c = editor.view.coordsAtPos(pos);
+            return c.top - surface.getBoundingClientRect().top + surface.scrollTop;
+        } catch { return null; }
+    }
+    function syncCommentsPresence(): void {
+        surface.classList.toggle('has-comments', currentComments.length > 0 || composer !== null);
+    }
+    function relTime(ts: number): string {
+        const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+        if (s < 45) return 'just now';
+        const m = Math.round(s / 60);
+        if (m < 60) return `${m}m`;
+        const h = Math.round(m / 60);
+        return h < 24 ? `${h}h` : `${Math.round(h / 24)}d`;
+    }
+    function cardAction(label: string, onClick: () => void, cls = ''): HTMLButtonElement {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = ('ce-cmt-action ' + cls).trim(); b.textContent = label;
+        b.addEventListener('mousedown', ev => ev.preventDefault());
+        b.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); onClick(); });
+        return b;
+    }
+    function buildMarginCard(t: CommentThread): HTMLElement {
+        const card = document.createElement('div');
+        card.className = 'ce-cmt-card ' + (t.status === 'sent' ? 'sent' : 'open');
+        card.contentEditable = 'false';
+        const head = document.createElement('div');
+        head.className = 'ce-cmt-card-head';
+        head.append(elc('span', 'ce-cmt-who', t.author === 'human' ? 'You' : t.author));
+        head.append(elc('span', 'ce-cmt-time', relTime(t.createdAt)));
+        head.append(elc('span', 'ce-cmt-state', t.status === 'sent' ? '✓ sent' : '→ for agent'));
+        card.append(head);
+        if (t.anchorText.trim()) {
+            const a = elc('div', 'ce-cmt-anchor'); a.textContent = t.anchorText; a.title = t.anchorText;
+            card.append(a);
+        }
+        card.append(elc('div', 'ce-cmt-body', t.body));
+        const foot = elc('div', 'ce-cmt-foot');
+        if (t.status !== 'sent') foot.append(cardAction('Edit', () => openComposerForEdit(t)));
+        foot.append(cardAction('Resolve', () => resolveComment(t.id), 'ce-cmt-resolve'));
+        card.append(foot);
+        // click the card body → reveal + select its anchored text
+        card.addEventListener('mousedown', ev => {
+            if ((ev.target as HTMLElement).closest('button')) return;
+            ev.preventDefault();
+            const r = commentMarkRange(t.id);
+            if (r) editor.chain().focus().setTextSelection({ from: r.from, to: r.to }).run();
+        });
+        return card;
+    }
+    /** Re-lay-out the margin cards: build, sort by anchor top, push down to avoid overlap. */
+    function renderCommentMargin(): void {
+        clearMarginCards();
+        syncCommentsPresence();
+        if (!currentComments.length) return;
+        const items: { card: HTMLElement; top: number }[] = [];
+        for (const t of currentComments) {
+            const range = commentMarkRange(t.id);
+            if (!range) continue;                       // mark gone (resolved) → no card
+            const top = anchorTopInContent(range.from);
+            if (top == null) continue;
+            items.push({ card: buildMarginCard(t), top });
+        }
+        items.sort((a, b) => a.top - b.top);
+        let cursor = -Infinity;
+        for (const it of items) {
+            surface.appendChild(it.card);               // append first so offsetHeight is real
+            const top = Math.max(it.top, cursor);
+            it.card.style.top = `${Math.round(top)}px`;
+            cursor = top + it.card.offsetHeight + CMT_STACK_GAP;
+        }
+    }
+    function positionComposerInMargin(): void {
+        if (!composer || !composeRange) return;
+        const top = anchorTopInContent(composeRange.from);
+        if (top != null) composer.style.top = `${Math.round(top)}px`;
+    }
+    // Coalesce reflows during a typing burst (one re-lay-out per frame, not per keystroke).
+    let cmtReflowQueued = false;
+    function scheduleCommentReflow(): void {
+        if (cmtReflowQueued) return;
+        cmtReflowQueued = true;
+        requestAnimationFrame(() => { cmtReflowQueued = false; positionComposerInMargin(); renderCommentMargin(); });
+    }
+
     // Reposition / dismiss the bubble + composer as the surface scrolls or blurs.
     let blurTimer = 0;
     surface.addEventListener('scroll', () => { if (bubble.style.display !== 'none') updateBubble(); }, { passive: true });
@@ -989,13 +1094,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // from their own modules.
     function repositionFloatingSurfaces(): void {
         if (bubble.style.display !== 'none') updateBubble();
-        if (composer && composeRange) {
-            const at = coordsRect(composeRange.from, composeRange.to);
-            if (!at) { closeComposer(); return; }
-            const w = composer.offsetWidth || 240;
-            composer.style.left = `${Math.max(8, Math.min(at.left, window.innerWidth - w - 8))}px`;
-            composer.style.top = `${Math.min(at.bottom + 6, window.innerHeight - composer.offsetHeight - 8)}px`;
-        }
+        // a width change reflows the prose → margin anchors moved; re-place the composer + cards.
+        positionComposerInMargin();
+        renderCommentMargin();
     }
     window.addEventListener('resize', repositionFloatingSurfaces);
 
@@ -1066,6 +1167,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             }
             markSaving('');
             rebuildRail();
+            requestAnimationFrame(renderCommentMargin); // anchors moved → re-place margin cards
         },
         setSuggestions: (list: Suggestion[]) => {
             currentSuggestions = list;  // agent code-ahead proposals (the host's sidecar)
@@ -1077,7 +1179,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setComments: (comments: CommentThread[]) => {
             currentComments = comments;
-            editor.view.dispatch(editor.state.tr.setMeta(COMMENTS_UPDATED, true));
+            requestAnimationFrame(renderCommentMargin); // persistent margin cards follow the store
         },
         setHoverCards: (cards: HoverCardData | null) => {
             // Pure overlay data — no doc transaction; the handler reads it lazily on
@@ -1086,7 +1188,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setPhases: (phases: Record<string, FeaturePhase>) => {
             currentPhases = phases;
-            editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true));
+            // One transaction carries both metas: the heading dot (PHASES_UPDATED) and the
+            // body ghost→reveal (REVEAL_UPDATED) read the same phase map.
+            editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true).setMeta(REVEAL_UPDATED, true));
+        },
+        setSteps: (steps: Record<string, AgentStep[]>) => {
+            currentSteps = steps;
+            editor.view.dispatch(editor.state.tr.setMeta(STEPS_UPDATED, true));
         },
         setHeld: (fids: string[], detail?: Record<string, HoldDetail>) => {
             currentHeld = new Set(fids);   // the HANDED-OFF set (staged & sent) → pending badge

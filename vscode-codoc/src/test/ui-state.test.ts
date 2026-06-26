@@ -11,6 +11,8 @@ const sample = {
     caretPos: 42,
     treeScroll: 120,
     docScroll: 880,
+    treeWidth: 320,
+    focusMode: true,
 };
 
 describe('U5 — UI state round-trip (R6)', () => {
@@ -35,6 +37,7 @@ describe('U5 — tolerant deserialize (no throw, safe defaults)', () => {
     it('fills safe defaults for a partial v:1 state', () => {
         expect(deserializeUiState({ v: 1 })).toEqual({
             v: 1, selectedId: null, expanded: [], caretPos: 0, treeScroll: 0, docScroll: 0,
+            treeWidth: 0, focusMode: true,   // default ON when the key is absent
         });
     });
     it('drops non-string expanded entries and non-finite numbers', () => {
