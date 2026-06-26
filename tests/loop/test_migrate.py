@@ -93,6 +93,59 @@ def test_dedup_converges_onto_binding_owner(dirs):
     s.close()
 
 
+def test_dedup_repoints_husk_blocks_to_keeper(dirs):
+    """A typed-media block owned by a husk is re-pointed to the keeper (FIX D), the
+    same as marks/comments — retiring the husk must not strand the block."""
+    from codoc.model.block import Block
+
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    keeper = Feature(title="Diagrams", description="short")
+    s.upsert_feature(keeper)
+    s.upsert_binding(Binding(feature_id=keeper.id, file="d.py", symbol_path="d.py::g", fingerprint="f"))
+    husk = Feature(title="Diagrams", description="")
+    s.upsert_feature(husk)
+    s.upsert_block(Block(id="blk-1", feature_id=husk.id, kind="diagram",
+                         content="graph TD; A-->B", provenance=Provenance.HUMAN))
+    s.close()
+
+    res = migrate_workspace(codoc_dir)
+    assert res.features_retired == 1
+    assert res.blocks_repointed == 1
+
+    s = open_store(codoc_dir)
+    keeper_blocks = s.blocks_for_feature(keeper.id)
+    assert [b.id for b in keeper_blocks] == ["blk-1"]
+    assert keeper_blocks[0].content == "graph TD; A-->B"
+    assert s.blocks_for_feature(husk.id) == []  # not stranded on the retired husk
+    s.close()
+
+
+def test_dedup_reparents_husk_children_to_keeper(dirs):
+    """A husk's LIVE child feature is reparented onto the keeper (FIX D) so retiring the
+    husk does not orphan / re-root the subtree."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    keeper = Feature(title="Settings", description="full description here")
+    s.upsert_feature(keeper)
+    s.upsert_binding(Binding(feature_id=keeper.id, file="s.py", symbol_path="s.py::S", fingerprint="f"))
+    husk = Feature(title="Settings", description="")
+    s.upsert_feature(husk)
+    child = Feature(title="Theme toggle", description="A child of the husk.", parent_id=husk.id)
+    s.upsert_feature(child)
+    s.close()
+
+    res = migrate_workspace(codoc_dir)
+    assert res.features_retired == 1
+    assert res.children_reparented == 1
+
+    s = open_store(codoc_dir)
+    moved = s.get_feature(child.id)
+    assert moved.retired is False           # the child is NOT retired with the husk
+    assert moved.parent_id == keeper.id     # reparented onto the keeper, not orphaned
+    s.close()
+
+
 def test_dedup_keeps_keeper_longer_description(dirs):
     """The keeper's own LONGER description must not be clobbered by a shorter husk."""
     root, codoc_dir = dirs

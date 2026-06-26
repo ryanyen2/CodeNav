@@ -114,6 +114,42 @@ def test_store_comment_projects_at_anchor(tmp_path):
     assert commented[0]["marks"][0]["attrs"]["threadId"] == c.id
 
 
+def test_store_zero_width_comment_on_empty_description_projects(tmp_path):
+    """A (0,0)-anchored comment on a feature with NO description is a feature-level
+    note; it must still project (FIX G) — previously it was dropped because no
+    paragraph was emitted for empty prose. It rides a zero-width caret run."""
+    with open_store(tmp_path) as s:
+        f = Feature(title="Auth", description="")
+        s.upsert_feature(f)
+        c = CommentThread(feature_id=f.id, body="why no body?", anchor_start=0, anchor_end=0)
+        s.upsert_comment(c)
+        doc = build_doc_from_store(s)
+    para = next((b for b in doc["content"] if b["type"] == "paragraph"), None)
+    assert para is not None  # a paragraph was emitted to carry the feature-level note
+    commented = [r for r in para["content"] if r.get("marks")]
+    assert len(commented) == 1
+    assert commented[0]["text"] == ""  # zero-width caret run
+    assert commented[0]["marks"][0]["type"] == "comment"
+    assert commented[0]["marks"][0]["attrs"]["threadId"] == c.id
+
+
+def test_store_zero_width_mark_caret_in_description_projects(tmp_path):
+    """A (0,0) zero-width mark caret inside a non-empty description projects as a
+    zero-width run at offset 0 (FIX G), without losing the description text."""
+    with open_store(tmp_path) as s:
+        f = Feature(title="Auth", description="Login and sessions.")
+        s.upsert_feature(f)
+        s.upsert_mark(Mark(feature_id=f.id, kind=MarkKind.AMEND, anchor_start=0, anchor_end=0))
+        doc = build_doc_from_store(s)
+    para = next(b for b in doc["content"] if b["type"] == "paragraph")
+    caret = [r for r in para["content"] if r.get("marks") and r["text"] == ""]
+    assert len(caret) == 1
+    assert caret[0]["marks"][0]["type"] == "amend"
+    # the description text survives intact alongside the caret run
+    plain = "".join(r["text"] for r in para["content"] if not r.get("marks"))
+    assert plain == "Login and sessions."
+
+
 def test_store_excludes_retired_features(tmp_path):
     with open_store(tmp_path) as s:
         keep = Feature(title="Keep", description="kept")

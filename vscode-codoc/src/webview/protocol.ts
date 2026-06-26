@@ -223,24 +223,6 @@ export type WebviewMessage =
      *  (the agent trigger). Prose stays exactly as committed. */
     | { kind: 'hand-off' }
     | { kind: 'move'; sourceId: string; newParentId: string | null }
-    /** Identity-keyed authored command (U3 / KTD3): the EXPLICIT op the webview emits
-     *  instead of letting Loop B infer it from a doc diff. `command.id` is the
-     *  idempotency key (KTD8); `add` carries a `localId` so the minted fid correlates
-     *  back to the in-progress node. The host routes it to edits.json (`commands`); the
-     *  daemon's Loop B applies it via apply_op. EMISSION is wired in U4 — this is the
-     *  message-type surface only. The command kinds match `CommandEntry` in
-     *  edits-channel.ts: add / set_title / set_description / move / retire. */
-    | {
-          kind: 'command';
-          command: {
-              id: string;
-              kind: 'add' | 'set_title' | 'set_description' | 'move' | 'retire';
-              featureId?: string;
-              localId?: string;
-              baseRev?: number;
-              payload?: { title?: string; description?: string; parentId?: string | null };
-          };
-      }
     | { kind: 'open-binding'; file: string; symbol: string }
     /** Open an external Consult link (a description's `https://` link) in the browser. */
     | { kind: 'open-link'; url: string }

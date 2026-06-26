@@ -368,17 +368,31 @@ def drain_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
     return anns
 
 
-@_locked
 def drain_commands(codoc_dir: str | Path) -> list[Command]:
-    """Consume the ``commands`` list (one-shot), keeping the others — Loop B applies
-    each via ``apply_op`` (KTD3) BEFORE the legacy annotation ``edits`` (so a
-    structural retire/move resolves before authorship stamps). Re-applying a recorded
-    command id is a no-op (KTD8, the store ledger), so a drain interleaved with a
-    crash is safe."""
-    cmds = read_commands(codoc_dir)
-    if cmds:
-        _rewrite(codoc_dir, commands=[])
-    return cmds
+    """READ the pending ``commands`` (order-preserving) WITHOUT clearing the list.
+
+    Crash-consistency (KTD8): the channel is cleared only by :func:`clear_commands`
+    AFTER the caller has durably applied each command (claimed it on the store
+    ledger). Clearing the whole list up front — the prior behavior — would lose any
+    command not yet applied if the process died mid-pass; the store ledger then can't
+    help because the command never reached it. So the read is now non-destructive and
+    Loop B clears exactly the ids it successfully claimed+applied. (Name kept for
+    callers; the one-shot guarantee now comes from the ledger + selective clear, not
+    from draining on read.)"""
+    return read_commands(codoc_dir)
+
+
+@_locked
+def clear_commands(codoc_dir: str | Path, applied_ids: set[str]) -> None:
+    """Remove the commands whose ids are in ``applied_ids`` from the channel, rewriting
+    the survivors back. Called AFTER Loop B has durably applied (ledger-claimed) those
+    ids, so a crash mid-pass leaves the un-applied commands in the channel for re-run —
+    the survivors are never lost. A no-op when nothing was applied."""
+    if not applied_ids:
+        return
+    survivors = [c for c in (_load(codoc_dir).get("commands") or [])
+                 if not (isinstance(c, dict) and (c.get("id") or "") in applied_ids)]
+    _rewrite(codoc_dir, commands=survivors)
 
 
 @_locked

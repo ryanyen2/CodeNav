@@ -115,7 +115,9 @@ def test_editing_one_feature_keeps_anothers_queued_directive(dirs):
 def test_edit_notes_label_each_edit_for_the_watch_log(dirs):
     """The daemon log lists WHAT each edit was + what it produced. In the held-draft
     model an AMEND mints a held draft → labeled ``→ draft`` (awaiting hand-off), never
-    surprise code. A retire-with-code or plan ADD is an explicit gesture → ``→ realize``."""
+    surprise code. A webview `retire` COMMAND is a soft, detach-only retire (FIX A): it
+    removes the FEATURE, never the code, so it is labeled ``doc-only`` and queues no
+    directive (code removal is reserved for an explicit delete_code retire)."""
     root, codoc_dir = dirs
     f = _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
 
@@ -126,7 +128,9 @@ def test_edit_notes_label_each_edit_for_the_watch_log(dirs):
     assert "Palette" in r.edit_notes[0] and "→ draft" in r.edit_notes[0]
     assert "• " in r.summary() and "→ draft" in r.summary()  # surfaced in the log line
 
-    # Retiring a feature that owns bound code → an explicit realize gesture.
+    # A webview retire command → detach-only soft retire: labeled doc-only, no directive.
     _retire(codoc_dir, f.id)
     r2 = run_loop_b(root, codoc_dir, dry_run=False)
-    assert any("→ realize" in n for n in r2.edit_notes)
+    assert any("doc-only" in n for n in r2.edit_notes)
+    assert not any("→ realize" in n for n in r2.edit_notes)
+    assert r2.directives == []

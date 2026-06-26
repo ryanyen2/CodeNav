@@ -104,6 +104,108 @@ def test_second_add_same_title_parent_fresh_id_rejected(dirs):
     assert res2.fids_by_local == {}
 
 
+# ── add re-mint guard via local_id (FIX B): same local_id, CHANGED title ─────
+def test_add_reemitted_same_local_id_changed_title_does_not_remint(dirs):
+    """A re-emitted `add` carrying the SAME local_id but a CHANGED title (a settle
+    fired again before the mint echoed back, after the user kept typing) must FOLD
+    onto the feature that local_id already minted — not slip past the
+    (normalized_title, parent_id) guard and mint a second node (FIX B). The minted
+    fid is re-echoed so the host still adopts the original node."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir)  # empty
+    append_command(codoc_dir, Command(id="c-add-1", kind="add", local_id="L-stable",
+                                      payload={"title": "Palette"}))
+    res1 = run_loop_b(root, codoc_dir, dry_run=False)
+    fid = res1.fids_by_local["L-stable"]
+
+    # Same local_id, a DIFFERENT title (the user kept editing) and a fresh command id.
+    append_command(codoc_dir, Command(id="c-add-2", kind="add", local_id="L-stable",
+                                      payload={"title": "Palette renamed"}))
+    res2 = run_loop_b(root, codoc_dir, dry_run=False)
+
+    s = open_store(codoc_dir)
+    owners = [f for f in s.list_features() if f.local_id == "L-stable"]
+    assert len(owners) == 1                  # exactly one feature owns the local_id
+    assert owners[0].id == fid               # the same node, not a re-mint
+    s.close()
+    assert res2.fids_by_local == {"L-stable": fid}  # re-echoed to the prior mint
+
+
+# ── crash-consistency (FIX C): a re-run skips an already-applied command ─────
+def test_command_already_in_ledger_is_skipped_no_double_apply(dirs):
+    """A command id already recorded in the store ledger (a crash AFTER apply but
+    BEFORE the channel was cleared re-delivers it) is skipped on the re-run — never
+    applied twice (FIX C). Simulated by pre-stamping the ledger, then queueing the
+    same command id."""
+    root, codoc_dir = dirs
+    f = Feature(title="Title A", description="d")
+    _seed_tree(codoc_dir, f)
+    # Pre-stamp the ledger as if a prior pass applied this id but crashed before clear.
+    s = open_store(codoc_dir)
+    s.mark_command_applied("c-amend-1")
+    s.close()
+
+    append_command(codoc_dir, Command(id="c-amend-1", kind="set_title",
+                                      feature_id=f.id, payload={"title": "Title B"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.commands == 0                 # the replayed id was skipped, not re-applied
+    s2 = open_store(codoc_dir)
+    assert s2.get_feature(f.id).title == "Title A"   # unchanged — no double-apply
+    s2.close()
+    # And the channel was cleared of the settled-but-uncleared command.
+    assert edits_channel.read_commands(codoc_dir) == []
+
+
+def test_erroring_command_does_not_consume_the_others(dirs):
+    """A command that errors mid-apply leaves the OTHER queued commands intact (FIX C):
+    the channel is cleared only of the ids that were durably applied, so a re-run
+    re-delivers the un-applied ones. Here a poisoned set_title raises; a sibling add
+    in the same batch is unaffected and a re-run still has the failed command to retry."""
+    import codoc.loop.loop_b as loop_b_mod
+    root, codoc_dir = dirs
+    f = Feature(title="Existing", description="d")
+    _seed_tree(codoc_dir, f)
+    append_command(codoc_dir, Command(id="ok-add", kind="add", local_id="LA",
+                                      payload={"title": "Healthy"}))
+    append_command(codoc_dir, Command(id="boom", kind="set_title",
+                                      feature_id=f.id, payload={"title": "Boom"}))
+
+    real_apply = loop_b_mod.apply_op
+
+    def flaky_apply(op, store, **kw):
+        if getattr(op, "title", None) == "Boom":
+            raise RuntimeError("simulated crash applying set_title")
+        return real_apply(op, store, **kw)
+
+    loop_b_mod.apply_op = flaky_apply
+    try:
+        with pytest.raises(RuntimeError):
+            run_loop_b(root, codoc_dir, dry_run=False)
+    finally:
+        loop_b_mod.apply_op = real_apply
+
+    # The errored command's claim rolled back (transaction): NOT on the ledger, still
+    # queued for retry. The healthy add committed BEFORE the crash, so it is on the
+    # ledger — even if the abort skipped the channel clear, the ledger guards it from a
+    # double-apply on the re-run. The crash must lose NEITHER command.
+    s = open_store(codoc_dir)
+    assert s.command_applied("boom") is False   # rolled back → re-delivered
+    assert s.command_applied("ok-add") is True  # committed before the crash
+    s.close()
+    remaining = {c.id for c in edits_channel.read_commands(codoc_dir)}
+    assert "boom" in remaining           # the failed command survives for retry
+
+    # Re-run with a healed applier: the surviving `boom` applies exactly once, and the
+    # already-ledgered `ok-add` is skipped (no double-apply) — the add is not duplicated.
+    res2 = run_loop_b(root, codoc_dir, dry_run=False)
+    assert res2.commands == 1            # only `boom` newly applied; `ok-add` skipped
+    s2 = open_store(codoc_dir)
+    assert s2.get_feature(f.id).title == "Boom"
+    assert len([x for x in s2.list_features() if x.title == "Healthy"]) == 1  # not duplicated
+    s2.close()
+
+
 # ── retire: tombstones and never re-adds on a later pass ─────────────────────
 def test_retire_tombstones_and_does_not_readd(dirs):
     root, codoc_dir = dirs

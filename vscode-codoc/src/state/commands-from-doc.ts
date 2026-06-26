@@ -90,6 +90,18 @@ function commandId(kind: string, id: string, salt: number): string {
     return `c-${kind}-${id}-${salt}`;
 }
 
+/** The DETERMINISTIC id for an `add` command, derived purely from the node's localId
+ *  (no salt). A localId is minted once per authored node and never changes, so a
+ *  re-emitted `add` for the same node (a settle that fired again before the fid echoed
+ *  back) produces the SAME command id — colliding on the store's applied-command ledger
+ *  so the daemon skips it instead of minting a duplicate feature (FIX B). The other
+ *  command kinds key off a stable fid and a fresh settle is a legitimately new edit, so
+ *  they keep the salted id (a re-edit SHOULD apply); only `add` must be replay-safe by
+ *  id because the fid does not yet exist to dedup against. */
+function addCommandId(localId: string): string {
+    return `c-add-${localId}`;
+}
+
 /**
  * Diff the previously-projected feature units against the just-settled ones and emit
  * the minimal identity-keyed command set. `salt` (e.g. Date.now()) disambiguates the
@@ -112,7 +124,7 @@ export function commandsForSettle(prev: FeatureUnit[], next: FeatureUnit[], salt
             // echoes back. A node with neither fid nor localId is skipped (can't key it).
             if (!u.localId) continue;
             out.push({
-                id: commandId('add', u.localId, salt),
+                id: addCommandId(u.localId),  // deterministic (no salt) → replay collides on the ledger (FIX B)
                 kind: 'add',
                 local_id: u.localId,
                 payload: { title: u.title, description: u.description, parent_id: u.parentId },

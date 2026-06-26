@@ -255,12 +255,13 @@ def test_accepted_auto_retire_is_detach_only_no_directive(dirs):
     s2.close()
 
 
-def test_human_tilde_retire_still_builds_directive(dirs):
-    """A human retire arrives as a `retire` COMMAND (U3/U4) — the webview's delete
-    gesture, no longer a `~` marker inferred from a tree.codoc text diff (U7). A
-    retire of a feature that owns bound code is the one path that DOES request code
-    removal — it still queues a RETIRE FEATURE directive. dry_run=False because
-    commands apply only on a real pass."""
+def test_command_retire_is_detach_only_soft_retire_no_directive(dirs):
+    """A webview `retire` COMMAND (U3/U4 — the human's delete gesture) is a SOFT,
+    DETACH-ONLY retire: it marks the feature retired AND detaches its bindings, but
+    queues NO code-deletion directive (FIX A). None of the five webview command kinds
+    set delete_code, so deleting a doc node removes the FEATURE, not the code — the
+    old reconcile_doc_presence behavior. Code removal is reserved for an explicit
+    delete_code retire (the agent `~` path, exercised by the inbox test below)."""
     from codoc.loop.edits import Command, append_command
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
@@ -275,7 +276,14 @@ def test_human_tilde_retire_still_builds_directive(dirs):
     res = run_loop_b(root, codoc_dir, dry_run=False)
 
     assert res.commands == 1
-    assert any("RETIRE FEATURE" in d and "Legacy export" in d for d in res.directives)
+    # ZERO directives for the retired feature — never a "remove this code" request.
+    assert res.directives == []
+    assert not any("RETIRE FEATURE" in d for d in res.directives)
+    s2 = open_store(codoc_dir)
+    assert s2.get_feature(f.id).retired is True          # soft-retired (marked, not deleted)
+    assert s2.bindings_for_feature(f.id) == []           # detached, not orphaned under a hidden feature
+    assert s2.binding_at("export.py", "export.py::to_csv") is None
+    s2.close()
 
 
 def test_accepted_delete_code_retire_queues_removal_directive(dirs):

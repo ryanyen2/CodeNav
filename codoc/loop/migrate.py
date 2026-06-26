@@ -55,6 +55,8 @@ class MigrationResult:
     features_retired: int = 0
     marks_repointed: int = 0
     comments_repointed: int = 0
+    blocks_repointed: int = 0
+    children_reparented: int = 0
     notes: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -204,6 +206,24 @@ def dedup_features(store: Store, result: MigrationResult) -> None:
                 c.updated_at = HLC.now()
                 store.upsert_comment(c)
                 result.comments_repointed += 1
+            # Re-point the husk's typed-media blocks to the keeper (same as marks /
+            # comments) so retiring the husk doesn't strand a diagram/latex/image the
+            # user authored on the duplicate. Upsert by the block's stable id (KTD8).
+            for b in store.blocks_for_feature(husk.id):
+                b.feature_id = keeper_id
+                b.updated_at = HLC.now()
+                store.upsert_block(b)
+                result.blocks_repointed += 1
+            # Reparent the husk's LIVE children onto the keeper before retiring it, so
+            # the subtree isn't orphaned / re-rooted (a child whose parent_id pointed at
+            # the husk would dangle once the husk is hidden). list_features() is live-only,
+            # so retired children are left as-is.
+            for child in feats:
+                if child.parent_id == husk.id:
+                    child.parent_id = keeper_id
+                    child.updated_at = HLC.now()
+                    store.upsert_feature(child)
+                    result.children_reparented += 1
             store.retire_feature(husk.id)
             result.features_retired += 1
 

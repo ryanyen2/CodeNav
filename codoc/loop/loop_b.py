@@ -41,7 +41,7 @@ from codoc.blocks.builtins import ensure_builtins
 from codoc.codoc_file.diff import CodocDiff
 from codoc.codoc_file.doc_render import build_doc_from_store
 from codoc.codoc_file.parse import extract_bold, extract_links
-from codoc.codoc_file.render import tree_path, write_tree
+from codoc.codoc_file.render import write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
@@ -333,39 +333,6 @@ def _write_realize(codoc_dir: str, prompt: str) -> None:
     atomic_write_text(dest, prompt)
 
 
-def _reinsert_comments(codoc_dir: str, targets: list[tuple[str, str]]) -> None:
-    """A dry pass re-rendered the text (store-driven, so the ``> …`` lines are
-    gone) but must not consume the un-queued notes — re-insert each under its
-    feature's title line so a later real pass can drain it."""
-    path = tree_path(codoc_dir)
-    try:
-        lines = path.read_text().splitlines()
-    except OSError:
-        return
-    # Group by feature so MULTIPLE notes on one feature re-insert as DISTINCT
-    # `>` runs separated by a blank line. Adjacent `>` lines would merge into a
-    # single comment on the next parse (parse.py: a contiguous run is one
-    # comment), silently collapsing two steering notes into one.
-    by_fid: dict[str, list[str]] = {}
-    for fid, comment in targets:
-        if fid:
-            by_fid.setdefault(fid, []).append(comment)
-    for fid, comments in by_fid.items():
-        marker = f"⟨{fid}⟩"
-        for i, ln in enumerate(lines):
-            if marker in ln:
-                indent = " " * (len(ln) - len(ln.lstrip()) + 4)
-                block: list[str] = []
-                for j, comment in enumerate(comments):
-                    if j:
-                        block.append("")  # blank separates distinct `>` runs
-                    block.extend(f"{indent}> {cl}".rstrip()
-                                 for cl in comment.splitlines())
-                lines[i + 1:i + 1] = block
-                break
-    atomic_write_text(path, "\n".join(lines) + "\n")
-
-
 def _rewrite_queue(root_dir: str, codoc_dir: str, survivors: list) -> None:
     """Persist ``survivors`` as the realization queue: rewrite ``realize.json`` and
     rebuild ``realize.md`` from the survivors carrying rendered text — or remove BOTH
@@ -617,21 +584,50 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         live_title_parent = {
             (_norm_title(f.title), f.parent_id) for f in store.list_features()
         }
+        applied_cmd_ids: set[str] = set()  # ids to clear from the channel AFTER apply (KTD8)
         for cmd in edits_channel.drain_commands(codoc_dir):
             if store.command_applied(cmd.id):
-                continue  # already applied (idempotency, KTD8)
+                # Already on the ledger (re-sent / crash-replayed) — never re-apply.
+                # Still clear it from the channel so a settled-but-uncleared command
+                # (a crash AFTER apply, BEFORE clear) drops out on the re-run.
+                applied_cmd_ids.add(cmd.id)
+                continue
             op = _command_to_op(cmd)
             if op is None:
                 store.mark_command_applied(cmd.id)
+                applied_cmd_ids.add(cmd.id)
                 continue
             fid = op.feature_id or ""
+            # Crash-consistency (KTD8): claim the id on the ledger and run apply_op's
+            # store mutation inside ONE transaction, so a crash between them rolls back
+            # the claim too (the command is re-delivered, never silently dropped). The
+            # claim wins only on first insert; a concurrent / replayed apply loses it
+            # and is skipped. mutated=True records that this branch wrote to the store
+            # under the transaction (so a non-mutating fold/skip can stay outside one).
             if op.kind is NodeOpKind.ADD_NODE:
+                # Fold (skip, ledger-stamp, no mint) when a LIVE feature already owns
+                # this local_id — the strongest identity (KTD8): a re-emitted add with
+                # the SAME local_id but a CHANGED title must NOT mint a second feature.
+                # Fall back to the (normalized_title, parent_id) soft guard for an add
+                # carrying no local_id (the Loop-A LLM-apply fold's key, KTD3).
+                existing = store.feature_by_local_id(cmd.local_id) if cmd.local_id else None
                 key = (_norm_title(op.title), op.parent_id)
+                if existing is not None:
+                    if cmd.local_id:
+                        fids_by_local[cmd.local_id] = existing.id  # re-echo the prior mint
+                    store.mark_command_applied(cmd.id)
+                    applied_cmd_ids.add(cmd.id)
+                    continue
                 if key in live_title_parent:
                     # Duplicate (re-sent / replayed) add — fold, don't mint (KTD3).
                     store.mark_command_applied(cmd.id)
+                    applied_cmd_ids.add(cmd.id)
                     continue
-                fid = _accept_with_fid(op)
+                with store.transaction():
+                    if not store.try_claim_command(cmd.id):
+                        applied_cmd_ids.add(cmd.id)
+                        continue
+                    fid = _accept_with_fid(op)
                 op.feature_id = fid  # so build_directive / supersede key off the minted id
                 if fid:
                     live_title_parent.add(key)
@@ -640,6 +636,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
             elif op.feature_id and store.get_feature(op.feature_id) is None:
                 # Target vanished (already retired / never existed): skip, don't crash.
                 store.mark_command_applied(cmd.id)
+                applied_cmd_ids.add(cmd.id)
                 continue
             else:
                 # Snapshot the pre-edit description for the IDE's in-situ diff (AMEND
@@ -661,9 +658,25 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                 # it (edits.json); an edit with no annotation defaults to human/pen. Same
                 # stamping step 2 applied to a diff op, now applied to the command op.
                 ann = annotations.get(op.feature_id or "")
-                apply_op(op, store, source="user", applied=True,
-                         actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
-                         caused_by=(ann.suggestion_id if ann else ""))
+                with store.transaction():
+                    if not store.try_claim_command(cmd.id):
+                        applied_cmd_ids.add(cmd.id)
+                        continue
+                    apply_op(op, store, source="user", applied=True,
+                             actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
+                             caused_by=(ann.suggestion_id if ann else ""))
+                    # A command `retire` is a SOFT, DETACH-ONLY retire (mirrors the
+                    # verdict-accept RETIRE branch): mark retired AND detach the
+                    # feature's bindings so the code isn't left bound to a now-hidden
+                    # feature (reconcile would treat it as covered → silently orphaned).
+                    # It must NEVER queue a code-deletion directive — none of the five
+                    # webview command kinds set delete_code, so a human deleting a node
+                    # in the doc removes the FEATURE, not the code (the old
+                    # reconcile_doc_presence behavior). Code-deletion is reserved for an
+                    # explicit delete_code retire (the agent-side `~`, step 2 / inbox).
+                    if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
+                        for b in store.bindings_for_feature(op.feature_id):
+                            store.delete_binding(b.file, b.symbol_path)
                 # A command-driven retire supersedes prior pending directives for the
                 # feature (add+retire churn — INV1/N15), mirroring the text retire path.
                 if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
@@ -674,10 +687,16 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                     # text-diff path drove via diff.user_ops, now driven by the command.
                     command_amend_fids.add(op.feature_id)
             store.mark_command_applied(cmd.id)
+            applied_cmd_ids.add(cmd.id)
             res.commands += 1
             # Queue a directive for a code-implying command (the loop's codoc→code half).
             if op.kind is NodeOpKind.ADD_NODE and not fid:
                 continue  # add minted nothing (shouldn't happen post-_accept_with_fid)
+            # A command `retire` is detach-only (above) and must queue NO directive — the
+            # webview never sets delete_code, so deleting a doc node never deletes code.
+            if op.kind is NodeOpKind.RETIRE_NODE:
+                res.edit_notes.append(_edit_label(op, store, False))
+                continue
             will_queue = edit_mints_directive(op, store)
             res.edit_notes.append(_edit_label(op, store, will_queue))
             if will_queue:
@@ -686,6 +705,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                 ann = annotations.get(fid or "")
                 cause = ann.suggestion_id if (ann and ann.suggestion_id) else cmd.id
                 directive_ops.append((op, fid, cause))
+        edits_channel.clear_commands(codoc_dir, applied_cmd_ids)
         res.fids_by_local = fids_by_local
 
     # 1. Proposal verdicts — drained from the IDE's inbox, not parsed from text.
@@ -731,38 +751,13 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
             res.rejected += 1
     inbox.clear(codoc_dir)
 
-    # 2. Direct user edits (intentional → applied immediately; diff snapshot from
-    #    step 0). The IDE host annotates each settle with WHO authored it
-    #    (edits.json); ops on features with no annotation default to human/pen
-    #    (a raw-text edit).
-    for op in diff.user_ops:
-        # Snapshot the pre-edit description BEFORE apply_op mutates the store, so the
-        # IDE can later show what changed (AMEND only; first edit per feature wins).
-        if op.kind is NodeOpKind.AMEND and op.feature_id and op.feature_id not in baselines:
-            prev = store.get_feature(op.feature_id)
-            baselines[op.feature_id] = (prev.description or "") if prev else ""
-        ann = annotations.get(op.feature_id or "")
-        ev = apply_op(op, store, source="user", applied=True,
-                      actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
-                      caused_by=(ann.suggestion_id if ann else ""))
-        res.user_edits += 1
-        # Structural gate (no prose heuristic): AMEND always mints a directive,
-        # plan-ADD/RETIRE-with-code do too. Whether it realizes now or waits as a
-        # held draft is the finalize step's hand-off decision. Newly-bolded spans
-        # still ride into the directive as a `Focus:` line (diff.emphasis →
-        # build_directive); they no longer gate whether a directive is minted.
-        will_queue = edit_mints_directive(op, store)
-        res.edit_notes.append(_edit_label(op, store, will_queue))
-        if will_queue:
-            # RETIRE supersedes any prior pending directives for this feature
-            # (add+retire churn prevention — INV1/N15). A retire intent is always
-            # stronger than a queued code-add or code-update for the same feature.
-            if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
-                _supersede_directives(root_dir, codoc_dir, {op.feature_id})
-            # The directive's cause: the doc-ahead suggestion this settle applied
-            # (if the host told us), else the user-op event itself.
-            cause = (ann.suggestion_id if ann and ann.suggestion_id else ev.id)
-            directive_ops.append((op, op.feature_id or "", cause))
+    # 2. (RETIRED — U7 / FIX E) Direct text-diff user edits. ``diff.user_ops`` is now
+    #    always empty (``_merge_channels`` returns an empty CodocDiff), because every
+    #    authored edit arrives as an identity-keyed command (step 0.5) applied via
+    #    ``apply_op`` — not inferred from a tree.codoc/tree.doc.json diff. The former
+    #    ``for op in diff.user_ops:`` apply loop here was structurally dead code and is
+    #    deleted. ``diff.emphasis`` still carries the newly-bolded spans (populated in
+    #    step 0.5, consumed at directive render below); only the dead apply loop is gone.
 
     # 2.5 Doc-ahead suggestions (classify row 9). The host registers each
     #     suggesting-mode edit as a payload-carrying intent in edits.json; the
@@ -798,27 +793,15 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         if will_queue:
             directive_ops.append((op, f.id, intent.id))
 
-    # 2.7 Steering comments (`> …` in the text, snapshotted in step 0) — explicit
-    #     notes to the agent, imperative by construction. Each becomes a STEER
-    #     directive; the end-of-pass re-render consumes them from the text (the
-    #     store never holds them). A steer's caused_by is the co-occurring
-    #     AMEND's cause on the same feature when there is one (the comment rode
-    #     along with that edit), so the IDE's cascade cue can group them.
-    #     Comments on hand-added nodes resolve their freshly-minted id by title
-    #     (step 2 just applied the ADD).
+    # 2.7 (RETIRED — U7 / FIX E) Text `> …` steering comments. ``diff.comments`` /
+    #     ``diff.new_node_comments`` are now always empty (``_merge_channels`` returns
+    #     an empty CodocDiff): once the webview stopped writing tree.codoc (U6), an
+    #     inline comment arrives through edits.json (step 2.8 ``drain_steers``), not as
+    #     a `> …` text line. The former text-comment → STEER loop here was dead and is
+    #     deleted. ``amend_cause`` (a co-occurring command's cause, for the IDE cascade
+    #     cue) and the ``steered`` accumulator survive for step 2.8.
     amend_cause = {fid: cause for _op, fid, cause in directive_ops if fid}
     steered: list[tuple[str, str, str]] = []  # (directive text, feature_id, cause)
-    comment_targets = list(diff.comments)
-    if diff.new_node_comments:
-        by_title: dict[str, str] = {}
-        for f2 in store.list_features():
-            by_title.setdefault(f2.title, f2.id)
-        comment_targets += [(by_title.get(title, ""), comment)
-                            for title, comment in diff.new_node_comments]
-    for fid, comment in comment_targets:
-        d = build_steer_directive(fid, comment, store) if fid else ""
-        if d:
-            steered.append((d, fid, amend_cause.get(fid, "")))
 
     # 2.8 Inline-comment steers via edits.json (U2b): once the host stopped writing
     #     tree.codoc, a webview comment can't ride the `> …` text round-trip, so it
@@ -889,20 +872,13 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                 force_draft_fids.add(be.feature_id)  # ambiguous → held for confirmation
 
     # Re-render tree.codoc when this pass moved the store ahead of the text
-    # (verdict accepts / intent applies) or consumed steering comments —
-    # otherwise the next pass would diff the stale text and read it as a human
-    # edit reverting the change (or re-queue the same comment). User text edits
-    # were absorbed above, so regenerating from the store loses nothing.
-    # Steering comments are consumed ONLY when their directives will actually be
-    # queued: a dry/no-realize pass must leave the `>` lines in the text for a
-    # later real pass — consuming without queueing would destroy the note.
+    # (verdict accepts / intent applies / applied commands) — otherwise the next
+    # pass would diff the stale text and read it as a human edit reverting the
+    # change. User edits are absorbed above (commands → apply_op), so regenerating
+    # from the store loses nothing.
     if (res.accepted or res.user_edits or res.commands or block_store_changed
             or (res.steered and not dry_run)):
         write_tree(store, codoc_dir)
-        if dry_run and comment_targets:
-            # The dry re-render (store-driven) just dropped the `> …` lines even
-            # though we are not queueing them — put them back.
-            _reinsert_comments(codoc_dir, comment_targets)
         # KTD9: the daemon is the sole writer of tree.doc.json — re-render the store
         # projection so the webview's file-watch re-read repaints from the source of
         # truth. Skipped on a dry pass (no durable state mutation).
@@ -936,9 +912,9 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # directive) still withdraws the queued change; step 3 then appends this pass's
     # directives onto the pruned queue, yielding one per feature. Dry passes never
     # mutate the live queue.
-    edited_fids = {op.feature_id for op in diff.user_ops
-                   if op.feature_id and op.kind is NodeOpKind.AMEND}
-    edited_fids |= command_amend_fids  # command-driven AMENDs coalesce too (U7)
+    # Every AMEND now arrives as a command (step 0.5) — ``diff.user_ops`` is empty
+    # (U7 / FIX E), so the coalesce set is just the command-driven AMEND fids.
+    edited_fids = set(command_amend_fids)
     if edited_fids and not dry_run:
         _supersede_directives(root_dir, codoc_dir, edited_fids)
 

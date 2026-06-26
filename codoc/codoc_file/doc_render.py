@@ -135,21 +135,39 @@ def _annotated_runs(text: str, base: int, anns: list[tuple[int, int, dict]]) -> 
         for x in (s, e):
             if base <= x <= end_of_para:
                 bounds.add(x)
+    # Zero-width annotation carets (s == e) that fall inside this paragraph. A caret
+    # marks no text, so it cannot ride a normal split run; it is projected as an
+    # explicit zero-width text run at its offset (FIX G), so a (0,0)-anchored
+    # comment/mark — a feature-level note, or a collapsed caret — still projects
+    # instead of being silently dropped.
+    carets: dict[int, list[dict]] = {}
+    for s, e, m in anns:
+        if s == e and base <= s <= end_of_para:
+            carets.setdefault(s, []).append(m)
 
     def marks_at(lo: int, hi: int) -> list[dict]:
-        """Marks covering the half-open run ``[lo, hi)`` (zero-width annotations
-        attach to a zero-width run at their caret)."""
+        """Marks covering the half-open run ``[lo, hi)`` (a zero-width caret does NOT
+        ride a text run — it is emitted separately as a zero-width run; see ``carets``)."""
         out: list[dict] = []
         for s, e, m in anns:
-            if (s < hi and e > lo) or (s == e == lo == hi):
+            if s < hi and e > lo:
                 out.append(m)
         return out
 
     runs: list[dict] = []
+    emitted_carets: set[int] = set()
+
+    def emit_caret(off: int) -> None:
+        """Emit a zero-width text run carrying every caret annotation at ``off`` (once)."""
+        if off in carets and off not in emitted_carets:
+            emitted_carets.add(off)
+            runs.append({"type": "text", "text": "", "marks": carets[off]})
 
     def emit_text(seg: str, seg_start: int) -> None:
         """Emit ``seg`` (starting at absolute offset ``seg_start``) split at every
-        boundary inside it, each piece carrying the marks covering its span."""
+        boundary inside it, each piece carrying the marks covering its span; a
+        zero-width caret at a boundary is emitted as its own zero-width run."""
+        emit_caret(seg_start)
         pos = seg_start
         cuts = sorted(b for b in bounds if seg_start < b < seg_start + len(seg))
         for cut in cuts + [seg_start + len(seg)]:
@@ -161,12 +179,15 @@ def _annotated_runs(text: str, base: int, anns: list[tuple[int, int, dict]]) -> 
                     run["marks"] = ms
                 runs.append(run)
             pos = cut
+            emit_caret(cut)
 
     cur = base
     last = 0
     for m in _REF_RE.finditer(text):
         if m.start() > last:
             emit_text(text[last:m.start()], cur)
+        else:
+            emit_caret(cur)  # a caret sitting just before a leading codeRef
         cur += m.start() - last
         ref_text = m.group(0)
         runs.append({
@@ -181,6 +202,12 @@ def _annotated_runs(text: str, base: int, anns: list[tuple[int, int, dict]]) -> 
         last = m.end()
     if last < len(text):
         emit_text(text[last:], cur)
+    elif last == len(text):
+        emit_caret(cur)  # a caret at the very end of the paragraph
+    # Any caret not yet placed (e.g. an empty paragraph: base == end_of_para and no
+    # text walked) is emitted now so a feature-level note on empty prose still projects.
+    for off in sorted(carets):
+        emit_caret(off)
     return runs
 
 
@@ -236,6 +263,14 @@ def _annotated_paragraphs(description: str, anns: list[tuple[int, int, dict]]) -
         runs = _annotated_runs(chunk, start, anns) if anns else _inline_runs(chunk)
         if runs:
             blocks.append({"type": "paragraph", "content": runs})
+    # Empty / whitespace-only description with annotations (a feature-level note, which
+    # can only anchor at offset 0): no paragraph was emitted above, so the annotation
+    # would be dropped (FIX G). Emit a paragraph carrying its zero-width caret run(s) so
+    # the (0,0)-anchored comment/mark still projects.
+    if not blocks and anns:
+        caret_runs = _annotated_runs("", 0, anns)
+        if caret_runs:
+            blocks.append({"type": "paragraph", "content": caret_runs})
     return blocks
 
 

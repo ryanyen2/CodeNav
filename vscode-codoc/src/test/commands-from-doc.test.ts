@@ -72,6 +72,39 @@ describe('commandsForSettle — identity-keyed command emission', () => {
         expect(cmds[0]).toMatchObject({ kind: 'add', local_id: 'L-9', payload: { title: 'Brand new' } });
     });
 
+    it('an add command id is DETERMINISTIC from the localId (no salt) — FIX B', () => {
+        const next = featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),
+            ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+            ...feat({ localId: 'L-9' }, 'Brand new', 'fresh'),
+        ]));
+        // Two settles with DIFFERENT salts produce the SAME add command id, so a
+        // re-emitted add collides on the daemon's ledger and never mints a second node.
+        const a = commandsForSettle(prev, next, 111);
+        const b = commandsForSettle(prev, next, 222);
+        expect(a[0].id).toBe('c-add-L-9');
+        expect(b[0].id).toBe('c-add-L-9');
+        expect(a[0].id).toBe(b[0].id);
+    });
+
+    it('a re-emit of the same add (changed title, same localId) keeps the same id — FIX B', () => {
+        // The settle fires again before the fid echoes back; the user has kept typing,
+        // so the title changed but the localId is stable. The add id must NOT change,
+        // so the ledger folds it (no duplicate feature).
+        const first = commandsForSettle(prev, featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),
+            ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+            ...feat({ localId: 'L-9' }, 'Palette', 'fresh'),
+        ])), 1);
+        const second = commandsForSettle(prev, featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),
+            ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+            ...feat({ localId: 'L-9' }, 'Palette renamed', 'fresh'),
+        ])), 2);
+        expect(first[0].id).toBe(second[0].id);  // same id despite the title change
+        expect(second[0]).toMatchObject({ kind: 'add', local_id: 'L-9', payload: { title: 'Palette renamed' } });
+    });
+
     it('a deleted node emits exactly one retire command (R7 — no resurrection)', () => {
         const next = featureUnits(makeDoc([
             ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),

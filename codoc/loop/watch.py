@@ -524,6 +524,7 @@ def run_watch(
     # refactor (U8). Must run BEFORE _render rebuilds tree.doc.json from the store —
     # it reads the pre-existing tree.doc.json comment threads into the store, then
     # converges any re-minted duplicate features. A clean workspace is a no-op.
+    migrate_ok = True
     try:
         from codoc.loop.migrate import migrate_workspace
 
@@ -531,9 +532,17 @@ def run_watch(
         if res.changed():
             printer(f"▸ migrate  {res.summary()}")
     except Exception as e:  # noqa: BLE001
+        migrate_ok = False
         printer(f"⚠ startup migrate failed (continuing to watch): {e}")
 
-    _render(codoc_dir)
+    # Render rebuilds tree.doc.json from the store. On a FAILED (partial) migration the
+    # store may not yet hold the comments still living only in the pre-existing
+    # tree.doc.json — rendering now would overwrite that file and destroy the un-migrated
+    # comments. So skip this startup render when migration failed; the file is left
+    # untouched (a later cycle, after the migration is fixed, rebuilds it safely). The
+    # daemon stays alive either way.
+    if migrate_ok:
+        _render(codoc_dir)
     state = WatchState(
         last_tree_hash=_hash(tree_path(codoc_dir)),
         last_edits_hash=_hash(edits_path(codoc_dir)),
