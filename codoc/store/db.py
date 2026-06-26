@@ -132,6 +132,17 @@ CREATE TABLE IF NOT EXISTS comments (
     updated_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_comments_feature ON comments(feature_id);
+
+-- Applied identity-keyed command ledger (U3 / KTD8). The commands channel
+-- (edits.json) is at-most-once-by-consumption, not idempotent-on-replay: a
+-- write/drain interleaved with a crash can re-deliver. So each command carries a
+-- stable id and the daemon records applied ids here; re-applying a recorded id is
+-- a no-op. (The realize.md manifest tracks DIRECTIVES, not this channel — a
+-- separate ledger is required.)
+CREATE TABLE IF NOT EXISTS applied_commands (
+    id          TEXT PRIMARY KEY,
+    applied_at  TEXT NOT NULL
+);
 """
 
 
@@ -557,6 +568,24 @@ class Store:
 
     def delete_event(self, event_id: str) -> None:
         self.conn.execute("DELETE FROM events WHERE id=?", (event_id,))
+        self.conn.commit()
+
+    # -- applied-command ledger (idempotency, U3 / KTD8) ------------------
+    def command_applied(self, cmd_id: str) -> bool:
+        """True if the identity-keyed command ``cmd_id`` has already been applied —
+        the at-least-once → exactly-once guard for the commands channel."""
+        row = self.conn.execute(
+            "SELECT 1 FROM applied_commands WHERE id=?", (cmd_id,)
+        ).fetchone()
+        return row is not None
+
+    def mark_command_applied(self, cmd_id: str) -> None:
+        """Record ``cmd_id`` as applied (HLC-stamped). Idempotent — re-stamping an
+        already-recorded id is a no-op (INSERT OR IGNORE keeps the first stamp)."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO applied_commands (id, applied_at) VALUES (?, ?)",
+            (cmd_id, HLC.now().to_str()),
+        )
         self.conn.commit()
 
     # -- code_edges (derived graph cache) ---------------------------------

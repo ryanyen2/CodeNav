@@ -62,11 +62,46 @@ _EXPLICIT_REALIZE_KINDS = frozenset({
 })
 
 
+def _norm_title(t: str | None) -> str:
+    """Normalize a title for the soft ``(normalized_title, parent_id)`` uniqueness
+    key — mirrors ``loop_a._norm_title`` so the command-apply dedup (U3 / KTD3)
+    folds duplicates the same way the Loop-A LLM-apply fold does."""
+    return re.sub(r"\s+", " ", (t or "").strip().lower())
+
+
+def _command_to_op(cmd: "edits_channel.Command") -> NodeOp | None:
+    """Map an identity-keyed command (U3) onto a ``NodeOp`` for ``apply_op``.
+
+    ``add`` → ADD_NODE (carries title/description/parent_id + the webview's
+    ``local_id`` for minted-fid correlation); ``set_title``/``set_description`` →
+    AMEND (only the changed field set); ``move`` → MOVE_NODE; ``retire`` →
+    RETIRE_NODE (detach-only — never ``delete_code`` from this channel). Returns
+    None for an unhandled kind (defensive; ``read_commands`` already filters)."""
+    p = cmd.payload or {}
+    if cmd.kind == "add":
+        return NodeOp(kind=NodeOpKind.ADD_NODE, title=p.get("title") or "",
+                      description=p.get("description") or "",
+                      parent_id=p.get("parent_id"), local_id=cmd.local_id)
+    if cmd.kind == "set_title":
+        return NodeOp(kind=NodeOpKind.AMEND, feature_id=cmd.feature_id,
+                      title=p.get("title", ""))
+    if cmd.kind == "set_description":
+        return NodeOp(kind=NodeOpKind.AMEND, feature_id=cmd.feature_id,
+                      description=p.get("description", ""))
+    if cmd.kind == "move":
+        return NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=cmd.feature_id,
+                      parent_id=p.get("parent_id"))
+    if cmd.kind == "retire":
+        return NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=cmd.feature_id)
+    return None
+
+
 @dataclass
 class LoopBResult:
     accepted: int = 0
     rejected: int = 0
     user_edits: int = 0
+    commands: int = 0  # identity-keyed authored commands applied this pass (U3)
     steered: int = 0  # inline `> …` steering comments drained this pass
     canceled: int = 0  # queued directives withdrawn this pass (U6)
     soft_retired: int = 0  # nodes the human deleted from the doc → soft (detach-only) retire
@@ -80,10 +115,16 @@ class LoopBResult:
     # only ("doc-only"). Listed under the summary so a watcher can SEE what each edit was
     # and why it did/didn't decorate — instead of an opaque "edits 2".
     edit_notes: list[str] = field(default_factory=list)
+    # local_id → minted feature id for each `add` command applied this pass (U3): the
+    # webview correlates its in-progress node back to the store fid (KTD8) so it adopts
+    # the right node without title/order guessing. Echoed back via the host (U4).
+    fids_by_local: dict[str, str] = field(default_factory=dict)
     error: str = ""
 
     def summary(self) -> str:
         parts = [f"accepted {self.accepted}", f"rejected {self.rejected}", f"edits {self.user_edits}"]
+        if self.commands:
+            parts.append(f"commands {self.commands}")
         if self.steered:
             parts.append(f"steered {self.steered}")
         if self.canceled:
@@ -575,6 +616,56 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         apply_op(op, store, source="user", applied=True)
         return op.feature_id or ""
 
+    # 0.5 Identity-keyed authored commands (U3 / KTD3). The webview emits an
+    #     EXPLICIT op (add/set_title/set_description/move/retire) keyed by feature/
+    #     local id, instead of Loop B INFERRING it from a doc diff. Drained + applied
+    #     BEFORE the legacy annotation `edits` list (step 2) so a structural retire/
+    #     move resolves before authorship stamps land on the post-command state.
+    #     Idempotent on the store ledger (KTD8): a re-sent / crash-replayed id is a
+    #     no-op. ADD reuses _accept_with_fid for minted-fid correlation back to the
+    #     submitted local_id, and is rejected (skipped, no mint) when a live feature
+    #     already owns the same (normalized_title, parent_id) — the soft-uniqueness
+    #     guard the Loop-A LLM-apply fold has but apply_op does not (KTD3). A command
+    #     whose target feature_id no longer exists is skipped without crashing.
+    #     Dry runs leave the channel queued (a command is a real authored intent, not
+    #     a deferrable directive) — same one-shot-only-on-a-real-pass guard as steers.
+    fids_by_local: dict[str, str] = {}  # local_id → minted fid (echoed back to the host, U4)
+    if not dry_run:
+        live_title_parent = {
+            (_norm_title(f.title), f.parent_id) for f in store.list_features()
+        }
+        for cmd in edits_channel.drain_commands(codoc_dir):
+            if store.command_applied(cmd.id):
+                continue  # already applied (idempotency, KTD8)
+            op = _command_to_op(cmd)
+            if op is None:
+                store.mark_command_applied(cmd.id)
+                continue
+            if op.kind is NodeOpKind.ADD_NODE:
+                key = (_norm_title(op.title), op.parent_id)
+                if key in live_title_parent:
+                    # Duplicate (re-sent / replayed) add — fold, don't mint (KTD3).
+                    store.mark_command_applied(cmd.id)
+                    continue
+                fid = _accept_with_fid(op)
+                if fid:
+                    live_title_parent.add(key)
+                    if cmd.local_id:
+                        fids_by_local[cmd.local_id] = fid
+            elif op.feature_id and store.get_feature(op.feature_id) is None:
+                # Target vanished (already retired / never existed): skip, don't crash.
+                store.mark_command_applied(cmd.id)
+                continue
+            else:
+                apply_op(op, store, source="user", applied=True)
+                # A command-driven retire supersedes prior pending directives for the
+                # feature (add+retire churn — INV1/N15), mirroring the text retire path.
+                if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
+                    _supersede_directives(root_dir, codoc_dir, {op.feature_id})
+            store.mark_command_applied(cmd.id)
+            res.commands += 1
+        res.fids_by_local = fids_by_local
+
     # 1. Proposal verdicts — drained from the IDE's inbox, not parsed from text.
     for v in inbox.read_verdicts(codoc_dir):
         e = store.get_event(v.event_id)
@@ -783,8 +874,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     # Steering comments are consumed ONLY when their directives will actually be
     # queued: a dry/no-realize pass must leave the `>` lines in the text for a
     # later real pass — consuming without queueing would destroy the note.
-    if (res.accepted or res.user_edits or block_store_changed or res.soft_retired
-            or res.unretired or (res.steered and not dry_run)):
+    if (res.accepted or res.user_edits or res.commands or block_store_changed
+            or res.soft_retired or res.unretired or (res.steered and not dry_run)):
         write_tree(store, codoc_dir)
         if dry_run and comment_targets:
             # The dry re-render (store-driven) just dropped the `> …` lines even

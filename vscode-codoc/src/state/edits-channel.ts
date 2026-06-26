@@ -17,9 +17,14 @@
  *   • `steers` — one-shot inline-comment notes (U2b): with the host no longer
  *     writing tree.codoc, a `> …` comment is handed to Loop B here instead of the
  *     text round-trip; Loop B drains each into a STEER directive once.
+ *   • `commands` — identity-keyed authored edits (U3): the EXPLICIT op the webview
+ *     emits (add/set_title/set_description/move/retire) instead of letting Loop B
+ *     infer it from a doc diff. Drained + applied via apply_op (KTD3), idempotent
+ *     on the store's applied-command ledger (KTD8).
  *
- * Mirrors codoc/loop/edits.py (schema version 1). File I/O lives in the host
- * (tree-editor.ts) — this module is pure data so vitest can pin the contract.
+ * Mirrors codoc/loop/edits.py (schema version 2 — the U3 commands channel). File I/O
+ * lives in the host (tree-editor.ts) — this module is pure data so vitest can pin the
+ * contract.
  */
 import type { Suggestion } from './suggestion-model';
 
@@ -99,10 +104,36 @@ export interface BlockEditEntry {
     ts: number;             // unix ms
 }
 
+/** The kinds an identity-keyed command (U3) may carry — mirrors Python
+ *  `edits.COMMAND_KINDS`. `set_title`/`set_description` are description-level
+ *  (SUGGEST-eligible); `add`/`move`/`retire` are structural (HANDOFF-gated, KTD10). */
+export type CommandKind = 'add' | 'set_title' | 'set_description' | 'move' | 'retire';
+
+/** An identity-keyed authored command (U3 / KTD3) — the EXPLICIT op the webview emits
+ *  instead of letting Loop B infer it from a doc diff. Mirrors the Python `Command`
+ *  dataclass. `id` is the idempotency key (KTD8) recorded in the store's applied-command
+ *  ledger; `localId` correlates an `add`'s minted fid back to the in-progress node;
+ *  `payload` carries title/description/parentId per kind. */
+export interface CommandEntry {
+    id: string;
+    kind: CommandKind;
+    feature_id?: string;        // target (empty for `add`, which mints)
+    local_id?: string;          // webview client-side node id for `add` (minted-fid correlation)
+    base_rev?: number;          // per-feature version the edit was authored from (U5 gate)
+    payload?: {
+        title?: string;
+        description?: string;
+        parent_id?: string | null;
+    };
+}
+
 export interface EditsFile {
-    version: 1;
+    version: 2;
     edits: EditAnnotation[];
     intents: IntentEntry[];
+    /** Pending identity-keyed authored commands (U3). Omitted when empty (Python
+     *  omit-when-empty shape). Drained + applied by Loop B via apply_op (KTD3). */
+    commands?: CommandEntry[];
     /** Pending realize-withdrawals (U6). Omitted when empty (matches the Python
      *  writer, which only emits the key when non-empty). */
     cancellations?: CancellationEntry[];
@@ -121,17 +152,18 @@ export interface EditsFile {
 }
 
 export function emptyEditsFile(): EditsFile {
-    return { version: 1, edits: [], intents: [] };
+    return { version: 2, edits: [], intents: [] };
 }
 
 export function parseEditsFile(json: unknown): EditsFile {
     if (!json || typeof json !== 'object') return emptyEditsFile();
     const o = json as Record<string, unknown>;
     const file: EditsFile = {
-        version: 1,
+        version: 2,
         edits: Array.isArray(o.edits) ? (o.edits as EditAnnotation[]) : [],
         intents: Array.isArray(o.intents) ? (o.intents as IntentEntry[]) : [],
     };
+    if (Array.isArray(o.commands)) file.commands = o.commands as CommandEntry[];
     if (Array.isArray(o.cancellations)) file.cancellations = o.cancellations as CancellationEntry[];
     if (Array.isArray(o.steers)) file.steers = o.steers as SteerEntry[];
     if (Array.isArray(o.drafts)) file.drafts = o.drafts as DraftEntry[];
@@ -204,6 +236,16 @@ export function appendBlockEdit(
         ts: entry.ts,
     });
     return { ...file, block_edits };
+}
+
+/** Append an identity-keyed authored command (U3). Replaces any prior pending command
+ *  with the same `id` (idempotency key) so a re-emit supersedes rather than stacks.
+ *  Pure — returns a new EditsFile the host persists; Loop B drains + applies the
+ *  `commands` list via apply_op (KTD3), idempotent on the store ledger (KTD8). */
+export function appendCommand(file: EditsFile, entry: CommandEntry): EditsFile {
+    const commands = (file.commands ?? []).filter(c => c.id !== entry.id);
+    commands.push(entry);
+    return { ...file, commands };
 }
 
 /** A minimal parsed-feature shape (matches tree-model's ParsedFeature fields we need). */

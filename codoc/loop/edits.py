@@ -72,6 +72,13 @@ from codoc.loop.fsio import atomic_write_json, read_json
 # this is only the backstop. Timestamps are unix epoch MILLISECONDS (Date.now()).
 INTENT_STALE_MS = 7 * 24 * 3600 * 1000
 
+# edits.json schema version. Bumped to 2 for the identity-keyed ``commands`` channel
+# (U3): authored edits arrive as explicit commands applied via ``apply_op``, no longer
+# inferred from a doc diff. Readers don't gate on this — a v1 file (no ``commands`` key)
+# reads as empty (the ``_LISTS`` merge in :func:`_rewrite` already gives that) — so the
+# bump is a signal, not a barrier. The TS mirror (edits-channel.ts) pins the same value.
+EDITS_VERSION = 2
+
 
 @dataclass
 class EditAnnotation:
@@ -126,6 +133,43 @@ class BlockEdit:
     content: str = ""         # new content (empty for remove)
     prev_content: str = ""    # content before the edit (for the lower delta / diff)
     ts: int = 0               # unix ms
+
+
+# The recognised command kinds (U3). Each maps onto a NodeOpKind in loop_b (the apply
+# path); a command with any other kind is dropped on read. ``set_title``/``set_description``
+# are description-level (SUGGEST-eligible, KTD10); ``add``/``move``/``retire`` are
+# structural (HANDOFF-gated). Kept here so edits.py and dispatch.py agree on the set.
+COMMAND_KINDS = frozenset({"add", "set_title", "set_description", "move", "retire"})
+
+
+@dataclass
+class Command:
+    """An identity-keyed authored edit (U3 / KTD3) — the explicit op the webview
+    emits instead of letting Loop B INFER it from a doc diff. Applied directly to
+    the store via ``apply_op``; the doc-diff inference layer is retired (U7).
+
+    * ``id`` is the IDEMPOTENCY key (KTD8): a stable, author-minted id recorded in
+      the store's ``applied_commands`` ledger so a re-sent or replayed command
+      (a drain interleaved with a crash) is a no-op on the second apply.
+    * ``kind`` ∈ {``add``, ``set_title``, ``set_description``, ``move``, ``retire``}
+      maps onto a ``NodeOpKind`` (add→ADD_NODE, set_title/set_description→AMEND,
+      move→MOVE_NODE, retire→RETIRE_NODE).
+    * ``feature_id`` targets an existing feature (empty for ``add``, which mints one).
+    * ``local_id`` is the webview's client-side node id for ``add`` (KTD8): the
+      minted fid is correlated back to it so the host adopts the right node — no
+      title/order guessing, no duplicate/orphan add.
+    * ``base_rev`` is the per-feature version the edit was authored from (the U5
+      version gate uses it; recorded here for the channel, unused on the Phase-A
+      apply path).
+    * ``payload`` carries the kind's data: ``add`` → ``title``/``description``/
+      ``parent_id``; ``set_title`` → ``title``; ``set_description`` →
+      ``description``; ``move`` → ``parent_id``; ``retire`` → (nothing)."""
+    id: str
+    kind: str
+    feature_id: str = ""
+    local_id: str = ""
+    base_rev: int = 0
+    payload: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -196,6 +240,27 @@ def read_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
     return out
 
 
+def read_commands(codoc_dir: str | Path) -> list[Command]:
+    """Pending identity-keyed authored commands (U3), order-preserving. A command
+    needs an ``id`` (the idempotency key) and a recognised ``kind``; malformed
+    entries are dropped (a stale/garbled command can at worst be skipped, never
+    crash a pass). The ``payload`` is passed through verbatim for the applier."""
+    out: list[Command] = []
+    for c in _load(codoc_dir).get("commands", []):
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("id") or ""
+        kind = c.get("kind") or ""
+        if not cid or kind not in COMMAND_KINDS:
+            continue
+        payload = c.get("payload")
+        out.append(Command(
+            id=cid, kind=kind, feature_id=c.get("feature_id") or "",
+            local_id=c.get("local_id") or "", base_rev=int(c.get("base_rev") or 0),
+            payload=dict(payload) if isinstance(payload, dict) else {}))
+    return out
+
+
 def read_intents(codoc_dir: str | Path) -> list[Intent]:
     out: list[Intent] = []
     for i in _load(codoc_dir).get("intents", []):
@@ -215,7 +280,11 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
 #   adds a fid on a code-implying draft edit and removes it on hand-off; the loop derives
 #   each directive's ``handed_off`` from this set every pass (so removing a fid releases
 #   it). Empty/absent → every directive is handed off, i.e. today's immediate-realize.
-_LISTS = ("edits", "intents", "cancellations", "steers", "drafts", "block_edits", "handoffs")
+#   ``commands`` = identity-keyed authored edits (U3): the explicit op the webview
+#   emits (add/set_title/set_description/move/retire) instead of Loop B inferring it
+#   from a doc diff. Loop-drained one-shot, applied via apply_op (KTD3); idempotent on
+#   the store's applied-command-id ledger (KTD8). A v1 file (no key) reads as empty.
+_LISTS = ("commands", "edits", "intents", "cancellations", "steers", "drafts", "block_edits", "handoffs")
 
 # Cached, reentrant FileLock per repo guarding every edits.json read-modify-write.
 _edit_locks: dict[str, object] = {}
@@ -268,10 +337,10 @@ def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
         return None
     dest = edits_path(codoc_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict = {"version": 1, "edits": merged["edits"], "intents": merged["intents"]}
+    payload: dict = {"version": EDITS_VERSION, "edits": merged["edits"], "intents": merged["intents"]}
     # Keep the optional lists out of the payload when empty (matches the prior shape
-    # + keeps a plain annotations-only file byte-identical to before).
-    for k in ("cancellations", "steers", "drafts", "block_edits", "handoffs"):
+    # + keeps a plain annotations-only file byte-identical to before, modulo version).
+    for k in ("commands", "cancellations", "steers", "drafts", "block_edits", "handoffs"):
         if merged[k]:
             payload[k] = merged[k]
     atomic_write_json(dest, payload)
@@ -297,6 +366,30 @@ def drain_annotations(codoc_dir: str | Path) -> dict[str, EditAnnotation]:
     if anns:
         _rewrite(codoc_dir, edits=[])
     return anns
+
+
+@_locked
+def drain_commands(codoc_dir: str | Path) -> list[Command]:
+    """Consume the ``commands`` list (one-shot), keeping the others — Loop B applies
+    each via ``apply_op`` (KTD3) BEFORE the legacy annotation ``edits`` (so a
+    structural retire/move resolves before authorship stamps). Re-applying a recorded
+    command id is a no-op (KTD8, the store ledger), so a drain interleaved with a
+    crash is safe."""
+    cmds = read_commands(codoc_dir)
+    if cmds:
+        _rewrite(codoc_dir, commands=[])
+    return cmds
+
+
+@_locked
+def append_command(codoc_dir: str | Path, cmd: Command) -> Path | None:
+    """Append an identity-keyed authored command (host emit affordance; CLI/tests).
+    Preserves the other edits.json lists. Drained + applied by Loop B (U3)."""
+    commands = (_load(codoc_dir).get("commands") or []) + [{
+        "id": cmd.id, "kind": cmd.kind, "feature_id": cmd.feature_id,
+        "local_id": cmd.local_id, "base_rev": cmd.base_rev, "payload": dict(cmd.payload),
+    }]
+    return _rewrite(codoc_dir, commands=commands)
 
 
 def read_cancellations(codoc_dir: str | Path) -> list[str]:
