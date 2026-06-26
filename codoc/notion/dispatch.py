@@ -20,11 +20,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import re
+
 from codoc.codoc_file.diff import diff_codoc
 from codoc.loop import edits as edits_channel
+from codoc.loop import inbox
 from codoc.loop.edits import Steer
 from codoc.notion.parse import parse_blocks
 from codoc.store.db import Store
+
+# A verdict command typed in a Notion comment on a proposal callout. Leading slash,
+# case-insensitive, optionally surrounded by other words ("looks good /accept").
+_ACCEPT_RE = re.compile(r"(?:^|\s)/accept\b", re.IGNORECASE)
+_REJECT_RE = re.compile(r"(?:^|\s)/reject\b", re.IGNORECASE)
 
 
 @dataclass
@@ -81,3 +89,38 @@ def dispatch_notion_edits(
         result.steers += 1
 
     return result
+
+
+def parse_verdict_command(text: str) -> bool | None:
+    """``/accept`` → True, ``/reject`` → False, neither → None. If both appear, the
+    first one in the text wins (an explicit later correction beats an earlier word)."""
+    if not text:
+        return None
+    accept = _ACCEPT_RE.search(text)
+    reject = _REJECT_RE.search(text)
+    if accept and reject:
+        return accept.start() < reject.start()
+    if accept:
+        return True
+    if reject:
+        return False
+    return None
+
+
+def submit_verdict(codoc_dir: str | Path, event_id: str, accept: bool):
+    """Write an accept/reject verdict to the inbox channel (Loop B applies it).
+
+    The verdict is the authority — never also mutate the Notion page to reflect it
+    (that would be a local double-apply); Loop B applies the proposal and the next
+    push reflects the result."""
+    return inbox.append_verdict(codoc_dir, event_id, accept)
+
+
+def handle_comment_verdict(codoc_dir: str | Path, event_id: str, comment_text: str) -> bool | None:
+    """Parse a proposal-callout comment and, when it carries a verdict command, write
+    it to the inbox. Returns the verdict (True/False) when one was written, else None."""
+    verdict = parse_verdict_command(comment_text)
+    if verdict is None or not event_id:
+        return None
+    submit_verdict(codoc_dir, event_id, verdict)
+    return verdict
