@@ -166,6 +166,16 @@ class NotionClient:
     def delete_block(self, block_id: str) -> dict:
         return self._call("delete_block", block_id)
 
+    def write_page_tree(self, fid_to_block: dict[str, str], blocks: list[dict]) -> dict:  # pragma: no cover
+        """Write a rendered block tree to the page. v1: create top-level features that
+        have no mapped block id yet (``append_children`` under the page). Full update/
+        nested-create/delete reconciliation is validated against a live workspace and
+        landed incrementally; this keeps cold-start authoring working today."""
+        new_top = [b for b in blocks if "id" not in b]
+        if new_top:
+            return self.append_children(self._config.page_id, new_top)
+        return {"ok": True, "noop": True}
+
 
 def build_real_transport(config: NotionConfig):  # pragma: no cover - needs the extra + a token
     """Adapt ``notion_client.Client`` to the :class:`Transport` surface. Lazy-imported
