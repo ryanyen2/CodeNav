@@ -142,6 +142,44 @@ def serve(
 
 
 @app.command()
+def notion(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    host: str = typer.Option(
+        "127.0.0.1", "--host",
+        help="Bind address for the webhook listener (localhost by default)."),
+    port: int = typer.Option(8788, "--port", help="Local port for webhook ingress."),
+):
+    """Run the Notion bridge: make a Notion page an authoring surface for the tree.
+
+    A separate process (peer to the VS Code extension and ``codoc serve``). It is a
+    file-channel client — it reads ``.codoc/*`` and writes only the verdict/draft/
+    intent channels, never ``tree.codoc`` — and it DEFERS to an existing daemon
+    owner (``codoc watch`` / ``codoc serve``) rather than spawning its own.
+
+    Config comes from the environment (CODOC_NOTION_TOKEN, CODOC_NOTION_PAGE_ID, …);
+    see ``docs/notion-deployment.md``.
+    """
+    from codoc.notion.config import (
+        NotionConfig, NotionConfigError, missing_deps_message, missing_optional_deps,
+    )
+
+    missing = missing_optional_deps()
+    if missing:
+        typer.echo(f"Error: {missing_deps_message(missing)}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        config = NotionConfig.from_env()
+    except NotionConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    from codoc.notion.bridge import run_bridge
+
+    run_bridge(config, _codoc_dir(root), host=host, port=port, printer=typer.echo)
+
+
+@app.command()
 def realize(
     root: str = typer.Option(".", "--root", help="Repository root."),
     engine: str = typer.Option(

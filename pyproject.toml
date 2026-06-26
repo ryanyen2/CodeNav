@@ -35,6 +35,11 @@ serve = [
     "uvicorn>=0.30.0",
     "sse-starlette>=2.1.0",
 ]
+notion = [
+    "notion-client>=3.1.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
 
 [project.scripts]
 codoc = "codoc.cli.main:app"
