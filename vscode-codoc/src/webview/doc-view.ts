@@ -10,6 +10,7 @@
 
 import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
+import { isSaveChord } from './save-chord';
 import { AuthorController } from './tiptap/author-plugin';
 import { kindGlyph } from '../state/grammar';
 import { icon, iconMaskDataUri } from './icons';
@@ -1095,6 +1096,27 @@ document.addEventListener('keydown', ev => {
         ev.preventDefault();
         ev.stopPropagation();
         palette.toggle();
+    }
+}, true);
+
+// ⌘S / Ctrl-S = "save the file" from ANY focus context (nav-tree pane, toolbar, editor,
+// anywhere in the webview) → stage & send (commit) (U6 / R11, R12). `tree.codoc` is a
+// derived, read-only export; the daemon is the sole writer and the host never dirties the
+// backing text document, so the native save would only ever flash the "content is newer"
+// dialog. Capture phase + stopPropagation means this fires before the in-editor ProseMirror
+// `Mod-s` keymap (which listens on the deeper editable element), so the commit runs exactly
+// once and the native save never reaches VS Code. The in-editor binding (whole-doc-editor.ts)
+// stays as a harmless fallback for the (unreachable-here) bubble path.
+//
+// Phase A note: there is no clean VS Code host-API flag to mark a CustomTextEditor's backing
+// document non-savable without a full FileSystemProvider rewrite (out of scope per U6), so this
+// window-level interceptor IS the accepted Phase A read-only mechanism. AE3 (no save dialog) is
+// verified manually.
+window.addEventListener('keydown', ev => {
+    if (isSaveChord(ev, IS_MAC)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        triggerCommit();
     }
 }, true);
 

@@ -170,6 +170,9 @@ function makeKeymap(commit: () => void): Extension {
                 // ⌘S / Ctrl-S = "save the file" → stage & send (U4). The host never dirties
                 // the text document (single-writer), so the native save is a no-op we
                 // repurpose; returning true preventDefaults it so no save dialog flashes.
+                // NOTE: a window-level capture-phase listener in doc-view.ts (U6) now swallows
+                // this chord from ANY focus context (incl. the editor) BEFORE it reaches this
+                // keymap, so in practice this binding is a fallback and never double-fires.
                 'Mod-s': () => { commit(); return true; },
                 Enter: () => {
                     const { $from } = ed.state.selection;
