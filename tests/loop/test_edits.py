@@ -84,15 +84,20 @@ def _seed_feature(codoc_dir, *, title="Validator", desc="Validates input.") -> s
 
 
 def test_loop_b_stamps_user_ops_from_annotations(dirs):
+    """The edit arrives as a `set_description` COMMAND (U3/U4); the edits.json
+    annotation stamps the resulting AMEND event with the declared author (the command
+    apply path consults annotations, U7). dry_run=False because commands apply only on
+    a real pass."""
     root, codoc_dir = dirs
     fid = _seed_feature(codoc_dir)
     # an agent settle annotated by the IDE host
     edits.append_annotation(codoc_dir, edits.EditAnnotation(
         feature_id=fid, fields=["description"], actor="claude-code", mode="suggest"))
-    tp = tree_path(codoc_dir)
-    tp.write_text(tp.read_text().replace("Validates input.", "Validates and sanitizes input."))
+    edits.append_command(codoc_dir, edits.Command(
+        id="cmd-ann-1", kind="set_description", feature_id=fid,
+        payload={"description": "Validates and sanitizes input."}))
 
-    run_loop_b(root, codoc_dir, dry_run=True)
+    run_loop_b(root, codoc_dir, dry_run=False)
 
     s = open_store(codoc_dir)
     evs = [e for e in s.recent_events(10) if e.op.kind.value == "amend"]
@@ -103,12 +108,14 @@ def test_loop_b_stamps_user_ops_from_annotations(dirs):
 
 
 def test_loop_b_defaults_to_human_pen_without_annotation(dirs):
+    """A command with no annotation defaults the AMEND's authorship to human/pen."""
     root, codoc_dir = dirs
-    _seed_feature(codoc_dir)
-    tp = tree_path(codoc_dir)
-    tp.write_text(tp.read_text().replace("Validates input.", "Validates trimmed input."))
+    fid = _seed_feature(codoc_dir)
+    edits.append_command(codoc_dir, edits.Command(
+        id="cmd-noann-1", kind="set_description", feature_id=fid,
+        payload={"description": "Validates trimmed input."}))
 
-    run_loop_b(root, codoc_dir, dry_run=True)
+    run_loop_b(root, codoc_dir, dry_run=False)
 
     s = open_store(codoc_dir)
     evs = [e for e in s.recent_events(10) if e.op.kind.value == "amend"]
@@ -122,9 +129,9 @@ def test_directives_get_ids_in_manifest_and_heading_after_handoff(dirs):
     edits.append_annotation(codoc_dir, edits.EditAnnotation(
         feature_id=fid, fields=["description"], actor="human", mode="pen",
         suggestion_id="d-sugg1"))
-    tp = tree_path(codoc_dir)
-    tp.write_text(tp.read_text().replace(
-        "Validates input.", "Rewrite the validator; it should reject tabs."))
+    edits.append_command(codoc_dir, edits.Command(
+        id="cmd-did-1", kind="set_description", feature_id=fid,
+        payload={"description": "Rewrite the validator; it should reject tabs."}))
 
     # Held-draft model: the AMEND mints a directive with a stable id + caused_by, held
     # in the manifest (handed_off=False) — NOT yet in realize.md.

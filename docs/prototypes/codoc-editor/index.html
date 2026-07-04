@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>codoc · editor prototype</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- top chrome: brand · doc tab · presence cluster (no window buttons) -->
+    <div class="topbar">
+      <span class="brand"><span class="mark" id="brand-mark"></span>codoc</span>
+      <span class="tab"><span class="emoji">🔔</span>Notifications</span>
+      <span class="spacer"></span>
+      <span class="presence-cluster" id="presence-cluster"></span>
+    </div>
+
+    <div class="shell">
+      <!-- left: feature tree -->
+      <aside class="nav" id="nav"></aside>
+
+      <!-- center: the living document -->
+      <div class="doc-wrap" id="doc-wrap">
+        <article class="doc" id="doc"></article>
+        <div class="presence-layer" id="presence"></div>
+      </div>
+
+      <!-- right: dependency-flow panel -->
+      <aside class="flow">
+        <div class="flow-head">
+          <span class="ft" id="flow-title">Flow</span>
+          <span class="slice-toggle" id="slice-toggle"></span>
+        </div>
+        <div class="flow-canvas" id="flow-canvas">
+          <svg class="flow-svg" id="flow-svg"></svg>
+        </div>
+        <div class="flow-legend">
+          <span class="lg"><span class="swatch up"></span>depends on</span>
+          <span class="lg"><span class="swatch down"></span>used by</span>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="hint">the agent resolves “Duplicate suppression” on load — or replay it</div>
+  <button class="replay" id="replay"></button>
+
+  <script src="icons-core.js"></script>
+  <script src="icons-agent.js"></script>
+  <script src="prototype.js"></script>
+  <script>
+    // inject the replay label once icons are present
+    document.getElementById("replay").innerHTML =
+      '<svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+      (window.CODOC_ICONS ? window.CODOC_ICONS.spark : "") + "</svg> Replay agent";
+  </script>
+</body>
+</html>

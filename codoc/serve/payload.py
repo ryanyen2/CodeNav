@@ -26,6 +26,7 @@ from codoc.loop.status import STATUS_FILENAME
 from codoc.model.hlc import HLC
 
 _DOC_FILENAME = "tree.doc.json"
+_ACTIVITY_FILENAME = "activity.json"
 # A wall-clock-ms HLC leaves ample room below this shift for the logical counter.
 _LOGICAL_BITS = 20
 
@@ -38,8 +39,105 @@ def _status(codoc_dir: str | Path) -> dict:
     return read_json(Path(codoc_dir) / STATUS_FILENAME, default={}) or {}
 
 
+_TREE_FILENAME = "tree.codoc"
+
+
+_DB_FILENAME = "codoc.db"
+
+
 def _doc(codoc_dir: str | Path):
-    return read_json(Path(codoc_dir) / _DOC_FILENAME, default=None)
+    """The store projection (store is the single source of truth, R3) when the store
+    exists; else the webview-authored rich doc; else — when both are absent/empty
+    because the workspace was never opened in VS Code — one rendered from
+    ``tree.codoc`` so the hub is self-sufficient (it has no editor to author the doc)."""
+    codoc_dir = Path(codoc_dir)
+    if (codoc_dir / _DB_FILENAME).is_file():
+        from codoc.codoc_file.doc_render import build_doc_from_store
+        from codoc.store.db import open_store
+
+        with open_store(codoc_dir) as store:
+            return build_doc_from_store(store)
+    doc = read_json(codoc_dir / _DOC_FILENAME, default=None)
+    if isinstance(doc, dict) and (doc.get("content") or []):
+        return doc
+    tree_path = codoc_dir / _TREE_FILENAME
+    if tree_path.is_file():
+        text = tree_path.read_text(encoding="utf-8")
+        if text.strip():
+            from codoc.codoc_file.doc_render import build_doc_from_text
+
+            return build_doc_from_text(text)
+    return doc
+
+
+def _activity(codoc_dir: str | Path) -> dict:
+    return read_json(Path(codoc_dir) / _ACTIVITY_FILENAME, default={}) or {}
+
+
+_MAX_STEPS = 5
+_TOOL_VERB = {
+    "Edit": "editing", "Write": "editing", "MultiEdit": "editing", "NotebookEdit": "editing",
+    "Read": "reading", "Bash": "running", "Grep": "searching", "Glob": "searching",
+}
+
+
+def _phases_from_activity(activity: dict) -> dict:
+    """Per-feature reflection phase (editing/reflecting/done) — the browser-path parity of
+    the TS ``featurePhases``. Drives the heading dot + the ghost→resolved reveal on the hub."""
+    out: dict[str, str] = {}
+    for fid, entry in (activity.get("features") or {}).items():
+        if isinstance(entry, dict) and entry.get("phase"):
+            out[fid] = entry["phase"]
+    return out
+
+
+def _steps_from_activity(activity: dict, sidecar: dict) -> dict:
+    """Per-feature agent-action steps for the ribbon (parity of TS ``featureSteps``).
+    Prefers the ``recent`` event log, falling back to ``touched``; resolves a file to its
+    features via the sidecar ``by_file`` index. Last step active, earlier ones done."""
+    epoch = activity.get("epoch") or {}
+    if not epoch.get("open"):
+        return {}
+
+    by_file = sidecar.get("by_file") or {}
+
+    def fids_for(file: str, explicit: list) -> set[str]:
+        s = set(explicit or [])
+        for e in by_file.get(file) or []:
+            if isinstance(e, dict) and e.get("feature_id"):
+                s.add(e["feature_id"])
+        return s
+
+    def base(p: str) -> str:
+        return p.rsplit("/", 1)[-1] if p else p
+
+    labels_by_fid: dict[str, list[str]] = {}
+    recent = activity.get("recent") or []
+    if recent:
+        for r in recent:
+            if not isinstance(r, dict):
+                continue
+            label = f"{_TOOL_VERB.get(r.get('tool', ''), (r.get('tool') or '').lower())} {base(r.get('file', ''))}".strip()
+            for fid in fids_for(r.get("file", ""), r.get("feature_ids") or []):
+                lst = labels_by_fid.setdefault(fid, [])
+                if not lst or lst[-1] != label:
+                    lst.append(label)
+    else:
+        for file, entry in (activity.get("touched") or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            verb = "editing" if entry.get("mode") == "write" else "reading"
+            label = f"{verb} {base(file)}"
+            for fid in fids_for(file, entry.get("feature_ids") or []):
+                lst = labels_by_fid.setdefault(fid, [])
+                if label not in lst:
+                    lst.append(label)
+
+    out: dict[str, list[dict]] = {}
+    for fid, labels in labels_by_fid.items():
+        trimmed = labels[-_MAX_STEPS:]
+        out[fid] = [{"label": lab, "done": i < len(trimmed) - 1} for i, lab in enumerate(trimmed)]
+    return out
 
 
 def payload_version(codoc_dir: str | Path) -> int:
@@ -127,6 +225,88 @@ def _nodes_from_sidecar(sidecar: dict) -> tuple[dict, list[str]]:
     return nodes, roots
 
 
+#: Inline-line collapse cap — mirrors protocol.ts THREADS_COLLAPSE_AT.
+_THREADS_COLLAPSE_AT = 5
+
+
+def _threads_from_sidecar(sidecar: dict) -> dict:
+    """Per-feature Connections strands (reads / usedBy / refs), the browser-payload
+    parity of the VS Code ``directedEdges`` + ``assembleThreads`` (``src/state/``).
+
+    Powers the inline threads line AND the dependency-flow panel. ``reads`` =
+    out-edges (this feature depends on →), ``usedBy`` = in-edges (← used by); both
+    rank by coupling ``weight`` (desc, tie-broken by title) and dedup within their
+    strand. ``refs`` are the bound code chunks (ranked file then symbol). The
+    ``consult`` strand is parsed from feature DESCRIPTIONS in the VS Code host; the
+    sidecar carries none, so it is empty here (the hub is a suggest surface — the
+    flow panel and inline deps line do not depend on it)."""
+    features = sidecar.get("features") or {}
+    by_feature = sidecar.get("by_feature") or {}
+    feature_edges = sidecar.get("feature_edges") or {}
+
+    def title_of(fid: str) -> str:
+        meta = features.get(fid)
+        return (meta.get("title") or "") if isinstance(meta, dict) else ""
+
+    # Directed out/in maps from feature_edges (drop self-loops), mirroring directedEdges.
+    out: dict[str, list[dict]] = {}
+    inn: dict[str, list[dict]] = {}
+    for src, edges in feature_edges.items():
+        for e in edges or []:
+            to = e.get("to")
+            if not to or to == src:
+                continue
+            edge = {"weight": e.get("weight", 0), "kinds": e.get("kinds") or []}
+            out.setdefault(src, []).append({"to": to, **edge})
+            inn.setdefault(to, []).append({"to": src, **edge})
+
+    def targets(edges: list[dict], self_id: str) -> list[dict]:
+        seen: set[str] = set()
+        rows: list[dict] = []
+        for e in edges:
+            to = e["to"]
+            t = title_of(to)
+            if not t or to == self_id or to in seen:
+                continue
+            seen.add(to)
+            rows.append({"toId": to, "toTitle": t, "weight": e.get("weight", 0), "kinds": e.get("kinds") or []})
+        rows.sort(key=lambda r: (-(r["weight"] or 0), r["toTitle"].lower()))
+        return rows
+
+    threads: dict[str, dict] = {}
+    for fid in features:
+        if not isinstance(features.get(fid), dict):
+            continue
+        reads = targets(out.get(fid, []), fid)
+        used_by = targets(inn.get(fid, []), fid)
+        ref_seen: set[str] = set()
+        refs = []
+        for b in by_feature.get(fid) or []:
+            if not isinstance(b, dict):
+                continue
+            key = f"{b.get('file', '')} {b.get('symbol', '')}"
+            if key in ref_seen:
+                continue
+            ref_seen.add(key)
+            refs.append({"file": b.get("file", ""), "symbol": b.get("symbol", "")})
+        refs.sort(key=lambda r: (r["file"], r["symbol"]))
+        if not reads and not used_by and not refs:
+            continue
+        threads[fid] = {
+            "reads": reads,
+            "usedBy": used_by,
+            "refs": refs,
+            "consult": [],
+            "collapsed": {
+                "reads": len(reads) > _THREADS_COLLAPSE_AT,
+                "usedBy": len(used_by) > _THREADS_COLLAPSE_AT,
+                "refs": len(refs) > _THREADS_COLLAPSE_AT,
+                "consult": False,
+            },
+        }
+    return threads
+
+
 def build_browser_payload(codoc_dir: str | Path) -> dict:
     """The full DocPayload for the browser suggest surface, derived from files."""
     codoc_dir = Path(codoc_dir)
@@ -148,6 +328,7 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
     }
     state = status.get("state") or "in_sync"
     pending = int(status.get("pending") or 0)
+    activity = _activity(codoc_dir)
 
     return {
         "nodes": nodes,
@@ -158,11 +339,13 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
             "pending": pending,
             "activeWrite": [],
             "activeRead": [],
-            "phase": {},
+            "phase": _phases_from_activity(activity),
+            "steps": _steps_from_activity(activity, sidecar),
         },
         "rootName": codoc_dir.parent.name,
         "pendingEventIds": [],
         "doc": _doc(codoc_dir),
+        "threads": _threads_from_sidecar(sidecar),
         "awaitingAI": holds,
         "holdDetail": sidecar.get("hold_detail") or {},
         "drafts": drafts,

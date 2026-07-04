@@ -10,6 +10,7 @@
 
 import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
+import { isSaveChord } from './save-chord';
 import { AuthorController } from './tiptap/author-plugin';
 import { kindGlyph } from '../state/grammar';
 import { icon, iconMaskDataUri } from './icons';
@@ -22,7 +23,7 @@ import { CommandPalette } from './palette-view';
 import type { PaletteContext, PaletteItem } from './palette';
 import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
-import { acquireHostApi } from './host-bridge';
+import { acquireHostApi, isVsCodeHost } from './host-bridge';
 
 // One transport seam for both homes (U2): the real VS Code host API, or — in a
 // standalone browser served by `codoc serve` — a network shim that POSTs commands
@@ -64,11 +65,18 @@ let draftSet = new Set<string>();
 // feature you edited; flagged "review what the AI did" alongside the surfaced
 // proposal. fid → reason ("scope").
 let divergent: Record<string, string> = {};
-// Focus dimming (WS5): when a feature is focused, its dependency neighbours stay at
-// full opacity (depends-on tinted one hue, used-by another) and everything else dims.
-// Null = no dimming (the focused feature has no dependencies to spotlight).
-let focusState: { fid: string; on: Set<string>; by: Set<string> } | null = null;
+// Focus mode (the dependency spotlight, redesigned 2026-06): DEFAULT-ON and caret-driven.
+// As the caret / scroll-spy moves to a feature, the tree gently dims every row outside that
+// feature's dependency neighbourhood (its reads + used-by, plus the ancestor path so the
+// tree still reads structurally). It is pure OPACITY — no recolour (a hue read too strong) —
+// related rows stay 1.0, the rest ease to 0.7. `focusState.related` is the lit set for the
+// current focus (null = nothing dimmed); `focusMode` is the (default-on) toggle.
+let focusState: { fid: string; related: Set<string> } | null = null;
+let focusMode = true;
 let firstPayload = true;
+// Continuous pane resize: the nav-tree column width (px), dragged via the gutter and
+// persisted in UiState so a compact tree survives reload. Clamped on apply.
+let treeWidth = 0;            // 0 = use the CSS default until restored / dragged
 let dragSourceId: string | null = null;
 let lastRev = -1;
 let didFocusTree = false;
@@ -200,6 +208,12 @@ function focusTree(): void {
 }
 
 const app = document.getElementById('app')!;
+
+// Standalone home (codoc serve in a browser): no VS Code theme vars are injected, so
+// tag the body to apply codoc's own calm paper-white "Ollama" palette as the default
+// token values. Inside VS Code the host's --vscode-* vars win and the editor stays
+// theme-aware — this class is never added there.
+if (!isVsCodeHost()) document.body.classList.add('codoc-standalone');
 
 // ─── DOM helpers ────────────────────────────────────────────────────────────
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -481,6 +495,8 @@ function persistUiState(): void {
             caretPos: wholeEditor ? wholeEditor.getCaretPos() : 0,
             treeScroll: tree ? tree.scrollTop : 0,
             docScroll: wholeEditor ? wholeEditor.getScrollTop() : 0,
+            treeWidth,
+            focusMode,
         }));
     }, 400);
 }
@@ -507,9 +523,65 @@ function renderAll(): void {
     app.replaceChildren();
     app.append(renderToolbar());
     const main = el('div', 'main');
-    main.append(renderTree(), renderDocHost());
+    main.append(renderTree(), renderColResizer(), renderDocHost());
     app.append(main);
+    applyTreeWidth();
     if (!didFocusTree) { didFocusTree = true; queueMicrotask(focusTree); }
+}
+
+// ─── Continuous pane resize ───────────────────────────────────────────────────
+const TREE_MIN = 200, TREE_MAX = 560, TREE_DEFAULT = 300;
+
+/** Push the current tree width onto the layout as a CSS var (clamped). A `0` width means
+ *  "use the stylesheet default" — so a fresh editor isn't pinned until the user drags. */
+function applyTreeWidth(): void {
+    const main = document.querySelector<HTMLElement>('.main');
+    if (!main) return;
+    if (treeWidth > 0) main.style.setProperty('--tree-w', `${Math.round(clampTreeWidth(treeWidth))}px`);
+    else main.style.removeProperty('--tree-w');
+}
+function clampTreeWidth(px: number): number {
+    return Math.max(TREE_MIN, Math.min(TREE_MAX, px));
+}
+
+/** The draggable gutter between the nav tree and the doc. Pointer-capture drag updates the
+ *  tree width live (clamped); double-click resets to the default. Calm: the divider is a
+ *  hairline that brightens on hover/drag, never a heavy handle. */
+function renderColResizer(): HTMLElement {
+    const r = el('div', 'col-resizer');
+    r.setAttribute('role', 'separator');
+    r.setAttribute('aria-orientation', 'vertical');
+    r.title = 'Drag to resize · double-click to reset';
+    r.addEventListener('pointerdown', ev => {
+        ev.preventDefault();
+        const main = document.querySelector<HTMLElement>('.main');
+        const tree = document.querySelector<HTMLElement>('.tree');
+        if (!main || !tree) return;
+        const startX = ev.clientX;
+        const startW = tree.getBoundingClientRect().width;
+        r.setPointerCapture(ev.pointerId);
+        document.body.classList.add('col-resizing');
+        const onMove = (e: PointerEvent): void => {
+            treeWidth = clampTreeWidth(startW + (e.clientX - startX));
+            main.style.setProperty('--tree-w', `${Math.round(treeWidth)}px`);
+        };
+        const onUp = (e: PointerEvent): void => {
+            r.releasePointerCapture(ev.pointerId);
+            r.removeEventListener('pointermove', onMove);
+            r.removeEventListener('pointerup', onUp);
+            document.body.classList.remove('col-resizing');
+            void e;
+            persistUiState();
+        };
+        r.addEventListener('pointermove', onMove);
+        r.addEventListener('pointerup', onUp);
+    });
+    r.addEventListener('dblclick', () => {
+        treeWidth = TREE_DEFAULT;
+        applyTreeWidth();
+        persistUiState();
+    });
+    return r;
 }
 
 // ─── Reconcile (subsequent payloads) ─────────────────────────────────────────
@@ -530,6 +602,7 @@ function reconcile(): void {
         wholeEditor.setSuggestions(payload.suggestions ?? []);
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
+        wholeEditor.setSteps(payload.sync.steps ?? {});
         // Lifecycle split (U3/U4): drafts = recorded-but-not-sent → "captured"; held minus
         // drafts = handed-off (staged & sent) → "pending". Save/Commit (hand-off) moves a
         // feature from drafts → handed-off.
@@ -567,17 +640,38 @@ function renderToolbar(): HTMLElement {
     const t = el('div', 'toolbar');
     const p = el('div', 'path');
     p.append(el('span', 'dim', payload.rootName + ' / .codoc / '));
-    p.append(document.createTextNode('tree.codoc'));
+    p.append(el('span', 'file', 'tree.codoc'));
     t.append(p);
 
     const state = payload.status.state || 'in_sync';
     const pending = payload.status.pending || 0;
     const s = el('div', 'status ' + state);
     s.append(el('span', 'dot'));
-    s.append(el('span', undefined, statusLabel(state, pending)));
+    s.append(el('span', 'status-label', statusLabel(state, pending)));
     t.append(s);
 
     t.append(el('div', 'spacer'));
+
+    // A single right-aligned action group keeps the bar calm: view toggles, then the
+    // contextual review / hand-off actions only when there's something to act on.
+    const actions = el('div', 'tb-actions');
+
+    // Focus toggle: dim tree rows unrelated to the selection (its depends-on / used-by
+    // neighbours stay lit). Off by default; replaces the old dependency-flow panel.
+    const focus = el('button', 'toggle focus' + (focusMode ? ' active' : ''),
+        (focusMode ? '◉ ' : '◎ ') + 'Focus');
+    focus.title = focusMode
+        ? 'Focus on — the tree dims everything outside the selected feature’s dependencies. Click to show all.'
+        : 'Focus — dim the tree to just the selected feature’s dependencies (depends-on + used-by)';
+    focus.setAttribute('aria-pressed', String(focusMode));
+    focus.onclick = () => {
+        focusMode = !focusMode;
+        computeFocus(selectedId);
+        applyFocusClasses();   // re-tag every row for the new on/off state
+        rerenderToolbar();
+        persistUiState();
+    };
+    actions.append(focus);
 
     // Glance toggle (B-U2): collapse every feature to its one-line pitch. Tree-wide,
     // default off, persisted per-workspace. A decoration only — the doc is untouched.
@@ -588,16 +682,18 @@ function renderToolbar(): HTMLElement {
         : 'Glance — collapse every feature to its one-line pitch';
     glance.setAttribute('aria-pressed', String(prefs.glance));
     glance.onclick = () => { setPref('glance', !prefs.glance); applyGlance(); rerenderToolbar(); };
-    t.append(glance);
+    actions.append(glance);
 
     const ids = payload.pendingEventIds;
     if (ids.length) {
+        actions.append(el('span', 'tb-sep'));
         const accAll = el('button', 'toggle bulk', `✓ Accept all (${ids.length})`);
         accAll.onclick = () => { beginApplying(null); postVerdict(ids.slice(), true); };
         const rejAll = el('button', 'toggle bulk', `✗ Reject all (${ids.length})`);
         rejAll.onclick = () => { beginApplying(null); postVerdict(ids.slice(), false); };
-        t.append(accAll, rejAll);
+        actions.append(accAll, rejAll);
     }
+    t.append(actions);
 
     // Commit & send (U4 — save = stage & send): the one gesture that hands the staged
     // (captured) code-implying edits to the agent. Shown only when the daemon is holding
@@ -605,6 +701,7 @@ function renderToolbar(): HTMLElement {
     // editor; routes through the editor so the latest unsettled keystroke is flushed first.
     const drafts = payload.drafts ?? [];
     if (drafts.length) {
+        actions.append(el('span', 'tb-sep'));
         const hand = el('button', 'toggle bulk handoff');
         // §C.1/§C.3: a paper-plane glyph = "sent". On click it launches (up-right) and the
         // captured rails shimmer blue→green — the two big save-moments chained into one.
@@ -614,7 +711,7 @@ function renderToolbar(): HTMLElement {
             ? 'Commit & send (⌘S) — hand this staged edit to the agent to implement now.'
             : `Commit & send (⌘S) — hand all ${drafts.length} staged edits to the agent to implement now.`;
         hand.onclick = () => triggerCommit(plane);
-        t.append(hand);
+        actions.append(hand);
     }
 
     // (the "⇄ text" toggle was removed — the webview is the single surface, D1; the
@@ -814,6 +911,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setSuggestions(payload.suggestions ?? []); // before setDoc — see reconcile()
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
+    wholeEditor.setSteps(payload.sync.steps ?? {});
     wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
     wholeEditor.setDrafts(payload.drafts ?? []);
     wholeEditor.setBlocks(payload.blocks ?? {});
@@ -835,24 +933,40 @@ function renderDocHost(): HTMLElement {
  *  by greying the whole tree would be noise, not signal). Returns whether the spotlight
  *  actually changed, so callers can skip the O(rows) re-tag on an unchanged focus
  *  (arrow-key nav usually stays within the same dependency cluster). */
-function computeFocus(_fid: string | null): boolean {
-    // Dependency spotlight removed (user request): no opacity dimming, no directional
-    // --dep-out/--dep-in tinting. Kept as a no-op clear so every caller stays valid and
-    // any prior dimming/tint is torn down on the next selection.
-    const changed = focusState !== null;
-    focusState = null;
-    document.body.classList.remove('focus-dimming');
-    return changed;
+function computeFocus(fid: string | null): boolean {
+    const prev = focusState;
+    // No toggle, no focus, or a feature with no surfaced dependencies → clear (dimming an
+    // isolated node by greying the whole tree would be noise, not signal).
+    const threads = fid && focusMode ? payload.threads?.[fid] : undefined;
+    const reads = threads?.reads ?? [];
+    const usedBy = threads?.usedBy ?? [];
+    if (!fid || !focusMode || (!reads.length && !usedBy.length)) {
+        focusState = null;
+        document.body.classList.remove('focus-dimming');
+        return prev !== null;
+    }
+    // The lit set: the focus, its reads + used-by neighbours, and the ancestor chain of all
+    // of them (so a lit row never floats under a greyed-out parent). Everything else dims.
+    const related = new Set<string>([fid, ...reads.map(r => r.toId), ...usedBy.map(r => r.toId)]);
+    for (const id of [...related]) {
+        let n: UINode | undefined = payload.nodes[id];
+        while (n && n.parent_id) { related.add(n.parent_id); n = payload.nodes[n.parent_id]; }
+    }
+    focusState = { fid, related };
+    document.body.classList.add('focus-dimming');
+    // Cheap change check so callers skip the O(rows) re-tag when the lit set is unchanged
+    // (arrow-nav / scroll often stays within one dependency cluster).
+    const same = prev && prev.fid === fid && prev.related.size === related.size
+        && [...related].every(x => prev.related.has(x));
+    return !same;
 }
 
 /** Tag a row with its dependency relationship to the focused feature (called from
  *  appendRow so it survives reconciles, and applied in bulk by applyFocusClasses). */
 function markFocusRow(row: HTMLElement, id: string): void {
-    row.classList.remove('dep-focus', 'dep-on', 'dep-by', 'dep-related');
+    row.classList.remove('dep-related');
     if (!focusState) return;
-    if (id === focusState.fid) row.classList.add('dep-focus', 'dep-related');
-    else if (focusState.on.has(id)) row.classList.add('dep-on', 'dep-related');
-    else if (focusState.by.has(id)) row.classList.add('dep-by', 'dep-related');
+    if (focusState.related.has(id)) row.classList.add('dep-related'); // lit; everything else dims
 }
 
 /** Re-tag every existing tree row (cheap, no re-render) after the focus changes. */
@@ -985,6 +1099,27 @@ document.addEventListener('keydown', ev => {
     }
 }, true);
 
+// ⌘S / Ctrl-S = "save the file" from ANY focus context (nav-tree pane, toolbar, editor,
+// anywhere in the webview) → stage & send (commit) (U6 / R11, R12). `tree.codoc` is a
+// derived, read-only export; the daemon is the sole writer and the host never dirties the
+// backing text document, so the native save would only ever flash the "content is newer"
+// dialog. Capture phase + stopPropagation means this fires before the in-editor ProseMirror
+// `Mod-s` keymap (which listens on the deeper editable element), so the commit runs exactly
+// once and the native save never reaches VS Code. The in-editor binding (whole-doc-editor.ts)
+// stays as a harmless fallback for the (unreachable-here) bubble path.
+//
+// Phase A note: there is no clean VS Code host-API flag to mark a CustomTextEditor's backing
+// document non-savable without a full FileSystemProvider rewrite (out of scope per U6), so this
+// window-level interceptor IS the accepted Phase A read-only mechanism. AE3 (no save dialog) is
+// verified manually.
+window.addEventListener('keydown', ev => {
+    if (isSaveChord(ev, IS_MAC)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        triggerCommit();
+    }
+}, true);
+
 document.addEventListener('keydown', ev => {
     if (palette.isOpen) return;                        // the palette owns keys while open
     const tag = (document.activeElement && document.activeElement.tagName) || '';
@@ -1035,6 +1170,8 @@ window.addEventListener('message', ev => {
         if (restored) {
             for (const id of restored.expanded) if (payload.nodes[id]) expanded.add(id);
             if (restored.selectedId && payload.nodes[restored.selectedId]) selectedId = restored.selectedId;
+            treeWidth = restored.treeWidth;
+            focusMode = restored.focusMode;
             pendingRestore = restored; // scroll + caret applied after the editor mounts
         } else {
             // Expand every parent so the whole tree is visible by default.

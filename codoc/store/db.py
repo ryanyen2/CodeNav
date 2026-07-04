@@ -12,9 +12,11 @@ dedup pass is needed anywhere downstream.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from codoc.model.annotation import CommentStatus, CommentThread, Mark, MarkKind
 from codoc.model.binding import Binding
 from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import Event, NodeOp
@@ -96,6 +98,52 @@ CREATE TABLE IF NOT EXISTS code_edges (
 CREATE INDEX IF NOT EXISTS idx_edges_src_symbol ON code_edges(src_symbol);
 CREATE INDEX IF NOT EXISTS idx_edges_dst_symbol ON code_edges(dst_symbol);
 CREATE INDEX IF NOT EXISTS idx_edges_src_file   ON code_edges(src_file);
+
+-- Tracked-change authorship marks on a feature's description span (R8). The
+-- store-authoritative home for the webview's ProseMirror authorship ink, so the
+-- store→doc projection (doc_render.build_doc_from_store) re-emits them instead of
+-- the host holding them in tree.doc.json. Anchors are char offsets into the
+-- normalized description.
+CREATE TABLE IF NOT EXISTS marks (
+    id           TEXT PRIMARY KEY,
+    feature_id   TEXT NOT NULL,
+    kind         TEXT NOT NULL DEFAULT 'amend',
+    provenance   TEXT NOT NULL DEFAULT 'human',
+    anchor_start INTEGER NOT NULL DEFAULT 0,
+    anchor_end   INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marks_feature ON marks(feature_id);
+
+-- Inline comment threads anchored to a feature's description span (R9). The
+-- durable home for what currently lives only in tree.doc.json DocFile.comments;
+-- migrated in on first run (U8) so threads survive the host no longer writing the
+-- doc file.
+CREATE TABLE IF NOT EXISTS comments (
+    id           TEXT PRIMARY KEY,
+    feature_id   TEXT NOT NULL,
+    body         TEXT NOT NULL DEFAULT '',
+    author       TEXT NOT NULL DEFAULT 'human',
+    status       TEXT NOT NULL DEFAULT 'open',
+    anchor_start INTEGER NOT NULL DEFAULT 0,
+    anchor_end   INTEGER NOT NULL DEFAULT 0,
+    media_ref    TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_feature ON comments(feature_id);
+
+-- Applied identity-keyed command ledger (U3 / KTD8). The commands channel
+-- (edits.json) is at-most-once-by-consumption, not idempotent-on-replay: a
+-- write/drain interleaved with a crash can re-deliver. So each command carries a
+-- stable id and the daemon records applied ids here; re-applying a recorded id is
+-- a no-op. (The realize.md manifest tracks DIRECTIVES, not this channel — a
+-- separate ledger is required.)
+CREATE TABLE IF NOT EXISTS applied_commands (
+    id          TEXT PRIMARY KEY,
+    applied_at  TEXT NOT NULL
+);
 """
 
 
@@ -103,6 +151,16 @@ class Store:
     def __init__(self, db_path: str | Path):
         self.db_path = str(db_path)
         self._conn: sqlite3.Connection | None = None
+        self._suppress_commit = False  # set inside transaction() so the per-method
+                                       # eager commits coalesce into one atomic commit
+
+    def _commit(self) -> None:
+        """The single commit funnel every mutator calls (in place of the connection's
+        ``commit`` directly), so :meth:`transaction` can SUPPRESS the per-method eager
+        commits and make several mutations land atomically. Outside a transaction this
+        is a plain commit — identical to the prior behavior."""
+        if not self._suppress_commit:
+            self.conn.commit()
 
     # -- lifecycle --------------------------------------------------------
     def open(self) -> "Store":
@@ -210,7 +268,7 @@ class Store:
                 f.updated_at.to_str(),
             ),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_feature(self, feature_id: str) -> Feature | None:
         row = self.conn.execute("SELECT * FROM features WHERE id=?", (feature_id,)).fetchone()
@@ -241,7 +299,7 @@ class Store:
             "UPDATE features SET lifecycle='retired', retired=1, updated_at=? WHERE id=?",
             (HLC.now().to_str(), feature_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def unretire_feature(self, feature_id: str) -> None:
         """Bring a retired feature back to ``active`` — the undo of a soft delete.
@@ -253,7 +311,7 @@ class Store:
             " WHERE id=? AND lifecycle='retired'",
             (HLC.now().to_str(), feature_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def mark_realized(self, feature_id: str) -> None:
         """Promote a plan placeholder to ``active`` (code now binds to it) — the
@@ -264,7 +322,7 @@ class Store:
             " WHERE id=? AND lifecycle='planned'",
             (HLC.now().to_str(), feature_id),
         )
-        self.conn.commit()
+        self._commit()
 
     # -- bindings ---------------------------------------------------------
     def upsert_binding(self, b: Binding) -> None:
@@ -285,13 +343,13 @@ class Store:
             (b.id, b.feature_id, b.file, b.symbol_path, b.fingerprint,
              b.types_hash, b.updated_at.to_str()),
         )
-        self.conn.commit()
+        self._commit()
 
     def delete_binding(self, file: str, symbol_path: str) -> None:
         self.conn.execute(
             "DELETE FROM bindings WHERE file=? AND symbol_path=?", (file, symbol_path)
         )
-        self.conn.commit()
+        self._commit()
 
     def backfill_types_hash(self, file: str, symbol_path: str, types_hash: str) -> bool:
         """D4: record a binding's AST-shape hash when it was attributed WITHOUT one
@@ -306,7 +364,7 @@ class Store:
             "UPDATE bindings SET types_hash=? WHERE file=? AND symbol_path=? AND types_hash=''",
             (types_hash, file, symbol_path),
         )
-        self.conn.commit()
+        self._commit()
         return cur.rowcount > 0
 
     def bindings_for_feature(self, feature_id: str) -> list[Binding]:
@@ -363,7 +421,7 @@ class Store:
                 b.provenance.value, b.ord, b.created_at.to_str(), b.updated_at.to_str(),
             ),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_block(self, block_id: str) -> Block | None:
         row = self.conn.execute("SELECT * FROM blocks WHERE id=?", (block_id,)).fetchone()
@@ -390,11 +448,92 @@ class Store:
 
     def delete_block(self, block_id: str) -> None:
         self.conn.execute("DELETE FROM blocks WHERE id=?", (block_id,))
-        self.conn.commit()
+        self._commit()
 
     def delete_blocks_for_feature(self, feature_id: str) -> None:
         self.conn.execute("DELETE FROM blocks WHERE feature_id=?", (feature_id,))
-        self.conn.commit()
+        self._commit()
+
+    # -- marks (tracked-change authorship spans, R8) ----------------------
+    def upsert_mark(self, m: Mark) -> None:
+        """Insert or update an authorship mark by its stable id."""
+        self.conn.execute(
+            """
+            INSERT INTO marks (id, feature_id, kind, provenance, anchor_start, anchor_end, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                feature_id=excluded.feature_id,
+                kind=excluded.kind,
+                provenance=excluded.provenance,
+                anchor_start=excluded.anchor_start,
+                anchor_end=excluded.anchor_end,
+                updated_at=excluded.updated_at
+            """,
+            (
+                m.id, m.feature_id, m.kind.value, m.provenance.value,
+                m.anchor_start, m.anchor_end, m.created_at.to_str(), m.updated_at.to_str(),
+            ),
+        )
+        self._commit()
+
+    def marks_for_feature(self, feature_id: str) -> list[Mark]:
+        rows = self.conn.execute(
+            "SELECT * FROM marks WHERE feature_id=? ORDER BY anchor_start, created_at", (feature_id,)
+        ).fetchall()
+        return [_row_to_mark(r) for r in rows]
+
+    def all_marks(self) -> list[Mark]:
+        return [_row_to_mark(r) for r in self.conn.execute("SELECT * FROM marks").fetchall()]
+
+    def delete_mark(self, mark_id: str) -> None:
+        self.conn.execute("DELETE FROM marks WHERE id=?", (mark_id,))
+        self._commit()
+
+    def delete_marks_for_feature(self, feature_id: str) -> None:
+        self.conn.execute("DELETE FROM marks WHERE feature_id=?", (feature_id,))
+        self._commit()
+
+    # -- comments (inline steering threads, R9) ---------------------------
+    def upsert_comment(self, c: CommentThread) -> None:
+        """Insert or update a comment thread by its stable id."""
+        self.conn.execute(
+            """
+            INSERT INTO comments (id, feature_id, body, author, status, anchor_start, anchor_end, media_ref, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                feature_id=excluded.feature_id,
+                body=excluded.body,
+                author=excluded.author,
+                status=excluded.status,
+                anchor_start=excluded.anchor_start,
+                anchor_end=excluded.anchor_end,
+                media_ref=excluded.media_ref,
+                updated_at=excluded.updated_at
+            """,
+            (
+                c.id, c.feature_id, c.body, c.author.value, c.status.value,
+                c.anchor_start, c.anchor_end, c.media_ref,
+                c.created_at.to_str(), c.updated_at.to_str(),
+            ),
+        )
+        self._commit()
+
+    def comments_for_feature(self, feature_id: str) -> list[CommentThread]:
+        rows = self.conn.execute(
+            "SELECT * FROM comments WHERE feature_id=? ORDER BY anchor_start, created_at", (feature_id,)
+        ).fetchall()
+        return [_row_to_comment(r) for r in rows]
+
+    def all_comments(self) -> list[CommentThread]:
+        return [_row_to_comment(r) for r in self.conn.execute("SELECT * FROM comments").fetchall()]
+
+    def delete_comment(self, comment_id: str) -> None:
+        self.conn.execute("DELETE FROM comments WHERE id=?", (comment_id,))
+        self._commit()
+
+    def delete_comments_for_feature(self, feature_id: str) -> None:
+        self.conn.execute("DELETE FROM comments WHERE feature_id=?", (feature_id,))
+        self._commit()
 
     # -- events -----------------------------------------------------------
     def append_event(self, e: Event) -> None:
@@ -413,7 +552,7 @@ class Store:
                 e.caused_by,
             ),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_event(self, event_id: str) -> Event | None:
         row = self.conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
@@ -436,11 +575,82 @@ class Store:
             "UPDATE events SET applied=1, accepted_at=? WHERE id=?",
             (datetime.now(timezone.utc).isoformat(), event_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def delete_event(self, event_id: str) -> None:
         self.conn.execute("DELETE FROM events WHERE id=?", (event_id,))
-        self.conn.commit()
+        self._commit()
+
+    # -- applied-command ledger (idempotency, U3 / KTD8) ------------------
+    def command_applied(self, cmd_id: str) -> bool:
+        """True if the identity-keyed command ``cmd_id`` has already been applied —
+        the at-least-once → exactly-once guard for the commands channel."""
+        row = self.conn.execute(
+            "SELECT 1 FROM applied_commands WHERE id=?", (cmd_id,)
+        ).fetchone()
+        return row is not None
+
+    def mark_command_applied(self, cmd_id: str) -> None:
+        """Record ``cmd_id`` as applied (HLC-stamped). Idempotent — re-stamping an
+        already-recorded id is a no-op (INSERT OR IGNORE keeps the first stamp)."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO applied_commands (id, applied_at) VALUES (?, ?)",
+            (cmd_id, HLC.now().to_str()),
+        )
+        self._commit()
+
+    def try_claim_command(self, cmd_id: str) -> bool:
+        """Atomically claim ``cmd_id`` for application — ``INSERT OR IGNORE`` into
+        the ledger, returning True ONLY when the row was newly inserted (this caller
+        won the claim). A re-sent / crash-replayed id loses the claim (returns False)
+        so it is skipped, never double-applied.
+
+        Crash-consistency (KTD8): the claim is written WITHOUT committing, so the
+        caller can wrap claim + ``apply_op``'s mutation in one transaction (see
+        ``Store.transaction``) — both commit together or roll back together. If the
+        process dies after the claim but before that commit, SQLite rolls back the
+        uncommitted claim, so the command is re-delivered and re-applied (no silent
+        drop). ``rowcount`` is 1 for a fresh insert, 0 when the id already existed."""
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO applied_commands (id, applied_at) VALUES (?, ?)",
+            (cmd_id, HLC.now().to_str()),
+        )
+        return cur.rowcount == 1
+
+    @contextmanager
+    def transaction(self):
+        """A single atomic unit around several mutations (claim + apply): commit on
+        clean exit, roll back on any exception. The store's methods commit eagerly via
+        :meth:`_commit`; this SUPPRESSES those inner commits for the duration — they
+        all land (or none do) on this context's single commit.
+
+        Used by Loop B's command apply so a crash between the ledger claim and the
+        ``apply_op`` store mutation leaves NEITHER (the command is re-delivered),
+        never the claim alone (which would drop the command's effect). Not reentrant —
+        the suppress flag is a bool, and Loop B never nests these."""
+        self._suppress_commit = True
+        try:
+            yield self
+        except BaseException:
+            self._suppress_commit = False
+            self.conn.rollback()
+            raise
+        else:
+            self._suppress_commit = False
+            self.conn.commit()
+
+    def feature_by_local_id(self, local_id: str) -> Feature | None:
+        """The LIVE (non-retired) feature owning ``local_id`` — the webview's
+        client-side node id (KTD8). Used to fold a re-emitted ``add`` (same localId,
+        possibly a changed title) onto the feature it already minted, instead of
+        minting a second one. Empty ``local_id`` never matches (most rows carry '')."""
+        if not local_id:
+            return None
+        row = self.conn.execute(
+            "SELECT * FROM features WHERE local_id=? AND retired=0 ORDER BY created_at LIMIT 1",
+            (local_id,),
+        ).fetchone()
+        return _row_to_feature(row) if row else None
 
     # -- code_edges (derived graph cache) ---------------------------------
     def insert_edges(self, edges: list[dict]) -> None:
@@ -453,7 +663,7 @@ class Store:
             """,
             edges,
         )
-        self.conn.commit()
+        self._commit()
 
     def delete_edges_from_files(self, files: set[str]) -> None:
         if not files:
@@ -462,11 +672,11 @@ class Store:
         self.conn.execute(
             f"DELETE FROM code_edges WHERE src_file IN ({placeholders})", tuple(files)
         )
-        self.conn.commit()
+        self._commit()
 
     def drop_all_edges(self) -> None:
         self.conn.execute("DELETE FROM code_edges")
-        self.conn.commit()
+        self._commit()
 
     def edges_out(self, symbol: str, *, internal_only: bool = True) -> list[sqlite3.Row]:
         sql = "SELECT * FROM code_edges WHERE src_symbol=?"
@@ -533,6 +743,34 @@ def _row_to_block(r: sqlite3.Row) -> Block:
         lifecycle=BlockLifecycle(r["lifecycle"]),
         provenance=Provenance(r["provenance"]),
         ord=r["ord"],
+        created_at=HLC.from_str(r["created_at"]),
+        updated_at=HLC.from_str(r["updated_at"]),
+    )
+
+
+def _row_to_mark(r: sqlite3.Row) -> Mark:
+    return Mark(
+        id=r["id"],
+        feature_id=r["feature_id"],
+        kind=MarkKind(r["kind"]),
+        provenance=Provenance(r["provenance"]),
+        anchor_start=r["anchor_start"],
+        anchor_end=r["anchor_end"],
+        created_at=HLC.from_str(r["created_at"]),
+        updated_at=HLC.from_str(r["updated_at"]),
+    )
+
+
+def _row_to_comment(r: sqlite3.Row) -> CommentThread:
+    return CommentThread(
+        id=r["id"],
+        feature_id=r["feature_id"],
+        body=r["body"],
+        author=Provenance(r["author"]),
+        status=CommentStatus(r["status"]),
+        anchor_start=r["anchor_start"],
+        anchor_end=r["anchor_end"],
+        media_ref=r["media_ref"],
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )

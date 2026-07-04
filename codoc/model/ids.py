@@ -36,3 +36,13 @@ def new_block_id() -> str:
     identity survives arbitrary host edits (move, delete+undo, type-change). 12 hex
     chars — blocks are more numerous than features and short-lived ones churn."""
     return _short("blk", 12)
+
+
+def new_mark_id() -> str:
+    """A tracked-change authorship mark on a feature's description span (R8)."""
+    return _short("mk", 12)
+
+
+def new_comment_id() -> str:
+    """An inline comment thread anchored to a feature's description span (R9)."""
+    return _short("cm", 12)

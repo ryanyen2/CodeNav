@@ -155,6 +155,46 @@
     --dep-in:  var(--vscode-charts-orange, #e0935a);  /* ← used by this node     */
 }
 
+/* ── Standalone "Ollama" palette (codoc serve in a browser) ───────────────────
+   Only active when doc-view.ts tags `body.codoc-standalone` (no VS Code host). It
+   maps codoc's calm paper-white palette onto the same --vscode-* tokens the editor
+   already consumes, so the browser hub looks deliberate (paper canvas, near-black
+   ink, hairline rules, restrained accents) while VS Code stays fully theme-aware
+   (the class is never added there). Tuned to DESIGN-ollama.md + the prototype. */
+body.codoc-standalone {
+    --vscode-editor-background: #ffffff;
+    --vscode-foreground: #1c1c1c;            /* near-black ink; the editor derives fg-body/muted/faint from it */
+    --vscode-editorWidget-background: #ffffff;
+    --vscode-editorWidget-border: #e5e5e5;   /* Ollama hairline */
+    --vscode-focusBorder: #5aa6e0;           /* calm blue — matches the flow "depends on" hue */
+    --vscode-contrastBorder: #d4d4d4;
+
+    --vscode-charts-blue:   #5aa6e0;          /* depends-on */
+    --vscode-charts-orange: #c98a4b;          /* used-by (warm clay, desaturated) */
+    --vscode-charts-green:  #6fae74;
+    --vscode-charts-red:    #d06b6b;
+    --vscode-charts-yellow: #c9a24a;
+    --vscode-charts-foreground: #525252;
+
+    --vscode-list-activeSelectionBackground: #eef2f6;  /* soft selection wash */
+    --vscode-input-background: #ffffff;
+    --vscode-input-foreground: #1c1c1c;
+    --vscode-input-border: #e5e5e5;
+    --vscode-button-background: #1c1c1c;      /* black pill */
+    --vscode-button-foreground: #ffffff;
+    --vscode-button-hoverBackground: #090909;
+    --vscode-editorSuggestWidget-background: #ffffff;
+    --vscode-editorSuggestWidget-border: #e5e5e5;
+    --vscode-editorSuggestWidget-selectedBackground: #f4f4f4;
+    --vscode-widget-shadow: rgba(0,0,0,0.08);
+
+    --vscode-font-family: "SF Pro Rounded", ui-rounded, -apple-system, system-ui, "Segoe UI", sans-serif;
+    --vscode-editor-font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+    background: var(--vscode-editor-background);
+    color: var(--vscode-foreground);
+}
+
 /* Shared entrance for floating surfaces (popovers, composer, hover card). One
    declaration so every transient surface animates identically; the reduced-motion
    body-class gate zeroes it out. */
@@ -220,25 +260,37 @@ body {
 }
 body.dragging, body.dragging * { cursor: grabbing !important; }
 
-#app { display: grid; grid-template-rows: 38px 1fr; height: 100vh; }
+#app { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
 
-/* ── Toolbar ──────────────────────────────────────────────────────────────── */
+/* ── Toolbar (the top menu bar) ───────────────────────────────────────────────
+   Calm + Notion-restrained: a breadcrumb (file in ink, path muted), a quiet status
+   pill, then ONE right-aligned action group of consistent pill buttons. Hairline
+   bottom rule; generous side padding; no heavy fills at rest. */
 .toolbar {
     display: flex;
     align-items: center;
-    gap: 18px;
-    padding: 0 var(--pad-x);
+    gap: 14px;
+    padding: 0 var(--space-4);
     border-bottom: var(--rule);
-    font: 11.5px var(--vscode-font-family);
+    font: 12px var(--vscode-font-family);
     color: var(--fg-muted);
     user-select: none;
 }
-.toolbar .path { font-weight: 500; color: var(--vscode-foreground); letter-spacing: 0.01em; }
-.toolbar .path .dim { color: var(--fg-muted); font-weight: 400; }
-.toolbar .status { display: flex; align-items: center; gap: 7px; }
+.toolbar .path { display: flex; align-items: baseline; gap: 0; letter-spacing: 0.01em; min-width: 0; }
+.toolbar .path .dim { color: var(--fg-faint); font-weight: 400; white-space: nowrap; }
+.toolbar .path .file { color: var(--fg-strong); font-weight: 600; }
+
+/* status as a quiet pill: dot + label inside a hairline chip */
+.toolbar .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 9px 2px 8px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+    color: var(--fg-muted); font-size: 11px; white-space: nowrap;
+}
+.toolbar .status-label { letter-spacing: 0.01em; }
 .toolbar .dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--accent-refs); opacity: 0.55;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent-refs); opacity: 0.5;
     transition: background 200ms ease, opacity 200ms ease;
 }
 /* status language (U5): code-ahead review → review hue, doc-ahead implement → await hue,
@@ -250,20 +302,28 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 
 .toolbar .spacer { flex: 1; }
+/* the right-aligned action group + its hairline separators */
+.toolbar .tb-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.toolbar .tb-sep {
+    width: 1px; height: 16px; margin: 0 2px;
+    background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+}
+/* every action is a consistent pill: hairline at rest, fill on hover (Ollama geometry) */
 .toolbar button.toggle {
-    cursor: pointer;
+    cursor: pointer; display: inline-flex; align-items: center;
     color: var(--fg-muted);
-    background: none;
-    border: 1px solid transparent;
-    padding: 4px 10px;
-    font: inherit;
-    border-radius: 4px;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 11%, transparent);
+    padding: 3px 11px;
+    font: 11.5px var(--vscode-font-family);
+    border-radius: 999px;
+    white-space: nowrap;
     transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 .toolbar button.toggle:hover {
     background: var(--hover-bg);
     color: var(--vscode-foreground);
-    border-color: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+    border-color: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
 }
 .toolbar button.bulk { color: var(--vscode-foreground); }
 /* Hand to agent (U4): the one batch-commit action for held drafts. A quiet fill on the
@@ -281,23 +341,47 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
    it launches up-right on click (motion.ts launchPlane). */
 .toolbar button.bulk.handoff .ce-handoff-plane {
     width: 12px; height: 12px; vertical-align: -0.12em;
-    color: var(--dir-await); margin-right: 2px;
+    color: var(--dir-await); margin-right: 4px;
 }
-/* glance toggle (B-U2): active = a quiet structural-accent fill (no new hue) */
-.toolbar button.toggle.glance.active {
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
+/* an active view toggle (Focus / Glance) = a quiet structural-accent fill (no new hue) */
+.toolbar button.toggle.glance.active,
+.toolbar button.toggle.focus.active {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
     color: var(--vscode-foreground);
     border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .main {
-    display: grid;
-    grid-template-columns: minmax(300px, 38%) 1fr;
+    display: flex;
     overflow: hidden;
+    /* nav-tree column width — dragged via the gutter, persisted in UiState (continuous resize). */
+    --tree-w: 300px;
 }
+.tree { flex: 0 0 var(--tree-w); }
+.doc-host { flex: 1 1 auto; min-width: 0; }
+/* a compact default on a narrow webview so the doc keeps room */
+@media (max-width: 880px) { .main { --tree-w: 240px; } }
+
+/* ── Continuous pane-resize gutter ────────────────────────────────────────────
+   A hairline divider with a wide invisible hit area. Calm: the line brightens to the
+   structural accent on hover / during the drag, never a heavy handle. */
+.col-resizer {
+    flex: 0 0 7px; align-self: stretch; position: relative;
+    cursor: col-resize; touch-action: none; user-select: none; z-index: 1;
+}
+.col-resizer::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px;
+    transform: translateX(-50%);
+    background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+    transition: background 120ms ease, width 120ms ease;
+}
+.col-resizer:hover::before,
+body.col-resizing .col-resizer::before { background: var(--accent); width: 2px; }
+body.col-resizing { cursor: col-resize; }
+body.col-resizing * { user-select: none !important; }
 
 /* ── Tree pane (navigation) ──────────────────────────────────────────────── */
-.tree { overflow: auto; padding: 8px 0 60px; outline: none; border-right: var(--rule); position: relative; }
+.tree { overflow: auto; padding: 8px 0 60px; outline: none; position: relative; }
 .tree .empty { padding: 24px var(--pad-x); color: var(--fg-muted); font-size: 12px; }
 
 .row {
@@ -331,19 +415,12 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
    (incoming). A thin left rail in that hue makes the relationship scannable; the
    title picks up a matching tint. Opacity transitions are gentle, gated by the
    global reduced-motion blanket. */
-body.focus-dimming .tree .row { opacity: 0.6; transition: opacity var(--dur-base) var(--ease); }
+/* Focus mode (default-on): the focused feature's dependency neighbourhood stays lit; every
+   other row eases to 0.7. Pure OPACITY — no recolour (a hue reads too strongly for an
+   ambient cue). The eased transition IS the smooth navigation feel the redesign asked for. */
+body.focus-dimming .tree .row { opacity: 0.7; transition: opacity .28s var(--ease); }
 body.focus-dimming .tree .row.dep-related,
 body.focus-dimming .tree .row.hover-peek { opacity: 1; }
-/* (the dep-on / dep-by title tints live below the base .title rule so the design-system
-   CSS test still reads the navigator title rule first) */
-.tree .row.dep-on::after,
-.tree .row.dep-by::after,
-.tree .row.dep-focus::after {
-    content: ""; position: absolute; right: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 1px;
-}
-.tree .row.dep-on::after  { background: var(--dep-out); }
-.tree .row.dep-by::after  { background: var(--dep-in); }
-.tree .row.dep-focus::after { background: var(--accent); }
 
 /* hover-preview of a depends-on / used-by link target (WS5 hover-navigate) */
 .tree .row.hover-peek { background: color-mix(in srgb, var(--accent) 13%, transparent); }
@@ -395,9 +472,6 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .row.retired .title { text-decoration: line-through; opacity: 0.55; }
 .row.has-retire .title { text-decoration: line-through; color: var(--fg-muted); opacity: 0.7; }
 .row.unrealized .title { font-style: italic; opacity: 0.78; }
-/* dependency spotlight tints (WS5) — depends-on (outgoing) vs used-by (incoming) */
-.row.dep-on .title { color: color-mix(in srgb, var(--dep-out) 85%, var(--vscode-foreground)); }
-.row.dep-by .title { color: color-mix(in srgb, var(--dep-in) 85%, var(--vscode-foreground)); }
 
 .amend-inline {
     font-family: var(--vscode-editor-font-family); font-size: 11.5px;
@@ -528,11 +602,12 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 }
 .ce-spacer { flex: 1; }
 .ce-btn {
-    font: 11.5px var(--vscode-font-family); color: var(--vscode-foreground);
-    background: transparent; border: 1px solid transparent; border-radius: 4px;
-    padding: 3px 8px; cursor: pointer; line-height: 1.4;
+    font: 11.5px var(--vscode-font-family); color: var(--fg-muted);
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    padding: 3px 9px; cursor: pointer; line-height: 1.4;
+    transition: background 120ms ease, color 120ms ease;
 }
-.ce-btn:hover { background: var(--hover-bg); }
+.ce-btn:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
 .ce-btn.active { background: var(--select-bg); border-color: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
 .ce-btn.ce-bold { font-weight: 700; }
 .ce-btn.ce-italic { font-style: italic; }
@@ -634,18 +709,43 @@ span[data-change-id] { text-decoration-style: solid; }
     flex: 1; min-width: 0; height: 100%;
     display: flex; flex-direction: column;
 }
+/* The formatting bar recedes: same paper as the doc, a single hairline beneath it,
+   generous side padding so it lines up with the top menu bar — no heavy grey band. */
 .codoc-whole-editor .ce-toolbar {
-    position: sticky; top: 0; z-index: 5; flex-wrap: wrap;
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground));
+    position: sticky; top: 0; z-index: 5; flex-wrap: wrap; gap: 4px;
+    padding: 7px 14px;
+    background: var(--vscode-editor-background);
     border-bottom: var(--rule);
 }
-.ce-structure { display: inline-flex; gap: 2px; padding-left: 6px; border-left: var(--rule); }
+.ce-structure { display: inline-flex; gap: 2px; padding-left: 8px; margin-left: 4px; border-left: var(--rule); }
 .ce-savestate { font: 10.5px var(--vscode-font-family); color: var(--fg-muted); min-width: 48px; text-align: right; }
 
-.ce-whole-surface { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 28px 90px; }
+.ce-whole-surface {
+    flex: 1; min-height: 0; overflow-y: auto; position: relative;
+    padding: 28px clamp(24px, 4vw, 64px) 34vh;
+    /* the comment margin lives in the right whitespace of the centred prose (no reserved
+       column at rest — "default collapsed"). These size the cards + their offset. */
+    --cmt-w: 296px; --cmt-gap: 28px;
+    transition: padding-left .32s var(--ease-out);
+}
 /* the one-page article reads in the editorial body family (Inter, P1) — the single
-   biggest "document, not panel" lever. --font-doc falls back to the UI font. */
-.ce-whole-surface .ProseMirror { outline: none; max-width: 78ch; font-family: var(--font-doc); }
+   biggest "document, not panel" lever. --font-doc falls back to the UI font.
+   CENTRED with a calm measure so the page is balanced (no massive asymmetric right void);
+   comments hang in the right whitespace beside the text. */
+.ce-whole-surface .ProseMirror {
+    outline: none; font-family: var(--font-doc);
+    max-width: 46rem; margin: 0 auto;
+}
+/* when a comment thread (or the composer) is present, slide the prose left of centre so the
+   margin cards get dedicated room beside the text instead of overlapping the page edge. */
+.ce-whole-surface.has-comments .ProseMirror {
+    margin-left: max(0px, calc(50% - 23rem - (var(--cmt-w) + var(--cmt-gap)) / 2));
+    margin-right: calc(var(--cmt-w) + var(--cmt-gap));
+}
+@media (max-width: 1100px) {
+    /* not enough room to slide + keep a full measure → cards overlay the right margin instead */
+    .ce-whole-surface.has-comments .ProseMirror { margin: 0 auto; }
+}
 .ce-whole-surface .ProseMirror:focus { outline: none; }
 
 /* feature headings — Notion-style: flush-left, hierarchy by a STRONG type scale
@@ -684,6 +784,60 @@ span[data-change-id] { text-decoration-style: solid; }
     --phase-glyph: var(--phase-glyph-reflecting);
     opacity: 0.75;
 }
+
+/* ── Ghost → resolved reveal (P-reveal, reveal-decorations.ts) ─────────────────
+   While the agent realizes a feature, its description prose is "ghost" — dimmed to
+   the faint ink, the opaque text it has staked out but not resolved. On the flip to
+   `done`, each word fades mute→ink left-to-right (a brief stagger), the body-prose
+   counterpart of the heading-dot finishing. Pure opacity/transform → GPU-cheap. */
+.ce-ghost { color: var(--fg-faint) !important; transition: color .3s ease; }
+.ce-reveal-word {
+    color: var(--fg-strong);
+    animation: ce-word-rise .34s cubic-bezier(.16,1,.3,1) backwards;
+}
+@keyframes ce-word-rise {
+    from { opacity: .2; color: var(--fg-faint); transform: translateY(.1em); }
+    to   { opacity: 1;  color: var(--fg-strong); transform: none; }
+}
+/* reduced motion / screen reader: no stagger, land resolved instantly (the JS timer
+   still tidies the transient decorations). The blanket query is unreliable in the
+   webview host, so the body classes below mirror it (KTD4 pattern). */
+@media (prefers-reduced-motion: reduce) { .ce-reveal-word { animation: none; } }
+body.vscode-reduce-motion .ce-reveal-word,
+body.vscode-using-screen-reader .ce-reveal-word { animation: none; }
+
+/* ── Agent-action ribbon (P2b, agent-ribbon.ts) ───────────────────────────────
+   The live "what the agent is doing" list under a feature heading: a quiet name +
+   pulsing mark, then mono step rows that tick to a check as the agent moves on.
+   STATUS axis — the accent is the structural blue, no new hue. */
+.ce-ribbon {
+    margin: 8px 0 12px; padding-left: 12px;
+    border-left: 2px solid color-mix(in srgb, var(--vscode-charts-blue) 55%, transparent);
+    display: grid; gap: 2px; user-select: none;
+    animation: ce-pop-in .26s cubic-bezier(.16,1,.3,1);
+}
+.ce-ribbon-head { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--fg-strong); margin-bottom: 2px; }
+.ce-ribbon-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-charts-blue); animation: pulse 1.4s ease-in-out infinite; }
+.ce-ribbon-who { color: color-mix(in srgb, var(--vscode-charts-blue) 75%, var(--vscode-foreground)); }
+.ce-ribbon-step { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); padding: 1px 0; }
+.ce-ribbon-step.active { color: var(--fg-strong); }
+.ce-ribbon-tick { width: 12px; height: 12px; flex: 0 0 12px; position: relative; }
+.ce-ribbon-step.done .ce-ribbon-tick::after {
+    content: ''; position: absolute; left: 4px; top: 0; width: 4px; height: 8px;
+    border: 1.5px solid var(--vscode-charts-green); border-top: 0; border-left: 0; transform: rotate(40deg);
+}
+.ce-ribbon-step.active .ce-ribbon-tick::after {
+    content: ''; position: absolute; inset: 2.5px; border-radius: 50%;
+    background: var(--vscode-charts-blue); animation: pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .ce-ribbon { animation: none; }
+    .ce-ribbon-mark, .ce-ribbon-step.active .ce-ribbon-tick::after { animation: none; }
+}
+body.vscode-reduce-motion .ce-ribbon-mark,
+body.vscode-using-screen-reader .ce-ribbon-mark,
+body.vscode-reduce-motion .ce-ribbon-step.active .ce-ribbon-tick::after,
+body.vscode-using-screen-reader .ce-ribbon-step.active .ce-ribbon-tick::after { animation: none; }
 
 /* ── Code→doc spark (P2 / spec §A.3) ──────────────────────────────────────────
    A bound source file was edited → an INBOUND glyph (arrow-bend-down-left, §C.1) lands at
@@ -853,7 +1007,8 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
     width: calc(16px - var(--d, 0) * 2.5px); margin-left: calc(var(--d, 0) * 2.5px);
     background: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
     transform-origin: right center;
-    transition: background 120ms ease;
+    /* ease the active-tick move so the scroll-position indicator glides rather than snaps */
+    transition: background .22s var(--ease-out), width .22s var(--ease-out), height .22s var(--ease-out);
 }
 /* hover feedback: under full motion the anime.js wave sets an inline scaleX that overrides this;
    under reduced motion the wave no-ops, so this gives an INSTANT single-tick grow + colour. */
@@ -986,15 +1141,6 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
    motion is covered by the reduced-motion blanket gate.
    ─────────────────────────────────────────────────────────────────────────── */
 
-/* the top-right anchor icon (one per comment thread; placed at the span's end) */
-.ce-cmt-icon {
-    display: inline-block; font-size: 9px; line-height: 1; vertical-align: super;
-    margin-left: 1px; cursor: pointer; user-select: none;
-    color: var(--accent-amend); opacity: 0.7; transition: opacity var(--dur-fast) var(--ease);
-}
-.ce-cmt-icon:hover { opacity: 1; }
-.ce-cmt-icon.sent { color: var(--fg-muted); opacity: 0.55; }
-
 /* selection toolbar (format · comment · hand-to-AI) — a Medium/Notion floating bar */
 .ce-bubble {
     position: fixed; z-index: 70; display: flex; align-items: stretch; gap: 1px; padding: 3px;
@@ -1014,8 +1160,36 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
 .ce-bub-btn.ce-bub-hl:hover { background: color-mix(in srgb, var(--accent-amend) 22%, transparent); }
 .ce-bub-sep { width: 1px; margin: 3px 2px; background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
 
-/* comment composer + thread popover share the card chrome (a quiet amber left edge) */
-.ce-cmt-composer, .ce-cmt-pop {
+/* ── right-margin comments (Notion-style) ─────────────────────────────────────
+   Persistent thread cards + the composer live in the doc's right whitespace,
+   absolutely positioned INSIDE the scroll surface (so they scroll with the prose)
+   and aligned to the anchored text's vertical offset. Right-aligned at a fixed
+   inset so they don't chase the prose width; the surface gains `.has-comments`
+   which slides the prose left to make room (see the .ProseMirror rules above). */
+.ce-cmt-card,
+.ce-cmt-composer.in-margin {
+    position: absolute; right: 16px; left: auto; width: var(--cmt-w, 296px);
+    max-width: calc(100% - 32px); z-index: 6;
+}
+.ce-cmt-card {
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 14%, transparent));
+    border-left: 2px solid color-mix(in srgb, var(--accent-amend) 55%, transparent);
+    border-radius: 10px; box-shadow: var(--shadow-pop-sm);
+    padding: 9px 11px; font: 12px var(--vscode-font-family); cursor: default;
+    transition: top .22s var(--ease-out);
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
+}
+.ce-cmt-card.sent { border-left-color: color-mix(in srgb, var(--fg-muted) 45%, transparent); opacity: 0.85; }
+.ce-cmt-card-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; }
+.ce-cmt-who { font-weight: 600; font-size: 11.5px; color: var(--vscode-foreground); }
+.ce-cmt-time { font-size: 10.5px; color: var(--fg-faint); }
+.ce-cmt-card .ce-cmt-state { margin-left: auto; font-size: 10px; color: var(--fg-muted); }
+.ce-cmt-card.sent .ce-cmt-state { color: var(--accent-add); }
+
+/* comment composer chrome (a quiet amber left edge) — the fixed fallback geometry; the
+   in-margin override above repositions it into the right margin beside the anchored text. */
+.ce-cmt-composer {
     position: fixed; z-index: 75; width: 264px; max-width: calc(100vw - 16px);
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
@@ -1031,7 +1205,6 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
     margin-bottom: 8px;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.ce-cmt-quote { display: none; } /* the left rule replaces the literal quote glyphs */
 .ce-cmt-input {
     width: 100%; box-sizing: border-box; resize: none;
     font: 12.5px/1.5 var(--vscode-font-family); color: var(--vscode-input-foreground);
@@ -1043,8 +1216,7 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
 .ce-cmt-input::placeholder { color: var(--fg-muted); }
 .ce-cmt-input:focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 .ce-cmt-composer-foot, .ce-cmt-foot { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
-.ce-cmt-hint, .ce-cmt-state { font-size: 10.5px; color: var(--fg-muted); flex: 1; min-width: 0; }
-.ce-cmt-pop.sent .ce-cmt-state { color: var(--accent-add); }
+.ce-cmt-hint, .ce-cmt-composer .ce-cmt-state { font-size: 10.5px; color: var(--fg-muted); flex: 1; min-width: 0; }
 .ce-cmt-send {
     font: 11.5px var(--vscode-font-family); font-weight: 600; cursor: pointer;
     background: var(--vscode-button-background); color: var(--vscode-button-foreground);
@@ -1073,7 +1245,7 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
 .ce-cmt-resolve:hover { background: color-mix(in srgb, var(--accent-add) 18%, transparent); border-color: color-mix(in srgb, var(--accent-add) 60%, transparent); }
 body.vscode-high-contrast .ce-bubble,
 body.vscode-high-contrast .ce-cmt-composer,
-body.vscode-high-contrast .ce-cmt-pop { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
+body.vscode-high-contrast .ce-cmt-card { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
 /* HC floors for the selection toolbar: the faint divider + the low-% hover washes
    vanish under high contrast, so raise them to a real border / solid fill. */
 body.vscode-high-contrast .ce-bub-sep { background: var(--vscode-contrastBorder, var(--vscode-foreground)); }

@@ -145,3 +145,74 @@ export function featurePhases(data: ActivityData): Map<string, FeaturePhase> {
     }
     return m;
 }
+
+// ─── Agent-action steps (P2b — the inline ribbon) ─────────────────────────────
+
+const MAX_STEPS = 5;   // keep the ribbon short; older steps fall off the top
+
+/** A tool call → a human verb. The agent's actual tools, humanised. */
+function toolVerb(tool: string): string {
+    switch (tool) {
+        case 'Edit': case 'Write': case 'MultiEdit': case 'NotebookEdit': return 'editing';
+        case 'Read': return 'reading';
+        case 'Bash': return 'running';
+        case 'Grep': case 'Glob': return 'searching';
+        default: return tool.toLowerCase();
+    }
+}
+const baseName = (p: string): string => p.split('/').pop() || p;
+
+/** Build each active feature's ordered action steps for the ribbon. Prefers the
+ *  `recent` event log (real tool calls → "editing agent.py"), falling back to the
+ *  `touched` set when no event log is present. The LAST step is active; earlier ones
+ *  are `done`. Empty when no epoch is open. Pure — unit-tested directly.
+ *
+ *  AgentStep is structurally `{ label, done }` (see protocol.ts); kept inline here to
+ *  avoid a webview→state import cycle. */
+export function featureSteps(
+    data: ActivityData,
+    sidecar: SidecarData | null,
+): Map<string, { label: string; done: boolean }[]> {
+    const out = new Map<string, { label: string; done: boolean }[]>();
+    if (!isAgentActive(data)) return out;
+
+    const fidsFor = (file: string, explicit: string[]): Set<string> => {
+        const s = new Set<string>(explicit ?? []);
+        if (sidecar) for (const fe of entriesForFile(sidecar, file)) s.add(fe.feature_id);
+        return s;
+    };
+
+    const recent = data.recent ?? [];
+    if (recent.length) {
+        const labelsByFid = new Map<string, string[]>();
+        for (const r of recent) {                       // chronological
+            const label = `${toolVerb(r.tool)} ${baseName(r.file)}`;
+            for (const fid of fidsFor(r.file, r.feature_ids)) {
+                const list = labelsByFid.get(fid) ?? labelsByFid.set(fid, []).get(fid)!;
+                if (list[list.length - 1] !== label) list.push(label);  // collapse consecutive dupes
+            }
+        }
+        for (const [fid, labels] of labelsByFid) {
+            const trimmed = labels.slice(-MAX_STEPS);
+            out.set(fid, trimmed.map((label, i) => ({ label, done: i < trimmed.length - 1 })));
+        }
+        return out;
+    }
+
+    // Fallback: derive a step per touched file (no event log available).
+    const byFid = new Map<string, string[]>();
+    for (const [file, entry] of Object.entries(data.touched ?? {})) {
+        const verb = entry.mode === 'write' ? 'editing' : 'reading';
+        const label = `${verb} ${baseName(file)}`;
+        for (const fid of fidsFor(file, entry.feature_ids)) {
+            const list = byFid.get(fid) ?? byFid.set(fid, []).get(fid)!;
+            if (!list.includes(label)) list.push(label);
+        }
+    }
+    for (const [fid, labels] of byFid) {
+        const trimmed = labels.slice(-MAX_STEPS);
+        // touched has no ordering signal for "current", so the most recent write stays active
+        out.set(fid, trimmed.map((label, i) => ({ label, done: i < trimmed.length - 1 })));
+    }
+    return out;
+}

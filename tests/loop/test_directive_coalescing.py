@@ -10,8 +10,8 @@ directives are untouched.
 """
 from __future__ import annotations
 
-from codoc.codoc_file.render import tree_path, write_tree
-from codoc.loop.edits import read_manifest
+from codoc.codoc_file.render import write_tree
+from codoc.loop.edits import Command, append_command, read_manifest
 from codoc.loop.loop_b import realize_path, run_loop_b
 from codoc.model.binding import Binding
 from codoc.model.feature import Feature
@@ -38,21 +38,31 @@ def _seed(codoc_dir, title, description, file):
     return f
 
 
-def _edit(codoc_dir, old, new):
-    p = tree_path(codoc_dir)
-    p.write_text(p.read_text().replace(old, new))
+_N = [0]
+
+
+def _amend(codoc_dir, fid, description):
+    """Queue a `set_description` command — the webview's edit channel (U3/U4). Edits no
+    longer arrive as tree.codoc text diffs (U7)."""
+    _N[0] += 1
+    append_command(codoc_dir, Command(id=f"cmd-{_N[0]}", kind="set_description",
+                                      feature_id=fid, payload={"description": description}))
+
+
+def _retire(codoc_dir, fid):
+    _N[0] += 1
+    append_command(codoc_dir, Command(id=f"cmd-{_N[0]}", kind="retire", feature_id=fid))
 
 
 def test_iterating_one_feature_coalesces_to_one_directive(dirs):
     root, codoc_dir = dirs
-    _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
-    _edit(codoc_dir, "Holds brand colors.", "Should also support dark-mode palettes.")
+    f = _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
+    _amend(codoc_dir, f.id, "Should also support dark-mode palettes.")
     run_loop_b(root, codoc_dir, dry_run=False)
     assert len(read_manifest(codoc_dir)) == 1
 
     # Iterate the SAME feature — must REPLACE, not stack.
-    _edit(codoc_dir, "Should also support dark-mode palettes.",
-          "Should also support dark-mode and high-contrast palettes.")
+    _amend(codoc_dir, f.id, "Should also support dark-mode and high-contrast palettes.")
     run_loop_b(root, codoc_dir, dry_run=False)
     m = read_manifest(codoc_dir)
     assert len(m) == 1, f"iterating stacked {len(m)} directives instead of coalescing"
@@ -66,15 +76,15 @@ def test_iterating_coalesces_and_never_auto_realizes(dirs):
     the old 'revert-to-descriptive withdraws the queued directive' test: there is no
     auto-queue to withdraw any more — the directive was held all along.)"""
     root, codoc_dir = dirs
-    _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
-    _edit(codoc_dir, "Holds brand colors.", "Should also support dark-mode palettes.")
+    f = _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
+    _amend(codoc_dir, f.id, "Should also support dark-mode palettes.")
     run_loop_b(root, codoc_dir, dry_run=False)
     m = read_manifest(codoc_dir)
     assert len(m) == 1 and m[0].handed_off is False
     assert not realize_path(codoc_dir).exists()  # held, never auto-realized
 
     # Iterate to a descriptive phrasing → still ONE held draft, latest text, still held.
-    _edit(codoc_dir, "Should also support dark-mode palettes.", "Holds brand and dark-mode colors.")
+    _amend(codoc_dir, f.id, "Holds brand and dark-mode colors.")
     run_loop_b(root, codoc_dir, dry_run=False)
     m2 = read_manifest(codoc_dir)
     assert len(m2) == 1 and m2[0].handed_off is False
@@ -92,9 +102,9 @@ def test_editing_one_feature_keeps_anothers_queued_directive(dirs):
     s.upsert_binding(Binding(feature_id=fb.id, file="b.py", symbol_path="b.py::SYM", fingerprint="h"))
     write_tree(s, codoc_dir); s.close()
 
-    _edit(codoc_dir, "Desc A.", "Should rewrite A entirely.")
+    _amend(codoc_dir, fa.id, "Should rewrite A entirely.")
     run_loop_b(root, codoc_dir, dry_run=False)
-    _edit(codoc_dir, "Desc B.", "Should rewrite B entirely.")
+    _amend(codoc_dir, fb.id, "Should rewrite B entirely.")
     run_loop_b(root, codoc_dir, dry_run=False)
 
     m = read_manifest(codoc_dir)
@@ -105,18 +115,22 @@ def test_editing_one_feature_keeps_anothers_queued_directive(dirs):
 def test_edit_notes_label_each_edit_for_the_watch_log(dirs):
     """The daemon log lists WHAT each edit was + what it produced. In the held-draft
     model an AMEND mints a held draft → labeled ``→ draft`` (awaiting hand-off), never
-    surprise code. A retire-with-code or plan ADD is an explicit gesture → ``→ realize``."""
+    surprise code. A webview `retire` COMMAND is a soft, detach-only retire (FIX A): it
+    removes the FEATURE, never the code, so it is labeled ``doc-only`` and queues no
+    directive (code removal is reserved for an explicit delete_code retire)."""
     root, codoc_dir = dirs
     f = _seed(codoc_dir, "Palette", "Holds brand colors.", "colors.py")
 
     # Any description edit → a held draft, labeled "→ draft".
-    _edit(codoc_dir, "Holds brand colors.", "Holds brand and accent colors.")
+    _amend(codoc_dir, f.id, "Holds brand and accent colors.")
     r = run_loop_b(root, codoc_dir, dry_run=False)
     assert len(r.edit_notes) == 1
     assert "Palette" in r.edit_notes[0] and "→ draft" in r.edit_notes[0]
     assert "• " in r.summary() and "→ draft" in r.summary()  # surfaced in the log line
 
-    # Retiring a feature that owns bound code → an explicit realize gesture.
-    _edit(codoc_dir, "- Palette", "~ Palette")
+    # A webview retire command → detach-only soft retire: labeled doc-only, no directive.
+    _retire(codoc_dir, f.id)
     r2 = run_loop_b(root, codoc_dir, dry_run=False)
-    assert any("→ realize" in n for n in r2.edit_notes)
+    assert any("doc-only" in n for n in r2.edit_notes)
+    assert not any("→ realize" in n for n in r2.edit_notes)
+    assert r2.directives == []

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from codoc.codoc_file.render import tree_path, write_tree
+from codoc.codoc_file.render import write_tree
 from codoc.loop import inbox
 from codoc.loop.loop_b import realize_path, run_loop_b
 from codoc.loop.status import AWAITING_IMPL, status_path
@@ -28,10 +28,6 @@ def dirs(tmp_path):
     codoc_dir = tmp_path / ".codoc"
     codoc_dir.mkdir()
     return str(root), str(codoc_dir)
-
-
-def _edit_file(path: Path, old: str, new: str) -> None:
-    path.write_text(path.read_text().replace(old, new))
 
 
 def _state(codoc_dir) -> str:
@@ -107,6 +103,12 @@ def test_reject_proposal_drops_event(dirs):
 
 
 def test_user_amend_builds_directive_with_bindings(dirs):
+    """A description edit arrives as a `set_description` COMMAND (U3/U4) — no longer
+    inferred from a tree.codoc text diff (U7). The command apply path builds the
+    UPDATE FEATURE directive carrying the feature's bound code (U7 wires the codoc→
+    code half onto the command path). dry_run=False because commands apply only on a
+    real pass; the directive is BUILT (res.directives) regardless of hand-off."""
+    from codoc.loop.edits import Command, append_command
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     f = Feature(title="Color palette", description="Holds brand colors.")
@@ -115,11 +117,12 @@ def test_user_amend_builds_directive_with_bindings(dirs):
     write_tree(s, codoc_dir)
     s.close()
 
-    _edit_file(tree_path(codoc_dir), "Holds brand colors.",
-               "Holds brand colors. Should also expose dark-mode variants.")
-    res = run_loop_b(root, codoc_dir, dry_run=True)
+    append_command(codoc_dir, Command(
+        id="cmd-amend-1", kind="set_description", feature_id=f.id,
+        payload={"description": "Holds brand colors. Should also expose dark-mode variants."}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
 
-    assert res.user_edits >= 1
+    assert res.commands == 1
     assert any("UPDATE FEATURE" in d and "colors.py::PALETTE" in d
                and "dark-mode variants" in d for d in res.directives)
 
@@ -129,6 +132,7 @@ def test_amend_mints_held_draft_not_realized_until_handoff(dirs):
     realize.md and not sent to the agent — until an explicit hand-off. The SYSTEM no
     longer guesses from prose whether the edit 'requests code'; the USER decides by
     handing off. A typo fix therefore never surprises the agent with code."""
+    from codoc.loop.edits import Command, append_command
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     f = Feature(title="Color palette", description="Holds brand colors.")
@@ -138,11 +142,12 @@ def test_amend_mints_held_draft_not_realized_until_handoff(dirs):
     write_tree(s, codoc_dir)
     s.close()
 
-    _edit_file(tree_path(codoc_dir), "Holds brand colors.",
-               "Holds brand colors and their dark-mode variants for the UI.")
+    append_command(codoc_dir, Command(
+        id="cmd-held-1", kind="set_description", feature_id=f.id,
+        payload={"description": "Holds brand colors and their dark-mode variants for the UI."}))
     res = run_loop_b(root, codoc_dir, dry_run=False)
 
-    assert res.user_edits >= 1          # the prose edit IS applied
+    assert res.commands == 1            # the prose edit IS applied (as a command)
     assert res.queued is False          # …but HELD — not realized
     assert not realize_path(codoc_dir).exists()
     # The directive exists in the manifest as a held draft (handed_off=False).
@@ -250,9 +255,14 @@ def test_accepted_auto_retire_is_detach_only_no_directive(dirs):
     s2.close()
 
 
-def test_human_tilde_retire_still_builds_directive(dirs):
-    """A human retire (changing the marker to `~` in tree.codoc) is the one path
-    that DOES request code removal — it still queues a directive."""
+def test_command_retire_is_detach_only_soft_retire_no_directive(dirs):
+    """A webview `retire` COMMAND (U3/U4 — the human's delete gesture) is a SOFT,
+    DETACH-ONLY retire: it marks the feature retired AND detaches its bindings, but
+    queues NO code-deletion directive (FIX A). None of the five webview command kinds
+    set delete_code, so deleting a doc node removes the FEATURE, not the code — the
+    old reconcile_doc_presence behavior. Code removal is reserved for an explicit
+    delete_code retire (the agent `~` path, exercised by the inbox test below)."""
+    from codoc.loop.edits import Command, append_command
     root, codoc_dir = dirs
     s = open_store(codoc_dir)
     f = Feature(title="Legacy export", description="Old CSV export path.")
@@ -262,13 +272,18 @@ def test_human_tilde_retire_still_builds_directive(dirs):
     write_tree(s, codoc_dir)
     s.close()
 
-    # Flip the live node's marker "- " → "~ " (a human retire edit).
-    p = tree_path(codoc_dir)
-    p.write_text(p.read_text().replace("- Legacy export", "~ Legacy export"))
-    res = run_loop_b(root, codoc_dir, dry_run=True)
+    append_command(codoc_dir, Command(id="cmd-retire-1", kind="retire", feature_id=f.id))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
 
-    assert res.user_edits >= 1
-    assert any("RETIRE FEATURE" in d and "Legacy export" in d for d in res.directives)
+    assert res.commands == 1
+    # ZERO directives for the retired feature — never a "remove this code" request.
+    assert res.directives == []
+    assert not any("RETIRE FEATURE" in d for d in res.directives)
+    s2 = open_store(codoc_dir)
+    assert s2.get_feature(f.id).retired is True          # soft-retired (marked, not deleted)
+    assert s2.bindings_for_feature(f.id) == []           # detached, not orphaned under a hidden feature
+    assert s2.binding_at("export.py", "export.py::to_csv") is None
+    s2.close()
 
 
 def test_accepted_delete_code_retire_queues_removal_directive(dirs):

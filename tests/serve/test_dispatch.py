@@ -88,6 +88,40 @@ def test_withdraw_appends_cancellation(tmp_path):
     assert "f-9" in edits.read_cancellations(cd)
 
 
+# U3 / KTD10 — identity-keyed command kinds are capability-gated.
+def test_suggest_can_set_title_and_description(tmp_path):
+    cd = str(tmp_path)
+    # set_title / set_description are description-level → SUGGEST-eligible.
+    res = dispatch({"kind": "set_title", "id": "c-1", "featureId": "f-1",
+                    "payload": {"title": "Renamed"}}, Capability.SUGGEST, cd)
+    assert res["ok"] is True
+    dispatch({"kind": "set_description", "id": "c-2", "featureId": "f-1",
+              "payload": {"description": "New prose."}}, Capability.SUGGEST, cd)
+    cmds = edits.read_commands(cd)
+    assert {c.id for c in cmds} == {"c-1", "c-2"}
+    assert {c.kind for c in cmds} == {"set_title", "set_description"}
+
+
+def test_suggest_cannot_structural_command(tmp_path):
+    cd = str(tmp_path)
+    for kind in ("add", "move", "retire"):
+        with pytest.raises(CommandError) as ei:
+            dispatch({"kind": kind, "id": f"c-{kind}", "featureId": "f-1"},
+                     Capability.SUGGEST, cd)
+        assert ei.value.status == 403
+    # …and nothing was written to the channel (rejected before the handler).
+    assert edits.read_commands(cd) == []
+
+
+def test_handoff_can_structural_command(tmp_path):
+    cd = str(tmp_path)
+    res = dispatch({"kind": "add", "id": "c-add", "localId": "L1",
+                    "payload": {"title": "New feature"}}, Capability.HANDOFF, cd)
+    assert res["ok"] is True
+    dispatch({"kind": "retire", "id": "c-ret", "featureId": "f-9"}, Capability.HANDOFF, cd)
+    assert {c.kind for c in edits.read_commands(cd)} == {"add", "retire"}
+
+
 # Flow 5 — malformed / unknown commands rejected.
 def test_unknown_and_malformed_rejected(tmp_path):
     cd = str(tmp_path)

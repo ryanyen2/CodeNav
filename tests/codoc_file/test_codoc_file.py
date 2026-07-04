@@ -172,7 +172,8 @@ def test_duplicate_local_id_second_is_add_not_clobber(store):
 
 def test_local_id_mapping_to_retired_feature_is_not_add(store):
     """A node whose local_id maps to a RETIRED feature (reappearing via undo, or stale
-    crash debris) must NOT be an ADD — reconcile_doc_presence handles the un-retire."""
+    crash debris) must NOT be an ADD — the un-retire arrives as an explicit command
+    (U3/U4); diff_codoc only guards the non-destructive write checks in reconcile.py."""
     f = Feature(title="Gone", description="Body.", local_id="lid-gone")
     store.upsert_feature(f)
     store.retire_feature(f.id)

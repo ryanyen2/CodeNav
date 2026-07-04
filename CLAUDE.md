@@ -36,6 +36,7 @@ codoc reflect               # recovery-grade state reconciliation (used by the S
 codoc propose <kind>        # author a plan proposal from the shell (humans/tests)
 codoc install-hooks         # (re)install the CC hooks + MCP registration
 codoc realize               # implement the realize queue NOW, foreground (SDK or CLI engine)
+codoc migrate               # one-time idempotent workspace heal (migrate tree.doc.json comments into the store + converge duplicate features); also runs on daemon startup
 codoc serve                 # the deployed hub: serve the tree to remote users (docs/serve-deployment.md)
 
 # watch flags: --dry (apply tree edits, don't queue realization), --no-realize
@@ -70,11 +71,14 @@ Three markdown-native signals in descriptions feed Loop B directives:
   auto-apply safe ops (refresh/attach/detach/small-amend) → if anything needs
   judgment, ONE LLM pass (`agent/tree_update.py`) returns minimal node ops;
   structural ops (add/move/retire) are logged as pending proposals.
-- **Loop B — codoc → code** (`loop/loop_b.py`): parse `tree.codoc` edits → apply
-  user edits + proposal verdicts → for edits implying code change, build a
-  directive and **queue it for the live session** in `.codoc/realize.md` (status
-  `awaiting_impl`). The session implements via `/codoc:sync`; the Stop-hook
-  reflection / watch-daemon Loop A then closes the loop. No headless `claude -p`.
+- **Loop B — codoc → code** (`loop/loop_b.py`): drain identity-keyed **commands**
+  from `.codoc/edits.json` (add/set_title/set_description/move/retire — the webview
+  emits them; an idempotency ledger guards crash-replay) + proposal verdicts →
+  apply via `apply_op` → for edits implying code change, build a directive and
+  **queue it for the live session** in `.codoc/realize.md` (status `awaiting_impl`).
+  Edits are NOT inferred from a text/doc diff (that path was retired). The session
+  implements via `/codoc:sync`; the Stop-hook reflection / watch-daemon Loop A then
+  closes the loop. No headless `claude -p`.
 
 A single LLM pass with full change + whole-tree-title context (plus the
 `UNIQUE(file, symbol_path)` binding constraint) is what prevents duplicate nodes —
@@ -85,15 +89,18 @@ detailed in `docs/architecture.md`.
 ### Package layout (`codoc/`)
 
 ```
-model/       # Pydantic: Feature, Binding, Event/NodeOp/NodeOpKind, HLC; ids.py
-store/       # db.py — Store over 3 SQLite tables + 1 derived graph cache (WAL)
+model/       # Pydantic: Feature, Binding, Event/NodeOp/NodeOpKind, HLC; ids.py;
+             #   annotation.py (Mark, CommentThread — store-authoritative rich state)
+store/       # db.py — Store over the SQLite tables (features/bindings/events +
+             #   blocks/marks/comments + applied-command ledger) + 1 derived graph cache (WAL)
 graph/       # code dependency graph (derived, rebuildable): extract.py, query.py
 loop/        # the two loops + pieces: classify.py (decision table), phase.py (the
              #   single feature-phase projection — holds/drift/resolution are views),
              #   diff.py (compute_changeset), apply.py, loop_a.py / loop_b.py, edits.py
              #   (edits.json + realize.json), inbox.py, status.py, fsio.py (atomic
              #   IO), subtree.py, bootstrap_hier.py, title_dedup.py (opt-in semantic
-             #   title dedup), sdk_realize.py / autorealize.py, watch.py
+             #   title dedup), migrate.py (one-time store-authoritative workspace
+             #   heal), sdk_realize.py / autorealize.py, watch.py
 blocks/      # typed-media blocks + plugin codecs (agent-native notebook protocol):
              #   base.py (Capability LIFT/LOWER/CONSULT + BlockPlugin), registry.py,
              #   builtins.py, prose.py (plugin-zero), diagram.py (graph→mermaid lift +
@@ -111,7 +118,7 @@ prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.t
 cli/main.py  # Typer app; config.py — LLM config
 ```
 
-The data model, NodeOp kinds, storage (3 SQLite tables + the cocoindex/LanceDB
+The data model, NodeOp kinds, storage (the SQLite tables + the cocoindex/LanceDB
 index), and the `.codoc/` control-file schemas are documented in
 `docs/architecture.md`; the change ledger is `docs/codoc-change-ledger.md`.
 
@@ -124,10 +131,19 @@ is the default editor for `tree.codoc`; both it and the raw-text editor render
 **every** proposal type inline (ADD/MOVE ghost rows, RETIRE strike, AMEND
 word-level diff) with inline `✓`/`✗` Accept/Reject.
 
-Single-writer editing model: the webview is authoritative (`tree.doc.json`),
-`tree.codoc` is the byte-identical derived render; a **draft / hand-off** gate
-keeps code-implying edits safe-by-default. The editing-model details + key source
-files are in `docs/architecture.md`.
+Store-authoritative editing model (2026-06 refactor — see
+`docs/plans/2026-06-26-001-refactor-store-authoritative-coordination-plan.md`):
+the **SQLite store is the single source of truth**. The webview is a pure
+*projection* of the store (it consumes the daemon-written `tree.doc.json`) plus an
+identity-keyed *command emitter* — editing actions emit `{id, kind, fid|localId,
+baseRev, payload}` commands (add/set_title/set_description/move/retire) on
+`edits.json`, applied to the store via `apply_op`; nothing is inferred from a doc
+diff. Both `tree.doc.json` AND `tree.codoc` are daemon-written **derived
+artifacts** (`tree.codoc` is a read-only export; the daemon is their sole writer).
+A per-feature HLC version gate keeps a returning projection from clobbering a newer
+local edit, and a **draft / hand-off** gate keeps code-implying edits
+safe-by-default. The editing-model details + key source files are in
+`docs/architecture.md`.
 
 ### The deployed hub (`codoc serve`)
 

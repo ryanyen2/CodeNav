@@ -47,24 +47,6 @@ interface VsCodeApi {
 }
 declare function acquireVsCodeApi(): VsCodeApi;
 
-/** Bridge over the VS Code webview message bus. Browser-only (uses `window`). */
-export function createVsCodeBridge(): HostBridge {
-    const api = acquireVsCodeApi();
-    return {
-        postMessage: (msg) => api.postMessage(msg),
-        onPayload: (cb) => {
-            const handler = (e: MessageEvent) => {
-                const data = e.data as { kind?: string; payload?: DocPayload } | undefined;
-                if (data && data.kind === 'doc' && data.payload) cb(data.payload);
-            };
-            window.addEventListener('message', handler);
-            return () => window.removeEventListener('message', handler);
-        },
-        getState: <T,>() => api.getState() as T | undefined,
-        setState: (s) => api.setState(s),
-    };
-}
-
 // ---------------------------------------------------------------------------
 // Standalone-browser (codoc serve) transport
 // ---------------------------------------------------------------------------
@@ -203,12 +185,6 @@ function _defaultEventSourceFactory(): ((url: string) => EventSourceLike) | unde
     return (url) => new EventSource(url) as unknown as EventSourceLike;
 }
 
-/** Select the transport for the current home. The standalone shell passes
- *  `networkOptions`; inside VS Code the host API is present and wins. */
-export function createHostBridge(networkOptions?: NetworkBridgeOptions): HostBridge {
-    return isVsCodeHost() ? createVsCodeBridge() : createNetworkBridge(networkOptions);
-}
-
 /**
  * Return a VS Code-`acquireVsCodeApi()`-shaped object for the current home, so a
  * webview built for VS Code runs unchanged in a standalone browser.
@@ -222,7 +198,12 @@ export function createHostBridge(networkOptions?: NetworkBridgeOptions): HostBri
 export function acquireHostApi(networkOptions?: NetworkBridgeOptions): VsCodeApi {
     if (isVsCodeHost()) return acquireVsCodeApi();
 
-    const bridge = createNetworkBridge(networkOptions);
+    // Default the bridge's backing store to localStorage in the browser hub so VIEW state
+    // (selection / scroll / tree-width / focus-mode) and the offline outbox actually persist
+    // across reloads — without this, getState() always returns undefined and restore no-ops.
+    const opts: NetworkBridgeOptions = { ...networkOptions };
+    if (!opts.storage && typeof localStorage !== 'undefined') opts.storage = localStorage;
+    const bridge = createNetworkBridge(opts);
     bridge.onPayload((payload) => {
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new MessageEvent('message', { data: { kind: 'doc', payload } }));

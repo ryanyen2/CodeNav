@@ -16,6 +16,10 @@ export interface UiState {
     caretPos: number;
     treeScroll: number;
     docScroll: number;
+    /** Nav-tree column width in px (0 = stylesheet default). Survives reload (continuous resize). */
+    treeWidth: number;
+    /** Focus mode: dim tree rows unrelated to the focused feature. ON by default. */
+    focusMode: boolean;
 }
 
 export function serializeUiState(s: Omit<UiState, 'v'>): UiState {
@@ -26,6 +30,8 @@ export function serializeUiState(s: Omit<UiState, 'v'>): UiState {
         caretPos: s.caretPos,
         treeScroll: s.treeScroll,
         docScroll: s.docScroll,
+        treeWidth: s.treeWidth,
+        focusMode: s.focusMode,
     };
 }
 
@@ -43,5 +49,7 @@ export function deserializeUiState(raw: unknown): UiState | null {
         caretPos: num(o.caretPos),
         treeScroll: num(o.treeScroll),
         docScroll: num(o.docScroll),
+        treeWidth: num(o.treeWidth),
+        focusMode: o.focusMode !== false,   // default ON; only an explicit false disables it
     };
 }

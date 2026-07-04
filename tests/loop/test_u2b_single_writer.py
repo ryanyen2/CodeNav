@@ -1,10 +1,12 @@
-"""U2b — single-writer: Loop B reads tree.doc.json; the daemon writes tree.codoc.
+"""U2b/U7 — single-writer: the daemon writes BOTH tree.doc.json and tree.codoc; the
+webview emits identity-keyed COMMANDS instead of authoring either file.
 
-The webview persists tree.doc.json (no tree.codoc write). Loop B picks the doc as
-its edit source when it carries a pending edit, applies it, and re-renders
-tree.codoc itself (the daemon is the sole writer). Inline comments arrive as
-one-shot edits.json steers. The daemon routes a tree.doc.json change to Loop B,
-guarded so a non-edit persist doesn't ping-pong.
+Post-U7 the doc-diff / text-diff inference is retired (R18): user edits arrive as
+``commands`` (U3) applied via ``apply_op``, and ``_merge_channels`` returns an empty
+diff. Loop B applies the command, re-renders both files (sole writer), and builds the
+codoc→code directive from the command. Inline comments arrive as one-shot edits.json
+steers. The daemon routes a tree.doc.json change to Loop B (the routing guard in
+reconcile.py keeps a read-only ``diff_codoc`` for the pending-edit check).
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ import pytest
 from codoc.codoc_file.doc_parse import doc_path
 from codoc.codoc_file.parse import parse_tree_file
 from codoc.codoc_file.render import tree_path, write_tree
-from codoc.loop.edits import Steer, append_steer, read_manifest
+from codoc.loop.edits import Command, Steer, append_command, append_steer, read_manifest
 from codoc.loop.loop_b import _merge_channels, realize_path, run_loop_b
 from codoc.model.event import NodeOpKind
 from codoc.model.feature import Feature
@@ -26,6 +28,17 @@ from codoc.store.db import open_store
 def codoc_dir(tmp_path):
     d = tmp_path / ".codoc"; d.mkdir()
     return str(d)
+
+
+_CMD_N = [0]
+
+
+def _amend_cmd(codoc_dir, fid, description):
+    """Queue a `set_description` command — the webview's edit channel (U3/U4)."""
+    _CMD_N[0] += 1
+    append_command(codoc_dir, Command(
+        id=f"cmd-{_CMD_N[0]}", kind="set_description", feature_id=fid,
+        payload={"description": description}))
 
 
 def _write_doc(codoc_dir, features: list[tuple[str, str, str]]):
@@ -53,87 +66,34 @@ def _seed(codoc_dir, title, desc):
     return f.id
 
 
-# ─── channel merge (INV3) ──────────────────────────────────────────────────
+# ─── channel merge is RETIRED (U7 / R18) ─────────────────────────────────────
 
-def test_merge_channels_prefers_doc_when_it_has_pending_edit(codoc_dir):
-    """Doc-path AMEND is authoritative for features it has edits for (INV3)."""
+def test_merge_channels_is_retired_and_returns_empty(codoc_dir):
+    """U7: ``_merge_channels`` no longer infers user edits by diffing tree.doc.json or
+    tree.codoc against the store — both are the daemon's own output now, so reading them
+    back as input was a feedback loop. It returns an empty diff; user edits come from the
+    `commands` channel. This replaces the former doc-vs-text arbitration tests (the doc-
+    path/text-path/retire-override merge rules they pinned no longer exist)."""
     fid = _seed(codoc_dir, "Auth", "Old prose.")
+    # Even with a divergent doc AND a divergent raw-text file, no edit is inferred.
     _write_doc(codoc_dir, [(fid, "Auth", "New prose from the webview.")])
+    tp = tree_path(codoc_dir)
+    tp.write_text(tp.read_text().replace("Old prose.", "Raw-text edit."))
     with open_store(codoc_dir) as s:
         diff, errors = _merge_channels(codoc_dir, s)
-    assert not errors
-    amends = [op for op in diff.user_ops if op.kind is NodeOpKind.AMEND]
-    assert len(amends) == 1
-    assert amends[0].description == "New prose from the webview."
+    assert diff.is_empty(), "no user edits are inferred from files post-U7"
+    assert errors == []
 
 
-def test_merge_channels_falls_back_to_text_when_doc_is_in_sync(codoc_dir):
-    """When doc has no pending edits, text path is authoritative (INV3)."""
-    fid = _seed(codoc_dir, "Auth", "Same.")
-    _write_doc(codoc_dir, [(fid, "Auth", "Same.")])  # doc == store → no pending doc edit
-    # A raw-text edit moves tree.codoc ahead instead.
-    tp = tree_path(codoc_dir)
-    tp.write_text(tp.read_text().replace("Same.", "Edited in the raw text editor."))
-    with open_store(codoc_dir) as s:
-        diff, errors = _merge_channels(codoc_dir, s)
-    assert not errors
-    amends = [op for op in diff.user_ops if op.kind is NodeOpKind.AMEND]
-    assert len(amends) == 1
-    assert amends[0].description == "Edited in the raw text editor."
+# ─── Loop B applies a command edit + re-renders tree.codoc (sole writer) ──────
 
-
-def test_merge_channels_includes_text_edit_when_doc_has_edit_for_different_feature(codoc_dir):
-    """Text-path op for feature B is NOT dropped when doc has an edit for feature A (INV3).
-    This was the A2/A6 attack: raw-text-editor edit silently discarded."""
-    fid_a = _seed(codoc_dir, "Auth", "Old A.")
-    # Add a second feature B to the store.
-    with open_store(codoc_dir) as s:
-        from codoc.model.feature import Feature as F
-        feat_b = F(title="Billing", description="Old B.")
-        s.upsert_feature(feat_b)
-        fid_b = feat_b.id
-        write_tree(s, codoc_dir)
-    # Doc has a pending edit for A only.
-    _write_doc(codoc_dir, [(fid_a, "Auth", "New webview intent for A."),
-                           (fid_b, "Billing", "Old B.")])
-    # Text editor also edits B (simulates user editing tree.codoc directly).
-    tp = tree_path(codoc_dir)
-    tp.write_text(tp.read_text().replace("Old B.", "Text editor edit for B."))
-    with open_store(codoc_dir) as s:
-        diff, errors = _merge_channels(codoc_dir, s)
-    ops_by_fid = {op.feature_id: op for op in diff.user_ops if op.kind is NodeOpKind.AMEND}
-    assert fid_a in ops_by_fid, "doc-path edit for A must be included"
-    assert ops_by_fid[fid_a].description == "New webview intent for A."
-    assert fid_b in ops_by_fid, "text-path edit for B must NOT be dropped (INV3)"
-    assert ops_by_fid[fid_b].description == "Text editor edit for B."
-
-
-def test_merge_channels_text_retire_overrides_doc_amend(codoc_dir):
-    """RETIRE_NODE from text path beats AMEND from doc path for the same feature (INV3)."""
-    from codoc.codoc_file.render import write_tree
-    fid = _seed(codoc_dir, "Feature", "Some desc.")
-    # Doc has an AMEND for the feature.
-    _write_doc(codoc_dir, [(fid, "Feature", "Updated doc desc.")])
-    # Text editor retires it (changes - to ~).
-    tp = tree_path(codoc_dir)
-    tp.write_text(tp.read_text().replace("- Feature", "~ Feature"))
-    with open_store(codoc_dir) as s:
-        diff, _ = _merge_channels(codoc_dir, s)
-    retires = [op for op in diff.user_ops if op.kind is NodeOpKind.RETIRE_NODE]
-    amends = [op for op in diff.user_ops if op.kind is NodeOpKind.AMEND]
-    assert any(op.feature_id == fid for op in retires), "text RETIRE must win"
-    assert not any(op.feature_id == fid for op in amends), "doc AMEND must be suppressed"
-
-
-# ─── Loop B applies a doc.json edit + re-renders tree.codoc (sole writer) ─────
-
-def test_loop_b_applies_doc_json_edit_and_rerenders_text(codoc_dir, tmp_path):
+def test_loop_b_applies_command_edit_and_rerenders_text(codoc_dir, tmp_path):
     fid = _seed(codoc_dir, "Auth", "Login.")
-    _write_doc(codoc_dir, [(fid, "Auth", "Add validation for empty input.")])
+    _amend_cmd(codoc_dir, fid, "Add validation for empty input.")
 
     res = run_loop_b(str(tmp_path), codoc_dir)
 
-    assert res.user_edits == 1
+    assert res.commands == 1
     with open_store(codoc_dir) as s:
         assert s.get_feature(fid).description == "Add validation for empty input."
     # Held-draft model: the edit applies + tree.codoc re-renders, but the directive is
@@ -227,43 +187,34 @@ def test_daemon_skips_non_edit_doc_persist(codoc_dir, tmp_path):
     assert out is None and "ran" not in ran  # guarded — no ping-pong
 
 
-# ─── INV7: local_id-keyed identity prevents undo/redo duplicates ─────────────
+# ─── KTD8: command idempotency prevents undo/redo duplicates ─────────────────
 
 def test_undo_of_add_node_does_not_create_duplicate_feature(codoc_dir, tmp_path):
-    """INV7: a TipTap undo restores the heading to fid=null (its history snapshot).
-    diff_codoc(has_local_ids=True) resolves identity by the author-stable local_id
-    against the store, so Loop B recognizes the existing feature (no op / AMEND) and
-    never emits a duplicate ADD. (This replaced the _apply_minted_fids pre-pass —
-    identity is resolved inside the diff, not laundered into the fid field first.)"""
-    # Pass 1: new feature with a localId (simulates TipTap's node creation).
-    payload = {
-        "version": 1,
-        "doc": {"type": "doc", "content": [
-            {"type": "featureHeading",
-             "attrs": {"fid": None, "localId": "lid-test-1", "level": 0,
-                       "retired": False, "realized": True},
-             "content": [{"type": "text", "text": "Brand new feature"}]},
-            {"type": "paragraph", "content": []},
-        ]},
-        "suggestions": [], "comments": [],
-    }
-    doc_path(codoc_dir).write_text(__import__("json").dumps(payload))
+    """Post-U7 a TipTap undo can no longer re-mint a feature, because the doc is never
+    read back as input: an `add` arrives as one identity-keyed command, applied once. A
+    crash-replay / re-send of the SAME command id is a ledger no-op (KTD8), and a fresh
+    add with the same (normalized_title, parent_id) is deduped (KTD3) — both paths leave
+    exactly one feature. (Replaces the INV7 doc-diff local_id-keyed dedup, which is moot
+    once the daemon is the sole writer of tree.doc.json.)"""
+    _seed(codoc_dir, "Existing", "x")  # empty-ish tree (one unrelated feature)
+    cmd = Command(id="cmd-add-undo", kind="add", local_id="lid-test-1",
+                  payload={"title": "Brand new feature", "description": "b"})
+    append_command(codoc_dir, cmd)
     res = run_loop_b(str(tmp_path), codoc_dir)
-    assert res.user_edits == 1, "ADD_NODE should be applied"
+    assert res.commands == 1
     with open_store(codoc_dir) as s:
-        features = s.list_features()
-    assert len(features) == 1
-    minted_fid = features[0].id
-    assert features[0].local_id == "lid-test-1"
+        minted = [f for f in s.list_features() if f.title == "Brand new feature"]
+    assert len(minted) == 1
+    minted_fid = minted[0].id
+    assert minted[0].local_id == "lid-test-1"
 
-    # Pass 2: simulate TipTap undo — heading is restored with fid=null, same localId.
-    # The local_id-keyed diff recognizes the existing feature → no duplicate ADD.
-    doc_path(codoc_dir).write_text(__import__("json").dumps(payload))  # fid still null
+    # Re-send the SAME command id (a crash-replay) → ledger no-op, no duplicate.
+    append_command(codoc_dir, cmd)
     res2 = run_loop_b(str(tmp_path), codoc_dir)
+    assert res2.commands == 0
     with open_store(codoc_dir) as s:
-        all_features = s.list_features()
-    assert len(all_features) == 1, "no duplicate should be created (INV7)"
-    assert all_features[0].id == minted_fid, "same fid must survive undo/redo"
+        again = [f for f in s.list_features() if f.title == "Brand new feature"]
+    assert len(again) == 1 and again[0].id == minted_fid, "no duplicate on replay (KTD8)"
 
 
 # ─── INV8: a HANDED-OFF directive is protected mid-realization ───────────────
@@ -274,12 +225,13 @@ def test_handed_off_directive_in_realize_md_is_not_superseded(codoc_dir, tmp_pat
     the caused_by causality chain and waste the agent's work. The protection is purely
     STRUCTURAL (realize.md membership) — it does NOT depend on activity.json's epoch, so
     a stale/missing epoch can never wrongly expose an in-flight directive. Held drafts
-    (the default) are not in realize.md, so they coalesce freely."""
+    (the default) are not in realize.md, so they coalesce freely. (Edits now arrive as
+    `set_description` commands; the supersede pruning keys off feature_id, unchanged.)"""
     from codoc.loop.edits import append_handoffs, read_manifest
 
     fid = _seed(codoc_dir, "Feature", "Old desc.")
     # Pass 1: edit → held draft D1; hand it off → realize.md written.
-    _write_doc(codoc_dir, [(fid, "Feature", "Add caching layer.")])
+    _amend_cmd(codoc_dir, fid, "Add caching layer.")
     run_loop_b(str(tmp_path), codoc_dir)
     append_handoffs(codoc_dir, [fid])
     run_loop_b(str(tmp_path), codoc_dir)
@@ -290,74 +242,40 @@ def test_handed_off_directive_in_realize_md_is_not_superseded(codoc_dir, tmp_pat
 
     # A fresh edit to the same feature would normally supersede — but D1 is in realize.md.
     # No activity.json epoch is written: protection comes from realize.md membership alone.
-    _write_doc(codoc_dir, [(fid, "Feature", "Add caching layer with TTL.")])
+    _amend_cmd(codoc_dir, fid, "Add caching layer with TTL.")
     run_loop_b(str(tmp_path), codoc_dir)
     assert d1_id in {d.id for d in read_manifest(codoc_dir)}, \
         "a handed-off, in-flight directive must survive supersede (INV8)"
 
 
-def test_doc_plan_node_mints_and_hands_off_a_build_directive(codoc_dir, tmp_path):
-    """Step 10: a NEW heading authored as a PLAN (realized=False — the webview's ◇ plan
-    gesture) is an explicit build request. Its ADD mints a directive that is handed off
-    on mint (an explicit gesture, not a held draft) → realize.md written → the agent
-    builds it. This is the typed replacement for the deleted is_imperative prose guess:
-    a descriptive new feature does NOT build; a plan one does."""
-    import json as _json
-    # A plan heading (realized=False) with a purely DESCRIPTIVE body.
-    payload = {
-        "version": 1,
-        "doc": {"type": "doc", "content": [
-            {"type": "featureHeading",
-             "attrs": {"fid": None, "localId": "lid-plan", "level": 0,
-                       "retired": False, "realized": False},
-             "content": [{"type": "text", "text": "Dark mode"}]},
-            {"type": "paragraph", "content": [{"type": "text", "text": "A light/dark theme toggle."}]},
-        ]},
-        "suggestions": [], "comments": [],
-    }
-    doc_path(codoc_dir).write_text(_json.dumps(payload))
+def test_descriptive_new_node_command_does_not_build(codoc_dir, tmp_path):
+    """A plain `add` command (a documentation node, realized defaults True) is created
+    but mints NO directive — only an explicit plan (verdict path) builds. (Replaces the
+    doc-diff descriptive-vs-plan ADD tests; the plan-builds path is covered by
+    test_loop_b.test_accept_plan_proposal_applies_and_builds_directive.)"""
+    _seed(codoc_dir, "Existing", "x")
+    append_command(codoc_dir, Command(
+        id="cmd-desc-add", kind="add", local_id="lid-doc",
+        payload={"title": "Add a dark theme toggle", "description": "verb-led prose"}))
     res = run_loop_b(str(tmp_path), codoc_dir)
-
-    assert res.user_edits == 1
-    assert res.queued is True, "a plan ADD is handed off on mint → realize.md written"
-    assert any("NEW FEATURE" in d and "Dark mode" in d for d in res.directives)
+    assert res.commands == 1
+    assert res.queued is False and res.directives == []  # a plain add never builds
     with open_store(codoc_dir) as s:
-        f = next(f for f in s.list_features() if f.title == "Dark mode")
-        assert f.realized is False  # stored as a plan placeholder
-
-
-def test_doc_descriptive_new_node_does_not_build(codoc_dir, tmp_path):
-    """The contrast: a NEW heading authored normally (realized defaults True) is a
-    documentation node — it is created but mints NO directive (no prose guessing)."""
-    import json as _json
-    payload = {
-        "version": 1,
-        "doc": {"type": "doc", "content": [
-            {"type": "featureHeading",
-             "attrs": {"fid": None, "localId": "lid-doc", "level": 0,
-                       "retired": False, "realized": True},
-             "content": [{"type": "text", "text": "Add a dark theme toggle"}]},  # verb-led prose
-            {"type": "paragraph", "content": []},
-        ]},
-        "suggestions": [], "comments": [],
-    }
-    doc_path(codoc_dir).write_text(_json.dumps(payload))
-    res = run_loop_b(str(tmp_path), codoc_dir)
-    assert res.user_edits == 1
-    assert res.queued is False and res.directives == []  # verb-led prose no longer builds
+        assert any(f.title == "Add a dark theme toggle" for f in s.list_features())
 
 
 def test_held_drafts_coalesce_to_one(codoc_dir, tmp_path):
     """Held drafts (the default) coalesce: iterating one feature across passes leaves a
-    SINGLE held draft, never a stack. No epoch involved — held drafts aren't in-flight."""
+    SINGLE held draft, never a stack. No epoch involved — held drafts aren't in-flight.
+    (Edits arrive as `set_description` commands; the per-feature supersede is unchanged.)"""
     from codoc.loop.edits import read_manifest
 
     fid = _seed(codoc_dir, "Feature", "Old desc.")
-    _write_doc(codoc_dir, [(fid, "Feature", "Add caching layer.")])
+    _amend_cmd(codoc_dir, fid, "Add caching layer.")
     run_loop_b(str(tmp_path), codoc_dir)
     assert len(read_manifest(codoc_dir)) == 1
 
-    _write_doc(codoc_dir, [(fid, "Feature", "Add caching layer with TTL.")])
+    _amend_cmd(codoc_dir, fid, "Add caching layer with TTL.")
     run_loop_b(str(tmp_path), codoc_dir)
     manifest = read_manifest(codoc_dir)
     assert len(manifest) == 1, "a fresh edit supersedes the prior held draft (coalesce)"
@@ -395,8 +313,8 @@ def test_loop_b_still_correct_under_the_lock(codoc_dir, tmp_path):
     """A normal pass produces the same result with the lock wrapping it (the lock is
     uncontended in a single-threaded test, so behavior is unchanged)."""
     fid = _seed(codoc_dir, "Auth", "Login.")
-    _write_doc(codoc_dir, [(fid, "Auth", "Add validation for empty input.")])
+    _amend_cmd(codoc_dir, fid, "Add validation for empty input.")
     res = run_loop_b(str(tmp_path), codoc_dir)
-    assert res.user_edits == 1
+    assert res.commands == 1
     with open_store(codoc_dir) as s:
         assert s.get_feature(fid).description == "Add validation for empty input."

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
-    createHostBridge,
+    acquireHostApi,
     createNetworkBridge,
     isVsCodeHost,
     type EventSourceLike,
@@ -161,10 +161,26 @@ describe('view state + transport selection', () => {
         expect(bridge.getState()).toEqual({ glance: true });
     });
 
-    it('selects the network bridge outside VS Code', () => {
+    it('acquireHostApi returns a usable VsCodeApi shim outside VS Code', () => {
         expect(isVsCodeHost()).toBe(false);
-        const bridge = createHostBridge();
-        expect(typeof bridge.postMessage).toBe('function');
-        expect(typeof bridge.onPayload).toBe('function');
+        const api = acquireHostApi();
+        expect(typeof api.postMessage).toBe('function');
+        expect(typeof api.getState).toBe('function');
+        expect(typeof api.setState).toBe('function');
+    });
+
+    it('acquireHostApi defaults its store to the ambient localStorage (browser-hub view state persists)', () => {
+        // The browser-hub regression: without a default storage, getState() always returned
+        // undefined and UiState restore (selection / scroll / tree-width / focus-mode) no-oped.
+        const fake = new FakeStorage();
+        (globalThis as unknown as { localStorage?: StorageLike }).localStorage = fake;
+        try {
+            const api = acquireHostApi();
+            api.setState({ focusMode: true, treeWidth: 320 });
+            expect(api.getState()).toEqual({ focusMode: true, treeWidth: 320 });
+            expect(fake.getItem('codoc.viewstate')).toContain('focusMode'); // persisted, not in-memory
+        } finally {
+            delete (globalThis as unknown as { localStorage?: StorageLike }).localStorage;
+        }
     });
 });

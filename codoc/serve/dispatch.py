@@ -36,14 +36,21 @@ class CommandError(Exception):
 
 
 # Command kinds a SUGGEST (read) role may issue. `commit` is included but routes to
-# a HELD settle (see module docstring) — it does not auto-send.
+# a HELD settle (see module docstring) — it does not auto-send. The identity-keyed
+# command kinds (U3 / KTD10): a description-level edit (`set_title`/`set_description`)
+# is SUGGEST-eligible — an outsider may propose prose; the structural kinds
+# (`add`/`move`/`retire`) are HANDOFF-gated below.
 _SUGGEST_KINDS = frozenset({
     "ready", "doc-settle", "commit",
     "comment-create", "comment-edit", "comment-resolve",
     "withdraw-realization", "set-pref",
+    "set_title", "set_description",
 })
-# Kinds that require a HANDOFF (write) role — the suggestion→execution crossing.
-_HANDOFF_KINDS = frozenset({"verdict", "hand-off"})
+# Kinds that require a HANDOFF (write) role — the suggestion→execution crossing. The
+# structural identity-keyed commands (U3 / KTD10) join here: only a write collaborator
+# may add/move/retire a feature directly; a suggest-only client's structural change is
+# queued as a pending proposal, never applied.
+_HANDOFF_KINDS = frozenset({"verdict", "hand-off", "add", "move", "retire"})
 
 
 def allowed(kind: str | None, capability: Capability) -> bool:
@@ -147,6 +154,30 @@ def _comment_create(message: dict, codoc_dir: str) -> dict:
     return {"ok": True}
 
 
+def _command(message: dict, codoc_dir: str) -> dict:
+    """Persist an identity-keyed authored command (U3) to edits.json. The
+    capability gate already ran in :func:`dispatch` (set_title/set_description need
+    only SUGGEST; add/move/retire need HANDOFF — KTD10), so by the time we get here
+    the kind is allowed for this caller. The daemon's Loop B drains + applies it via
+    ``apply_op`` (idempotent on the command id). The wire shape mirrors the Python
+    ``Command`` dataclass: ``{kind, id, featureId?, localId?, baseRev?, payload?}``."""
+    from codoc.loop import edits
+    from codoc.loop.edits import Command
+
+    kind = message.get("kind") or ""
+    cid = message.get("id") or message.get("commandId") or ""
+    if not cid:
+        raise CommandError(f"'{kind}' command requires an id (idempotency key)")
+    payload = message.get("payload")
+    edits.append_command(codoc_dir, Command(
+        id=cid, kind=kind,
+        feature_id=message.get("featureId") or message.get("feature_id") or "",
+        local_id=message.get("localId") or message.get("local_id") or "",
+        base_rev=int(message.get("baseRev") or message.get("base_rev") or 0),
+        payload=dict(payload) if isinstance(payload, dict) else {}))
+    return {"ok": True, "queued": True}
+
+
 def _comment_passthrough(message: dict, codoc_dir: str) -> dict:
     # comment-edit / comment-resolve: persist the doc (mark edit/removal); the
     # `> …` steering lifecycle is reconciled by the daemon.
@@ -165,4 +196,11 @@ _HANDLERS = {
     "comment-edit": _comment_passthrough,
     "comment-resolve": _comment_passthrough,
     "set-pref": _noop,
+    # Identity-keyed authored commands (U3): all five route to the same persist
+    # handler; the per-kind capability gate runs in dispatch() (KTD10).
+    "add": _command,
+    "set_title": _command,
+    "set_description": _command,
+    "move": _command,
+    "retire": _command,
 }
