@@ -117,6 +117,7 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
             while (queue.length) {
                 const msg = queue[0];
                 let ok = false;
+                let rejected = false;
                 try {
                     const res = await fetchImpl(`${base}/api/command`, {
                         method: 'POST',
@@ -125,10 +126,20 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
                         body: JSON.stringify(msg),
                     });
                     ok = !!res && res.ok;
+                    // A definite client rejection (400-499, excluding 429 rate-limit) will
+                    // never succeed on retry — e.g. a capability the caller's role doesn't
+                    // have, or a malformed message. Treating it the same as a transient
+                    // failure (offline / 5xx) would wedge this message at the head of the
+                    // FIFO queue FOREVER, silently blocking every later postMessage (settle,
+                    // comment, verdict, …) from ever syncing again. Drop it instead — the
+                    // rest of the queue keeps flowing.
+                    if (!ok && res && res.status >= 400 && res.status < 500 && res.status !== 429) {
+                        rejected = true;
+                    }
                 } catch {
                     ok = false;
                 }
-                if (!ok) break; // offline / server error → keep the queue, retry later
+                if (!ok && !rejected) break; // offline / 5xx / rate-limited → keep, retry later
                 queue.shift();
                 persist();
             }

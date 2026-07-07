@@ -105,13 +105,17 @@ class LiftContext:
     assembles (bound chunk text, graph neighborhood) — the plugin interprets it.
     ``block`` is the prior block (None when the loop is offering to *create* one).
     ``store`` is a READ-ONLY handle for plugins that need graph/index queries (the
-    diagram plugin reads the dependency graph); a plugin must never mutate it."""
+    diagram plugin reads the dependency graph); a plugin must never mutate it.
+    ``codoc_dir`` (``<repo>/.codoc``) lets a plugin resolve a repo-relative media
+    ref (e.g. a locally-attached PDF under ``.codoc/media/``) to an absolute path;
+    ``None`` in contexts that don't have a workspace root (e.g. some tests)."""
 
     feature: Feature
     bindings: list[Binding]
     code_context: str = ""
     block: Block | None = None
     store: object | None = None
+    codoc_dir: str | None = None
 
 
 @dataclass(frozen=True)

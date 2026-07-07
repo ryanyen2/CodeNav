@@ -150,6 +150,49 @@ describe('network bridge — outbound commands + offline outbox (R14)', () => {
         await bridge.flush();
         expect(JSON.parse(storage.getItem('codoc.outbox') as string)).toHaveLength(1);
     });
+
+    it('keeps retrying on a 429 rate-limit (transient, not a permanent rejection)', async () => {
+        const storage = new FakeStorage();
+        const fetchImpl = vi.fn(async () => ({ ok: false, status: 429 }) as Response);
+        const bridge = createNetworkBridge({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            storage,
+        });
+        bridge.postMessage({ kind: 'hand-off' });
+        await bridge.flush();
+        expect(JSON.parse(storage.getItem('codoc.outbox') as string)).toHaveLength(1);
+    });
+
+    it('drops a permanently-rejected (4xx) command instead of wedging the queue forever', async () => {
+        const storage = new FakeStorage();
+        const fetchImpl = vi.fn(async () => ({ ok: false, status: 403 }) as Response);
+        const bridge = createNetworkBridge({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            storage,
+        });
+        bridge.postMessage({ kind: 'block-edit', block: { block_id: 'blk-1', feature_id: 'f-1', kind: 'url', action: 'add', content: 'x', prev_content: '' } });
+        await bridge.flush();
+        expect(JSON.parse(storage.getItem('codoc.outbox') as string)).toHaveLength(0);
+    });
+
+    it('a dropped 4xx message does not block a later message behind it', async () => {
+        const storage = new FakeStorage();
+        const calls: string[] = [];
+        const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+            const body = JSON.parse(init.body as string) as WebviewMessage;
+            calls.push(body.kind);
+            return body.kind === 'hand-off' ? ({ ok: false, status: 403 }) as Response : ({ ok: true }) as Response;
+        });
+        const bridge = createNetworkBridge({
+            fetchImpl: fetchImpl as unknown as typeof fetch,
+            storage,
+        });
+        bridge.postMessage({ kind: 'hand-off' }); // will be rejected + dropped
+        bridge.postMessage({ kind: 'withdraw-realization', featureId: 'f-1' }); // must still get through
+        await vi.waitFor(() => expect(calls).toEqual(['hand-off', 'withdraw-realization']));
+        await vi.waitFor(() =>
+            expect(JSON.parse(storage.getItem('codoc.outbox') as string)).toHaveLength(0));
+    });
 });
 
 describe('view state + transport selection', () => {

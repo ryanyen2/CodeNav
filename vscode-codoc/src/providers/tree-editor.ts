@@ -82,7 +82,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     ): Promise<void> {
         panel.webview.options = {
             enableScripts: true,
-            localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
+            // `dist` serves the editor bundle; `.codoc/media` lets an `image` block's
+            // local attachment (screenshot/upload) load as a real `<img>` via
+            // `asWebviewUri` (see `mediaSrc`) instead of rendering as inert text.
+            localResourceRoots: [
+                vscode.Uri.joinPath(this.context.extensionUri, 'dist'),
+                vscode.Uri.joinPath(document.uri, '..', '..', '.codoc', 'media'),
+            ],
         };
         panel.webview.html = this.html(panel.webview);
 
@@ -101,7 +107,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         for (const d of seedEdits.drafts ?? []) seedSet.add(d.feature_id);
 
         const post = (): void => {
-            panel.webview.postMessage({ kind: 'doc', payload: this.buildPayload(document) });
+            panel.webview.postMessage({ kind: 'doc', payload: this.buildPayload(document, panel.webview) });
         };
 
         const subs: vscode.Disposable[] = [
@@ -244,16 +250,25 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
 
     /** Hand a typed-media block edit to Loop B (v6). Keyed by the STABLE block id
      *  (KTD8), so a move is never a block-edit and a delete+undo nets to nothing.
-     *  Loop B dispatches `lower` by the block's declared capability. */
+     *  Loop B dispatches `lower` by the block's declared capability. `mediaData`/
+     *  `mediaMime` (an `add`'s image/pdf file, from block-suggestion.ts's file
+     *  picker) are written under `.codoc/media/` first — content becomes the
+     *  resulting ref, exactly like an `image` block authored any other way. */
     private async handleBlockEdit(
         document: vscode.TextDocument,
         block: { block_id: string; feature_id: string; kind: string;
-                 action: 'edit' | 'add' | 'remove'; content?: string; prev_content?: string },
+                 action: 'edit' | 'add' | 'remove'; content?: string; prev_content?: string;
+                 mediaData?: string; mediaMime?: string },
     ): Promise<void> {
         if (!block?.block_id || !block.feature_id || !block.kind) return;
+        let content = block.content ?? '';
+        if (block.mediaData) {
+            const ref = await this.writeMediaAttachment(document, block.block_id, block.mediaData, block.mediaMime);
+            if (ref) content = ref;
+        }
         const file = appendBlockEdit(await this.readEditsFile(document), {
             block_id: block.block_id, feature_id: block.feature_id, kind: block.kind,
-            action: block.action, content: block.content ?? '',
+            action: block.action, content,
             prev_content: block.prev_content ?? '', ts: Date.now(),
         });
         await this.writeEditsFile(document, file);
@@ -273,14 +288,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         await this.writeEditsFile(document, file);
     }
 
-    /** Persist a comment's screenshot attachment (U6) under `.codoc/media/` and
-     *  return a repo-relative ref the realizing agent can open. Keyed by the thread
-     *  id so two attachments never collide. Returns null on any write failure
-     *  (a missing attachment must not block the comment). */
-    private async writeMediaAttachment(document: vscode.TextDocument, threadId: string, dataB64: string, mime?: string): Promise<string | null> {
+    /** Persist a comment-screenshot OR block (image/pdf) attachment (U6/Phase 0)
+     *  under `.codoc/media/` and return a repo-relative ref the realizing agent
+     *  (or a rendered `<img>`, see mediaSrc in buildPayload) can open. Keyed by
+     *  `key` (a thread id or block id) so two attachments never collide. Returns
+     *  null on any write failure (a missing attachment must not block the edit). */
+    private async writeMediaAttachment(document: vscode.TextDocument, key: string, dataB64: string, mime?: string): Promise<string | null> {
         try {
             const ext = (mime?.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
-            const safe = threadId.replace(/[^a-zA-Z0-9_-]/g, '') || 'shot';
+            const safe = key.replace(/[^a-zA-Z0-9_-]/g, '') || 'shot';
             const dir = vscode.Uri.joinPath(document.uri, '..', 'media');
             await vscode.workspace.fs.createDirectory(dir);
             await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, `${safe}.${ext}`), Buffer.from(dataB64, 'base64'));
@@ -321,7 +337,26 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         df.comments = df.comments.filter(c => c.id !== id);
     }
 
-    private buildPayload(document: vscode.TextDocument): DocPayload {
+    /** Resolve an `image` block's repo-relative `.codoc/media/...` ref (or an
+     *  already-absolute `http(s)://` reference) to a URL the webview can load
+     *  directly into an `<img src>` — VS Code webviews can't load an arbitrary
+     *  local file path, they need `asWebviewUri` translation into the panel's
+     *  `vscode-webview://` scheme, scoped to a `localResourceRoots` entry (see
+     *  `resolveCustomTextEditor`, which adds `.codoc/media` alongside `dist`).
+     *  Returns `undefined` for anything else (e.g. a bare filename with no
+     *  resolvable location) so the webview falls back to a placeholder rather
+     *  than a broken `<img>`. */
+    private mediaSrc(webview: vscode.Webview, document: vscode.TextDocument, ref: string): string | undefined {
+        const trimmed = (ref || '').trim();
+        if (!trimmed) return undefined;
+        if (/^https?:\/\//.test(trimmed)) return trimmed;
+        if (!trimmed.startsWith('.codoc/media/')) return undefined;
+        // document.uri is .../.codoc/tree.codoc; '..' → .codoc, '..' → repo root.
+        const abs = vscode.Uri.joinPath(document.uri, '..', '..', trimmed);
+        return webview.asWebviewUri(abs).toString();
+    }
+
+    private buildPayload(document: vscode.TextDocument, webview: vscode.Webview): DocPayload {
         const uri = document.uri.toString();
         // U4 (store-authoritative): the webview is a pure PROJECTION CONSUMER. The
         // authoritative rich doc is the daemon-written tree.doc.json (KTD9 — the daemon
@@ -520,7 +555,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const blocks: Record<string, ReturnType<typeof blocksForFeature>> = {};
         for (const fid of Object.keys(sidecar.features)) {
             const fb = blocksForFeature(sidecar, fid);
-            if (fb.length) blocks[fid] = fb;
+            if (!fb.length) continue;
+            blocks[fid] = fb.map(b => b.kind === 'image'
+                ? { ...b, mediaSrc: this.mediaSrc(webview, document, b.content) }
+                : b);
         }
 
         return {

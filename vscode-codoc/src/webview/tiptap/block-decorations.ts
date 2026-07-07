@@ -27,7 +27,10 @@ import type { UIBlock } from '../protocol';
 export const BLOCKS_UPDATED = 'codocBlocksUpdated';
 const blockKey = new PluginKey('codocBlockDecorations');
 
-/** A block-edit the webview hands back to the host (→ edits.json → Loop B `lower`). */
+/** A block-edit the webview hands back to the host (→ edits.json → Loop B `lower`).
+ *  `mediaData`/`mediaMime` (base64) carry an `add`'s file attachment (image/pdf) —
+ *  the host writes the bytes under `.codoc/media/` and substitutes the resulting
+ *  ref for `content` before persisting; text kinds (diagram/latex/url) omit them. */
 export interface BlockEditMsg {
     block_id: string;
     feature_id: string;
@@ -35,6 +38,8 @@ export interface BlockEditMsg {
     action: 'edit' | 'add' | 'remove';
     content: string;
     prev_content: string;
+    mediaData?: string;
+    mediaMime?: string;
 }
 
 export interface BlockDecorationsOptions {
@@ -60,6 +65,88 @@ export function blockEditMsg(block: UIBlock, fid: string, newContent: string): B
     };
 }
 
+/** `url` block content is either a bare reference (freshly authored, not yet
+ *  lifted) or a JSON envelope `{url,title,excerpt,status}` cached by the
+ *  daemon-side `lift` (codoc/blocks/reference.py:UrlPlugin) once it fetches the
+ *  page. Parse tolerantly — content the daemon hasn't lifted yet, or a plugin
+ *  version this host predates, is just a bare string. */
+export function parseUrlEnvelope(content: string): { url: string; title?: string; excerpt?: string } | null {
+    const text = (content || '').trim();
+    if (!text.startsWith('{')) return null;
+    try {
+        const parsed: unknown = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && typeof (parsed as { url?: unknown }).url === 'string') {
+            return parsed as { url: string; title?: string; excerpt?: string };
+        }
+    } catch {
+        // fall through — not (yet) a lifted envelope
+    }
+    return null;
+}
+
+function renderUrlBlock(block: UIBlock): HTMLElement {
+    const envelope = parseUrlEnvelope(block.content);
+    const url = envelope?.url ?? block.content;
+    const a = document.createElement('a');
+    a.className = 'ce-block-url';
+    a.textContent = envelope?.title || url;
+    a.href = url;
+    if (!envelope?.excerpt) return a;
+    // Lifted: a small preview card (title link + excerpt) instead of a bare link,
+    // so a human reading the tree sees real content, not just a URL to follow.
+    const card = document.createElement('div');
+    card.className = 'ce-block-url-card';
+    const excerpt = document.createElement('p');
+    excerpt.className = 'ce-block-url-excerpt';
+    excerpt.textContent = envelope.excerpt;
+    card.append(a, excerpt);
+    return card;
+}
+
+/** `pdf` block content is either a bare `.codoc/media/*.pdf` ref (not yet
+ *  lifted) or a JSON envelope `{ref,pages,excerpt,status}` cached by the
+ *  daemon-side `lift` (codoc/blocks/reference.py:PdfPlugin) once it extracts
+ *  text from the local attachment. Same tolerant-parse shape as url's envelope. */
+export function parsePdfEnvelope(content: string): { ref: string; pages?: number; excerpt?: string } | null {
+    const text = (content || '').trim();
+    if (!text.startsWith('{')) return null;
+    try {
+        const parsed: unknown = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && typeof (parsed as { ref?: unknown }).ref === 'string') {
+            return parsed as { ref: string; pages?: number; excerpt?: string };
+        }
+    } catch {
+        // fall through — not (yet) a lifted envelope
+    }
+    return null;
+}
+
+function renderPdfBlock(block: UIBlock): HTMLElement {
+    const envelope = parsePdfEnvelope(block.content);
+    const ref = envelope?.ref ?? block.content;
+    const name = document.createElement('span');
+    name.className = 'ce-block-pdf-name';
+    name.textContent = ref.split('/').pop() || ref || '(pdf)';
+    if (!envelope?.excerpt) return name;
+    const card = document.createElement('div');
+    card.className = 'ce-block-url-card';
+    const excerpt = document.createElement('p');
+    excerpt.className = 'ce-block-url-excerpt';
+    excerpt.textContent = envelope.excerpt;
+    card.append(name, excerpt);
+    return card;
+}
+
+/** A local image ref that isn't (yet) resolvable to a loadable URL — never
+ *  authored yet, moved/deleted on disk, or a host that predates media
+ *  resolution. Shows the raw ref rather than a broken `<img>`. */
+function unresolvedImagePlaceholder(ref: string): HTMLElement {
+    const ph = document.createElement('span');
+    ph.className = 'ce-block-image-unresolved';
+    ph.textContent = ref || '(image)';
+    return ph;
+}
+
 function renderBlock(block: UIBlock, fid: string, onEdit?: (e: BlockEditMsg) => void): HTMLElement {
     const wrap = document.createElement('div');
     wrap.className = `ce-block ce-block-${block.kind}`;
@@ -73,16 +160,24 @@ function renderBlock(block: UIBlock, fid: string, onEdit?: (e: BlockEditMsg) => 
     wrap.append(label);
 
     if (block.kind === 'url') {
-        const a = document.createElement('a');
-        a.className = 'ce-block-url';
-        a.textContent = block.content;
-        a.href = block.content;
-        wrap.append(a);
+        wrap.append(renderUrlBlock(block));
+    } else if (block.kind === 'pdf') {
+        wrap.append(renderPdfBlock(block));
     } else if (block.kind === 'image') {
-        const ref = document.createElement('span');
-        ref.className = 'ce-block-image';
-        ref.textContent = block.content;
-        wrap.append(ref);
+        if (block.mediaSrc) {
+            const img = document.createElement('img');
+            img.className = 'ce-block-image';
+            img.src = block.mediaSrc;
+            img.alt = 'reference image';
+            // A stale/unreadable ref (attachment moved or deleted on disk) must
+            // degrade to a placeholder, not a broken-image glyph.
+            img.addEventListener('error', () => {
+                img.replaceWith(unresolvedImagePlaceholder(block.content));
+            }, { once: true });
+            wrap.append(img);
+        } else {
+            wrap.append(unresolvedImagePlaceholder(block.content));
+        }
     } else if (EDITABLE_KINDS.has(block.kind)) {
         const pre = document.createElement('pre');
         pre.className = 'ce-block-content';

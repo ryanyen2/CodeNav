@@ -7,7 +7,7 @@
  * nothing; only LOWER-capable text media (diagram/latex) are editable.
  */
 import { describe, it, expect } from 'vitest';
-import { blockEditMsg, EDITABLE_KINDS } from '../webview/tiptap/block-decorations';
+import { blockEditMsg, EDITABLE_KINDS, parsePdfEnvelope, parseUrlEnvelope } from '../webview/tiptap/block-decorations';
 import type { UIBlock } from '../webview/protocol';
 
 const diagram: UIBlock = {
@@ -33,5 +33,49 @@ describe('block-edit message', () => {
         expect(EDITABLE_KINDS.has('latex')).toBe(true);
         expect(EDITABLE_KINDS.has('url')).toBe(false);
         expect(EDITABLE_KINDS.has('image')).toBe(false);
+    });
+});
+
+describe('url block envelope parsing', () => {
+    it('a bare (not-yet-lifted) url is not an envelope', () => {
+        expect(parseUrlEnvelope('https://docs.example/spec')).toBeNull();
+    });
+
+    it('parses a lifted envelope carrying title + excerpt', () => {
+        const content = JSON.stringify({
+            url: 'https://docs.example/spec', title: 'Spec Doc',
+            excerpt: 'the important bit', status: 'ok',
+        });
+        expect(parseUrlEnvelope(content)).toEqual({
+            url: 'https://docs.example/spec', title: 'Spec Doc',
+            excerpt: 'the important bit', status: 'ok',
+        });
+    });
+
+    it('malformed JSON-looking content falls back to null (renders as a bare link)', () => {
+        expect(parseUrlEnvelope('{not valid json')).toBeNull();
+    });
+
+    it('a JSON object without a url field is not treated as an envelope', () => {
+        expect(parseUrlEnvelope(JSON.stringify({ foo: 'bar' }))).toBeNull();
+    });
+});
+
+describe('pdf block envelope parsing', () => {
+    it('a bare (not-yet-lifted) ref is not an envelope', () => {
+        expect(parsePdfEnvelope('.codoc/media/blk-1.pdf')).toBeNull();
+    });
+
+    it('parses a lifted envelope carrying pages + excerpt', () => {
+        const content = JSON.stringify({
+            ref: '.codoc/media/blk-1.pdf', pages: 3, excerpt: 'design notes', status: 'ok',
+        });
+        expect(parsePdfEnvelope(content)).toEqual({
+            ref: '.codoc/media/blk-1.pdf', pages: 3, excerpt: 'design notes', status: 'ok',
+        });
+    });
+
+    it('a JSON object without a ref field is not treated as an envelope', () => {
+        expect(parsePdfEnvelope(JSON.stringify({ foo: 'bar' }))).toBeNull();
     });
 });

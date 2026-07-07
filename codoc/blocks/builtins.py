@@ -19,7 +19,9 @@ def register_builtins(registry: BlockRegistry) -> BlockRegistry:
     if registry.get("prose") is None:
         registry.register(ProsePlugin())
 
-    # Diagram (U5), screenshot + consult media (U6) register here as they land.
+    # Diagram (U5), screenshot (U6), and the reference-media family (url/pdf/
+    # image/latex) register here. Each registration is independently guarded so a
+    # missing optional dep (e.g. no `media` extras) never blocks the others.
     try:
         from codoc.blocks.diagram import DiagramPlugin
         if registry.get("diagram") is None:
@@ -29,6 +31,13 @@ def register_builtins(registry: BlockRegistry) -> BlockRegistry:
     try:
         from codoc.blocks.screenshot import register_media
         register_media(registry)
+    except ImportError:
+        pass
+    try:
+        from codoc.blocks.reference import ImagePlugin, LatexPlugin, PdfPlugin, UrlPlugin
+        for plugin_cls in (UrlPlugin, PdfPlugin, ImagePlugin, LatexPlugin):
+            if registry.get(plugin_cls.kind) is None:
+                registry.register(plugin_cls())
     except ImportError:
         pass
     return registry

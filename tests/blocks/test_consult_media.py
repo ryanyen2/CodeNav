@@ -1,4 +1,7 @@
-"""U6 — consult media: transient screenshot + persistent url/image, all consult-only."""
+"""U6 — consult media: transient screenshot + the persistent reference-media
+family (url/pdf/image/latex, codoc/blocks/reference.py). url/pdf additionally
+declare LIFT (fetch/extract real content once — see test_reference_plugins.py);
+screenshot/image/latex stay consult-only."""
 from __future__ import annotations
 
 from codoc.blocks.base import Capability
@@ -11,14 +14,23 @@ def _registry():
     return register_builtins(BlockRegistry())
 
 
-def test_media_register_with_consult_only():
+def test_consult_only_media_declares_no_lift_or_lower():
     reg = _registry()
-    for kind in ("screenshot", "url", "image"):
+    for kind in ("screenshot", "image", "latex"):
         p = reg.require(kind)
         assert p.capabilities == frozenset({Capability.CONSULT})
-        # consult-only: the loops asking for lift/lower get a clean skip
         assert reg.for_capability(kind, Capability.LOWER) is None
         assert reg.for_capability(kind, Capability.LIFT) is None
+        assert reg.for_capability(kind, Capability.CONSULT) is not None
+
+
+def test_url_and_pdf_additionally_declare_lift():
+    reg = _registry()
+    for kind in ("url", "pdf"):
+        p = reg.require(kind)
+        assert p.capabilities == frozenset({Capability.LIFT, Capability.CONSULT})
+        assert reg.for_capability(kind, Capability.LOWER) is None
+        assert reg.for_capability(kind, Capability.LIFT) is not None
         assert reg.for_capability(kind, Capability.CONSULT) is not None
 
 
@@ -40,14 +52,14 @@ def test_adding_a_new_consult_medium_needs_no_codec():
     """The cheapest extension: a brand-new reference medium is a 4-line plugin."""
     from codoc.blocks.base import BindingMode, BlockPlugin
 
-    class PdfPlugin(BlockPlugin):
-        kind = "pdf"
+    class AudioPlugin(BlockPlugin):
+        kind = "audio"
         capabilities = frozenset({Capability.CONSULT})
         binding_mode = BindingMode.AMBIENT
 
         def consult(self, block):
-            return f"Consult PDF: {block.content}"
+            return f"Consult audio: {block.content}"
 
     reg = _registry()
-    reg.register(PdfPlugin())
-    assert reg.for_capability("pdf", Capability.CONSULT) is not None
+    reg.register(AudioPlugin())
+    assert reg.for_capability("audio", Capability.CONSULT) is not None

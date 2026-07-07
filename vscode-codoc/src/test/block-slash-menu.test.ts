@@ -7,7 +7,7 @@ import { filterBlockKinds, buildBlockCreate, BLOCK_KINDS } from '../webview/tipt
 
 describe('filterBlockKinds', () => {
     it('empty query returns the full catalog in order', () => {
-        expect(filterBlockKinds('').map(k => k.kind)).toEqual(['diagram', 'image', 'latex', 'url']);
+        expect(filterBlockKinds('').map(k => k.kind)).toEqual(['diagram', 'image', 'latex', 'url', 'pdf']);
     });
 
     it('fuzzy-matches by label, best first', () => {
@@ -20,6 +20,10 @@ describe('filterBlockKinds', () => {
         const r = filterBlockKinds('latex');
         expect(r[0].kind).toBe('latex');
         expect(filterBlockKinds('zzzz')).toEqual([]);
+    });
+
+    it('matches pdf', () => {
+        expect(filterBlockKinds('pdf')[0].kind).toBe('pdf');
     });
 
     it('every catalog kind has a glyph + hint', () => {

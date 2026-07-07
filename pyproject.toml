@@ -35,6 +35,14 @@ serve = [
     "uvicorn>=0.30.0",
     "sse-starlette>=2.1.0",
 ]
+media = [
+    # Enriches url/pdf reference blocks (codoc/blocks/reference.py) with real
+    # extracted content instead of a bare reference. Lazily imported — absent,
+    # those blocks just carry the reference and skip enrichment.
+    "httpx>=0.27.0",
+    "trafilatura>=1.12.0",
+    "pypdf>=5.0.0",
+]
 
 [project.scripts]
 codoc = "codoc.cli.main:app"

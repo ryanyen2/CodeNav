@@ -112,6 +112,41 @@ def test_command_route_enforces_csrf_and_capability(tmp_path):
     assert {v.event_id for v in inbox.read_verdicts(str(cd))} == {"e-9"}
 
 
+def test_api_media_serves_an_attachment(tmp_path):
+    cd = tmp_path / ".codoc"
+    (cd / "media").mkdir(parents=True)
+    (cd / "media" / "mock.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = TestClient(build_app(str(cd)))
+    r = client.get("/api/media/mock.png")
+    assert r.status_code == 200
+    assert r.content == b"\x89PNG\r\n\x1a\n"
+
+
+def test_api_media_rejects_missing_files(tmp_path):
+    cd = tmp_path / ".codoc"
+    (cd / "media").mkdir(parents=True)
+    client = TestClient(build_app(str(cd)))
+    r = client.get("/api/media/absent.png")
+    assert r.status_code == 404
+    # not shadowed by the SPA catch-all — a real 404 JSON, not the placeholder HTML
+    assert r.json() == {"error": "not found"}
+
+
+def test_api_media_never_leaks_a_traversal_target(tmp_path):
+    # A literal ".." segment (and its %2F-encoded sibling-escape form) never reach
+    # this route with a traversal payload intact — either the ASGI layer
+    # normalizes the path before routing (falls through to the SPA catch-all) or
+    # resolve_media_file's own guard rejects it (unit-tested directly in
+    # test_media.py, where HTTP-layer normalization doesn't get in the way).
+    # Either way, the secret's bytes must never come back from this route.
+    (tmp_path / "secret.png").write_bytes(b"SECRET")
+    cd = tmp_path / ".codoc"
+    (cd / "media").mkdir(parents=True)
+    client = TestClient(build_app(str(cd)))
+    assert b"SECRET" not in client.get("/api/media/..").content
+    assert b"SECRET" not in client.get("/api/media/..%2Fsecret.png").content
+
+
 def test_command_route_rate_limits(tmp_path):
     from codoc.serve.auth import COOKIE_NAME, AuthContext, Capability, SessionStore
     from codoc.serve.ratelimit import RateLimiter

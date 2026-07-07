@@ -55,8 +55,38 @@ def test_hub_excludes_transient_blocks(codoc_dir):
 
 
 def test_hub_and_sidecar_agree(codoc_dir):
-    """The hub re-shapes the sidecar slice straight through — no re-derivation."""
+    """The hub re-shapes the sidecar slice straight through — no re-derivation
+    (the one exception, image mediaSrc, is additive and covered separately)."""
     from codoc.serve.payload import _sidecar
     d, fid = codoc_dir
     payload = build_browser_payload(d)
     assert payload["blocks"] == (_sidecar(d).get("blocks") or {})
+
+
+def test_hub_payload_resolves_image_media_src(tmp_path):
+    d = tmp_path / ".codoc"
+    d.mkdir()
+    with open_store(d) as s:
+        f = Feature(title="Landing", description="The landing page.")
+        s.upsert_feature(f)
+        s.upsert_block(Block(feature_id=f.id, kind="image", ord=0,
+                             content=".codoc/media/mock.png",
+                             lifecycle=BlockLifecycle.PERSISTENT, provenance=Provenance.HUMAN))
+        write_tree(s, d)
+    payload = build_browser_payload(str(d))
+    img = payload["blocks"][f.id][0]
+    assert img["mediaSrc"] == "/api/media/mock.png"
+
+
+def test_hub_payload_image_media_src_passthrough_for_external_url(tmp_path):
+    d = tmp_path / ".codoc"
+    d.mkdir()
+    with open_store(d) as s:
+        f = Feature(title="Landing", description="The landing page.")
+        s.upsert_feature(f)
+        s.upsert_block(Block(feature_id=f.id, kind="image", ord=0,
+                             content="https://cdn.example/mock.png",
+                             lifecycle=BlockLifecycle.PERSISTENT, provenance=Provenance.HUMAN))
+        write_tree(s, d)
+    payload = build_browser_payload(str(d))
+    assert payload["blocks"][f.id][0]["mediaSrc"] == "https://cdn.example/mock.png"

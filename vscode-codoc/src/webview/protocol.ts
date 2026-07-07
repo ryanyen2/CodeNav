@@ -193,6 +193,13 @@ export interface UIBlock {
     lifecycle: 'persistent' | 'transient';
     provenance: 'human' | 'agent' | 'derived';
     ord: number;
+    /** A HOST-RESOLVED, directly-loadable URL for an `image` block's attachment
+     *  (VS Code: `asWebviewUri`; the hub: `/api/media/<name>`). The webview never
+     *  resolves `content` (a repo-relative ref) into a URL itself — that
+     *  resolution is host-specific, so it renders `mediaSrc` verbatim when
+     *  present and falls back to a placeholder when absent (e.g. the ref is
+     *  missing/unreadable). Omitted for every other kind. */
+    mediaSrc?: string;
 }
 
 /** Per-workspace webview preferences persisted in the host's `workspaceState`. */
@@ -248,7 +255,25 @@ export type WebviewMessage =
     | { kind: 'bridge-open'; fid: string }
     /** Clear the code-side bridge highlight when the caret leaves the feature (§A.1). The
      *  code pane STAYS open (opening is eager, closing is the user's call). */
-    | { kind: 'bridge-dim'; fid: string | null };
+    | { kind: 'bridge-dim'; fid: string | null }
+    /** A typed-media block was authored/edited/removed (v6). Keyed by the STABLE
+     *  block id (KTD8) — a pure reorder never sends this. `mediaData`/`mediaMime`
+     *  (base64) carry an optional file attachment (image/pdf `add`) the host
+     *  writes under `.codoc/media/` before persisting the block-edit; text-only
+     *  kinds (diagram/latex/url) omit them. */
+    | {
+          kind: 'block-edit';
+          block: {
+              block_id: string;
+              feature_id: string;
+              kind: string;
+              action: 'edit' | 'add' | 'remove';
+              content?: string;
+              prev_content?: string;
+              mediaData?: string;
+              mediaMime?: string;
+          };
+      };
 
 /** Messages the HOST posts to the webview. The webview message bus keys on `kind`. */
 export type HostMessage =

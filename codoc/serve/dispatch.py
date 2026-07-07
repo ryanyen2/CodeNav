@@ -39,12 +39,16 @@ class CommandError(Exception):
 # a HELD settle (see module docstring) — it does not auto-send. The identity-keyed
 # command kinds (U3 / KTD10): a description-level edit (`set_title`/`set_description`)
 # is SUGGEST-eligible — an outsider may propose prose; the structural kinds
-# (`add`/`move`/`retire`) are HANDOFF-gated below.
+# (`add`/`move`/`retire`) are HANDOFF-gated below. `block-edit` joins here for the
+# same reason as `set_title`/`set_description`: a typed-media block edit is content,
+# not structure, and Loop B's `lower` dispatch already routes an ambiguous/lossy
+# result to the held-draft gate — a remote suggester can propose one, never force
+# an immediate code change.
 _SUGGEST_KINDS = frozenset({
     "ready", "doc-settle", "commit",
     "comment-create", "comment-edit", "comment-resolve",
     "withdraw-realization", "set-pref",
-    "set_title", "set_description",
+    "set_title", "set_description", "block-edit",
 })
 # Kinds that require a HANDOFF (write) role — the suggestion→execution crossing. The
 # structural identity-keyed commands (U3 / KTD10) join here: only a write collaborator
@@ -185,6 +189,41 @@ def _comment_passthrough(message: dict, codoc_dir: str) -> dict:
     return {"ok": True}
 
 
+def _block_edit(message: dict, codoc_dir: str) -> dict:
+    """Persist a typed-media block edit (v6) to the `block_edits` channel — the
+    SAME persistence the local webview's `handleBlockEdit` uses (KTD5/KTD8), so a
+    remote suggestion and a local edit are indistinguishable once written. Loop B
+    drains it and dispatches the block's declared `lower` capability; an
+    add/edit's *content* is written to the store immediately (it is the visible
+    projection, same as a doc-ahead suggestion), while any resulting code-implying
+    directive still inherits the draft/hand-off gate — a remote suggester cannot
+    force realization, only propose it."""
+    from codoc.loop import edits
+    from codoc.loop.edits import BlockEdit
+
+    block = message.get("block") or {}
+    block_id = block.get("block_id") or ""
+    feature_id = block.get("feature_id") or ""
+    kind = block.get("kind") or ""
+    if not block_id or not feature_id or not kind:
+        raise CommandError("block-edit requires block_id, feature_id, kind")
+    content = block.get("content") or ""
+    media_data = block.get("mediaData") or ""
+    if media_data:
+        from codoc.serve.media import save_media_attachment
+
+        ref = save_media_attachment(codoc_dir, block_id, media_data, block.get("mediaMime") or "")
+        if ref:
+            content = ref
+    edits.append_block_edit(codoc_dir, BlockEdit(
+        block_id=block_id, feature_id=feature_id, kind=kind,
+        action=block.get("action") or "edit",
+        content=content,
+        prev_content=block.get("prev_content") or "",
+        ts=int(time.time() * 1000)))
+    return {"ok": True}
+
+
 _HANDLERS = {
     "ready": _noop,
     "doc-settle": _settle,
@@ -195,6 +234,7 @@ _HANDLERS = {
     "comment-create": _comment_create,
     "comment-edit": _comment_passthrough,
     "comment-resolve": _comment_passthrough,
+    "block-edit": _block_edit,
     "set-pref": _noop,
     # Identity-keyed authored commands (U3): all five route to the same persist
     # handler; the per-kind capability gate runs in dispatch() (KTD10).

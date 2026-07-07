@@ -1449,4 +1449,29 @@ body.vscode-high-contrast .ce-presence-trail { background: var(--vscode-foregrou
 
 /* HC floor: the faint select wash + accent tick can wash out — pin the active row to a border. */
 body.vscode-high-contrast .ce-palette { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
+
+/* ── Typed-media blocks (v6) — diagram / image / latex / url / pdf, rendered
+   below a feature's prose by block-decorations.ts ──────────────────────── */
+.ce-blocks { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; }
+.ce-block {
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+    border-radius: 8px; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-foreground) 3%, transparent);
+}
+.ce-block-kind {
+    display: block; font: 10px var(--font-mono); letter-spacing: 0.02em; text-transform: uppercase;
+    color: var(--fg-muted); margin-bottom: 5px;
+}
+.ce-block-content {
+    margin: 0; font: 12.5px var(--font-mono); color: var(--vscode-foreground);
+    white-space: pre-wrap; word-break: break-word; outline: none;
+}
+.ce-block-content[contenteditable='true']:focus { background: var(--select-bg); border-radius: 4px; }
+.ce-block-url { color: var(--vscode-textLink-foreground); text-decoration: none; font: 13px var(--font-doc); }
+.ce-block-url:hover { text-decoration: underline; }
+.ce-block-url-card { display: flex; flex-direction: column; gap: 4px; }
+.ce-block-url-excerpt { margin: 0; font: 12px var(--font-doc); color: var(--fg-muted); line-height: 1.5; }
+.ce-block-image { display: block; max-width: 100%; border-radius: 6px; }
+.ce-block-image-unresolved, .ce-block-unknown {
+    display: block; font: 12px var(--font-mono); color: var(--fg-faint); font-style: italic;
+}
 body.vscode-high-contrast .ce-palette-row.active { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); border-left-color: var(--vscode-contrastBorder, var(--vscode-foreground)); }

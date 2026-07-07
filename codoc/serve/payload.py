@@ -307,6 +307,22 @@ def _threads_from_sidecar(sidecar: dict) -> dict:
     return threads
 
 
+def _blocks_with_media(blocks: dict) -> dict:
+    """Attach a `mediaSrc` to each `image` block entry the browser can load
+    directly (`/api/media/<name>` or a pass-through `http(s)://` ref) — mirrors
+    the webview's `asWebviewUri` translation so both hosts render the same
+    attachment without either resolving a raw filesystem path themselves."""
+    from codoc.serve.media import media_url_for
+
+    out: dict[str, list[dict]] = {}
+    for fid, entries in blocks.items():
+        out[fid] = [
+            {**e, "mediaSrc": media_url_for(e.get("content", ""))} if e.get("kind") == "image" else e
+            for e in (entries or [])
+        ]
+    return out
+
+
 def build_browser_payload(codoc_dir: str | Path) -> dict:
     """The full DocPayload for the browser suggest surface, derived from files."""
     codoc_dir = Path(codoc_dir)
@@ -350,11 +366,13 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
         "holdDetail": sidecar.get("hold_detail") or {},
         "drafts": drafts,
         "pitches": pitches,
-        # v6: typed-media blocks per feature, surfaced READ-ONLY (the hub renders
-        # diagrams/images but does not offer block editing — a per-host policy the
-        # host contract allows). Re-shaped straight from the sidecar slice, no
-        # re-derivation — the hub is a file-channel client (KTD7). This is the
-        # "many surfaces" evidence: a second host rendering the same blocks.
-        "blocks": _sidecar(codoc_dir).get("blocks") or {},
+        # v6: typed-media blocks per feature. Re-shaped straight from the sidecar
+        # slice, no re-derivation — the hub is a file-channel client (KTD7). This
+        # is the "many surfaces" evidence: a second host rendering the same
+        # blocks. Block EDITS route through dispatch.py's suggest-gated
+        # "block-edit" command; an `image` block's local attachment gets a
+        # `mediaSrc` the browser can load directly (mirrors the webview's
+        # `asWebviewUri` translation — see codoc/serve/media.py).
+        "blocks": _blocks_with_media(_sidecar(codoc_dir).get("blocks") or {}),
         "rev": payload_version(codoc_dir),
     }

@@ -16,6 +16,7 @@ from codoc.serve.dispatch import CommandError, allowed, dispatch
 def test_capability_matrix():
     assert allowed("comment-create", Capability.SUGGEST)
     assert allowed("commit", Capability.SUGGEST)
+    assert allowed("block-edit", Capability.SUGGEST)
     assert not allowed("hand-off", Capability.SUGGEST)
     assert not allowed("verdict", Capability.SUGGEST)
     assert allowed("hand-off", Capability.HANDOFF)
@@ -120,6 +121,54 @@ def test_handoff_can_structural_command(tmp_path):
     assert res["ok"] is True
     dispatch({"kind": "retire", "id": "c-ret", "featureId": "f-9"}, Capability.HANDOFF, cd)
     assert {c.kind for c in edits.read_commands(cd)} == {"add", "retire"}
+
+
+# Blocks (v6) — a remote suggester may propose a block edit; it's held/staged
+# exactly like every other hub suggestion (SUGGEST-eligible, content-level).
+def test_suggest_can_block_edit(tmp_path):
+    cd = str(tmp_path)
+    res = dispatch(
+        {"kind": "block-edit",
+         "block": {"block_id": "blk-1", "feature_id": "f-1", "kind": "diagram",
+                    "action": "edit", "content": "flowchart TB\n  a --> b",
+                    "prev_content": "flowchart TB\n  a"}},
+        Capability.SUGGEST, cd)
+    assert res["ok"] is True
+    pending = edits.read_block_edits(cd)
+    assert len(pending) == 1
+    assert pending[0].block_id == "blk-1" and pending[0].kind == "diagram"
+    assert pending[0].content == "flowchart TB\n  a --> b"
+
+
+def test_block_edit_requires_identity(tmp_path):
+    with pytest.raises(CommandError):
+        dispatch({"kind": "block-edit", "block": {"feature_id": "f-1", "kind": "url"}},
+                 Capability.SUGGEST, str(tmp_path))
+    assert edits.read_block_edits(str(tmp_path)) == []
+
+
+def test_suggest_block_edit_writes_a_file_attachment(tmp_path):
+    import base64
+
+    cd = str(tmp_path)
+    data = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+    res = dispatch(
+        {"kind": "block-edit",
+         "block": {"block_id": "blk-2", "feature_id": "f-1", "kind": "image",
+                    "action": "add", "mediaData": data, "mediaMime": "image/png"}},
+        Capability.SUGGEST, cd)
+    assert res["ok"] is True
+    pending = edits.read_block_edits(cd)
+    assert pending[0].content == ".codoc/media/blk-2.png"
+    assert (tmp_path / "media" / "blk-2.png").read_bytes() == b"\x89PNG\r\n\x1a\n"
+
+
+def test_none_cannot_block_edit(tmp_path):
+    with pytest.raises(CommandError) as ei:
+        dispatch({"kind": "block-edit",
+                  "block": {"block_id": "blk-1", "feature_id": "f-1", "kind": "url"}},
+                 Capability.NONE, str(tmp_path))
+    assert ei.value.status == 403
 
 
 # Flow 5 — malformed / unknown commands rejected.

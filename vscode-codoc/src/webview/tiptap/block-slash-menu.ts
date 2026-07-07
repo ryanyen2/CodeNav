@@ -22,12 +22,13 @@ export interface BlockKindItem {
     glyph: string;      // icons.ts name
 }
 
-/** The catalog — mirrors the registered reference plugins (diagram/image/latex/url). */
+/** The catalog — mirrors the registered reference plugins (diagram/image/latex/url/pdf). */
 export const BLOCK_KINDS: BlockKindItem[] = [
     { kind: 'diagram', label: 'Diagram', hint: 'dependency graph of this feature', glyph: 'diamond' },
     { kind: 'image', label: 'Image', hint: 'a screenshot or mockup', glyph: 'square' },
     { kind: 'latex', label: 'Formula', hint: 'a LaTeX formula', glyph: 'function' },
     { kind: 'url', label: 'Link', hint: 'a reference URL the agent consults', glyph: 'link' },
+    { kind: 'pdf', label: 'PDF', hint: 'a reference document the agent consults', glyph: 'file' },
 ];
 
 /** Filter + rank the block kinds for a slash query (after the `/`). Empty query →

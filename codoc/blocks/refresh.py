@@ -46,7 +46,7 @@ def refresh_lift_blocks(store: Store, codoc_dir: str,
             continue
         res = plugin.lift(LiftContext(
             feature=f, bindings=store.bindings_for_feature(blk.feature_id),
-            block=blk, store=store))
+            block=blk, store=store, codoc_dir=codoc_dir))
         if res.changed and res.content is not None and res.content != blk.content:
             store.upsert_block(blk.model_copy(update={
                 "content": res.content, "provenance": Provenance.DERIVED}))

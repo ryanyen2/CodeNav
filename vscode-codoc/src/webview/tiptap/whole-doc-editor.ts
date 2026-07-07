@@ -33,6 +33,7 @@ import { RevealDecorations, REVEAL_UPDATED } from './reveal-decorations';
 import { AgentRibbon, STEPS_UPDATED } from './agent-ribbon';
 import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
 import { BlockDecorations, BLOCKS_UPDATED, type BlockEditMsg } from './block-decorations';
+import { BlockSuggestion } from './block-suggestion';
 import type { UIBlock } from '../protocol';
 import { CapturedDecorations, CAPTURED_UPDATED, featureBlocks, type FeatureText } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
@@ -279,6 +280,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             BlockDecorations.configure({
                 getBlocks: () => currentBlocks,
                 onEdit: opts.onBlockEdit,
+            }),
+            BlockSuggestion.configure({
+                getActiveFid: () => activeFid(),
+                onCreate: edit => opts.onBlockEdit?.(edit),
+                char: '/',
             }),
             CapturedDecorations.configure({
                 // Phase 1 of the lifecycle: every user edit gets the "recorded, not sent"

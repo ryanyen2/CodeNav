@@ -85,6 +85,17 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None, rate_
 
         return JSONResponse(build_browser_payload(codoc_dir))
 
+    @app.get("/api/media/{name}")
+    def api_media(name: str):
+        from starlette.responses import FileResponse
+
+        from codoc.serve.media import resolve_media_file
+
+        path = resolve_media_file(codoc_dir, name)
+        if path is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(str(path))
+
     @app.get("/api/events")
     async def api_events(request: "Request"):
         from sse_starlette.sse import EventSourceResponse
