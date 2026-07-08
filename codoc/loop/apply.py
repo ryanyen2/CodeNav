@@ -124,7 +124,13 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
                 f.title = op.title
             if op.description is not None:
                 f.description = op.description
-            f.updated_at = HLC.now()
+            # advance() (not HLC.now()) guarantees the new updated_at is STRICTLY greater
+            # than the feature's prior one even for two edits in the same wall-clock ms —
+            # HLC.now() always returns logical_time=0, so same-ms edits tied and the
+            # webview's "strictly newer" doc-gate could miss a real change (P2). Bumping
+            # the logical counter off the feature's own clock keeps per-feature edits
+            # monotonic without any process-global state.
+            f.updated_at = f.updated_at.advance()
             store.upsert_feature(f)
     elif k is NodeOpKind.ADD_NODE:
         # ``realized`` defaults True: a node is a real feature unless an explicit
@@ -146,11 +152,38 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
     elif k is NodeOpKind.MOVE_NODE:
         f = store.get_feature(op.feature_id)
         if f:
-            f.parent_id = op.parent_id
-            f.updated_at = HLC.now()
-            store.upsert_feature(f)
+            # Reject a cycle-forming move (destination is the node itself or a
+            # descendant). Silently dropping the move is far safer than applying it:
+            # a cycle detaches the subtree from every root, so render_tree's walk, the
+            # doc projection, and the sidecar all drop it — the features stay live and
+            # bound (their chunks read as "covered", so Loop A never re-homes them) but
+            # are invisible and unrecoverable from any UI. The move source (webview
+            # command / proposal accept / MCP / hub) all funnel through here, so this is
+            # the single chokepoint that keeps the tree acyclic.
+            if store.would_move_create_cycle(op.feature_id, op.parent_id):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "codoc: rejected cycle-forming move of %s under %s (no-op)",
+                    op.feature_id, op.parent_id)
+            else:
+                f.parent_id = op.parent_id
+                f.updated_at = f.updated_at.advance()
+                store.upsert_feature(f)
     elif k is NodeOpKind.RETIRE_NODE:
         if op.feature_id:
+            # Re-parent LIVE children to the grandparent BEFORE retiring. A retired
+            # feature is filtered out of `children()`, so any child left pointing at it
+            # becomes an orphan — invisible to render/projection/sidecar (all walk from
+            # the roots) yet still live + bound, i.e. unrecoverable. Promoting the
+            # children to the retiree's own parent keeps the tree connected (a root's
+            # children become roots). Retiring a subtree is done child-first or cascades
+            # correctly: each retire only lifts its own direct children one level.
+            owner = store.get_feature(op.feature_id)
+            if owner is not None:
+                for child in store.children(op.feature_id):
+                    child.parent_id = owner.parent_id
+                    child.updated_at = child.updated_at.advance()
+                    store.upsert_feature(child)
             # Mark retired only. Binding detach is a PATH decision, not a property of
             # the op: an inbox/auto retire detaches (untrack — Loop B does it), while
             # a human `~` retire keeps its bindings so Loop B can build the code-removal

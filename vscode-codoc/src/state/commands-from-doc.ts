@@ -168,3 +168,32 @@ export function moveCommand(fid: string, newParentId: string | null, salt: numbe
     return { id: commandId('move', fid, salt), kind: 'move', feature_id: fid,
              payload: { parent_id: newParentId } };
 }
+
+/** One entry in the host's short projection-baseline history (#4). */
+export interface Baseline { id: number; units: FeatureUnit[]; }
+
+/**
+ * #4 — compute the settle command set against the baseline the settle CITES, not against
+ * whatever projection last landed on the host. A settle carries the `baselineId` of the
+ * projection the editor was showing when the user typed; we diff against THAT baseline's
+ * units. Diffing against a newer projection is the phantom-retire bug: a feature the
+ * daemon added after the editor's baseline would appear in `prev` but not `next` and be
+ * misread as a user deletion → a `retire` command.
+ *
+ * When the settle cites no baseline, or one that has been evicted from the bounded
+ * history, we cannot trust a "feature disappeared" signal (it may be a daemon-added
+ * feature the stale fallback never had), so RETIRE — the one destructive, irreversible
+ * command — is suppressed; every other command is safe against the fallback.
+ */
+export function settleCommands(
+    history: readonly Baseline[],
+    baselineId: number | undefined,
+    fallbackUnits: FeatureUnit[],
+    nextUnits: FeatureUnit[],
+    salt: number,
+): CommandEntry[] {
+    const cited = baselineId != null ? history.find(b => b.id === baselineId) : undefined;
+    const prevUnits = cited ? cited.units : fallbackUnits;
+    const commands = commandsForSettle(prevUnits, nextUnits, salt);
+    return cited ? commands : commands.filter(c => c.kind !== 'retire');
+}

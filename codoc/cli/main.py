@@ -274,7 +274,9 @@ def sync(
     from codoc.store.db import open_store
 
     cd = _codoc_dir(root)
-    rb = run_loop_b(root, cd, dry_run=dry)
+    # --dry APPLIES the tree edits (mutates the store, re-renders both files) but does not
+    # hand realization to the agent — realize=False, not loop_b's read-mostly dry_run.
+    rb = run_loop_b(root, cd, realize=not dry)
     typer.echo(f"▸ codoc→code  {rb.summary()}")
     if rb.directives:
         label = "would queue (dry run)" if dry else "queued for the session (run /codoc:sync)"

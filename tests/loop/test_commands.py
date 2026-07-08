@@ -85,23 +85,51 @@ def test_reapplying_same_command_id_is_noop(dirs):
 
 
 # ── dedup: a fresh-id second add with the same (norm title, parent) is rejected ─
-def test_second_add_same_title_parent_fresh_id_rejected(dirs):
+def test_second_add_same_title_different_local_id_mints_sibling(dirs):
+    """#5 — a second `add` carrying a DIFFERENT local_id but the same (title, parent)
+    is a DELIBERATE same-titled sibling, NOT a duplicate: it mints its own feature and
+    echoes its fid. The old (normalized_title, parent_id) fold swallowed it — which both
+    made same-titled siblings impossible to author AND stranded the webview's optimistic
+    node with no fid to adopt (a zombie heading that vanished on reload). The local_id is
+    the identity here (KTD8); re-sends are caught by the ledger + feature_by_local_id."""
     root, codoc_dir = dirs
     _seed_tree(codoc_dir)
     append_command(codoc_dir, Command(id="c-a", kind="add", local_id="L1",
                                       payload={"title": "Palette"}))
-    run_loop_b(root, codoc_dir, dry_run=False)
+    res1 = run_loop_b(root, codoc_dir, dry_run=False)
 
-    # Same normalized title (whitespace/case differ), same parent (None), fresh id.
+    # Same normalized title (whitespace/case differ), same parent (None), a NEW local_id.
     append_command(codoc_dir, Command(id="c-b", kind="add", local_id="L2",
+                                      payload={"title": "  palette "}))
+    res2 = run_loop_b(root, codoc_dir, dry_run=False)
+
+    s = open_store(codoc_dir)
+    palettes = [f for f in s.list_features() if f.title.strip().lower() == "palette"]
+    assert len(palettes) == 2                       # two deliberate siblings
+    s.close()
+    # Each add echoed its own minted fid so the webview adopts the right node.
+    assert set(res1.fids_by_local) == {"L1"}
+    assert set(res2.fids_by_local) == {"L2"}
+    assert res1.fids_by_local["L1"] != res2.fids_by_local["L2"]
+
+
+def test_second_add_same_title_no_local_id_folds(dirs):
+    """The (normalized_title, parent_id) fold survives for an add carrying NO local_id —
+    the Loop-A LLM-apply / CLI path, whose replays have no stable client identity to key
+    on. A second no-local_id add with the same title+parent folds (mints nothing)."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir)
+    append_command(codoc_dir, Command(id="c-a", kind="add", local_id="",
+                                      payload={"title": "Palette"}))
+    run_loop_b(root, codoc_dir, dry_run=False)
+    append_command(codoc_dir, Command(id="c-b", kind="add", local_id="",
                                       payload={"title": "  palette "}))
     res2 = run_loop_b(root, codoc_dir, dry_run=False)
 
     s = open_store(codoc_dir)
     assert len([f for f in s.list_features() if f.title.strip().lower() == "palette"]) == 1
     s.close()
-    # The duplicate command was consumed (ledger-stamped) but minted nothing.
-    assert res2.fids_by_local == {}
+    assert res2.fids_by_local == {}  # no local_id → nothing to echo
 
 
 # ── add re-mint guard via local_id (FIX B): same local_id, CHANGED title ─────

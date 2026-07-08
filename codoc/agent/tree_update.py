@@ -46,4 +46,18 @@ def propose_tree_update(
     )
     raw = run_agent(prompt, config)
     ops_raw = raw.get("ops", []) if isinstance(raw, dict) else raw
-    return [_coerce_op(o) for o in ops_raw]
+    # Per-op tolerance (dead-letter): one malformed op (a bad/absent kind, a missing key,
+    # a pydantic validation failure) must NOT sink the whole response. Before this, a
+    # single bad op raised out of the comprehension, the pass errored, and the state-based
+    # reconcile re-issued every subsequent save — an unbounded retry/cost loop. Now a bad
+    # op is dropped with a warning and the good ops still apply.
+    import logging
+
+    ops: list[NodeOp] = []
+    for o in ops_raw:
+        try:
+            ops.append(_coerce_op(o))
+        except Exception as exc:  # noqa: BLE001 — tolerate one bad op, keep the rest
+            logging.getLogger(__name__).warning(
+                "codoc: dropping malformed LLM tree-update op (%s): %r", exc, o)
+    return ops

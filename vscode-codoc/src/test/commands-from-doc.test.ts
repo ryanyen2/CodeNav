@@ -7,7 +7,7 @@
  * an edit emits a command, a delete emits a `retire`, an unchanged settle emits nothing.
  */
 import { describe, it, expect } from 'vitest';
-import { commandsForSettle, featureUnits, moveCommand } from '../state/commands-from-doc';
+import { commandsForSettle, featureUnits, moveCommand, settleCommands } from '../state/commands-from-doc';
 import { makeDoc, featureHeadingNode, paragraphNode, textToInlineRuns } from '../state/pm-doc';
 import type { PMNode } from '../state/pm-doc';
 
@@ -128,6 +128,64 @@ describe('commandsForSettle — identity-keyed command emission', () => {
         const cmds = commandsForSettle(prev, next, 1);
         expect(cmds).toHaveLength(1);
         expect(cmds[0]).toMatchObject({ kind: 'move', feature_id: 'f-2', payload: { parent_id: 'f-1' } });
+    });
+});
+
+describe('settleCommands — #4: diff against the CITED baseline, not a newer projection', () => {
+    // Baseline B0: what the editor was showing. The user edits f-1's title in it.
+    const b0 = makeDoc([
+        ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),
+        ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+    ]);
+    const b0Units = featureUnits(b0);
+    // B1: a NEWER projection the daemon pushed mid-typing — it added f-3.
+    const b1Units = featureUnits(makeDoc([
+        ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),
+        ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+        ...feat({ fid: 'f-3' }, 'Agent-added', 'new'),
+    ]));
+    // The settled editor doc (computed from B0, so it has NO f-3) with f-1 retitled.
+    const settledUnits = featureUnits(makeDoc([
+        ...feat({ fid: 'f-1' }, 'Authentication', 'Validates input.'),
+        ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+    ]));
+    const history = [{ id: 1, units: b0Units }, { id: 2, units: b1Units }];
+
+    it('diffs against the cited baseline B0 → the edit only, NO phantom retire of f-3', () => {
+        // fallback is the LATEST projection B1 (has f-3) — the old bug diffed against this.
+        const cmds = settleCommands(history, 1, b1Units, settledUnits, 1);
+        expect(cmds).toHaveLength(1);
+        expect(cmds[0]).toMatchObject({ kind: 'set_title', feature_id: 'f-1' });
+        expect(cmds.some(c => c.kind === 'retire')).toBe(false);
+    });
+
+    it('WITHOUT the fix (diff against the newer projection) f-3 would phantom-retire', () => {
+        // Demonstrates the bug the baseline id prevents: diffing the B0-editor doc against
+        // B1 reads f-3 (added by the daemon) as a user deletion.
+        const buggy = commandsForSettle(b1Units, settledUnits, 1);
+        expect(buggy.some(c => c.kind === 'retire' && c.feature_id === 'f-3')).toBe(true);
+    });
+
+    it('an uncited baseline suppresses retire (conservative) but keeps other commands', () => {
+        // A genuine deletion of f-2 in the settled doc, but no baselineId cited.
+        const deleted = featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Authentication', 'Validates input.'),
+        ]));
+        const cmds = settleCommands(history, undefined, b0Units, deleted, 1);
+        expect(cmds.some(c => c.kind === 'retire')).toBe(false);   // suppressed
+        expect(cmds.some(c => c.kind === 'set_title' && c.feature_id === 'f-1')).toBe(true);
+    });
+
+    it('an evicted baseline id (not in history) also suppresses retire', () => {
+        const deleted = featureUnits(makeDoc([...feat({ fid: 'f-1' }, 'Auth', 'Validates input.')]));
+        const cmds = settleCommands(history, 999, b0Units, deleted, 1);
+        expect(cmds.some(c => c.kind === 'retire')).toBe(false);
+    });
+
+    it('a cited baseline allows a genuine retire through', () => {
+        const deleted = featureUnits(makeDoc([...feat({ fid: 'f-1' }, 'Auth', 'Validates input.')]));
+        const cmds = settleCommands(history, 1, b0Units, deleted, 1);
+        expect(cmds.some(c => c.kind === 'retire' && c.feature_id === 'f-2')).toBe(true);
     });
 });
 

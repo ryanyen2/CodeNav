@@ -119,6 +119,12 @@ export interface DocPayload {
     sync: SyncState;
     rootName: string;
     pendingEventIds: string[];
+    /** Monotonic id of the projection this payload was rendered from (#4). The webview
+     *  echoes it back on `doc-settle` / `commit` so the host diffs the settled doc against
+     *  the EXACT baseline the editor was showing — not whatever projection has since
+     *  arrived — which prevents a settle computed pre-payload from reading a
+     *  daemon-added feature as a user deletion (a phantom retire). */
+    baselineId?: number;
     /** The authoritative whole-tree rich doc (tree.doc.json, reconciled with the
      *  current structure). The webview mounts the editor from it so authorship
      *  marks survive. Absent on legacy payloads. */
@@ -211,15 +217,15 @@ export interface WebviewPrefs {
 /** Messages the webview posts back to the host. */
 export type WebviewMessage =
     | { kind: 'ready' }
-    /** Whole-doc settle (R3 / U2b): the entire edited ProseMirror doc. The host
-     *  persists it to tree.doc.json (single writer); the daemon's Loop B derives the
-     *  AMEND / MOVE / ADD / RETIRE op from it and renders tree.codoc. */
-    | { kind: 'doc-settle'; doc: PMNode }
+    /** Whole-doc settle (R3 / U2b): the entire edited ProseMirror doc. The host diffs it
+     *  against the projection baseline `baselineId` names (#4) to emit identity-keyed
+     *  commands; the daemon's Loop B applies them and renders tree.codoc. */
+    | { kind: 'doc-settle'; doc: PMNode; baselineId?: number }
     /** Stage & SEND (U4 — save = stage & send): the explicit ⌘S / Commit gesture. The host
-     *  flushes this doc (persist + mark drafts), then hands the staged code-implying edits
-     *  to the agent in one step (settle + hand-off). The single send gesture; the debounced
+     *  flushes this doc (settle against `baselineId` + mark drafts), then hands the staged
+     *  code-implying edits to the agent in one step. The single send gesture; the debounced
      *  `doc-settle` only captures (records locally, never sends). */
-    | { kind: 'commit'; doc: PMNode }
+    | { kind: 'commit'; doc: PMNode; baselineId?: number }
     /** Withdraw a queued realization (U6): cancel feature `featureId`'s directive.
      *  The host appends a cancellation to edits.json; Loop B prunes the directive
      *  and releases the hold. The committed prose is kept. */

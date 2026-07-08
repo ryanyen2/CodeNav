@@ -139,7 +139,7 @@ def test_daemon_routes_doc_edit_to_loop_b(codoc_dir, tmp_path):
 
     called = {}
 
-    def fake_loop_b(root, cd, *, dry_run=False):
+    def fake_loop_b(root, cd, **kw):
         from codoc.loop.loop_b import LoopBResult
         called["ran"] = True
         return LoopBResult(user_edits=1)
@@ -176,7 +176,7 @@ def test_daemon_skips_non_edit_doc_persist(codoc_dir, tmp_path):
 
     ran = {}
 
-    def fake_loop_b(root, cd, *, dry_run=False):
+    def fake_loop_b(root, cd, **kw):
         ran["ran"] = True
         from codoc.loop.loop_b import LoopBResult
         return LoopBResult()

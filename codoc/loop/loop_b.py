@@ -476,14 +476,17 @@ class _PreMutation:
     errors: list[str] = field(default_factory=list)
 
 
-def _snapshot_pre_mutation(store: Store, codoc_dir: str) -> _PreMutation:
+def _snapshot_pre_mutation(store: Store, codoc_dir: str, *, dry_run: bool = False) -> _PreMutation:
     """Capture the pre-mutation snapshot in ONE place, doing NO store mutation.
 
     Order matters and is fixed here so callers never have to get it right:
     1. seed ``baselines`` from the manifest (must precede any later cancellation
        drain so a still-pending episode keeps its stable diff baseline — R5/R6);
     2. drain edits.json authorship annotations (a control-file read/clear, not a
-       store write);
+       store write). A ``dry_run`` PREVIEW pass applies no commands, so consuming the
+       annotations there would just LOSE them (a later real pass then mislabels the
+       provenance as the human/pen default) — so a dry pass READS them without clearing.
+       A non-realize pass still applies commands, so it drains normally.
     3. ``_merge_channels`` — retired to an empty diff (U7); user edits are commands.
     """
     baselines: dict[str, str] = {
@@ -491,22 +494,53 @@ def _snapshot_pre_mutation(store: Store, codoc_dir: str) -> _PreMutation:
         for d in edits_channel.read_manifest(codoc_dir)
         if d.feature_id and d.baseline
     }
-    annotations = edits_channel.drain_annotations(codoc_dir)
+    annotations = (edits_channel.read_annotations(codoc_dir) if dry_run
+                   else edits_channel.drain_annotations(codoc_dir))
     diff, errors = _merge_channels(codoc_dir, store)
     return _PreMutation(diff=diff, annotations=annotations, baselines=baselines,
                         errors=errors)
 
 
-def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False) -> LoopBResult:
+def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False,
+               realize: bool = True) -> LoopBResult:
+    """Drain the edit/verdict channels and (when ``realize``) queue code realization.
+
+    Two orthogonal knobs:
+
+    * ``dry_run`` — a read-mostly PREVIEW: verdicts/intents are applied and directives
+      are BUILT (so a caller can inspect ``res.directives``), but authored ``commands``
+      are not applied and no manifest/realize.md/tree.doc.json is written. Used by tests
+      and inspection callers.
+    * ``realize`` — the production hand-off gate (CLAUDE.md ``--dry`` / ``--no-realize``).
+      When False, authored edits ARE applied to the store and both files ARE re-rendered
+      (so the editor never appears frozen — the field bug), but NOTHING is handed to the
+      agent: steers/block-edits are deferred (not drained), code-implying verdict accepts
+      are deferred (left in the inbox), the one-shot handoffs channel is not drained, and
+      no ``realize.md`` is written. New directives are recorded HELD so their intent
+      survives for a later realize-mode pass / hand-off.
+    """
     # The shared codoc-loop lock serializes this whole pass against Loop A and any other
     # Loop B (daemon / CLI / hub / Stop-hook) so no two passes interleave between store
     # mutation and the write_tree re-render (the phantom-revert race). See loop/locks.py.
     with loop_lock(codoc_dir):
+        # Absorb the IDE's append-only host-op log (edits.host.jsonl) into edits.json
+        # under the edits lock BEFORE reading any channel, so a webview edit that arrived
+        # as an appended op is seen this pass and never lost to a lock-less RMW race (U9).
+        edits_channel.merge_host_ops(codoc_dir)
         with open_store(codoc_dir) as store:
-            return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run)
+            return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run, realize=realize)
 
 
-def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
+def _accept_implies_realize(op: NodeOp) -> bool:
+    """True if ACCEPTING this proposal would hand code work to the agent — a delete-code
+    retire (the agent removes the code) or a plan ADD (realized=False, an explicit build
+    request). These are deferred on a non-realize pass; every other accept reconciles the
+    tree to code that already exists and applies normally."""
+    return ((op.kind is NodeOpKind.RETIRE_NODE and op.delete_code)
+            or (op.kind is NodeOpKind.ADD_NODE and op.realized is False))
+
+
+def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBResult:
     res = LoopBResult()
     # (op, feature_id-or-"", caused_by) per code-implying edit — feature_id feeds
     # the doc-wins hold set, caused_by the causality chain (suggestion/event id).
@@ -519,7 +553,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     #    in-situ inline diff (seeded from the manifest so iterating/undo within one
     #    episode doesn't erode it to the previous keystroke — R5/R6); it is seeded
     #    here and augmented per-feature in step 2.
-    snap = _snapshot_pre_mutation(store, codoc_dir)
+    snap = _snapshot_pre_mutation(store, codoc_dir, dry_run=dry_run)
     diff = snap.diff
     annotations = snap.annotations
     baselines = snap.baselines
@@ -618,8 +652,16 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
                     store.mark_command_applied(cmd.id)
                     applied_cmd_ids.add(cmd.id)
                     continue
-                if key in live_title_parent:
-                    # Duplicate (re-sent / replayed) add — fold, don't mint (KTD3).
+                if not cmd.local_id and key in live_title_parent:
+                    # Soft (normalized_title, parent_id) fold — a fallback ONLY for an add
+                    # carrying NO local_id (the Loop-A LLM-apply / CLI path, whose dedup key
+                    # this mirrors). A webview add ALWAYS carries a local_id (KTD8), whose
+                    # identity was already resolved by feature_by_local_id above; folding it
+                    # here on a title collision would (a) silently swallow a deliberate
+                    # same-titled sibling and (b) strand the webview's optimistic node with no
+                    # fid to adopt — it lingers as a zombie heading and vanishes on reload.
+                    # Re-sends of a local_id add are caught by the ledger (cmd.id) and
+                    # feature_by_local_id, so the title guard is unnecessary for them.
                     store.mark_command_applied(cmd.id)
                     applied_cmd_ids.add(cmd.id)
                     continue
@@ -709,10 +751,26 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         res.fids_by_local = fids_by_local
 
     # 1. Proposal verdicts — drained from the IDE's inbox, not parsed from text.
+    #    We record exactly the ids we CONSUME and drop only those at the end
+    #    (inbox.drop_verdicts, lock-guarded + selective) — never inbox.clear()'s
+    #    unconditional unlink. A verdict the IDE / hub appends during this pass's
+    #    processing window must survive to the next pass, not be destroyed unprocessed
+    #    (the "accept was a dead click" bug).
+    seen_verdict_ids: set[str] = set()
     for v in inbox.read_verdicts(codoc_dir):
         e = store.get_event(v.event_id)
         if e is None:
+            # References a vanished/never-seen event — unprocessable, so consume it
+            # (leaving it would re-read forever) but there is nothing to apply.
+            seen_verdict_ids.add(v.event_id)
             continue
+        # On a non-realize pass, DEFER a code-implying accept (delete-code retire / plan
+        # ADD): applying + discarding its directive would lose the code work. Leave the
+        # verdict in the inbox (NOT added to seen) for a later realize-mode pass. A reject
+        # or a reconcile-to-code accept (descriptive AMEND / unbound ADD / MOVE) proceeds.
+        if v.accept and not realize and _accept_implies_realize(e.op):
+            continue
+        seen_verdict_ids.add(v.event_id)
         if v.accept:
             fid = _accept_with_fid(e.op)
             store.delete_event(e.id)
@@ -749,7 +807,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
         else:
             store.delete_event(e.id)
             res.rejected += 1
-    inbox.clear(codoc_dir)
+    inbox.drop_verdicts(codoc_dir, seen_verdict_ids)
 
     # 2. (RETIRED — U7 / FIX E) Direct text-diff user edits. ``diff.user_ops`` is now
     #    always empty (``_merge_channels`` returns an empty CodocDiff), because every
@@ -808,8 +866,9 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     #     arrives as a one-shot steer here. Drained exactly once → a STEER directive
     #     (caused_by the comment's thread id so the host can mark it sent). A dry/
     #     no-realize pass leaves them queued by NOT draining (consuming without
-    #     queueing would lose the note) — mirroring the `> …` re-insert guard below.
-    if not dry_run:
+    #     queueing would lose the note): a steer is a pure realize request, so it is
+    #     deferred whenever realization is suppressed (dry_run OR not realize).
+    if not dry_run and realize:
         for s in edits_channel.drain_steers(codoc_dir):
             d = build_steer_directive(s.feature_id, s.text, store)
             # A transient consult attachment (U6) — a bug screenshot — rides the
@@ -834,7 +893,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     block_specs: list[tuple[str, str, str, str]] = []  # (text, fid, cause, kind)
     force_draft_fids: set[str] = set()                 # lossy `lower` → held draft (KTD2)
     block_store_changed = False
-    if not dry_run:
+    if not dry_run and realize:
         registry = ensure_builtins()
         for be in edits_channel.drain_block_edits(codoc_dir):
             f = store.get_feature(be.feature_id)
@@ -935,6 +994,22 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run) -> LoopBResult:
     #    (hold_set reads the manifest), no realize.md needed.
     existing = edits_channel.read_manifest(codoc_dir)
     if not existing and not res.directives:
+        status.refresh_status(codoc_dir, store)
+        return res
+
+    # --dry / --no-realize (realize=False): the store edits are already applied + both
+    # files re-rendered above. Record this pass's directives as HELD drafts in the
+    # manifest so their intent survives for a later realize-mode pass / hand-off, but hand
+    # NOTHING to the agent — do not drain the one-shot `handoffs` channel and write no
+    # realize.md. (CLAUDE.md: "apply tree edits, don't queue realization".)
+    if not realize:
+        res.directive_ids = [new_directive_id() for _ in rendered]
+        all_directives = existing + [
+            edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause,
+                                    text=text, baseline=baselines.get(fid, ""), handed_off=False)
+            for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
+        ]
+        edits_channel.write_manifest(codoc_dir, all_directives)
         status.refresh_status(codoc_dir, store)
         return res
 

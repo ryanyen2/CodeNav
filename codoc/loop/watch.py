@@ -25,7 +25,7 @@ from codoc.codoc_file.doc_parse import doc_path
 from codoc.codoc_file.render import tree_path
 from codoc.loop import status
 from codoc.loop.activity import activity_path, epoch_touched_files
-from codoc.loop.edits import edits_path
+from codoc.loop.edits import edits_path, host_ops_path
 from codoc.loop.fsio import read_json
 from codoc.loop.inbox import inbox_path
 from codoc.loop.loop_a import reconcile_drift
@@ -59,6 +59,11 @@ class WatchState:
     # ignore a batch whose only new signal is that self-write (mirrors last_tree_hash).
     last_edits_hash: str = ""
     last_inbox_hash: str = ""
+    # Self-write guard for the IDE→daemon host-op log (edits.host.jsonl): Loop B's merge
+    # consumes it (renames it away), which is a filesystem event that would otherwise
+    # re-route into a no-op Loop B. Record its post-pass hash ("" once consumed) so the
+    # daemon's own consumption isn't mistaken for a fresh IDE append.
+    last_host_hash: str = ""
     # Agent epoch state — managed by the process_batch epoch-transition logic.
     epoch_open: bool = False
     epoch_origin: str = ""       # "interactive" | "loop_b"
@@ -98,6 +103,7 @@ def _classify(
     dp = doc_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
     ep = edits_path(codoc_dir).resolve()
+    hp = host_ops_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
     root = Path(root_dir).resolve()
     codoc_touched = False
@@ -117,7 +123,9 @@ def _classify(
         if rp == ip:
             inbox_touched = True
             continue
-        if rp == ep:
+        if rp == ep or rp == hp:
+            # edits.json OR the IDE's host-op append log (edits.host.jsonl): both are
+            # webview intent for Loop B (the log is merged into edits.json at pass start).
             edits_touched = True
             continue
         if rp == ap:
@@ -268,11 +276,12 @@ def watch_filter(codoc_dir: str):
     dp = doc_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
     ep = edits_path(codoc_dir).resolve()
+    hp = host_ops_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
 
     def _f(_change, path: str) -> bool:
         rp = Path(path).resolve()
-        if rp in (tp, dp, ip, ep, ap):
+        if rp in (tp, dp, ip, ep, hp, ap):
             return True
         if any(part in _SKIP_DIRS for part in rp.parts):
             return False
@@ -405,7 +414,13 @@ def process_batch(
     # it when the file is byte-identical to what the last Loop B pass left behind —
     # the same self-write guard the tree.codoc hash provides above. A genuine host
     # write (a new annotation / verdict) changes the bytes, so it is never suppressed.
-    if edits_touched and _hash(edits_path(codoc_dir)) == state.last_edits_hash:
+    # edits.json / edits.host.jsonl: Loop B drains edits.json AND consumes the IDE's
+    # host-op log (merge renames it away). Both writes are watched-file events that would
+    # re-route into a no-op Loop B. Suppress ONLY when BOTH are byte-identical to what the
+    # last pass left behind — a genuine host append changes edits.host.jsonl's hash, so it
+    # is never suppressed; the daemon's own consumption (log gone) is.
+    if edits_touched and (_hash(edits_path(codoc_dir)) == state.last_edits_hash
+                          and _hash(host_ops_path(codoc_dir)) == state.last_host_hash):
         edits_touched = False
     if inbox_touched and _hash(inbox_path(codoc_dir)) == state.last_inbox_hash:
         inbox_touched = False
@@ -425,29 +440,43 @@ def process_batch(
         if not (inbox_touched or edits_touched):
             return None  # code churn / agent reflection during epoch → suppressed
 
-    # ── Step 4: Normal routing (unchanged). ────────────────────────────────────
-    # A tree.codoc edit, a tree.doc.json webview edit (U2b), an Accept/Reject
-    # verdict, or a doc-ahead suggestion / comment steer (edits.json) all drive
-    # Loop B (codoc → code).
+    # ── Step 4: Normal routing. ────────────────────────────────────────────────
+    # A tree.codoc edit, a tree.doc.json webview edit (U2b), an Accept/Reject verdict,
+    # or a doc-ahead suggestion / comment steer (edits.json) drives Loop B (codoc →
+    # code); changed code files drive Loop A (code → codoc). When BOTH co-occur in one
+    # batch we now run BOTH — Loop B first (authored intent leads), then a scoped Loop A
+    # — instead of an ``elif`` that ran only Loop B and starved the code→tree reflection
+    # until the next code-only event (under continuous editing the tree lagged the code
+    # indefinitely). Loop A stays suppressed while an epoch is open (the agent owns those
+    # files; they were accumulated into suppressed_files for the epoch-close reconcile).
+    outs: list[tuple[str, str]] = []
     if codoc_touched or doc_touched or inbox_touched or edits_touched:
         if codoc_touched or doc_touched:
             status.write_status(codoc_dir, status.TREE_DIRTY, detail="applying tree edits")
-        res = loop_b(root_dir, codoc_dir, dry_run=dry_run or no_realize)
-        # Loop B just drained/cleared edits.json + inbox.json; record their new state
-        # so the resulting watch event (its own write) is recognised as a self-write
-        # on the next batch and not re-routed back into Loop B.
+        # --dry / --no-realize must still APPLY the webview's authored edits (else the
+        # editor appears frozen — the field bug) and re-render both files; they only
+        # suppress handing realization to the agent. So map both flags to realize=False
+        # (NOT loop_b's dry_run, which is a read-mostly preview that skips commands).
+        res = loop_b(root_dir, codoc_dir, realize=not (dry_run or no_realize))
+        # Loop B just drained/cleared edits.json + inbox.json and consumed the host-op
+        # log; record their new state so the resulting watch events (its own writes) are
+        # recognised as self-writes on the next batch and not re-routed back into Loop B.
         state.last_edits_hash = _hash(edits_path(codoc_dir))
         state.last_inbox_hash = _hash(inbox_path(codoc_dir))
-        label, summary = "codoc→code", res.summary()
-    elif code_files:
-        res = loop_a(root_dir, codoc_dir, file_scope=code_files)
-        label, summary = "code→codoc", f"({len(code_files)} files) {res.summary()}"
-    else:
+        state.last_host_hash = _hash(host_ops_path(codoc_dir))
+        outs.append(("codoc→code", res.summary()))
+    if code_files and not state.epoch_open:
+        res_a = loop_a(root_dir, codoc_dir, file_scope=code_files)
+        outs.append(("code→codoc", f"({len(code_files)} files) {res_a.summary()}"))
+
+    if not outs:
         return None
 
     render(codoc_dir)
     state.last_tree_hash = _hash(tp)
-    return label, summary
+    if len(outs) == 1:
+        return outs[0]
+    return " + ".join(label for label, _ in outs), " · ".join(summary for _, summary in outs)
 
 
 def safe_process_batch(
@@ -543,10 +572,22 @@ def run_watch(
     # daemon stays alive either way.
     if migrate_ok:
         _render(codoc_dir)
+
+    # Absorb any IDE host ops that queued in edits.host.jsonl while the daemon was down
+    # (no watch event fires for a file that already existed at startup, so this is the
+    # only place they get merged + applied). A Loop B pass merges the log and drains it.
+    if migrate_ok and host_ops_path(codoc_dir).exists():
+        try:
+            res = run_loop_b(root_dir, codoc_dir, realize=not (no_realize or dry_run))
+            printer(f"▸ startup edits  {res.summary()}")
+        except Exception as e:  # noqa: BLE001
+            printer(f"⚠ startup edits merge failed (continuing to watch): {e}")
+
     state = WatchState(
         last_tree_hash=_hash(tree_path(codoc_dir)),
         last_edits_hash=_hash(edits_path(codoc_dir)),
         last_inbox_hash=_hash(inbox_path(codoc_dir)),
+        last_host_hash=_hash(host_ops_path(codoc_dir)),
     )
 
     # Startup drift reconcile: catch any code↔tree divergence that accumulated

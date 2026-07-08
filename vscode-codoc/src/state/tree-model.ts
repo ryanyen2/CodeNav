@@ -113,6 +113,7 @@ export function parseTreeCodoc(text: string): ParseResult {
 
     const stack: Array<{ indent: number; id: string | null }> = [];
     let descOwner: ParsedFeature | null = null;
+    let descOwnerIndent = 0;                 // indent of the feature owning the current description
     let descBuf: string[] = [];
     let inPending = false;
     let inProposal = false;                 // inside an in-situ proposal block
@@ -201,6 +202,25 @@ export function parseTreeCodoc(text: string): ParseResult {
             }
             continue;
         }
+        // #P0-1 (parity with parse.py): a marker/heading line indented DEEPER than a
+        // direct child of the current description owner (descOwnerIndent + 2) is
+        // description prose, not a phantom feature — render writes descriptions at
+        // owner+4 and real children at owner+2. The ⟨f-id⟩ escape hatch keeps a
+        // mis-indented but id-bearing child a feature (render never emits an id inside a
+        // description). A `>` line stays a steering comment; everything else is prose.
+        if (descOwner !== null
+            && (line.length - line.replace(/^\s+/, '').length) > descOwnerIndent + 2
+            && !ID_RE.test(s)) {
+            if (s.startsWith('>')) {
+                if (!commentBuf.length) commentLine = i;
+                commentBuf.push(s.slice(1).replace(/^\s+/, ''));
+            } else {
+                flushComment();
+                descBuf.push(s);
+            }
+            continue;
+        }
+
         if (DIFF_HUNK_RE.test(line)) { flushComment(); continue; }
         if (s.startsWith('#')) { flushComment(); continue; }
 
@@ -224,6 +244,7 @@ export function parseTreeCodoc(text: string): ParseResult {
             features.push(feature);
             stack.push({ indent, id: fid });
             descOwner = feature;
+            descOwnerIndent = indent;
             descBuf = [];
             continue;
         }

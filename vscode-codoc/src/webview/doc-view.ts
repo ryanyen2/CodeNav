@@ -882,8 +882,10 @@ function renderDocHost(): HTMLElement {
     wholeEditor = mountWholeDocEditor(host, {
         controller: authorController,
         getSymbols: () => payload.symbols ?? [],
-        onSettle: doc => vscode.postMessage({ kind: 'doc-settle', doc }),
-        onCommit: doc => { fireSaveShimmer(); vscode.postMessage({ kind: 'commit', doc }); },
+        // Cite the projection this editor was rendered from (#4) so the host diffs the
+        // settle against that exact baseline, not a newer projection that landed in flight.
+        onSettle: doc => vscode.postMessage({ kind: 'doc-settle', doc, baselineId: payload.baselineId }),
+        onCommit: doc => { fireSaveShimmer(); vscode.postMessage({ kind: 'commit', doc, baselineId: payload.baselineId }); },
         onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdrawRealization: featureId => vscode.postMessage({ kind: 'withdraw-realization', featureId }),

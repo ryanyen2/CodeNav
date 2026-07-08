@@ -935,6 +935,55 @@ def _state_changeset(rows, store: Store, file_scope: set[str] | None) -> ChangeS
     return ChangeSet(added=added, removed=removed, modified=modified, rows=rows)
 
 
+def heal_tree_integrity(store: Store) -> int:
+    """Re-home orphaned or cyclic LIVE features so the whole tree stays reachable from
+    the roots. Returns the number of features re-homed (0 when the tree is sound).
+
+    An orphan (``parent_id`` points at a retired or missing feature) or a cycle makes a
+    subtree invisible to EVERY walk-from-root surface — ``render_tree``, the doc
+    projection, the sidecar — while its features stay live and bound (their chunks read
+    as "covered", so Loop A never re-homes them). The result is a silent, unrecoverable
+    disappearance. ``apply_op`` now rejects cycle-forming moves and re-parents children on
+    retire, so this is the recovery-grade backstop for state that predates those guards or
+    was written by another path — idempotent, safe to run every reconcile pass.
+
+    Broken nodes are re-parented to root (``parent_id=None``): the minimal, always-correct
+    repair (it both reattaches an orphan and breaks a cycle). Fixing a top-level orphan
+    first reconnects its live descendants, so only genuinely-broken nodes move."""
+    healed = 0
+    # Phase 1 — orphans: a live feature whose parent is retired/missing → re-home to root.
+    live = {f.id: f for f in store.list_features()}
+    for f in list(live.values()):
+        if f.parent_id is not None and f.parent_id not in live:
+            f.parent_id = None
+            f.updated_at = f.updated_at.advance()
+            store.upsert_feature(f)
+            healed += 1
+    if healed:
+        live = {f.id: f for f in store.list_features()}  # refresh after re-homing orphans
+
+    # Phase 2 — cycles: a live feature unreachable from a root via live parent links is in
+    # a cycle. BFS down from the roots; anything unvisited gets rooted to break the loop.
+    children_of: dict[str | None, list[str]] = {}
+    for f in live.values():
+        children_of.setdefault(f.parent_id, []).append(f.id)
+    reachable: set[str] = set()
+    stack = list(children_of.get(None, []))
+    while stack:
+        nid = stack.pop()
+        if nid in reachable:
+            continue
+        reachable.add(nid)
+        stack.extend(children_of.get(nid, []))
+    for f in live.values():
+        if f.id not in reachable:
+            f.parent_id = None
+            f.updated_at = f.updated_at.advance()
+            store.upsert_feature(f)
+            healed += 1
+    return healed
+
+
 def reconcile_drift(
     root_dir: str,
     codoc_dir: str,
@@ -966,6 +1015,11 @@ def reconcile_drift(
         rows = read_all_chunks(codoc_dir, with_embeddings=False)
         held, cb_map, default_cb = _doc_intent(codoc_dir)
         with open_store(codoc_dir) as store:
+            # Recovery-grade invariant: re-home any orphaned/cyclic subtree BEFORE
+            # reconciling, so a feature made unreachable (by pre-guard state or a
+            # non-apply_op path) is pulled back onto a root instead of staying invisible
+            # yet bound (which would keep Loop A from ever re-homing it).
+            heal_tree_integrity(store)
             _backfill_types_hashes(store, rows)
             cs = _state_changeset(rows, store, file_scope)
             # Only pay the embedder model load when there are additions to dedup

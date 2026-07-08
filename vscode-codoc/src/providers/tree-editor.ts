@@ -22,14 +22,13 @@ import { activeFeatureModes, featurePhases, featureSteps } from '../state/activi
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
 import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
-import { commandsForSettle, moveCommand, featureUnits, FeatureUnit } from '../state/commands-from-doc';
+import { settleCommands, moveCommand, featureUnits, FeatureUnit } from '../state/commands-from-doc';
 import {
     CommentThread, commentNoteText, reconcileComments,
 } from '../state/comment-model';
 import { directedEdges, heldFeatures, heldDetail, divergentFeatures, blocksForFeature, mintedByLocalId } from '../state/bindings-model';
 import {
     EditsFile, parseEditsFile, emptyEditsFile, CommandEntry,
-    appendCancellation, appendSteer, appendCommand, setDrafts, appendBlockEdit, appendHandoffs,
 } from '../state/edits-channel';
 import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
@@ -64,9 +63,18 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  thread store. */
     private docFileByUri = new Map<string, DocFile>();
     /** The feature units of the last projection rendered to the editor, per uri — the
-     *  identity-keyed baseline `settleDoc` diffs against (commandsForSettle). Refreshed
-     *  whenever a new projection is read in buildPayload. */
+     *  fallback baseline `settleDoc` diffs against when a settle cites no / an unknown
+     *  baseline. Refreshed whenever a new projection is read in buildPayload. */
     private projectedUnitsByUri = new Map<string, FeatureUnit[]>();
+    /** Short per-uri history of projection baselines a settle may cite (#4): each payload
+     *  is stamped with a monotonic `baselineId` and its feature units are recorded here.
+     *  settleDoc diffs against the EXACT baseline the settle cites (the editor's view when
+     *  the user typed) — not a newer projection — so a feature the daemon added in flight
+     *  is never misread as a user deletion (a phantom retire). Bounded so it can't grow
+     *  unbounded across agent realize epochs while the user types. */
+    private baselinesByUri = new Map<string, Array<{ id: number; units: FeatureUnit[] }>>();
+    private baselineSeq = 0;
+    private static readonly BASELINE_HISTORY = 16;
     /** Suggesting-mode DRAFTS (U4), per doc uri: feature ids whose edit the human is
      *  holding as a draft (the daemon keeps their code-implying directive out of the
      *  agent queue until hand-off). The host is the SOLE writer of edits.json `drafts`
@@ -140,13 +148,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     post();
                     return;
                 case 'doc-settle':
-                    await this.settleDoc(document, msg.doc);
+                    await this.settleDoc(document, msg.doc, msg.baselineId);
                     post();  // U2b: no tree.codoc write → repost so the tree pane/badges
                     return;  // reflect the settle now (sourced from the saved doc)
                 case 'commit':
                     // Save = stage & send (U4): persist the latest doc (marks drafts), then
                     // hand the staged code-implying edits to the agent in the same turn.
-                    await this.settleDoc(document, msg.doc);
+                    await this.settleDoc(document, msg.doc, msg.baselineId);
                     await this.handOff(document);
                     post();
                     return;
@@ -266,12 +274,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             const ref = await this.writeMediaAttachment(document, block.block_id, block.mediaData, block.mediaMime);
             if (ref) content = ref;
         }
-        const file = appendBlockEdit(await this.readEditsFile(document), {
+        await this.appendHostOp(document, 'appendBlockEdit', {
             block_id: block.block_id, feature_id: block.feature_id, kind: block.kind,
             action: block.action, content,
             prev_content: block.prev_content ?? '', ts: Date.now(),
         });
-        await this.writeEditsFile(document, file);
     }
 
     /** Hand a thread's note to Loop B as a one-shot steer, and mark it sent. A
@@ -279,13 +286,12 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  the steer; Loop B folds it into the directive as a transient `Consult:` line. */
     private async steerComment(document: vscode.TextDocument, thread: CommentThread): Promise<void> {
         if (!thread.featureId) return;  // a null-fid comment waits for the mint
-        const file = appendSteer(await this.readEditsFile(document), {
+        await this.appendHostOp(document, 'appendSteer', {
             feature_id: thread.featureId, text: commentNoteText(thread),
             comment_id: thread.id,
             ...(thread.media ? { media: thread.media.ref, media_kind: thread.media.kind } : {}),
             ts: Date.now(),
         });
-        await this.writeEditsFile(document, file);
     }
 
     /** Persist a comment-screenshot OR block (image/pdf) attachment (U6/Phase 0)
@@ -479,7 +485,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const doc = projectionDoc;
         // Record the projection's feature units as the identity-keyed baseline the next
         // settle diffs against (commandsForSettle) — replaces the docAhead text compare.
-        this.projectedUnitsByUri.set(uri, featureUnits(doc));
+        // Stamp a monotonic baselineId and keep a short history so a settle can cite the
+        // EXACT baseline it was computed from (#4), immune to an in-flight projection.
+        const baselineUnits = featureUnits(doc);
+        this.projectedUnitsByUri.set(uri, baselineUnits);
+        const baselineId = ++this.baselineSeq;
+        const hist = this.baselinesByUri.get(uri) ?? [];
+        hist.push({ id: baselineId, units: baselineUnits });
+        while (hist.length > CodocTreeEditorProvider.BASELINE_HISTORY) hist.shift();
+        this.baselinesByUri.set(uri, hist);
 
         // Comment lifecycle (U4): the projection carries the anchor MARKS; the thread
         // bodies live in the in-memory store (seeded from the last tree.doc.json, kept
@@ -568,6 +582,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             sync,
             rootName,
             pendingEventIds,
+            baselineId,
             doc: docForPayload,
             symbols: this.buildSymbols(sidecar),
             suggestions,
@@ -617,9 +632,24 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
 
     // ── .codoc/edits.json — the provenance/intent channel to the loops ────────
     //    (schema mirrored by codoc/loop/edits.py; see state/edits-channel.ts)
+    //
+    // U9 — the host is a SEPARATE process and does not hold the daemon/hub's
+    // edits.json cross-process lock, so it MUST NOT read-modify-write edits.json: a
+    // lock-less RMW can clobber the daemon's locked RMW (a lost command / hand-off /
+    // steer) and its fixed-tmp rename can ENOENT-crash against a concurrent writer.
+    // Instead every host write APPENDS one op per line to edits.host.jsonl (O_APPEND is
+    // atomic per small write — two windows can even append concurrently), and the daemon
+    // MERGES the log into edits.json under the lock at the start of every Loop B pass
+    // (codoc/loop/edits.py:merge_host_ops), replaying each op through the same writers.
+    // The host still READS edits.json (read is race-free with atomic writes) to seed the
+    // draft mirror; it just never writes it.
 
     private editsUri(document: vscode.TextDocument): vscode.Uri {
         return vscode.Uri.joinPath(document.uri, '..', 'edits.json');
+    }
+
+    private hostOpsUri(document: vscode.TextDocument): vscode.Uri {
+        return vscode.Uri.joinPath(document.uri, '..', 'edits.host.jsonl');
     }
 
     private async readEditsFile(document: vscode.TextDocument): Promise<EditsFile> {
@@ -631,37 +661,35 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         }
     }
 
-    private async writeEditsFile(document: vscode.TextDocument, file: EditsFile): Promise<void> {
-        const target = this.editsUri(document).fsPath;
-        const tmp = path.join(path.dirname(target), '.edits.json.tmp');
-        await fs.writeFile(tmp, JSON.stringify(file, null, 2), 'utf-8');
-        await fs.rename(tmp, target);
+    /** Append ONE op to edits.host.jsonl (the IDE→daemon log). Pure append — no read, no
+     *  lock — so it never races the daemon's locked merge. `fn` names the daemon-side
+     *  writer (appendCommand / appendSteer / appendBlockEdit / appendCancellation /
+     *  appendHandoffs / setDrafts); `arg` is its payload (see edits.py:_dispatch_host_op). */
+    private async appendHostOp(document: vscode.TextDocument, fn: string, arg: unknown): Promise<void> {
+        const line = JSON.stringify({ fn, arg }) + '\n';
+        await fs.appendFile(this.hostOpsUri(document).fsPath, line, 'utf-8');
     }
 
     /** Mark the held-draft set for a batch of edited feature ids (U4 suggesting mode).
      *  The daemon HOLDS only the code-implying ones (a prose-only edit produces no
      *  directive → nothing held → commits live), so over-marking is harmless; the
-     *  hand-off affordance is gated host-side by `drafts ∩ held` (buildPayload).
-     *  Reconciles with the on-disk drafts so a set the daemon preserved isn't dropped.
+     *  hand-off affordance is gated host-side by `drafts ∩ held` (buildPayload). The
+     *  in-memory `draftSet` is authoritative for the synchronous buildPayload; we append a
+     *  `setDrafts` snapshot of it (the daemon preserves drafts, so a reload re-seeds).
      *  A fresh `add` (no fid yet) is skipped — it has no feature id to hold. */
     private async markDrafts(document: vscode.TextDocument, featureIds: readonly string[]): Promise<void> {
         const fids = featureIds.filter(Boolean);
         if (!fids.length) return;
-        const file = await this.readEditsFile(document);
         const set = this.draftSet(document);
-        for (const d of file.drafts ?? []) set.add(d.feature_id);
         for (const fid of fids) set.add(fid);
-        await this.writeEditsFile(document, setDrafts(file, [...set]));
+        await this.appendHostOp(document, 'setDrafts', [...set]);
     }
 
-    /** Append identity-keyed commands (U3) to edits.json (preserving the other lists).
-     *  This is the ONLY channel a structural/description edit reaches Loop B now — the
-     *  host never persists tree.doc.json (KTD9). Idempotent on the store ledger (KTD8). */
+    /** Append identity-keyed commands (U3) as host ops. This is the ONLY channel a
+     *  structural/description edit reaches Loop B now — the host never persists
+     *  tree.doc.json (KTD9). Idempotent on the store ledger (KTD8): a re-emitted id folds. */
     private async emitCommands(document: vscode.TextDocument, commands: readonly CommandEntry[]): Promise<void> {
-        if (!commands.length) return;
-        let file = await this.readEditsFile(document);
-        for (const c of commands) file = appendCommand(file, c);
-        await this.writeEditsFile(document, file);
+        for (const c of commands) await this.appendHostOp(document, 'appendCommand', c);
     }
 
     /** Read the daemon-written store projection (tree.doc.json) for this tree (U4/KTD9).
@@ -706,14 +734,16 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      * tree.codoc. Loop B applies the commands via apply_op (no doc-diff inference) and
      * re-renders both files; the file-watch repaint closes the loop.
      */
-    private async settleDoc(document: vscode.TextDocument, doc: PMNode): Promise<void> {
+    private async settleDoc(document: vscode.TextDocument, doc: PMNode, baselineId?: number): Promise<void> {
         const uri = document.uri.toString();
-        // Baseline = the feature units of the last projection rendered to the editor
-        // (recorded in buildPayload). Falls back to the current projection on disk.
-        const prevUnits = this.projectedUnitsByUri.get(uri)
-            ?? featureUnits(this.readProjectionDoc(document));
-        const nextUnits = featureUnits(doc);
-        const commands = commandsForSettle(prevUnits, nextUnits, Date.now());
+        // #4 — diff against the EXACT projection the settle was computed from. The webview
+        // echoes the payload's baselineId; we look it up in the short history. Diffing
+        // against a NEWER projection (whatever last landed in projectedUnitsByUri) is the
+        // phantom-retire bug: a feature the daemon added after the editor's baseline would
+        // appear in `prev` but not `next` and be misread as a user deletion → a retire.
+        const hist = this.baselinesByUri.get(uri) ?? [];
+        const fallback = this.projectedUnitsByUri.get(uri) ?? featureUnits(this.readProjectionDoc(document));
+        const commands = settleCommands(hist, baselineId, fallback, featureUnits(doc), Date.now());
         if (!commands.length) return;  // no identity-keyed change
         await this.emitCommands(document, commands);
         // Held-draft gate (U4): mark every touched EXISTING feature a draft so its
@@ -730,8 +760,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  from the queue and releases the hold; the committed prose is kept. No payload
      *  repost — the daemon's resulting sidecar/status write drives the UI refresh. */
     private async withdrawRealization(document: vscode.TextDocument, featureId: string): Promise<void> {
-        const file = appendCancellation(await this.readEditsFile(document), featureId, Date.now());
-        await this.writeEditsFile(document, file);
+        await this.appendHostOp(document, 'appendCancellation', { feature_id: featureId, ts: Date.now() });
     }
 
     /** The in-memory held-draft set for a doc uri (U4); created empty on first use. */
@@ -756,8 +785,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const set = this.draftSet(document);
         const fids = [...set];
         set.clear();
-        const file = await this.readEditsFile(document);
-        await this.writeEditsFile(document, setDrafts(appendHandoffs(file, fids), []));
+        // Write the hand-off requests (the daemon flips their held directives to
+        // handed_off → realize.md), then clear the drafts snapshot. Two ops, replayed in
+        // order by the daemon's merge.
+        await this.appendHostOp(document, 'appendHandoffs', fids);
+        await this.appendHostOp(document, 'setDrafts', []);
     }
 
     /** Loop B / realize stamps progress into status.detail in ONE shape —

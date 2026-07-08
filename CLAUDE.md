@@ -73,7 +73,10 @@ Three markdown-native signals in descriptions feed Loop B directives:
   structural ops (add/move/retire) are logged as pending proposals.
 - **Loop B — codoc → code** (`loop/loop_b.py`): drain identity-keyed **commands**
   from `.codoc/edits.json` (add/set_title/set_description/move/retire — the webview
-  emits them; an idempotency ledger guards crash-replay) + proposal verdicts →
+  emits them; an idempotency ledger guards crash-replay). The webview never writes
+  `edits.json` directly (no shared lock across processes): it APPENDS ops to
+  `edits.host.jsonl`, which the daemon merges into `edits.json` under the lock at each
+  Loop B pass (`edits.merge_host_ops`). Plus proposal verdicts →
   apply via `apply_op` → for edits implying code change, build a directive and
   **queue it for the live session** in `.codoc/realize.md` (status `awaiting_impl`).
   Edits are NOT inferred from a text/doc diff (that path was retired). The session
@@ -136,10 +139,14 @@ Store-authoritative editing model (2026-06 refactor — see
 the **SQLite store is the single source of truth**. The webview is a pure
 *projection* of the store (it consumes the daemon-written `tree.doc.json`) plus an
 identity-keyed *command emitter* — editing actions emit `{id, kind, fid|localId,
-baseRev, payload}` commands (add/set_title/set_description/move/retire) on
-`edits.json`, applied to the store via `apply_op`; nothing is inferred from a doc
-diff. Both `tree.doc.json` AND `tree.codoc` are daemon-written **derived
-artifacts** (`tree.codoc` is a read-only export; the daemon is their sole writer).
+baseRev, payload}` commands (add/set_title/set_description/move/retire) by APPENDING
+to `edits.host.jsonl` (the webview holds no cross-process lock, so it never writes
+`edits.json` directly); the daemon merges that append log into `edits.json` under the
+lock and applies via `apply_op`; nothing is inferred from a doc diff. A settle cites
+the `baselineId` of the projection it was computed from so the host diffs against that
+exact baseline (not an in-flight one — no phantom retire). Both `tree.doc.json` AND
+`tree.codoc` are daemon-written **derived artifacts** (`tree.codoc` is a read-only
+export; the daemon is their sole writer).
 A per-feature HLC version gate keeps a returning projection from clobbering a newer
 local edit, and a **draft / hand-off** gate keeps code-implying edits
 safe-by-default. The editing-model details + key source files are in

@@ -10,5 +10,6 @@ DOC_FILENAME = "tree.doc.json"             # webview's authored rich doc (U2b Lo
 REALIZE_FILENAME = "realize.md"
 REALIZE_MANIFEST_FILENAME = "realize.json"  # machine-readable directive manifest (ids + targets)
 EDITS_FILENAME = "edits.json"               # IDE→loop provenance annotations + live doc-ahead intents
+HOST_OPS_FILENAME = "edits.host.jsonl"      # IDE→daemon append-only op log; merged into edits.json under lock
 DRIFT_FILENAME = "drift.json"               # loop-computed per-feature drift/trust signal (sidecar re-emits)
 RESOLUTION_FILENAME = "resolution.json"     # loop-computed realize-divergence per target feature (U5)

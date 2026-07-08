@@ -293,6 +293,31 @@ class Store:
             ).fetchall()
         return [_row_to_feature(r) for r in rows]
 
+    def would_move_create_cycle(self, feature_id: str, new_parent_id: str | None) -> bool:
+        """True if re-parenting ``feature_id`` under ``new_parent_id`` would form a cycle
+        — i.e. ``new_parent_id`` is ``feature_id`` itself or one of its descendants.
+
+        Walks UP the parent chain from ``new_parent_id``: reaching ``feature_id`` means
+        the destination is inside the moved subtree. Moving to root (``None``) can never
+        cycle. The ``seen`` guard bounds the walk so a PRE-EXISTING cycle (crash debris)
+        can't spin forever — callers reject the move either way. A cycle is
+        catastrophic: render/projection/sidecar all walk from the roots, so a cycle makes
+        the whole subtree invisible AND unrecoverable while its features stay live+bound
+        (Loop A reads their chunks as covered and never re-homes them)."""
+        if not new_parent_id or not feature_id:
+            return False
+        seen: set[str] = set()
+        cur: str | None = new_parent_id
+        while cur:
+            if cur == feature_id:
+                return True
+            if cur in seen:
+                break  # pre-existing cycle — stop; the move is rejected regardless
+            seen.add(cur)
+            f = self.get_feature(cur)
+            cur = f.parent_id if f else None
+        return False
+
     def retire_feature(self, feature_id: str) -> None:
         # lifecycle is authoritative; retired=1 kept in sync for back-compat readers.
         self.conn.execute(

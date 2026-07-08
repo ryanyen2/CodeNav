@@ -35,3 +35,21 @@ def test_add_node_defaults_realized_true(store):
     apply_op(add, store, source="loop_a", applied=True)
     feature = next(f for f in store.list_features() if f.title == "Regular feature")
     assert feature.realized is True
+
+
+def test_amend_updated_at_is_strictly_monotonic(store):
+    """P2 — two AMENDs in the same wall-clock ms must yield STRICTLY increasing
+    updated_at. HLC.now() always returns logical_time=0, so same-ms edits tied and the
+    webview's "strictly newer" doc-gate could miss a real change; advance() bumps the
+    feature's own logical counter to keep each edit ordered."""
+    add = NodeOp(kind=NodeOpKind.ADD_NODE, title="F", description="v0")
+    apply_op(add, store, source="user", applied=True)
+    fid = next(f for f in store.list_features() if f.title == "F").id
+
+    stamps = []
+    for i in range(3):
+        apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=f"v{i + 1}"),
+                 store, source="user", applied=True)
+        stamps.append(store.get_feature(fid).updated_at)
+    # Even within one millisecond, each stamp is strictly greater than the last.
+    assert stamps[0] < stamps[1] < stamps[2]

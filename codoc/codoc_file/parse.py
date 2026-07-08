@@ -140,6 +140,7 @@ def parse_text(text: str) -> ParsedTree:
     tree = ParsedTree()
     stack: list[tuple[int, ParsedNode]] = []  # (indent, node)
     desc_owner: ParsedNode | None = None
+    desc_owner_indent = 0  # indent of the feature line owning the current description
     desc_buf: list[str] = []
     in_pending = False
     in_proposal = False  # inside an in-situ proposal block (until the next blank)
@@ -200,6 +201,30 @@ def parse_text(text: str) -> ParsedTree:
                 else:
                     desc_buf.append("")
             continue
+
+        # A marker/heading line indented DEEPER than a direct child of the current
+        # description owner (owner_indent + 2) is description CONTENT, never structure —
+        # UNLESS it carries a feature id. render.py writes description lines at
+        # owner_indent + 4 and real children at owner_indent + 2, so a `-`/`~`/`#`/`+`/`*`
+        # line at (or past) the description indent is prose the author wrote — a markdown
+        # bullet, heading, or quote — NOT a phantom child feature. Intercepting here
+        # (before the marker/heading checks below) is what keeps render→parse→diff a no-op
+        # over arbitrary description text, instead of minting a ghost node and truncating
+        # the description (which permanently wedged the render guard). The ``⟨f-id⟩`` escape
+        # hatch keeps a mis-indented BUT id-bearing child a feature: render never emits an
+        # id inside a description, so an id is an unambiguous feature signal that survives
+        # non-canonical indentation. A `>` line stays a steering comment even in a
+        # description; everything else is prose.
+        if (desc_owner is not None and not skip_desc
+                and (len(line) - len(line.lstrip())) > desc_owner_indent + 2
+                and not _ID_RE.search(s)):
+            if s.startswith(">"):
+                comment_buf.append(s[1:].lstrip())
+            else:
+                flush_comment()
+                desc_buf.append(s)
+            continue
+
         if _DIFF_HUNK_RE.match(line):
             flush_comment()  # any non-`>` line ends a steering run
             continue  # stray proposal hunk outside the pending block
@@ -230,7 +255,7 @@ def parse_text(text: str) -> ParsedTree:
                               parent_id=parent_id, retired=(marker == "~"))
             tree.nodes.append(node)
             stack.append((indent, node))
-            desc_owner, desc_buf = node, []
+            desc_owner, desc_owner_indent, desc_buf = node, indent, []
             continue
 
         # Detect mangled feature lines (wrong marker, e.g. `*` or `+`).

@@ -198,3 +198,47 @@ def test_loop_b_self_clear_of_edits_does_not_refire(dirs):
     assert out2 is None
     assert calls["n"] == 1  # Loop B not re-fired
     assert "called" not in a.seen
+
+
+def test_host_ops_log_routes_to_loop_b_then_self_write_suppressed(dirs):
+    """#2 — an IDE append to edits.host.jsonl routes to Loop B; the daemon's own
+    consumption of that log (it's gone after the merge) is recognised as a self-write and
+    NOT re-routed into a no-op pass."""
+    from codoc.loop.edits import host_ops_path
+    root, codoc_dir, tp = dirs
+    hp = host_ops_path(codoc_dir)
+    hp.write_text('{"fn":"appendCommand","arg":{"id":"c-1","kind":"add","payload":{"title":"A"}}}\n')
+    a = _spy(LoopAResult())
+
+    def b_consume(root_dir, codoc_dir, **kw):
+        host_ops_path(codoc_dir).unlink(missing_ok=True)  # mimic merge consuming the log
+        return LoopBResult(commands=1)
+
+    state = WatchState(last_tree_hash=_hash(tp))
+
+    out1 = process_batch([str(hp)], root, codoc_dir, state,
+                         loop_a=a, loop_b=b_consume, render=_noop_render)
+    assert out1 and out1[0] == "codoc→code"
+
+    # Batch 2 — the watch event from the daemon's OWN consumption (log now gone). Ignored.
+    out2 = process_batch([str(hp)], root, codoc_dir, state,
+                         loop_a=a, loop_b=b_consume, render=_noop_render)
+    assert out2 is None
+
+
+def test_mixed_batch_runs_both_loops(dirs):
+    """#6/P2 batch routing: a batch carrying BOTH a tree edit and a code change runs
+    Loop B AND Loop A (was: an `elif` ran only Loop B, starving code→tree reflection)."""
+    root, codoc_dir, tp = dirs
+    a = _spy(LoopAResult(auto={"refresh": 1}))
+    b = _spy(LoopBResult(accepted=1))
+    state = WatchState(last_tree_hash="stale")  # tree edit is a real user edit
+    tp.write_text("# tree\n- Root edited  ⟨f-1⟩\n")
+
+    out = process_batch([str(tp), str(root + "/pkg/mod.py")], root, codoc_dir, state,
+                        loop_a=a, loop_b=b, render=_noop_render)
+
+    assert b.seen["called"]                       # Loop B ran (tree edit)
+    assert a.seen["called"]                       # Loop A ALSO ran (code change)
+    assert a.seen["file_scope"] == {"pkg/mod.py"}
+    assert out and "codoc→code" in out[0] and "code→codoc" in out[0]

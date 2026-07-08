@@ -51,9 +51,20 @@ without making Python read ``tree.doc.json``:
   feature ids for the hold set. Deleted together with ``realize.md`` when the
   queue completes; a manifest with no ``realize.md`` beside it is stale and is
   ignored (and cleaned up opportunistically).
+
+* ``edits.host.jsonl`` (IDE-written APPEND-ONLY op log; U9) — the VS Code host is a
+  separate process that does NOT hold this module's cross-process lock, so it must not
+  read-modify-write ``edits.json`` (a lock-less RMW could clobber the daemon's/hub's
+  locked RMW — a lost command / hand-off / steer — and its fixed-tmp rename could ENOENT-
+  crash). Instead it APPENDS one op per line (``{"fn", "arg"}``, one of the ``append_*`` /
+  ``set_drafts`` writers), and :func:`merge_host_ops` folds the log into ``edits.json``
+  under the lock at the start of every Loop B pass. O_APPEND is atomic per small write, so
+  two windows can append concurrently; pure append means the host never re-includes an
+  already-merged op.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +72,7 @@ from pathlib import Path
 from codoc.loop.filenames import (
     DRIFT_FILENAME,
     EDITS_FILENAME,
+    HOST_OPS_FILENAME,
     REALIZE_FILENAME,
     REALIZE_MANIFEST_FILENAME,
     RESOLUTION_FILENAME,
@@ -575,6 +587,125 @@ def append_handoffs(codoc_dir: str | Path, feature_ids: list[str]) -> Path | Non
     existing = read_handoffs(codoc_dir)
     merged = existing + [f for f in feature_ids if f and f not in existing]
     return _rewrite(codoc_dir, handoffs=[{"feature_id": f} for f in merged])
+
+
+# ─── edits.host.jsonl — the IDE→daemon append-only op log (single-writer, U9) ──
+#
+# The IDE (a SEPARATE process) must never read-modify-write edits.json: it does not
+# hold this module's cross-process lock, so its RMW could clobber the daemon's/hub's
+# locked RMW (a lost command / hand-off / steer) and its fixed-tmp rename could ENOENT-
+# crash against a concurrent writer. Instead the IDE APPENDS one op per line to
+# ``edits.host.jsonl`` (O_APPEND is atomic per small write, so two IDE windows can even
+# append concurrently), and the daemon MERGES those ops into ``edits.json`` under the
+# lock at the start of every Loop B pass — replaying each op through the same
+# ``append_*`` / ``set_drafts`` functions the daemon/hub already use, so all existing
+# dedup/one-shot semantics carry over. Pure append means the IDE never re-includes an
+# already-merged op, so nothing is double-fired on the happy path.
+
+def host_ops_path(codoc_dir: str | Path) -> Path:
+    return Path(codoc_dir) / HOST_OPS_FILENAME
+
+
+def append_host_op(codoc_dir: str | Path, fn: str, arg) -> Path:
+    """Append one host op (``{"fn", "arg"}``) to ``edits.host.jsonl`` (the Python
+    mirror of the TS host's append; used by the CLI/tests). Pure append — no lock, no
+    read — so it never races the daemon's locked merge. The daemon consumes it via
+    :func:`merge_host_ops`."""
+    dest = host_ops_path(codoc_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"fn": fn, "arg": arg}) + "\n")
+    return dest
+
+
+def _dispatch_host_op(codoc_dir: str | Path, fn: str, arg) -> bool:
+    """Apply one host op to edits.json via the matching lock-guarded writer. Returns
+    True when the op was recognised + applied. Unknown/garbled ops are skipped (a
+    forward-compatible IDE op the daemon predates must not crash the merge)."""
+    if fn == "appendCommand" and isinstance(arg, dict):
+        append_command(codoc_dir, Command(
+            id=arg.get("id") or "", kind=arg.get("kind") or "",
+            feature_id=arg.get("feature_id") or "", local_id=arg.get("local_id") or "",
+            base_rev=int(arg.get("base_rev") or 0),
+            payload=arg.get("payload") if isinstance(arg.get("payload"), dict) else {}))
+    elif fn == "appendSteer" and isinstance(arg, dict):
+        append_steer(codoc_dir, Steer(
+            feature_id=arg.get("feature_id") or "", text=arg.get("text") or "",
+            comment_id=arg.get("comment_id") or "", media=arg.get("media") or "",
+            media_kind=arg.get("media_kind") or "", ts=int(arg.get("ts") or 0)))
+    elif fn == "appendBlockEdit" and isinstance(arg, dict):
+        append_block_edit(codoc_dir, BlockEdit(
+            block_id=arg.get("block_id") or "", feature_id=arg.get("feature_id") or "",
+            kind=arg.get("kind") or "", action=arg.get("action") or "edit",
+            content=arg.get("content") or "", prev_content=arg.get("prev_content") or "",
+            ts=int(arg.get("ts") or 0)))
+    elif fn == "appendCancellation" and isinstance(arg, dict) and arg.get("feature_id"):
+        append_cancellation(codoc_dir, arg["feature_id"])
+    elif fn == "appendHandoffs" and isinstance(arg, list):
+        append_handoffs(codoc_dir, [f for f in arg if isinstance(f, str)])
+    elif fn == "setDrafts" and isinstance(arg, list):
+        set_drafts(codoc_dir, [f for f in arg if isinstance(f, str)])
+    elif fn == "appendAnnotation" and isinstance(arg, dict) and arg.get("feature_id"):
+        append_annotation(codoc_dir, EditAnnotation(
+            feature_id=arg["feature_id"], fields=list(arg.get("fields") or []),
+            actor=arg.get("actor") or "human", mode=arg.get("mode") or "pen",
+            suggestion_id=arg.get("suggestion_id") or "", ts=int(arg.get("ts") or 0)))
+    else:
+        return False
+    return True
+
+
+def _drain_host_file(codoc_dir: str | Path, path: Path) -> int:
+    """Apply every op line in ``path`` to edits.json, then delete ``path``. A garbled
+    line or an unrecognised op is skipped (logged) — one bad line never blocks the rest.
+    Called under :func:`_edits_lock`."""
+    import logging
+
+    applied = 0
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            op = json.loads(line)
+            if isinstance(op, dict) and _dispatch_host_op(codoc_dir, op.get("fn") or "", op.get("arg")):
+                applied += 1
+        except Exception as exc:  # noqa: BLE001 — tolerate one bad line, keep merging
+            logging.getLogger(__name__).warning(
+                "codoc: skipping malformed host op (%s): %s", exc, line[:200])
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return applied
+
+
+def merge_host_ops(codoc_dir: str | Path) -> int:
+    """Merge the IDE's ``edits.host.jsonl`` append log into ``edits.json`` under the
+    cross-process lock, so the daemon's read-modify-write and the IDE's writes can never
+    interleave. Returns the number of ops applied (0 when nothing was pending).
+
+    Atomic hand-off: rename the live log to a ``.merging`` sidecar so any concurrent IDE
+    append lands in a fresh log for the NEXT pass; then replay the sidecar's ops. A
+    ``.merging`` left by a crashed merge is recovered first (its ops may be partly
+    applied — ``appendCommand`` is idempotent on the store ledger; the one-shot channels
+    are low-stakes to re-append). Called at the top of every Loop B pass + at daemon
+    startup so pending IDE edits are always absorbed before the store is read."""
+    host = host_ops_path(codoc_dir)
+    merging = Path(str(host) + ".merging")
+    applied = 0
+    with _edits_lock(codoc_dir):
+        if merging.exists():                       # recover a crash-orphaned batch first
+            applied += _drain_host_file(codoc_dir, merging)
+        if host.exists():
+            import os
+            os.replace(host, merging)              # atomic; new appends go to a fresh log
+            applied += _drain_host_file(codoc_dir, merging)
+    return applied
 
 
 # ─── realize.json — the directive manifest ───────────────────────────────────
