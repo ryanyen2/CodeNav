@@ -168,6 +168,31 @@ def test_safe_write_tree_yields_to_pending_doc_edit(codoc_dir):
         assert safe_write_tree(s, codoc_dir) is True
 
 
+def test_safe_write_tree_seeds_tree_doc_json_from_store(codoc_dir):
+    """The daemon's non-destructive render must write tree.doc.json alongside
+    tree.codoc — both are daemon-written derived views of the store (KTD9). Without
+    this, a freshly indexed / in-sync workspace that has never had a webview edit has
+    no tree.doc.json, so the webview's doc pane degrades to an empty doc (blank).
+
+    This is the daemon-side seed path: `codoc watch` startup (`_render`) and every
+    code-drift render go through `safe_write_tree`, which owns the invariant."""
+    from codoc.loop.reconcile import safe_write_tree
+
+    fid = _seed(codoc_dir, "Auth", "Handles login.")
+    # Simulate a fresh index: tree.codoc exists (from _seed's write_tree) but the doc
+    # projection was never authored (no Loop-B-mutating edit ever ran).
+    assert not doc_path(codoc_dir).exists()
+
+    with open_store(codoc_dir) as s:
+        assert safe_write_tree(s, codoc_dir) is True
+
+    # tree.doc.json is now present and reflects the store's live feature.
+    assert doc_path(codoc_dir).exists()
+    doc = json.loads(doc_path(codoc_dir).read_text())
+    heads = [n for n in doc.get("content", []) if n.get("type") == "featureHeading"]
+    assert any(h["attrs"].get("fid") == fid for h in heads)
+
+
 def test_daemon_skips_non_edit_doc_persist(codoc_dir, tmp_path):
     from codoc.loop.watch import WatchState, process_batch
 

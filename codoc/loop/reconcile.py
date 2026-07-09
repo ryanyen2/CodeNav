@@ -68,6 +68,7 @@ def safe_write_tree(store: Store, codoc_dir: str) -> bool:
     # this only READS the store and writes the derived .codoc files (no SQLite writes),
     # so it cannot deadlock against a loop that holds the lock and writes the store.
     from codoc.loop.locks import loop_lock
+    from codoc.loop.loop_b import write_tree_doc
 
     with loop_lock(codoc_dir):
         write_sidecar(store, codoc_dir)
@@ -81,4 +82,11 @@ def safe_write_tree(store: Store, codoc_dir: str) -> bool:
         if doc_parsed is not None and not diff_codoc(doc_parsed, store, has_local_ids=True).is_empty():
             return False
         write_tree(store, codoc_dir)
+        # KTD9: tree.doc.json is a daemon-written derived view of the store, exactly like
+        # tree.codoc — write BOTH here so a freshly-indexed / in-sync workspace that never
+        # had a Loop-B-mutating edit still has a doc projection. Loop B only writes
+        # tree.doc.json on a mutating pass, so without this seed the webview's doc pane
+        # degrades to an empty (blank) doc until the first edit. Guarded by the same
+        # pending-edit checks above, so it never clobbers an in-flight webview intent.
+        write_tree_doc(store, codoc_dir)
         return True
