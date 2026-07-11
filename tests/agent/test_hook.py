@@ -159,6 +159,95 @@ def test_resolve_features_ignores_draft_directive(shared_file_repo):
     assert set(_resolve_features("src/shared.py", str(codoc_dir))) == {"f-one", "f-two"}
 
 
+# ── symbol-level narrowing (Edit old_string → enclosing symbol → feature) ──────
+
+_MULTI_SYMBOL_SRC = '''\
+class Alpha:
+    def run(self):
+        return "alpha-body"
+
+
+class Beta:
+    def run(self):
+        return "beta-body"
+'''
+
+
+@pytest.fixture
+def multi_symbol_repo(tmp_path):
+    """One real Python file with two classes, each (and Beta's method) bound to a
+    DIFFERENT feature — so a symbol-scoped edit must pick exactly one."""
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    codoc_dir = root / ".codoc"
+    codoc_dir.mkdir()
+    (root / "src" / "shared.py").write_text(_MULTI_SYMBOL_SRC)
+    sidecar = {
+        "version": 1,
+        "by_feature": {},
+        "by_file": {"src/shared.py": [
+            {"symbol": "src/shared.py::Alpha", "feature_id": "f-alpha", "feature_title": "Alpha"},
+            {"symbol": "src/shared.py::Beta", "feature_id": "f-beta", "feature_title": "Beta"},
+            {"symbol": "src/shared.py::Beta.run", "feature_id": "f-beta-run", "feature_title": "Beta.run"},
+        ]},
+        "features": {"f-alpha": {"title": "Alpha"}, "f-beta": {"title": "Beta"},
+                     "f-beta-run": {"title": "Beta.run"}},
+    }
+    (codoc_dir / "tree.bindings.json").write_text(json.dumps(sidecar))
+    return root, codoc_dir
+
+
+def _edit(root, old, new="x"):
+    fp = str(root / "src" / "shared.py")
+    return {"tool_name": "Edit", "tool_input": {"file_path": fp, "old_string": old, "new_string": new}, "abs_path": fp}
+
+
+def test_symbol_scope_attributes_edit_to_the_edited_symbol(multi_symbol_repo):
+    """An Edit whose old_string lives inside Alpha attributes to Alpha's feature
+    only — not Beta's, even though both are bound to the same file."""
+    root, codoc_dir = multi_symbol_repo
+    kw = _edit(root, 'return "alpha-body"')
+    assert _resolve_features("src/shared.py", str(codoc_dir), **kw) == ["f-alpha"]
+
+
+def test_symbol_scope_picks_innermost_symbol(multi_symbol_repo):
+    """An edit inside Beta.run resolves to the innermost bound symbol (the method
+    feature f-beta-run), not the enclosing class feature f-beta."""
+    root, codoc_dir = multi_symbol_repo
+    kw = _edit(root, 'return "beta-body"')
+    assert _resolve_features("src/shared.py", str(codoc_dir), **kw) == ["f-beta-run"]
+
+
+def test_symbol_scope_finds_anchor_after_apply(multi_symbol_repo):
+    """At the PostToolUse phase old_string is gone from the file; the new_string
+    fallback still locates the edited symbol."""
+    root, codoc_dir = multi_symbol_repo
+    fp = str(root / "src" / "shared.py")
+    # Simulate the applied state: the file now contains the new text.
+    (root / "src" / "shared.py").write_text(_MULTI_SYMBOL_SRC.replace('"alpha-body"', '"alpha-new"'))
+    kw = {"tool_name": "Edit",
+          "tool_input": {"file_path": fp, "old_string": 'return "alpha-body"', "new_string": 'return "alpha-new"'},
+          "abs_path": fp}
+    assert _resolve_features("src/shared.py", str(codoc_dir), **kw) == ["f-alpha"]
+
+
+def test_symbol_scope_falls_back_when_anchor_missing(multi_symbol_repo):
+    """When old_string can't be located (neither old nor new present), symbol
+    scoping yields nothing and the resolver falls back to the file-level set."""
+    root, codoc_dir = multi_symbol_repo
+    kw = _edit(root, "this text is not in the file at all")
+    assert set(_resolve_features("src/shared.py", str(codoc_dir), **kw)) == {"f-alpha", "f-beta", "f-beta-run"}
+
+
+def test_symbol_scope_write_falls_back_to_file_level(multi_symbol_repo):
+    """A whole-file Write carries no symbol anchor → file-level fallback (all
+    bound features), never a wrong single-symbol guess."""
+    root, codoc_dir = multi_symbol_repo
+    fp = str(root / "src" / "shared.py")
+    kw = {"tool_name": "Write", "tool_input": {"file_path": fp, "content": _MULTI_SYMBOL_SRC}, "abs_path": fp}
+    assert set(_resolve_features("src/shared.py", str(codoc_dir), **kw)) == {"f-alpha", "f-beta", "f-beta-run"}
+
+
 # ── session-start ─────────────────────────────────────────────────────────────
 
 def test_session_start_writes_open_epoch(repo):
