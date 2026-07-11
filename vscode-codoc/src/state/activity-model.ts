@@ -82,13 +82,14 @@ export function computeActiveFeatureLines(
     const featureIds = new Set<string>();
 
     for (const [filePath, entry] of Object.entries(data.touched ?? {})) {
-        // Source 1: explicit feature_ids in the touched entry
-        for (const fid of entry.feature_ids) {
-            featureIds.add(fid);
-        }
-
-        // Source 2: resolve via sidecar (works even when feature_ids aren't populated)
-        if (sidecar) {
+        if (entry.feature_ids.length) {
+            // The hook already resolved (and, when a file is shared by several
+            // features, narrowed to) the feature(s) actually being touched —
+            // trust it rather than re-widening back out via the sidecar.
+            for (const fid of entry.feature_ids) featureIds.add(fid);
+        } else if (sidecar) {
+            // Fallback: no explicit feature_ids (older activity.json) — resolve
+            // via the sidecar so liveness still renders.
             for (const fileEntry of entriesForFile(sidecar, filePath)) {
                 featureIds.add(fileEntry.feature_id);
             }
@@ -129,8 +130,9 @@ export function activeFeatureModes(
 
     for (const [filePath, entry] of Object.entries(data.touched ?? {})) {
         const mode: 'write' | 'read' = entry.mode === 'write' ? 'write' : 'read';
-        for (const fid of entry.feature_ids) mark(fid, mode);
-        if (sidecar) {
+        if (entry.feature_ids.length) {
+            for (const fid of entry.feature_ids) mark(fid, mode);
+        } else if (sidecar) {
             for (const fe of entriesForFile(sidecar, filePath)) mark(fe.feature_id, mode);
         }
     }
@@ -176,8 +178,14 @@ export function featureSteps(
     const out = new Map<string, { label: string; done: boolean }[]>();
     if (!isAgentActive(data)) return out;
 
+    // Trust an already-resolved (and, for a file shared by several features,
+    // already-narrowed) explicit feature_ids list; only fall back to the full
+    // sidecar by_file resolution when nothing explicit is present (older
+    // activity.json) — otherwise a file bound to several features would union
+    // ALL of them back in, re-broadening a hook-narrowed single-feature touch.
     const fidsFor = (file: string, explicit: string[]): Set<string> => {
-        const s = new Set<string>(explicit ?? []);
+        if (explicit && explicit.length) return new Set(explicit);
+        const s = new Set<string>();
         if (sidecar) for (const fe of entriesForFile(sidecar, file)) s.add(fe.feature_id);
         return s;
     };

@@ -66,11 +66,45 @@ def _resolve_features(rel_path: str, codoc_dir: str) -> list[str]:
 
     Reads the sidecar rather than opening the SQLite store to avoid WAL
     contention with the running watch daemon.
+
+    A file can be bound to several features (e.g. a shared helper). When it is,
+    narrow to whichever of those features has a realize directive actively
+    in flight (``handed_off`` in ``.codoc/realize.json``) and bound to this same
+    file — the feature actually being realized right now — so editing one
+    feature's file doesn't mark its unrelated siblings "editing" too. Falls back
+    to the full set when no in-flight directive disambiguates (e.g. ad hoc
+    editing outside a realize session).
     """
     sidecar = read_json(Path(codoc_dir) / BINDINGS_FILENAME, default={})
     by_file: dict = sidecar.get("by_file", {})
     entries = by_file.get(rel_path, [])
-    return [e["feature_id"] for e in entries if "feature_id" in e]
+    all_fids = list(dict.fromkeys(e["feature_id"] for e in entries if "feature_id" in e))
+    if len(all_fids) <= 1:
+        return all_fids
+    narrowed = _realizing_features_for_file(rel_path, codoc_dir, sidecar, all_fids)
+    return narrowed if narrowed else all_fids
+
+
+def _realizing_features_for_file(
+    rel_path: str, codoc_dir: str, sidecar: dict, candidate_fids: list[str],
+) -> list[str]:
+    """Of ``candidate_fids`` (all bound to ``rel_path``), return those with a
+    handed-off realize directive that is ITSELF bound to ``rel_path`` (via the
+    sidecar's ``by_feature`` index) — the feature(s) actually being realized.
+    Best-effort: any failure (missing/corrupt manifest) skips narrowing."""
+    try:
+        from codoc.loop.edits import read_manifest
+
+        candidates = set(candidate_fids)
+        directive_fids = {d.feature_id for d in read_manifest(codoc_dir)
+                           if d.handed_off and d.feature_id in candidates}
+    except Exception:  # noqa: BLE001 — best-effort disambiguation, never break the hook
+        return []
+    if not directive_fids:
+        return []
+    by_feature: dict = sidecar.get("by_feature", {})
+    return [fid for fid in candidate_fids if fid in directive_fids
+            and rel_path in {e.get("file") for e in by_feature.get(fid, [])}]
 
 
 # ─── Hook handlers ───────────────────────────────────────────────────────────

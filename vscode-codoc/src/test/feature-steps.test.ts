@@ -67,4 +67,20 @@ describe('featureSteps', () => {
         const data = openEpoch({ recent: [{ tool: 'Edit', file: 'x.py', feature_ids: [], at: '1', phase: 'editing' }] });
         expect(featureSteps(data, sidecar).get('f9')!.map(s => s.label)).toEqual(['editing x.py']);
     });
+
+    it('does not fan a resolved edit out to every sibling feature bound to the same file', () => {
+        // shared.py is bound to two features; the event was already resolved (by the
+        // hook) to just f-one — the sidecar must not widen that back out to f-two.
+        const sidecar: SidecarData = {
+            ...emptySidecar(),
+            by_file: { 'shared.py': [
+                { symbol: 'One.run', feature_id: 'f-one', feature_title: 'One' },
+                { symbol: 'Two.run', feature_id: 'f-two', feature_title: 'Two' },
+            ] },
+        };
+        const data = openEpoch({ recent: [{ tool: 'Edit', file: 'shared.py', feature_ids: ['f-one'], at: '1', phase: 'editing' }] });
+        const steps = featureSteps(data, sidecar);
+        expect(steps.has('f-one')).toBe(true);
+        expect(steps.has('f-two')).toBe(false);
+    });
 });

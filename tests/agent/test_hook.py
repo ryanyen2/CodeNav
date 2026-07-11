@@ -97,6 +97,68 @@ def test_resolve_features_corrupt_sidecar(tmp_path):
     assert _resolve_features("src/app.py", str(codoc_dir)) == []
 
 
+@pytest.fixture
+def shared_file_repo(tmp_path):
+    """A single file bound to two features (a shared module) — the multi-feature
+    fan-out scenario: editing it should attribute to whichever feature is
+    actually being realized, not to both."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    codoc_dir = root / ".codoc"
+    codoc_dir.mkdir()
+    sidecar = {
+        "version": 1,
+        "by_feature": {
+            "f-one": [{"file": "src/shared.py", "symbol": "One.run"}],
+            "f-two": [{"file": "src/shared.py", "symbol": "Two.run"}],
+        },
+        "by_file": {"src/shared.py": [
+            {"symbol": "One.run", "feature_id": "f-one", "feature_title": "One"},
+            {"symbol": "Two.run", "feature_id": "f-two", "feature_title": "Two"},
+        ]},
+        "features": {"f-one": {"title": "One", "parent_id": None},
+                     "f-two": {"title": "Two", "parent_id": None}},
+    }
+    (codoc_dir / "tree.bindings.json").write_text(json.dumps(sidecar))
+    return root, codoc_dir
+
+
+def test_resolve_features_narrows_to_in_flight_directive(shared_file_repo):
+    """Only the feature with a handed-off directive lights up — not its sibling
+    that merely shares the same file."""
+    root, codoc_dir = shared_file_repo
+    from codoc.loop.edits import Directive, write_manifest
+
+    write_manifest(str(codoc_dir), [
+        Directive(id="d-1", feature_id="f-one", kind="amend", handed_off=True),
+    ])
+    # A handed-off directive without realize.md reads back as stale (read_manifest's
+    # contract) — mirror the real state: handed-off directives live in realize.md.
+    (codoc_dir / "realize.md").write_text("### d-1\n")
+
+    assert _resolve_features("src/shared.py", str(codoc_dir)) == ["f-one"]
+
+
+def test_resolve_features_falls_back_with_no_directive(shared_file_repo):
+    """No realize directive at all (ad hoc editing, no active realize session) →
+    the full fan-out, since there's no signal to narrow with."""
+    root, codoc_dir = shared_file_repo
+    assert set(_resolve_features("src/shared.py", str(codoc_dir))) == {"f-one", "f-two"}
+
+
+def test_resolve_features_ignores_draft_directive(shared_file_repo):
+    """A held draft (handed_off=False) hasn't been sent to the agent yet — it must
+    not narrow the attribution, or an unrelated ad hoc edit would misattribute."""
+    root, codoc_dir = shared_file_repo
+    from codoc.loop.edits import Directive, write_manifest
+
+    write_manifest(str(codoc_dir), [
+        Directive(id="d-1", feature_id="f-one", kind="amend", handed_off=False),
+    ])
+
+    assert set(_resolve_features("src/shared.py", str(codoc_dir))) == {"f-one", "f-two"}
+
+
 # ── session-start ─────────────────────────────────────────────────────────────
 
 def test_session_start_writes_open_epoch(repo):

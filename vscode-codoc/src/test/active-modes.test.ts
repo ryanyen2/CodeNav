@@ -42,6 +42,20 @@ describe('activeFeatureModes', () => {
         const data = openEpoch({ touched: { 'a.py': { symbols: [], feature_ids: [], last: null, mode: 'read' } } });
         expect(activeFeatureModes(data, sc).get('f-a')).toBe('read');
     });
+
+    it('does not widen an already-resolved touch out to a sibling feature sharing the file', () => {
+        const sc: SidecarData = {
+            ...emptySidecar(),
+            by_file: { 'shared.py': [
+                { symbol: 'One.run', feature_id: 'f-one', feature_title: 'One' },
+                { symbol: 'Two.run', feature_id: 'f-two', feature_title: 'Two' },
+            ] },
+        };
+        const data = openEpoch({ touched: { 'shared.py': { symbols: [], feature_ids: ['f-one'], last: null, mode: 'write' } } });
+        const modes = activeFeatureModes(data, sc);
+        expect(modes.get('f-one')).toBe('write');
+        expect(modes.has('f-two')).toBe(false);
+    });
 });
 
 describe('featurePhases', () => {
