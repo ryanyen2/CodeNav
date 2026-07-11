@@ -60,6 +60,23 @@ export function featureBodyRanges(doc: PMModelNode): FeatureBody[] {
 
 const PHASE_ACTIVE = (p: FeaturePhase | undefined): boolean => p === 'editing' || p === 'reflecting';
 
+/** Direct-child paragraph ranges within [from, to) — the node-level spans the resolving
+ *  sweep wraps (one per paragraph in a feature's body). Pure — unit-tested directly. */
+export function paragraphRanges(doc: PMModelNode, from: number, to: number): { from: number; to: number }[] {
+    const out: { from: number; to: number }[] = [];
+    doc.forEach((node, pos) => {
+        if (pos < from || pos >= to || node.type.name !== 'paragraph') return;
+        out.push({ from: pos, to: pos + node.nodeSize });
+    });
+    return out;
+}
+
+/** One node decoration per paragraph in [from, to) — the CSS `::after` sweep band sizes to
+ *  the whole paragraph box, so this must be a node (not inline) decoration. */
+function sweepDecorations(doc: PMModelNode, from: number, to: number): Decoration[] {
+    return paragraphRanges(doc, from, to).map(r => Decoration.node(r.from, r.to, { class: 'ce-resolving-sweep' }));
+}
+
 /** Inline word decorations across [from,to], each with an incrementing animation-delay so
  *  the reveal sweeps left→right. Caps at MAX_REVEAL_WORDS (the rest simply fade with no
  *  per-word stagger, so a huge body never spawns thousands of decorations). */
@@ -90,7 +107,7 @@ function build(doc: PMModelNode, phases: Record<string, FeaturePhase>, resolving
             // ghost: dim the whole description while the agent works it
             decos.push(Decoration.inline(body.from, body.to, { class: 'ce-ghost' }));
         } else if (resolving.has(body.fid)) {
-            decos.push(...wordDecorations(doc, body.from, body.to));
+            decos.push(...wordDecorations(doc, body.from, body.to), ...sweepDecorations(doc, body.from, body.to));
         }
     }
     return DecorationSet.create(doc, decos);

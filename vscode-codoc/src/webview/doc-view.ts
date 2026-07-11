@@ -122,7 +122,9 @@ const presence = new PresenceLayer({
  *  (presence.ts); a future per-agent signal drops in there without touching this. */
 function updatePresence(): void {
     const phase = (payload.sync.phase ?? {}) as Record<string, PresencePhase>;
-    presence.update(deriveAgentPresences(phase, payload.sync.activeRead ?? []), payload.sync.realize);
+    const presences = deriveAgentPresences(phase, payload.sync.activeRead ?? []);
+    presence.update(presences, payload.sync.realize);
+    wholeEditor?.setRole(presences[0]?.role ?? 'claude');
 }
 
 // ── Command palette (P4 / §D) ──────────────────────────────────────────────────

@@ -1,0 +1,370 @@
+\documentclass[sigconf,nonacm]{acmart}
+
+% codoc — UIST short paper (2 pages).
+% Draft. Citations are written inline in APA style; the reference list at the
+% end is APA-formatted. BibTeX to be added later.
+
+\settopmatter{printccs=false, printacmref=false}
+\setcopyright{none}
+\pagestyle{plain}
+
+\begin{document}
+
+\title{codoc: Reading and Changing a Codebase Through an Editable Map of Its Intent}
+
+\author{Anonymous}
+\affiliation{%
+  \institution{Anonymous Institution}
+  \country{}
+}
+
+\begin{abstract}
+As AI agents write and edit a growing share of code, the account of what the code
+is for --- why a piece of code exists, and how one feature is spread across many
+files --- falls behind, because the agent maintains files but not that account,
+and the documents meant to hold it are authored to feed the agent context rather
+than kept faithful to the code. codoc treats the documentation of a codebase as a
+shared representation that a person and an agent both read and edit. It is built
+from the code: the repository is parsed into code chunks, each chunk is labeled,
+and the labels are clustered into a hierarchy of features, so every section of the
+document corresponds to a definite slice of the code and that correspondence is
+kept live. A person reads the document to understand the system and edits it to
+say what should change; the agent implements the change and surfaces the result
+back into the document as a diff to review; and both sides update incrementally,
+so no one has to re-read a regenerated document. We describe the design through a
+running example --- making a small coding agent's model calls resilient to a flaky
+server --- and its implementation as a Visual Studio Code extension.
+\end{abstract}
+
+\keywords{program comprehension, code navigation, AI coding agents, intent, literate programming}
+
+\maketitle
+
+\section{Introduction}
+
+Managing a codebase over its lifetime demands a clear picture of not just what it
+does but how it works. To plan a change, review one, or decide where new code
+belongs, a developer needs to know how the parts fit together, not only what the
+system delivers on the surface. Coding through LLM agents leaves that picture
+thin: the agent conveys what the code does at a high level, but the lower-level
+account of how it works --- the account that informs each next decision in
+iteration and maintenance --- is not something it keeps.
+
+The usual remedy is a companion document kept alongside the code: a
+\texttt{CLAUDE.md}, a set of Cursor rules, a memory bank. These soon turn into
+long change logs, useful as context for the agent but of little help to a person
+trying to understand the system. The root problem is authorship: no human wrote
+them. They are the agent's summaries of code the person neither wrote nor
+condensed, so a developer can neither trust them as an account of the system nor
+edit them to specify what should change next.
+
+codoc instead builds the document bottom-up from the code, so it stays faithful to
+the codebase and serves as a \emph{shared representation} that a person and an
+agent co-maintain. The repository is parsed into an
+intermediate representation of code chunks; each chunk is assigned a semantic
+label; and the labels are clustered into a hierarchy of \emph{features}, named
+units of intent. Each section of the document therefore corresponds to a definite
+slice of the code, and the correspondence is kept live rather than computed once:
+a change to any code in a feature's slice, made by a person or by an agent, is
+detected and surfaced in that section.
+
+On top of this mapping codoc runs an editing loop that resembles collaborative
+document editing. A person edits the document to say what should change; the agent
+picks up the implied task, implements it in code, and surfaces the resulting
+changes --- including the ones the person did not spell out --- back into the
+document as a diff to review. Because both the document and the code are updated
+incrementally, the person never confronts a regenerated document they must
+re-read from scratch; they see only what changed and who changed it. Our
+contribution is this design: one editable representation of a codebase's intent,
+kept faithful to the code in both directions, through which a person comprehends
+the system, directs the agent, and reviews its work. We describe it through a
+running example and its implementation as a Visual Studio Code extension.
+
+\section{Representing intent: a recurring goal, and why it kept failing}
+
+Describing a program in terms of its intent is not a new wish. Knuth (1984) argued
+that a program should be written to explain to a person what we want the computer
+to do, with the machine as the second reader. His approach kept the prose and the
+code consistent at the moment they were written, from a single source. It said
+nothing about what happens when the code later changes under maintenance, and in
+practice the explanation went stale or the code became hard to change once it was
+embedded in prose. The method also assumed one author keeping both sides aligned
+by hand.
+
+Understanding code has long been framed as mapping human concepts onto the code
+that implements them. Biggerstaff et al.\ (1993) called this the concept
+assignment problem and described code as carrying both an informal expression of
+intent for people and a formal one for the machine. Rajlich and Wilde (2002) put
+it in terms that match daily work: a change is stated in domain concepts, the
+concept is known but where it lives in the code is not, and one concept is usually
+spread across many files. People built tools to find that code, surveyed by Dit et
+al.\ (2013), but these ran once per task and returned a ranked list that a
+developer read and discarded. The mapping was recomputed each time, never kept.
+
+Others tried the opposite: make intent the source and generate code from it.
+Simonyi et al.\ (2006) stored intent as the primary artifact and generated code
+from it, but the surface was a specialized structured editor. Voelter et al.\
+(2014) documented the cost of that style of editor: people had to edit the syntax
+tree rather than type freely, ordinary tools like diff and version control no
+longer worked, and the effort of getting used to it was high.
+
+The same goal returns in today's agent tooling, in three forms. One keeps a
+natural-language artifact beside the code to steer the agent: GitHub Next's
+SpecLang (2023) writes a program as a prose specification the model compiles to
+code, while Cursor rules (2024) and Cline's memory bank (2025) persist project
+conventions and state for the agent to reload on each turn. These make the
+agent's output more controllable, but the artifact is authored for the model and
+is not bound to the code it governs, so it drifts exactly as earlier
+documentation did. A second form conditions code generation on documentation
+directly: DocPrompting (Zhou et al., 2023) retrieves library docs to generate
+calls to functions the model has not seen, and DocCGen (Pimparkhede et al., 2024)
+constrains generation against structured documentation to raise syntactic
+correctness and controllability. A third builds an explicit intermediate
+structure before generating: RPG (Microsoft Research, 2025) plans a repository as
+a graph of capabilities and data flows and generates the code from it. All three
+improve how code is produced \emph{from} a description, but the description is an
+input consumed once, not a living representation a person keeps reading and
+editing as the code evolves.
+
+Across these efforts the same goal recurs --- to hold a codebase in terms of its
+intent --- and two obstacles defeat it. Keeping the map between intent and code
+current was manual, so it rotted; and the editors that made intent the primary
+artifact were too heavy to adopt. Both obstacles have since moved. An agent can
+now read code and re-derive what each part does, and write code from a stated
+intent, cheaply enough to run continuously. codoc builds on this: it derives the
+intent-to-code map automatically and keeps it current in both directions, and it
+keeps the authoring surface as plain text so a person never leaves the editor
+they already use.
+
+\section{A running example, and what codoc shows}
+
+Maya has taken over a small coding agent: a few thousand lines that drive a
+read-think-act tool-use loop against a locally hosted model. The original author
+has left, and a user reports that the local model server is flaky --- a single
+dropped request aborts the whole session. Maya has to make model calls resilient,
+in code she has not read.
+
+She opens \texttt{tree.codoc} in the Codoc Tree editor, the view codoc keeps for
+this repository (Figure~\ref{fig:tree}). The outline is a projection of codoc's
+store, and it gives her the shape of the system in about a minute: the agent is a
+loop orchestrator that builds a size-capped prompt, parses the model's tool calls,
+dispatches them through a validated tool registry, and runs file and shell tools
+behind a path sandbox, while the model itself is reached through a separate
+\emph{model backend clients} area. Each feature links to the exact code that
+implements it, so she clicks the link on ``Ollama model backend client'' and lands
+on the \texttt{OllamaModelClient} class that makes the HTTP call. She has run no
+search and opened no unrelated file.
+
+\begin{figure}[t]
+\footnotesize
+\begin{verbatim}
+- Agent runtime core
+  - Agentic tool-use loop orchestrator
+      Drives the read-think-act loop: sends prompts,
+      parses replies, executes tools, spawns sub-agents.
+      [MiniAgent](codoc:mini_coding_agent.py#MiniAgent)
+
+- Model backend clients
+  - Ollama model backend client
+      > On a transient HTTP error or timeout, retry with
+      > **exponential backoff** (max 3 attempts) instead
+      > of aborting the run. Add a test for the retry path.
+      Talks to a local Ollama /api/generate endpoint for
+      completions.
+      Runbook: [flaky local inference](wiki/runbook/ollama)
+      [OllamaModelClient](codoc:mini_coding_agent.py#OllamaModelClient)
+\end{verbatim}
+\caption{A fragment of \texttt{tree.codoc} after Maya's edits. Features nest under
+an area and each links to the code that implements it (feature ids are hidden in
+the editor). The two quoted lines are a steering note to the agent, the bold span
+marks the requirement, and the plain link points the agent at a document to read
+first.}
+\label{fig:tree}
+\end{figure}
+
+\section{Editing the intent instead of changing the code directly}
+
+Reading the client, Maya confirms the cause: the call to \texttt{/api/generate}
+sets a timeout but never retries, so one transient failure propagates up and ends
+the run. She states the fix where the feature is described, not in a chat window.
+On ``Ollama model backend client'' she adds two quoted note lines --- on a
+transient HTTP error or timeout, retry with exponential backoff up to three times
+instead of aborting; and add a test for the retry path --- marks ``exponential
+backoff'' in bold so the agent treats it as the requirement, and pastes a link to
+the runbook for the flaky server so the agent reads it first. codoc does not treat
+these as plain prose: quoted lines become steering directives, the bold span is
+the focus of the change, and the external link is fetched before implementation.
+The instruction stays attached to the feature it concerns, with a place to live
+and a version, rather than scattered across throwaway prompts (Prompts Are
+Programs Too!, 2024).
+
+The edits are held as a draft until Maya hands them to the agent, which starts
+Loop~B: the tree-to-code direction. The agent reads the runbook, wraps the
+completion call in retry-with-backoff, and adds the test. The change returns as a
+normal diff, with the agent's edits shown as tracked changes she accepts or
+rejects inline, together with the updated links from the feature to the new code.
+She reviews and accepts.
+
+The retry logic is a new helper function that no existing feature owns. Because
+the code no longer matches the outline, codoc's other direction --- Loop~A, which
+watches the code --- surfaces this as a proposal rather than an edit made behind
+her back: a new child feature under the model client for the retry helper,
+rendered in place as a ghost row with inline Accept and Reject. Maya accepts it,
+because it matches how she now understands the code. When she is done the outline
+is correct, the fix is in, and the reason for it --- down to the runbook link and
+the bolded requirement --- is recorded where the code is described, not in a
+ticket that will be closed and forgotten.
+
+\section{How codoc keeps the two in sync}
+
+We make the two directions precise. The repository is indexed into a set of
+AST-level chunks $\mathcal{C}$; each chunk $c = (\mathit{file}, \mathit{sym}, h)$
+carries its location and a content hash $h$ over its normalized tokens. The
+outline is a feature tree $\mathcal{T} = (\mathcal{F}, \prec)$ with a forest
+parent relation $\prec$, and attribution is a partial map
+$\mathcal{B} \colon \mathcal{C} \to \mathcal{F} \cup \{\bot\}$ that binds each
+chunk to at most one feature --- a uniqueness constraint on
+$(\mathit{file}, \mathit{sym})$ --- while one feature owns many chunks across many
+files. This map is the correspondence between a section of the document and its
+slice of the code.
+
+\textbf{Loop~A reflects code into the tree.} A pass diffs the fresh index against
+$\mathcal{B}$ to compute a changeset
+$\Delta = (\Delta^{+}, \Delta^{-}, \Delta^{\sim})$ of chunks added, removed, and
+modified (bound, but $h$ no longer matches the stored fingerprint). Every change
+it can resolve mechanically it resolves without a model: a modified chunk
+refreshes its binding, a removed chunk detaches, and a chunk whose hash reappears
+at a new key re-attaches to its prior feature, carrying attribution across moves
+and renames. Only the residual --- genuinely new code, or a feature that lost its
+last binding --- goes to a single LLM call per pass, which sees $\Delta$, a
+locality subtree of $\mathcal{T}$, and \emph{every} feature title. Supplying the
+full title set to one call is what prevents duplicate or split features, with no
+post-hoc deduplication. Safe operations (binding maintenance, small prose
+amendments) apply automatically; structural ones (add, move, retire) become
+proposals a person accepts or rejects. The direction is workable because code that
+people write is regular enough that a model can reliably tell which code serves
+which feature (Hindle et al., 2012); we never need an exact, reversible grammar
+between outline and code, the requirement that made earlier round-trip tools
+brittle once code was hand-edited (Siegl, 2015).
+
+\textbf{Loop~B realizes tree edits into code.} Each applied edit is classified by
+whether it implies a code change. Descriptive prose merely persists; imperative
+prose, an accepted plan node, or a steering note mints a \emph{directive} --- a
+work order assembled from the feature's description, its bound symbols, and its
+\texttt{Consult} links --- and queues it for the live coding session. The session
+implements the directive, reflects the new code back, and Loop~A closes the cycle.
+
+\textbf{Conflicts resolve by a deterministic priority, not a merge heuristic.}
+Let $H \subseteq \mathcal{F}$ be the \emph{hold set}: features with a pending
+document-side intent, whether an unsettled suggestion or a queued directive. While
+$f \in H$, code-side intent operations on $f$ are suppressed,
+\[
+  \mathrm{suppress}(o, H) \iff
+  o.\mathit{kind} \in \{\textsf{amend}, \textsf{retire}, \textsf{move}\}
+  \;\wedge\; o.f \in H,
+\]
+while binding maintenance ($\textsf{attach}$, $\textsf{detach}$,
+$\textsf{refresh}$) is never suppressed --- bindings are attribution, not intent,
+and must stay correct regardless of who is mid-edit. The rule is that the side
+expressing \emph{intent} (the document) outranks the side that only
+\emph{observes} (the code reflector), so a person's in-flight edit is never
+clobbered.
+
+\section{Status and next steps}
+
+codoc runs today on real repositories as a Visual Studio Code extension. Reading
+the outline, editing it, directing the agent, and reviewing structural proposals
+work end to end. The rough edges are honest ones: the model pass adds latency,
+proposals on large refactors are not always right, and the first outline built
+from a cold start needs cleanup.
+
+Three directions follow. First, \emph{shared editing.} A single outline that a
+team reads and edits is a natural place for more than one person, and for people
+and agents, to work at once; we are moving the store's projection onto a CRDT
+(pycrdt) so concurrent edits from several authors and the reflecting loop merge
+without a lock or a lost write. Second, \emph{more media than prose.} A feature is
+already a typed, bindable node, and the same lift-and-lower machinery applies to
+non-prose media --- a dependency diagram lifted from the code graph, a screenshot
+or a linked document consulted before implementation --- so the outline can carry
+the representation that fits each feature rather than prose alone. Third,
+\emph{evaluation.} We have not yet run a user study; the question we most want to
+answer is whether the outline holds up as the primary place people work over
+months of real change, not just for a single fix.
+
+\begin{thebibliography}{99}
+
+\bibitem{allamanis2018}
+Allamanis, M., Barr, E. T., Devanbu, P., \& Sutton, C. (2018). A survey of machine
+learning for big code and naturalness. \textit{ACM Computing Surveys, 51}(4),
+1--37.
+
+\bibitem{biggerstaff1993}
+Biggerstaff, T. J., Mitbander, B. G., \& Webster, D. (1993). The concept assignment
+problem in program understanding. In \textit{Proceedings of the 15th International
+Conference on Software Engineering} (pp. 482--498). IEEE.
+
+\bibitem{cline2025}
+Cline. (2025). \textit{Memory Bank} [Software documentation]. Retrieved from
+https://docs.cline.bot
+
+\bibitem{cursor2024}
+Cursor (Anysphere). (2024). \textit{Rules for AI} [Software documentation].
+Retrieved from https://docs.cursor.com/context/rules
+
+\bibitem{dit2013}
+Dit, B., Revelle, M., Gethers, M., \& Poshyvanyk, D. (2013). Feature location in
+source code: A taxonomy and survey. \textit{Journal of Software: Evolution and
+Process, 25}(1), 53--95.
+
+\bibitem{speclang2023}
+GitHub Next. (2023). \textit{SpecLang} [Research prototype]. Retrieved from
+https://githubnext.com/projects/speclang
+
+\bibitem{hindle2012}
+Hindle, A., Barr, E. T., Su, Z., Gabel, M., \& Devanbu, P. (2012). On the
+naturalness of software. In \textit{Proceedings of the 34th International
+Conference on Software Engineering} (pp. 837--847). IEEE.
+
+\bibitem{knuth1984}
+Knuth, D. E. (1984). Literate programming. \textit{The Computer Journal, 27}(2),
+97--111.
+
+\bibitem{rpg2025}
+Microsoft Research. (2025). RPG: A repository planning graph for unified and
+scalable codebase generation. \textit{arXiv:2509.16198}.
+
+\bibitem{doccgen2024}
+Pimparkhede, S., Kammakomati, M., Tamilselvam, S., Kumar, P., Kumar, A. P., \&
+Bhattacharyya, P. (2024). DocCGen: Document-based controlled code generation. In
+\textit{Proceedings of the 2024 Conference on Empirical Methods in Natural
+Language Processing (EMNLP)}. ACL.
+
+\bibitem{promptsprograms2024}
+[Authors to confirm]. (2024). Prompts are programs too! Understanding how
+developers build software containing prompts. \textit{arXiv:2409.12447}.
+
+\bibitem{rajlich2002}
+Rajlich, V., \& Wilde, N. (2002). The role of concepts in program comprehension. In
+\textit{Proceedings of the 10th International Workshop on Program Comprehension}
+(pp. 271--278). IEEE.
+
+\bibitem{siegl2015}
+Siegl, D. (2015). Why round-trip engineering does not work. LieberLieber (blog).
+
+\bibitem{simonyi2006}
+Simonyi, C., Christerson, M., \& Clifford, S. (2006). Intentional software. In
+\textit{Proceedings of OOPSLA 2006} (pp. 451--464). ACM.
+
+\bibitem{voelter2014}
+Voelter, M., Siegmund, J., Berger, T., \& Kolb, B. (2014). Towards user-friendly
+projectional editors. In \textit{Software Language Engineering (SLE 2014)}, LNCS
+8706 (pp. 41--61). Springer.
+
+\bibitem{docprompting2023}
+Zhou, S., Alon, U., Xu, F. F., Jiang, Z., \& Neubig, G. (2023). DocPrompting:
+Generating code by retrieving the docs. In \textit{The Eleventh International
+Conference on Learning Representations (ICLR)}.
+
+\end{thebibliography}
+
+\end{document}

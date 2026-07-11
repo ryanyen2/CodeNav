@@ -179,3 +179,6 @@ never `tree.codoc`). See `docs/serve-deployment.md` (setup) and `docs/architectu
 
 Accepted review residuals live in `docs/residual-review-findings/`; superseded
 plans/brainstorms from prior feature work are archived under `docs/archive/`.
+Documented solutions to past problems (bugs, best practices, workflow patterns),
+organized by category with YAML frontmatter (`module`, `tags`, `problem_type`),
+accrete in `docs/solutions/`; shared domain vocabulary lives in `CONCEPTS.md`.

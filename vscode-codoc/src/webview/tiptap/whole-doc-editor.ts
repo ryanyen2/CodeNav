@@ -105,6 +105,9 @@ export interface WholeDocEditorHandle {
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
     setSteps: (steps: Record<string, AgentStep[]>) => void;
+    /** Update the currently-active agent's role — tints the ribbon + resolves its "who" label
+     *  (state/presence.ts's roleName/roleInk), matching the presence avatar's tint. */
+    setRole: (role: string) => void;
     /** Update the "awaiting AI realization" set (the daemon hold set) — drives the
      *  pending-intent rail + underline + being-realized badge. `detail` carries the
      *  queued directive's kind + intent gloss per feature (a subset of `fids`) for the
@@ -219,6 +222,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentSteps: Record<string, AgentStep[]> = {};   // P2b agent-action ribbon
+    let currentRole = 'claude';   // the ribbon's "who" — matches the presence avatar's role
     let currentHeld = new Set<string>();   // handed-off features (staged & sent) → pending badge
     let currentHoldDetail: Record<string, HoldDetail> = {};  // queued-directive {kind,intent} per held fid
     // Edit-lifecycle phase 1 (U3): the "captured" set is computed in the plugin from
@@ -271,7 +275,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
             RevealDecorations.configure({ getPhases: () => currentPhases }),
-            AgentRibbon.configure({ getSteps: () => currentSteps }),
+            AgentRibbon.configure({ getSteps: () => currentSteps, getRole: () => currentRole }),
             HoldDecorations.configure({
                 getHeld: () => currentHeld,
                 getDetail: () => currentHoldDetail,
@@ -1233,6 +1237,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setSteps: (steps: Record<string, AgentStep[]>) => {
             currentSteps = steps;
+            editor.view.dispatch(editor.state.tr.setMeta(STEPS_UPDATED, true));
+        },
+        setRole: (role: string) => {
+            currentRole = role;
             editor.view.dispatch(editor.state.tr.setMeta(STEPS_UPDATED, true));
         },
         setHeld: (fids: string[], detail?: Record<string, HoldDetail>) => {

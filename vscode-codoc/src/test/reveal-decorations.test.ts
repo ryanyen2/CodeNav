@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Schema } from '@tiptap/pm/model';
-import { featureBodyRanges, newlyResolved } from '../webview/tiptap/reveal-decorations';
+import { featureBodyRanges, newlyResolved, paragraphRanges } from '../webview/tiptap/reveal-decorations';
 import type { FeaturePhase } from '../state/activity-model';
 
 // A minimal schema with a featureHeading node carrying an `fid`, plus paragraphs —
@@ -54,6 +54,39 @@ describe('featureBodyRanges', () => {
     it('ignores headings with no fid', () => {
         const doc = schema.nodes.doc.create(null, [heading('', 'No id'), para('x')]);
         expect(featureBodyRanges(doc)).toEqual([]);
+    });
+});
+
+describe('paragraphRanges', () => {
+    it('returns one range per paragraph within [from, to)', () => {
+        const doc = schema.nodes.doc.create(null, [
+            heading('f1', 'One'),
+            para('alpha beta'),
+            para('gamma'),
+            heading('f2', 'Two'),
+            para('delta'),
+        ]);
+        const [f1] = featureBodyRanges(doc);
+        const ranges = paragraphRanges(doc, f1.from, f1.to);
+        expect(ranges).toHaveLength(2);
+        expect(ranges.map(r => doc.textBetween(r.from, r.to))).toEqual(['alpha beta', 'gamma']);
+    });
+
+    it('excludes paragraphs outside the range', () => {
+        const doc = schema.nodes.doc.create(null, [
+            heading('f1', 'One'),
+            para('alpha'),
+            heading('f2', 'Two'),
+            para('beta'),
+        ]);
+        const [f1, f2] = featureBodyRanges(doc);
+        expect(paragraphRanges(doc, f1.from, f1.to).map(r => doc.textBetween(r.from, r.to))).toEqual(['alpha']);
+        expect(paragraphRanges(doc, f2.from, f2.to).map(r => doc.textBetween(r.from, r.to))).toEqual(['beta']);
+    });
+
+    it('returns nothing for an empty range', () => {
+        const doc = schema.nodes.doc.create(null, [heading('f1', 'One'), heading('f2', 'Two'), para('x')]);
+        expect(paragraphRanges(doc, 0, 0)).toEqual([]);
     });
 });
 
