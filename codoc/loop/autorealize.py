@@ -23,8 +23,7 @@ from pathlib import Path
 
 from codoc.loop.filenames import REALIZE_FILENAME
 from codoc.loop import status
-from codoc.loop.activity import activity_path
-from codoc.loop.fsio import read_json
+from codoc.loop.activity import epoch_alive
 
 
 def find_claude() -> str | None:
@@ -33,9 +32,12 @@ def find_claude() -> str | None:
 
 
 def _epoch_open(codoc_dir: str) -> bool:
-    """True if a live agent session owns this repo (don't headless-spawn over it)."""
-    data = read_json(activity_path(codoc_dir), default={})
-    return bool((data.get("epoch") or {}).get("open"))
+    """True if a live agent session owns this repo (don't headless-spawn over it).
+
+    Lease-based (`epoch_alive`), not a raw flag read: a session hard-killed
+    without firing `Stop` would otherwise leave `epoch.open=true` forever and
+    permanently starve `--auto-realize` of any queue it could pick up."""
+    return epoch_alive(codoc_dir)
 
 
 def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:

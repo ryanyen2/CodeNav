@@ -239,9 +239,17 @@ def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
 def handle_stop(payload: dict[str, Any], codoc_dir: str) -> None:
     """Close the epoch; keep ``touched`` so the reconciler can read it. Then, for
     an interactive session with no running daemon, spawn a detached reflection so
-    code→tree sync happens even without ``codoc watch``."""
+    code→tree sync happens even without ``codoc watch``.
+
+    Registered for BOTH the ``Stop`` and ``SessionEnd`` hook events (a graceful
+    exit fires both — ``Stop`` at the end of the final turn, ``SessionEnd`` at
+    session termination — while a kill/crash may fire only one or neither). Idempotent:
+    the second invocation sees the epoch already closed and skips re-spawning
+    reflect, so a clean exit never launches two ``codoc reflect`` subprocesses
+    racing each other over the same write set."""
     data = _read_activity(codoc_dir)
     ep = data.get("epoch") or {}
+    already_closed = not ep.get("open", False)
     ep["open"] = False
     ep["ended_at"] = _now_iso()
     data["epoch"] = ep
@@ -249,7 +257,8 @@ def handle_stop(payload: dict[str, Any], codoc_dir: str) -> None:
     # doc view settles (any content updates already flowed through the sidecar).
     data["features"] = {}
     _write_activity(codoc_dir, data)
-    _maybe_spawn_reflect(codoc_dir, data, ep)
+    if not already_closed:
+        _maybe_spawn_reflect(codoc_dir, data, ep)
 
 
 def _maybe_spawn_reflect(codoc_dir: str, data: dict, ep: dict) -> None:

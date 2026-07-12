@@ -120,6 +120,73 @@ def test_code_side_pass_does_not_orphan_queued_realize_md(codoc_dir):
     assert _state(codoc_dir) == status.AWAITING_IMPL
 
 
+# -- realizing lease (WS1.5) ----------------------------------------------
+def test_realizing_lease_preserved_when_fresh(codoc_dir):
+    """A live realize pass (fresh progress write, queue still present) must
+    survive an interleaved refresh_status call with no explicit flag — this is
+    the fix for the bug where `codoc_status` silently clobbered a genuinely
+    active pass back to `awaiting_impl` (nothing ever passed realizing=True)."""
+    from pathlib import Path
+    Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")
+    store = open_store(codoc_dir)
+    try:
+        # A progress write stamps REALIZING directly (as codoc_realize_progress does).
+        status.write_status(codoc_dir, status.REALIZING, detail="implementing 1/2")
+        # An unrelated call (no realizing= flag) must NOT clobber it.
+        status.refresh_status(codoc_dir, store)
+    finally:
+        store.close()
+    assert _state(codoc_dir) == status.REALIZING
+
+
+def test_realizing_lease_decays_when_stale(codoc_dir):
+    """A crashed/cancelled pass (no progress write in REALIZING_LEASE_SECONDS)
+    must NOT be preserved — this is what un-wedges a fresh /codoc:sync."""
+    from pathlib import Path
+    import os
+    import time
+
+    Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")
+    store = open_store(codoc_dir)
+    try:
+        status.write_status(codoc_dir, status.REALIZING, detail="implementing 1/2")
+        # Backdate the file's mtime past the lease TTL.
+        old = time.time() - status.REALIZING_LEASE_SECONDS - 1
+        os.utime(status.status_path(codoc_dir), (old, old))
+        status.refresh_status(codoc_dir, store)
+    finally:
+        store.close()
+    # Decays to the ground truth: realize.md is still queued → awaiting_impl.
+    assert _state(codoc_dir) == status.AWAITING_IMPL
+
+
+def test_realizing_lease_ignored_without_queue(codoc_dir):
+    """Even a fresh on-disk `realizing` must not be preserved once the queue is
+    gone (realize.md deleted) — nothing can still be "in progress" with no queue."""
+    store = open_store(codoc_dir)
+    try:
+        status.write_status(codoc_dir, status.REALIZING, detail="implementing 2/2")
+        status.refresh_status(codoc_dir, store)  # no realize.md present at all
+    finally:
+        store.close()
+    assert _state(codoc_dir) == status.IN_SYNC
+
+
+def test_realizing_explicit_false_overrides_fresh_lease(codoc_dir):
+    """An engine's own end-of-pass cleanup (sdk_realize's finally block) must be
+    able to force a recompute even when the lease would otherwise look fresh —
+    it authoritatively knows the pass just ended."""
+    from pathlib import Path
+    Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")
+    store = open_store(codoc_dir)
+    try:
+        status.write_status(codoc_dir, status.REALIZING, detail="implementing 1/1")
+        status.refresh_status(codoc_dir, store, realizing=False)
+    finally:
+        store.close()
+    assert _state(codoc_dir) == status.AWAITING_IMPL
+
+
 def test_realize_md_outranks_code_drift(codoc_dir):
     """A queued realize.md outranks pending proposals: status reports awaiting_impl
     (not code_drift), so the IDE keeps prompting /codoc:sync even when new

@@ -92,6 +92,29 @@ def test_safe_process_batch_survives_a_failing_cycle(dirs):
     assert any("cycle error" in m for m in logs)
 
 
+def test_safe_process_batch_floors_status_after_a_failing_cycle(dirs):
+    """WS1.6: a status write earlier in a crashed pass (e.g. TREE_DIRTY stamped
+    before Loop B ran) must not outlive the pass — the exception handler floors
+    it to the ground truth instead of leaving "applying tree edits…" stuck until
+    the next SUCCESSFUL pass happens to call refresh_status."""
+    from codoc.loop import status
+    from codoc.loop.watch import safe_process_batch
+
+    root, codoc_dir, tp = dirs
+    status.write_status(codoc_dir, status.TREE_DIRTY, detail="applying tree edits")
+    state = WatchState()
+
+    def boom(*a, **k):
+        raise RuntimeError("LLM exploded")
+
+    safe_process_batch([str(tp)], root, codoc_dir, state,
+                       printer=lambda *_a: None, _process=boom)
+
+    import json
+    healed = json.loads(status.status_path(codoc_dir).read_text())
+    assert healed["state"] != status.TREE_DIRTY
+
+
 def test_mcp_render_with_stale_hash_does_not_route_to_loop_b(dirs):
     """H2: a tree.codoc write that matches the store (e.g. an agent MCP reflection
     in another process) has no user ops → must NOT spawn Loop B, even though the

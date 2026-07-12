@@ -248,6 +248,54 @@ def test_stale_epoch_recovers_and_reconciles_suppressed_files(dirs):
     assert "half_written.py" in scope and "another.py" in scope
 
 
+def test_stale_epoch_recovery_heals_activity_json_file(dirs):
+    """WS1.4: recovery must WRITE activity.json (not just mutate WatchState) so
+    every other reader (the IDE, autorealize, a second hook invocation) also sees
+    the epoch closed — previously only the daemon's in-memory state was fixed,
+    leaving `epoch.open=true` and stuck feature phases in the file forever."""
+    root, codoc_dir, tp = dirs
+    _write_activity(codoc_dir, epoch_id="ep-1", origin="interactive", open=True)
+    data = json.loads(activity_path(codoc_dir).read_text())
+    data["features"] = {"f-1": {"phase": "editing", "at": "2026-07-11T00:00:00+00:00"}}
+    activity_path(codoc_dir).write_text(json.dumps(data))
+
+    state = WatchState(last_tree_hash=_hash(tp), epoch_open=True,
+                       epoch_origin="interactive", last_epoch_id="ep-1")
+
+    process_batch(
+        [str(root) + "/another.py"], root, codoc_dir, state,
+        loop_a=_spy(LoopAResult(auto={"refresh": 1})), loop_b=_spy(LoopBResult()),
+        render=_noop_render, now=lambda: 9_999_999_999.0,
+    )
+
+    healed = json.loads(activity_path(codoc_dir).read_text())
+    assert healed["epoch"]["open"] is False
+    assert healed["features"] == {}
+
+
+def test_stale_epoch_recovery_refreshes_status(dirs):
+    """WS1.4: recovery also floors status.json — a stuck `realizing` written by
+    the dead session must not survive the recovery."""
+    root, codoc_dir, tp = dirs
+    _write_activity(codoc_dir, epoch_id="ep-1", origin="interactive", open=True)
+    from codoc.loop import status
+
+    status.write_status(codoc_dir, status.REALIZING, detail="implementing")
+
+    state = WatchState(last_tree_hash=_hash(tp), epoch_open=True,
+                       epoch_origin="interactive", last_epoch_id="ep-1")
+
+    process_batch(
+        [str(root) + "/another.py"], root, codoc_dir, state,
+        loop_a=_spy(LoopAResult(auto={"refresh": 1})), loop_b=_spy(LoopBResult()),
+        render=_noop_render, now=lambda: 9_999_999_999.0,
+    )
+
+    healed_status = json.loads(status.status_path(codoc_dir).read_text())
+    # No realize.md queued and no pending proposals in a fresh store → in_sync.
+    assert healed_status["state"] == status.IN_SYNC
+
+
 def test_fresh_epoch_not_treated_as_stale(dirs):
     """An epoch whose activity.json was just written is NOT recovered."""
     root, codoc_dir, tp = dirs

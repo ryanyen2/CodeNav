@@ -348,7 +348,12 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
             from codoc.store.db import open_store
 
             with open_store(codoc_dir) as store:
-                status_mod.refresh_status(codoc_dir, store)
+                # Force the recompute (bypass the on-disk realizing lease, WS1.5):
+                # this call authoritatively knows the pass just ended (success or
+                # exception) — a lease-fresh REALIZING from a progress write
+                # moments ago must not be preserved past the process that would
+                # have kept renewing it.
+                status_mod.refresh_status(codoc_dir, store, realizing=False)
         except Exception:  # noqa: BLE001
             pass
     return 1 if monitor.errored else 0

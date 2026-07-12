@@ -40,6 +40,7 @@ changed — it only reads the ``epoch.open`` transition.
 """
 from __future__ import annotations
 
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +56,19 @@ ACTIVITY_FILENAME = "activity.json"
 PHASE_EDITING = "editing"
 PHASE_REFLECTING = "reflecting"
 PHASE_DONE = "done"
+
+# How long an `epoch.open=True` is trusted without a fresh activity.json write
+# before liveness readers treat it as dead. An agent hard-killed (Esc, SIGKILL,
+# closed window/terminal) never fires the `Stop` hook that would otherwise clear
+# `epoch.open` — trusting the raw flag forever shows "agent working" long after
+# the agent is gone. Every hook write touches this file, so file mtime doubles as
+# the lease's `last_seen` with no schema change.
+EPOCH_UI_TTL_SECONDS = 90
+
+# Same failure mode, feature granularity: `features[fid].phase` is only cleared by
+# the Stop hook (`handle_stop` resets `features = {}`); an interrupted session
+# leaves the doc view's skeleton/"editing" animation stuck on that feature forever.
+FEATURE_PHASE_TTL_SECONDS = 120
 
 def _empty_activity() -> dict:
     """A fresh empty document (fresh nested dicts — callers mutate in place)."""
@@ -84,6 +98,25 @@ def read_epoch(codoc_dir: str | Path) -> dict | None:
     if not ep or not ep.get("id"):
         return None
     return ep
+
+
+def epoch_alive(codoc_dir: str | Path, *, now: float | None = None,
+                ttl: float = EPOCH_UI_TTL_SECONDS) -> bool:
+    """True iff activity.json currently says ``epoch.open`` AND the file was
+    written within ``ttl`` seconds. A LEASE, not a flag (see the TTL constants'
+    docstrings above) — every reader of "is an agent currently active" should go
+    through this instead of trusting ``epoch.open`` directly, so a hard-killed
+    session (no ``Stop`` hook) self-heals instead of showing "active" forever."""
+    path = activity_path(codoc_dir)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return False
+    if not bool((read_activity(codoc_dir).get("epoch") or {}).get("open")):
+        return False
+    if now is None:
+        now = _time.time()
+    return (now - mtime) <= ttl
 
 
 def epoch_touched_files(codoc_dir: str | Path) -> list[str]:

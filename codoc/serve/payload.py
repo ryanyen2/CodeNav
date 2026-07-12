@@ -81,22 +81,46 @@ _TOOL_VERB = {
 }
 
 
-def _phases_from_activity(activity: dict) -> dict:
+def _phases_from_activity(activity: dict, *, now: float | None = None) -> dict:
     """Per-feature reflection phase (editing/reflecting/done) — the browser-path parity of
-    the TS ``featurePhases``. Drives the heading dot + the ghost→resolved reveal on the hub."""
+    the TS ``featurePhases``. Drives the heading dot + the ghost→resolved reveal on the hub.
+
+    TTL-filtered on each entry's own ``at`` timestamp (`FEATURE_PHASE_TTL_SECONDS`):
+    only the ``Stop`` hook clears a feature's phase, and it never fires on an
+    interrupted/killed session, so an un-filtered read would show "editing" forever."""
+    import time as _time
+    from datetime import datetime
+
+    from codoc.loop.activity import FEATURE_PHASE_TTL_SECONDS
+
+    if now is None:
+        now = _time.time()
     out: dict[str, str] = {}
     for fid, entry in (activity.get("features") or {}).items():
-        if isinstance(entry, dict) and entry.get("phase"):
-            out[fid] = entry["phase"]
+        if not (isinstance(entry, dict) and entry.get("phase")):
+            continue
+        at = entry.get("at")
+        if at:
+            try:
+                ts = datetime.fromisoformat(at).timestamp()
+                if (now - ts) > FEATURE_PHASE_TTL_SECONDS:
+                    continue  # stale — an interrupted session left this set forever
+            except (ValueError, TypeError):
+                pass
+        out[fid] = entry["phase"]
     return out
 
 
-def _steps_from_activity(activity: dict, sidecar: dict) -> dict:
+def _steps_from_activity(activity: dict, sidecar: dict, *, alive: bool = True) -> dict:
     """Per-feature agent-action steps for the ribbon (parity of TS ``featureSteps``).
     Prefers the ``recent`` event log, falling back to ``touched``; resolves a file to its
-    features via the sidecar ``by_file`` index. Last step active, earlier ones done."""
-    epoch = activity.get("epoch") or {}
-    if not epoch.get("open"):
+    features via the sidecar ``by_file`` index. Last step active, earlier ones done.
+
+    ``alive`` is the caller's lease-checked liveness (`codoc.loop.activity.epoch_alive`),
+    not the raw ``epoch.open`` flag — a hard-killed session never fires the ``Stop`` hook
+    that would otherwise close the epoch, so trusting the flag directly would show the
+    ribbon "active" long after the agent is gone."""
+    if not alive:
         return {}
 
     by_file = sidecar.get("by_file") or {}
@@ -345,6 +369,7 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
     state = status.get("state") or "in_sync"
     pending = int(status.get("pending") or 0)
     activity = _activity(codoc_dir)
+    from codoc.loop.activity import epoch_alive
 
     return {
         "nodes": nodes,
@@ -356,7 +381,7 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
             "activeWrite": [],
             "activeRead": [],
             "phase": _phases_from_activity(activity),
-            "steps": _steps_from_activity(activity, sidecar),
+            "steps": _steps_from_activity(activity, sidecar, alive=epoch_alive(codoc_dir)),
         },
         "rootName": codoc_dir.parent.name,
         "pendingEventIds": [],

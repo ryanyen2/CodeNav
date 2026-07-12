@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { featureSteps, type ActivityData } from '../state/activity-model';
+import { featureSteps, EPOCH_UI_TTL_MS, type ActivityData } from '../state/activity-model';
 import { emptySidecar, type SidecarData } from '../state/bindings-model';
 
 function openEpoch(over: Partial<ActivityData> = {}): ActivityData {
@@ -60,6 +60,14 @@ describe('featureSteps', () => {
         const labels = featureSteps(data, null).get('f1')!.map(s => s.label);
         expect(labels).toContain('reading a.py');
         expect(labels).toContain('editing b.py');
+    });
+
+    it('goes empty once the epoch lease expires, even though open=true (WS1.1)', () => {
+        const data = openEpoch({
+            recent: [{ tool: 'Edit', file: 'a.py', feature_ids: ['f1'], at: '1', phase: 'editing' }],
+        });
+        const mtimeMs = 1_000_000;
+        expect(featureSteps(data, null, mtimeMs, mtimeMs + EPOCH_UI_TTL_MS + 1).size).toBe(0);
     });
 
     it('resolves files to features via the sidecar by_file index', () => {

@@ -42,6 +42,9 @@ export class WorkspaceState {
     private _registry: RegistryData | null = null;
     private _status: CodocStatus = { state: 'in_sync', pending: 0, detail: '' };
     private _activity: ActivityData = {};
+    // activity.json's last-modified time — the epoch/phase lease's `last_seen`
+    // (see activity-model.ts). Undefined when the file is unreadable.
+    private _activityMtimeMs: number | undefined;
     private _pendingCode: Map<string, PendingChange[]> = new Map();
     private _provisioning = false;
 
@@ -135,7 +138,12 @@ export class WorkspaceState {
         }
 
         let activityText = '';
-        try { activityText = fs.readFileSync(this._codocPath('activity.json'), 'utf-8'); } catch { /* file absent → no active agent */ }
+        this._activityMtimeMs = undefined;
+        try {
+            const activityPath = this._codocPath('activity.json');
+            activityText = fs.readFileSync(activityPath, 'utf-8');
+            this._activityMtimeMs = fs.statSync(activityPath).mtimeMs;
+        } catch { /* file absent → no active agent */ }
         this._activity = parseActivity(activityText);
 
         // .codoc/realize.md → which code the queued tree edits will touch (reverse
@@ -203,12 +211,14 @@ export class WorkspaceState {
     get registry(): RegistryData | null { return this._registry; }
     get status(): CodocStatus { return this._status; }
     get activity(): ActivityData { return this._activity; }
-    get agentActive(): boolean { return isAgentActive(this._activity); }
+    /** activity.json's last-modified time — the epoch lease's `last_seen`. */
+    get activityMtimeMs(): number | undefined { return this._activityMtimeMs; }
+    get agentActive(): boolean { return isAgentActive(this._activity, this._activityMtimeMs); }
     /** Code the queued tree edits (.codoc/realize.md) will touch, by repo-relative file. */
     get pendingCode(): Map<string, PendingChange[]> { return this._pendingCode; }
     pendingCodeForFile(relPath: string): PendingChange[] { return this._pendingCode.get(relPath) ?? []; }
     get activeFeatureLines(): number[] {
-        return computeActiveFeatureLines(this._activity, this._features, this._sidecar);
+        return computeActiveFeatureLines(this._activity, this._features, this._sidecar, this._activityMtimeMs);
     }
     get featureEdges(): Map<string, Set<string>> {
         return featureAdjacency(this._sidecar);

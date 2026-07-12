@@ -330,9 +330,9 @@ def process_batch(
         paths, root_dir, codoc_dir
     )
 
-    # ── Step 0: Stale-epoch recovery. A hard-killed agent (no Stop hook) leaves
-    # the epoch open, which would suppress all loops forever. Detect silence and
-    # recover by closing it; for an interactive epoch, fold its suppressed +
+    # ── Step 0: Stale-epoch recovery. A hard-killed agent (no Stop/SessionEnd hook)
+    # leaves the epoch open, which would suppress all loops forever. Detect silence
+    # and recover by closing it; for an interactive epoch, fold its suppressed +
     # touched files into this batch so the normal Loop A routing reconciles them. ─
     if state.epoch_open and _epoch_stale(codoc_dir, now()):
         if state.epoch_origin == "interactive" and not no_realize:
@@ -343,6 +343,32 @@ def process_batch(
         stale_ep = _read_epoch(codoc_dir)
         if stale_ep:  # don't let step 1 reprocess this dead epoch
             state.last_epoch_id = stale_ep.get("id", state.last_epoch_id)
+        # Heal activity.json ITSELF, not just the daemon's in-memory WatchState —
+        # previously recovery only touched WatchState, so `epoch.open=true` stayed
+        # in the file forever and every OTHER reader (the IDE status bar, a second
+        # hook invocation, autorealize's spawn guard) kept believing the dead
+        # session was still active. Also floor status.json so a stuck `tree_dirty`/
+        # `realizing` written by that session doesn't outlive it either.
+        from codoc.loop.activity import read_activity as _read_act_file
+        from codoc.loop.activity import write_activity as _write_act_file
+        from datetime import datetime, timezone
+
+        heal = _read_act_file(codoc_dir)
+        heal_ep = heal.get("epoch") or {}
+        # Only clear if the file still names the SAME dead epoch just detected — a
+        # brand-new session could open in the instant between the staleness check
+        # and this write; never clobber a genuinely fresh epoch.
+        same_epoch = stale_ep is not None and heal_ep.get("id") == stale_ep.get("id")
+        if same_epoch and (heal_ep.get("open") or heal.get("features")):
+            heal["epoch"] = {**heal_ep, "open": False,
+                             "ended_at": datetime.now(timezone.utc).isoformat()}
+            heal["features"] = {}
+            _write_act_file(codoc_dir, heal)
+        try:
+            with open_store(codoc_dir) as _store:
+                status.refresh_status(codoc_dir, _store)
+        except Exception:  # noqa: BLE001 — status recovery is best-effort
+            pass
 
     # ── Step 1: Epoch transitions from activity.json (control only; never starts
     # a loop directly). ─────────────────────────────────────────────────────────
@@ -503,6 +529,16 @@ def safe_process_batch(
         import traceback
         printer(f"⚠ codoc cycle error (daemon continues): {e}")
         traceback.print_exc()
+        # A status write earlier in the crashed pass (e.g. TREE_DIRTY before Loop B
+        # ran) must not outlive the pass that wrote it — floor it back to the
+        # ground truth now, best-effort, rather than leaving "applying tree
+        # edits…"/"implementing…" stuck until the next SUCCESSFUL pass happens to
+        # call refresh_status.
+        try:
+            with open_store(codoc_dir) as _store:
+                status.refresh_status(codoc_dir, _store)
+        except Exception:  # noqa: BLE001 — status recovery is best-effort
+            pass
         return None
 
 
@@ -517,6 +553,15 @@ def maybe_auto_realize(state: WatchState, root_dir: str, codoc_dir: str, *, prin
     if proc is not None and proc.poll() is not None:  # previous pass finished
         state.realize_proc = None
         proc = None
+        # Force the honest lifecycle state now that the process is gone (mirrors
+        # sdk_realize's own finally-block recovery, WS1.5): without this a
+        # crashed/killed `claude -p /codoc:sync` relies on the realizing lease's
+        # REALIZING_LEASE_SECONDS timeout to self-heal instead of clearing immediately.
+        try:
+            with open_store(codoc_dir) as _store:
+                status.refresh_status(codoc_dir, _store, realizing=False)
+        except Exception:  # noqa: BLE001 — status recovery is best-effort
+            pass
     if not autorealize.should_spawn(codoc_dir, in_flight=proc is not None):
         return
     from codoc.loop.sdk_realize import resolve_engine
@@ -617,7 +662,17 @@ def run_watch(
             printer("▸ codoc watch: spawning extension host gone — self-exiting")
             break
         if not changes:
-            continue  # bare timeout tick — just the parent-death check above
+            # Bare timeout tick — beyond the parent-death check above, give
+            # stale-epoch recovery (step 0 of process_batch) a chance to run even
+            # when no file event arrives. Without this, a hard-killed session (no
+            # Stop/SessionEnd hook) wedges every loop until the user happens to
+            # touch a file — which may be never if they've moved on to other work.
+            if state.epoch_open:
+                out = safe_process_batch([], root_dir, codoc_dir, state,
+                                         no_realize=no_realize, dry_run=dry_run, printer=printer)
+                if out:
+                    printer(f"▸ {out[0]}  {out[1]}")
+            continue
         out = safe_process_batch([p for _, p in changes], root_dir, codoc_dir, state,
                                  no_realize=no_realize, dry_run=dry_run, printer=printer)
         if out:

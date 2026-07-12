@@ -128,7 +128,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 // realize writes must not read as "external code drift to review"). The spark is
                 // for the user hand-editing code; with no open epoch nothing is filtered.
                 const fids = userTouchedFids(touched, {
-                    epochOpen: isAgentActive(this.state.activity),
+                    epochOpen: isAgentActive(this.state.activity, this.state.activityMtimeMs),
                     phase: Object.fromEntries(featurePhases(this.state.activity)),
                     held: new Set(heldFeatures(this.state.sidecar)),
                 });
@@ -375,7 +375,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const sidecar = this.state.sidecar;
         const status = this.state.status;
         const activity = this.state.activity;
-        const activeModes = activeFeatureModes(activity, sidecar);
+        const activeModes = activeFeatureModes(activity, sidecar, this.state.activityMtimeMs);
         // Effective phase: an explicit signal (editing/reflecting/done) wins;
         // otherwise a feature whose bound file is being written reads as 'editing'
         // so it shimmers immediately, before the hook's explicit mark lands.
@@ -475,7 +475,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             activeRead: [...activeModes].filter(([, m]) => m === 'read').map(([id]) => id),
             phase: Object.fromEntries(phases),
             realize: this.parseRealizeProgress(status.detail),
-            steps: Object.fromEntries(featureSteps(activity, sidecar)),   // P2b agent ribbon
+            steps: Object.fromEntries(featureSteps(activity, sidecar, this.state.activityMtimeMs)),   // P2b agent ribbon
         };
 
         // Authoritative rich doc (U4): the daemon-written store projection, read above.

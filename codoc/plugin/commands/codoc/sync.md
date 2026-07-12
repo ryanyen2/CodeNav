@@ -82,8 +82,12 @@ code. **Reconcile the tree to the code you can see:**
 - Summarize the pending proposals so the user can Accept/Reject them in the IDE.
 
 ### `realizing` — already in progress
-Another realize pass is running. Report progress (`pending` remaining) and stop;
-don't start a second pass.
+Another realize pass is genuinely running right now — this state is lease-verified
+(codoc only reports it while the pass has written progress within the last few
+minutes; a crashed or cancelled pass decays out of this state on its own). Report
+progress (`pending` remaining) and stop; don't start a second pass. If you believe
+this is wrong (e.g. you know the other session died), just wait a few minutes and
+re-run — no manual cleanup needed.
 
 ### `in_sync` — nothing to do
 Report that codoc and the codebase are in sync and stop.

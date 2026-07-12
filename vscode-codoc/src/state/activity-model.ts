@@ -49,6 +49,19 @@ export interface ActivityData {
     features?: Record<string, FeaturePhaseEntry>;
 }
 
+// How long `epoch.open === true` is trusted without a fresh activity.json write
+// before liveness readers treat it as dead. Claude Code's `Stop` hook — the only
+// writer that clears `epoch.open` — does not fire on Esc/kill/closed-window, so
+// trusting the raw flag forever shows "agent working…" long after the agent is
+// gone. `mtimeMs` (the file's last-modified time) doubles as the lease's
+// `last_seen` with no schema change — every hook write touches the file.
+export const EPOCH_UI_TTL_MS = 90_000;
+
+// Same failure mode at feature granularity: `features[fid].phase` is only
+// cleared by the `Stop` hook resetting the whole block, so an interrupted
+// session leaves a feature's skeleton/"editing" animation stuck forever.
+export const FEATURE_PHASE_TTL_MS = 120_000;
+
 /** Parse the text content of activity.json into ActivityData. Returns {} on any error. */
 export function parseActivity(text: string): ActivityData {
     if (!text.trim()) return {};
@@ -59,9 +72,20 @@ export function parseActivity(text: string): ActivityData {
     }
 }
 
-/** Returns true iff an agent session is currently open. */
-export function isAgentActive(data: ActivityData): boolean {
-    return data.epoch?.open === true;
+/**
+ * Returns true iff an agent session is currently open — a LEASE, not a flag.
+ *
+ * `mtimeMs` is activity.json's last-modified time (the host reads it via
+ * `fs.statSync` alongside the JSON); when provided, `open === true` is only
+ * trusted for `EPOCH_UI_TTL_MS` since that write. When omitted (a caller with
+ * no lease info, e.g. most existing unit tests) this falls back to trusting
+ * the raw flag, matching the pre-lease behavior — production callers should
+ * always pass it (see `WorkspaceState.activityMtimeMs`).
+ */
+export function isAgentActive(data: ActivityData, mtimeMs?: number, nowMs: number = Date.now()): boolean {
+    if (data.epoch?.open !== true) return false;
+    if (mtimeMs === undefined) return true;
+    return (nowMs - mtimeMs) <= EPOCH_UI_TTL_MS;
 }
 
 /**
@@ -76,8 +100,10 @@ export function computeActiveFeatureLines(
     data: ActivityData,
     features: ParsedFeature[],
     sidecar: SidecarData | null,
+    mtimeMs?: number,
+    nowMs: number = Date.now(),
 ): number[] {
-    if (!isAgentActive(data)) return [];
+    if (!isAgentActive(data, mtimeMs, nowMs)) return [];
 
     const featureIds = new Set<string>();
 
@@ -119,9 +145,11 @@ export function computeActiveFeatureLines(
 export function activeFeatureModes(
     data: ActivityData,
     sidecar: SidecarData | null,
+    mtimeMs?: number,
+    nowMs: number = Date.now(),
 ): Map<string, 'write' | 'read'> {
     const modes = new Map<string, 'write' | 'read'>();
-    if (!isAgentActive(data)) return modes;
+    if (!isAgentActive(data, mtimeMs, nowMs)) return modes;
 
     const mark = (fid: string, mode: 'write' | 'read'): void => {
         if (modes.get(fid) === 'write') return; // write wins, never downgrade
@@ -139,11 +167,23 @@ export function activeFeatureModes(
     return modes;
 }
 
-/** Per-feature reflection phase from activity.json (empty if absent). */
-export function featurePhases(data: ActivityData): Map<string, FeaturePhase> {
+/**
+ * Per-feature reflection phase from activity.json (empty if absent).
+ *
+ * TTL-filtered on each entry's own `at` timestamp (`FEATURE_PHASE_TTL_MS`): only
+ * the `Stop` hook clears this block, and it never fires on an interrupted/killed
+ * session, so an un-filtered read would show "editing" forever. An entry with no
+ * `at` (older activity.json) is kept as-is — no lease info, no staleness verdict.
+ */
+export function featurePhases(data: ActivityData, nowMs: number = Date.now()): Map<string, FeaturePhase> {
     const m = new Map<string, FeaturePhase>();
     for (const [fid, entry] of Object.entries(data.features ?? {})) {
-        if (entry && entry.phase) m.set(fid, entry.phase);
+        if (!entry || !entry.phase) continue;
+        if (entry.at) {
+            const at = Date.parse(entry.at);
+            if (!Number.isNaN(at) && (nowMs - at) > FEATURE_PHASE_TTL_MS) continue;
+        }
+        m.set(fid, entry.phase);
     }
     return m;
 }
@@ -174,9 +214,11 @@ const baseName = (p: string): string => p.split('/').pop() || p;
 export function featureSteps(
     data: ActivityData,
     sidecar: SidecarData | null,
+    mtimeMs?: number,
+    nowMs: number = Date.now(),
 ): Map<string, { label: string; done: boolean }[]> {
     const out = new Map<string, { label: string; done: boolean }[]>();
-    if (!isAgentActive(data)) return out;
+    if (!isAgentActive(data, mtimeMs, nowMs)) return out;
 
     // Trust an already-resolved (and, for a file shared by several features,
     // already-narrowed) explicit feature_ids list; only fall back to the full
