@@ -209,6 +209,44 @@ def test_holds_and_drafts(tmp_path):
     assert p["status"]["state"] == "awaiting_impl"
 
 
+# Flow 4b — the displayed pipeline state is lease-decayed (review #8): a crashed
+# realize pass must not show "implementing…" to remote viewers indefinitely.
+def test_fresh_realizing_state_is_shown_to_viewers(tmp_path):
+    """A live pass (fresh status.json write + queue present) is displayed verbatim
+    — remote viewers should see the in-progress realization."""
+    sidecar = {"features": {"f-1": {"title": "X", "parent_id": None}}, "by_feature": {}}
+    cd = _seed(tmp_path, sidecar=sidecar,
+               status={"state": "realizing", "pending": 1,
+                       "detail": "implementing 1/2: X", "at": HLC.now().to_str()})
+    Path(cd, "realize.md").write_text("### 1. NEW FEATURE: \"X\"\n")
+    p = build_browser_payload(cd)
+    assert p["status"]["state"] == "realizing"
+    assert p["sync"]["state"] == "realizing"
+
+
+def test_stale_realizing_state_decays_for_viewers(tmp_path):
+    """A crashed/cancelled pass (no status write within REALIZING_LEASE_SECONDS)
+    must decay to the queue-present ground truth (awaiting_impl) in the payload,
+    even though status.json on disk still literally says "realizing"."""
+    import os
+    import time
+
+    from codoc.loop.status import REALIZING_LEASE_SECONDS
+
+    sidecar = {"features": {"f-1": {"title": "X", "parent_id": None}}, "by_feature": {}}
+    cd = _seed(tmp_path, sidecar=sidecar,
+               status={"state": "realizing", "pending": 1,
+                       "detail": "implementing 1/2: X", "at": HLC.now().to_str()})
+    Path(cd, "realize.md").write_text("### 1. NEW FEATURE: \"X\"\n### 2. NEW FEATURE: \"Y\"\n")
+    stale = time.time() - REALIZING_LEASE_SECONDS - 1
+    os.utime(Path(cd, "status.json"), (stale, stale))
+
+    p = build_browser_payload(cd)
+    assert p["status"]["state"] == "awaiting_impl"   # decayed, not the stuck realizing
+    assert p["sync"]["state"] == "awaiting_impl"
+    assert p["status"]["pending"] == 2               # ground-truth queue size
+
+
 # Flow 5 — corrupt / malformed control files must not crash a browser.
 def test_corrupt_files_are_tolerant(tmp_path):
     cd = tmp_path / ".codoc"

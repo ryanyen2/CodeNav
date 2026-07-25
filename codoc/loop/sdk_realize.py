@@ -46,6 +46,13 @@ _QUIET_TOOLS = frozenset({"TodoWrite", "Task", "Glob", "Grep", "AskUserQuestion"
 # directive lands.
 _STATIC_DETAIL = "implementing (sdk) — codoc realize"
 
+# Heartbeat cadence: how often ongoing tool activity re-stamps the realizing lease
+# (review #12). Well under REALIZING_LEASE_SECONDS so a single long directive never
+# lets the lease decay mid-pass, but coarse enough to avoid churning status.json on
+# every tool call. The renewal is attributed to the realize pass's OWN tool stream
+# (this monitor watches exactly that subprocess), so it cannot renew a crashed pass.
+_HEARTBEAT_INTERVAL_SECONDS = 60.0
+
 
 def format_realize_detail(done: int, total: int, title: str) -> str:
     """The live realize-progress string the IDE parses out of ``status.detail``.
@@ -118,6 +125,7 @@ class RealizeMonitor:
         self._total = 0
         self._dir_seen: set[str] = set()  # caused_by ids already counted (idempotent)
         self._dir_title: dict[str, str] = {}  # caused_by id → feature title
+        self._last_heartbeat = 0.0  # monotonic ts of the last realizing-lease touch
         self._load_manifest()
 
     # -- helpers ---------------------------------------------------------
@@ -209,6 +217,21 @@ class RealizeMonitor:
         text = f"  {glyph} {verb:<8}{detail}"
         self.printer(_dim(text, self.tty) if quiet else text)
 
+    def _maybe_heartbeat(self, *, _clock: Callable[[], float] = time.monotonic) -> None:
+        """Renew the realizing lease from the pass's own tool activity, at most
+        once per :data:`_HEARTBEAT_INTERVAL_SECONDS` (review #12). Any tool call —
+        Edit, Bash, Read, a long inference stretch punctuated by tool use — proves
+        the pass is alive, so the lease should track that, not only completed
+        directives. No-op unless status.json is genuinely ``realizing``."""
+        now = _clock()
+        if now - self._last_heartbeat < _HEARTBEAT_INTERVAL_SECONDS:
+            return
+        self._last_heartbeat = now
+        try:
+            status_mod.touch_realizing_lease(self.codoc_dir)
+        except Exception:  # noqa: BLE001 — lease heartbeat is advisory, never break realize
+            pass
+
     def _record_touch(self, name: str, tool_input: dict) -> None:
         """Same code path as the interactive PreToolUse hook — touched entry +
         per-feature ``editing`` phase. Idempotent with the in-session hook."""
@@ -226,6 +249,10 @@ class RealizeMonitor:
 
     def on_tool_use(self, name: str, tool_input: dict | None) -> None:
         tool_input = tool_input or {}
+        # Any tool activity (including the quiet/orchestration tools below) is
+        # evidence the pass is alive — heartbeat the realizing lease before the
+        # early returns so a long stretch of Bash/Grep alone still renews it.
+        self._maybe_heartbeat()
         if name in _QUIET_TOOLS:
             return
 

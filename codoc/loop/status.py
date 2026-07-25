@@ -104,6 +104,64 @@ def realizing_is_fresh(codoc_dir: str | Path) -> bool:
     return _realizing_is_fresh(codoc_dir)
 
 
+def touch_realizing_lease(codoc_dir: str | Path) -> bool:
+    """Heartbeat: renew the ``realizing`` lease from ongoing pass ACTIVITY, not
+    only from a completed directive. Returns True iff it re-stamped the lease.
+
+    The per-directive progress writes (``codoc_realize_progress`` / sdk_realize's
+    ``_advance_progress``) are the only other things that age the lease clock, so
+    a single directive that takes longer than :data:`REALIZING_LEASE_SECONDS` to
+    implement — with many tool calls but no intervening reflect — would let the
+    lease decay to ``awaiting_impl`` mid-pass, inviting a second ``/codoc:sync``
+    onto the same queue (review #12). A caller that can attribute tool activity to
+    the live realize pass itself (sdk_realize's tool stream) calls this, throttled,
+    so the lease tracks "the pass is alive" rather than "a directive finished
+    recently".
+
+    No-op unless status.json already says ``realizing`` — so an unattributed or
+    mistimed call can never CREATE or resurrect the state, only refresh a lease the
+    pass genuinely still holds. The displayed ``detail``/``pending`` are preserved
+    verbatim (only the mtime, which is the lease clock, advances)."""
+    data = read_json(status_path(codoc_dir), default={})
+    if not isinstance(data, dict) or data.get("state") != REALIZING:
+        return False
+    write_status(codoc_dir, REALIZING,
+                 pending=int(data.get("pending") or 0),
+                 detail=str(data.get("detail") or ""))
+    return True
+
+
+def leased_display_state(codoc_dir: str | Path) -> tuple[str, int, str]:
+    """Read-only ``(state, pending, detail)`` a PASSIVE viewer should display, with
+    the realizing lease applied — no store, no write.
+
+    :func:`refresh_status` only decays a stale ``realizing`` when *some* process
+    happens to call it, so surfaces that read status.json directly (the deployed
+    hub, the IDE status bar) would otherwise show a crashed pass's "implementing…"
+    indefinitely past :data:`REALIZING_LEASE_SECONDS` (review #8/#9). Those surfaces
+    are read-only channel clients that must NOT write status.json (that would race
+    the daemon, its sole writer), so they can't call ``refresh_status`` — they call
+    this instead to get the same lease-decayed value the daemon would eventually
+    persist.
+
+    Decay target mirrors ``refresh_status``: a stale ``realizing`` with a queue
+    still present is really ``awaiting_impl`` (the daemon's own precedence); with no
+    queue it floors to ``in_sync`` (a passive reader has no store to distinguish
+    ``code_drift``, and the daemon corrects it on its next pass). Any non-realizing
+    state is displayed verbatim."""
+    data = read_json(status_path(codoc_dir), default={})
+    if not isinstance(data, dict):
+        return IN_SYNC, 0, ""
+    state = data.get("state") or IN_SYNC
+    pending = int(data.get("pending") or 0)
+    detail = str(data.get("detail") or "")
+    if state == REALIZING and not _realizing_is_fresh(codoc_dir):
+        if queued := _realize_queue_size(codoc_dir):
+            return AWAITING_IMPL, queued, f"{queued} change(s) ready to implement — run /codoc:sync"
+        return IN_SYNC, 0, ""
+    return state, pending, detail
+
+
 def refresh_status(
     codoc_dir: str | Path,
     store,

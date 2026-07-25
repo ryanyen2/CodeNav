@@ -21,9 +21,10 @@ import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
 import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
 import { RegistryData } from './registry-model';
 import { loadRegistry } from './registry-loader';
-import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines } from './activity-model';
+import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines, EPOCH_UI_TTL_MS } from './activity-model';
 import { parseRealize, pendingCodeByFile, PendingChange } from './realize-model';
 import { statusBarView } from './status-presentation';
+import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS } from './status-model';
 
 export { ParsedFeature, SidecarData };
 
@@ -45,8 +46,15 @@ export class WorkspaceState {
     // activity.json's last-modified time — the epoch/phase lease's `last_seen`
     // (see activity-model.ts). Undefined when the file is unreadable.
     private _activityMtimeMs: number | undefined;
+    // status.json's last-modified time — the realizing lease's `last_seen`
+    // (see status-model.ts). Undefined when the file is unreadable.
+    private _statusMtimeMs: number | undefined;
     private _pendingCode: Map<string, PendingChange[]> = new Map();
     private _provisioning = false;
+    // One-shot timer that re-derives state when a TTL lease (realizing / agent
+    // epoch) expires with no file event to trigger a reload — see
+    // _scheduleLeaseExpiry (review #10).
+    private _leaseTimer: ReturnType<typeof setTimeout> | undefined;
 
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
@@ -55,6 +63,7 @@ export class WorkspaceState {
         this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
         this.statusBar.command = 'codoc.open';
         context.subscriptions.push(this.statusBar);
+        context.subscriptions.push({ dispose: () => this._clearLeaseTimer() });
         this._init();
     }
 
@@ -98,6 +107,7 @@ export class WorkspaceState {
         // fresh `codoc.setup` run this session.
         void vscode.commands.executeCommand('setContext', 'codoc.ready', this._rootDir !== null);
         if (!this._rootDir) {
+            this._clearLeaseTimer();
             this._features = [];
             this._proposals = [];
             this._sidecar = emptySidecar();
@@ -128,9 +138,29 @@ export class WorkspaceState {
         // Tolerant: missing/corrupt → null (loadRegistry never throws).
         this._registry = loadRegistry(this._rootDir);
 
+        // .codoc/realize.md → which code the queued tree edits will touch (reverse
+        // direction: codoc → codebase placeholders). Absent when nothing queued.
+        // Read once here: the same text seeds both the pending-code map and the
+        // realizing lease's queue-present decay below.
+        let realizeText = '';
         try {
-            const st = JSON.parse(fs.readFileSync(this._codocPath('status.json'), 'utf-8'));
-            this._status = { state: st.state, pending: st.pending ?? 0, detail: st.detail ?? '' };
+            realizeText = fs.readFileSync(this._codocPath('realize.md'), 'utf-8');
+        } catch { /* nothing queued */ }
+        this._pendingCode = pendingCodeByFile(parseRealize(realizeText));
+
+        this._statusMtimeMs = undefined;
+        try {
+            const statusPath = this._codocPath('status.json');
+            const st = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+            this._statusMtimeMs = fs.statSync(statusPath).mtimeMs;
+            // Lease-decay a crashed `realizing` pass (review #9): the IDE never
+            // runs the daemon's refresh_status, so without this a killed
+            // /codoc:sync would spin "implementing…" indefinitely.
+            this._status = leaseStatus(
+                { state: st.state, pending: st.pending ?? 0, detail: st.detail ?? '' },
+                this._statusMtimeMs,
+                realizeQueueSize(realizeText),
+            );
         } catch {
             // No status file yet → derive from the parsed proposal count.
             const n = this._proposals.length;
@@ -146,16 +176,47 @@ export class WorkspaceState {
         } catch { /* file absent → no active agent */ }
         this._activity = parseActivity(activityText);
 
-        // .codoc/realize.md → which code the queued tree edits will touch (reverse
-        // direction: codoc → codebase placeholders). Absent when nothing queued.
-        try {
-            this._pendingCode = pendingCodeByFile(parseRealize(fs.readFileSync(this._codocPath('realize.md'), 'utf-8')));
-        } catch {
-            this._pendingCode = new Map();
-        }
-
         this._updateStatusBar();
         this._onDidChange.fire();
+        this._scheduleLeaseExpiry();
+    }
+
+    private _clearLeaseTimer(): void {
+        if (this._leaseTimer !== undefined) {
+            clearTimeout(this._leaseTimer);
+            this._leaseTimer = undefined;
+        }
+    }
+
+    /**
+     * Arm a one-shot timer to re-derive state the instant a TTL lease expires
+     * (review #10). The realizing lease and the agent-epoch lease both decay
+     * purely by the passage of time — a crashed /codoc:sync or a killed session
+     * writes no closing event, so nothing in the file watchers would ever fire to
+     * repaint the status bar / webview off "implementing…" / "agent working…".
+     * We schedule a single reload at the earliest pending expiry; the reload
+     * re-reads from disk (the lease is now past → decays) and re-arms only if some
+     * OTHER lease is still live, so this self-terminates rather than polling.
+     */
+    private _scheduleLeaseExpiry(nowMs: number = Date.now()): void {
+        this._clearLeaseTimer();
+        const expiries: number[] = [];
+        // A still-fresh `realizing` (survived the read-time lease decay) will go
+        // stale at this instant with no file event to announce it.
+        if (this._status.state === 'realizing' && this._statusMtimeMs !== undefined) {
+            expiries.push(this._statusMtimeMs + REALIZING_LEASE_MS);
+        }
+        // A still-live agent epoch (the "agent working…" bar) decays the same way.
+        if (this.agentActive && this._activityMtimeMs !== undefined) {
+            expiries.push(this._activityMtimeMs + EPOCH_UI_TTL_MS);
+        }
+        const next = expiries.filter(t => t > nowMs).sort((a, b) => a - b)[0];
+        if (next === undefined) return;
+        // +50ms cushion so the lease clock is definitively past when we re-read.
+        this._leaseTimer = setTimeout(() => {
+            this._leaseTimer = undefined;
+            this._reload();
+        }, (next - nowMs) + 50);
     }
 
     /** Reflect whether one-click setup is actively provisioning (drives the

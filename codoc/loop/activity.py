@@ -174,6 +174,60 @@ def mark_feature_phase(codoc_dir: str | Path, feature_ids: list[str], phase: str
         pass
 
 
+def close_epoch(codoc_dir: str | Path, expected_id: str, *,
+                now: float | None = None, stale_after: float | None = None) -> bool:
+    """Atomically mark a stale epoch closed in activity.json. Returns True iff it
+    actually closed an epoch.
+
+    Holds the activity :class:`FileLock` across the read + identity check + write
+    (mirroring :func:`mark_feature_phase`) so a concurrent ``SessionStart`` — which
+    replaces activity.json wholesale with a fresh epoch — can never be clobbered by
+    a lagging stale-epoch heal:
+
+    * ``expected_id`` — the epoch id the caller observed open (the daemon's own
+      ``state.last_epoch_id``, captured *before* any in-memory overwrite). If the
+      on-disk epoch no longer names it, a newer session has taken the single-slot
+      epoch → no-op. An empty ``expected_id`` matches whatever open epoch is present
+      (the caller could not identify one), preserving legacy best-effort behavior.
+    * ``stale_after`` — when given, the file mtime is *re-checked under the lock*; a
+      fresh write that landed after the caller's staleness stat but before the lock
+      keeps the epoch alive → no-op. This is what makes the "never clobber a
+      genuinely fresh epoch" guarantee real rather than merely narrated: the old
+      inline heal compared two post-staleness-check reads with each other, so a
+      SessionStart landing in that window was trivially "same epoch" and got
+      overwritten.
+
+    Best-effort: any failure (lock timeout, unwritable file) returns False rather
+    than raising — a heal must never kill the daemon cycle that called it.
+    """
+    from filelock import FileLock
+
+    codoc_dir = Path(codoc_dir)
+    dest = activity_path(codoc_dir)
+    try:
+        with FileLock(str(codoc_dir / (ACTIVITY_FILENAME + ".lock")), timeout=5):
+            data = read_activity(codoc_dir)
+            ep = data.get("epoch") or {}
+            if expected_id and ep.get("id") != expected_id:
+                return False  # a newer session took the epoch slot — leave it alone
+            if stale_after is not None:
+                try:
+                    mtime = dest.stat().st_mtime
+                except OSError:
+                    return False
+                if (now if now is not None else _time.time()) - mtime <= stale_after:
+                    return False  # a fresh write landed in the check→lock window
+            if not (ep.get("open") or data.get("features")):
+                return False  # already closed and cleared — nothing to heal
+            data["epoch"] = {**ep, "open": False, "ended_at": _now_iso()}
+            data["features"] = {}
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(dest, data)
+            return True
+    except Exception:  # noqa: BLE001 — heal is best-effort; never break the caller
+        return False
+
+
 def epoch_written_files(codoc_dir: str | Path) -> list[str]:
     """Files the last epoch actually WROTE (``mode == "write"``).
 

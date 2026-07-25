@@ -24,7 +24,7 @@ from pathlib import Path
 from codoc.codoc_file.doc_parse import doc_path
 from codoc.codoc_file.render import tree_path
 from codoc.loop import status
-from codoc.loop.activity import activity_path, epoch_touched_files
+from codoc.loop.activity import activity_path, close_epoch, epoch_touched_files
 from codoc.loop.edits import edits_path, host_ops_path
 from codoc.loop.fsio import read_json
 from codoc.loop.inbox import inbox_path
@@ -350,36 +350,34 @@ def process_batch(
     # and recover by closing it; for an interactive epoch, fold its suppressed +
     # touched files into this batch so the normal Loop A routing reconciles them. ─
     if state.epoch_open and _epoch_stale(codoc_dir, now()):
-        if state.epoch_origin == "interactive" and not no_realize:
-            code_files |= state.suppressed_files | set(epoch_touched_files(codoc_dir))
+        # The epoch id the daemon actually observed open (recorded at its rising
+        # edge). Capturing it BEFORE any mutation is what lets close_epoch reject a
+        # fresh SessionStart that raced into the single epoch slot — the old inline
+        # heal read the id back AFTER the staleness check, so a racing SessionStart
+        # made the "same epoch?" guard trivially true and got clobbered.
+        dead_id = state.last_epoch_id
+        fold_interactive = state.epoch_origin == "interactive" and not no_realize
+        # Files to reconcile if we confirm this epoch is ours and dead (close_epoch
+        # preserves `touched`, so reading them before/after the heal is equivalent).
+        ep_files = (state.suppressed_files | set(epoch_touched_files(codoc_dir))
+                    if fold_interactive else set())
+        # Drop our in-memory tracking regardless of the heal outcome: this epoch is
+        # no longer ours to suppress. last_epoch_id stays = dead_id so step 1 won't
+        # reprocess the dead epoch and a racing fresh epoch registers as a rising edge.
         state.epoch_open = False
         state.epoch_origin = ""
         state.suppressed_files.clear()
-        stale_ep = _read_epoch(codoc_dir)
-        if stale_ep:  # don't let step 1 reprocess this dead epoch
-            state.last_epoch_id = stale_ep.get("id", state.last_epoch_id)
-        # Heal activity.json ITSELF, not just the daemon's in-memory WatchState —
-        # previously recovery only touched WatchState, so `epoch.open=true` stayed
-        # in the file forever and every OTHER reader (the IDE status bar, a second
-        # hook invocation, autorealize's spawn guard) kept believing the dead
-        # session was still active. Also floor status.json so a stuck `tree_dirty`/
-        # `realizing` written by that session doesn't outlive it either.
-        from codoc.loop.activity import read_activity as _read_act_file
-        from codoc.loop.activity import write_activity as _write_act_file
-        from datetime import datetime, timezone
-
-        heal = _read_act_file(codoc_dir)
-        heal_ep = heal.get("epoch") or {}
-        # Only clear if the file still names the SAME dead epoch just detected — a
-        # brand-new session could open in the instant between the staleness check
-        # and this write; never clobber a genuinely fresh epoch.
-        same_epoch = stale_ep is not None and heal_ep.get("id") == stale_ep.get("id")
-        if same_epoch and (heal_ep.get("open") or heal.get("features")):
-            heal["epoch"] = {**heal_ep, "open": False,
-                             "ended_at": datetime.now(timezone.utc).isoformat()}
-            heal["features"] = {}
-            _write_act_file(codoc_dir, heal)
-        _floor_status(codoc_dir, printer)
+        # Heal activity.json ITSELF (not just WatchState) under the file lock, so
+        # every OTHER reader (IDE status bar, a second hook, autorealize's spawn
+        # guard) also stops believing the dead session is live — but only if the
+        # file still names the SAME dead epoch and is still stale under the lock.
+        if close_epoch(codoc_dir, dead_id, now=now(), stale_after=EPOCH_STALE_SECONDS):
+            if fold_interactive:
+                code_files |= ep_files
+            # Floor status.json so a stuck `tree_dirty`/`realizing` written by that
+            # session doesn't outlive it. Only after a confirmed heal: if a fresh
+            # session raced in, its status is live and must not be recomputed away.
+            _floor_status(codoc_dir, printer)
 
     # ── Step 1: Epoch transitions from activity.json (control only; never starts
     # a loop directly). ─────────────────────────────────────────────────────────

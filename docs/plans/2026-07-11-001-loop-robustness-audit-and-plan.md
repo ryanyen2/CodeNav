@@ -9,7 +9,7 @@ cancelled / crashed* sessions. Today the system is fragile: state indicators wed
 surfaces no longer work.
 
 This document has three parts, per the finding-unknowns method
-(`CLAUDE_FINDING_UNKOWN.md`):
+(`docs/CLAUDE_FINDING_UNKNOWN.md`):
 
 1. **Confirmed issues** — evidence-backed, with file:line citations.
 2. **Known unknowns** — plausible failures that need a verification experiment first.

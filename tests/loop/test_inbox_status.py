@@ -238,6 +238,39 @@ def test_realizing_explicit_false_overrides_fresh_lease(codoc_dir):
     assert _state(codoc_dir) == status.AWAITING_IMPL
 
 
+def test_touch_lease_renews_a_live_pass_mid_directive(codoc_dir):
+    """Review #12: a single directive that runs longer than the lease TTL without
+    an intervening progress write must not decay. A heartbeat re-stamps the lease
+    from ongoing activity, so a check just under one TTL AFTER the heartbeat still
+    reads fresh — and the live detail/pending are preserved (only the clock moves)."""
+    import os
+    import time
+    from pathlib import Path
+
+    Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")
+    status.write_status(codoc_dir, status.REALIZING, pending=1, detail="implementing 1/1: y")
+    # The pass has been quiet for nearly a full TTL (a long single directive).
+    old = time.time() - (status.REALIZING_LEASE_SECONDS - 5)
+    os.utime(status.status_path(codoc_dir), (old, old))
+
+    assert status.touch_realizing_lease(codoc_dir) is True
+
+    data = json.loads(status.status_path(codoc_dir).read_text())
+    assert data["detail"] == "implementing 1/1: y"   # preserved
+    assert data["pending"] == 1
+    # The lease clock reset to ~now, so the pass survives another full TTL window.
+    assert status.realizing_is_fresh(codoc_dir) is True
+    assert time.time() - status.status_path(codoc_dir).stat().st_mtime < 5
+
+
+def test_touch_lease_is_noop_when_not_realizing(codoc_dir):
+    """The heartbeat can only refresh a lease the pass genuinely holds — it must
+    never create or resurrect `realizing` from any other state."""
+    status.write_status(codoc_dir, status.AWAITING_IMPL, detail="run /codoc:sync")
+    assert status.touch_realizing_lease(codoc_dir) is False
+    assert _state(codoc_dir) == status.AWAITING_IMPL
+
+
 def test_realize_md_outranks_code_drift(codoc_dir):
     """A queued realize.md outranks pending proposals: status reports awaiting_impl
     (not code_drift), so the IDE keeps prompting /codoc:sync even when new

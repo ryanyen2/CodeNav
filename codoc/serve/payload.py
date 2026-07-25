@@ -351,7 +351,6 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
     """The full DocPayload for the browser suggest surface, derived from files."""
     codoc_dir = Path(codoc_dir)
     sidecar = _sidecar(codoc_dir)
-    status = _status(codoc_dir)
     features = sidecar.get("features") or {}
     holds = sorted(str(h) for h in (sidecar.get("holds") or []))
 
@@ -366,8 +365,15 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
         for fid, meta in features.items()
         if isinstance(meta, dict)
     }
-    state = status.get("state") or "in_sync"
-    pending = int(status.get("pending") or 0)
+    # Lease-decay the displayed pipeline state: the hub reads status.json directly
+    # and never calls refresh_status (it's a read-only channel client — writing
+    # status.json would race the daemon), so a crashed realize pass would otherwise
+    # show "implementing…" to every remote viewer indefinitely (review #8). This
+    # returns the same value the daemon would eventually persist once the lease
+    # expires, without a store or a write.
+    from codoc.loop.status import leased_display_state
+
+    state, pending, _detail = leased_display_state(codoc_dir)
     activity = _activity(codoc_dir)
     from codoc.loop.activity import epoch_alive
 

@@ -175,6 +175,62 @@ def test_run_watch_idle_tick_heals_stale_epoch_and_reaps_auto_realize(dirs, monk
     assert len(reaps) == 2
 
 
+def test_step0_heal_does_not_clobber_a_fresh_session_that_raced_in(dirs):
+    """Review #14: a SessionStart landing in the window between the daemon's
+    staleness stat and its heal write must survive. We drive the race by making
+    the `now` callable, on its SECOND call (the one close_epoch uses), write a
+    fresh epoch to activity.json — simulating the concurrent SessionStart — then
+    assert the live epoch is left untouched and no dead-epoch fold/floor happened."""
+    import json
+
+    from codoc.loop.activity import activity_path
+
+    root, codoc_dir, tp = dirs
+    ap = activity_path(codoc_dir)
+    # On disk before the race: the dead epoch the daemon is tracking, backdated stale.
+    ap.write_text(json.dumps({
+        "version": 1,
+        "epoch": {"id": "ep-dead", "origin": "interactive", "open": True,
+                  "started_at": "2026-07-11T00:00:00+00:00", "ended_at": None},
+        "touched": {}, "recent": [], "features": {},
+    }))
+    import os
+    old = 1_000.0
+    os.utime(ap, (old, old))
+
+    def racing_session_start():
+        # The fresh SessionStart replaces activity.json wholesale mid-heal.
+        ap.write_text(json.dumps({
+            "version": 1,
+            "epoch": {"id": "ep-fresh", "origin": "interactive", "open": True,
+                      "started_at": "2026-07-11T01:00:00+00:00", "ended_at": None},
+            "touched": {}, "recent": [], "features": {},
+        }))
+        return old + 10_000  # stale relative to the OLD (dead) mtime the stat saw
+
+    calls = {"n": 0}
+
+    def now():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return old + 10_000       # staleness check: dead epoch looks stale
+        racing_session_start()        # ...then the fresh session lands
+        return old + 10_000
+
+    a = _spy(LoopAResult())
+    state = WatchState(last_tree_hash=_hash(tp))
+    state.epoch_open = True
+    state.epoch_origin = "interactive"
+    state.last_epoch_id = "ep-dead"
+
+    process_batch([], root, codoc_dir, state, loop_a=a, loop_b=_spy(LoopBResult()),
+                  render=_noop_render, now=now)
+
+    survived = json.loads(ap.read_text())
+    assert survived["epoch"]["id"] == "ep-fresh"
+    assert survived["epoch"]["open"] is True  # the live session was NOT clobbered
+
+
 def test_mcp_render_with_stale_hash_does_not_route_to_loop_b(dirs):
     """H2: a tree.codoc write that matches the store (e.g. an agent MCP reflection
     in another process) has no user ops → must NOT spawn Loop B, even though the

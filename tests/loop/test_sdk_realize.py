@@ -393,6 +393,63 @@ def test_total_tracks_directives_appended_mid_epoch(repo):
         "implementing 2/2: Color palette"
 
 
+# -- realizing-lease heartbeat (review #12) -----------------------------------
+
+def test_tool_activity_heartbeats_the_realizing_lease(repo):
+    """A live pass's own tool activity renews the realizing lease, so a single
+    long directive (many tool calls, no intervening reflect) never lets it decay
+    to awaiting_impl mid-pass and invite a second /codoc:sync onto the queue."""
+    import os
+    import time
+
+    from codoc.loop import status
+
+    root, codoc = repo
+    (Path(codoc) / "realize.md").write_text('### 1. AMEND FEATURE\n  body\n')
+    status.write_status(codoc, status.REALIZING, detail="implementing 1/1: Color palette")
+    old = time.time() - (status.REALIZING_LEASE_SECONDS - 5)  # nearly expired
+    os.utime(status.status_path(codoc), (old, old))
+
+    m = _monitor(repo, [])
+    m.on_tool_use("Bash", {"command": "pytest -q", "description": "run tests"})
+
+    # Lease clock reset; detail preserved (heartbeat never blanks live progress).
+    assert status.realizing_is_fresh(codoc) is True
+    assert json.loads(status.status_path(codoc).read_text())["detail"] == \
+        "implementing 1/1: Color palette"
+
+
+def test_heartbeat_is_throttled(repo):
+    """The heartbeat writes at most once per interval — a burst of tool calls does
+    not churn status.json on every action."""
+    from codoc.loop import status
+
+    root, codoc = repo
+    (Path(codoc) / "realize.md").write_text('### 1. AMEND FEATURE\n  body\n')
+    status.write_status(codoc, status.REALIZING, detail="implementing 1/1: x")
+    m = _monitor(repo, [])
+
+    writes = {"n": 0}
+    orig = status.touch_realizing_lease
+
+    def counting(cd):
+        writes["n"] += 1
+        return orig(cd)
+
+    from codoc.loop import sdk_realize
+    sdk_realize.status_mod.touch_realizing_lease = counting
+    try:
+        clock = {"t": 1000.0}
+        m._maybe_heartbeat(_clock=lambda: clock["t"])          # first → fires
+        m._maybe_heartbeat(_clock=lambda: clock["t"] + 5)      # +5s → throttled
+        m._maybe_heartbeat(_clock=lambda: clock["t"] + 30)     # +30s → throttled
+        m._maybe_heartbeat(_clock=lambda: clock["t"] + 70)     # +70s → fires again
+    finally:
+        sdk_realize.status_mod.touch_realizing_lease = orig
+
+    assert writes["n"] == 2
+
+
 # -- engine selection -----------------------------------------------------------
 
 def test_auto_engine_prefers_sdk_when_available(repo):
