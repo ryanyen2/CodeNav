@@ -298,6 +298,20 @@ def _render(codoc_dir: str) -> None:
         safe_write_tree(store, codoc_dir)
 
 
+def _floor_status(codoc_dir: str, printer=print, *, realizing: bool | None = None) -> None:
+    """Best-effort re-derive of status.json to the ground truth — the shared
+    floor for crash paths, stale-epoch heals, and reap paths. Never raises, but
+    a failure is LOGGED: silently masking a persistently-failing floor (locked/
+    corrupt store, unwritable status.json) would leave a stale status lying
+    forever — the exact "lie without an expiry" these recovery paths exist to
+    prevent."""
+    try:
+        with open_store(codoc_dir) as _store:
+            status.refresh_status(codoc_dir, _store, realizing=realizing)
+    except Exception as e:  # noqa: BLE001 — recovery is best-effort, but leave a trace
+        printer(f"⚠ status floor failed (status.json may be stale): {e}")
+
+
 def process_batch(
     paths: list[str],
     root_dir: str,
@@ -311,6 +325,7 @@ def process_batch(
     render=_render,
     has_user_edits=None,
     now=None,
+    printer=print,
 ) -> tuple[str, str] | None:
     """Handle one debounced change batch. Returns (label, summary) or None.
 
@@ -364,11 +379,7 @@ def process_batch(
                              "ended_at": datetime.now(timezone.utc).isoformat()}
             heal["features"] = {}
             _write_act_file(codoc_dir, heal)
-        try:
-            with open_store(codoc_dir) as _store:
-                status.refresh_status(codoc_dir, _store)
-        except Exception:  # noqa: BLE001 — status recovery is best-effort
-            pass
+        _floor_status(codoc_dir, printer)
 
     # ── Step 1: Epoch transitions from activity.json (control only; never starts
     # a loop directly). ─────────────────────────────────────────────────────────
@@ -524,7 +535,7 @@ def safe_process_batch(
     proc = _process or process_batch
     try:
         return proc(paths, root_dir, codoc_dir, state,
-                    no_realize=no_realize, dry_run=dry_run)
+                    no_realize=no_realize, dry_run=dry_run, printer=printer)
     except Exception as e:  # noqa: BLE001 — resilience over correctness for one cycle
         import traceback
         printer(f"⚠ codoc cycle error (daemon continues): {e}")
@@ -534,11 +545,7 @@ def safe_process_batch(
         # ground truth now, best-effort, rather than leaving "applying tree
         # edits…"/"implementing…" stuck until the next SUCCESSFUL pass happens to
         # call refresh_status.
-        try:
-            with open_store(codoc_dir) as _store:
-                status.refresh_status(codoc_dir, _store)
-        except Exception:  # noqa: BLE001 — status recovery is best-effort
-            pass
+        _floor_status(codoc_dir, printer)
         return None
 
 
@@ -557,11 +564,7 @@ def maybe_auto_realize(state: WatchState, root_dir: str, codoc_dir: str, *, prin
         # sdk_realize's own finally-block recovery, WS1.5): without this a
         # crashed/killed `claude -p /codoc:sync` relies on the realizing lease's
         # REALIZING_LEASE_SECONDS timeout to self-heal instead of clearing immediately.
-        try:
-            with open_store(codoc_dir) as _store:
-                status.refresh_status(codoc_dir, _store, realizing=False)
-        except Exception:  # noqa: BLE001 — status recovery is best-effort
-            pass
+        _floor_status(codoc_dir, printer, realizing=False)
     if not autorealize.should_spawn(codoc_dir, in_flight=proc is not None):
         return
     from codoc.loop.sdk_realize import resolve_engine
@@ -672,6 +675,12 @@ def run_watch(
                                          no_realize=no_realize, dry_run=dry_run, printer=printer)
                 if out:
                     printer(f"▸ {out[0]}  {out[1]}")
+            if auto_realize:
+                # Reap a finished/crashed headless pass and retry a queued
+                # realize.md on the idle cadence too — an unattended repo may
+                # never see another file event, and a dead child would otherwise
+                # stay un-reaped (and the queue un-implemented) indefinitely.
+                maybe_auto_realize(state, root_dir, codoc_dir, printer=printer)
             continue
         out = safe_process_batch([p for _, p in changes], root_dir, codoc_dir, state,
                                  no_realize=no_realize, dry_run=dry_run, printer=printer)

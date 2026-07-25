@@ -236,19 +236,30 @@ def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
     _write_activity(codoc_dir, data)
 
 
-def handle_stop(payload: dict[str, Any], codoc_dir: str) -> None:
+def handle_stop(payload: dict[str, Any], codoc_dir: str, *, event: str = "stop") -> None:
     """Close the epoch; keep ``touched`` so the reconciler can read it. Then, for
     an interactive session with no running daemon, spawn a detached reflection so
     code→tree sync happens even without ``codoc watch``.
 
-    Registered for BOTH the ``Stop`` and ``SessionEnd`` hook events (a graceful
-    exit fires both — ``Stop`` at the end of the final turn, ``SessionEnd`` at
-    session termination — while a kill/crash may fire only one or neither). Idempotent:
-    the second invocation sees the epoch already closed and skips re-spawning
-    reflect, so a clean exit never launches two ``codoc reflect`` subprocesses
-    racing each other over the same write set."""
+    ``Stop`` fires at the end of EVERY agent turn (not only the last), so the
+    ``stop`` event always reflects the turn's writes — turn 1's Stop already
+    closed the epoch, and turns 2+ must not lose their reflection to that.
+    ``SessionEnd`` (``event="session_end"``) is the backstop for exits that skip
+    Stop (Esc mid-turn, terminal close): it reflects only when the epoch is
+    still open — after a clean exit whose final Stop already reflected, it
+    skips, so a graceful exit never launches two ``codoc reflect`` subprocesses
+    racing each other over the same write set.
+
+    Ownership guard: only the session that opened the current epoch may close
+    it. ``SessionEnd`` can fire long after the final turn — by then a NEWER
+    session may own activity.json, and closing it would wipe that session's
+    live state and reflect over its write set. A stale close skipped here is
+    harmless: the epoch lease (``epoch_alive``) expires it on its own."""
     data = _read_activity(codoc_dir)
     ep = data.get("epoch") or {}
+    sid = payload.get("session_id")
+    if sid and ep.get("id") and ep["id"] != f"ep-{sid}":
+        return
     already_closed = not ep.get("open", False)
     ep["open"] = False
     ep["ended_at"] = _now_iso()
@@ -257,8 +268,14 @@ def handle_stop(payload: dict[str, Any], codoc_dir: str) -> None:
     # doc view settles (any content updates already flowed through the sidecar).
     data["features"] = {}
     _write_activity(codoc_dir, data)
-    if not already_closed:
+    if event == "stop" or not already_closed:
         _maybe_spawn_reflect(codoc_dir, data, ep)
+
+
+def handle_session_end(payload: dict[str, Any], codoc_dir: str) -> None:
+    """``SessionEnd`` → same close as ``stop``, but reflect only if the final
+    ``Stop`` didn't already handle it (see :func:`handle_stop`)."""
+    handle_stop(payload, codoc_dir, event="session_end")
 
 
 def _maybe_spawn_reflect(codoc_dir: str, data: dict, ep: dict) -> None:
@@ -427,6 +444,7 @@ def _drain_inbox_fallback(codoc_dir: str) -> None:
 _HANDLERS = {
     "session-start": handle_session_start,
     "stop": handle_stop,
+    "session-end": handle_session_end,
     "pre-tool": handle_pre_tool,
     "post-tool": handle_post_tool,
     "user-prompt": handle_user_prompt,

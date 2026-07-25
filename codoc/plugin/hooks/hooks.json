@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m codoc.agent.hook stop",
+            "command": "python -m codoc.agent.hook session-end",
             "timeout": 10
           }
         ]

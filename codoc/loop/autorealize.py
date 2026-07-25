@@ -36,19 +36,33 @@ def _epoch_open(codoc_dir: str) -> bool:
 
     Lease-based (`epoch_alive`), not a raw flag read: a session hard-killed
     without firing `Stop` would otherwise leave `epoch.open=true` forever and
-    permanently starve `--auto-realize` of any queue it could pick up."""
-    return epoch_alive(codoc_dir)
+    permanently starve `--auto-realize` of any queue it could pick up.
+
+    Uses the DAEMON-grade TTL (`EPOCH_STALE_SECONDS`, ~15 min), not the 90 s UI
+    TTL: hooks only renew activity.json on Edit/Write/Read tool calls, so a
+    LIVE session in a long Bash/inference stretch goes activity-silent well
+    past 90 s — spawning a headless pass over it would race two agents on the
+    same queue. The plan's TTL tiering (WS1.1) assigns seconds-scale to UI
+    display and 900 s to daemon decisions; spawning is a daemon decision."""
+    from codoc.loop.watch import EPOCH_STALE_SECONDS
+
+    return epoch_alive(codoc_dir, ttl=EPOCH_STALE_SECONDS)
 
 
 def should_spawn(codoc_dir: str, *, in_flight: bool) -> bool:
     """Decide whether to launch a headless realize pass right now.
 
     Spawn only when there is a queued ``realize.md`` to implement, nothing is
-    already in flight (we launched one that hasn't finished), and no interactive
-    session is open to do it instead."""
+    already in flight (we launched one that hasn't finished), no interactive
+    session is open to do it instead, and no OTHER realize pass holds a fresh
+    ``realizing`` lease (an interactive ``/codoc:sync`` renews status.json per
+    directive even when its epoch looks activity-silent; a crashed pass's lease
+    decays on its own, after which spawning resumes)."""
     if in_flight:
         return False
     if not (Path(codoc_dir) / REALIZE_FILENAME).exists():
+        return False
+    if status.realizing_is_fresh(codoc_dir):
         return False
     return not _epoch_open(codoc_dir)
 

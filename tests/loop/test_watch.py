@@ -112,7 +112,67 @@ def test_safe_process_batch_floors_status_after_a_failing_cycle(dirs):
 
     import json
     healed = json.loads(status.status_path(codoc_dir).read_text())
-    assert healed["state"] != status.TREE_DIRTY
+    # Floors all the way to the ground truth (empty store, no realize.md), not
+    # merely away from the stuck transient.
+    assert healed["state"] == status.IN_SYNC
+
+
+def test_run_watch_idle_tick_heals_stale_epoch_and_reaps_auto_realize(dirs, monkeypatch):
+    """WS1.4 wiring: a bare timeout tick (no file events) must (a) run stale-epoch
+    recovery — healing activity.json itself — and (b) reap/retry --auto-realize,
+    without waiting for a file event that may never come."""
+    import json
+    import os
+    import time
+
+    import watchfiles
+
+    import codoc.loop.migrate as migrate_mod
+    from codoc.loop import watch as watch_mod
+    from codoc.loop.activity import activity_path
+
+    root, codoc_dir, tp = dirs
+    ap = activity_path(codoc_dir)
+    ap.write_text(json.dumps({
+        "version": 1,
+        "epoch": {"id": "ep-dead", "origin": "interactive", "open": True,
+                  "started_at": "2026-07-11T00:00:00+00:00", "ended_at": None},
+        "touched": {}, "recent": [],
+        "features": {"f-1": {"phase": "editing", "at": "2026-07-11T00:00:00+00:00"}},
+    }))
+
+    def fake_watch(*a, **k):
+        # Tick 1: a real activity.json event — step 1 records the rising edge
+        # (state.epoch_open=True). Then the session "dies": backdate the file
+        # past EPOCH_STALE_SECONDS and yield a bare timeout tick.
+        yield {(1, str(ap))}
+        old = time.time() - watch_mod.EPOCH_STALE_SECONDS - 1
+        os.utime(ap, (old, old))
+        yield set()
+
+    reaps = []
+    monkeypatch.setattr(watchfiles, "watch", fake_watch)
+    monkeypatch.setattr(watch_mod, "parent_alive", lambda: True)
+    monkeypatch.setattr(watch_mod, "maybe_auto_realize",
+                        lambda *a, **k: reaps.append(1))
+    monkeypatch.setattr(watch_mod, "_render", lambda *_a, **_k: None)
+
+    class _NoopMigrate:
+        def changed(self):
+            return False
+
+    monkeypatch.setattr(migrate_mod, "migrate_workspace", lambda *_a: _NoopMigrate())
+    monkeypatch.setattr("atexit.register", lambda *a, **k: None)
+
+    watch_mod.run_watch(root, codoc_dir, no_realize=True, auto_realize=True,
+                        printer=lambda *_a: None)
+
+    healed = json.loads(ap.read_text())
+    assert healed["epoch"]["open"] is False        # the FILE healed, not just WatchState
+    assert healed["features"] == {}
+    # Once for tick 1 (file-event path) AND once for the bare idle tick — the
+    # idle call is what reaps a dead child when no file event ever arrives.
+    assert len(reaps) == 2
 
 
 def test_mcp_render_with_stale_hash_does_not_route_to_loop_b(dirs):

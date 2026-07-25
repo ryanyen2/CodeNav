@@ -124,6 +124,46 @@ def test_phases_and_steps_from_activity(tmp_path):
     assert [s["done"] for s in steps] == [True, False]   # last step active
 
 
+def test_phases_drop_stale_at_entries(tmp_path):
+    """WS1.2 hub parity: a feature phase whose `at` is older than
+    FEATURE_PHASE_TTL_SECONDS is an interrupted session's leftover — it must not
+    show 'editing' to hub viewers forever. A fresh `at` (and an entry with no
+    `at` at all — no lease info, no staleness verdict) stays."""
+    from datetime import datetime, timedelta, timezone
+
+    from codoc.serve.payload import _phases_from_activity
+
+    now = datetime.now(timezone.utc)
+    stale = (now - timedelta(seconds=999)).isoformat()
+    fresh = (now - timedelta(seconds=5)).isoformat()
+    activity = {"features": {
+        "f-stale": {"phase": "editing", "at": stale},
+        "f-fresh": {"phase": "editing", "at": fresh},
+        "f-no-at": {"phase": "done"},
+    }}
+    phases = _phases_from_activity(activity, now=now.timestamp())
+    assert "f-stale" not in phases
+    assert phases["f-fresh"] == "editing"
+    assert phases["f-no-at"] == "done"
+
+
+def test_steps_empty_when_lease_dead_despite_open_flag(tmp_path):
+    """WS1.1 hub parity: `alive` is the caller's lease-checked liveness — with
+    alive=False the ribbon empties even though epoch.open is still true (a
+    hard-killed session never fires the Stop hook that would clear the flag)."""
+    from codoc.serve.payload import _steps_from_activity
+
+    activity = {
+        "epoch": {"id": "e", "origin": "interactive", "open": True,
+                  "started_at": None, "ended_at": None},
+        "recent": [{"tool": "Edit", "file": "login.py", "feature_ids": ["f-1"],
+                    "at": "1", "phase": "editing"}],
+    }
+    sidecar = {"by_file": {}}
+    assert _steps_from_activity(activity, sidecar, alive=False) == {}
+    assert _steps_from_activity(activity, sidecar, alive=True) != {}
+
+
 def test_steps_empty_when_epoch_closed(tmp_path):
     sidecar = {"features": {"f-1": {"title": "Auth", "parent_id": None}}, "by_feature": {}}
     activity = {"epoch": {"id": "e", "origin": "interactive", "open": False, "started_at": None, "ended_at": None},

@@ -354,8 +354,8 @@ async def _run(root_dir: str, codoc_dir: str, *, permission_mode: str,
                 # moments ago must not be preserved past the process that would
                 # have kept renewing it.
                 status_mod.refresh_status(codoc_dir, store, realizing=False)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001 — recovery is best-effort, but leave a trace
+            printer(f"⚠ end-of-pass status recompute failed (status.json may be stale): {e}")
     return 1 if monitor.errored else 0
 
 

@@ -11,6 +11,7 @@ from codoc.agent.hook import (
     _rel,
     _resolve_features,
     handle_pre_tool,
+    handle_session_end,
     handle_session_start,
     handle_stop,
     main,
@@ -363,6 +364,73 @@ def test_stop_skips_reflect_with_no_writes(repo, no_real_spawn):
     )
     handle_stop(_payload(str(root)), str(codoc_dir))
 
+    assert no_real_spawn == []
+
+
+def test_stop_reflects_every_turn_even_when_epoch_already_closed(repo, no_real_spawn):
+    """`Stop` fires at the end of EVERY turn, not only the last: turn 1's Stop
+    closes the epoch, but turn 2's writes must still reflect daemonless — the
+    already_closed skip applies only to the SessionEnd duplicate."""
+    root, codoc_dir = repo
+    edit = _payload(str(root), tool_name="Edit",
+                    tool_input={"file_path": str(root / "src/app.py")})
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(edit, str(codoc_dir))
+    handle_stop(_payload(str(root)), str(codoc_dir))   # turn 1 — closes the epoch
+    handle_pre_tool(edit, str(codoc_dir))              # turn 2 writes more
+    handle_stop(_payload(str(root)), str(codoc_dir))   # turn 2 — epoch already closed
+
+    assert len(no_real_spawn) == 2
+
+
+def test_session_end_after_stop_does_not_double_spawn(repo, no_real_spawn):
+    """Clean exit fires Stop then SessionEnd — exactly ONE reflect must launch
+    (the SessionEnd duplicate sees the epoch already closed and skips)."""
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(
+        _payload(str(root), tool_name="Edit", tool_input={"file_path": str(root / "src/app.py")}),
+        str(codoc_dir),
+    )
+    handle_stop(_payload(str(root)), str(codoc_dir))
+    handle_session_end(_payload(str(root)), str(codoc_dir))
+
+    assert len(no_real_spawn) == 1
+
+
+def test_session_end_reflects_when_stop_was_skipped(repo, no_real_spawn):
+    """Esc/kill path: no Stop fired, so SessionEnd finds the epoch still open —
+    it must close it AND reflect (the backstop WS1.3 exists for)."""
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(
+        _payload(str(root), tool_name="Edit", tool_input={"file_path": str(root / "src/app.py")}),
+        str(codoc_dir),
+    )
+    handle_session_end(_payload(str(root)), str(codoc_dir))
+
+    assert len(no_real_spawn) == 1
+    data = read_activity(str(codoc_dir))
+    assert data["epoch"]["open"] is False
+
+
+def test_stale_session_close_leaves_newer_epoch_alone(repo, no_real_spawn):
+    """A delayed Stop/SessionEnd from an OLD session must not close a NEWER
+    session's live epoch (ownership guard: epoch id encodes the session id).
+    The stale close is a no-op; the epoch lease expires it if truly dead."""
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))            # sess-1
+    handle_session_start({"session_id": "sess-2", "cwd": str(root)}, str(codoc_dir))
+    handle_pre_tool(
+        {"session_id": "sess-2", "cwd": str(root), "tool_name": "Edit",
+         "tool_input": {"file_path": str(root / "src/app.py")}},
+        str(codoc_dir),
+    )
+    handle_session_end(_payload(str(root)), str(codoc_dir))              # sess-1, delayed
+
+    data = read_activity(str(codoc_dir))
+    assert data["epoch"]["open"] is True
+    assert data["epoch"]["id"] == "ep-sess-2"
     assert no_real_spawn == []
 
 

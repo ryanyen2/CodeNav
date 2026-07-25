@@ -97,6 +97,13 @@ def _realizing_is_fresh(codoc_dir: str | Path, *, now: float | None = None,
     return (now - mtime) <= ttl
 
 
+def realizing_is_fresh(codoc_dir: str | Path) -> bool:
+    """Public read-only probe of the realizing lease (no side effects) — for
+    callers outside this module that must not race a live pass (autorealize's
+    spawn guard; display surfaces that want lease-decayed state)."""
+    return _realizing_is_fresh(codoc_dir)
+
+
 def refresh_status(
     codoc_dir: str | Path,
     store,
@@ -118,9 +125,19 @@ def refresh_status(
     explicit ``True``/``False`` to override (e.g. a realize engine's own
     end-of-pass cleanup, which authoritatively knows the pass just ended and must
     force a recompute regardless of how fresh the last progress write looked).
+
+    A lease-inferred fresh ``realizing`` is preserved by NOT writing at all: a
+    rewrite would blank the live pass's own "implementing M/N" ``detail``/
+    ``pending`` and — because the lease is keyed to this file's mtime — renew
+    the very lease this call just checked, so a crashed pass would never decay
+    while ambient passes (any Loop A save, any ``codoc_status``) keep calling
+    in. Only genuine progress writes (``write_status(REALIZING, …)``) may age
+    the lease clock.
     """
     if realizing is None:
         realizing = _realizing_is_fresh(codoc_dir)
+        if realizing and not awaiting_impl:
+            return status_path(codoc_dir)
     n_proposals = len(store.pending_events())
     count = n_proposals if pending is None else pending
     if awaiting_impl:

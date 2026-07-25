@@ -209,7 +209,15 @@ state** and is re-emitted on every pass even when the text render is held back
 - **`status.json`** — `{state ∈ in_sync | code_drift | tree_dirty | awaiting_impl |
   realizing, pending, at, …}`; drives the status bar + header CodeLens (and the
   hub's restart-safe payload version via its `at` HLC). A non-empty `realize.md` is
-  a floor (reports `awaiting_impl`, never clobbered to `in_sync`).
+  a floor (reports `awaiting_impl`, never clobbered to `in_sync`). `realizing` is a
+  **lease**, not a flag (WS1.5): trusted only while the file was written within
+  `REALIZING_LEASE_SECONDS` (300 s) AND `realize.md` is still present. Live passes
+  renew it per directive (`codoc_realize_progress` / sdk_realize); `refresh_status`
+  preserves a fresh lease *without rewriting the file* (a rewrite would blank the
+  pass's `detail`/`pending` and renew the mtime the lease is keyed to), and a stale
+  lease decays back to ground truth on the next recompute. Similarly, activity.json
+  epoch/phase liveness is leased by its readers (`epoch_alive` 90 s UI TTL /
+  `EPOCH_STALE_SECONDS` 900 s daemon TTL; per-feature phases 120 s on their `at`).
 - **`realize.md`** + **`realize.json`** — the realization queue (directive prompt
   for `/codoc:sync`) + its machine-readable manifest `{id, feature_id, kind,
   caused_by, text, handed_off}`. `text` lets a later pass rebuild the queue as

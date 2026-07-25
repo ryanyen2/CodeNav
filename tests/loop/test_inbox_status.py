@@ -172,6 +172,57 @@ def test_realizing_lease_ignored_without_queue(codoc_dir):
     assert _state(codoc_dir) == status.IN_SYNC
 
 
+def test_refresh_preserves_live_progress_without_rewriting(codoc_dir):
+    """Preserving a fresh lease must NOT rewrite status.json: a rewrite would
+    blank the live pass's own "implementing M/N" detail/pending AND stamp a new
+    mtime — renewing the very lease being checked, so a crashed pass would never
+    decay while ambient passes keep calling refresh_status."""
+    import json
+    import os
+    import time
+    from pathlib import Path
+
+    Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")
+    store = open_store(codoc_dir)
+    try:
+        status.write_status(codoc_dir, status.REALIZING, pending=1,
+                            detail="implementing 1/2: y")
+        # Age the file a little so an (incorrect) rewrite is detectable by mtime.
+        old = time.time() - 100
+        os.utime(status.status_path(codoc_dir), (old, old))
+        status.refresh_status(codoc_dir, store)
+    finally:
+        store.close()
+    data = json.loads(status.status_path(codoc_dir).read_text())
+    assert data["state"] == status.REALIZING
+    assert data["detail"] == "implementing 1/2: y"      # progress NOT blanked
+    assert data["pending"] == 1
+    assert abs(status.status_path(codoc_dir).stat().st_mtime - old) < 1  # NOT rewritten
+
+
+def test_realizing_lease_decays_despite_intermediate_refreshes(codoc_dir):
+    """The lease clock runs from the last GENUINE progress write: repeated
+    sub-TTL refresh_status calls in between must not extend it (the
+    self-renewal bug), so the state still decays at TTL-from-progress-write."""
+    import os
+    import time
+    from pathlib import Path
+
+    Path(codoc_dir, "realize.md").write_text("### 1. NEW FEATURE: \"y\"\n")
+    store = open_store(codoc_dir)
+    try:
+        status.write_status(codoc_dir, status.REALIZING, detail="implementing 1/2")
+        old = time.time() - (status.REALIZING_LEASE_SECONDS - 50)
+        os.utime(status.status_path(codoc_dir), (old, old))
+        status.refresh_status(codoc_dir, store)   # sub-TTL check: preserved, no rewrite
+        old = time.time() - status.REALIZING_LEASE_SECONDS - 1
+        os.utime(status.status_path(codoc_dir), (old, old))
+        status.refresh_status(codoc_dir, store)   # past TTL: decays to ground truth
+    finally:
+        store.close()
+    assert _state(codoc_dir) == status.AWAITING_IMPL
+
+
 def test_realizing_explicit_false_overrides_fresh_lease(codoc_dir):
     """An engine's own end-of-pass cleanup (sdk_realize's finally block) must be
     able to force a recompute even when the lease would otherwise look fresh —

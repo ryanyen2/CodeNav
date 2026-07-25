@@ -42,6 +42,62 @@ def test_no_spawn_while_a_live_session_is_open(codoc_dir):
     assert autorealize.should_spawn(codoc_dir, in_flight=False) is False
 
 
+def test_no_spawn_while_epoch_open_but_activity_quiet(codoc_dir):
+    """A LIVE session renews activity.json only on Edit/Write/Read hook events —
+    minutes of Bash/inference silence must NOT read as 'no session'. Spawn
+    decisions use the daemon-grade 900s TTL, not the 90s UI TTL (WS1.1 tiering);
+    otherwise a headless pass would race the live session on the same queue."""
+    import os
+    import time
+
+    _queue(codoc_dir)
+    _epoch(codoc_dir, open_=True)
+    old = time.time() - 300   # > EPOCH_UI_TTL_SECONDS, < EPOCH_STALE_SECONDS
+    os.utime(activity_path(codoc_dir), (old, old))
+    assert autorealize.should_spawn(codoc_dir, in_flight=False) is False
+
+
+def test_spawn_resumes_after_daemon_grade_ttl(codoc_dir):
+    """A hard-killed session stops starving --auto-realize once the daemon-grade
+    lease expires (~15 min), instead of forever."""
+    import os
+    import time
+
+    from codoc.loop.watch import EPOCH_STALE_SECONDS
+
+    _queue(codoc_dir)
+    _epoch(codoc_dir, open_=True)
+    old = time.time() - EPOCH_STALE_SECONDS - 1
+    os.utime(activity_path(codoc_dir), (old, old))
+    assert autorealize.should_spawn(codoc_dir, in_flight=False) is True
+
+
+def test_no_spawn_while_realizing_lease_is_fresh(codoc_dir):
+    """An interactive /codoc:sync renews status.json per directive even when its
+    epoch looks activity-silent — a fresh realizing lease blocks the headless
+    spawn (two agents must never race one queue)."""
+    from codoc.loop import status
+
+    _queue(codoc_dir)
+    status.write_status(codoc_dir, status.REALIZING, detail="implementing 1/2")
+    assert autorealize.should_spawn(codoc_dir, in_flight=False) is False
+
+
+def test_spawn_resumes_after_realizing_lease_decays(codoc_dir):
+    """A crashed pass's realizing lease decays on its own (nothing renews it),
+    after which the headless fallback may pick the queue back up."""
+    import os
+    import time
+
+    from codoc.loop import status
+
+    _queue(codoc_dir)
+    status.write_status(codoc_dir, status.REALIZING, detail="implementing 1/2")
+    old = time.time() - status.REALIZING_LEASE_SECONDS - 1
+    os.utime(status.status_path(codoc_dir), (old, old))
+    assert autorealize.should_spawn(codoc_dir, in_flight=False) is True
+
+
 def test_no_spawn_when_one_is_already_in_flight(codoc_dir):
     _queue(codoc_dir)
     assert autorealize.should_spawn(codoc_dir, in_flight=True) is False
@@ -95,6 +151,28 @@ def test_maybe_auto_realize_reaps_finished_pass(codoc_dir):
         maybe_auto_realize(state, "/repo", codoc_dir, printer=lambda *_: None)
     assert state.realize_proc is None
     spawn.assert_not_called()
+
+
+def test_maybe_auto_realize_reap_floors_stuck_realizing(codoc_dir):
+    """A crashed headless child must not leave `realizing` on disk past its
+    reap — the reap floors status.json immediately (WS1.5) instead of waiting
+    out the 300s lease."""
+    from codoc.loop import status
+    from codoc.loop.watch import WatchState, maybe_auto_realize
+
+    class _Dead:
+        def poll(self):
+            return 1  # crashed
+
+    status.write_status(codoc_dir, status.REALIZING, detail="implementing (headless)")
+    state = WatchState(realize_proc=_Dead())
+    with patch.object(autorealize, "spawn_realize") as spawn:
+        maybe_auto_realize(state, "/repo", codoc_dir, printer=lambda *_: None)
+
+    assert state.realize_proc is None
+    spawn.assert_not_called()  # no queue → nothing respawned
+    data = json.loads((__import__("pathlib").Path(codoc_dir) / "status.json").read_text())
+    assert data["state"] == "in_sync"
 
 
 def test_maybe_auto_realize_does_not_stack(codoc_dir):
