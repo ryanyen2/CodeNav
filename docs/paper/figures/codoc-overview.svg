@@ -1,0 +1,445 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Figure 1 (hero) - CoDoc in VS Code, redrawn faithfully from the real extension screenshot.
+  Three regions: (left) the Codoc Tree webview = feature outline + feature document;
+  (right) mini_coding_agent.py source with the bound region highlighted; (bottom) the terminal
+  running /codoc:sync. Numbered callouts ①-⑤ live in the toggleable <g id="callouts"> at the end
+  and map to the four System-section concepts; delete that group for a clean, un-annotated hero.
+  Coordinate system 1360 x 1180. Vector; scales to an ACM figure* full-width.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 1180" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <clipPath id="clipCode"><rect x="1035" y="98" width="317" height="838"/></clipPath>
+    <clipPath id="clipDoc"><rect x="366" y="180" width="640" height="752"/></clipPath>
+    <clipPath id="clipTree"><rect x="14" y="152" width="346" height="780"/></clipPath>
+    <style>
+      .ui   { font-size:13px; fill:#3b3b3b; }
+      .mut  { font-size:12px; fill:#8a8a8a; }
+      .tree { font-size:12.5px; fill:#3b3b3b; }
+      .head { font-size:16px; font-weight:600; fill:#1f1f1f; }
+      .body { font-size:12.5px; fill:#4a4a4a; }
+      .chip { font-size:11px; fill:#2b7a78; font-family:'SF Mono','Menlo','Consolas',monospace; }
+      .code { font-size:12px; font-family:'SF Mono','Menlo','Consolas',monospace; fill:#3b3b3b; }
+      .ln   { font-size:11px; font-family:'SF Mono','Menlo','Consolas',monospace; fill:#a0a0a0; }
+      .kw   { fill:#af00db; }
+      .str  { fill:#a31515; }
+      .fn   { fill:#795e26; }
+      .term { font-size:12px; font-family:'SF Mono','Menlo','Consolas',monospace; }
+      .cbadge { font-size:15px; font-weight:700; fill:#ffffff; }
+      .clab { font-size:12.5px; fill:#111; }
+    </style>
+  </defs>
+
+  <!-- ===================== window shell ===================== -->
+  <rect x="6" y="6" width="1348" height="1168" rx="9" fill="#ffffff" stroke="#c9c9c9" stroke-width="1.5"/>
+
+  <!-- top tab strip -->
+  <rect x="7" y="7" width="1346" height="38" rx="8" fill="#ececec"/>
+  <rect x="7" y="30" width="1346" height="15" fill="#ececec"/>
+
+  <!-- active left tab: tree.codoc -->
+  <rect x="8" y="9" width="176" height="36" fill="#ffffff"/>
+  <rect x="8" y="9" width="176" height="2" fill="#0a7bd4"/>
+  <!-- codoc tab glyph: nested-tree mark -->
+  <g stroke="#6a6a6a" stroke-width="1.4" fill="none">
+    <circle cx="24" cy="27" r="2.4" fill="#6a6a6a" stroke="none"/>
+    <path d="M24 29 v6 h9"/>
+    <circle cx="35" cy="35" r="2.1" fill="#6a6a6a" stroke="none"/>
+    <path d="M24 32 v9 h9"/>
+    <circle cx="35" cy="41" r="2.1" fill="#6a6a6a" stroke="none"/>
+  </g>
+  <text class="ui" x="44" y="31">tree.codoc</text>
+  <text x="164" y="31" font-size="13" fill="#8a8a8a">✕</text>
+
+  <!-- editor-group actions for the left group (asterisk = Claude, split, more) -->
+  <g transform="translate(930,20)">
+    <!-- Claude sparkle -->
+    <g fill="#d97757">
+      <path d="M8 0 l1.6 4.6 4.6 1.6 -4.6 1.6 -1.6 4.6 -1.6 -4.6 -4.6 -1.6 4.6 -1.6 z"/>
+    </g>
+    <!-- split editor -->
+    <g transform="translate(38,0)" stroke="#6a6a6a" stroke-width="1.3" fill="none">
+      <rect x="0" y="0" width="15" height="13" rx="1.5"/>
+      <line x1="7.5" y1="0" x2="7.5" y2="13"/>
+    </g>
+    <!-- more -->
+    <g transform="translate(74,6)" fill="#6a6a6a">
+      <circle cx="0" cy="0" r="1.5"/><circle cx="6" cy="0" r="1.5"/><circle cx="12" cy="0" r="1.5"/>
+    </g>
+  </g>
+
+  <!-- right group tab: mini_coding_agent.py (modified) -->
+  <rect x="1035" y="9" width="230" height="36" fill="#ffffff"/>
+  <!-- python glyph -->
+  <g transform="translate(1046,20)">
+    <path d="M6 0 h4 a3 3 0 0 1 3 3 v3 h-7 v1.5 h10 a3 3 0 0 1 3 3 v3 a3 3 0 0 1 -3 3 h-3 v-3 a3 3 0 0 0 -3 -3 h-4 a3 3 0 0 1 -3 -3 v-4 a3 3 0 0 1 3 -3 z" fill="#3b7fb3"/>
+    <path d="M14 20 h-4 a3 3 0 0 1 -3 -3 v-3 h7 v-1.5 h-10 a3 3 0 0 1 -3 -3 v-3 a3 3 0 0 1 3 -3 h3 v3 a3 3 0 0 0 3 3 h4 a3 3 0 0 1 3 3 v4 a3 3 0 0 1 -3 3 z" fill="#f0d040" transform="translate(0,-4)"/>
+  </g>
+  <text class="ui" x="1070" y="31">mini_coding_agent.py</text>
+  <text x="1224" y="31" font-size="12" fill="#7a7a7a" font-family="monospace">U</text>
+  <circle cx="1246" cy="27" r="4" fill="#7a7a7a"/>
+
+  <!-- ===================== breadcrumb row ===================== -->
+  <rect x="7" y="45" width="1346" height="24" fill="#fbfbfb"/>
+  <text class="mut" x="18" y="61">.codoc &#8250;&#160;&#160;tree.codoc</text>
+  <text class="mut" x="1046" y="61">mini_coding_agent.py &#8250; &#8230;</text>
+  <line x1="1032" y1="45" x2="1032" y2="938" stroke="#e2e2e2" stroke-width="1"/>
+
+  <!-- ===================== CODOC TREE WEBVIEW (left group) ===================== -->
+  <!-- webview toolbar: breadcrumb path + implement pill + focus/glance -->
+  <g>
+    <text class="mut" x="18" y="92" font-size="12.5">mini-coding-agent&#160;/&#160;.codoc&#160;/&#160;<tspan fill="#3b3b3b" font-weight="600">tree.codoc</tspan></text>
+    <!-- "1 to implement" pill -->
+    <rect x="300" y="80" width="118" height="20" rx="10" fill="#eaf6ec" stroke="#bfe3c6"/>
+    <circle cx="313" cy="90" r="4" fill="#3fae57"/>
+    <text x="322" y="94" font-size="11.5" fill="#2f7d43">1 to implement</text>
+    <!-- focus / glance segmented toggle -->
+    <rect x="836" y="79" width="184" height="22" rx="6" fill="#f0f0f0" stroke="#dcdcdc"/>
+    <rect x="838" y="81" width="90" height="18" rx="5" fill="#dbeafe" stroke="#a9cbf5"/>
+    <text x="857" y="94" font-size="11.5" fill="#1e5fbf" font-weight="600">&#9673; Focus</text>
+    <text x="945" y="94" font-size="11.5" fill="#7a7a7a">&#9671; Glance</text>
+  </g>
+  <line x1="7" y1="110" x2="1032" y2="110" stroke="#eeeeee" stroke-width="1"/>
+  <line x1="360" y1="110" x2="360" y2="938" stroke="#eeeeee" stroke-width="1"/>
+
+  <!-- === outline tree (left column of the webview) === -->
+  <g clip-path="url(#clipTree)">
+    <!-- selected-row highlight for Ollama model backend -->
+    <rect x="14" y="322" width="346" height="20" fill="#e4edfb"/>
+    <rect x="14" y="322" width="2.5" height="20" fill="#0a7bd4"/>
+
+    <g class="tree">
+      <!-- depth key: tri at x, label at x+14 -->
+      <!-- Core agent engine (d0) -->
+      <text x="24" y="168" fill="#8a8a8a">&#9662;</text><text x="40" y="168">Core agent engine</text>
+      <!-- Agentic tool-use (d1) -->
+      <text x="40" y="188" fill="#8a8a8a">&#9662;</text><text x="56" y="188">Agentic tool-use conver&#8230;</text>
+      <!-- Model response par (d2) -->
+      <text x="72" y="208">Model response par&#8230;</text>
+      <!-- Sandboxed workspa (d2) -->
+      <text x="56" y="228" fill="#8a8a8a">&#9662;</text><text x="72" y="228">Sandboxed workspa&#8230;</text>
+      <text x="88" y="248">Path containmen&#8230;</text>
+      <text x="88" y="268">Individual works&#8230;</text>
+      <text x="88" y="288">Sub-agent task d&#8230;</text>
+      <!-- Working memory (d2) -->
+      <text x="72" y="308">Working memory an&#8230;</text>
+      <!-- Session persistence (d1) -->
+      <text x="56" y="308" opacity="0"> </text>
+      <!-- Model backends and clients (d0) -->
+      <text x="24" y="328" opacity="0"> </text>
+    </g>
+
+    <!-- these two straddle the selection boundary; keep separate for clarity -->
+    <g class="tree">
+      <text x="56" y="308" opacity="0"> </text>
+    </g>
+
+    <!-- continue below the two d1 leaves before Model backends -->
+    <g class="tree">
+      <text x="56" y="308" opacity="0"></text>
+    </g>
+
+    <!-- NOTE rows re-laid on a clean 20px grid from y=168 -->
+    <g class="tree">
+      <!-- redo the list cleanly -->
+    </g>
+  </g>
+
+  <!-- Clean re-draw of the outline on a strict 20px grid (overwrites the sketch above) -->
+  <rect x="14" y="152" width="346" height="780" fill="#ffffff"/>
+  <rect x="14" y="373" width="346" height="20" fill="#e4edfb"/>
+  <rect x="14" y="373" width="2.5" height="20" fill="#0a7bd4"/>
+  <g clip-path="url(#clipTree)" class="tree">
+    <!-- y grid: row n baseline = 168 + 20n -->
+    <!-- 0  Core agent engine  d0 -->
+    <text x="24" y="168" fill="#9a9a9a">&#9662;</text><text x="41" y="168">Core agent engine</text>
+    <!-- 1  Agentic tool-use conver…  d1 -->
+    <text x="42" y="188" fill="#9a9a9a">&#9662;</text><text x="59" y="188">Agentic tool-use conver&#8230;</text>
+    <!-- 2  Model response par…  d2 -->
+    <text x="77" y="208">Model response par&#8230;</text>
+    <!-- 3  Sandboxed workspa…  d2 (expanded) -->
+    <text x="60" y="228" fill="#9a9a9a">&#9662;</text><text x="77" y="228">Sandboxed workspa&#8230;</text>
+    <!-- 4  Path containmen…  d3 -->
+    <text x="95" y="248">Path containmen&#8230;</text>
+    <!-- 5  Individual works…  d3 -->
+    <text x="95" y="268">Individual works&#8230;</text>
+    <!-- 6  Sub-agent task d…  d3 -->
+    <text x="95" y="288">Sub-agent task d&#8230;</text>
+    <!-- 7  Working memory an…  d2 -->
+    <text x="77" y="308">Working memory an&#8230;</text>
+    <!-- 8  Session persistence to…  d1 -->
+    <text x="59" y="328">Session persistence to&#8230;</text>
+    <!-- 9  Git workspace context…  d1 -->
+    <text x="59" y="348">Git workspace context&#8230;</text>
+    <!-- 10 Model backends and clients  d0 -->
+    <text x="24" y="368" fill="#9a9a9a">&#9662;</text><text x="41" y="368">Model backends and clients</text>
+    <!-- 11 Ollama model ba…  d1  SELECTED -->
+    <text x="46" y="388" fill="#9a9a9a" font-size="10">&#8942;&#8942;</text>
+    <text x="59" y="388" fill="#1f1f1f">Ollama model ba&#8230;</text>
+    <circle cx="316" cy="384" r="3.3" fill="#3b3b3b"/>
+    <path d="M330 379 l6 5 -6 5 -6 -5 z" fill="#3fae57"/>
+    <!-- 12 Fake model client test d…  d1 -->
+    <text x="59" y="408">Fake model client test d&#8230;</text>
+    <!-- 13 Ollama client request…  d1 -->
+    <text x="59" y="428">Ollama client request&#8230;</text>
+    <path d="M330 419 l5 4 -5 4 -5 -4 z" fill="none" stroke="#c2c2c2"/>
+    <!-- 14 CLI application  d0 -->
+    <text x="24" y="448" fill="#9a9a9a">&#9662;</text><text x="41" y="448">CLI application</text>
+    <!-- 15 CLI entry point and wel…  d1 -->
+    <text x="59" y="468">CLI entry point and wel&#8230;</text>
+    <!-- 16 Welcome screen ren…  d1 -->
+    <text x="59" y="488">Welcome screen ren&#8230;</text>
+    <path d="M330 479 l5 4 -5 4 -5 -4 z" fill="none" stroke="#c2c2c2"/>
+    <!-- 17 Agent test suite and fixtures  d0 -->
+    <text x="24" y="508" fill="#9a9a9a">&#9662;</text><text x="41" y="508">Agent test suite and fixtures</text>
+    <!-- 18 Shared agent test fix…  d1 -->
+    <text x="59" y="528">Shared agent test fix&#8230;</text>
+    <path d="M330 519 l5 4 -5 4 -5 -4 z" fill="none" stroke="#c2c2c2"/>
+    <!-- 19 Agent conversation l…  d1 -->
+    <text x="59" y="548">Agent conversation l&#8230;</text>
+    <path d="M330 539 l5 4 -5 4 -5 -4 z" fill="none" stroke="#c2c2c2"/>
+    <!-- 20 Session persistence …  d1 -->
+    <text x="59" y="568">Session persistence&#8230;</text>
+    <path d="M330 559 l5 4 -5 4 -5 -4 z" fill="none" stroke="#c2c2c2"/>
+    <!-- 21 History transcript de…  d1 -->
+    <text x="59" y="588">History transcript de&#8230;</text>
+    <path d="M330 579 l5 4 -5 4 -5 -4 z" fill="none" stroke="#c2c2c2"/>
+    <!-- 22 Workspace tool exec…  d1 -->
+    <text x="59" y="608">Workspace tool exec&#8230;</text>
+    <path d="M330 599 l5 4 -5 4 -5 -4 z" fill="none" stroke="#c2c2c2"/>
+  </g>
+
+  <!-- === document pane (center column of the webview) === -->
+  <!-- doc formatting toolbar -->
+  <g>
+    <text x="376" y="140" font-size="14" font-weight="700" fill="#5a5a5a">B</text>
+    <text x="398" y="140" font-size="14" font-style="italic" fill="#5a5a5a">I</text>
+    <text x="420" y="140" font-size="14" font-weight="600" fill="#5a5a5a">H</text>
+    <text x="442" y="140" font-size="16" fill="#5a5a5a">&#8221;</text>
+    <rect x="470" y="126" width="74" height="19" rx="4" fill="#f2f2f2" stroke="#dcdcdc"/>
+    <text x="479" y="140" font-size="11.5" fill="#4a4a4a">+ feature</text>
+    <rect x="550" y="126" width="66" height="19" rx="4" fill="#f2f2f2" stroke="#dcdcdc"/>
+    <text x="559" y="140" font-size="11.5" fill="#4a4a4a">~ retire</text>
+    <rect x="622" y="126" width="60" height="19" rx="4" fill="#f2f2f2" stroke="#dcdcdc"/>
+    <text x="631" y="140" font-size="11.5" fill="#4a4a4a">&#9671; plan</text>
+  </g>
+  <line x1="366" y1="152" x2="1006" y2="152" stroke="#eeeeee"/>
+
+  <g clip-path="url(#clipDoc)">
+    <!-- tail of previous feature -->
+    <text class="mut" x="376" y="176">&#8230; for resume.</text>
+
+    <!-- FEATURE: Git workspace context gathering -->
+    <text class="head" x="376" y="206">Git workspace context gathering</text>
+    <!-- binding chips -->
+    <g class="chip">
+      <path d="M378 220 l3 3 3 -3 -3 -3 z" fill="#2b7a78"/>
+      <text x="388" y="226">DOC_N&#8230;,</text>
+      <text x="442" y="226">Workspace&#8230;,</text>
+      <text x="520" y="226">WorkspaceConte&#8230;,</text>
+      <text x="620" y="226">WorkspaceCon&#8230;</text>
+    </g>
+    <text class="body" x="376" y="248">Inspects the current git repository (root, branch, status, recent</text>
+    <text class="body" x="376" y="266">commits) and clips key project docs into a summary block that</text>
+    <text class="body" x="376" y="284">grounds the model&#8217;s prompt in the real workspace.</text>
+
+    <!-- FEATURE: Ollama model backend  (the running example) -->
+    <text class="head" x="376" y="326">Ollama model backend</text>
+    <path d="M556 316 l7 6 -7 6 -7 -6 z" fill="#3fae57"/>
+    <text x="576" y="327" font-size="13" fill="#9a9a9a">&#215;</text>
+
+    <!-- steering blockquote: > Claude, reading mini_coding_agent.py -->
+    <rect x="376" y="338" width="612" height="46" fill="#faf7ff"/>
+    <rect x="376" y="338" width="3" height="46" fill="#a371f7"/>
+    <circle cx="394" cy="354" r="4.5" fill="#d97757"/>
+    <text x="406" y="358" font-size="12" fill="#5a4a6a" font-weight="600">Claude</text>
+    <circle cx="394" cy="374" r="4" fill="#a371f7"/>
+    <text x="406" y="378" font-size="12" fill="#6a5a7a" font-style="italic">reading mini_coding_agent.py</text>
+
+    <!-- binding chips for the class + methods -->
+    <g class="chip">
+      <path d="M378 400 l3 3 3 -3 -3 -3 z" fill="#2b7a78"/>
+      <text x="388" y="406">OllamaModelClient,</text>
+      <text x="516" y="406">OllamaModelClient.__init__,</text>
+      <text x="376" y="424">OllamaModelClient.complete</text>
+    </g>
+
+    <!-- description with left focus bar; last sentence bold + underlined (a focus edit) -->
+    <rect x="368" y="436" width="2.5" height="70" fill="#dcdce2"/>
+    <text class="body" x="382" y="448">Model client that sends completion requests to a local Ollama</text>
+    <text class="body" x="382" y="466">server&#8217;s HTTP API and returns generated text.</text>
+    <text x="382" y="490" font-size="12.5" font-weight="600" fill="#1f1f1f" text-decoration="underline">On a transient HTTP error, retry with exponential</text>
+    <text x="382" y="508" font-size="12.5" font-weight="600" fill="#1f1f1f" text-decoration="underline">backoff.</text>
+
+    <!-- FEATURE: Fake model client test double -->
+    <text class="head" x="376" y="548">Fake model client test double</text>
+    <g class="chip">
+      <path d="M378 562 l3 3 3 -3 -3 -3 z" fill="#2b7a78"/>
+      <text x="388" y="568">FakeModelClient,</text>
+      <text x="490" y="568">FakeModelClient.__init__,</text>
+      <text x="376" y="586">FakeModelClient.complete</text>
+    </g>
+    <text class="body" x="376" y="610">Scripted model client that replays a fixed queue of canned</text>
+    <text class="body" x="376" y="628">outputs and records prompts it was given, used to drive the</text>
+    <text class="body" x="376" y="646">agent loop deterministically in tests.</text>
+
+    <!-- FEATURE: CLI entry point and welcome screen -->
+    <text class="head" x="376" y="686">CLI entry point and welcome screen</text>
+    <g class="chip">
+      <path d="M378 700 l3 3 3 -3 -3 -3 z" fill="#2b7a78"/>
+      <text x="388" y="706">build_ag&#8230;,</text>
+      <text x="452" y="706">build_arg_par&#8230;,</text>
+      <text x="546" y="706">build_welco&#8230;,</text>
+      <text x="636" y="706">HELP_DETA&#8230;,</text>
+      <text x="722" y="706">HELP_TE&#8230;</text>
+      <text x="782" y="706" fill="#9a9a9a">+3</text>
+    </g>
+  </g>
+
+  <!-- minimap sliver at right edge of the webview -->
+  <rect x="1008" y="112" width="22" height="824" fill="#fbfbfb"/>
+  <g stroke="#d8d8d8" stroke-width="2">
+    <line x1="1012" y1="130" x2="1026" y2="130"/>
+    <line x1="1012" y1="136" x2="1022" y2="136"/>
+    <line x1="1012" y1="150" x2="1026" y2="150"/>
+    <line x1="1012" y1="156" x2="1020" y2="156"/>
+    <line x1="1012" y1="170" x2="1024" y2="170"/>
+    <line x1="1012" y1="176" x2="1018" y2="176"/>
+  </g>
+  <rect x="1008" y="122" width="22" height="70" fill="#0a7bd4" opacity="0.08"/>
+
+  <!-- ===================== CODE PANE (right group) ===================== -->
+  <g clip-path="url(#clipCode)">
+    <rect x="1035" y="98" width="317" height="838" fill="#ffffff"/>
+    <!-- bound-region highlight (lines ~207-223) -->
+    <rect x="1035" y="330" width="317" height="304" fill="#e8effb"/>
+    <!-- codoc gutter annotation -->
+    <rect x="1035" y="636" width="317" height="17" fill="#f3eefe"/>
+    <text x="1084" y="649" font-size="10.5" fill="#8a6fc4" font-style="italic" font-family="'SF Mono',monospace">codoc: Agentic tool-use conver&#8230;</text>
+
+    <!-- code: line numbers + tokens (truncated at pane edge, as in the screenshot) -->
+    <g class="ln">
+      <text x="1044" y="120">180</text><text x="1044" y="152">188</text>
+      <text x="1044" y="168">192</text><text x="1044" y="184">193</text><text x="1044" y="200">194</text>
+      <text x="1044" y="216">195</text><text x="1044" y="232">196</text><text x="1044" y="248">197</text>
+      <text x="1044" y="264">198</text><text x="1044" y="280">199</text><text x="1044" y="296">200</text>
+      <text x="1044" y="312">201</text><text x="1044" y="328">202</text><text x="1044" y="344">203</text>
+      <text x="1044" y="360">204</text><text x="1044" y="376">205</text><text x="1044" y="392">206</text>
+      <text x="1044" y="408">207</text><text x="1044" y="424">208</text><text x="1044" y="440">209</text>
+      <text x="1044" y="456">210</text><text x="1044" y="472">211</text><text x="1044" y="488">212</text>
+      <text x="1044" y="504">213</text><text x="1044" y="520">214</text><text x="1044" y="536">215</text>
+      <text x="1044" y="552">216</text><text x="1044" y="568">217</text><text x="1044" y="584">218</text>
+      <text x="1044" y="600">219</text><text x="1044" y="616">220</text><text x="1044" y="632">221</text>
+      <text x="1044" y="648">222</text><text x="1044" y="664">223</text><text x="1044" y="696">226</text>
+    </g>
+    <g class="code">
+      <text x="1078" y="120"><tspan class="kw">class</tspan> OllamaModelClie</text>
+      <text x="1078" y="152"><tspan class="kw">def</tspan> <tspan class="fn">complete</tspan>(self,</text>
+      <text x="1094" y="168"><tspan class="str">"stream"</tspan>: Fals</text>
+      <text x="1094" y="184"><tspan class="str">"raw"</tspan>: Fa</text>
+      <text x="1094" y="200"><tspan class="str">"think"</tspan>: sel</text>
+      <text x="1094" y="216"><tspan class="str">"options"</tspan>: {</text>
+      <text x="1110" y="232"><tspan class="str">"num_pred</tspan></text>
+      <text x="1110" y="248"><tspan class="str">"temperat</tspan></text>
+      <text x="1110" y="264"><tspan class="str">"top_p"</tspan>:</text>
+      <text x="1094" y="280">}</text>
+      <text x="1078" y="296">}</text>
+      <text x="1078" y="312">request = url</text>
+      <text x="1094" y="328">self.host</text>
+      <text x="1094" y="344">data=json</text>
+      <text x="1094" y="360">headers={</text>
+      <text x="1094" y="376">method=<tspan class="str">"P</tspan></text>
+      <text x="1078" y="392">)</text>
+      <text x="1078" y="408"><tspan class="kw">try</tspan>:</text>
+      <text x="1094" y="424"><tspan class="kw">with</tspan> urll</text>
+      <text x="1110" y="440">data</text>
+      <text x="1094" y="456"><tspan class="kw">except</tspan> urllib</text>
+      <text x="1110" y="472">body = ex</text>
+      <text x="1110" y="488"><tspan class="kw">raise</tspan> Run</text>
+      <text x="1094" y="504"><tspan class="kw">except</tspan> urllib</text>
+      <text x="1110" y="520"><tspan class="kw">raise</tspan> Run</text>
+      <text x="1126" y="536"><tspan class="str">"Coul</tspan></text>
+      <text x="1126" y="552"><tspan class="str">"Make</tspan></text>
+      <text x="1126" y="568"><tspan class="str">f"Hos</tspan></text>
+      <text x="1126" y="584"><tspan class="str">f"Mod</tspan></text>
+      <text x="1110" y="600">) <tspan class="kw">from</tspan> ex</text>
+      <text x="1094" y="632"><tspan class="kw">if</tspan> data.get(<tspan class="str">"</tspan></text>
+      <text x="1110" y="648"><tspan class="kw">raise</tspan> Run</text>
+      <text x="1094" y="664"><tspan class="kw">return</tspan> data.g</text>
+      <text x="1078" y="696"><tspan class="kw">class</tspan> MiniAgent:</text>
+    </g>
+  </g>
+
+  <!-- ===================== TERMINAL PANEL ===================== -->
+  <line x1="7" y1="940" x2="1353" y2="940" stroke="#d0d0d0"/>
+  <!-- panel tab row -->
+  <g font-size="11.5" fill="#8a8a8a" letter-spacing="0.4">
+    <text x="20" y="960">PROBLEMS</text>
+    <text x="96" y="960">OUTPUT</text>
+    <text x="156" y="960">DEBUG CONSOLE</text>
+    <text x="266" y="960" fill="#2b2b2b" font-weight="600">TERMINAL</text>
+    <rect x="266" y="966" width="62" height="2" fill="#0a7bd4"/>
+    <text x="344" y="960">PORTS</text>
+  </g>
+  <line x1="7" y1="972" x2="1353" y2="972" stroke="#eeeeee"/>
+
+  <!-- terminal content -->
+  <g class="term">
+    <text x="20" y="996" fill="#7a7a7a">&#8627; Set model to <tspan fill="#2b2b2b" font-weight="600">Sonnet 5</tspan> and saved as your default for new sessions</text>
+
+    <!-- the /codoc:sync command line -->
+    <text x="20" y="1024" fill="#3b7fb3">&#8250;</text>
+    <text x="36" y="1024" fill="#2b2b2b" font-weight="600">/codoc:sync</text>
+
+    <text x="20" y="1052"><tspan fill="#3fae57">&#9679;</tspan> <tspan fill="#3b3b3b">Searching for <tspan font-weight="600">1</tspan> pattern, reading <tspan font-weight="600">3</tspan> files, calling codoc&#8230;</tspan></text>
+    <text x="36" y="1076" fill="#7a7a7a">&#8627; tests/test_mini_coding_agent.py</text>
+    <text x="20" y="1104"><tspan fill="#d97757">+</tspan> <tspan fill="#8a8a8a" font-style="italic">Cultivating&#8230; (35s &#183; &#8595; 724 tokens)</tspan></text>
+    <text x="36" y="1132" fill="#9a9a9a">&#8627; Tip: You can control how big a workflow is just by prompting. Ask for a small workflow, cap it with "use at most 5 agents", or set a default wi&#8230;</text>
+  </g>
+
+  <!-- ===================== CALLOUTS (toggleable overlay; delete this group for clean hero) ===================== -->
+  <g id="callouts">
+    <style>
+      .cline { stroke:#e8833a; stroke-width:2; fill:none; }
+    </style>
+    <!-- badge helper: circle + number -->
+    <!-- (1) the feature document = outline + title + description -->
+    <circle cx="30" cy="640" r="13" fill="#e8833a"/>
+    <text class="cbadge" x="30" y="645" text-anchor="middle">1</text>
+    <path class="cline" d="M43 638 C 150 620, 200 500, 200 430"/>
+
+    <!-- (2) bindings = binding chips + code highlight + codoc gutter -->
+    <circle cx="700" cy="404" r="13" fill="#e8833a"/>
+    <text class="cbadge" x="700" y="409" text-anchor="middle">2</text>
+    <path class="cline" d="M687 410 C 500 430, 470 412, 452 410"/>
+    <path class="cline" d="M713 404 C 900 420, 1000 470, 1120 480"/>
+
+    <!-- (3) markdown-native steering + focus edit (held draft) -->
+    <circle cx="1006" cy="360" r="13" fill="#e8833a"/>
+    <text class="cbadge" x="1006" y="365" text-anchor="middle">3</text>
+    <path class="cline" d="M993 360 C 900 360, 640 360, 500 362"/>
+    <path class="cline" d="M999 368 C 700 470, 560 486, 520 490"/>
+
+    <!-- (4) hand-off = the "1 to implement" pill + green diamond queue marker -->
+    <circle cx="450" cy="60" r="13" fill="#e8833a"/>
+    <text class="cbadge" x="450" y="65" text-anchor="middle">4</text>
+    <path class="cline" d="M440 68 C 420 78, 400 82, 380 88"/>
+    <path class="cline" d="M450 73 C 480 200, 480 320, 336 384"/>
+
+    <!-- (5) realization in the person's own session = /codoc:sync -->
+    <circle cx="220" cy="1024" r="13" fill="#e8833a"/>
+    <text class="cbadge" x="220" y="1029" text-anchor="middle">5</text>
+    <path class="cline" d="M207 1024 C 160 1024, 120 1024, 92 1024"/>
+
+    <!-- legend -->
+    <g transform="translate(1050,1000)">
+      <rect x="-8" y="-16" width="300" height="132" rx="6" fill="#ffffff" stroke="#e0e0e0"/>
+      <text class="clab" x="4" y="2" font-weight="600" fill="#e8833a">Callouts</text>
+      <text class="clab" x="4" y="24">&#9312; Feature outline, title, description</text>
+      <text class="clab" x="4" y="46">&#9313; Bindings to the code that implements it</text>
+      <text class="clab" x="4" y="68">&#9314; Steering note and focus edit (held draft)</text>
+      <text class="clab" x="4" y="90">&#9315; Hand-off queued for implementation</text>
+      <text class="clab" x="4" y="112">&#9316; Realized in the person&#8217;s own session</text>
+    </g>
+  </g>
+</svg>
