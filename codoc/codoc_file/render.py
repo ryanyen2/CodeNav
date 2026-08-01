@@ -30,8 +30,6 @@ IDE's Accept/Reject actions write verdicts to ``.codoc/inbox.json`` (see
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 from collections import defaultdict
 from pathlib import Path

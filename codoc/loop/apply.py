@@ -16,7 +16,6 @@ from codoc.loop.diff import ChangeSet
 from codoc.model.binding import Binding
 from codoc.model.event import SAFE_OPS, Event, NodeOp, NodeOpKind, default_provenance
 from codoc.model.feature import Feature, Lifecycle
-from codoc.model.hlc import HLC
 from codoc.store.db import Store
 
 AMEND_SAFE_RATIO = 0.30  # description edits changing ≤30% of the text auto-apply

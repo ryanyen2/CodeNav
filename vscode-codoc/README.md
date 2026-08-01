@@ -273,20 +273,27 @@ makes network requests:
 | `.codoc/activity.json` | Agent touch log — drives gutter markers + file badges |
 | `.codoc/realize.md` | Realization queue — surfaced as "N to implement" in the status bar |
 
-**Sidecar schema (v4):**
+**Sidecar schema (v6):**
 
 ```json
 {
-  "version": 4,
+  "version": 6,
   "by_feature": { "f-id": [{"file": "path.py", "symbol": "path.py::Class.method"}] },
   "by_file":    { "path.py": [{"symbol": "...", "feature_id": "f-id", "feature_title": "Title"}] },
-  "features":   { "f-id": {"title": "Title", "parent_id": null, "realized": true} },
+  "features":   { "f-id": {"title": "Title", "parent_id": null, "lifecycle": "active", "realized": true} },
   "feature_edges": { "f-id": [{"to": "f-other", "weight": 4, "kinds": ["call"]}] },
   "proposals":  { "by_feature": {"f-id": {"op": "amend", "event_id": "e-id", "actor": "…", "mode": "…", "caused_by": "…"}},
                   "by_event": {"e-id": {"op": "add_node", "title": "…"}} },
   "changes":    [{"event_id": "e-id", "at": "…", "kind": "amend", "feature_id": "f-id",
                   "actor": "agent", "mode": "auto", "caused_by": "d-…"}],
-  "holds":      ["f-id"]
+  "feature_phase":      { "f-id": "queued" },
+  "holds":              ["f-id"],
+  "hold_detail":        { "f-id": {"kind": "amend", "intent": "…", "baseline": "…"} },
+  "feature_kind":       { "f-id": "howto" },
+  "feature_see_also":   { "f-id": ["f-other"] },
+  "feature_drift":      { "f-id": "questioned" },
+  "feature_resolution": { "f-id": "scope" },
+  "blocks":             { "f-id": [{"kind": "diagram", "…": "…"}] }
 }
 ```
 
@@ -300,7 +307,15 @@ makes network requests:
   "↳ from your edit" cascade cue.
 - `changes` — the last ~50 applied events (newest first); drives the agent-pencil
   re-stamp in the doc view.
-- `holds` — the doc-wins hold set (features with pending doc-ahead intent).
+- `feature_phase` / `holds` / `hold_detail` / `feature_drift` /
+  `feature_resolution` — the mid-flight lifecycle slices (all thin views of one
+  projection): where each feature sits between an edit and its realization, the
+  doc-wins hold set + queued-directive detail, and the drift / realize-divergence
+  badges.
+- `feature_kind` (Diátaxis-lite chip) and `feature_see_also` (top coupled
+  neighbours) — optional inferred hints.
+- `blocks` (v6) — per-feature typed-media blocks (diagram / image / latex / url /
+  …); absent for features with no typed media.
 
 File watchers on all paths trigger an automatic reload whenever codoc writes new
 output.
@@ -334,8 +349,9 @@ session's changes back into the tree; `UserPromptSubmit` nudges `/codoc:sync`
 when work is queued.
 
 **MCP server** (`codoc`, registered in `.mcp.json`): the agent's reflection API —
-`codoc_tree`, `codoc_status`, `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`,
-`codoc_attach`, `codoc_plan_add`.
+`codoc_context` (the relevant tree slice for the files being edited — the primary
+read), `codoc_tree` (whole tree, scopeable), `codoc_status`, `codoc_reflect`,
+`codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`.
 
 **Skill + commands** (`.claude/skills/codoc-intent/`, `.claude/commands/codoc/`):
 the skill teaches Claude the MCP-first propose-then-implement workflow; `/codoc:plan`

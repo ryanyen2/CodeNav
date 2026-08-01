@@ -24,8 +24,6 @@ import shutil
 from datetime import timedelta
 from pathlib import Path
 
-from codoc.pipelines.indexing.schema import embed_chunks_enabled
-
 
 def _lance_path(codoc_dir: Path) -> Path:
     return codoc_dir / "lancedb"
