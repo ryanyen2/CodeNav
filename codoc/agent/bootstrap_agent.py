@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import json
 
-from codoc.agent.base import format_prompt, load_prompt, run_agent
-from codoc.config import LLMConfig
+from codoc.agent.base import format_prompt, load_prompt, run_agent, split_prompt
+from codoc.config import LLMConfig, fast_llm_config
 from codoc.model.event import NodeOp, NodeOpKind
 
 
@@ -65,17 +65,28 @@ def propose_file_features(
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
 ) -> list[NodeOp]:
-    """One LLM call: propose a small coherent feature set for a single file."""
-    template = load_prompt("bootstrap_file")
-    prompt = format_prompt(
-        template,
+    """One LLM call: propose a small coherent feature set for a single file.
+
+    Cache-aligned (CACHE_BREAK markers in the template): the frozen instruction
+    block + the grow-only titles list form the stable prefix; only the file
+    block varies per call. Within a bootstrap wave every call shares the same
+    titles snapshot, so the whole prefix is identical across the wave.
+    Structured extraction → fast model tier by default.
+    """
+    # Split the raw template FIRST, then substitute per segment — substituted
+    # values are repo-derived and may contain a literal marker.
+    prefix_tpls, volatile_tpl = split_prompt(load_prompt("bootstrap_file"))
+    kwargs = dict(
         repo_name=repo_name,
         file=file,
-        chunks=json.dumps(chunks, indent=2),
-        edges=json.dumps(edges, indent=2),
-        existing_titles=json.dumps(existing_titles, indent=2),
+        chunks=json.dumps(chunks, indent=2, sort_keys=True),
+        edges=json.dumps(edges, indent=2, sort_keys=True),
+        existing_titles="\n".join(f"- {t}" for t in existing_titles) or "(none yet)",
     )
-    return _ops_from(run_agent(prompt, config))
+    prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
+    volatile = format_prompt(volatile_tpl, **kwargs)
+    return _ops_from(run_agent(volatile, config or fast_llm_config(),
+                               prefix_parts=prefix_parts))
 
 
 def propose_organization(

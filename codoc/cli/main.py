@@ -100,6 +100,19 @@ def init(
     """Index the repo, propose an initial feature tree, render tree.codoc."""
     from codoc.loop.bootstrap import run_init
 
+    # A running daemon (the VS Code extension's, or a manual `codoc watch`) must not
+    # race a re-init: init rebuilds the index (which can wipe + recreate the LanceDB
+    # state) and, with --force, deletes the store the daemon has open. Stop it first.
+    from codoc.loop.watch import daemon_running
+
+    if _workspace_exists(root) and daemon_running(_codoc_dir(root)):
+        typer.echo(
+            "A codoc daemon is watching this repo — stop it (or close the VS Code "
+            "workspace) before running `codoc init`.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     # Guard against clobbering / duplicating an existing tree: a second `init` would
     # re-bootstrap from code with fresh ids on top of the current features. Require
     # --force, which starts from a clean store so there is no duplication.

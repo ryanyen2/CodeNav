@@ -3,25 +3,9 @@ navigable hierarchy of *intent*, where each node is a named unit of what the cod
 is for and binds to code chunks (a chunk = a function, method, class, or
 module-level block, identified by `file::symbol_path`).
 
-You are looking at ONE file: `{file}`. Below are all of its code chunks and the
-call/containment relationships among them. Produce a SMALL, coherent set of
-features that captures what this file is for.
-
-## Chunks in {file}
-
-{chunks}
-
-## Relationships near these chunks
-
-{edges}
-
-- `calls` / `called_by` are other symbols (some in other files) — use them to
-  judge cohesion, NOT to bind anything outside this file.
-- `contained_in` means the symbol is a method/member of that class.
-
-## Features already created from other files (for naming consistency only — do NOT bind to them)
-
-{existing_titles}
+You are looking at ONE file at a time. Given the file's code chunks and the
+call/containment relationships among them, produce a SMALL, coherent set of
+features that captures what that file is for.
 
 ## How to choose nodes
 
@@ -38,12 +22,18 @@ features that captures what this file is for.
      than lumping them. They serve different purposes even if they share a protocol.
 2. A class and its methods are normally ONE feature (the class). Only break out a
    cluster of methods as a CHILD node when they form a clearly separable concern.
-3. **Every chunk listed above MUST be bound by exactly one node you emit.** Bind
-   module-level chunks (`{file}::__module__`) to the file's primary feature, not a
+3. **Every chunk listed MUST be bound by exactly one node you emit.** Bind
+   module-level chunks (`<file>::__module__`) to the file's primary feature, not a
    node of their own. Bind module-level constants to the node that primarily *uses*
    them, not to a generic utilities node.
-4. Do not invent a node whose title merely paraphrases one already created in
-   another file (see the list above); name this file's intent on its own terms.
+4. Do not invent a node whose title merely paraphrases one already created from
+   another file (see the list below); name this file's intent on its own terms.
+
+## Relationships legend
+
+- `calls` / `called_by` are other symbols (some in other files) — use them to
+  judge cohesion, NOT to bind anything outside this file.
+- `contained_in` means the symbol is a method/member of that class.
 
 ## Nesting (within this file)
 
@@ -58,11 +48,27 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
   locations (bindings carry that). NEVER leave it empty.
 - `bindings`: the `[file, symbol_path]` pairs this node owns.
 
-## Output — return ONLY this, inside solution tags:
+## Output — return ONLY this, inside solution tags (example for a file `adapters.py`):
 
 <solution>
 {"ops": [
-  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "Sends prepared requests over urllib3, managing connection pools, proxies, and TLS.", "bindings": [["{file}", "{file}::HTTPAdapter"], ["{file}", "{file}::HTTPAdapter.send"]], "rationale": "the file's primary class"},
-  {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Connection pool configuration", "description": "Derives and caches urllib3 pool managers for a request's target and proxy.", "bindings": [["{file}", "{file}::HTTPAdapter.get_connection"]], "rationale": "separable pooling concern"}
+  {"id": "n1", "kind": "add_node", "title": "HTTP transport adapter", "description": "Sends prepared requests over urllib3, managing connection pools, proxies, and TLS.", "bindings": [["adapters.py", "adapters.py::HTTPAdapter"], ["adapters.py", "adapters.py::HTTPAdapter.send"]], "rationale": "the file's primary class"},
+  {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Connection pool configuration", "description": "Derives and caches urllib3 pool managers for a request's target and proxy.", "bindings": [["adapters.py", "adapters.py::HTTPAdapter.get_connection"]], "rationale": "separable pooling concern"}
 ]}
 </solution>
+<<<CACHE_BREAK>>>
+## Features already created from other files (for naming consistency only — do NOT bind to them)
+
+{existing_titles}
+<<<CACHE_BREAK>>>
+## The file to analyze: `{file}`
+
+### Chunks in {file}
+
+{chunks}
+
+### Relationships near these chunks
+
+{edges}
+
+Now return this file's feature set, inside solution tags.

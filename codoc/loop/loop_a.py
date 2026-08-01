@@ -882,18 +882,20 @@ def _doc_intent(codoc_dir: str) -> tuple[set[str], dict[str, str], str]:
     return held, cb_map, default_cb
 
 
-def _backfill_types_hashes(store: Store, rows) -> int:
+def _backfill_types_hashes(store: Store, rows, bindings: list | None = None) -> int:
     """D4: backfill ``types_hash`` on bound chunks attributed without an AST shape
     (legacy rows, MCP/propose binds), reading the shape from the current index.
     Idempotent (only fills empties) and event-free — so rename detection works on
     the NEXT edit instead of staying permanently blind for those bindings. Returns
     the number of bindings filled. Runs in the authoritative reconcile pass, which
-    already holds the full index ``rows``."""
+    already holds the full index ``rows`` — and, on a scoped pass, that pass's
+    already-fetched ``bindings`` (scoped sweeps cover the touched files now; the
+    unscoped recovery passes still sweep everything)."""
     row_th = {(r.file, r.symbol_path): r.types_hash for r in rows if r.types_hash}
     if not row_th:
         return 0
     filled = 0
-    for b in store.all_bindings():
+    for b in (bindings if bindings is not None else store.all_bindings()):
         if not b.types_hash:
             th = row_th.get((b.file, b.symbol_path))
             if th and store.backfill_types_hash(b.file, b.symbol_path, th):
@@ -901,7 +903,13 @@ def _backfill_types_hashes(store: Store, rows) -> int:
     return filled
 
 
-def _state_changeset(rows, store: Store, file_scope: set[str] | None) -> ChangeSet:
+def _scoped_bindings(store: Store, file_scope: set[str] | None) -> list:
+    return (store.bindings_in_files(file_scope) if file_scope is not None
+            else store.all_bindings())
+
+
+def _state_changeset(rows, store: Store, file_scope: set[str] | None,
+                     bindings: list | None = None) -> ChangeSet:
     """Build a change set by comparing the index to the store's BINDINGS, not to a
     prior index snapshot. State-based ⇒ idempotent and self-healing.
 
@@ -911,21 +919,26 @@ def _state_changeset(rows, store: Store, file_scope: set[str] | None) -> ChangeS
 
     Unlike :func:`compute_changeset` (which diffs the index over time and so goes
     blind once the index advances without a reflection), this recovers a missed
-    cycle: it always re-derives the full divergence between code and the tree."""
+    cycle: it always re-derives the full divergence between code and the tree.
+    ``bindings`` lets the caller pass the pass's already-fetched scoped bindings
+    (one bulk query keys the whole comparison; this used to issue one
+    ``binding_at`` SELECT per chunk)."""
     scoped = rows if file_scope is None else [r for r in rows if r.file in file_scope]
     index_keys = {(r.file, r.symbol_path) for r in scoped}
 
+    if bindings is None:
+        bindings = _scoped_bindings(store, file_scope)
+    by_key = {(b.file, b.symbol_path): b for b in bindings}
+
     added, modified = [], []
     for r in scoped:
-        b = store.binding_at(r.file, r.symbol_path)
+        b = by_key.get((r.file, r.symbol_path))
         ref = ChunkRef(r.file, r.symbol_path, r.tokens_hash, r.source, r.types_hash)
         if b is None:
             added.append(ref)
         elif b.fingerprint and b.fingerprint != r.tokens_hash:
             modified.append(ref)
 
-    bindings = (store.bindings_in_files(file_scope) if file_scope is not None
-                else store.all_bindings())
     removed = [
         # carry the binding's stored types_hash so a rename (shape match, new
         # name) is still recognised after the old symbol left the index.
@@ -1011,22 +1024,82 @@ def reconcile_drift(
     # across processes so nothing interleaves between diff and render (loop/locks.py).
     with loop_lock(codoc_dir):
         update_index(root_dir, codoc_dir)
-        # The authority pass walks the whole index, but never needs embeddings.
-        rows = read_all_chunks(codoc_dir, with_embeddings=False)
+        # The authority pass walks the whole index but never needs embeddings, and
+        # needs SOURCE only for the chunks that actually diverged (they feed the
+        # LLM context + graph re-extraction). Read the light identity projection
+        # first, find the divergent files against the bindings, then fetch source
+        # for just those files — on an in-sync repo the pass never materializes a
+        # single chunk body.
+        rows_light = read_all_chunks(codoc_dir, with_embeddings=False, with_source=False)
         held, cb_map, default_cb = _doc_intent(codoc_dir)
         with open_store(codoc_dir) as store:
             # Recovery-grade invariant: re-home any orphaned/cyclic subtree BEFORE
             # reconciling, so a feature made unreachable (by pre-guard state or a
             # non-apply_op path) is pulled back onto a root instead of staying invisible
-            # yet bound (which would keep Loop A from ever re-homing it).
+            # yet bound (which would keep Loop A from ever re-homing it). Heal is a
+            # cheap in-memory sweep and runs on EVERY pass (the Stop hook's reflect is
+            # scoped, so gating it to unscoped passes would leave hook-driven
+            # workspaces unhealed forever). The types-hash backfill scans bindings, so
+            # a scoped pass backfills only its scope; unscoped recovery passes
+            # (startup, `codoc sync`) still sweep everything.
             heal_tree_integrity(store)
-            _backfill_types_hashes(store, rows)
-            cs = _state_changeset(rows, store, file_scope)
+            bindings = _scoped_bindings(store, file_scope)
+            _backfill_types_hashes(store, rows_light, bindings)
+            # Empty-index invariant: a vanished/blank index beside real bindings is a
+            # torn state (a concurrent wipe/rebuild, a deleted .codoc/lancedb), not a
+            # repo where every file was deleted. Reconciling would mass-detach every
+            # binding with no LLM and no proposal — refuse the pass; the next tick
+            # (index rebuilt) reconciles normally.
+            if not rows_light and bindings:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "codoc: index read returned 0 chunks but %d bindings exist — "
+                    "skipping this reconcile pass (torn/absent index)", len(bindings))
+                return LoopAResult()
+            by_key = {(b.file, b.symbol_path): b for b in bindings}
+            scoped_light = (rows_light if file_scope is None
+                            else [r for r in rows_light if r.file in file_scope])
+            scoped_keys = {(r.file, r.symbol_path) for r in scoped_light}
+            candidates = set()
+            for r in scoped_light:
+                b = by_key.get((r.file, r.symbol_path))
+                if b is None or (b.fingerprint and b.fingerprint != r.tokens_hash):
+                    candidates.add(r.file)
+            # Files whose divergence is a REMOVED symbol (binding present, chunk gone)
+            # must be sourced too: they land in graph_scope below, and re-extracting
+            # their surviving rows from source='' would silently wipe the file's
+            # call/import edges (P0 from the 2026-08-01 review).
+            for b in bindings:
+                if (b.file, b.symbol_path) not in scoped_keys:
+                    candidates.add(b.file)
+            # A never-built graph (rebuilt codoc.db beside an intact index) needs a
+            # one-time full extraction — which parses source — so pull every file
+            # into the sourced read for this pass.
+            graph_full_build = bool(rows_light) and not store.has_edges()
+            if graph_full_build:
+                candidates = {r.file for r in rows_light}
+            if candidates:
+                sourced = {
+                    (r.file, r.symbol_path): r
+                    for r in read_all_chunks(codoc_dir, files=candidates,
+                                             with_embeddings=False)
+                }
+                rows = [sourced.get((r.file, r.symbol_path), r) for r in rows_light]
+            else:
+                rows = rows_light
+            cs = _state_changeset(rows, store, file_scope, bindings)
             # Only pay the embedder model load when there are additions to dedup
             # (built after the changeset, so a pure-drift pass skips it entirely).
             embed_fn = (make_loop_embedder()
                         if cs.added and semantic_dedup_enabled() else None)
-            update_graph(store, cs.rows, cs.touched_files() or {r.file for r in rows})
+            # Graph maintenance is scoped to what actually changed. An EMPTY
+            # changeset previously fell back to ALL files — a full tree-sitter
+            # re-extraction on every clean startup / Stop-hook / no-op reconcile.
+            # The full extraction now happens only when the graph has never been
+            # built (graph_full_build above, which also sourced every row).
+            graph_scope = ({r.file for r in rows} if graph_full_build
+                           else cs.touched_files())
+            update_graph(store, cs.rows, graph_scope)
             # Authoritative full-state reconciliation — the only pass allowed to raise
             # retires (a feature empty *in current state* genuinely lost its code) and
             # to propose description amends when bound code changed in place.

@@ -112,9 +112,12 @@ def test_tables_added_additively_to_existing_db(tmp_path):
     f = Feature(title="Existing")
     s1.upsert_feature(f)
     s1.upsert_binding(Binding(feature_id=f.id, file="a.py", symbol_path="a.py::foo", fingerprint="abc"))
-    # Simulate a pre-existing DB by dropping the new tables, then reopening.
+    # Simulate a pre-existing DB by dropping the new tables, then reopening. A
+    # genuine legacy DB predates the user_version stamp, so reset that too —
+    # open() only replays the schema when the stamp is stale.
     s1.conn.execute("DROP TABLE marks")
     s1.conn.execute("DROP TABLE comments")
+    s1.conn.execute("PRAGMA user_version = 0")
     s1.conn.commit()
     s1.close()
 

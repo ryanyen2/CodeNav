@@ -530,8 +530,18 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     by_file: dict[str, list[dict]] = {}
     feats_meta: dict[str, dict] = {}
 
+    # One bulk bindings read grouped in memory — the per-feature
+    # bindings_for_feature loop was an O(F) query storm on every render pass.
+    # Sorted per group to match bindings_for_feature's (file, symbol_path) order
+    # so the sidecar stays byte-identical.
+    grouped: dict[str, list] = {}
+    for b in store.all_bindings():
+        grouped.setdefault(b.feature_id, []).append(b)
+    for entries in grouped.values():
+        entries.sort(key=lambda b: (b.file, b.symbol_path))
+
     for f in features:
-        bindings = store.bindings_for_feature(f.id)
+        bindings = grouped.get(f.id, [])
         by_feature[f.id] = [{"file": b.file, "symbol": b.symbol_path} for b in bindings]
         feats_meta[f.id] = {
             "title": f.title,
@@ -641,7 +651,7 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
             "write_registry failed (%s); registry left stale", exc)
 
 
-def write_tree(store: Store, codoc_dir: str | Path) -> Path:
+def write_tree(store: Store, codoc_dir: str | Path, *, sidecar: bool = True) -> Path:
     path = tree_path(codoc_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = render_tree(store)
@@ -650,8 +660,11 @@ def write_tree(store: Store, codoc_dir: str | Path) -> Path:
     # editor) that external change races its own save → "content of the file is newer".
     # The common daemon path — re-render after a clean round-trip — is byte-identical,
     # so this removes the dominant write-conflict. The sidecar is pure derived state
-    # and is always refreshed below.
+    # and is refreshed below unless the caller just wrote it itself
+    # (safe_write_tree passes sidecar=False — the compute is O(F+B+E) and was
+    # being done twice per tick).
     if not (path.exists() and path.read_text() == rendered):
         path.write_text(rendered)
-    write_sidecar(store, codoc_dir)
+    if sidecar:
+        write_sidecar(store, codoc_dir)
     return path

@@ -18,7 +18,6 @@ from typing import AsyncIterator
 
 import cocoindex as coco
 from cocoindex.connectors import lancedb, localfs
-from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 from cocoindex.resources.file import FileLike, PatternFilePathMatcher
 from cocoindex.resources.id import generate_id
 
@@ -30,6 +29,8 @@ from codoc.pipelines.indexing.schema import (
     LANCE_DB,
     LANCE_TABLE_NAME,
     CodeChunk,
+    CodeChunkLite,
+    embed_chunks_enabled,
 )
 
 _DEFAULT_LANCE_PATH = "./.codoc/lancedb"
@@ -112,17 +113,29 @@ async def _coco_lifespan(
     pathlib.Path(lance_path).parent.mkdir(parents=True, exist_ok=True)
     conn = await lancedb.connect_async(lance_path)
     builder.provide(LANCE_DB, conn)
-    builder.provide(EMBEDDER, SentenceTransformerEmbedder(EMBEDDER_MODEL))
+    if embed_chunks_enabled():
+        # Heavy import (sentence-transformers pulls torch, ~6s cold) — only when
+        # the opt-in embedding column is actually being produced.
+        from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
+
+        builder.provide(EMBEDDER, SentenceTransformerEmbedder(EMBEDDER_MODEL))
     yield
 
 
 @coco.fn
-async def _process_chunk(
-    item: tuple[str, str, str, str, int, int],
+async def _embed_chunk(
+    item: tuple[str, str, str, str, int, int, str, str],
     target: lancedb.TableTarget[CodeChunk],
 ) -> None:
-    file_str, lang, symbol_path, source, start_byte, end_byte = item
-    walk_result = tree_walk(source, get_adapter(lang))
+    """Embed + declare one chunk row (embeddings-on path).
+
+    All CPU-bound parsing already happened in ``_process_file``, so every task
+    spawned by ``coco.map`` reaches ``embed()`` almost immediately — the
+    embedder's adaptive batching then coalesces the concurrent calls into large
+    micro-batches instead of the size-1 batches an interleaved sync workload
+    produces.
+    """
+    file_str, lang, symbol_path, source, start_byte, end_byte, tokens_hash, types_hash = item
     embedding = await coco.use_context(EMBEDDER).embed(source)
     chunk_id = await generate_id((file_str, symbol_path))
     target.declare_row(
@@ -132,8 +145,8 @@ async def _process_chunk(
             symbol_path=symbol_path,
             language=lang,
             source=source,
-            tokens_hash=walk_result.tokens_hash,
-            types_hash=walk_result.types_hash,
+            tokens_hash=tokens_hash,
+            types_hash=types_hash,
             start_byte=start_byte,
             end_byte=end_byte,
             embedding=embedding,
@@ -145,7 +158,8 @@ async def _process_chunk(
 async def _process_file(
     file: FileLike,
     sourcedir: pathlib.Path,
-    target: lancedb.TableTarget[CodeChunk],
+    target: lancedb.TableTarget,
+    embed: bool,
 ) -> None:
     file_abs = pathlib.Path(file.file_path.path)
     file_str = _repo_relative(file_abs, sourcedir)
@@ -170,12 +184,25 @@ async def _process_file(
     # dropping the whole file. Keep the first chunk per symbol_path so the file
     # still indexes and the uniqueness invariant holds.
     seen: set[str] = set()
-    items = [
-        (file_str, lang, c.symbol_path, c.source, c.start_byte, c.end_byte)
-        for c in chunks
-        if not (c.symbol_path in seen or seen.add(c.symbol_path))
-    ]
-    await coco.map(_process_chunk, items, target)
+    items = []
+    for c in chunks:
+        if c.symbol_path in seen:
+            continue
+        seen.add(c.symbol_path)
+        walk_result = tree_walk(c.source, adapter)
+        items.append((file_str, lang, c.symbol_path, c.source, c.start_byte,
+                      c.end_byte, walk_result.tokens_hash, walk_result.types_hash))
+    if embed:
+        await coco.map(_embed_chunk, items, target)
+        return
+    for (f, lg, sym, src, sb, eb, th, tyh) in items:
+        chunk_id = await generate_id((f, sym))
+        target.declare_row(
+            row=CodeChunkLite(
+                id=chunk_id, file=f, symbol_path=sym, language=lg, source=src,
+                tokens_hash=th, types_hash=tyh, start_byte=sb, end_byte=eb,
+            )
+        )
 
 
 class _SymlinkAwareMatcher(PatternFilePathMatcher):
@@ -205,11 +232,12 @@ class _SymlinkAwareMatcher(PatternFilePathMatcher):
 
 @coco.fn
 async def app_main(sourcedir: pathlib.Path) -> None:
+    embed = embed_chunks_enabled()
     target = await lancedb.mount_table_target(
         LANCE_DB,
         table_name=LANCE_TABLE_NAME,
         table_schema=await lancedb.TableSchema.from_class(
-            CodeChunk, primary_key=["id"]
+            CodeChunk if embed else CodeChunkLite, primary_key=["id"]
         ),
     )
     files = localfs.walk_dir(
@@ -221,7 +249,7 @@ async def app_main(sourcedir: pathlib.Path) -> None:
             excluded_patterns=_EXCLUDED_PATTERNS + _gitignore_excludes(pathlib.Path(sourcedir)),
         ),
     )
-    await coco.mount_each(_process_file, files.items(), sourcedir, target)
+    await coco.mount_each(_process_file, files.items(), sourcedir, target, embed)
 
 
 def make_app(sourcedir: pathlib.Path, app_name: str = "CodocIndex") -> coco.App:

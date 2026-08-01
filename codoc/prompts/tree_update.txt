@@ -3,36 +3,9 @@ is a small, navigable hierarchy of *intent*: each node is a named unit of what
 the code is for, and binds to one or more code chunks (a chunk = a function,
 method, class, or module identified by `file::symbol_path`).
 
-The code just changed. Your job: return the MINIMAL set of operations that keeps
-the tree faithful to the code, WITHOUT creating duplicate or near-duplicate
-nodes.
-
-## What changed (the change set)
-
-{changes}
-
-- `added`   — chunks that appeared and are not yet bound to any feature.
-- `removed` — chunks that disappeared; `current_feature_id` is the feature they
-  were bound to. A feature listed here has just lost its last binding.
-- `modified` — chunks whose code changed but stay bound to `current_feature_id`;
-  use these only to decide whether that feature's description is now stale.
-- `edges` (optional) — call/import/contain edges from the code dependency graph
-  near the changed symbols. Use these to understand cohesion and choose
-  `parent_id` for new nodes, or to spot related existing features.
-- `impacted` (optional) — features whose code directly calls or imports the
-  changed symbols (upstream dependents). **Advisory only**: emit an `amend` for
-  an impacted feature only when the upstream change genuinely shifts its meaning.
-
-## The relevant subtree (full detail)
-
-These are the existing features near the change (same files + their parents and
-children). Prefer attaching new chunks here.
-
-{subtree}
-
-## Every feature title in the tree (for de-duplication)
-
-{all_titles}
+When the code changes, your job is to return the MINIMAL set of operations that
+keeps the tree faithful to the code, WITHOUT creating duplicate or
+near-duplicate nodes.
 
 ## Operations you may emit
 
@@ -55,10 +28,10 @@ Every op may carry a one-line `rationale`.
    changes need no node update.
 2. Strongly prefer `attach` to an existing feature over `add_node`. Only add a
    node when no feature in the subtree plausibly covers the new chunk. (When the
-   tree is empty — `subtree` and the title list are empty — group the added
+   tree is empty — the subtree and the title list are empty — group the added
    chunks into a small number of cohesive `add_node`s.)
 3. NEVER create a node whose `title` duplicates or paraphrases any title in the
-   tree (see the full title list above). If two added chunks belong together,
+   tree (see the full title list below). If two added chunks belong together,
    cover them with ONE node, not two.
 4. Choose `parent_id` from the subtree/titles so the new node sits under the most
    related parent. Keep the tree shallow and balanced (aim for 3–7 children per
@@ -89,3 +62,34 @@ Return ONLY this, inside solution tags:
   {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Picks the minimal set of features the tree-update LLM needs, using binding file-locality.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
 ]}
 </solution>
+<<<CACHE_BREAK>>>
+## Every feature title in the tree (for de-duplication)
+
+One line per feature, `- [feature_id] Title`, children indented under parents.
+
+{all_titles}
+<<<CACHE_BREAK>>>
+## The relevant subtree (full detail)
+
+These are the existing features near the change (same files + their parents and
+children). Prefer attaching new chunks here.
+
+{subtree}
+
+## What changed (the change set)
+
+{changes}
+
+- `added`   — chunks that appeared and are not yet bound to any feature.
+- `removed` — chunks that disappeared; `current_feature_id` is the feature they
+  were bound to. A feature listed here has just lost its last binding.
+- `modified` — chunks whose code changed but stay bound to `current_feature_id`;
+  use these only to decide whether that feature's description is now stale.
+- `edges` (optional) — call/import/contain edges from the code dependency graph
+  near the changed symbols. Use these to understand cohesion and choose
+  `parent_id` for new nodes, or to spot related existing features.
+- `impacted` (optional) — features whose code directly calls or imports the
+  changed symbols (upstream dependents). **Advisory only**: emit an `amend` for
+  an impacted feature only when the upstream change genuinely shifts its meaning.
+
+Now return the minimal op set for this change, inside solution tags.

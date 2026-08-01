@@ -37,16 +37,40 @@ def _need_dir() -> tuple[str | None, dict | None]:
 
 
 @mcp.tool
-def codoc_tree() -> dict:
-    """Read the live feature tree (id, title, description, parent, realized,
-    bindings) plus pending proposals. Read-only. Call this before proposing.
+def codoc_context(files: list[str] | None = None, feature_id: str | None = None,
+                  include_bindings: bool = True) -> dict:
+    """The relevant slice of the feature tree for the code you are working on —
+    the PREFERRED read before editing or proposing. Pass the repo-relative file
+    path(s) you're editing (and/or a feature_id): returns the features bound to
+    those files expanded one hop along call/import edges (with descriptions and
+    bindings), a compact indented outline of every tree title for orientation,
+    and nearby graph edges. Bounded by the edit, not the repo size — use
+    codoc_tree only when you genuinely need the whole tree."""
+    cd, err = _need_dir()
+    return err or tools.read_context(cd, files=files, feature_id=feature_id,
+                                     include_bindings=include_bindings)
+
+
+@mcp.tool
+def codoc_tree(root_id: str | None = None, depth: int = 0,
+               include_bindings: bool = False) -> dict:
+    """Read the feature tree (id, title, description, parent, realized, drift,
+    binding_count, files) plus pending proposals. Read-only. For file-scoped
+    work prefer codoc_context — it returns the relevant slice instead of
+    everything.
+
+    ``root_id`` limits to that subtree; ``depth`` (>0) caps levels;
+    ``include_bindings=True`` adds every bound symbol_path (large — request it
+    only when you need exact symbols; ``files``+``binding_count`` are always
+    present).
 
     Each feature also carries ``drift`` — the last code-side pass's trust signal
     (``"questioned"`` = bound code changed but the prose wasn't amended;
     ``"binding-lost"`` = lost its last binding; ``null`` = followed). Amend or
     re-attach questioned features when reconciling."""
     cd, err = _need_dir()
-    return err or tools.read_tree(cd)
+    return err or tools.read_tree(cd, root_id=root_id, depth=depth,
+                                  include_bindings=include_bindings)
 
 
 @mcp.tool

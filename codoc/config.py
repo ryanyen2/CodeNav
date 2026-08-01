@@ -91,6 +91,38 @@ _DEFAULT_MODELS = {
     "claude": "sonnet",
 }
 
+# The FAST tier for structured-extraction calls (the per-save tree update, the
+# per-file bootstrap pass): they output small JSON op lists against explicit
+# rules — a fast model does this well at a fraction of the cost, and these are
+# the two highest-volume call sites in the system. The organization pass and
+# anything judgment-heavy stay on the standard tier. ``CODOC_MODEL`` (explicit
+# user choice) overrides both tiers; ``CODOC_MODEL_FAST`` overrides just this.
+_FAST_MODELS = {
+    "openai": "gpt-5.4-mini",
+    "anthropic": "claude-haiku-4-5",
+    "claude": "haiku",
+}
+
+
+def fast_llm_config(base: LLMConfig | None = None) -> LLMConfig:
+    """The config for high-volume extraction calls (tree update, bootstrap file).
+
+    Resolution: ``CODOC_MODEL_FAST`` > explicit ``CODOC_MODEL`` (a user who
+    pinned a model gets it everywhere) > the provider's fast default.
+    """
+    cfg = base or get_llm_config()
+    fast = os.environ.get("CODOC_MODEL_FAST")
+    if fast:
+        if not _model_fits_provider(cfg.provider, fast):
+            return cfg
+        return cfg.model_copy(update={"model": fast})
+    if os.environ.get("CODOC_MODEL"):
+        return cfg  # explicit global pin wins
+    fast_default = _FAST_MODELS.get(cfg.provider)
+    if fast_default is None:
+        return cfg
+    return cfg.model_copy(update={"model": fast_default})
+
 
 def _is_claude_family_model(model: str) -> bool:
     """Whether a model name belongs to the Claude family (so it can run on the
@@ -160,23 +192,39 @@ def get_llm_config() -> LLMConfig:
     )
 
 
-def complete(prompt: str, config: LLMConfig | None = None) -> str:
-    """Call the configured LLM and return the raw response string."""
+def complete(
+    prompt: str,
+    config: LLMConfig | None = None,
+    *,
+    prefix_parts: list[str] | None = None,
+) -> str:
+    """Call the configured LLM and return the raw response string.
+
+    ``prefix_parts`` are STABLE prompt segments (frozen instructions, the
+    feature-tree titles) that precede the volatile ``prompt``. Callers order
+    them most-stable-first; the provider layer exploits that for prompt
+    caching — Anthropic gets them as system blocks with ``cache_control``
+    breakpoints (cache reads bill ~0.1×), OpenAI relies on automatic
+    prefix caching, and the other providers just concatenate. Semantics are
+    identical everywhere: the model sees prefix_parts + prompt in order.
+    """
     if config is None:
         config = get_llm_config()
+    parts = [p for p in (prefix_parts or []) if p]
 
     log_prompts = os.environ.get("CODOC_LOG_PROMPTS", "0") == "1"
     if log_prompts:
-        print(f"[CODOC] PROMPT:\n{prompt}", file=sys.stderr)
+        joined = "\n\n".join(parts + [prompt])
+        print(f"[CODOC] PROMPT:\n{joined}", file=sys.stderr)
 
     if config.provider == "openai":
-        response_text = _complete_openai(prompt, config)
+        response_text = _complete_openai(prompt, config, parts)
     elif config.provider == "ollama":
-        response_text = _complete_ollama(prompt, config)
+        response_text = _complete_ollama(prompt, config, parts)
     elif config.provider == "anthropic":
-        response_text = _complete_anthropic(prompt, config)
+        response_text = _complete_anthropic(prompt, config, parts)
     elif config.provider in ("claude", "claude-code"):
-        response_text = _complete_claude(prompt, config)
+        response_text = _complete_claude(prompt, config, parts)
     else:
         raise ValueError(f"Unknown LLM provider: {config.provider!r}")
 
@@ -186,19 +234,47 @@ def complete(prompt: str, config: LLMConfig | None = None) -> str:
     return response_text
 
 
-def _complete_openai(prompt: str, config: LLMConfig) -> str:
+def _joined(parts: list[str], prompt: str) -> str:
+    return "\n\n".join(parts + [prompt]) if parts else prompt
+
+
+# One connect/read timeout + bounded retries on every network path: an unset
+# timeout let a wedged connection hang a loop pass (and the daemon behind it)
+# indefinitely.
+_LLM_TIMEOUT_S = float(os.environ.get("CODOC_LLM_TIMEOUT", "300"))
+_LLM_RETRIES = 2
+
+
+def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     try:
         import openai
     except ImportError as exc:
         raise ImportError("openai package is required for provider='openai'. Run: pip install openai") from exc
 
-    kwargs: dict = {}
+    kwargs: dict = {"timeout": _LLM_TIMEOUT_S, "max_retries": _LLM_RETRIES}
     if config.api_key is not None:
         kwargs["api_key"] = config.api_key
     if config.base_url is not None:
         kwargs["base_url"] = config.base_url
 
     client = openai.OpenAI(**kwargs)
+    # A stable prefix + volatile tail in ONE user message: OpenAI's automatic
+    # prefix caching (≥1024 tokens) needs byte-identical leading content, which
+    # is exactly what prefix_parts provide. prompt_cache_key pins requests from
+    # this workspace to the same cache shard.
+    extra: dict = {}
+    # Only against the stock OpenAI endpoint: strictly-validating compatible
+    # servers (some Azure API versions, local proxies behind CODOC_BASE_URL)
+    # reject unknown body fields with a 400 on every call.
+    if config.base_url is None:
+        try:
+            import hashlib
+
+            extra["prompt_cache_key"] = "codoc-" + hashlib.sha1(
+                os.getcwd().encode(), usedforsecurity=False
+            ).hexdigest()[:16]
+        except Exception:  # noqa: BLE001 — cache hint only
+            pass
     # Reasoning models (GPT-5 family) spend completion budget on hidden reasoning;
     # if the visible answer gets truncated (finish_reason == "length"), retry once
     # with a larger budget so we don't return half a JSON object.
@@ -206,9 +282,10 @@ def _complete_openai(prompt: str, config: LLMConfig) -> str:
     for attempt in range(2):
         response = client.chat.completions.create(
             model=config.model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": _joined(parts, prompt)}],
             temperature=config.temperature,
             max_completion_tokens=budget,
+            extra_body=extra or None,
         )
         choice = response.choices[0]
         content = choice.message.content or ""
@@ -218,7 +295,7 @@ def _complete_openai(prompt: str, config: LLMConfig) -> str:
     return content
 
 
-def _complete_ollama(prompt: str, config: LLMConfig) -> str:
+def _complete_ollama(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     try:
         import ollama
     except ImportError as exc:
@@ -226,18 +303,23 @@ def _complete_ollama(prompt: str, config: LLMConfig) -> str:
 
     response = ollama.chat(
         model=config.model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": _joined(parts, prompt)}],
         options={"temperature": config.temperature, "num_predict": config.max_tokens},
     )
     return response["message"]["content"]
 
 
-def _complete_anthropic(prompt: str, config: LLMConfig) -> str:
+def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     """Complete via the Anthropic API using an explicit ``ANTHROPIC_API_KEY``.
 
     This is the *managed-API* path (the user pasted an Anthropic key in setup), as
     opposed to the keyless ``claude`` provider that reuses a Claude Code login. The
     model must be a concrete API id (e.g. ``claude-sonnet-4-6``), not a CLI alias.
+
+    Stable prefix parts become system blocks, each with a ``cache_control``
+    breakpoint (max 4 allowed; we use ≤2): consecutive loop passes re-send the
+    same frozen instructions + titles and pay ~0.1× for them on a hit. Below the
+    model's minimum cacheable length the marker is silently ignored — harmless.
     """
     try:
         import anthropic
@@ -246,19 +328,25 @@ def _complete_anthropic(prompt: str, config: LLMConfig) -> str:
             "anthropic package is required for provider='anthropic'. Run: pip install anthropic"
         ) from exc
 
-    kwargs: dict = {}
+    kwargs: dict = {"timeout": _LLM_TIMEOUT_S, "max_retries": _LLM_RETRIES}
     if config.api_key is not None:
         kwargs["api_key"] = config.api_key
     if config.base_url is not None:
         kwargs["base_url"] = config.base_url
 
     client = anthropic.Anthropic(**kwargs)
-    message = client.messages.create(
-        model=config.model,
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    create_kwargs: dict = {
+        "model": config.model,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if parts:
+        create_kwargs["system"] = [
+            {"type": "text", "text": part, "cache_control": {"type": "ephemeral"}}
+            for part in parts[:2]
+        ] + [{"type": "text", "text": part} for part in parts[2:]]
+    message = client.messages.create(**create_kwargs)
     # Concatenate the text blocks of the response (tool/thinking blocks, if any,
     # carry no .text and are skipped) — the same raw-text contract as the others.
     return "".join(
@@ -266,19 +354,38 @@ def _complete_anthropic(prompt: str, config: LLMConfig) -> str:
     )
 
 
-def _complete_claude(prompt: str, config: LLMConfig) -> str:
+# The minimal identity every keyless completion runs under, REPLACING Claude
+# Code's default agent system prompt. Measured on this machine: the default
+# session context was ~37K tokens ingested per call (system prompt + tool
+# schemas + user config), none of it read back — $0.075/call on Haiku. With the
+# override + an empty toolset a completion is ~1-2K tokens ($0.0016) and the
+# stable prefix (this preamble + prefix_parts) gets cross-spawn prompt-cache
+# hits (verified: second identical call billed cache_creation=0).
+_CLAUDE_MIN_SYSTEM = (
+    "You are codoc's structured code-analysis engine. Follow the user message "
+    "exactly and return output only in the format it requests."
+)
+
+
+def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     """Complete via the user's existing Claude credentials by shelling out to the
     ``claude`` CLI in headless JSON mode — no separate API key.
 
     Why the CLI and not the ``anthropic`` SDK: the subscription OAuth token Claude
     Code stores is *not* a general API key, so only the ``claude`` binary can reuse
-    that login. Three guards make the reuse correct and cheap:
+    that login. Guards that make the reuse correct and cheap:
 
-    * **never ``--bare``** — bare mode skips the OAuth/keychain read, forcing a key.
+    * **never ``--bare``** — bare mode skips the OAuth/keychain read, forcing a key
+      (re-verified 2026-08: still "Not logged in" under --bare).
     * **drop ``ANTHROPIC_API_KEY``** from the child env — if present it silently
       overrides the subscription and bills the wrong account.
     * **neutral cwd** — run from a temp dir so codoc's *own* repo hooks / MCP /
       CLAUDE.md don't load (heavy, and risks the reflection re-triggering codoc).
+    * **minimal context** — ``--system-prompt-file`` replaces the default agent
+      system prompt with a small codoc preamble + the caller's stable
+      prefix_parts, and ``--disallowedTools "*"`` drops every tool schema. The
+      stable prefix lands in the system block, so consecutive calls (the loop's
+      cadence) hit Claude Code's automatic prompt cache across spawns.
 
     Returns the model's text (the JSON envelope's ``result``); codoc's
     ``parse_solution`` extracts the structured payload exactly as for OpenAI, so
@@ -302,23 +409,48 @@ def _complete_claude(prompt: str, config: LLMConfig) -> str:
     # .env) that the CLI parser could re-lex into options.
     if config.model and config.model.startswith("-"):
         raise ValueError(f"Refusing a flag-shaped CODOC_MODEL: {config.model!r}")
+
+    # The system prompt carries repo-derived content (feature titles), so it goes
+    # through a file, never argv — argv is visible in `ps` and a crafted value
+    # could be re-lexed into CLI options.
+    system_text = "\n\n".join([_CLAUDE_MIN_SYSTEM] + parts)
     cmd = [
         claude, "-p",
         "--output-format", "json",
         "--max-turns", "1",
-        "--allowedTools", "",  # pure completion — no tools, no agent loop
+        "--allowedTools", "",     # pure completion — no tools, no agent loop
+        "--disallowedTools", "*",  # and no tool schemas in the prompt at all
     ]
     if config.model:
         cmd += ["--model", config.model]
 
     # The prompt is built from repo/tree.codoc content (attacker-influenceable in a
     # shared repo). Deliver it on STDIN, never argv: a flag-shaped prompt can't be
-    # re-lexed into CLI options (so `--allowedTools ""` / `--max-turns 1` hold), and
-    # the prompt (source snippets) never appears in `ps`/process listings.
-    proc = subprocess.run(
-        cmd, input=prompt, capture_output=True, text=True,
-        cwd=tempfile.gettempdir(), env=env,
+    # re-lexed into CLI options (so the tool/turn caps hold), and the prompt
+    # (source snippets) never appears in `ps`/process listings.
+    sf = tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", prefix="codoc-sys-", delete=False
     )
+    system_file = sf.name
+    try:
+        # Everything from first write to subprocess exit is covered by the
+        # unlink below — a failed write (disk full) must not leak the file.
+        with sf:
+            sf.write(system_text)
+        proc = subprocess.run(
+            cmd + ["--system-prompt-file", system_file],
+            input=prompt, capture_output=True, text=True,
+            cwd=tempfile.gettempdir(), env=env, timeout=_LLM_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"`claude -p` timed out after {_LLM_TIMEOUT_S:.0f}s"
+        ) from exc
+    finally:
+        try:
+            os.unlink(system_file)
+        except OSError:
+            pass
     if proc.returncode != 0:
         raise RuntimeError(
             f"`claude -p` failed (exit {proc.returncode}): "

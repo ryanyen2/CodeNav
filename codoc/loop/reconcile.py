@@ -93,7 +93,10 @@ def safe_write_tree(store: Store, codoc_dir: str) -> bool:
             logging.getLogger(__name__).info(
                 "codoc: tree.codoc diverged from the store (manual edit or git op) — "
                 "re-rendering the read-only export from the store")
-        write_tree(store, codoc_dir)
+        # sidecar=False: this pass already wrote the sidecar above from the same
+        # (read-only) store state — recomputing it inside write_tree doubled the
+        # heaviest per-tick render work for byte-identical output.
+        write_tree(store, codoc_dir, sidecar=False)
         # KTD9: tree.doc.json is a daemon-written derived view of the store, exactly like
         # tree.codoc — write BOTH here so a freshly-indexed / in-sync workspace that never
         # had a Loop-B-mutating edit still has a doc projection. Loop B only writes

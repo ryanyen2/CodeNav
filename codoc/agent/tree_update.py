@@ -9,8 +9,14 @@ from __future__ import annotations
 
 import json
 
-from codoc.agent.base import format_prompt, load_prompt, run_agent
-from codoc.config import LLMConfig
+from codoc.agent.base import (
+    format_prompt,
+    load_prompt,
+    run_agent,
+    split_prompt,
+    titles_outline,
+)
+from codoc.config import LLMConfig, fast_llm_config
 from codoc.model.event import NodeOp, NodeOpKind
 
 
@@ -35,16 +41,27 @@ def propose_tree_update(
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
 ) -> list[NodeOp]:
-    """Run the single tree-update LLM call and return its ops (possibly empty)."""
-    template = load_prompt("tree_update")
-    prompt = format_prompt(
-        template,
+    """Run the single tree-update LLM call and return its ops (possibly empty).
+
+    Prompt layout is cache-aligned (see the template's CACHE_BREAK markers):
+    frozen instructions first, the whole-tree title outline second (byte-stable
+    between tree mutations), and the per-call change set last — so consecutive
+    passes pay cache-read prices for everything but the change itself. This is
+    a structured-extraction call, so it defaults to the fast model tier.
+    """
+    # Split the raw template FIRST, then substitute per segment — substituted
+    # values are repo-derived and may contain a literal marker.
+    prefix_tpls, volatile_tpl = split_prompt(load_prompt("tree_update"))
+    kwargs = dict(
         repo_name=repo_name,
-        changes=json.dumps(changes, indent=2),
-        subtree=json.dumps(subtree, indent=2),
-        all_titles=json.dumps(all_titles, indent=2),
+        changes=json.dumps(changes, indent=2, sort_keys=True),
+        subtree=json.dumps(subtree, indent=2, sort_keys=True),
+        all_titles=titles_outline(all_titles),
     )
-    raw = run_agent(prompt, config)
+    prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
+    volatile = format_prompt(volatile_tpl, **kwargs)
+    raw = run_agent(volatile, config or fast_llm_config(),
+                    prefix_parts=prefix_parts)
     ops_raw = raw.get("ops", []) if isinstance(raw, dict) else raw
     # Per-op tolerance (dead-letter): one malformed op (a bad/absent kind, a missing key,
     # a pydantic validation failure) must NOT sink the whole response. Before this, a

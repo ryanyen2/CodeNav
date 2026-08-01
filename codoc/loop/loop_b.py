@@ -279,6 +279,13 @@ def build_block_directive(feature_id: str, kind: str, intent_text: str, store: S
             f"  Apply the intended change to this feature's code.")
 
 
+# Above this many bindings the ``Bound code:`` line stops enumerating symbols
+# and summarizes per file — a many-bound feature was putting KBs of qualified
+# symbol paths into every directive, and the implementing agent reads the files
+# anyway (the ``Edit only:`` scope is what actually bounds it).
+_BOUND_CODE_MAX_SYMBOLS = 12
+
+
 def _bound_code(feature_id: str | None, store: Store) -> tuple[str, list[str]]:
     """One bindings fetch → (joined symbol paths, distinct repo-relative files).
 
@@ -288,6 +295,12 @@ def _bound_code(feature_id: str | None, store: Store) -> tuple[str, list[str]]:
         return "", []
     binds = store.bindings_for_feature(feature_id)
     files = list(dict.fromkeys(b.file for b in binds))
+    if len(binds) > _BOUND_CODE_MAX_SYMBOLS:
+        per_file: dict[str, int] = {}
+        for b in binds:
+            per_file[b.file] = per_file.get(b.file, 0) + 1
+        summary = ", ".join(f"{f} ({n} symbols)" for f, n in per_file.items())
+        return f"{len(binds)} bound symbols across {summary}", files
     return ", ".join(b.symbol_path for b in binds), files
 
 

@@ -21,9 +21,15 @@ hand or shell out to `codoc propose`; use the tools.
 
 ## Read before you write
 
-- `codoc_tree` — the live tree: feature ids, titles, descriptions, parents,
-  `realized` flag, and bound symbols. Read this to find the right parent / an
-  existing feature to attach to, and to avoid creating duplicates.
+- `codoc_context(files=[…])` — **the preferred read**: pass the repo-relative
+  file(s) you are working on (and/or a `feature_id`) and get the relevant slice
+  of the tree — the features bound to those files with descriptions and bound
+  symbols, one hop of related features along call/import edges, plus a compact
+  outline of every title for orientation and duplicate-avoidance. Bounded by
+  your edit, not the repo.
+- `codoc_tree` — the whole tree (titles, descriptions, `binding_count`, files;
+  pass `include_bindings=true` for exact symbols, `root_id`/`depth` to scope).
+  Use it only for genuinely tree-wide work (restructuring, auditing).
 - `codoc_status` — counts + pipeline state.
 
 ## Reflect your code changes (the code-first loop)
@@ -37,7 +43,8 @@ After you finish a code change, reflect it in ONE call:
 
 Guidance:
 - **Strongly prefer `attach`** to an existing feature over `add_node`. Only add a
-  node when no existing feature covers the new code (check `codoc_tree` first).
+  node when no existing feature covers the new code (check `codoc_context` for
+  the files you touched first).
 - Group related new chunks under ONE `add_node`, not one node per function.
 - `amend` a feature's description when you change what it does — including when
   you **add new capability** to it. If you add table/visualization helpers to a
@@ -89,4 +96,5 @@ For a single change you can also call the focused tools directly:
 - ❌ Don't hand-edit `.codoc/tree.codoc` or any `⟨…⟩` marker.
 - ❌ Don't edit code during the planning step of `/codoc:plan`.
 - ❌ Don't create a node whose title duplicates an existing one — attach instead.
-- ✅ Read `codoc_tree` first; reflect via the MCP tools; prefer attach over add.
+- ✅ Read `codoc_context` (scoped to your files) first; reflect via the MCP
+  tools; prefer attach over add.

@@ -195,8 +195,8 @@ def bootstrap_hier_from_chunks(
 
     files = sorted(by_file)
     total = len(files)
-    # Bootstrap makes ~1 sequential LLM call per file. On a big repo that is slow (and,
-    # on a paid key, costly) — warn, and honour an opt-in hard cap so a user can bound it.
+    # Bootstrap makes ~1 LLM call per file (run in concurrent waves below). On a big
+    # repo that still costs — warn, and honour an opt-in hard cap so a user can bound it.
     cap_env = _os.environ.get("CODOC_BOOTSTRAP_MAX_FILES", "").strip()
     max_files = int(cap_env) if cap_env.isdigit() and int(cap_env) > 0 else 0
     if max_files and total > max_files:
@@ -216,24 +216,72 @@ def bootstrap_hier_from_chunks(
     # minted, so later files still see them as dedup context without an
     # O(files × features) re-scan.
     existing_titles = [f.title for f in store.list_features()]
-    for idx, file in enumerate(files, 1):
-        if idx == 1 or idx == total or idx % step == 0:
-            say(f"  · [{idx}/{total}] {file}")
-        file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
-        chunks = [
-            {"symbol_path": r.symbol_path, "source": (r.source or "")[:_SOURCE_CAP]}
-            for r in file_rows
-        ]
-        edges = _file_edges(file_rows, store)
-        fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
-        ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
 
-        ops = propose_file(file, chunks, edges, existing_titles, repo_name=repo_name, config=config)
-        ops = _ensure_file_coverage(ops, file_rows, file)
-        _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
-        existing_titles.extend(
-            op.title for op in ops if op.kind is NodeOpKind.ADD_NODE and op.title)
-        calls += 1
+    # The per-file LLM calls run in WAVES of `concurrency`: within a wave every
+    # call shares the same titles snapshot (identical prompt prefix → prompt-
+    # cache hits across the wave) and runs concurrently — the calls are pure
+    # network/LLM work; all store reads happen before dispatch and all store
+    # writes after the wave, on this thread, in deterministic file order. The
+    # titles list extends between waves, so cross-wave dedup context is kept;
+    # intra-wave near-duplicates are absorbed by the org pass + the
+    # (title,parent) identity guard, the same way concurrent Loop-A passes are.
+    conc_env = _os.environ.get("CODOC_BOOTSTRAP_CONCURRENCY", "").strip()
+    concurrency = int(conc_env) if conc_env.isdigit() and int(conc_env) > 0 else 8
+    executor = None
+    if concurrency > 1 and total > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        executor = ThreadPoolExecutor(max_workers=concurrency,
+                                      thread_name_prefix="codoc-bootstrap")
+    try:
+        for wave_start in range(0, total, max(concurrency, 1)):
+            wave = files[wave_start:wave_start + max(concurrency, 1)]
+            titles_snapshot = list(existing_titles)
+            prepared = []
+            for file in wave:
+                file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
+                chunks = [
+                    {"symbol_path": r.symbol_path, "source": (r.source or "")[:_SOURCE_CAP]}
+                    for r in file_rows
+                ]
+                edges = _file_edges(file_rows, store)
+                prepared.append((file, file_rows, chunks, edges))
+
+            def _call(item):
+                file, _rows, chunks, edges = item
+                return propose_file(file, chunks, edges, titles_snapshot,
+                                    repo_name=repo_name, config=config)
+
+            if executor is not None and len(wave) > 1:
+                try:
+                    results = list(executor.map(_call, prepared))
+                except BaseException:
+                    # One failed call aborts the bootstrap (the caller's
+                    # transaction rolls back). In-flight sibling calls can't be
+                    # killed — say why the exit isn't instant instead of hanging
+                    # silently in the interpreter's thread join for up to
+                    # CODOC_LLM_TIMEOUT.
+                    say("  ✗ a bootstrap LLM call failed — waiting for the "
+                        "wave's in-flight calls to finish before rolling back…")
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    raise
+            else:
+                results = [_call(item) for item in prepared]
+
+            for offset, ((file, file_rows, _c, _e), ops) in enumerate(zip(prepared, results)):
+                idx = wave_start + offset + 1
+                if idx == 1 or idx == total or idx % step == 0:
+                    say(f"  · [{idx}/{total}] {file}")
+                fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
+                ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
+                ops = _ensure_file_coverage(ops, file_rows, file)
+                _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
+                existing_titles.extend(
+                    op.title for op in ops if op.kind is NodeOpKind.ADD_NODE and op.title)
+                calls += 1
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     top_level = store.children(None)
     if organize and 1 < len(top_level) <= _ORG_FEATURE_CAP:

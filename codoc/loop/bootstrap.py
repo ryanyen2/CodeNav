@@ -51,7 +51,15 @@ def run_bootstrap(
     say = printer or (lambda *_a, **_k: None)
 
     if do_index:
-        update_index(root_dir, codoc_dir)
+        # Under the shared loop lock: update_index can WIPE + rebuild the LanceDB
+        # index (embed-flag reconcile). Unlocked, that rmtree could land between a
+        # concurrent daemon's own update_index and its read — an empty read that
+        # mass-detaches every binding. Every other update_index caller is already
+        # lock-covered; this was the one outside it.
+        from codoc.loop.locks import loop_lock
+
+        with loop_lock(codoc_dir):
+            update_index(root_dir, codoc_dir)
     # Bootstrap reads only symbol_path/source/hashes — never the embedding vectors —
     # so materializing the whole embedding column here is pure memory pressure on a
     # large repo (hundreds of MB of 384-float rows for nothing).
