@@ -908,6 +908,50 @@ def _scoped_bindings(store: Store, file_scope: set[str] | None) -> list:
             else store.all_bindings())
 
 
+def _materialize_divergent_rows(
+    codoc_dir: str,
+    rows_light,
+    bindings: list,
+    file_scope: set[str] | None,
+    *,
+    full: bool,
+) -> list:
+    """Return the index rows with SOURCE filled in only where it's needed.
+
+    An in-sync reconcile pass reads the light identity projection (no source)
+    and never materializes a chunk body. Source is fetched for the files that
+    actually diverged — a chunk that was added, whose fingerprint changed, or
+    whose sibling symbol was REMOVED (a removed-only file still lands in the
+    graph scope, and re-extracting its surviving rows from ``source=''`` would
+    silently wipe the file's call/import edges — P0 from the 2026-08-01 review).
+    ``full`` sources every file (a never-built graph needs one full extraction).
+    """
+    if full:
+        candidates = {r.file for r in rows_light}
+    else:
+        scoped = (rows_light if file_scope is None
+                  else [r for r in rows_light if r.file in file_scope])
+        scoped_keys = {(r.file, r.symbol_path) for r in scoped}
+        by_key = {(b.file, b.symbol_path): b for b in bindings}
+        candidates = set()
+        for r in scoped:  # added or fingerprint-changed chunks
+            b = by_key.get((r.file, r.symbol_path))
+            if b is None or (b.fingerprint and b.fingerprint != r.tokens_hash):
+                candidates.add(r.file)
+        candidates.update(  # removed-symbol files (binding present, chunk gone)
+            b.file for b in bindings if (b.file, b.symbol_path) not in scoped_keys)
+
+    if not candidates:
+        return rows_light
+    from codoc.pipelines.indexing.reader import read_all_chunks
+
+    sourced = {
+        (r.file, r.symbol_path): r
+        for r in read_all_chunks(codoc_dir, files=candidates, with_embeddings=False)
+    }
+    return [sourced.get((r.file, r.symbol_path), r) for r in rows_light]
+
+
 def _state_changeset(rows, store: Store, file_scope: set[str] | None,
                      bindings: list | None = None) -> ChangeSet:
     """Build a change set by comparing the index to the store's BINDINGS, not to a
@@ -1056,37 +1100,11 @@ def reconcile_drift(
                     "codoc: index read returned 0 chunks but %d bindings exist — "
                     "skipping this reconcile pass (torn/absent index)", len(bindings))
                 return LoopAResult()
-            by_key = {(b.file, b.symbol_path): b for b in bindings}
-            scoped_light = (rows_light if file_scope is None
-                            else [r for r in rows_light if r.file in file_scope])
-            scoped_keys = {(r.file, r.symbol_path) for r in scoped_light}
-            candidates = set()
-            for r in scoped_light:
-                b = by_key.get((r.file, r.symbol_path))
-                if b is None or (b.fingerprint and b.fingerprint != r.tokens_hash):
-                    candidates.add(r.file)
-            # Files whose divergence is a REMOVED symbol (binding present, chunk gone)
-            # must be sourced too: they land in graph_scope below, and re-extracting
-            # their surviving rows from source='' would silently wipe the file's
-            # call/import edges (P0 from the 2026-08-01 review).
-            for b in bindings:
-                if (b.file, b.symbol_path) not in scoped_keys:
-                    candidates.add(b.file)
             # A never-built graph (rebuilt codoc.db beside an intact index) needs a
-            # one-time full extraction — which parses source — so pull every file
-            # into the sourced read for this pass.
+            # one-time full extraction, which parses source — so source every file.
             graph_full_build = bool(rows_light) and not store.has_edges()
-            if graph_full_build:
-                candidates = {r.file for r in rows_light}
-            if candidates:
-                sourced = {
-                    (r.file, r.symbol_path): r
-                    for r in read_all_chunks(codoc_dir, files=candidates,
-                                             with_embeddings=False)
-                }
-                rows = [sourced.get((r.file, r.symbol_path), r) for r in rows_light]
-            else:
-                rows = rows_light
+            rows = _materialize_divergent_rows(
+                codoc_dir, rows_light, bindings, file_scope, full=graph_full_build)
             cs = _state_changeset(rows, store, file_scope, bindings)
             # Only pay the embedder model load when there are additions to dedup
             # (built after the changeset, so a pure-drift pass skips it entirely).

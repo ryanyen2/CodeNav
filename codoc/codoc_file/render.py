@@ -530,15 +530,10 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     by_file: dict[str, list[dict]] = {}
     feats_meta: dict[str, dict] = {}
 
-    # One bulk bindings read grouped in memory — the per-feature
+    # One bulk bindings read grouped by feature — the per-feature
     # bindings_for_feature loop was an O(F) query storm on every render pass.
-    # Sorted per group to match bindings_for_feature's (file, symbol_path) order
-    # so the sidecar stays byte-identical.
-    grouped: dict[str, list] = {}
-    for b in store.all_bindings():
-        grouped.setdefault(b.feature_id, []).append(b)
-    for entries in grouped.values():
-        entries.sort(key=lambda b: (b.file, b.symbol_path))
+    # Grouped/sorted to match bindings_for_feature so the sidecar is byte-identical.
+    grouped = store.bindings_by_feature()
 
     for f in features:
         bindings = grouped.get(f.id, [])

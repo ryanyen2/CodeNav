@@ -19,7 +19,7 @@ integration surfaces into your repo:
 
 | Surface | Installed to | Role |
 |---|---|---|
-| **MCP server** (`codoc`) | `.mcp.json` → `codoc-mcp` (FastMCP, stdio) | The agent's reflection API: `codoc_tree`, `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`. The agent carries real intent straight into the store instead of leaving it to a blind index-diff. |
+| **MCP server** (`codoc`) | `.mcp.json` → `codoc-mcp` (FastMCP, stdio) | The agent's reflection API: `codoc_context` (the relevant tree slice for the files you're editing — the primary read), `codoc_tree` (whole tree, scopeable), `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`. The agent carries real intent straight into the store instead of leaving it to a blind index-diff. |
 | **Slash commands** | `.claude/commands/codoc/` | `/codoc:plan <task>` — propose plan nodes *before* writing code; `/codoc:sync` — reconcile whichever side is behind (implements queued directives, drains tree edits, or reflects code drift). |
 | **Skill** `codoc-intent` | `.claude/skills/codoc-intent/SKILL.md` | Auto-loaded every session; teaches Claude the MCP-first propose-then-implement workflow for this repo. |
 | **Hooks** | `.claude/settings.json` | `SessionStart` · `Stop` · `PreToolUse` · `PostToolUse` · `UserPromptSubmit` — maintain `.codoc/activity.json` (the live agent touch-log → VS Code gutter decorations), run recovery reflection when the session stops, and nudge `/codoc:sync` when work is queued. Fire-and-forget; they never block the agent. |

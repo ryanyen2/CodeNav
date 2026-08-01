@@ -142,14 +142,7 @@ def read_tree(
         if root_id is None and depth <= 0:
             selected.extend(f for f in all_feats if f.id not in seen)
 
-        # One bulk bindings read grouped by feature (the previous shape issued
-        # one query per feature); sorted to match bindings_for_feature order.
-        grouped: dict[str, list] = {}
-        for b in store.all_bindings():
-            grouped.setdefault(b.feature_id, []).append(b)
-        for entries in grouped.values():
-            entries.sort(key=lambda b: (b.file, b.symbol_path))
-
+        grouped = store.bindings_by_feature()  # one bulk read, not per-feature
         feats = []
         for f in selected:
             binds = grouped.get(f.id, [])

@@ -437,6 +437,19 @@ class Store:
         rows = self.conn.execute("SELECT * FROM bindings").fetchall()
         return [_row_to_binding(r) for r in rows]
 
+    def bindings_by_feature(self) -> dict[str, list[Binding]]:
+        """All bindings grouped by ``feature_id``, each group sorted by
+        ``(file, symbol_path)`` to match :meth:`bindings_for_feature`.
+
+        One bulk read for the whole-tree render / read paths, which would
+        otherwise issue a ``bindings_for_feature`` query per feature."""
+        grouped: dict[str, list[Binding]] = {}
+        for b in self.all_bindings():
+            grouped.setdefault(b.feature_id, []).append(b)
+        for group in grouped.values():
+            group.sort(key=lambda b: (b.file, b.symbol_path))
+        return grouped
+
     def bound_feature_ids(self) -> set[str]:
         """Feature ids that own at least one binding — one indexed query, so the
         loops can test "is unbound" over many features without a per-feature

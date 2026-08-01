@@ -226,6 +226,7 @@ def bootstrap_hier_from_chunks(
     # intra-wave near-duplicates are absorbed by the org pass + the
     # (title,parent) identity guard, the same way concurrent Loop-A passes are.
     conc_env = _os.environ.get("CODOC_BOOTSTRAP_CONCURRENCY", "").strip()
+    # Always ≥ 1: a non-positive / non-numeric value falls back to 8.
     concurrency = int(conc_env) if conc_env.isdigit() and int(conc_env) > 0 else 8
     executor = None
     if concurrency > 1 and total > 1:
@@ -234,8 +235,8 @@ def bootstrap_hier_from_chunks(
         executor = ThreadPoolExecutor(max_workers=concurrency,
                                       thread_name_prefix="codoc-bootstrap")
     try:
-        for wave_start in range(0, total, max(concurrency, 1)):
-            wave = files[wave_start:wave_start + max(concurrency, 1)]
+        for wave_start in range(0, total, concurrency):
+            wave = files[wave_start:wave_start + concurrency]
             titles_snapshot = list(existing_titles)
             prepared = []
             for file in wave:

@@ -292,6 +292,17 @@ Postgres-backed anything.
   concurrency env); zero-edge-repo `graph_full_build` refire (pathological —
   any class/contain edge prevents it).
 
+## Post-review cleanup (code-simplifier pass)
+
+Behavior-preserving refinements after the review fixes (suites still green):
+- `reconcile_drift`'s inline light-read → candidates → sourced-merge block
+  extracted to `_materialize_divergent_rows(...)`.
+- the "group bindings by feature, sorted" block (duplicated in
+  `render.write_sidecar` and `mcp/tools.read_tree`) is now one
+  `Store.bindings_by_feature()`.
+- dropped a redundant `max(concurrency, 1)` in the bootstrap waves
+  (`concurrency` is already ≥1).
+
 ## Residuals (deliberately deferred)
 
 - Embeddings-ON path still ~35 chunks/s (opt-in only; route through a
