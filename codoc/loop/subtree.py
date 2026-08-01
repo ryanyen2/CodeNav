@@ -31,18 +31,37 @@ def select_relevant_subtree(
     ``features`` lets the caller pass the pass's already-loaded feature list so
     the every-node-title context doesn't cost a second full table read.
     """
-    from codoc.graph.query import ego_graph
-
-    touched = cs.touched_files()
-
-    # --- seeds ---------------------------------------------------------------
-    seed_bindings = store.bindings_in_files(touched)
-    seed_features: set[str] = {b.feature_id for b in seed_bindings}
-    seed_symbols: set[str] = {b.symbol_path for b in seed_bindings}
-
     changed_symbols: set[str] = {
         c.symbol_path for c in (cs.added + cs.modified + cs.removed)
     }
+    return select_context(
+        store, cs.touched_files(), changed_symbols, hops=hops, features=features
+    )
+
+
+def select_context(
+    store: Store,
+    files: set[str],
+    changed_symbols: set[str] | None = None,
+    *,
+    hops: int = 1,
+    features=None,
+) -> tuple[list[dict], list[dict], dict]:
+    """Ego-graph relevance selection from a set of touched files (+ symbols).
+
+    The shared core behind Loop A's LLM context and the agent-facing
+    ``codoc_context`` MCP tool: seeds = features bound in ``files`` (+ any
+    ``changed_symbols``), expanded ``hops`` along internal graph edges, plus
+    1-hop parent/child structural context.
+    """
+    from codoc.graph.query import ego_graph
+
+    changed_symbols = changed_symbols or set()
+
+    # --- seeds ---------------------------------------------------------------
+    seed_bindings = store.bindings_in_files(files)
+    seed_features: set[str] = {b.feature_id for b in seed_bindings}
+    seed_symbols: set[str] = {b.symbol_path for b in seed_bindings}
 
     # --- ego-expand ----------------------------------------------------------
     all_related = ego_graph(store, seed_symbols | changed_symbols, hops=hops)
@@ -67,7 +86,7 @@ def select_relevant_subtree(
 
     # --- subtree -------------------------------------------------------------
     subtree: list[dict] = []
-    for fid in ids:
+    for fid in sorted(ids):
         f = store.get_feature(fid)
         if not f or f.retired:
             continue
@@ -86,7 +105,9 @@ def select_relevant_subtree(
         for f in (features if features is not None else store.list_features())
     ]
 
-    context = _build_context(changed_symbols, seed_features, store)
+    # Edge sketches anchor on the changed symbols when there are any (Loop A),
+    # else on the seed symbols (agent context reads have no change set).
+    context = _build_context(changed_symbols or seed_symbols, seed_features, store)
     return subtree, all_titles, context
 
 

@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS features (
     updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_features_parent ON features(parent_id);
+-- list_features()/children() filter retired=0 and ORDER BY created_at on every
+-- render pass — a composite index serves both without a scan+sort.
+CREATE INDEX IF NOT EXISTS idx_features_retired_created ON features(retired, created_at);
 
 CREATE TABLE IF NOT EXISTS bindings (
     id          TEXT PRIMARY KEY,
@@ -65,6 +68,10 @@ CREATE TABLE IF NOT EXISTS events (
     accepted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_applied ON events(applied);
+-- recent_events() / the sidecar changes-feed sort by `at` DESC on every render; the
+-- events table is append-only and grows for the daemon's lifetime, so without this
+-- index that sort degrades to a full scan (tens of ms once the table is large).
+CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
 
 -- Typed-media blocks on a feature (diagram / image / latex / url / …). Prose is
 -- NOT here — it is the implicit block-zero backed by features.description, so an
@@ -146,6 +153,13 @@ CREATE TABLE IF NOT EXISTS applied_commands (
 );
 """
 
+# Stamped into ``PRAGMA user_version`` after the schema + migrations have run, so
+# subsequent opens of an up-to-date DB skip the executescript + 4 PRAGMA
+# table_info scans entirely (open_store runs several times per loop tick — the
+# schema replay was measurable overhead on every one). Bump when _SCHEMA or
+# _migrate changes; version 0 (never stamped) always takes the slow path.
+_SCHEMA_VERSION = 2
+
 
 class Store:
     def __init__(self, db_path: str | Path):
@@ -167,8 +181,14 @@ class Store:
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.executescript(_SCHEMA)
-        self._migrate()
+        # A brief wait instead of an instant "database is locked" when a concurrent
+        # writer (an out-of-lock migrate / startup render) holds the WAL write slot.
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version != _SCHEMA_VERSION:
+            self._conn.executescript(_SCHEMA)
+            self._migrate()
+            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         self._conn.commit()
         return self
 
@@ -416,6 +436,19 @@ class Store:
     def all_bindings(self) -> list[Binding]:
         rows = self.conn.execute("SELECT * FROM bindings").fetchall()
         return [_row_to_binding(r) for r in rows]
+
+    def bindings_by_feature(self) -> dict[str, list[Binding]]:
+        """All bindings grouped by ``feature_id``, each group sorted by
+        ``(file, symbol_path)`` to match :meth:`bindings_for_feature`.
+
+        One bulk read for the whole-tree render / read paths, which would
+        otherwise issue a ``bindings_for_feature`` query per feature."""
+        grouped: dict[str, list[Binding]] = {}
+        for b in self.all_bindings():
+            grouped.setdefault(b.feature_id, []).append(b)
+        for group in grouped.values():
+            group.sort(key=lambda b: (b.file, b.symbol_path))
+        return grouped
 
     def bound_feature_ids(self) -> set[str]:
         """Feature ids that own at least one binding — one indexed query, so the
@@ -702,6 +735,11 @@ class Store:
     def drop_all_edges(self) -> None:
         self.conn.execute("DELETE FROM code_edges")
         self._commit()
+
+    def has_edges(self) -> bool:
+        """Whether ANY graph edge exists — the cheap emptiness probe the reconcile
+        pass uses to decide if a never-built graph needs a one-time full build."""
+        return self.conn.execute("SELECT 1 FROM code_edges LIMIT 1").fetchone() is not None
 
     def edges_out(self, symbol: str, *, internal_only: bool = True) -> list[sqlite3.Row]:
         sql = "SELECT * FROM code_edges WHERE src_symbol=?"

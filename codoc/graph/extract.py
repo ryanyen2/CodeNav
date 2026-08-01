@@ -86,11 +86,6 @@ def _resolve(
     if not leaf or leaf.startswith("__") or len(leaf) <= 1 or leaf.isdigit():
         return None
 
-    # Exact symbol_path match (e.g., dotted path maps to a known symbol)
-    for sym in by_symbol:
-        if sym.endswith(f"::{qualified_name}") or sym.endswith(f"::{leaf}"):
-            pass  # handled via by_leaf below for efficiency
-
     candidates = by_leaf.get(leaf, [])
     if not candidates:
         return None

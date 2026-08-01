@@ -19,7 +19,7 @@ integration surfaces into your repo:
 
 | Surface | Installed to | Role |
 |---|---|---|
-| **MCP server** (`codoc`) | `.mcp.json` → `codoc-mcp` (FastMCP, stdio) | The agent's reflection API: `codoc_tree`, `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`. The agent carries real intent straight into the store instead of leaving it to a blind index-diff. |
+| **MCP server** (`codoc`) | `.mcp.json` → `codoc-mcp` (FastMCP, stdio) | The agent's reflection API: `codoc_context` (the relevant tree slice for the files you're editing — the primary read), `codoc_tree` (whole tree, scopeable), `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`. The agent carries real intent straight into the store instead of leaving it to a blind index-diff. |
 | **Slash commands** | `.claude/commands/codoc/` | `/codoc:plan <task>` — propose plan nodes *before* writing code; `/codoc:sync` — reconcile whichever side is behind (implements queued directives, drains tree edits, or reflects code drift). |
 | **Skill** `codoc-intent` | `.claude/skills/codoc-intent/SKILL.md` | Auto-loaded every session; teaches Claude the MCP-first propose-then-implement workflow for this repo. |
 | **Hooks** | `.claude/settings.json` | `SessionStart` · `Stop` · `PreToolUse` · `PostToolUse` · `UserPromptSubmit` — maintain `.codoc/activity.json` (the live agent touch-log → VS Code gutter decorations), run recovery reflection when the session stops, and nudge `/codoc:sync` when work is queued. Fire-and-forget; they never block the agent. |
@@ -198,7 +198,7 @@ Verdicts flow through `.codoc/inbox.json`; the loop applies them.
   realize.json        — machine-readable directive manifest (ids → features → causes)
   activity.json       — agent touch-log: the CC hooks write here, the VS Code extension reads it
   codoc.db            — features + bindings + event log (SQLite WAL)
-  lancedb/            — cocoindex-managed chunk index: AST + embeddings + identity hashes
+  lancedb/            — cocoindex-managed chunk index: AST + identity hashes (chunk embeddings only when CODOC_EMBED_CHUNKS=1)
   cocoindex.db/       — cocoindex internal memoization (resumes interrupted indexing)
 ```
 
@@ -257,11 +257,11 @@ A single LLM pass with the full change set plus every existing node title preven
 duplicates. `UNIQUE(file, symbol_path)` in the store ensures a chunk binds to at
 most one feature.
 
-## Sidecar schema (v5)
+## Sidecar schema (v6)
 
 ```json
 {
-  "version": 5,
+  "version": 6,
   "by_feature": { "f-id": [{"file": "path.py", "symbol": "path.py::Class.method"}] },
   "by_file":    { "path.py": [{"symbol": "...", "feature_id": "f-id", "feature_title": "Title"}] },
   "features":   { "f-id": {"title": "Title", "parent_id": null, "lifecycle": "active", "realized": true} },
@@ -273,8 +273,11 @@ most one feature.
   "feature_phase":      { "f-id": "queued" },
   "holds":              ["f-id"],
   "hold_detail":        { "f-id": {"kind": "amend", "intent": "update the code to match your new intent", "baseline": "…"} },
+  "feature_kind":       { "f-id": "howto" },
+  "feature_see_also":   { "f-id": ["f-other"] },
   "feature_drift":      { "f-id": "questioned" },
-  "feature_resolution": { "f-id": "scope" }
+  "feature_resolution": { "f-id": "scope" },
+  "blocks":             { "f-id": [{"kind": "diagram", "…": "…"}] }
 }
 ```
 
@@ -293,18 +296,27 @@ The **mid-flight slices** are all thin views of one projection
 `feature_phase` (a held feature reads `drafting`/`queued`, never
 `drifted`/`divergent`); the drift/resolution slices keep their prior filters.
 
+`feature_kind` (a Diátaxis-lite chip) and `feature_see_also` (top coupled
+neighbours) are optional inferred hints. `blocks` (v6) carries per-feature
+typed-media blocks (diagram / image / latex / url / …); prose is block-zero (the
+description) and a feature with no typed media is absent from the map.
+
 ## Environment variables
 
 | Var | Default | Description |
 |---|---|---|
 | `CODOC_PROVIDER` | `openai` | LLM provider for reflection: `claude` (reuse Claude Code's login via headless `claude -p`, no key), `openai`, or `ollama`. The extension sets `claude` by default. |
-| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name (defaults to `sonnet` when `CODOC_PROVIDER=claude`) |
+| `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name (defaults to `sonnet` when `CODOC_PROVIDER=claude`). Pins the model for *all* calls. |
+| `CODOC_MODEL_FAST` | provider fast tier | Fast-tier model for the two high-volume extraction calls (per-save tree update, per-file bootstrap). Defaults to the provider's fast model (`haiku` / `claude-haiku-4-5` / `gpt-5.4-mini`); an explicit `CODOC_MODEL` overrides it. |
 | `OPENAI_API_KEY` | — | OpenAI API key (only for `CODOC_PROVIDER=openai`) |
 | `CODOC_BASE_URL` | — | Custom OpenAI-compatible base URL |
 | `CODOC_TEMPERATURE` | `0.2` | LLM sampling temperature |
 | `CODOC_MAX_TOKENS` | `16000` | LLM completion budget (reasoning models spend it on hidden reasoning too) |
-| `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider (`sentence-transformers` or `openai`) |
-| `CODOC_EMBEDDER_MODEL` | `all-MiniLM-L6-v2` | Embedding model |
+| `CODOC_LLM_TIMEOUT` | `300` | Per-call LLM timeout in seconds (bounds a wedged connection; applies to retries too) |
+| `CODOC_BOOTSTRAP_CONCURRENCY` | `8` | Concurrent per-file LLM calls per bootstrap wave during `codoc init` |
+| `CODOC_EMBED_CHUNKS` | — (off) | Set to `1` to compute + store chunk embeddings. **Opt-in — off by default**: indexing is parse+hash+write only, so `codoc init` skips the sentence-transformers load. |
+| `CODOC_EMBEDDER_PROVIDER` | `sentence-transformers` | Embedder provider (`sentence-transformers` or `openai`), used only when `CODOC_EMBED_CHUNKS=1` |
+| `CODOC_EMBEDDER_MODEL` | `all-MiniLM-L6-v2` | Embedding model (used only when `CODOC_EMBED_CHUNKS=1`) |
 | `CODOC_LANCE_PATH` | `.codoc/lancedb` | LanceDB directory holding the `code_chunks` table |
 | `COCOINDEX_DB` | `.codoc/cocoindex.db` | cocoindex memoization state (auto-set by the indexer) |
 | `CODOC_LOG_PROMPTS` | — | Set to `1` to log LLM prompt+response to stderr |

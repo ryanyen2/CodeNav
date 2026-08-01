@@ -40,8 +40,11 @@ def test_heavy_columns_droppable(tmp_path):
     light = read_all_chunks(tmp_path, with_embeddings=False, with_source=False)
     assert all(r.embedding is None and r.source == "" for r in light)
     assert all(r.tokens_hash for r in light)  # identity columns intact
-    full = read_all_chunks(tmp_path)
+    full = read_all_chunks(tmp_path, with_embeddings=True)
     assert all(r.embedding is not None and r.source for r in full)
+    # Embeddings are opt-in: the bare call never materializes the vector column.
+    default = read_all_chunks(tmp_path)
+    assert all(r.embedding is None and r.source for r in default)
 
 
 def test_missing_index_returns_empty(tmp_path):

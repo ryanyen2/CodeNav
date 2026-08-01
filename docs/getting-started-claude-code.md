@@ -47,7 +47,8 @@ codoc init
 
 `codoc init` does three things:
 
-1. **Indexes the repo** — AST chunks + embeddings via cocoindex/LanceDB.
+1. **Indexes the repo** — AST chunks via cocoindex/LanceDB (parse + hash + write;
+   chunk embeddings are opt-in via `CODOC_EMBED_CHUNKS=1` and off by default).
    Incremental; a killed run resumes from the last completed file.
 2. **Proposes a feature tree** and writes `.codoc/tree.codoc`.
 3. **Installs the codoc Claude Code plugin** — hooks, the MCP server, the
@@ -98,7 +99,12 @@ script, FastMCP over stdio) is the agent's primary reflection path. Instead of
 relying on Loop A's blind index-diff, Claude calls tools that carry real intent
 straight into the store:
 
-- `codoc_tree` / `codoc_status` — read the current tree + lifecycle state.
+- `codoc_context` — the **primary read**: the relevant tree slice for the file(s)
+  you're editing (bound features expanded one hop along call/import edges, plus a
+  compact title outline). Bounded by the edit, not the repo size.
+- `codoc_tree` / `codoc_status` — read the current tree + lifecycle state
+  (`codoc_tree` is scopeable via `root_id` / `depth`, and summarizes bindings unless
+  `include_bindings=true`).
 - `codoc_propose_add` / `_amend` / `_move` / `_retire` — author a structural proposal.
 - `codoc_attach` — bind code to an existing feature.
 - `codoc_reflect` — bulk-reconcile after writing code.

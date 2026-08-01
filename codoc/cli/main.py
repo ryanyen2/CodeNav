@@ -35,9 +35,62 @@ def _codoc_dir(root: str) -> str:
     return str(Path(root) / ".codoc")
 
 
+def _workspace_exists(root: str) -> bool:
+    return (Path(root) / ".codoc" / "codoc.db").exists()
+
+
+def _require_workspace(root: str) -> None:
+    """Fail fast with guidance when a command needs an initialized workspace but none
+    exists — a fresh user running ``codoc status``/``sync`` before ``codoc init`` should
+    see one clear line, not a raw sqlite ``unable to open database file`` traceback."""
+    if not _workspace_exists(root):
+        typer.echo(
+            f"No codoc workspace here — run `codoc init` first (looked for "
+            f"{_codoc_dir(root)}/codoc.db).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+def _read_state(status_path) -> str:
+    """The status file's ``state``, tolerant of a truncated/corrupt ``status.json`` so a
+    damaged control file can never turn ``status``/``sync`` into a traceback."""
+    try:
+        return json.loads(Path(status_path).read_text()).get("state", "in_sync")
+    except (OSError, ValueError):
+        return "in_sync"
+
+
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        typer.echo(f"codoc {version('codoc')}")
+    except PackageNotFoundError:
+        typer.echo("codoc (version unknown — not installed as a package)")
+    raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False, "--version", callback=_version_callback, is_eager=True,
+        help="Show the codoc version and exit.",
+    ),
+) -> None:
+    """codoc keeps a feature-tree view of your code, synced as you edit."""
+
+
 @app.command()
 def init(
     root: str = typer.Option(".", "--root", help="Repository root."),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Re-bootstrap even if a workspace already exists (discards the current "
+             "tree and re-derives it from code).",
+    ),
     hooks: bool = typer.Option(
         True,
         "--hooks/--no-hooks",
@@ -47,10 +100,61 @@ def init(
     """Index the repo, propose an initial feature tree, render tree.codoc."""
     from codoc.loop.bootstrap import run_init
 
+    # A running daemon (the VS Code extension's, or a manual `codoc watch`) must not
+    # race a re-init: init rebuilds the index (which can wipe + recreate the LanceDB
+    # state) and, with --force, deletes the store the daemon has open. Stop it first.
+    from codoc.loop.watch import daemon_running
+
+    if _workspace_exists(root) and daemon_running(_codoc_dir(root)):
+        typer.echo(
+            "A codoc daemon is watching this repo — stop it (or close the VS Code "
+            "workspace) before running `codoc init`.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Guard against clobbering / duplicating an existing tree: a second `init` would
+    # re-bootstrap from code with fresh ids on top of the current features. Require
+    # --force, which starts from a clean store so there is no duplication.
+    if _workspace_exists(root) and not force:
+        n = 0
+        try:
+            from codoc.store.db import open_store
+            with open_store(_codoc_dir(root)) as store:
+                n = len(store.list_features())
+        except Exception:  # noqa: BLE001 — a corrupt/partial store still counts as "exists"
+            n = -1
+        detail = f"{n} features" if n >= 0 else "possibly partial/corrupt"
+        typer.echo(
+            f"A codoc workspace already exists here ({detail}). Re-run with `--force` to "
+            "rebuild it from scratch, or run `codoc watch` to keep working.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if force and _workspace_exists(root):
+        # Clean slate so the rebuild can't stack fresh-id ADDs on the old features.
+        (Path(_codoc_dir(root)) / "codoc.db").unlink(missing_ok=True)
+
     typer.echo(f"Indexing {root} and bootstrapping the feature tree…")
-    res = run_init(root)
+    try:
+        res = run_init(root, printer=typer.echo)
+    except typer.Exit:
+        raise
+    except KeyboardInterrupt:
+        typer.echo("\n✗ init interrupted — no partial tree was written; re-run `codoc init`.",
+                   err=True)
+        raise typer.Exit(code=130)
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"✗ init failed: {exc}", err=True)
+        typer.echo(
+            "  The store was rolled back to a clean state (no partial tree). Fix the "
+            "cause — e.g. set an LLM key or start the `claude` CLI (see `codoc init --help`) "
+            "— and re-run `codoc init`.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     typer.echo(f"✓ {res.summary()}")
-    typer.echo(f"  Edit {_codoc_dir(root)}/tree.codoc, then run `codoc watch`.")
+    typer.echo(f"  Open {_codoc_dir(root)}/tree.codoc in VS Code, then run `codoc watch`.")
 
     if hooks:
         try:
@@ -95,16 +199,53 @@ def serve(
         None, "--static-dir", help="Built standalone SPA directory (unit U2)."),
     tunnel: bool = typer.Option(
         False, "--tunnel",
-        help="Expose the hub over a cloudflared tunnel (needs cloudflared + a "
-             "Cloudflare Access policy — see docs/serve-deployment.md)."),
+        help="Expose the hub over a cloudflared tunnel. NOTE: the hub's GitHub "
+             "authentication is not yet wired, so a tunnel publishes the tree with NO "
+             "access control — refused unless --i-understand-unauthenticated is also set."),
+    insecure_public: bool = typer.Option(
+        False, "--i-understand-unauthenticated",
+        help="Acknowledge that --tunnel currently exposes the tree with no authentication "
+             "and open it anyway (demo/local-network use only)."),
 ):
     """Serve codoc as a web app from this machine, supervising the daemon.
 
     The hub is a separate process (peer to the VS Code extension): it atomically
     claims single ownership of the repo, keeps one ``codoc watch`` daemon alive,
-    and serves the intent-tree editor. The listener binds localhost; remote,
-    GitHub-authorized access arrives over a tunnel in a later unit.
+    and serves the intent-tree editor. The listener binds localhost by default.
+
+    Remote, GitHub-authorized access is not finished: the read endpoints
+    (``/api/payload``/``/api/media``/``/api/events``) are currently served without
+    authentication, so exposing the hub off-machine (``--host 0.0.0.0`` or
+    ``--tunnel``) makes the whole tree public. Keep it on localhost until auth lands.
     """
+    # Guards BEFORE the heavy `serve`-extra imports so the safety refusal (and the
+    # "no workspace" message) fire even when the extra isn't installed.
+    _require_workspace(root)
+
+    # GitHub-backed auth from the environment (client id/secret + a push-access token +
+    # CODOC_SERVE_REPO). When configured, every /api/* route — reads included — is gated
+    # on a valid collaborator session and the /auth/* sign-in flow is live.
+    from codoc.serve.github_auth import GithubAuthConfig, build_auth_context
+
+    gh_config = GithubAuthConfig.from_env()
+    auth_ctx = build_auth_context(gh_config) if gh_config is not None else None
+
+    # Safe-by-default: exposing the hub off-machine REQUIRES configured auth. Without it
+    # the tree + code map would be public, so refuse unless the user explicitly opts in.
+    exposes_publicly = tunnel or host not in ("127.0.0.1", "localhost", "::1")
+    if exposes_publicly and auth_ctx is None and not insecure_public:
+        typer.echo(
+            "Refusing to expose the hub: no GitHub authentication is configured, so "
+            "--tunnel (or a non-localhost --host) would publish your entire feature tree and "
+            "code map to anyone who reaches the URL.\n"
+            "  • Configure auth: set CODOC_GITHUB_CLIENT_ID / CODOC_GITHUB_CLIENT_SECRET / "
+            "CODOC_GITHUB_TOKEN / CODOC_SERVE_REPO (see docs/serve-deployment.md), or\n"
+            "  • Keep it local: `codoc serve` (binds 127.0.0.1), or\n"
+            "  • Accept the risk for a demo: add --i-understand-unauthenticated.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     import uvicorn
 
     from codoc.serve.app import build_app
@@ -135,7 +276,7 @@ def serve(
         from codoc.serve.tunnel import launch_tunnel
         try:
             tunnel_proc = launch_tunnel(port)
-            typer.echo("  ↳ cloudflared tunnel launched — gate it with Cloudflare Access.")
+            typer.echo("  ↳ cloudflared tunnel launched.")
         except FileNotFoundError:
             typer.echo("  ⚠ cloudflared not found — install it (see docs/serve-deployment.md).", err=True)
 
@@ -143,12 +284,25 @@ def serve(
     # remote flood from DoSing the daemon / amplifying the SSE fan-out.
     rate_limiter = RateLimiter(capacity=60, refill_per_sec=2)
     typer.echo(f"codoc serve · http://{host}:{port} · supervising daemon · {cd}")
+    if auth_ctx is not None:
+        typer.echo(f"  ↳ auth · GitHub collaborators of {gh_config.owner}/{gh_config.repo} "
+                   "(sign in at /auth/login)")
+        # Hub-owned realization: hand-offs realize on a worktree → PR, sandboxed. Only
+        # runs when auth is configured (the hub trust boundary). Best-effort; never
+        # blocks serving if git/gh/SDK are unavailable.
+        from codoc.serve.realize_hub import start_realize_worker
+        realize_worker = start_realize_worker(root, cd, gh_config, printer=typer.echo)
+    else:
+        realize_worker = None
+        typer.echo("  ↳ auth · none (localhost-only; not exposed off-machine)")
     if spa_dir is not None:
         typer.echo(f"  ↳ editor bundle · {spa_dir}")
     try:
-        uvicorn.run(build_app(cd, static_dir=spa_dir, rate_limiter=rate_limiter),
+        uvicorn.run(build_app(cd, static_dir=spa_dir, auth=auth_ctx, rate_limiter=rate_limiter),
                     host=host, port=port, log_level="warning")
     finally:
+        if realize_worker is not None:
+            realize_worker.stop()
         if tunnel_proc is not None:
             tunnel_proc.terminate()
         supervisor.stop()
@@ -179,6 +333,8 @@ def realize(
     from codoc.loop.loop_b import realize_path, run_loop_b
     from codoc.loop.sdk_realize import resolve_engine, run_sdk_realize, sdk_available
 
+    # `realize` acts on the realize.md / manifest queue, which can exist without a full
+    # store; its own "Nothing queued" guard below handles the un-initialized case.
     codoc_dir = _codoc_dir(root)
     # `codoc realize` IS the CLI hand-off gesture (held-draft model): a doc AMEND
     # mints a HELD draft, not surprise code. Flush every held draft now — write the
@@ -218,6 +374,7 @@ def realize(
 @app.command()
 def status(root: str = typer.Option(".", "--root", help="Repository root.")):
     """Show feature count, pending proposals, and recent activity."""
+    _require_workspace(root)
     from codoc.store.db import open_store
 
     with open_store(_codoc_dir(root)) as store:
@@ -226,7 +383,7 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
         from codoc.loop.status import refresh_status
 
         st = refresh_status(_codoc_dir(root), store)
-        state = json.loads(st.read_text()).get("state", "in_sync")
+        state = _read_state(st)
         typer.echo(f"codoc · {len(feats)} features · {len(pending)} pending · state: {state}")
 
         # Coverage invariant: every indexed chunk should be attributed to a
@@ -267,6 +424,7 @@ def sync(
     in ``.codoc/realize.md`` for the live Claude Code session to implement via
     ``/codoc:sync``.
     """
+    _require_workspace(root)
     from codoc.codoc_file.render import write_tree
     from codoc.loop.loop_a import reconcile_drift
     from codoc.loop.loop_b import run_loop_b
@@ -290,7 +448,7 @@ def sync(
     with open_store(cd) as store:
         write_tree(store, cd)
         st = refresh_status(cd, store)
-        state = json.loads(st.read_text()).get("state", "in_sync")
+        state = _read_state(st)
         typer.echo(f"▸ state       {state}")
 
 
@@ -318,6 +476,7 @@ def reject(
 
 
 def _verdict(root: str, event_id: str, *, accept: bool) -> None:
+    _require_workspace(root)
     from codoc.codoc_file.render import write_tree
     from codoc.loop import inbox
     from codoc.loop.loop_b import run_loop_b
@@ -349,6 +508,7 @@ def reflect(
     changes a missed/crashed cycle dropped. Spawned by the Stop hook when no
     daemon is running; also runnable by hand.
     """
+    _require_workspace(root)
     from codoc.loop.loop_a import reconcile_drift
 
     file_scope = {s.strip() for s in scope.split(",") if s.strip()} if scope else None

@@ -12,7 +12,7 @@ from codoc.model.event import NodeOpKind
 
 
 def test_malformed_op_dropped_good_ops_survive(monkeypatch):
-    def fake_run_agent(prompt, config):
+    def fake_run_agent(prompt, config, *, prefix_parts=None):
         return {"ops": [
             {"kind": "amend", "feature_id": "f-1", "description": "ok"},   # good
             {"kind": "not_a_real_kind", "feature_id": "f-2"},              # bad kind
@@ -29,5 +29,5 @@ def test_malformed_op_dropped_good_ops_survive(monkeypatch):
 
 def test_all_malformed_yields_empty_not_raise(monkeypatch):
     monkeypatch.setattr(tree_update, "run_agent",
-                        lambda p, c: {"ops": [{"kind": "bogus"}, {}]})
+                        lambda p, c, *, prefix_parts=None: {"ops": [{"kind": "bogus"}, {}]})
     assert tree_update.propose_tree_update({}, [], [], repo_name="x") == []

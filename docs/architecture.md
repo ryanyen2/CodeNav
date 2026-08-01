@@ -56,12 +56,24 @@ SQLite WAL at `.codoc/codoc.db` — **3 authoritative tables + 1 derived graph c
 safe to drop and rebuild). No transactions/constraints/obligations tables.
 
 The chunk index is owned by **cocoindex**, outside `codoc.db`: AST chunks +
-embeddings + identity hashes (tokens_hash / types_hash) in
-`.codoc/lancedb/code_chunks.lance`; cocoindex memoization in `.codoc/cocoindex.db/`.
-Indexing is durable, incremental, crash-resumable. `update_index(root, codoc_dir)`
-runs the pipeline once (memoized per-file); the loops then read via
-`read_all_chunks(...)`. **The loops never read embeddings** and push file scope
-down as a LanceDB predicate; only bootstrap reads embeddings.
+identity hashes (tokens_hash / types_hash) in `.codoc/lancedb/code_chunks.lance`;
+cocoindex memoization in `.codoc/cocoindex.db/`. Indexing is durable, incremental,
+crash-resumable. `update_index(root, codoc_dir)` runs the pipeline once (memoized
+per-file); the loops then read via `read_all_chunks(...)`, pushing file scope down
+as a LanceDB predicate and dropping the heavy columns (source, embedding) they
+don't need. Reads share a process-lifetime background loop + cached connection.
+
+**Embeddings are opt-in.** Nothing in the loops, bootstrap, or graph reads chunk
+vectors today, so `CODOC_EMBED_CHUNKS` is OFF by default: the `CodeChunkLite`
+schema omits the column and the pipeline never imports sentence-transformers (a
+multi-second cold cost). Turning it on (for future semantic search) is recorded in
+`.codoc/index.meta.json` and rebuilds the index under the vector schema.
+
+**LanceDB upkeep.** Lance is copy-on-write — every pass appends a version + new
+fragments and cocoindex never prunes them (they piled to 4k versions / 256MB for
+this repo before this). `update_index` ends with
+`optimize(cleanup_older_than=30min)` (~40ms steady-state, 30-min retention per
+lancedb#3086) to keep the index at live-data size.
 
 ## Loop A in detail (code → codoc)
 
@@ -183,6 +195,29 @@ file's largest node); (2) an org pass (`organize=True`) grouping file-features u
 3–6 broad theme parents. Temp ids ("n1"/"t1") resolve to real ids before apply,
 enabling within-call nesting.
 
+The per-file calls run in concurrent **waves** of `CODOC_BOOTSTRAP_CONCURRENCY`
+(default 8): all store reads happen before dispatch and all writes after the wave,
+on the calling thread in deterministic file order (workers only make the LLM call),
+so a wave shares one titles snapshot — an identical prompt prefix that hits the
+prompt cache across the wave — while cross-wave dedup context still accretes.
+
+## LLM calls — model tiers + prompt-cache alignment (`agent/`, `config.py`)
+
+Every completion funnels through `config.complete(prompt, config, prefix_parts=…)`.
+`prefix_parts` are the STABLE prompt segments (frozen instructions, then the
+whole-tree title outline) that precede the volatile change; templates carry
+`<<<CACHE_BREAK>>>` markers that `agent/base.split_prompt` cuts **before**
+substitution (so a marker inside repo content is inert). The provider layer turns
+the prefix into Anthropic `system` blocks with `cache_control` breakpoints / an
+OpenAI stable prefix + `prompt_cache_key`, so consecutive passes over an unchanged
+tree pay cache-read (~0.1×) for everything but the change. The keyless `claude`
+path runs each completion with a minimal `--system-prompt-file` (codoc preamble +
+prefix) and `--disallowedTools "*"` — dropping the ~37K-token default agent context
+to ~1–2K, with cross-spawn cache hits. Structured-extraction calls (per-save tree
+update, per-file bootstrap) default to the fast model tier (`fast_llm_config`,
+`CODOC_MODEL_FAST`); `run_agent` memoizes parsed responses (bounded LRU) so a
+crash-replayed / re-issued identical pass doesn't re-bill.
+
 ## Render + sidecar (`codoc_file/render.py`) and the `.codoc` control files
 
 `write_tree` writes `tree.codoc` + the sidecar; the sidecar is **pure derived
@@ -240,6 +275,10 @@ state** and is re-emitted on every pass even when the text render is held back
 |---|---|---|
 | `CODOC_PROVIDER` | inferred | `claude` / `openai` / `anthropic` / `ollama`. Unset → `openai` if `OPENAI_API_KEY`, else `anthropic` if `ANTHROPIC_API_KEY`, else **keyless `claude`** (Claude Code login) |
 | `CODOC_MODEL` | per-provider | default `gpt-5.4-mini` / `claude-sonnet-4-6` / `sonnet`; cross-family value ignored |
+| `CODOC_MODEL_FAST` | per-provider | model for the high-volume extraction calls (tree update, per-file bootstrap): default `gpt-5.4-mini` / `claude-haiku-4-5` / `haiku`; an explicit `CODOC_MODEL` overrides both tiers |
+| `CODOC_LLM_TIMEOUT` | `300` | seconds before an LLM call (any provider, incl. the `claude` CLI spawn) is abandoned |
+| `CODOC_EMBED_CHUNKS` | — | `1` → compute + store chunk embeddings in the LanceDB index (OFF by default — nothing reads them today; flipping the flag rebuilds the index under the other schema) |
+| `CODOC_BOOTSTRAP_CONCURRENCY` | `8` | per-file bootstrap LLM calls run in concurrent waves of this size (`1` = serial) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | API keys (also select the provider) |
 | `CODOC_BASE_URL` | — | custom OpenAI-compatible base URL |
 | `CODOC_TEMPERATURE` | `0.2` | sampling temperature |

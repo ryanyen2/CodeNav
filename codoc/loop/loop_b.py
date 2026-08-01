@@ -279,6 +279,13 @@ def build_block_directive(feature_id: str, kind: str, intent_text: str, store: S
             f"  Apply the intended change to this feature's code.")
 
 
+# Above this many bindings the ``Bound code:`` line stops enumerating symbols
+# and summarizes per file — a many-bound feature was putting KBs of qualified
+# symbol paths into every directive, and the implementing agent reads the files
+# anyway (the ``Edit only:`` scope is what actually bounds it).
+_BOUND_CODE_MAX_SYMBOLS = 12
+
+
 def _bound_code(feature_id: str | None, store: Store) -> tuple[str, list[str]]:
     """One bindings fetch → (joined symbol paths, distinct repo-relative files).
 
@@ -288,6 +295,12 @@ def _bound_code(feature_id: str | None, store: Store) -> tuple[str, list[str]]:
         return "", []
     binds = store.bindings_for_feature(feature_id)
     files = list(dict.fromkeys(b.file for b in binds))
+    if len(binds) > _BOUND_CODE_MAX_SYMBOLS:
+        per_file: dict[str, int] = {}
+        for b in binds:
+            per_file[b.file] = per_file.get(b.file, 0) + 1
+        summary = ", ".join(f"{f} ({n} symbols)" for f, n in per_file.items())
+        return f"{len(binds)} bound symbols across {summary}", files
     return ", ".join(b.symbol_path for b in binds), files
 
 
@@ -772,8 +785,16 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             continue
         seen_verdict_ids.add(v.event_id)
         if v.accept:
-            fid = _accept_with_fid(e.op)
-            store.delete_event(e.id)
+            # Atomic: apply the accept AND delete its event as one unit. Without this a
+            # kill -9 between the two (the verdict is drained only at pass end) re-reads
+            # the still-present verdict next pass and re-accepts — and an ADD, whose op
+            # carries no feature_id, mints a SECOND feature (set-diff on empty id). The
+            # transaction makes it all-or-nothing: either the feature exists and the event
+            # is gone (next pass sees a vanished event → consumes harmlessly), or neither
+            # happened (re-applied exactly once). Mirrors the command channel's ledger.
+            with store.transaction():
+                fid = _accept_with_fid(e.op)
+                store.delete_event(e.id)
             res.accepted += 1
             # RETIRE accepted from the inbox is detach-only by default: mark retired
             # (apply_op) AND detach its bindings here, so the code isn't left bound to
@@ -1045,19 +1066,21 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             # AMEND (a prose description edit) — held until its feature is explicitly
             # handed off. The SYSTEM never guesses from prose whether to realize.
             d.handed_off = d.feature_id in handoffs
-    # Manifest first (its no-realize.md-but-drafts state is the source of truth);
-    # realize.md (the agent trigger) is rebuilt from handed-off directives only.
-    edits_channel.write_manifest(codoc_dir, all_directives)
+    # Write the agent TRIGGER (realize.md) before the manifest. read_manifest treats a
+    # manifest whose directives are all handed-off but has NO realize.md beside it as
+    # "the agent finished and deleted the queue" → discards them. A crash between the
+    # two writes with the OLD order (manifest first) produced exactly that state for a
+    # directive the agent never saw → the code change silently vanished. Writing
+    # realize.md first means the single-crash window leaves the trigger PRESENT, so the
+    # agent still implements the change. (Full atomicity across both files — e.g. a
+    # `triggered` flag so read_manifest can distinguish finished from never-triggered —
+    # is the complete fix; see docs/residual-review-findings.)
     handed = [d for d in all_directives if d.handed_off and d.text]
     if handed:
         _write_realize(codoc_dir, build_realize_prompt(
             [d.text for d in handed], root_dir, [d.id for d in handed]))
         res.queued = True
         res.queued_total = len(handed)
-        status.refresh_status(
-            codoc_dir, store, awaiting_impl=True, pending=len(handed),
-            detail=f"{len(handed)} change(s) ready to implement — run /codoc:sync",
-        )
     else:
         # Only held drafts (nothing handed off this pass) — remove the trigger; the
         # drafts persist in the manifest and surface as the in-situ diff + pending dots.
@@ -1065,5 +1088,13 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             realize_path(codoc_dir).unlink()
         except OSError:
             pass
+    # Manifest (its no-realize.md-but-drafts state is the source of truth for drafts).
+    edits_channel.write_manifest(codoc_dir, all_directives)
+    if handed:
+        status.refresh_status(
+            codoc_dir, store, awaiting_impl=True, pending=len(handed),
+            detail=f"{len(handed)} change(s) ready to implement — run /codoc:sync",
+        )
+    else:
         status.refresh_status(codoc_dir, store)
     return res

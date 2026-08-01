@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -54,14 +55,29 @@ def atomic_write_json(dest: str | Path, payload: Any, *, indent: int = 2) -> Non
 def read_json(path: str | Path, default: Any = None) -> Any:
     """Read a JSON control file; a missing or corrupt file returns *default*.
 
-    Corruption is logged (a corrupt inbox/edits file silently becoming "empty"
-    would otherwise look like data loss with no trace).
+    A NON-EMPTY file that fails to parse (a disk error, a hand-edit, a torn write on a
+    network FS) is QUARANTINED — renamed to ``<name>.corrupt-<ns>`` — before degrading
+    to *default*. Otherwise the next writer, which merges over ``read_json→{}``, would
+    silently overwrite it and drop every un-drained command / verdict / draft / steer,
+    with no trace. Quarantining keeps the data recoverable and the failure visible.
     """
     path = Path(path)
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return default
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         _log.warning("unreadable control file %s (%s); treating as empty", path, exc)
+        return default
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        if text.strip():  # non-empty but invalid → preserve it, don't let a write clobber it
+            try:
+                quarantine = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
+                os.replace(path, quarantine)
+                _log.warning("corrupt control file %s (%s); quarantined to %s and treating "
+                             "as empty", path, exc, quarantine.name)
+            except OSError:
+                _log.warning("corrupt control file %s (%s); treating as empty", path, exc)
         return default

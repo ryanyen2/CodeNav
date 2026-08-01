@@ -80,9 +80,15 @@ def _op_summary(op: NodeOp, store: Store) -> str:
 
 # ─── reads ────────────────────────────────────────────────────────────────────
 
-def read_tree(codoc_dir: str) -> dict:
+def read_tree(
+    codoc_dir: str,
+    *,
+    root_id: str | None = None,
+    depth: int = 0,
+    include_bindings: bool = False,
+) -> dict:
     """The live feature tree (incl. ``realized`` + per-feature ``drift``) + pending
-    proposals.
+    proposals — SCOPED by default so the payload stays reasoning-sized.
 
     ``drift`` surfaces the loop-computed per-feature trust signal
     (``"questioned"`` / ``"binding-lost"``) the same way the IDE sidecar does, so an
@@ -90,29 +96,120 @@ def read_tree(codoc_dir: str) -> dict:
     pass questioned. It is read from ``.codoc/drift.json`` (one dict lookup per
     feature; no index read) — ``followed`` is the absence of an entry, so the field
     is omitted (None) for features the loop did not flag.
+
+    Scoping (all optional): ``root_id`` limits output to that feature's subtree;
+    ``depth`` (>0) caps levels below the root(s); ``include_bindings=False`` (the
+    default) returns per-feature ``binding_count`` + ``files`` instead of every
+    qualified symbol_path — measured, symbol paths were ~2/3 of the old payload
+    and the least useful part for reasoning about intent. Pass
+    ``include_bindings=True`` for the full lists when actually needed.
     """
     from codoc.loop.edits import read_drift
 
     drift = read_drift(codoc_dir)
     with open_store(codoc_dir) as store:
+        all_feats = store.list_features()
+        by_parent: dict[str | None, list] = {}
+        for f in all_feats:
+            by_parent.setdefault(f.parent_id, []).append(f)
+
+        selected: list = []
+        if root_id is None:
+            roots = by_parent.get(None, [])
+        else:
+            root = store.get_feature(root_id)
+            if root is None:
+                return _err(f"unknown root_id {root_id!r}")
+            roots = [root]
+
+        seen: set[str] = set()
+
+        def _walk(feats, level: int) -> None:
+            for f in feats:
+                if f.id in seen:  # a parent-cycle must not recurse forever
+                    continue
+                seen.add(f.id)
+                selected.append(f)
+                if depth <= 0 or level < depth:
+                    _walk(by_parent.get(f.id, []), level + 1)
+
+        _walk(roots, 1)
+        # Nothing may silently vanish: features unreachable from the roots
+        # (orphaned parent link, cycle members) still exist and still bind code
+        # — surface them flat at the end of the whole-tree read instead of
+        # hiding them from the agent the way a broken parent link hides them
+        # from every render walk.
+        if root_id is None and depth <= 0:
+            selected.extend(f for f in all_feats if f.id not in seen)
+
+        grouped = store.bindings_by_feature()  # one bulk read, not per-feature
         feats = []
-        for f in store.list_features():
-            feats.append({
+        for f in selected:
+            binds = grouped.get(f.id, [])
+            row = {
                 "id": f.id,
                 "title": f.title,
                 "description": f.description,
                 "parent_id": f.parent_id,
                 "realized": f.realized,
                 "drift": drift.get(f.id),
-                "bindings": [b.symbol_path for b in store.bindings_for_feature(f.id)],
-            })
+                "binding_count": len(binds),
+                "files": sorted({b.file for b in binds}),
+            }
+            if include_bindings:
+                row["bindings"] = [b.symbol_path for b in binds]
+            feats.append(row)
         proposals = [
             {"event_id": e.id, "kind": e.op.kind.value, "feature_id": e.op.feature_id,
              "parent_id": e.op.parent_id, "title": e.op.title, "source": e.source,
              "rationale": e.op.rationale}
             for e in store.pending_events()
         ]
-        return {"ok": True, "features": feats, "proposals": proposals}
+        return {"ok": True, "features": feats, "proposals": proposals,
+                "truncated_to_depth": depth if depth > 0 else None}
+
+
+def read_context(
+    codoc_dir: str,
+    *,
+    files: list[str] | None = None,
+    feature_id: str | None = None,
+    include_bindings: bool = True,
+) -> dict:
+    """The RELEVANT slice of the tree for what an agent is working on.
+
+    This is the primary agent read: given the file(s) being edited (repo-relative
+    paths) and/or a feature id, it runs the same ego-graph relevance selection
+    Loop A uses for its own LLM context (features bound in those files, expanded
+    one hop along call/import edges, plus parents/children) and returns that
+    bounded subtree + a compact whole-tree title outline for orientation. Payload
+    is proportional to the *edit*, not the repo — prefer this over ``codoc_tree``.
+    """
+    from codoc.agent.base import titles_outline
+    from codoc.loop.subtree import select_context
+
+    with open_store(codoc_dir) as store:
+        file_set = set(files or [])
+        extra_symbols: set[str] = set()
+        if feature_id:
+            f = store.get_feature(feature_id)
+            if f is None:
+                return _err(f"unknown feature_id {feature_id!r}")
+            for b in store.bindings_for_feature(feature_id):
+                file_set.add(b.file)
+                extra_symbols.add(b.symbol_path)
+        if not file_set and not extra_symbols:
+            return _err("pass files=[...] and/or feature_id")
+        subtree, all_titles, context = select_context(store, file_set, extra_symbols)
+        if not include_bindings:
+            for row in subtree:
+                row["binding_count"] = len(row.pop("bindings", []))
+        return {
+            "ok": True,
+            "subtree": subtree,
+            "titles_outline": titles_outline(all_titles),
+            "graph": context,
+        }
 
 
 def _dead_refs(codoc_dir: str) -> list[dict]:
@@ -156,7 +253,9 @@ def read_status(codoc_dir: str) -> dict:
         return {
             "ok": True, "features": len(feats), "pending": len(pending),
             "unrealized": len(unrealized), "state": state,
-            "dead_refs": len(dead), "dead_ref_list": dead,
+            # Count is exact; the list is capped so a repo with hundreds of stale
+            # refs doesn't flood the agent's context through a status call.
+            "dead_refs": len(dead), "dead_ref_list": dead[:20],
         }
 
 

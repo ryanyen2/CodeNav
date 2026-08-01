@@ -4,7 +4,11 @@ version = "0.1.1"
 description = "codoc: a feature-tree system that maintains a human-intent-level view of a codebase, synchronized to the underlying code."
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.11"
+# tree-sitter-languages ships no cp313 wheels and doesn't build cleanly there, so a
+# fresh `pip install codoc` on Python 3.13 would fail. Cap the floor until we move to
+# tree-sitter-language-pack. (The VS Code extension provisions its own pinned env and
+# is unaffected.)
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "pydantic>=2.0.0",
     "tree-sitter>=0.23.0",
@@ -34,6 +38,7 @@ serve = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "sse-starlette>=2.1.0",
+    "httpx>=0.27.0",  # the GitHub OAuth + collaborator-permission calls (serve/github_auth.py)
 ]
 media = [
     # Enriches url/pdf reference blocks (codoc/blocks/reference.py) with real
@@ -57,6 +62,7 @@ where = ["."]
 include = ["codoc*"]
 
 [tool.setuptools.package-data]
+"codoc" = ["py.typed"]
 "codoc.plugin" = ["**/*"]
 "codoc.prompts" = ["*.txt"]
 

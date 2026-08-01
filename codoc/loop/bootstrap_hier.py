@@ -169,6 +169,11 @@ def _feature_coupling(store: Store) -> list[str]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+# Above this many top-level features the single-prompt organization pass would
+# overflow the model's context — skip it and keep the (usable) flat tree.
+_ORG_FEATURE_CAP = 400
+
+
 def bootstrap_hier_from_chunks(
     rows: list,
     store: Store,
@@ -178,36 +183,109 @@ def bootstrap_hier_from_chunks(
     repo_name: str = "codebase",
     config=None,
     organize: bool = True,
+    printer=None,
 ) -> BootstrapResult:
     """Two-phase bootstrap: per-file features, then top-level organization."""
+    import os as _os
+
+    say = printer or (lambda *_a, **_k: None)
     by_file: dict[str, list] = {}
     for r in rows:
         by_file.setdefault(r.file, []).append(r)
 
+    files = sorted(by_file)
+    total = len(files)
+    # Bootstrap makes ~1 LLM call per file (run in concurrent waves below). On a big
+    # repo that still costs — warn, and honour an opt-in hard cap so a user can bound it.
+    cap_env = _os.environ.get("CODOC_BOOTSTRAP_MAX_FILES", "").strip()
+    max_files = int(cap_env) if cap_env.isdigit() and int(cap_env) > 0 else 0
+    if max_files and total > max_files:
+        say(f"  ⚠ {total} source files — bootstrapping the first {max_files} "
+            "(raise or unset CODOC_BOOTSTRAP_MAX_FILES to include the rest).")
+        files = files[:max_files]
+        total = max_files
+    elif total > 1000:
+        say(f"  ⚠ {total} source files — bootstrap makes ~1 LLM call per file, so this "
+            "will take a while (and cost, on a paid key). Set CODOC_BOOTSTRAP_MAX_FILES to cap it.")
+
     calls = 0
+    # ~40 progress ticks regardless of repo size, so a large bootstrap shows steady
+    # motion (not a silent multi-minute hang) without scrolling thousands of lines.
+    step = max(1, total // 40)
     # One feature-table read up front; each file pass appends the titles it just
     # minted, so later files still see them as dedup context without an
     # O(files × features) re-scan.
     existing_titles = [f.title for f in store.list_features()]
-    for file in sorted(by_file):
-        file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
-        chunks = [
-            {"symbol_path": r.symbol_path, "source": (r.source or "")[:_SOURCE_CAP]}
-            for r in file_rows
-        ]
-        edges = _file_edges(file_rows, store)
-        fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
-        ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
 
-        ops = propose_file(file, chunks, edges, existing_titles, repo_name=repo_name, config=config)
-        ops = _ensure_file_coverage(ops, file_rows, file)
-        _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
-        existing_titles.extend(
-            op.title for op in ops if op.kind is NodeOpKind.ADD_NODE and op.title)
-        calls += 1
+    # The per-file LLM calls run in WAVES of `concurrency`: within a wave every
+    # call shares the same titles snapshot (identical prompt prefix → prompt-
+    # cache hits across the wave) and runs concurrently — the calls are pure
+    # network/LLM work; all store reads happen before dispatch and all store
+    # writes after the wave, on this thread, in deterministic file order. The
+    # titles list extends between waves, so cross-wave dedup context is kept;
+    # intra-wave near-duplicates are absorbed by the org pass + the
+    # (title,parent) identity guard, the same way concurrent Loop-A passes are.
+    conc_env = _os.environ.get("CODOC_BOOTSTRAP_CONCURRENCY", "").strip()
+    # Always ≥ 1: a non-positive / non-numeric value falls back to 8.
+    concurrency = int(conc_env) if conc_env.isdigit() and int(conc_env) > 0 else 8
+    executor = None
+    if concurrency > 1 and total > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        executor = ThreadPoolExecutor(max_workers=concurrency,
+                                      thread_name_prefix="codoc-bootstrap")
+    try:
+        for wave_start in range(0, total, concurrency):
+            wave = files[wave_start:wave_start + concurrency]
+            titles_snapshot = list(existing_titles)
+            prepared = []
+            for file in wave:
+                file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
+                chunks = [
+                    {"symbol_path": r.symbol_path, "source": (r.source or "")[:_SOURCE_CAP]}
+                    for r in file_rows
+                ]
+                edges = _file_edges(file_rows, store)
+                prepared.append((file, file_rows, chunks, edges))
+
+            def _call(item):
+                file, _rows, chunks, edges = item
+                return propose_file(file, chunks, edges, titles_snapshot,
+                                    repo_name=repo_name, config=config)
+
+            if executor is not None and len(wave) > 1:
+                try:
+                    results = list(executor.map(_call, prepared))
+                except BaseException:
+                    # One failed call aborts the bootstrap (the caller's
+                    # transaction rolls back). In-flight sibling calls can't be
+                    # killed — say why the exit isn't instant instead of hanging
+                    # silently in the interpreter's thread join for up to
+                    # CODOC_LLM_TIMEOUT.
+                    say("  ✗ a bootstrap LLM call failed — waiting for the "
+                        "wave's in-flight calls to finish before rolling back…")
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    raise
+            else:
+                results = [_call(item) for item in prepared]
+
+            for offset, ((file, file_rows, _c, _e), ops) in enumerate(zip(prepared, results)):
+                idx = wave_start + offset + 1
+                if idx == 1 or idx == total or idx % step == 0:
+                    say(f"  · [{idx}/{total}] {file}")
+                fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
+                ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
+                ops = _ensure_file_coverage(ops, file_rows, file)
+                _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
+                existing_titles.extend(
+                    op.title for op in ops if op.kind is NodeOpKind.ADD_NODE and op.title)
+                calls += 1
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     top_level = store.children(None)
-    if organize and len(top_level) > 1:
+    if organize and 1 < len(top_level) <= _ORG_FEATURE_CAP:
         features = [
             {"id": f.id, "title": f.title, "description": f.description}
             for f in top_level
@@ -216,6 +294,9 @@ def bootstrap_hier_from_chunks(
         ops = propose_org(features, coupling, repo_name=repo_name, config=config)
         _apply_ops_with_local_ids(ops, store, {}, source="bootstrap")
         calls += 1
+    elif organize and len(top_level) > _ORG_FEATURE_CAP:
+        say(f"  ⚠ {len(top_level)} top-level features — skipping the organization pass "
+            "(too large for one prompt). The flat tree is still usable; edit it to group.")
 
     return BootstrapResult(
         chunks=len(rows),

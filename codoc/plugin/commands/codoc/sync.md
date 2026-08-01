@@ -71,7 +71,9 @@ proceed per the new state (usually `awaiting_impl` above). Do not hand-edit
 ### `code_drift` — code → codoc (code changed, codoc is stale)
 Code moved ahead of the tree; there are `pending` proposals and/or unattributed
 code. **Reconcile the tree to the code you can see:**
-- Call `codoc_tree` to review existing features and the pending proposals.
+- Call `codoc_context(files=[…])` with the files that changed to review the
+  relevant features (use `codoc_tree` only if the drift is repo-wide); pending
+  proposals ride along in either read.
 - For code you wrote/changed that belongs to an existing feature, `codoc_attach` it.
 - For genuinely new intent, `codoc_reflect` with `add_node` ops (they surface as
   proposals for the user to accept).

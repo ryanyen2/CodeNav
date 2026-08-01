@@ -228,6 +228,23 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _store_open_error(codoc_dir: str) -> str | None:
+    """None if the store opens cleanly; otherwise a short reason. Used to fail the
+    daemon fast on a corrupt/unopenable ``codoc.db`` instead of looping forever with a
+    swallowed per-cycle error. A missing db is fine (a fresh `codoc watch` creates it)."""
+    from pathlib import Path
+
+    if not (Path(codoc_dir) / "codoc.db").exists():
+        return None
+    try:
+        from codoc.store.db import open_store
+
+        with open_store(codoc_dir):
+            return None
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+
+
 def parent_alive() -> bool:
     """Decide whether the watch loop should keep running w.r.t. its spawner.
 
@@ -591,6 +608,24 @@ def run_watch(
     import watchfiles
 
     from codoc.loop.loop_a import reconcile_drift
+
+    # Singleton guard: a second daemon on the same repo (a manual `codoc watch` beside
+    # the VS Code extension's daemon, or a double-launch) doubles every pass and, with
+    # --auto-realize, can spawn two agents on one realize.md. The serve hub and the
+    # extension already guard; the bare CLI did not. loop_lock keeps the store safe, but
+    # refusing up front avoids the wasted/duplicated work.
+    if daemon_running(codoc_dir):
+        printer("A codoc daemon is already watching this repo — not starting a second one. "
+                "Stop the other one first (or it may be the VS Code extension's).")
+        return
+
+    # Fail fast and legibly on an unopenable store instead of looping forever emitting
+    # one error per cycle (every open_store inside the loop would raise and be swallowed).
+    _bad = _store_open_error(codoc_dir)
+    if _bad is not None:
+        printer(f"✗ cannot open the codoc store ({_bad}). The database may be corrupt — "
+                "back it up and re-run `codoc init --force` to rebuild it.")
+        return
 
     write_pidfile(codoc_dir)  # let the Stop hook know a daemon owns this repo
     atexit.register(clear_pidfile, codoc_dir)

@@ -6,7 +6,7 @@
       "type": "shell",
       "command": "npm run build",
       "options": {
-        "cwd": "${workspaceFolder}/vscode-codenav"
+        "cwd": "${workspaceFolder}/vscode-codoc"
       },
       "group": "build",
       "presentation": {

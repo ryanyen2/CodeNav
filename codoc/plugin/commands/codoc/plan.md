@@ -11,8 +11,10 @@ codoc exposes the `codoc` MCP server. Follow these steps exactly. **Do not edit
 any code until the user accepts the plan.**
 
 ## 1. Understand the current tree
-- Call `codoc_tree` to see existing features (ids, titles, parents, bound code)
-  and `codoc_status` for the current state.
+- Call `codoc_context(files=[…])` with the files the task will touch (when you
+  know them) for the relevant features + a whole-tree title outline; fall back
+  to `codoc_tree` (optionally `root_id`/`depth`-scoped) when the task is
+  tree-wide. Check `codoc_status` for the current state.
 - Decide what the task implies: which NEW features are needed, and which EXISTING
   features it touches. Prefer extending existing features over inventing new ones.
 
@@ -20,7 +22,8 @@ any code until the user accepts the plan.**
 - For each new feature the task needs, call `codoc_plan_add(title, description,
   parent_id?, binds?, rationale)`. These enter the tree as **unrealized
   placeholders** (shown highlighted in the IDE) once accepted.
-  - Choose `parent_id` from `codoc_tree` so each node sits under the right parent.
+  - Choose `parent_id` from the titles outline / subtree you read so each node
+    sits under the right parent.
   - Keep titles short (3–6 words) and give a 1–2 sentence description of intent.
   - You may pre-bind a node to the code you intend to write via `binds`
     (`"file.py::symbol"`); the binding will mark it realized once that code exists.
