@@ -47,6 +47,7 @@ export class WorkspaceState {
     private _activityMtimeMs: number | undefined;
     private _pendingCode: Map<string, PendingChange[]> = new Map();
     private _provisioning = false;
+    private _reloadTimer: ReturnType<typeof setTimeout> | undefined;
 
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
@@ -62,7 +63,18 @@ export class WorkspaceState {
         this._rootDir = this.detectRootDir();
         this._reload();
 
-        const reload = (): void => { this._rootDir = this.detectRootDir(); this._reload(); };
+        // One Loop B / Loop A pass rewrites up to ~6 of these files back-to-back; firing
+        // a full reparse+repaint per file gives ~6 redundant reloads for one logical
+        // change. Coalesce them behind a short debounce so a burst collapses into a
+        // single reload (the daemon's writes within a pass land well inside this window).
+        const reload = (): void => {
+            if (this._reloadTimer) clearTimeout(this._reloadTimer);
+            this._reloadTimer = setTimeout(() => {
+                this._reloadTimer = undefined;
+                this._rootDir = this.detectRootDir();
+                this._reload();
+            }, 60);
+        };
         for (const glob of [
             '**/.codoc/tree.codoc',
             '**/.codoc/tree.doc.json',  // KTD9: daemon-written store projection — repaint the webview
@@ -76,6 +88,7 @@ export class WorkspaceState {
             const w = vscode.workspace.createFileSystemWatcher(glob);
             this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));
         }
+        this.context.subscriptions.push({ dispose: () => { if (this._reloadTimer) clearTimeout(this._reloadTimer); } });
     }
 
     detectRootDir(): string | null {

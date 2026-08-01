@@ -226,3 +226,56 @@ def test_install_hooks_is_idempotent(tmp_path):
     for event_name in ("SessionStart", "Stop"):
         assert len(hooks[event_name]) == 1, \
             f"{event_name} has {len(hooks[event_name])} entries (expected 1)"
+
+
+def test_status_before_init_is_friendly_not_a_traceback(tmp_path):
+    # No .codoc/codoc.db → status must guide, not dump a sqlite traceback.
+    r = runner.invoke(app, ["status", "--root", str(tmp_path)])
+    assert r.exit_code == 1
+    assert "codoc init" in r.output
+
+
+def test_init_refuses_to_clobber_an_existing_workspace(tmp_path):
+    cd = tmp_path / ".codoc"; cd.mkdir()
+    s = open_store(cd); s.upsert_feature(Feature(title="Existing")); s.close()
+    # Without --force, init must refuse rather than re-bootstrap fresh ids on top.
+    r = runner.invoke(app, ["init", "--root", str(tmp_path), "--no-hooks"])
+    assert r.exit_code == 1
+    assert "already exists" in r.output
+
+
+def test_version_flag_reports_a_version():
+    r = runner.invoke(app, ["--version"])
+    assert r.exit_code == 0
+    assert "codoc" in r.output
+
+
+def test_init_writes_a_codoc_gitignore(tmp_path):
+    from codoc.loop.bootstrap import _write_codoc_gitignore
+    cd = tmp_path / ".codoc"; cd.mkdir()
+    _write_codoc_gitignore(str(cd))
+    gi = (cd / ".gitignore").read_text()
+    assert "tree.codoc" in gi and "!tree.codoc" in gi
+    assert gi.strip().startswith("#")  # explanatory header
+    # Idempotent: a second call never overwrites a user's customization.
+    (cd / ".gitignore").write_text("custom\n")
+    _write_codoc_gitignore(str(cd))
+    assert (cd / ".gitignore").read_text() == "custom\n"
+
+
+def test_serve_refuses_public_tunnel_without_optin(tmp_path):
+    # A workspace must exist (serve supervises the daemon); then --tunnel without the
+    # explicit opt-in must be refused, since the hub has no auth wired.
+    cd = tmp_path / ".codoc"; cd.mkdir()
+    s = open_store(cd); s.upsert_feature(Feature(title="X")); s.close()
+    r = runner.invoke(app, ["serve", "--root", str(tmp_path), "--tunnel"])
+    assert r.exit_code == 1
+    assert "Refusing to expose" in r.output
+
+
+def test_serve_refuses_non_localhost_host_without_optin(tmp_path):
+    cd = tmp_path / ".codoc"; cd.mkdir()
+    s = open_store(cd); s.upsert_feature(Feature(title="X")); s.close()
+    r = runner.invoke(app, ["serve", "--root", str(tmp_path), "--host", "0.0.0.0"])
+    assert r.exit_code == 1
+    assert "Refusing to expose" in r.output

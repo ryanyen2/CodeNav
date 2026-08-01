@@ -38,6 +38,7 @@ def run_bootstrap(
     config=None,
     do_index: bool = True,
     organize: bool = True,
+    printer=None,
 ) -> BootstrapResult:
     from codoc.codoc_file.render import write_tree
     from codoc.pipelines.indexing.reader import read_all_chunks
@@ -45,20 +46,40 @@ def run_bootstrap(
 
     from codoc.graph.query import build_graph
     from codoc.loop.bootstrap_hier import bootstrap_hier_from_chunks
+    from codoc.loop.status import refresh_status
+
+    say = printer or (lambda *_a, **_k: None)
 
     if do_index:
         update_index(root_dir, codoc_dir)
-    rows = read_all_chunks(codoc_dir)
+    # Bootstrap reads only symbol_path/source/hashes — never the embedding vectors —
+    # so materializing the whole embedding column here is pure memory pressure on a
+    # large repo (hundreds of MB of 384-float rows for nothing).
+    rows = read_all_chunks(codoc_dir, with_embeddings=False)
+    if not rows:
+        # No indexable Python/TypeScript. Don't silently render an empty tree that
+        # reads as a bug — still create the store + status so the daemon runs, but
+        # tell the user why the tree is empty.
+        with open_store(codoc_dir) as store:
+            write_tree(store, codoc_dir)
+            refresh_status(codoc_dir, store)
+        say("  No supported source files found — codoc indexes Python & TypeScript. "
+            "Add code and re-run `codoc init`, or start `codoc watch`.")
+        return BootstrapResult()
     with open_store(codoc_dir) as store:
-        build_graph(store, rows)
-        res = bootstrap_hier_from_chunks(
-            rows, store, repo_name=repo_name or os.path.basename(os.path.abspath(root_dir)),
-            config=config, organize=organize,
-        )
+        # One atomic unit: a failed / interrupted LLM call mid-bootstrap (rate limit,
+        # network blip, missing key on file N of M) rolls the store back to empty
+        # rather than leaving a half-built tree that a re-run would DUPLICATE on top of
+        # (every ADD mints a fresh id). A clean re-run then just works.
+        with store.transaction():
+            build_graph(store, rows)
+            res = bootstrap_hier_from_chunks(
+                rows, store, repo_name=repo_name or os.path.basename(os.path.abspath(root_dir)),
+                config=config, organize=organize, printer=say,
+            )
         write_tree(store, codoc_dir)
         # Write status so the IDE shows a real state (in_sync) on a freshly
         # bootstrapped repo instead of "not initialized".
-        from codoc.loop.status import refresh_status
         refresh_status(codoc_dir, store)
         return res
 
@@ -69,4 +90,25 @@ def run_init(root_dir: str, codoc_dir: str | None = None, **kwargs) -> Bootstrap
 
     cd = codoc_dir or str(Path(root_dir) / ".codoc")
     Path(cd).mkdir(parents=True, exist_ok=True)
+    _write_codoc_gitignore(cd)
     return run_bootstrap(root_dir, cd, **kwargs)
+
+
+def _write_codoc_gitignore(codoc_dir: str) -> None:
+    """Drop a ``.codoc/.gitignore`` so the derived index (LanceDB blobs, the SQLite
+    store, embeddings) doesn't show up as untracked binary the user might commit.
+    Only the human-facing exports (``tree.codoc``/``tree.doc.json``) are left tracked.
+    Written once, never overwritten (a user may have customized it)."""
+    from pathlib import Path
+
+    gi = Path(codoc_dir) / ".gitignore"
+    if gi.exists():
+        return
+    gi.write_text(
+        "# codoc-managed derived state — not for version control.\n"
+        "# The feature tree lives in tree.codoc / tree.doc.json (kept tracked below).\n"
+        "*\n"
+        "!.gitignore\n"
+        "!tree.codoc\n"
+        "!tree.doc.json\n"
+    )

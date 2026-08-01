@@ -67,3 +67,26 @@ def test_failed_replace_cleans_up_tmp(tmp_path):
     with pytest.raises(OSError):
         fsio.atomic_write_text(dest, "x")
     assert _tmps(tmp_path) == []
+
+
+def test_read_json_quarantines_a_corrupt_nonempty_file(tmp_path):
+    """A non-empty file that won't parse must be moved aside (not silently treated as
+    empty) so the next writer, which merges over ``read_json→{}``, can't overwrite and
+    drop its un-drained contents. The data survives in a ``.corrupt-*`` sibling."""
+    dest = tmp_path / "edits.json"
+    dest.write_text('{"commands": [ truncated…')  # invalid JSON, non-empty
+    assert fsio.read_json(dest, default={}) == {}
+    assert not dest.exists()                       # moved aside, not left in place
+    corrupt = list(tmp_path.glob("edits.json.corrupt-*"))
+    assert len(corrupt) == 1
+    assert "truncated" in corrupt[0].read_text()   # original bytes preserved
+
+
+def test_read_json_missing_and_empty_do_not_quarantine(tmp_path):
+    missing = tmp_path / "nope.json"
+    assert fsio.read_json(missing, default={"d": 1}) == {"d": 1}
+    empty = tmp_path / "empty.json"
+    empty.write_text("   \n")                       # whitespace only → not corruption
+    assert fsio.read_json(empty, default={}) == {}
+    assert empty.exists()                           # left alone
+    assert list(tmp_path.glob("*.corrupt-*")) == []

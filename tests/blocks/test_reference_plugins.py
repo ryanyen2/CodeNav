@@ -120,6 +120,7 @@ def test_url_consult_prefers_cached_excerpt():
 # ── PdfPlugin.lift ──────────────────────────────────────────────────────────
 
 def test_pdf_lift_extracts_local_attachment(tmp_path):
+    pytest.importorskip("pypdf")
     codoc_dir = tmp_path / ".codoc"
     media_dir = codoc_dir / "media"
     media_dir.mkdir(parents=True)

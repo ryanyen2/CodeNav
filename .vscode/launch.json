@@ -6,10 +6,10 @@
       "type": "extensionHost",
       "request": "launch",
       "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/vscode-codenav"
+        "--extensionDevelopmentPath=${workspaceFolder}/vscode-codoc"
       ],
       "outFiles": [
-        "${workspaceFolder}/vscode-codenav/dist/**/*.js"
+        "${workspaceFolder}/vscode-codoc/dist/**/*.js"
       ],
       "preLaunchTask": "build-extension",
       "sourceMaps": true

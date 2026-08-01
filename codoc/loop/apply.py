@@ -98,6 +98,28 @@ def apply_op(
     return event
 
 
+def _live_parent_id(store: Store, parent_id: str | None) -> str | None:
+    """Resolve ``parent_id`` to a parent that is actually visible in the tree.
+
+    A destination parent that is retired (or has been deleted out from under a
+    stale ADD/MOVE) is filtered out of ``children()``, so a node parented to it
+    becomes a live-but-invisible orphan — the exact catastrophe the cycle guard
+    warns about, reached by a different door (accept a MOVE/ADD whose destination
+    was retired in the meantime). Walk up to the nearest LIVE ancestor, falling
+    back to ``None`` (a root) so the node is always reachable from some root."""
+    seen: set[str] = set()
+    pid = parent_id
+    while pid is not None and pid not in seen:
+        seen.add(pid)
+        parent = store.get_feature(pid)
+        if parent is None:
+            return None  # destination vanished → root
+        if parent.lifecycle is not Lifecycle.RETIRED:
+            return pid  # a live parent — use it
+        pid = parent.parent_id  # retired → try its parent
+    return None
+
+
 def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
             th: dict[tuple[str, str], str]) -> None:
     k = op.kind
@@ -139,8 +161,12 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
         # "unrealized" from empty bindings — org-pass theme PARENTS are
         # legitimately binding-less yet fully real, and marking them placeholders
         # would mis-fire the IDE's unrealized decoration on every theme node.
+        # A stale ADD (proposal accepted after its destination was retired, or an
+        # MCP plan_add under a since-retired parent) must not bury the new node
+        # under a retired ancestor — resolve to the nearest live parent.
+        add_parent_id = _live_parent_id(store, op.parent_id)
         f = Feature(title=op.title or "Untitled", description=op.description or "",
-                    parent_id=op.parent_id, local_id=op.local_id,
+                    parent_id=add_parent_id, local_id=op.local_id,
                     realized=(op.realized if op.realized is not None else True))
         if op.feature_id:
             f.id = op.feature_id
@@ -166,7 +192,11 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
                     "codoc: rejected cycle-forming move of %s under %s (no-op)",
                     op.feature_id, op.parent_id)
             else:
-                f.parent_id = op.parent_id
+                # Same orphan hazard as the cycle case: a MOVE whose destination
+                # was retired (or deleted) since the op was minted would strand the
+                # node under an invisible ancestor. Land it on the nearest LIVE
+                # parent instead of the requested (dead) one.
+                f.parent_id = _live_parent_id(store, op.parent_id)
                 f.updated_at = f.updated_at.advance()
                 store.upsert_feature(f)
     elif k is NodeOpKind.RETIRE_NODE:

@@ -128,12 +128,14 @@ class SessionStore:
 
 @dataclass
 class AuthContext:
-    """What the hub needs to authorize requests: the session store and (live) the
-    collaborator resolver. ``resolver`` is None in tests that drive the session
-    store directly; deployment supplies a GitHub-App-backed resolver."""
+    """What the hub needs to authorize requests: the session store, the collaborator
+    resolver, and the OAuth helper that drives the sign-in flow. ``resolver``/``oauth``
+    are None in tests that drive the session store directly; deployment supplies a
+    GitHub-App-backed pair (see :func:`codoc.serve.github_auth.build_auth_context`)."""
 
     store: SessionStore
     resolver: CollaboratorResolver | None = None
+    oauth: object | None = None  # a github_auth.GithubOAuth in deployment
 
 
 def capability_from_request(request, store: SessionStore) -> Capability:

@@ -38,7 +38,7 @@ import os
 import sys
 
 from pydantic import BaseModel
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv
 
 # Load the repo's .env from the CURRENT WORKING DIRECTORY, not from this module's
 # install location. Bare load_dotenv()/find_dotenv() walk up from the *caller's
@@ -46,9 +46,24 @@ from dotenv import find_dotenv, load_dotenv
 # the project .env and the user's CODOC_PROVIDER choice is silently ignored.
 # codoc is always run with cwd = the repo (the daemon, the CC hooks, `codoc init
 # --root <repo>` all set it), so usecwd=True is the correct, robust anchor.
-# override=True so the project's .env is authoritative over stale shell exports
-# (e.g. a globally-exported CODOC_MAX_TOKENS that would otherwise win).
-load_dotenv(find_dotenv(usecwd=True), override=True)
+#
+# codoc runs against ARBITRARY user repos, so the repo's .env is treated as a
+# FALLBACK only — it fills in config the user has not already set in their real
+# environment, and never OVERRIDES the shell. Overriding would let any checked-in
+# .env win over the user's actual intent (and silently bill a foreign key). Two
+# redirect/logging vars are refused from a repo .env entirely: a repo has no
+# legitimate reason to point codoc's API base URL elsewhere (key exfiltration) or
+# force prompt logging on — but an arbitrary/adversarial repo could. Set those in
+# the shell if you genuinely need them.
+_UNTRUSTED_FROM_DOTENV = frozenset({
+    "CODOC_BASE_URL", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "CODOC_LOG_PROMPTS",
+})
+_dotenv_path = find_dotenv(usecwd=True)
+if _dotenv_path:
+    for _k, _v in dotenv_values(_dotenv_path).items():
+        if _v is None or _k in _UNTRUSTED_FROM_DOTENV:
+            continue
+        os.environ.setdefault(_k, _v)
 
 
 # ---------------------------------------------------------------------------

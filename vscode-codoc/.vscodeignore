@@ -6,3 +6,8 @@ tsconfig.json
 bundled/.gitkeep
 test/**
 vitest.config.*
+**/.DS_Store
+**/*.vsix
+docs/**
+.vscode-test/**
+node_modules/.cache/**

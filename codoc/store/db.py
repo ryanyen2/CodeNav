@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS events (
     accepted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_applied ON events(applied);
+-- recent_events() / the sidecar changes-feed sort by `at` DESC on every render; the
+-- events table is append-only and grows for the daemon's lifetime, so without this
+-- index that sort degrades to a full scan (tens of ms once the table is large).
+CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
 
 -- Typed-media blocks on a feature (diagram / image / latex / url / …). Prose is
 -- NOT here — it is the implicit block-zero backed by features.description, so an
@@ -167,6 +171,9 @@ class Store:
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
+        # A brief wait instead of an instant "database is locked" when a concurrent
+        # writer (an out-of-lock migrate / startup render) holds the WAL write slot.
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._conn.commit()

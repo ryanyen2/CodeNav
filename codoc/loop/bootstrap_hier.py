@@ -169,6 +169,11 @@ def _feature_coupling(store: Store) -> list[str]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+# Above this many top-level features the single-prompt organization pass would
+# overflow the model's context — skip it and keep the (usable) flat tree.
+_ORG_FEATURE_CAP = 400
+
+
 def bootstrap_hier_from_chunks(
     rows: list,
     store: Store,
@@ -178,18 +183,42 @@ def bootstrap_hier_from_chunks(
     repo_name: str = "codebase",
     config=None,
     organize: bool = True,
+    printer=None,
 ) -> BootstrapResult:
     """Two-phase bootstrap: per-file features, then top-level organization."""
+    import os as _os
+
+    say = printer or (lambda *_a, **_k: None)
     by_file: dict[str, list] = {}
     for r in rows:
         by_file.setdefault(r.file, []).append(r)
 
+    files = sorted(by_file)
+    total = len(files)
+    # Bootstrap makes ~1 sequential LLM call per file. On a big repo that is slow (and,
+    # on a paid key, costly) — warn, and honour an opt-in hard cap so a user can bound it.
+    cap_env = _os.environ.get("CODOC_BOOTSTRAP_MAX_FILES", "").strip()
+    max_files = int(cap_env) if cap_env.isdigit() and int(cap_env) > 0 else 0
+    if max_files and total > max_files:
+        say(f"  ⚠ {total} source files — bootstrapping the first {max_files} "
+            "(raise or unset CODOC_BOOTSTRAP_MAX_FILES to include the rest).")
+        files = files[:max_files]
+        total = max_files
+    elif total > 1000:
+        say(f"  ⚠ {total} source files — bootstrap makes ~1 LLM call per file, so this "
+            "will take a while (and cost, on a paid key). Set CODOC_BOOTSTRAP_MAX_FILES to cap it.")
+
     calls = 0
+    # ~40 progress ticks regardless of repo size, so a large bootstrap shows steady
+    # motion (not a silent multi-minute hang) without scrolling thousands of lines.
+    step = max(1, total // 40)
     # One feature-table read up front; each file pass appends the titles it just
     # minted, so later files still see them as dedup context without an
     # O(files × features) re-scan.
     existing_titles = [f.title for f in store.list_features()]
-    for file in sorted(by_file):
+    for idx, file in enumerate(files, 1):
+        if idx == 1 or idx == total or idx % step == 0:
+            say(f"  · [{idx}/{total}] {file}")
         file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
         chunks = [
             {"symbol_path": r.symbol_path, "source": (r.source or "")[:_SOURCE_CAP]}
@@ -207,7 +236,7 @@ def bootstrap_hier_from_chunks(
         calls += 1
 
     top_level = store.children(None)
-    if organize and len(top_level) > 1:
+    if organize and 1 < len(top_level) <= _ORG_FEATURE_CAP:
         features = [
             {"id": f.id, "title": f.title, "description": f.description}
             for f in top_level
@@ -216,6 +245,9 @@ def bootstrap_hier_from_chunks(
         ops = propose_org(features, coupling, repo_name=repo_name, config=config)
         _apply_ops_with_local_ids(ops, store, {}, source="bootstrap")
         calls += 1
+    elif organize and len(top_level) > _ORG_FEATURE_CAP:
+        say(f"  ⚠ {len(top_level)} top-level features — skipping the organization pass "
+            "(too large for one prompt). The flat tree is still usable; edit it to group.")
 
     return BootstrapResult(
         chunks=len(rows),

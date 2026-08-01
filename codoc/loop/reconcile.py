@@ -72,15 +72,27 @@ def safe_write_tree(store: Store, codoc_dir: str) -> bool:
 
     with loop_lock(codoc_dir):
         write_sidecar(store, codoc_dir)
-        if not pending_user_edits(store, codoc_dir).is_empty():
-            return False
-        # U2b: also yield to a pending WEBVIEW edit (tree.doc.json ahead of the store).
-        # Rendering tree.codoc from the old store while a doc edit awaits Loop B would
-        # push stale text the host then adopts — reverting the user's settle. Only Loop B
-        # applies the doc edit; once it has, the doc is in sync and this renders normally.
+        # Yield to a pending WEBVIEW edit (tree.doc.json ahead of the store): the
+        # host optimistically settles the doc before Loop B applies the command,
+        # and on a not-yet-migrated workspace tree.doc.json may still hold comments
+        # the store lacks. Rendering now would push stale text the host adopts —
+        # reverting the settle — or clobber the un-migrated comments. Loop B applies
+        # the edit / migrate absorbs the comments; the next pass renders normally.
         doc_parsed = parse_doc_file(codoc_dir)
         if doc_parsed is not None and not diff_codoc(doc_parsed, store, has_local_ids=True).is_empty():
             return False
+        # tree.codoc is a READ-ONLY derived export: the text-ingest channel is retired
+        # (loop_b._merge_channels returns empty), so a divergent on-disk tree.codoc — a
+        # stray manual edit, a git merge/checkout, a torn write — can NEVER be absorbed.
+        # The former guard here SKIPPED the render to "preserve" such an edit, which
+        # instead wedged BOTH tree.codoc AND tree.doc.json permanently while status still
+        # read in_sync (an un-drainable pending diff). Re-render from the store so the
+        # workspace self-heals; log the overwrite so a surprised manual edit is traceable.
+        if not pending_user_edits(store, codoc_dir).is_empty():
+            import logging
+            logging.getLogger(__name__).info(
+                "codoc: tree.codoc diverged from the store (manual edit or git op) — "
+                "re-rendering the read-only export from the store")
         write_tree(store, codoc_dir)
         # KTD9: tree.doc.json is a daemon-written derived view of the store, exactly like
         # tree.codoc — write BOTH here so a freshly-indexed / in-sync workspace that never

@@ -336,7 +336,18 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.openRef', async (file: string, symbol: string) => {
             if (!state.rootDir) return;
-            const uri = vscode.Uri.file(path.join(state.rootDir, file));
+            // Containment guard: a `codoc:` ref is authored text (and, via the hub, can be
+            // teammate/remote-authored), so a crafted `codoc:../../../../etc/passwd` must
+            // not open an arbitrary file outside the repo. Resolve and require the target
+            // to stay under rootDir before opening.
+            const rootResolved = path.resolve(state.rootDir);
+            const target = path.resolve(rootResolved, file);
+            const rel = path.relative(rootResolved, target);
+            if (rel.startsWith('..') || path.isAbsolute(rel)) {
+                void vscode.window.showWarningMessage(`codoc: refusing to open ${file} — outside the workspace.`);
+                return;
+            }
+            const uri = vscode.Uri.file(target);
             let doc: vscode.TextDocument;
             let targetEditor: vscode.TextEditor;
             try {
