@@ -82,6 +82,57 @@ def test_store_nested_features_carry_level(tmp_path):
     assert heads["Child"]["attrs"]["level"] == 1
 
 
+def test_store_features_emit_in_tree_preorder(tmp_path):
+    # Regression: a child created AFTER a later root must still render UNDER its parent,
+    # not in flat created_at order — otherwise the doc body desyncs from the left nav
+    # (which walks the tree) and scroll-spy jumps. Creation order here is
+    # [Root A, Root B, Child of A]; the doc must read [Root A, Child of A, Root B].
+    with open_store(tmp_path) as s:
+        root_a = Feature(title="Root A", description="a")
+        s.upsert_feature(root_a)
+        root_b = Feature(title="Root B", description="b")
+        s.upsert_feature(root_b)
+        child = Feature(title="Child of A", description="c", parent_id=root_a.id)
+        s.upsert_feature(child)
+        doc = build_doc_from_store(s)
+    titles = [b["content"][0]["text"] for b in doc["content"] if b["type"] == "featureHeading"]
+    assert titles == ["Root A", "Child of A", "Root B"]
+
+
+def test_store_orphan_with_dangling_parent_still_projects(tmp_path):
+    # A feature whose parent_id points outside the live set (e.g. a retired parent) is
+    # treated as a de-facto root and stays in the projection — never silently dropped.
+    with open_store(tmp_path) as s:
+        orphan = Feature(title="Orphan", description="o", parent_id="f-nonexistent")
+        s.upsert_feature(orphan)
+        doc = build_doc_from_store(s)
+    titles = [b["content"][0]["text"] for b in doc["content"] if b["type"] == "featureHeading"]
+    assert titles == ["Orphan"]
+
+
+def test_store_paragraphs_carry_owner_id(tmp_path):
+    # Invariant I2: each projected description paragraph is anchored to its feature by
+    # identity (ownerId=fid), so the webview never re-attributes prose to a heading
+    # inserted above it. Two features, each with a distinct paragraph.
+    with open_store(tmp_path) as s:
+        a = Feature(title="A", description="First para.\n\nSecond para.")
+        s.upsert_feature(a)
+        b = Feature(title="B", description="Only para.")
+        s.upsert_feature(b)
+        doc = build_doc_from_store(s)
+    paras = [blk for blk in doc["content"] if blk["type"] == "paragraph"]
+    owners = [p["attrs"]["ownerId"] for p in paras]
+    assert owners == [a.id, a.id, b.id]
+
+
+def test_build_doc_from_text_omits_owner_id(tmp_path):
+    # The frozen text path (build_doc) stays byte-identical to the pre-I2 shape: no
+    # ownerId attr (only the store-fed projection anchors prose by identity).
+    doc = build_doc_from_text("- Auth  ⟨f-1⟩\n    Login and sessions.\n")
+    para = next(b for b in doc["content"] if b["type"] == "paragraph")
+    assert "attrs" not in para
+
+
 def test_store_mark_projects_onto_inline_run(tmp_path):
     with open_store(tmp_path) as s:
         # normalized description == "Login and sessions." — anchor the word "Login" (0..5).

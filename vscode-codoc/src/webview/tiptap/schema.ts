@@ -14,6 +14,7 @@
 import StarterKit from '@tiptap/starter-kit';
 import { getSchema, Extensions } from '@tiptap/core';
 import { FeatureHeading } from './feature-heading';
+import { ParagraphOwner } from './paragraph-owner';
 import { CodeRef } from './code-ref';
 import { AuthorMark } from './author-mark';
 import { HighlightMark } from './highlight-mark';
@@ -42,6 +43,9 @@ export function codocExtensions(): Extensions {
             //       history, dropcursor, gapcursor.
         }),
         FeatureHeading,
+        // ownerId on paragraphs + the keep-owner sweep (invariant I2): prose is anchored
+        // to its feature by identity, so a heading inserted above it never steals it.
+        ParagraphOwner,
         CodeRef,
         AuthorMark,
         HighlightMark,

@@ -54,9 +54,14 @@ def _inline_runs(text: str) -> list[dict]:
     return runs
 
 
-def _paragraphs(description: str) -> list[dict]:
+def _paragraphs(description: str, owner_id: str | None = None) -> list[dict]:
     """Description text → PM ``paragraph`` blocks (split on blank lines). Empty
-    paragraphs are dropped, matching ``doc_parse._description``'s projection."""
+    paragraphs are dropped, matching ``doc_parse._description``'s projection.
+
+    When ``owner_id`` is given, each block carries ``attrs.ownerId`` — the feature
+    identity the prose is anchored to (invariant I2), so the webview attributes it by
+    identity rather than by position. ``None`` (the frozen ``build_doc`` text path)
+    omits the attr, leaving the block byte-identical to the pre-I2 shape."""
     blocks: list[dict] = []
     for chunk in _PARA_SPLIT.split(description or ""):
         chunk = chunk.strip()
@@ -64,7 +69,10 @@ def _paragraphs(description: str) -> list[dict]:
             continue
         runs = _inline_runs(chunk)
         if runs:
-            blocks.append({"type": "paragraph", "content": runs})
+            block: dict = {"type": "paragraph", "content": runs}
+            if owner_id:
+                block["attrs"] = {"ownerId": owner_id}
+            blocks.append(block)
     return blocks
 
 
@@ -236,10 +244,13 @@ def _annotations_for(marks: list[Mark], comments: list[CommentThread]) -> list[t
     return anns
 
 
-def _annotated_paragraphs(description: str, anns: list[tuple[int, int, dict]]) -> list[dict]:
+def _annotated_paragraphs(
+    description: str, anns: list[tuple[int, int, dict]], owner_id: str | None = None
+) -> list[dict]:
     """Description → PM ``paragraph`` blocks, like :func:`_paragraphs`, but with
     annotations whose offsets index into the *normalized* description mapped onto the
-    matching inline runs.
+    matching inline runs. ``owner_id`` (invariant I2) stamps ``attrs.ownerId`` on every
+    emitted block, exactly as :func:`_paragraphs` does.
 
     The anchors are offsets into ``normalize_description(description)``, so we split
     that canonical string on blank lines (the same ``_PARA_SPLIT`` shape the parser
@@ -262,7 +273,10 @@ def _annotated_paragraphs(description: str, anns: list[tuple[int, int, dict]]) -
             continue
         runs = _annotated_runs(chunk, start, anns) if anns else _inline_runs(chunk)
         if runs:
-            blocks.append({"type": "paragraph", "content": runs})
+            block: dict = {"type": "paragraph", "content": runs}
+            if owner_id:
+                block["attrs"] = {"ownerId": owner_id}
+            blocks.append(block)
     # Empty / whitespace-only description with annotations (a feature-level note, which
     # can only anchor at offset 0): no paragraph was emitted above, so the annotation
     # would be dropped (FIX G). Emit a paragraph carrying its zero-width caret run(s) so
@@ -270,7 +284,10 @@ def _annotated_paragraphs(description: str, anns: list[tuple[int, int, dict]]) -
     if not blocks and anns:
         caret_runs = _annotated_runs("", 0, anns)
         if caret_runs:
-            blocks.append({"type": "paragraph", "content": caret_runs})
+            caret_block: dict = {"type": "paragraph", "content": caret_runs}
+            if owner_id:
+                caret_block["attrs"] = {"ownerId": owner_id}
+            blocks.append(caret_block)
     return blocks
 
 
@@ -294,6 +311,50 @@ def _store_depths(features: list) -> dict[str, int]:
     return cache
 
 
+def _preorder(features: list) -> list:
+    """Reorder live features into the tree's depth-first PRE-ORDER — the same order
+    the left-nav gets from ``render_tree`` (a ``walk(None, 0)`` over ``store.children``).
+
+    ``store.list_features()`` returns a FLAT ``ORDER BY created_at`` list, so emitting
+    the doc in that order lays a child out wherever it happened to be created — not
+    under its parent. That desynchronizes the doc body from the nav (scroll-spy then
+    jumps). Walking parent→children here makes the doc order faithful to the tree.
+
+    Siblings keep their ``created_at`` order (``list_features`` already sorts by it, and
+    ``store.children`` sorts the same way), so this matches the nav 1:1. Cycle-safe: a
+    ``seen`` guard bounds the walk, and any feature never reached from a root (orphaned
+    by a dangling ``parent_id`` or a pre-existing cycle) is appended afterward so it is
+    still projected rather than silently dropped."""
+    by_id = {f.id: f for f in features}
+    children: dict[str | None, list] = {}
+    for f in features:
+        # A parent_id pointing outside the live set (retired/missing parent) makes the
+        # feature a de-facto root — same as render_tree, where store.children(None)
+        # only returns rows whose parent is genuinely absent.
+        key = f.parent_id if (f.parent_id and f.parent_id in by_id) else None
+        children.setdefault(key, []).append(f)
+
+    ordered: list = []
+    seen: set[str] = set()
+
+    def walk(parent_key: str | None) -> None:
+        for f in children.get(parent_key, []):
+            if f.id in seen:
+                continue
+            seen.add(f.id)
+            ordered.append(f)
+            walk(f.id)
+
+    walk(None)
+    # Orphans unreachable from any root (dangling parent chain / pre-existing cycle):
+    # keep them in the projection so they stay visible and editable.
+    if len(ordered) != len(features):
+        for f in features:
+            if f.id not in seen:
+                ordered.append(f)
+    return ordered
+
+
 def build_doc_from_store(store: Store) -> dict:
     """Render the store's live feature tree into a ProseMirror ``doc`` (``tree.doc.json``).
 
@@ -302,8 +363,12 @@ def build_doc_from_store(store: Store) -> dict:
     feature's ``updated_at`` HLC string, for KTD4's per-feature version gate), and
     stored tracked-change marks + inline comment threads are projected onto the inline
     runs at their char-offset anchors. Retired features stay excluded (as in
-    :func:`build_doc`)."""
-    features = store.list_features()  # live features only (retired excluded)
+    :func:`build_doc`).
+
+    Features are emitted in tree PRE-ORDER (:func:`_preorder`) so the doc body lines up
+    with the left-nav's ``render_tree`` walk — not the flat ``created_at`` order
+    ``list_features`` returns, which desynchronizes the two panes."""
+    features = _preorder(store.list_features())  # live only (retired excluded), tree order
     depths = _store_depths(features)
     content: list[dict] = []
     for f in features:
@@ -323,5 +388,7 @@ def build_doc_from_store(store: Store) -> dict:
             heading["content"] = [{"type": "text", "text": title}]
         content.append(heading)
         anns = _annotations_for(store.marks_for_feature(f.id), store.comments_for_feature(f.id))
-        content.extend(_annotated_paragraphs(f.description, anns))
+        # ownerId=f.id anchors each description paragraph to its feature by identity (I2),
+        # so the webview never re-attributes prose to a heading inserted above it.
+        content.extend(_annotated_paragraphs(f.description, anns, owner_id=f.id))
     return {"type": "doc", "content": content}

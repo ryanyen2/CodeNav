@@ -87,8 +87,47 @@ export function codeRefNode(attrs: CodeRefAttrs, marks?: PMMark[]): PMNode {
     return node;
 }
 
-export function paragraphNode(content: PMNode[]): PMNode {
-    return { type: NODE_PARAGRAPH, content };
+/**
+ * A description paragraph. `ownerId` (the fid|localId of the feature it belongs to)
+ * anchors the prose to its feature by IDENTITY rather than by "the nearest heading
+ * above it right now" (invariant I2). It is stamped at projection time (the Python
+ * `build_doc_from_store` seam) and crystallized onto brand-new prose by the keep-owner
+ * plugin, then preserved by ProseMirror across split/merge — so inserting a heading
+ * above owned prose never re-attributes it. `null`/omitted → attribution falls back to
+ * position (a paragraph with no owner yet), keeping older docs byte-identical.
+ */
+export function paragraphNode(content: PMNode[], ownerId: string | null = null): PMNode {
+    return ownerId
+        ? { type: NODE_PARAGRAPH, attrs: { ownerId }, content }
+        : { type: NODE_PARAGRAPH, content };
+}
+
+/** The feature identity a paragraph is anchored to (invariant I2), or null if unowned. */
+export function paragraphOwner(node: PMNode): string | null {
+    return (node.attrs as { ownerId?: string | null } | undefined)?.ownerId ?? null;
+}
+
+/**
+ * For a whole-tree doc, compute the owner each UN-owned paragraph should adopt: the
+ * identity (fid ?? localId) of the nearest preceding heading. Returns a map from
+ * top-level block index → ownerId to stamp; already-owned paragraphs, non-paragraphs,
+ * and prose before the first heading are absent (no fill). This is the pure logic the
+ * keep-owner ProseMirror plugin applies (paragraph-owner.ts) — kept here so it is
+ * testable without a live editor and so the attribution model has one definition.
+ */
+export function paragraphOwnerFills(doc: PMNode): Map<number, string> {
+    const blocks = doc.content ?? [];
+    const fills = new Map<number, string>();
+    let nearest: string | null = null;
+    blocks.forEach((b, i) => {
+        if (b.type === NODE_FEATURE_HEADING) {
+            const a = b.attrs as { fid?: string | null; localId?: string | null } | undefined;
+            nearest = (a?.fid ?? a?.localId) ?? null;
+        } else if (b.type === NODE_PARAGRAPH) {
+            if (!paragraphOwner(b) && nearest) fills.set(i, nearest);
+        }
+    });
+    return fills;
 }
 
 export function featureHeadingNode(attrs: FeatureHeadingAttrs, content: PMNode[]): PMNode {
