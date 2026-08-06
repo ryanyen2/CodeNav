@@ -88,6 +88,30 @@ def apply_op(
     inferred from ``source`` via :func:`default_provenance`.
     """
     d_actor, d_mode = default_provenance(source, applied)
+    # Write-boundary sanitization: authored text must never carry id-shaped
+    # ⟨…⟩ tokens where the render→parse round-trip would read them as tree
+    # STRUCTURE — a title id token hijacks the node's identity, a marker line
+    # with an id inside a description forges a phantom node and truncates the
+    # prose (see parse.sanitize_authored_*). One choke point for every writer:
+    # LLM ops, MCP, webview commands, inbox accepts, bootstrap.
+    if op.title is not None or op.description is not None:
+        from codoc.codoc_file.parse import (
+            sanitize_authored_description,
+            sanitize_authored_title,
+        )
+        if op.title is not None:
+            clean = sanitize_authored_title(op.title)
+            # A title that was ONLY id tokens sanitizes to '' — dropping the
+            # AMEND beats blanking a real title (ADD falls back to "Untitled").
+            op.title = clean if (clean or op.kind is not NodeOpKind.AMEND) else None
+        if op.description is not None:
+            op.description = sanitize_authored_description(op.description)
+    # Pre-mint the id for a directly-applied ADD so the creation event records
+    # the real feature id (blame needs "who created this" findable by feature).
+    # Pending proposals keep a bare op — their id mints on acceptance.
+    if op.kind is NodeOpKind.ADD_NODE and applied and not op.feature_id:
+        from codoc.model.ids import new_feature_id
+        op.feature_id = new_feature_id()
     event = Event(source=source, op=op, applied=applied,
                   actor=actor or d_actor, mode=mode or d_mode, caused_by=caused_by)
     store.append_event(event)

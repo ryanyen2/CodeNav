@@ -271,3 +271,45 @@ def test_accepted_amend_survives_the_stale_text(dirs):
     s = open_store(codoc_dir)
     assert s.get_feature(fid).description == "Validates input against the schema."
     s.close()
+
+
+# ─── realized.jsonl — durable directive outcomes ──────────────────────────────
+
+def test_drained_manifest_logs_outcomes(dirs):
+    """When the queue drains (realize.md deleted), the handed-off directives
+    must land in realized.jsonl before the manifest entry vanishes."""
+    _, codoc_dir = dirs
+    edits.write_manifest(codoc_dir, [
+        edits.Directive(id="d-1", feature_id="f-1", kind="amend",
+                        caused_by="e-9", text="UPDATE FEATURE: …")])
+    assert edits.read_manifest(codoc_dir) == []  # stale → cleared
+
+    (outcome,) = edits.read_realized(codoc_dir)
+    assert outcome["id"] == "d-1"
+    assert outcome["feature_id"] == "f-1"
+    assert outcome["caused_by"] == "e-9"
+    assert outcome["completed_at"]
+
+
+def test_drain_with_held_drafts_logs_only_completed(dirs):
+    """Held drafts survive; completed handed-off entries are logged and dropped
+    from the manifest exactly once."""
+    _, codoc_dir = dirs
+    edits.write_manifest(codoc_dir, [
+        edits.Directive(id="d-done", feature_id="f-1", kind="amend", handed_off=True),
+        edits.Directive(id="d-draft", feature_id="f-2", kind="amend", handed_off=False),
+    ])
+
+    got = edits.read_manifest(codoc_dir)
+    assert [d.id for d in got] == ["d-draft"]
+    assert [o["id"] for o in edits.read_realized(codoc_dir)] == ["d-done"]
+
+    # Re-reads must not duplicate the outcome.
+    edits.read_manifest(codoc_dir)
+    edits.read_manifest(codoc_dir)
+    assert [o["id"] for o in edits.read_realized(codoc_dir)] == ["d-done"]
+
+
+def test_read_realized_missing_file(dirs):
+    _, codoc_dir = dirs
+    assert edits.read_realized(codoc_dir) == []

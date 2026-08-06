@@ -88,6 +88,16 @@ def codoc_status() -> dict:
 
 
 @mcp.tool
+def codoc_history(feature_id: str, limit: int = 20) -> dict:
+    """One feature's change history (blame): who changed it, when, how, and
+    why — actor/mode/caused_by per applied event, with the title/description
+    snapshots amends left behind. Use before reworking a feature to understand
+    the intent already invested in it."""
+    cd, err = _need_dir()
+    return err or tools.feature_history(cd, feature_id, limit=limit)
+
+
+@mcp.tool
 def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str = "") -> dict:
     """Submit the whole set of tree changes implied by code you just wrote, in one
     call. This is the primary code-first reflection entrypoint.

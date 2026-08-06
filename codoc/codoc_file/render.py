@@ -166,7 +166,7 @@ def _proposals_map(store: Store) -> dict[str, dict]:
 _CHANGES_FEED_LIMIT = 50
 
 
-def _changes_feed(store: Store) -> list[dict]:
+def _changes_feed(events: list) -> list[dict]:
     """The last N *applied* events as a provenance feed (newest first).
 
     This is how the IDE learns WHO last changed each feature without reading the
@@ -174,9 +174,12 @@ def _changes_feed(store: Store) -> list[dict]:
     re-stamp the new prose as pencil ink instead of resetting authorship, and a
     ``caused_by`` directive id lets it group a reflection cascade under the doc
     edit that triggered it. Legacy events carry empty strings — render as today.
+
+    Takes the shared recent-events list (write_sidecar reads it ONCE for both this
+    feed and the per-feature history feed — two scans per pass would be pure waste).
     """
     out: list[dict] = []
-    for e in store.recent_events(_CHANGES_FEED_LIMIT * 2):
+    for e in events:
         if not e.applied:
             continue
         out.append({
@@ -186,6 +189,44 @@ def _changes_feed(store: Store) -> list[dict]:
         })
         if len(out) >= _CHANGES_FEED_LIMIT:
             break
+    return out
+
+
+# Blame feed (W2): a bounded newest-first scan grouped per feature, so the IDE can
+# render an edit history (who / when / why) without reading the event log itself. One
+# indexed range scan (recent_events → idx_events_at), NOT an O(F) per-feature query
+# storm — a feature untouched within the window simply carries no history slice (its
+# deep past is still reachable via `codoc history` / the codoc_history MCP tool).
+_HISTORY_FEED_SCAN = 300       # events read per pass (one indexed LIMIT query)
+_HISTORY_PER_FEATURE = 6       # newest entries kept per feature
+_HISTORY_RATIONALE_CAP = 200   # trim a long rationale so the sidecar stays lean
+
+
+def _history_feed(events: list, live_ids: set[str]) -> dict[str, list[dict]]:
+    """`{feature_id: [ {at, kind, actor, mode, caused_by, rationale}, … ]}` newest
+    first, at most :data:`_HISTORY_PER_FEATURE` per feature, only for LIVE features
+    that changed within the scan window. Rationale is the one-line 'why' the ledger
+    already stores per op; empty strings are omitted so the payload stays lean, and
+    a pathologically long one is capped. Takes the shared recent-events list (read
+    once by write_sidecar — see :func:`_changes_feed`)."""
+    out: dict[str, list[dict]] = {}
+    for e in events:
+        if not e.applied:
+            continue
+        fid = e.op.feature_id or ""
+        if not fid or fid not in live_ids:
+            continue
+        bucket = out.setdefault(fid, [])
+        if len(bucket) >= _HISTORY_PER_FEATURE:
+            continue
+        entry = {"at": e.at.to_str(), "kind": e.op.kind.value,
+                 "actor": e.actor, "mode": e.mode}
+        if e.caused_by:
+            entry["caused_by"] = e.caused_by
+        if e.op.rationale:
+            r = e.op.rationale.strip()
+            entry["rationale"] = (r[:_HISTORY_RATIONALE_CAP] + "…") if len(r) > _HISTORY_RATIONALE_CAP else r
+        bucket.append(entry)
     return out
 
 
@@ -570,6 +611,12 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     # slot and _compute_see_also (which is derived from the same edges).
     edges = _compute_feature_edges(store)
 
+    # ONE recent-events read shared by the changes feed (last 50 applied) AND the
+    # per-feature blame history (grouped from a wider window) — two indexed scans
+    # per render pass would be pure waste (the pass runs on every loop tick).
+    recent_events = store.recent_events(_HISTORY_FEED_SCAN)
+    live_ids = {f.id for f in features}
+
     sidecar = {
         # v6: adds the `blocks` slice (typed-media blocks). Presence-keyed — the TS
         # reader and the hub key on field presence, so a v5 sidecar (no `blocks`)
@@ -582,7 +629,7 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         "proposals": _proposals_map(store),
         # v4: the provenance ledger surfaced to the IDE — recent applied events
         # (who/how/why-chained) + the doc-wins hold set.
-        "changes": _changes_feed(store),
+        "changes": _changes_feed(recent_events),
         "holds": proj.holds,
         # v5: per-held-feature detail for the in-situ "pending intent" decoration —
         # the queued directive's kind + a plain-language intent gloss, so the IDE can
@@ -622,6 +669,10 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # persistent only — prose is block-zero (the description) and transient
         # blocks ride the steers channel. A feature with no typed media is absent.
         "blocks": _blocks_map(store, {f.id for f in features}),
+        # W2 (blame): bounded per-feature edit history (who/when/why) for the IDE's
+        # History stance + hover timeline. Only features changed within the scan
+        # window appear; deep history stays in `codoc history` / codoc_history MCP.
+        "feature_history": _history_feed(recent_events, live_ids),
     }
     # Route through the shared atomic writer (per-writer-unique tmp) rather than a
     # hand-rolled fixed-name tmp: two writers of this sidecar (two daemons, or a daemon

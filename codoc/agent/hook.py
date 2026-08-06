@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -229,6 +230,12 @@ def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
             "open": True,
             "started_at": _now_iso(),
             "ended_at": None,
+            # W1: which coding agent owns this epoch, so presence/ribbon/blame
+            # attribute to the real agent instead of a hardcoded "Claude". Any
+            # agent that drives codoc exports CODOC_AGENT (claude-code | codex |
+            # gemini | cursor | …); default is Claude Code. Additive — a reader
+            # that predates this key still works (falls back to the default).
+            "agent": {"id": os.environ.get("CODOC_AGENT") or "claude-code"},
         },
         "touched": {},
         "recent": [],
@@ -317,6 +324,26 @@ def _maybe_spawn_reflect(codoc_dir: str, data: dict, ep: dict) -> None:
         pass
 
 
+# Bash actions worth narrating in the agent ribbon (P2b / W1): test runs and
+# repo-mutating git verbs. Everything else (ls, cat, grep, cd …) is noise the
+# ribbon must not drown in.
+_TEST_CMD_RE = re.compile(
+    r"\b(pytest|vitest|jest|tsc|mypy|ruff|eslint|go test|cargo test|npm (?:run )?test)\b")
+_GIT_CMD_RE = re.compile(
+    r"(?:^|&&|;|\|)\s*git\s+(commit|push|merge|rebase|revert|cherry-pick|stash)\b")
+
+
+def _classify_bash(command: str) -> tuple[str, str] | None:
+    """(action, ribbon label) for a Bash command worth showing, else None."""
+    m = _TEST_CMD_RE.search(command or "")
+    if m:
+        return ("test", f"running {m.group(1).split()[0]}")
+    m = _GIT_CMD_RE.search(command or "")
+    if m:
+        return ("git", f"git {m.group(1)}")
+    return None
+
+
 def _handle_tool(
     payload: dict[str, Any],
     codoc_dir: str,
@@ -325,6 +352,28 @@ def _handle_tool(
     """Record a tool-call touch event in activity.json."""
     tool_name = payload.get("tool_name", "")
     tool_input: dict = payload.get("tool_input") or {}
+    if tool_name == "Bash":
+        # No file to touch — narrate the ACTION (tests / git) in the ribbon,
+        # attributed to the features the agent is editing right now.
+        if phase != "pre":
+            return
+        act = _classify_bash(tool_input.get("command", ""))
+        if act is None:
+            return
+        action, label = act
+        data = _read_activity(codoc_dir)
+        feats = data.get("features") or {}
+        editing = [fid for fid, e in feats.items() if (e or {}).get("phase") == "editing"]
+        recent: list = data.get("recent") or []
+        recent.append({
+            "tool": "Bash", "action": action, "label": label,
+            "file": "", "feature_ids": editing, "at": _now_iso(), "phase": phase,
+        })
+        if len(recent) > _MAX_RECENT:
+            recent = recent[-_MAX_RECENT:]
+        data["recent"] = recent
+        _write_activity(codoc_dir, data)
+        return
     file_path: str | None = tool_input.get("file_path")
     if not file_path:
         return
@@ -402,6 +451,15 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     Loop B here first so the acceptance is applied and ``realize.md`` is queued —
     making "accept a plan, then keep working in Claude" close the loop with no
     daemon. When a daemon *is* running we defer to it (it owns the drain)."""
+    try:
+        # Capture the prompt itself — the author's stated intent — so the
+        # reflection that follows this session's writes can attribute the WHY
+        # of the change (see codoc.loop.intent).
+        from codoc.loop.intent import record_intent
+        record_intent(codoc_dir, payload.get("session_id") or "",
+                      payload.get("prompt") or "")
+    except Exception:  # noqa: BLE001 — capture is advisory; never break the turn
+        pass
     _drain_inbox_fallback(codoc_dir)
     realize = Path(codoc_dir) / REALIZE_FILENAME
     if not realize.exists():

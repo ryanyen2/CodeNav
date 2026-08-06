@@ -70,14 +70,27 @@ def read_json(path: str | Path, default: Any = None) -> Any:
         _log.warning("unreadable control file %s (%s); treating as empty", path, exc)
         return default
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError as exc:
         if text.strip():  # non-empty but invalid → preserve it, don't let a write clobber it
-            try:
-                quarantine = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
-                os.replace(path, quarantine)
-                _log.warning("corrupt control file %s (%s); quarantined to %s and treating "
-                             "as empty", path, exc, quarantine.name)
-            except OSError:
-                _log.warning("corrupt control file %s (%s); treating as empty", path, exc)
+            _quarantine(path, str(exc))
         return default
+    # Shape guard: valid JSON of the WRONG TYPE (a bare string/list where the
+    # caller's schema is an object) crashes every `.get(...)` reader — and the
+    # hook readers run on the user's turn, so a hand-edited control file would
+    # block the agent. When the caller declares its expected shape via a
+    # non-None default, a mismatched top-level type quarantines like corruption.
+    if default is not None and not isinstance(parsed, type(default)):
+        _quarantine(path, f"top-level {type(parsed).__name__}, expected {type(default).__name__}")
+        return default
+    return parsed
+
+
+def _quarantine(path: Path, why: str) -> None:
+    try:
+        quarantine = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
+        os.replace(path, quarantine)
+        _log.warning("corrupt control file %s (%s); quarantined to %s and treating "
+                     "as empty", path, why, quarantine.name)
+    except OSError:
+        _log.warning("corrupt control file %s (%s); treating as empty", path, why)

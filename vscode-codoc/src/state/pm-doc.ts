@@ -145,7 +145,7 @@ export function makeDoc(content: PMNode[]): PMNode {
  * (kept as its own copy so this module imports nothing).  `[label](codoc:file#symbol)`
  * with an optional `#symbol`.
  */
-const REF_RE_SOURCE = '\\[([^\\]]*)\\]\\(codoc:([^)#]+)(?:#([^)]+))?\\)';
+export const REF_RE_SOURCE = '\\[([^\\]]*)\\]\\(codoc:([^)#]+)(?:#([^)]+))?\\)';
 
 /** Serialize one codeRef to its canonical `[label](codoc:file#symbol)` text. */
 export function codeRefToText(attrs: CodeRefAttrs): string {

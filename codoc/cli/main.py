@@ -414,6 +414,48 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
 
 
 @app.command()
+def history(
+    feature: str = typer.Argument(..., help="Feature id (f-…) or a title fragment."),
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    limit: int = typer.Option(15, "--limit", help="Max changes to show."),
+):
+    """Show one feature's change history — who changed it, when, and why."""
+    _require_workspace(root)
+    from datetime import datetime
+
+    from codoc.store.db import open_store
+
+    with open_store(_codoc_dir(root)) as store:
+        fid = feature.strip("⟨⟩")
+        f = store.get_feature(fid)
+        if f is None:
+            needle = feature.lower()
+            matches = [x for x in store.list_features() if needle in x.title.lower()]
+            if not matches:
+                typer.echo(f"no feature matches {feature!r}")
+                raise typer.Exit(1)
+            if len(matches) > 1:
+                typer.echo(f"{feature!r} matches several features:")
+                for m in matches[:10]:
+                    typer.echo(f"  · {m.title}  ⟨{m.id}⟩")
+                raise typer.Exit(1)
+            f = matches[0]
+        events = store.events_for_feature(f.id, limit=limit)
+        typer.echo(f"{f.title}  ⟨{f.id}⟩ · {len(events)} change(s)")
+        for e in events:
+            when = datetime.fromtimestamp(e.at.wall_clock / 1000).strftime("%Y-%m-%d %H:%M")
+            who = e.actor or e.source
+            line = f"  {when}  {who:12} {e.op.kind.value:11}"
+            if e.mode:
+                line += f" ({e.mode})"
+            if e.caused_by:
+                line += f"  ← ⟨{e.caused_by}⟩"
+            typer.echo(line)
+            if e.op.rationale:
+                typer.echo(f"      {e.op.rationale}")
+
+
+@app.command()
 def sync(
     root: str = typer.Option(".", "--root", help="Repository root."),
     dry: bool = typer.Option(False, "--dry", help="Don't queue tree-edit directives for the session."),

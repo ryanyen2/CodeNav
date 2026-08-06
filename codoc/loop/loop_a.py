@@ -682,6 +682,17 @@ def apply_changeset(
             }
             for fid, syms in dep_features.items()
         ]
+    # Author intent (captured by the UserPromptSubmit hook): what the human
+    # actually asked their coding agent for. Rides into the prompt so amended /
+    # added descriptions can state the why instead of guessing it from the diff.
+    if codoc_dir:
+        try:
+            from codoc.loop.intent import recent_intent
+            intents = recent_intent(codoc_dir)
+        except Exception:  # noqa: BLE001 — advisory context only
+            intents = []
+        if intents:
+            changes["author_intent"] = intents
 
     ops = propose(changes, subtree, all_titles, repo_name=repo_name, config=config)
 

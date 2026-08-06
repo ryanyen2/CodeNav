@@ -122,7 +122,7 @@ const presence = new PresenceLayer({
  *  (presence.ts); a future per-agent signal drops in there without touching this. */
 function updatePresence(): void {
     const phase = (payload.sync.phase ?? {}) as Record<string, PresencePhase>;
-    const presences = deriveAgentPresences(phase, payload.sync.activeRead ?? []);
+    const presences = deriveAgentPresences(phase, payload.sync.activeRead ?? [], payload.sync.agent ?? 'claude');
     presence.update(presences, payload.sync.realize);
     wholeEditor?.setRole(presences[0]?.role ?? 'claude');
 }
@@ -257,8 +257,8 @@ function postVerdict(eventIds: string[], accept: boolean): void {
     vscode.postMessage({ kind: 'verdict', eventIds, accept });
 }
 
-// ── webview prefs (B-U2: overview dismiss + glance) ──────────────────────────
-function setPref(pref: 'glance', value: boolean): void {
+// ── webview prefs (B-U2: overview dismiss + glance; W2: blame) ────────────────
+function setPref(pref: 'glance' | 'blame', value: boolean): void {
     prefs = { ...prefs, [pref]: value };
     vscode.postMessage({ kind: 'set-pref', pref, value }); // persist in workspaceState
 }
@@ -269,6 +269,12 @@ function applyGlance(): void {
     if (!wholeEditor) return;
     wholeEditor.setPitches(payload.pitches ?? {});
     wholeEditor.setGlance(prefs.glance);
+}
+
+/** W2: push the History (blame) stance into the editor (decoration only). */
+function applyBlame(): void {
+    document.body.classList.toggle('blame', !!prefs.blame);
+    wholeEditor?.setBlame(!!prefs.blame);
 }
 
 // ── Optimistic verdict feedback ──────────────────────────────────────────────
@@ -284,7 +290,22 @@ function beginApplying(group: HTMLElement | null): void {
         group.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
     }
     if (applyingTimer) clearTimeout(applyingTimer);
-    applyingTimer = window.setTimeout(endApplying, 5000);
+    // W3: the timeout is not a silent revert any more — if no projection acked
+    // the verdict (the ack = the payload whose arrival calls endApplying), say
+    // so instead of letting the buttons quietly pop back with no explanation.
+    applyingTimer = window.setTimeout(() => {
+        endApplying();
+        showTransientNotice('Verdict not picked up — is `codoc watch` (or a Claude session) running?');
+    }, 5000);
+}
+
+/** A small self-dismissing notice pinned bottom-center — the honest channel for
+ *  "your click did not take effect" (W3). One at a time; newest wins. */
+function showTransientNotice(text: string): void {
+    document.querySelector('.ce-transient-notice')?.remove();
+    const n = el('div', 'ce-transient-notice', text);
+    document.body.append(n);
+    window.setTimeout(() => { n.classList.add('leaving'); window.setTimeout(() => n.remove(), 300); }, 6000);
 }
 function endApplying(): void {
     if (applyingTimer) { clearTimeout(applyingTimer); applyingTimer = 0; }
@@ -384,6 +405,25 @@ function onBridgeCaretLeave(): void {
  *  when that section is scrolled off). The persistent blue underline tick settles after the
  *  spark holds; a payload reconcile clears it. */
 const treePulseTimers = new Map<string, number>();
+
+/** W3: transient "✓ saved to tree" confirmation on a heading whose prose-only
+ *  edit just committed live (no queue, no badge — this is its only ack). */
+const savedFlashTimers = new Map<string, number>();
+function onSavedFlash(fids: string[]): void {
+    for (const fid of fids) {
+        const heading = document.querySelector<HTMLElement>(
+            '.codoc-feature-heading[data-fid="' + cssEsc(fid) + '"]');
+        if (!heading) continue;
+        heading.classList.add('ce-saved-flash');
+        const prev = savedFlashTimers.get(fid);
+        if (prev) clearTimeout(prev);
+        savedFlashTimers.set(fid, window.setTimeout(() => {
+            heading.classList.remove('ce-saved-flash');
+            savedFlashTimers.delete(fid);
+        }, 1800));
+    }
+}
+
 function onCodeTouch(fids: string[], big: string[]): void {
     if (!fids.length) return;
     wholeEditor?.touchFeatures(fids, new Set(big));
@@ -605,6 +645,8 @@ function reconcile(): void {
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setSteps(payload.sync.steps ?? {});
+        wholeEditor.setSessionLive(payload.sync.sessionLive ?? false);
+        wholeEditor.setHistory(payload.history ?? {});   // W2 blame data (refresh each pass)
         // Lifecycle split (U3/U4): drafts = recorded-but-not-sent → "captured"; held minus
         // drafts = handed-off (staged & sent) → "pending". Save/Commit (hand-off) moves a
         // feature from drafts → handed-off.
@@ -685,6 +727,17 @@ function renderToolbar(): HTMLElement {
     glance.setAttribute('aria-pressed', String(prefs.glance));
     glance.onclick = () => { setPref('glance', !prefs.glance); applyGlance(); rerenderToolbar(); };
     actions.append(glance);
+
+    // History (blame) toggle (W2): each feature shows who last changed it + when,
+    // with an author-role attribution rail. Decoration only; persisted per workspace.
+    const blame = el('button', 'toggle blame' + (prefs.blame ? ' active' : ''),
+        (prefs.blame ? '◉ ' : '◎ ') + 'History');
+    blame.title = prefs.blame
+        ? 'History on — each feature shows who last changed it and when. Hover for the full trace. Click to hide.'
+        : 'History — show who last changed each feature, when, and why (blame)';
+    blame.setAttribute('aria-pressed', String(!!prefs.blame));
+    blame.onclick = () => { setPref('blame', !prefs.blame); applyBlame(); rerenderToolbar(); };
+    actions.append(blame);
 
     const ids = payload.pendingEventIds;
     if (ids.length) {
@@ -922,8 +975,10 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
     wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
+    wholeEditor.setHistory(payload.history ?? {});   // W2 blame data
     wholeEditor.setDoc(payload.doc);
     applyGlance();      // seed pitch + glance state into the fresh editor
+    applyBlame();       // seed the History stance into the fresh editor
     // Presence rides the doc surface — re-place the avatar as the surface scrolls (the agent's
     // heading moves under a static avatar). The surface is recreated here, so re-bind.
     host.querySelector<HTMLElement>('.ce-whole-surface')
@@ -1142,11 +1197,39 @@ document.addEventListener('keydown', ev => {
 });
 
 // ─── Message bus ────────────────────────────────────────────────────────────
+/** Code→doc nav reveal that arrived before the first projection painted —
+ *  applied once the payload lands so a freshly-opened editor still navigates. */
+let pendingReveal: string | null = null;
+
+/** Resolve a reveal target to a live node id: by fid first, else by exact title
+ *  (the public navigateToFeature command historically accepted titles). */
+function resolveRevealTarget(idOrTitle: string): string | null {
+    if (payload.nodes[idOrTitle]) return idOrTitle;
+    for (const [id, n] of Object.entries(payload.nodes)) {
+        if (n.title === idOrTitle) return id;
+    }
+    return null;
+}
+
 window.addEventListener('message', ev => {
-    const msg = ev.data as { kind: string; payload: DocPayload; fids?: string[]; big?: string[] };
+    const msg = ev.data as { kind: string; payload: DocPayload; fids?: string[]; big?: string[]; fid?: string };
     // Code→doc spark (P2 / §A.3): a bound source file was edited — land the inbound glyph on
     // each touched heading and pulse its tree row, even when that section is scrolled off.
     if (msg.kind === 'code-touch') { onCodeTouch(msg.fids ?? [], msg.big ?? []); return; }
+    // W3: a prose-only edit committed live to the tree (daemon echoed it back,
+    // no directive minted) — flash a quiet "saved" confirmation on the heading
+    // so the edit doesn't vanish into silence.
+    if (msg.kind === 'saved-flash') { onSavedFlash(msg.fids ?? []); return; }
+    // Code→doc navigation (the source CodeLens): select + scroll to the feature.
+    if (msg.kind === 'reveal-feature') {
+        const fid = msg.fid;
+        if (!fid) return;
+        if (!mounted) { pendingReveal = fid; return; }
+        const resolved = resolveRevealTarget(fid);
+        if (!resolved) { pendingReveal = fid; return; }  // await a fresher projection
+        setSelected(resolved, true);
+        return;
+    }
     if (msg.kind !== 'doc') return;
     if (msg.payload.rev < lastRev) return; // ignore stale posts
     lastRev = msg.payload.rev;
@@ -1187,6 +1270,10 @@ window.addEventListener('message', ev => {
     }
 
     if (!mounted) { mounted = true; renderAll(); applyPendingRestore(); } else { reconcile(); }
+    if (pendingReveal) {
+        const resolved = resolveRevealTarget(pendingReveal);
+        if (resolved) { setSelected(resolved, true); pendingReveal = null; }
+    }
     // Presence rides every payload: a new sync.phase / realize moves the avatar (§B). Deferred
     // a frame so the freshly-rendered headings/rows exist for the anchor query.
     requestAnimationFrame(updatePresence);

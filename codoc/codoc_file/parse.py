@@ -112,6 +112,37 @@ def extract_bold(text: str) -> list[str]:
     return list(dict.fromkeys(s for s in spans if s))
 
 
+def sanitize_authored_title(title: str) -> str:
+    """Strip id-shaped ``⟨…⟩`` tokens from an authored title. The renderer
+    appends the feature's real ``⟨f-id⟩`` to the title line and the parser takes
+    the FIRST id token it finds — so a literal id token inside authored title
+    text hijacks the node's identity on the next round-trip (the real id is
+    dropped and the feature vanishes from the parse)."""
+    out = _EVENT_ID_RE.sub("", _ID_RE.sub("", title or ""))
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
+def sanitize_authored_description(text: str) -> str:
+    """Neutralize description lines that would round-trip as tree STRUCTURE.
+
+    ``parse_text`` treats a marker line carrying an id token as a feature even
+    at description indent (the mis-indent escape hatch) — the render→parse
+    contract is that the renderer never emits an id token inside a description
+    block. Authored prose can violate that (quoting a syntax example, pasting a
+    tree snippet), which forges a phantom node AND truncates the real
+    description at that line. At the write boundary we strip id tokens from
+    exactly those lines that start with a structure marker; ids in plain prose
+    lines are left alone (they round-trip as prose)."""
+    lines: list[str] = []
+    for ln in (text or "").split("\n"):
+        s = ln.lstrip()
+        if s[:1] in ("-", "~", "+", "*") and (_ID_RE.search(ln) or _EVENT_ID_RE.search(ln)):
+            ln = _EVENT_ID_RE.sub("", _ID_RE.sub("", ln))
+            ln = re.sub(r"\s{2,}", " ", ln).rstrip()
+        lines.append(ln)
+    return "\n".join(lines)
+
+
 def normalize_description(text: str) -> str:
     """Canonical form for a feature description (R19): strip each line, drop
     leading/trailing blank lines, and collapse interior runs of blank lines to a
@@ -137,6 +168,10 @@ def normalize_description(text: str) -> str:
 
 
 def parse_text(text: str) -> ParsedTree:
+    # A UTF-8 BOM (Notepad, some Windows editors) glues to the first feature
+    # marker and silently drops that feature — the diff then reads it as a
+    # retire. Strip it before any line matching.
+    text = text.lstrip("﻿")
     tree = ParsedTree()
     stack: list[tuple[int, ParsedNode]] = []  # (indent, node)
     desc_owner: ParsedNode | None = None

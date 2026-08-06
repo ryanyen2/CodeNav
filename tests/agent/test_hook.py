@@ -558,3 +558,121 @@ def test_user_prompt_defers_to_running_daemon(tmp_path):
         handle_user_prompt({}, cd)
 
     assert [v.event_id for v in inbox.read_verdicts(cd)] == [eid]  # left for the daemon
+
+
+# ── Intent capture: user-prompt hook stashes the author's prompt ───────────────
+
+def test_user_prompt_records_intent(tmp_path):
+    """The prompt text itself is the author's intent — the hook must stash it so
+    reflection can attribute the WHY of the session's changes."""
+    from codoc.agent.hook import handle_user_prompt
+    from codoc.loop.intent import recent_intent
+
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+
+    with patch("codoc.loop.watch.daemon_running", return_value=False):
+        handle_user_prompt(
+            {"session_id": "sess-9", "prompt": "make fan-out retries idempotent"}, cd)
+
+    assert recent_intent(cd) == ["make fan-out retries idempotent"]
+
+
+def test_user_prompt_intent_capture_never_blocks_turn(tmp_path):
+    """A failing intent stash must not break the user's prompt."""
+    from codoc.agent.hook import handle_user_prompt
+
+    root = tmp_path / "repo"
+    (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+
+    with patch("codoc.loop.watch.daemon_running", return_value=False), \
+         patch("codoc.loop.intent.record_intent", side_effect=RuntimeError("boom")):
+        handle_user_prompt({"session_id": "s", "prompt": "hello"}, cd)  # no raise
+
+
+# ── W1: Bash action steps (tests / git) for the agent ribbon ───────────────────
+
+def _seed_editing(cd, fids):
+    from codoc.loop.activity import write_activity
+    write_activity(cd, {
+        "version": 1,
+        "epoch": {"id": "ep-s", "origin": "interactive", "open": True,
+                  "started_at": "", "ended_at": None},
+        "touched": {}, "recent": [],
+        "features": {fid: {"phase": "editing", "at": "2026-08-03T00:00:00Z"} for fid in fids},
+    })
+
+
+def test_bash_test_run_lands_in_recent_attributed_to_editing_features(tmp_path):
+    from codoc.agent.hook import handle_pre_tool
+    from codoc.loop.activity import read_activity
+
+    root = tmp_path / "repo"; (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+    _seed_editing(cd, ["f-busy"])
+
+    handle_pre_tool({"tool_name": "Bash",
+                     "tool_input": {"command": "python -m pytest tests/ -q"}}, cd)
+
+    (entry,) = read_activity(cd)["recent"]
+    assert entry["tool"] == "Bash"
+    assert entry["action"] == "test"
+    assert entry["label"] == "running pytest"
+    assert entry["feature_ids"] == ["f-busy"]
+
+
+def test_bash_git_verb_lands_in_recent(tmp_path):
+    from codoc.agent.hook import handle_pre_tool
+    from codoc.loop.activity import read_activity
+
+    root = tmp_path / "repo"; (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+    _seed_editing(cd, [])
+
+    handle_pre_tool({"tool_name": "Bash",
+                     "tool_input": {"command": "git add -A && git commit -m 'x'"}}, cd)
+
+    (entry,) = read_activity(cd)["recent"]
+    assert (entry["action"], entry["label"]) == ("git", "git commit")
+
+
+def test_bash_noise_commands_are_ignored(tmp_path):
+    from codoc.agent.hook import handle_pre_tool, handle_post_tool
+    from codoc.loop.activity import read_activity
+
+    root = tmp_path / "repo"; (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+    _seed_editing(cd, ["f-busy"])
+
+    for cmd in ("ls -la", "cat foo.py", "git status", "git diff", "cd /tmp && echo hi"):
+        handle_pre_tool({"tool_name": "Bash", "tool_input": {"command": cmd}}, cd)
+    # post-phase Bash must never double-record
+    handle_post_tool({"tool_name": "Bash", "tool_input": {"command": "pytest"}}, cd)
+
+    assert read_activity(cd)["recent"] == []
+
+
+# ── W1: per-agent identity stamped on the epoch ────────────────────────────────
+
+def test_session_start_stamps_default_agent(tmp_path, monkeypatch):
+    from codoc.agent.hook import handle_session_start
+    from codoc.loop.activity import read_activity
+
+    root = tmp_path / "repo"; (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+    monkeypatch.delenv("CODOC_AGENT", raising=False)
+    handle_session_start({"session_id": "s1"}, cd)
+    assert read_activity(cd)["epoch"]["agent"] == {"id": "claude-code"}
+
+
+def test_session_start_honors_codoc_agent_env(tmp_path, monkeypatch):
+    from codoc.agent.hook import handle_session_start
+    from codoc.loop.activity import read_activity
+
+    root = tmp_path / "repo"; (root / ".codoc").mkdir(parents=True)
+    cd = str(root / ".codoc")
+    monkeypatch.setenv("CODOC_AGENT", "codex")
+    handle_session_start({"session_id": "s1"}, cd)
+    assert read_activity(cd)["epoch"]["agent"] == {"id": "codex"}

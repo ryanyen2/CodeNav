@@ -153,6 +153,18 @@ export interface ChangeEntry {
     caused_by: string;
 }
 
+/** One entry of the W2 `feature_history` blame slice — an applied event on this
+ *  feature, newest first. `at` is the HLC string; `rationale`/`caused_by` are the
+ *  "why" when the ledger recorded them. */
+export interface HistoryEntry {
+    at: string;
+    kind: string;
+    actor: string;
+    mode: string;
+    caused_by?: string;
+    rationale?: string;
+}
+
 export interface ProposalsMap {
     by_feature: Record<string, FeatureProposal>;
     by_event: Record<string, EventProposal>;
@@ -199,6 +211,9 @@ export interface SidecarData {
     // feature description = block-zero, not here). A feature with no typed media is
     // absent. The reader keys on presence, so a v5 sidecar (no `blocks`) still parses.
     blocks?: Record<string, BlockEntry[]>;
+    // W2 (blame): bounded per-feature edit history (who/when/why), newest first.
+    // Only features changed within the daemon's scan window appear. Presence-keyed.
+    feature_history?: Record<string, HistoryEntry[]>;
 }
 
 /** A typed-media block on a feature (v6, `blocks` slice). `content` is opaque —

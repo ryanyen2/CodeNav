@@ -32,6 +32,7 @@ codoc sync                  # one-shot: apply tree edits (Loop B), then reflect 
 # Plumbing (agents / no-IDE workflows)
 codoc accept <e-id>         # CLI verdict path — mirrors the IDE Accept (then runs Loop B)
 codoc reject <e-id>         # CLI verdict path — mirrors the IDE Reject
+codoc history <feature>     # one feature's blame timeline (who/when/why, by id or title fragment)
 codoc reflect               # recovery-grade state reconciliation (used by the Stop hook)
 codoc propose <kind>        # author a plan proposal from the shell (humans/tests)
 codoc install-hooks         # (re)install the CC hooks + MCP registration
