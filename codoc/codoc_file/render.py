@@ -34,6 +34,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from codoc.codoc_file.tree_order import children_map
 from codoc.model.event import LOOP_A_AGENT_SOURCE, PLAN_SOURCE, Event, NodeOpKind
 from codoc.store.db import Store
 
@@ -87,9 +88,14 @@ def render_tree(store: Store) -> str:
         lines.append("")
         emitted.add(e.id)
 
+    # A single map (shared with the doc projection, tree_order.children_map) so a
+    # feature orphaned by a retired/dangling parent_id is promoted to a root here
+    # exactly as it is in tree.doc.json — never silently dropped from the nav.
+    children = children_map(store.list_features())
+
     def walk(parent_id: str | None, depth: int) -> None:
         indent = "  " * depth
-        for f in store.children(parent_id):
+        for f in children.get(parent_id, []):
             marker = "~" if f.retired else "-"
             lines.append(f"{indent}{marker} {f.title}  ⟨{f.id}⟩")
             if f.description:

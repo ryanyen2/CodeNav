@@ -21,6 +21,7 @@ import re
 from typing import TYPE_CHECKING
 
 from codoc.codoc_file.parse import ParsedTree, normalize_description, parse_text
+from codoc.codoc_file.tree_order import preorder
 
 if TYPE_CHECKING:  # avoid a hard import cycle at module load
     from codoc.model.annotation import CommentThread, Mark
@@ -311,48 +312,16 @@ def _store_depths(features: list) -> dict[str, int]:
     return cache
 
 
-def _preorder(features: list) -> list:
-    """Reorder live features into the tree's depth-first PRE-ORDER — the same order
-    the left-nav gets from ``render_tree`` (a ``walk(None, 0)`` over ``store.children``).
+_preorder = preorder
+"""Reorder live features into the tree's depth-first pre-order — the same
+:func:`codoc.codoc_file.tree_order.preorder` walk ``render_tree`` uses for the
+left-nav, so an orphan (dangling ``parent_id``) is promoted to a root in both
+projections rather than surfacing in only one of them.
 
-    ``store.list_features()`` returns a FLAT ``ORDER BY created_at`` list, so emitting
-    the doc in that order lays a child out wherever it happened to be created — not
-    under its parent. That desynchronizes the doc body from the nav (scroll-spy then
-    jumps). Walking parent→children here makes the doc order faithful to the tree.
-
-    Siblings keep their ``created_at`` order (``list_features`` already sorts by it, and
-    ``store.children`` sorts the same way), so this matches the nav 1:1. Cycle-safe: a
-    ``seen`` guard bounds the walk, and any feature never reached from a root (orphaned
-    by a dangling ``parent_id`` or a pre-existing cycle) is appended afterward so it is
-    still projected rather than silently dropped."""
-    by_id = {f.id: f for f in features}
-    children: dict[str | None, list] = {}
-    for f in features:
-        # A parent_id pointing outside the live set (retired/missing parent) makes the
-        # feature a de-facto root — same as render_tree, where store.children(None)
-        # only returns rows whose parent is genuinely absent.
-        key = f.parent_id if (f.parent_id and f.parent_id in by_id) else None
-        children.setdefault(key, []).append(f)
-
-    ordered: list = []
-    seen: set[str] = set()
-
-    def walk(parent_key: str | None) -> None:
-        for f in children.get(parent_key, []):
-            if f.id in seen:
-                continue
-            seen.add(f.id)
-            ordered.append(f)
-            walk(f.id)
-
-    walk(None)
-    # Orphans unreachable from any root (dangling parent chain / pre-existing cycle):
-    # keep them in the projection so they stay visible and editable.
-    if len(ordered) != len(features):
-        for f in features:
-            if f.id not in seen:
-                ordered.append(f)
-    return ordered
+``store.list_features()`` returns a FLAT ``ORDER BY created_at`` list, so emitting
+the doc in that order lays a child out wherever it happened to be created — not
+under its parent. That desynchronizes the doc body from the nav (scroll-spy then
+jumps). Walking parent→children here makes the doc order faithful to the tree."""
 
 
 def build_doc_from_store(store: Store) -> dict:
