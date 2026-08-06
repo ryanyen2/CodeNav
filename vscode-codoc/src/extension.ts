@@ -159,6 +159,34 @@ export function activate(context: vscode.ExtensionContext): void {
     const state = new WorkspaceState(context);
     const codocSelector: vscode.DocumentSelector = { language: 'codoc' };
 
+    // ── Directive-completion notifications (W3) ───────────────────────────────
+    // realized.jsonl gains entries when the realize queue drains — the author's
+    // tree edit LANDED as code. Surface it even when they're not watching the
+    // webview; "Show feature" jumps to the feature in the tree.
+    context.subscriptions.push(state.onDidRealize(outcomes => {
+        const title = (fid: string): string =>
+            (state.sidecar.features?.[fid] as { title?: string } | undefined)?.title ?? fid;
+        if (outcomes.length === 1) {
+            const o = outcomes[0];
+            const label = o.featureId ? `"${title(o.featureId)}"` : 'a tree edit';
+            void vscode.window.showInformationMessage(
+                `codoc ✓ implemented ${label}`,
+                'Show feature',
+            ).then(pick => {
+                if (pick === 'Show feature' && o.featureId) {
+                    void vscode.commands.executeCommand('codoc.navigateToFeature', o.featureId);
+                }
+            });
+        } else {
+            void vscode.window.showInformationMessage(
+                `codoc ✓ ${outcomes.length} tree edits implemented`,
+                'Open tree',
+            ).then(pick => {
+                if (pick === 'Open tree') void vscode.commands.executeCommand('codoc.open');
+            });
+        }
+    }));
+
     // ── codoc.setup — one-click provision → init → daemon ─────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.setup', () => runSetup(context, state)),
@@ -460,7 +488,27 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('codoc.navigateToFeature', async (titleOrId: string | null) => {
             const treePath = state.rootDir && path.join(state.rootDir, '.codoc', 'tree.codoc');
             if (!treePath || !titleOrId || !fs.existsSync(treePath)) return;
-            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(treePath));
+            const treeUri = vscode.Uri.file(treePath);
+            // The Codoc Tree webview is the feature's real home — reveal it there.
+            // Resolve a title arg to its fid first (the webview reveals by fid).
+            const fid = titleOrId.startsWith('f-')
+                ? titleOrId
+                : state.sidecar?.features
+                    ? Object.entries(state.sidecar.features).find(
+                        ([, f]) => (f as { title?: string }).title === titleOrId)?.[0] ?? titleOrId
+                    : titleOrId;
+            if (CodocTreeEditorProvider.revealFeature(treeUri, fid)) return;
+            // No live panel yet — open the tree with its default (webview) editor,
+            // then reveal; the webview buffers the message until its first paint.
+            try {
+                await vscode.commands.executeCommand('vscode.openWith', treeUri, CodocTreeEditorProvider.viewType);
+                for (let tries = 0; tries < 10; tries++) {
+                    if (CodocTreeEditorProvider.revealFeature(treeUri, fid)) return;
+                    await new Promise(r => setTimeout(r, 150));
+                }
+            } catch { /* fall through to the raw-text path */ }
+            // Fallback (webview unavailable): the old raw tree.codoc text reveal.
+            const doc = await vscode.workspace.openTextDocument(treeUri);
             const editor = await vscode.window.showTextDocument(doc);
             // Match by feature id ⟨f-id⟩ first, then fall back to title/id substring.
             const exactId = `⟨${titleOrId}⟩`;

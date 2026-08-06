@@ -47,8 +47,24 @@ Every op may carry a one-line `rationale`.
    code in `modified` changed a feature's behavior in place and its prose no
    longer fits. Do not amend for trivial private helpers or cosmetic edits.
 6. A `title` is a 3–6 word sentence-case noun phrase ("Index snapshot diff").
-   A `description` is 1–3 sentences: what the feature does and why it exists. No
-   code-location lists in the prose — bindings carry that.
+   A `description` is 1–3 short sentences that hand a newcomer the *theory* of
+   the feature — what they would need to know to change this code confidently:
+   - Open with the purpose: the problem it solves for the user or for the rest
+     of the system, in plain everyday words. Someone who has never read the
+     code should understand the first sentence.
+   - Then, when the code shows it, the key design choice and its why — the
+     approach taken and the constraint, failure, or tradeoff behind it
+     ("computed eagerly so readers never see a stale total").
+   Plain language over jargon: say "saves the tree to disk", not "persists the
+   tree artifact". Never restate the title, never narrate mechanics
+   line-by-line. No code-location lists — bindings carry that. You MAY weave in
+   AT MOST one inline citation `[symbol()](codoc:file.py#symbol)` when a single
+   symbol is load-bearing to the claim; take the file and symbol verbatim from
+   the bindings/chunks in this prompt. Never emit lines starting with `> `,
+   `**bold**` spans, or external links — those are reserved author channels.
+7. When the change set includes `author_intent` (what the human asked their
+   coding agent for), let it supply the WHY in descriptions and rationales —
+   the author's stated purpose beats a guess reconstructed from the diff.
 
 ## Output
 
@@ -58,8 +74,8 @@ Return ONLY this, inside solution tags:
 {"ops": [
   {"kind": "attach", "feature_id": "f-1a2b", "bindings": [["codoc/loop/diff.py", "codoc/loop/diff.py::compute_changeset"]], "rationale": "same snapshot-diff behavior as the existing node"},
   {"kind": "attach", "feature_id": "f-7e8f", "bindings": [["metrics_utils.py", "metrics_utils.py::print_metrics_table"], ["metrics_utils.py", "metrics_utils.py::format_delta"]], "rationale": "rich terminal rendering belongs to the metrics summary feature"},
-  {"kind": "amend", "feature_id": "f-7e8f", "description": "Helpers for evaluating and presenting scalar metrics across checkpoints: aggregation, baseline comparison, threshold checks, and rich terminal display (box-drawing tables, colored deltas, range bars).", "rationale": "new table/visualization helpers attached — description was display-formatting-only"},
-  {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Picks the minimal set of features the tree-update LLM needs, using binding file-locality.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
+  {"kind": "amend", "feature_id": "f-7e8f", "description": "Turns raw per-checkpoint metrics into a go/no-go read: aggregates runs, compares them against the baseline, and flags threshold breaches. Renders straight to the terminal via [print_metrics_table()](codoc:metrics_utils.py#print_metrics_table) — tables, colored deltas, range bars — so a regression is visible without opening a dashboard.", "rationale": "new table/visualization helpers attached — description was display-formatting-only"},
+  {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Keeps each tree-update LLM call small by sending only the features whose bindings share files with the change, not the whole tree — so context cost stays flat as the tree grows.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
 ]}
 </solution>
 <<<CACHE_BREAK>>>
@@ -91,5 +107,8 @@ children). Prefer attaching new chunks here.
 - `impacted` (optional) — features whose code directly calls or imports the
   changed symbols (upstream dependents). **Advisory only**: emit an `amend` for
   an impacted feature only when the upstream change genuinely shifts its meaning.
+- `author_intent` (optional) — what the human asked their coding agent for in
+  the session that produced this change, most recent last. Use it to state the
+  why — purpose and rationale — in descriptions and `rationale` fields (Rule 7).
 
 Now return the minimal op set for this change, inside solution tags.

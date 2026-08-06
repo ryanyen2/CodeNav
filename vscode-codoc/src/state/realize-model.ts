@@ -95,3 +95,47 @@ export function pendingCodeByFile(directives: RealizeDirective[]): Map<string, P
     }
     return out;
 }
+
+
+// ── Directive outcomes (.codoc/realized.jsonl) ───────────────────────────────
+// The daemon appends one JSON line per completed directive when the realize
+// queue drains (codoc/loop/edits.py:_log_realized) — the durable "here's what
+// happened to your edit" record. The host watches the file and surfaces NEW
+// outcomes as a completion notification (workspace-state.ts / extension.ts);
+// the parsing + delta logic is pure and lives here.
+
+export interface RealizedOutcome {
+    id: string;
+    featureId: string;
+    kind: string;
+    causedBy: string;
+    text: string;
+    completedAt: string;
+}
+
+/** Tolerant JSONL parse — a torn/garbage line is skipped, never fatal. */
+export function parseRealizedLog(text: string): RealizedOutcome[] {
+    const out: RealizedOutcome[] = [];
+    for (const line of (text ?? '').split('\n')) {
+        if (!line.trim()) continue;
+        try {
+            const e = JSON.parse(line) as Record<string, unknown>;
+            if (typeof e !== 'object' || e === null || typeof e.id !== 'string' || !e.id) continue;
+            out.push({
+                id: e.id,
+                featureId: typeof e.feature_id === 'string' ? e.feature_id : '',
+                kind: typeof e.kind === 'string' ? e.kind : '',
+                causedBy: typeof e.caused_by === 'string' ? e.caused_by : '',
+                text: typeof e.text === 'string' ? e.text : '',
+                completedAt: typeof e.completed_at === 'string' ? e.completed_at : '',
+            });
+        } catch { /* torn line — skip */ }
+    }
+    return out;
+}
+
+/** Outcomes not yet surfaced, oldest first. `seen` is the caller's persisted
+ *  id set (workspaceState memento) so a window reload never re-toasts. */
+export function newOutcomes(entries: RealizedOutcome[], seen: ReadonlySet<string>): RealizedOutcome[] {
+    return entries.filter(e => !seen.has(e.id));
+}

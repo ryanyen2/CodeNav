@@ -11,7 +11,7 @@ import type { PMNode } from '../state/pm-doc';
 import type { Suggestion } from '../state/suggestion-model';
 import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
-import type { HoldDetail } from '../state/bindings-model';
+import type { HoldDetail, HistoryEntry } from '../state/bindings-model';
 
 /** An autocomplete candidate for the `@`-triggered code-reference picker (U5).
  *  Sourced from the sidecar `by_file` (bound symbols only). */
@@ -96,9 +96,11 @@ export interface UINode {
     activeMode?: 'write' | 'read' | null;
 }
 
-/** One line in a feature's live agent-action ribbon (e.g. "editing agent.py").
- *  Derived from activity.json `touched`; `done` marks a step the agent moved past. */
-export interface AgentStep { label: string; done: boolean }
+/** One line in a feature's live agent-action ribbon (e.g. "editing agent.py",
+ *  "running pytest", "git commit"). Derived from activity.json `recent`; `done`
+ *  marks a step the agent moved past. `kind` distinguishes action steps
+ *  (test/git) from file touches so the ribbon can style them. */
+export interface AgentStep { label: string; done: boolean; kind?: string }
 
 export interface SyncState {
     state: string;
@@ -110,6 +112,12 @@ export interface SyncState {
     /** Per-feature ordered agent-action steps for the inline ribbon (P2b). Optional on
      *  the wire — a stale payload / a host not tracking touches omits it. */
     steps?: Record<string, AgentStep[]>;
+    /** W3: whether an agent session (activity epoch) is live right now — gates the
+     *  pending-badge wording ("lands next agent turn" vs "run /codoc:sync"). */
+    sessionLive?: boolean;
+    /** W1: the role id of the coding agent on this epoch (claude-code | codex | …) —
+     *  drives the presence avatar name/tint + ribbon "who". Absent ⇒ 'claude'. */
+    agent?: string;
 }
 
 export interface DocPayload {
@@ -184,6 +192,10 @@ export interface DocPayload {
      *  minted fid onto the exact in-progress node by its localId, instead of guessing
      *  by title/order (which spawned duplicate/orphan nodes + caret jumps). */
     mintedByLocalId?: Record<string, string>;
+    /** W2 (blame): per-feature edit history (who/when/why), newest first, keyed by
+     *  feature id. Only features changed within the daemon's scan window appear.
+     *  Consumed by the History stance + the heading hover timeline. */
+    history?: Record<string, HistoryEntry[]>;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }
@@ -212,6 +224,9 @@ export interface UIBlock {
 export interface WebviewPrefs {
     /** glance mode is on — tree rows collapse to their one-line pitch. */
     glance: boolean;
+    /** History (blame) stance is on — each feature shows who last changed it and
+     *  when, with an attribution rail tinted by author role (W2). */
+    blame?: boolean;
 }
 
 /** Messages the webview posts back to the host. */
@@ -253,7 +268,7 @@ export type WebviewMessage =
     | { kind: 'comment-resolve'; doc: PMNode; id: string }
     /** Persist a webview pref (glance toggle) into the host's per-workspace
      *  `workspaceState`. Decoration-only — never touches tree.doc.json. */
-    | { kind: 'set-pref'; pref: 'glance'; value: boolean }
+    | { kind: 'set-pref'; pref: 'glance' | 'blame'; value: boolean }
     /** Live cross-surface bridge (P2 / §A.1): the user is editing feature `fid`'s prose —
      *  open its primary binding file Beside (non-focus-stealing) and light the implicated
      *  decl lines green. The host resolves file/symbols/lines from the sidecar bindings, so

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
-    bindingLeaf, primaryBinding, implicatedLeaves, declLines, implicatedDeclLines,
+    bindingLeaf, primaryBinding, implicatedLeaves, declLines, declName, implicatedDeclLines,
     featureIdsForChangedLines, changedLineNumbers, userTouchedFids, bridgeDismissals, BridgeDebounce,
 } from '../state/bridge';
 
@@ -64,6 +64,35 @@ describe('declLines — declaration scan (shared with code-lens)', () => {
             { name: 'upsert', line: 4, qualified: 'Store.upsert' },  // nested under Store
             { name: 'build', line: 5, qualified: 'build' },          // popped back to top level
         ]);
+    });
+
+    it('finds module-scope arrow / function / class consts (indexer parity — was mis-anchored)', () => {
+        const src = [
+            'export const handler = () => {}',          // 0
+            'const build = async (x) => x + 1',         // 1
+            'const Widget = class extends Base {}',     // 2
+            'const makeThing = function () { return 1 }',// 3
+            'const total = items.filter(x => x.ok)',    // 4 — module const the indexer emits too
+        ];
+        expect(declLines(src).map(d => d.name)).toEqual(
+            ['handler', 'build', 'Widget', 'makeThing', 'total']);
+    });
+
+    it('does NOT treat a nested (indented) arrow const as a declaration (avoids false decorations)', () => {
+        const src = [
+            'function outer() {',           // 0
+            '    const inner = () => {}',   // 1 — a local, not a symbol
+            '}',                            // 2
+        ];
+        expect(declLines(src).map(d => d.name)).toEqual(['outer']);
+    });
+
+    it('declName recognizes both forms and rejects non-declarations', () => {
+        expect(declName('def run():')).toBe('run');
+        expect(declName('export const f = () => 1')).toBe('f');
+        expect(declName('  const local = 5')).toBeNull();   // indented → not module scope
+        expect(declName('return x => x')).toBeNull();       // not a binding
+        expect(declName('const x = a > b ? c : d')).toBeNull(); // no arrow/function/class
     });
 
     it('qualifies two same-leaf methods by their enclosing class', () => {

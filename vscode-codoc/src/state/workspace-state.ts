@@ -22,7 +22,7 @@ import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
 import { RegistryData } from './registry-model';
 import { loadRegistry } from './registry-loader';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines, EPOCH_UI_TTL_MS } from './activity-model';
-import { parseRealize, pendingCodeByFile, PendingChange } from './realize-model';
+import { parseRealize, pendingCodeByFile, PendingChange, parseRealizedLog, newOutcomes, RealizedOutcome } from './realize-model';
 import { statusBarView } from './status-presentation';
 import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS } from './status-model';
 
@@ -62,6 +62,12 @@ export class WorkspaceState {
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChange = this._onDidChange.event;
 
+    /** Fires with directive outcomes NOT yet surfaced to the user (delta vs a
+     *  memento-persisted seen set — a window reload never re-fires old ones).
+     *  extension.ts turns these into completion notifications. */
+    private _onDidRealize = new vscode.EventEmitter<RealizedOutcome[]>();
+    readonly onDidRealize = this._onDidRealize.event;
+
     constructor(private context: vscode.ExtensionContext) {
         this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
         this.statusBar.command = 'codoc.open';
@@ -95,6 +101,7 @@ export class WorkspaceState {
             '**/.codoc/inbox.json',
             '**/.codoc/activity.json',
             '**/.codoc/realize.md',
+            '**/.codoc/realized.jsonl',  // directive outcomes → completion notifications
         ]) {
             const w = vscode.workspace.createFileSystemWatcher(glob);
             this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));
@@ -194,6 +201,29 @@ export class WorkspaceState {
         this._updateStatusBar();
         this._onDidChange.fire();
         this._scheduleLeaseExpiry();
+        this._surfaceRealized();
+    }
+
+    /** Diff realized.jsonl against the persisted seen-id set and fire the delta.
+     *  First run in a workspace (no memento) seeds silently — upgrading must not
+     *  toast the whole backlog. */
+    private _surfaceRealized(): void {
+        let text = '';
+        try {
+            text = fs.readFileSync(this._codocPath('realized.jsonl'), 'utf-8');
+        } catch { return; /* no outcomes yet */ }
+        const entries = parseRealizedLog(text);
+        if (!entries.length) return;
+        const KEY = 'codoc.realizedSeen';
+        const prior = this.context.workspaceState.get<string[]>(KEY);
+        const seen = new Set(prior ?? []);
+        const fresh = newOutcomes(entries, seen);
+        if (prior !== undefined && fresh.length) this._onDidRealize.fire(fresh);
+        if (fresh.length || prior === undefined) {
+            for (const e of entries) seen.add(e.id);
+            // Bounded: the log itself is trimmed to a tail; keep a superset window.
+            void this.context.workspaceState.update(KEY, [...seen].slice(-400));
+        }
     }
 
     private _clearLeaseTimer(): void {

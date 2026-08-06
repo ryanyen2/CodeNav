@@ -156,3 +156,21 @@ describe('changedRange (pending-change word diff)', () => {
         expect(erodedSpan.length).toBeLessThan(current.slice(stable.start, stable.end).length);
     });
 });
+
+
+describe('W3: session-aware pending wording', () => {
+    it('says "lands on the next agent turn" while a session is live', () => {
+        const set = buildHoldDecorations(heldDocWithBold(), new Set(['f-a']), undefined,
+            { 'f-a': { kind: 'amend', intent: 'x' } }, true);
+        const rail = set.find().find(d => attrsOf(d)?.class === 'ce-pending-rail');
+        expect(attrsOf(rail)?.title).toContain('Lands on the next agent turn');
+        expect(attrsOf(rail)?.title).not.toContain('/codoc:sync');
+    });
+
+    it('says "awaiting /codoc:sync" when no session is live', () => {
+        const set = buildHoldDecorations(heldDocWithBold(), new Set(['f-a']), undefined,
+            { 'f-a': { kind: 'amend', intent: 'x' } }, false);
+        const rail = set.find().find(d => attrsOf(d)?.class === 'ce-pending-rail');
+        expect(attrsOf(rail)?.title).toContain('/codoc:sync');
+    });
+});

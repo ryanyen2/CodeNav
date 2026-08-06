@@ -4,7 +4,7 @@ import { parseTreeCodoc, codocRefRe } from '../state/tree-model';
 import { SidecarData, emptySidecar, driftForFeature, kindForFeature } from '../state/bindings-model';
 import { RegistryData, isRefResolved } from '../state/registry-model';
 import { PendingChange } from '../state/realize-model';
-import { implicatedDeclLines } from '../state/bridge';
+import { implicatedDeclLines, declName } from '../state/bridge';
 
 // Inline code citation `[label](codoc:file.py#symbol)` is matched via the shared
 // `codocRefRe()` factory in tree-model.ts — one source of truth across this file,
@@ -226,8 +226,7 @@ export function applyPendingCodeDecorations(
     if (leaves.size) {
         for (let i = 0; i < editor.document.lineCount; i++) {
             const line = editor.document.lineAt(i).text;
-            if (!/^\s*(def |class |function |async def |export\s+(function|class|default))/.test(line)) continue;
-            const name = (/(?:def |class |function |async def )\s*(\w+)/.exec(line) ?? [])[1];
+            const name = declName(line);  // keyword + arrow/const forms (parity with the indexer)
             const title = name ? leaves.get(name) : undefined;
             if (!title) continue;
             ranges.push({

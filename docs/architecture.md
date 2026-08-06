@@ -52,8 +52,13 @@ control files, environment variables, and the deployed hub.
 
 SQLite WAL at `.codoc/codoc.db` — **3 authoritative tables + 1 derived graph cache**:
 `features`, `bindings` (`UNIQUE(file, symbol_path)`), `events` (append-only;
-`applied=0` = pending), plus `code_edges` (derived from `references_in_chunk`,
-safe to drop and rebuild). No transactions/constraints/obligations tables.
+`applied=0` = pending; schema v3 lifts `feature_id` out of the op payload into an
+indexed column — backfilled on migrate — so per-feature blame is one lookup:
+`store.events_for_feature`, surfaced as the `codoc_history` MCP tool and the
+`codoc history` CLI; a directly-applied ADD pre-mints its id in `apply_op` so the
+creation event is findable by feature), plus `code_edges` (derived from
+`references_in_chunk`, safe to drop and rebuild). No
+transactions/constraints/obligations tables.
 
 The chunk index is owned by **cocoindex**, outside `codoc.db`: AST chunks +
 identity hashes (tokens_hash / types_hash) in `.codoc/lancedb/code_chunks.lance`;
@@ -257,6 +262,18 @@ state** and is re-emitted on every pass even when the text render is held back
   for `/codoc:sync`) + its machine-readable manifest `{id, feature_id, kind,
   caused_by, text, handed_off}`. `text` lets a later pass rebuild the queue as
   old + new.
+- **`realized.jsonl`** — durable directive outcomes: when the queue drains
+  (`read_manifest` sees no `realize.md`), each handed-off directive is appended
+  here `{id, feature_id, kind, caused_by, text, completed_at, ts}` (idempotent by
+  id, bounded tail) before its manifest entry vanishes — join against
+  `events.caused_by` for the code changes it produced. Read via
+  `edits.read_realized`.
+- **`intent.jsonl`** — captured author prompts: the `UserPromptSubmit` hook
+  appends `{session_id, at, ts, prompt}` (slash commands skipped, bounded tail);
+  Loop A's `recent_intent` threads the fresh epoch-owning-session tail into the
+  tree-update prompt as `changes["author_intent"]`, and `codoc_status` /
+  `read_status` expose it as `recent_intent` so a fresh session can resume where
+  the author left off. Gitignored with the rest of `.codoc/`.
 - **`tree.index.json`** — cross-reference registry (features/bindings/refs) for
   dead-ref flagging + hover; `refs[].resolved` is leaf-tolerant.
 - **`drift.json`** — `{fid: "questioned" | "binding-lost"}`, re-emitted as the
@@ -288,6 +305,7 @@ state** and is re-emitted on every pass even when the text render is held back
 | `CODOC_LOG_PROMPTS` | — | `1` → log LLM prompt+response to stderr |
 | `CODOC_SEMANTIC_DEDUP` | — | `1` → enable D1 embedding near-duplicate title dedup in Loop A (off by default; needs a corpus-tuned threshold) |
 | `CODOC_EPOCH_ORIGIN` | `interactive` | `loop_b` marks an agent-owned epoch |
+| `CODOC_AGENT` | `claude-code` | role id of the coding agent driving codoc (`claude-code`/`codex`/`gemini`/`cursor`/…); stamped on the activity epoch (W1) so presence/ribbon/blame attribute to the real agent |
 | `CODOC_NO_STOP_REFLECT` | — | disable the Stop-hook recovery reflection |
 
 ## VS Code extension internals (`vscode-codoc/`)

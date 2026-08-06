@@ -92,3 +92,53 @@ describe('featureSteps', () => {
         expect(steps.has('f-two')).toBe(false);
     });
 });
+
+// ── W1: action steps (Bash test runs / git verbs) in the ribbon ───────────────
+
+describe('W1: action steps', () => {
+    it('renders an action entry with its own label + kind, attributed only to its explicit fids', () => {
+        const data = {
+            epoch: { id: 'ep-1', origin: 'interactive', open: true, started_at: '', ended_at: null },
+            touched: {},
+            recent: [
+                { tool: 'Edit', file: 'src/a.py', feature_ids: ['f-1'], at: 't1', phase: 'pre' },
+                { tool: 'Bash', file: '', feature_ids: ['f-1'], at: 't2', phase: 'pre',
+                  action: 'test', label: 'running pytest' },
+                { tool: 'Bash', file: '', feature_ids: ['f-1'], at: 't3', phase: 'pre',
+                  action: 'git', label: 'git commit' },
+            ],
+        } as never;
+        const steps = featureSteps(data, null, Date.now());
+        const f1 = steps.get('f-1') ?? [];
+        expect(f1.map(s => s.label)).toEqual(['editing a.py', 'running pytest', 'git commit']);
+        expect(f1.map(s => s.kind)).toEqual([undefined, 'test', 'git']);
+        expect(f1.map(s => s.done)).toEqual([true, true, false]);  // last is active
+    });
+
+    it('an action with no editing feature attribution decorates nothing (no global spam)', () => {
+        const data = {
+            epoch: { id: 'ep-1', origin: 'interactive', open: true, started_at: '', ended_at: null },
+            touched: {},
+            recent: [
+                { tool: 'Bash', file: '', feature_ids: [], at: 't1', phase: 'pre',
+                  action: 'test', label: 'running vitest' },
+            ],
+        } as never;
+        expect(featureSteps(data, null, Date.now()).size).toBe(0);
+    });
+});
+
+// ── W1: per-agent identity ────────────────────────────────────────────────────
+import { agentRole } from '../state/activity-model';
+
+describe('W1: agentRole', () => {
+    it('reads the epoch agent id', () => {
+        expect(agentRole({ epoch: { id: 'ep-1', origin: 'interactive', open: true,
+            started_at: '', ended_at: null, agent: { id: 'codex' } } } as never)).toBe('codex');
+    });
+    it('falls back to claude when identity is absent (legacy epoch)', () => {
+        expect(agentRole({ epoch: { id: 'ep-1', origin: 'interactive', open: true,
+            started_at: '', ended_at: null } } as never)).toBe('claude');
+        expect(agentRole({} as never)).toBe('claude');
+    });
+});

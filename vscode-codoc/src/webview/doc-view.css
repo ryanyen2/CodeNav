@@ -855,6 +855,10 @@ body.vscode-using-screen-reader .ce-resolving-sweep::after { animation: none; co
     content: ''; position: absolute; inset: 2.5px; border-radius: 50%;
     background: var(--ce-ink, var(--vscode-charts-blue)); animation: pulse 1.2s ease-in-out infinite;
 }
+/* W1: action steps (tests / git) read in mono — a command, not a file touch. */
+.ce-ribbon-step.kind-test .ce-ribbon-label,
+.ce-ribbon-step.kind-git .ce-ribbon-label { font-family: var(--font-mono); font-size: 11.5px; }
+.ce-ribbon-step.kind-test.active .ce-ribbon-tick::after { background: var(--vscode-charts-yellow); }
 @media (prefers-reduced-motion: reduce) {
     .ce-ribbon, .ce-ribbon-step { animation: none; }
     .ce-ribbon-mark, .ce-ribbon-step.active .ce-ribbon-tick::after { animation: none; }
@@ -1506,3 +1510,73 @@ body.vscode-high-contrast .ce-palette { outline: 1px solid var(--vscode-contrast
     display: block; font: 12px var(--font-mono); color: var(--fg-faint); font-style: italic;
 }
 body.vscode-high-contrast .ce-palette-row.active { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); border-left-color: var(--vscode-contrastBorder, var(--vscode-foreground)); }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   W3 — consequence feedback: the prose-only saved-flash + the transient notice.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* "✓ saved to tree" — a quiet, self-clearing acknowledgment on a heading whose
+   prose-only edit just committed live (its only ack; queued edits get the
+   pending badge instead). Text via ::after so no DOM churn in the editor. */
+.codoc-feature-heading.ce-saved-flash::after {
+    content: '✓ saved';
+    font: 11px var(--font-mono);
+    color: color-mix(in srgb, var(--ce-staged) 90%, transparent);
+    margin-left: 8px;
+    vertical-align: 2px;
+    animation: ce-saved-in 180ms ease-out;
+}
+@keyframes ce-saved-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; } }
+body.vscode-reduce-motion .codoc-feature-heading.ce-saved-flash::after,
+body.vscode-using-screen-reader .codoc-feature-heading.ce-saved-flash::after {
+    animation: none !important;
+}
+
+/* Bottom-center transient notice — the honest "your click did not take effect"
+   channel (verdict timeout). Calm: hairline card, no color shout. */
+.ce-transient-notice {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    z-index: 60; max-width: 70%;
+    padding: 7px 14px; border-radius: 6px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+    color: var(--vscode-foreground);
+    font: 12px var(--font-body, var(--vscode-font-family));
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    animation: ce-saved-in 180ms ease-out;
+}
+.ce-transient-notice.leaving { opacity: 0; transition: opacity 280ms ease-out; }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   W2 — History (blame) stance: who last changed each feature, tinted by author
+   ROLE (authorship hue, deliberately NOT the direction palette).
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+    --blame-human: var(--vscode-descriptionForeground, #8a8a8a);
+    --blame-agent: var(--ce-staged, #6fae74);
+    --blame-loop:  var(--vscode-charts-blue, #5aa6e0);
+}
+/* the resting "who · when" label after a heading */
+.ce-blame-who {
+    font: 11px var(--font-mono);
+    margin-left: 8px;
+    vertical-align: 2px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    opacity: 0.85;
+    cursor: default;
+    white-space: nowrap;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.ce-blame-who.ce-blame-human { color: var(--blame-human); }
+.ce-blame-who.ce-blame-agent { color: var(--blame-agent); }
+.ce-blame-who.ce-blame-loop  { color: var(--blame-loop); }
+/* the attribution rail down a feature's description blocks */
+.ce-blame-rail { position: relative; }
+.ce-blame-rail::before {
+    content: ''; position: absolute; left: -12px; top: 0.15em; bottom: 0.15em;
+    width: 2px; border-radius: 2px; opacity: 0.6;
+}
+.ce-blame-rail.ce-blame-human::before { background: var(--blame-human); }
+.ce-blame-rail.ce-blame-agent::before { background: var(--blame-agent); }
+.ce-blame-rail.ce-blame-loop::before  { background: var(--blame-loop); }

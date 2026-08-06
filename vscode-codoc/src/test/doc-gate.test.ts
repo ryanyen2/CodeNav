@@ -8,7 +8,7 @@
  * compares them as plain strings.
  */
 import { describe, it, expect } from 'vitest';
-import { gateProjection, shouldAdopt, type GateInput } from '../webview/doc-gate';
+import { gateProjection, shouldAdopt, shouldDeferProjection, type GateInput } from '../webview/doc-gate';
 import type { PMNode } from '../state/pm-doc';
 
 /** A featureHeading + one body paragraph carrying `body` text. `version` rides on the
@@ -196,5 +196,14 @@ describe('gateProjection — cross-feature no-clobber (R14 / KTD4)', () => {
         const titles = (r.doc.content ?? []).filter(b => b.type === 'featureHeading').map(b => b.content?.[0]?.text);
         expect(titles).toContain('Draft'); // the not-yet-minted heading survives
         expect(titles).toContain('A');
+    });
+});
+
+describe('shouldDeferProjection — W5 composer-drop fix', () => {
+    it('defers while a composer or bubble is open, applies otherwise', () => {
+        expect(shouldDeferProjection(false, false)).toBe(false); // idle → apply now
+        expect(shouldDeferProjection(true, false)).toBe(true);   // composer open → defer
+        expect(shouldDeferProjection(false, true)).toBe(true);   // selection bubble open → defer
+        expect(shouldDeferProjection(true, true)).toBe(true);
     });
 });

@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS events (
     source      TEXT NOT NULL,
     op_json     TEXT NOT NULL,
     applied     INTEGER NOT NULL DEFAULT 1,
-    accepted_at TEXT
+    accepted_at TEXT,
+    feature_id  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_applied ON events(applied);
 -- recent_events() / the sidecar changes-feed sort by `at` DESC on every render; the
@@ -158,7 +159,7 @@ CREATE TABLE IF NOT EXISTS applied_commands (
 # table_info scans entirely (open_store runs several times per loop tick — the
 # schema replay was measurable overhead on every one). Bump when _SCHEMA or
 # _migrate changes; version 0 (never stamped) always takes the slow path.
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 class Store:
@@ -238,6 +239,28 @@ class Store:
                 self.conn.execute(
                     f"ALTER TABLE events ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
                 )
+        if "feature_id" not in ecols:
+            # Blame index (v3): the feature an event touched, lifted out of the
+            # op_json payload so per-feature history is a single indexed lookup
+            # instead of a full-scan JSON parse. Backfilled from the payload.
+            # json_valid guard: json_extract RAISES on malformed JSON, so one
+            # torn/corrupt historical row would otherwise brick the migration —
+            # and with it every store open. A corrupt row keeps '' (it was never
+            # readable as an Event anyway); everything else backfills.
+            self.conn.execute(
+                "ALTER TABLE events ADD COLUMN feature_id TEXT NOT NULL DEFAULT ''"
+            )
+            self.conn.execute(
+                "UPDATE events SET feature_id ="
+                " COALESCE(json_extract(op_json, '$.feature_id'), '')"
+                " WHERE json_valid(op_json)"
+            )
+        # Outside the guard: a fresh DB gets the column from _SCHEMA (no ALTER),
+        # so the index must be created unconditionally-idempotently here.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_feature"
+            " ON events(feature_id, at)"
+        )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -596,8 +619,8 @@ class Store:
     # -- events -----------------------------------------------------------
     def append_event(self, e: Event) -> None:
         self.conn.execute(
-            "INSERT INTO events (id, at, source, op_json, applied, accepted_at, actor, mode, caused_by)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO events (id, at, source, op_json, applied, accepted_at, actor, mode, caused_by, feature_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 e.id,
                 e.at.to_str(),
@@ -608,6 +631,7 @@ class Store:
                 e.actor,
                 e.mode,
                 e.caused_by,
+                e.op.feature_id or "",
             ),
         )
         self._commit()
@@ -625,6 +649,17 @@ class Store:
     def recent_events(self, limit: int = 20) -> list[Event]:
         rows = self.conn.execute(
             "SELECT * FROM events ORDER BY at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [_row_to_event(r) for r in rows]
+
+    def events_for_feature(self, feature_id: str, limit: int = 50) -> list[Event]:
+        """The applied change history of one feature, newest first — the blame
+        substrate: who (actor) changed what (op) how (mode) and why (caused_by /
+        rationale), via the indexed ``feature_id`` column."""
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE feature_id=? AND applied=1"
+            " ORDER BY at DESC LIMIT ?",
+            (feature_id, limit),
         ).fetchall()
         return [_row_to_event(r) for r in rows]
 

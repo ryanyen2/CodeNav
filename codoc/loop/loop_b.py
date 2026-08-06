@@ -218,11 +218,29 @@ def _edit_label(op: NodeOp, store: Store, will_queue: bool) -> str:
     return f'{op.kind.value} "{title}" [{tag}]: {snippet!r}'
 
 
-def build_directive(op: NodeOp, store: Store, *, emphasis: list[str] | None = None) -> str:
+def _intent_line(author_intent: list[str] | None) -> str:
+    """W6: the author's own words for the realizing agent — so it implements the
+    stated goal, not a reconstruction of it from the tree edit. The freshest
+    captured prompt (newest last) is the one most likely to have driven the edit."""
+    if not author_intent:
+        return ""
+    asked = author_intent[-1].replace("\n", " ").strip()
+    if not asked:
+        return ""
+    if len(asked) > 240:
+        asked = asked[:240] + "…"
+    return f'\n  Author asked: "{asked}"'
+
+
+def build_directive(
+    op: NodeOp, store: Store, *, emphasis: list[str] | None = None,
+    author_intent: list[str] | None = None,
+) -> str:
+    intent = _intent_line(author_intent)
     if op.kind is NodeOpKind.ADD_NODE:
         return (f'NEW FEATURE: "{op.title}"\n  Intent: {op.description or "(none)"}\n'
                 f'  Implement this feature in the codebase.'
-                + _signal_lines(op.description))
+                + intent + _signal_lines(op.description))
     if op.kind is NodeOpKind.AMEND:
         f = store.get_feature(op.feature_id)
         title = op.title or (f.title if f else op.feature_id)
@@ -231,14 +249,15 @@ def build_directive(op: NodeOp, store: Store, *, emphasis: list[str] | None = No
         scope = ", ".join(files) if files else "(none yet — create where it fits)"
         return (f'UPDATE FEATURE: "{title}"\n  New intent: {op.description}\n'
                 f'  Bound code: {loc}\n  Edit only: {scope}\n  Align the bound code with the new intent.'
-                + _signal_lines(op.description, emphasis=emphasis))
+                + intent + _signal_lines(op.description, emphasis=emphasis))
     if op.kind is NodeOpKind.RETIRE_NODE:
         f = store.get_feature(op.feature_id)
         loc, files = _bound_code(op.feature_id, store) if f else ("", [])
         loc = loc or "(no bound code)"
         scope = ", ".join(files) if files else "(none)"
         return (f'RETIRE FEATURE: "{f.title if f else op.feature_id}"\n  Bound code: {loc}\n'
-                f'  Edit only: {scope}\n  Remove or refactor this code so the feature no longer exists.')
+                f'  Edit only: {scope}\n  Remove or refactor this code so the feature no longer exists.'
+                + intent)
     return ""
 
 
@@ -965,8 +984,16 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
         if not dry_run:
             write_tree_doc(store, codoc_dir)
 
+    # W6: the author's captured prompt(s) this session — attached to each queued
+    # directive so the realizing agent implements the stated goal, not a guess.
+    try:
+        from codoc.loop.intent import recent_intent
+        author_intent = recent_intent(codoc_dir)
+    except Exception:  # noqa: BLE001 — advisory context only
+        author_intent = []
     rendered = [
-        (build_directive(op, store, emphasis=diff.emphasis.get(fid)), fid, cause, op.kind.value)
+        (build_directive(op, store, emphasis=diff.emphasis.get(fid),
+                         author_intent=author_intent), fid, cause, op.kind.value)
         for op, fid, cause in directive_ops
     ]
     rendered += [(text, fid, cause, "steer") for text, fid, cause in steered]

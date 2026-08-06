@@ -56,6 +56,17 @@ export function shouldAdopt(incomingVersion: string, localVersion: string, hasPe
     return incomingVersion > localVersion;
 }
 
+/**
+ * W5 composer-drop fix — whether an incoming projection must be DEFERRED rather
+ * than applied right now, because a comment composer or selection bubble is open
+ * over the doc (applying would remap/destroy the captured range under it). The
+ * caller stashes the latest deferred projection and re-applies it on close.
+ * Pure so the defer/keep-latest contract is testable without the editor.
+ */
+export function shouldDeferProjection(composerOpen: boolean, bubbleOpen: boolean): boolean {
+    return composerOpen || bubbleOpen;
+}
+
 /** A feature's slice of the flat doc: its heading + the body blocks that follow it
  *  (until the next heading). */
 interface FeatureSlice {

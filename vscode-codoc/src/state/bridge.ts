@@ -83,6 +83,30 @@ export function implicatedLeaves(bindings: BridgeBinding[], file: string): Set<s
 // shared lastIndex.
 const DECL_RE = /^\s*(def |class |function |async def |export\s+(function|class|default))/;
 const DECL_NAME_RE = /(?:def |class |function |async def )\s*(\w+)/;
+// Assigned function-like binding — `const handler = () => {}`, `export const f =
+// function`, `const C = class`. The TS indexer emits these (and module-scope
+// plain consts) as named chunks, but the keyword regex above misses them, so a
+// feature bound to an arrow-fn const got NO code decoration/lens (a real
+// mis-anchor). Restricted to MODULE SCOPE (no leading indent) to match the
+// indexer's module-scope rule — a nested `const f = () =>` is a local, not a
+// symbol, so decorating it would be a false positive.
+const ASSIGN_DECL_RE = /^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:function\b|class\b|[^=;]*=>)/;
+
+/** The declared name on a source line, or null. Handles keyword decls
+ *  (def/class/function) at any indent and module-scope assigned function-like
+ *  bindings (arrow/function/class consts). Exported for direct testing. */
+export function declName(line: string): string | null {
+    if (DECL_RE.test(line)) {
+        const n = (DECL_NAME_RE.exec(line) ?? [])[1];
+        if (n) return n;
+    }
+    // Assigned form only at column 0 (module scope) — a leading space means nested.
+    if (!/^\s/.test(line)) {
+        const m = ASSIGN_DECL_RE.exec(line);
+        if (m) return m[1];
+    }
+    return null;
+}
 
 /** Scan source `lines` for every declaration line and its declared name (pure; the host
  *  passes `document` line texts). Used by both directions: doc→code filters these to the
@@ -94,8 +118,7 @@ export function declLines(lines: readonly string[]): DeclLine[] {
     // entry at the same or deeper indent (it has left those scopes) before nesting.
     const stack: { indent: number; name: string }[] = [];
     for (let i = 0; i < lines.length; i++) {
-        if (!DECL_RE.test(lines[i])) continue;
-        const name = (DECL_NAME_RE.exec(lines[i]) ?? [])[1];
+        const name = declName(lines[i]);
         if (!name) continue;
         const indent = lines[i].length - lines[i].replace(/^\s*/, '').length;
         while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();

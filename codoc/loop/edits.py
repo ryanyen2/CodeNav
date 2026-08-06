@@ -75,6 +75,7 @@ from codoc.loop.filenames import (
     HOST_OPS_FILENAME,
     REALIZE_FILENAME,
     REALIZE_MANIFEST_FILENAME,
+    REALIZED_LOG_FILENAME,
     RESOLUTION_FILENAME,
 )
 from codoc.loop.fsio import atomic_write_json, read_json
@@ -722,28 +723,51 @@ def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
     return dest
 
 
+def _parse_manifest(data: dict) -> list[Directive]:
+    return [Directive(id=d.get("id") or "", feature_id=d.get("feature_id") or "",
+                      kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
+                      text=d.get("text") or "", baseline=d.get("baseline") or "",
+                      handed_off=bool(d.get("handed_off", True)))
+            for d in data.get("directives", [])]
+
+
 def read_manifest(codoc_dir: str | Path) -> list[Directive]:
     """The queued directives. A manifest with no ``realize.md`` beside it is stale —
     the agent finished and deleted the queue — UNLESS it still holds DRAFT directives
     (``handed_off=False``), which intentionally live without a realize.md until the
     human hands them off. So: no realize.md + a held draft → keep; no realize.md + all
-    handed-off → stale (cleared)."""
+    handed-off → stale (drained: outcomes logged, manifest rewritten/cleared).
+
+    The drain MUTATES, and this reader runs in several processes at once (the CC
+    hook on every tool call, status refreshes, loop passes) — so the mutating
+    branch double-checks under :func:`_edits_lock`: Loop B writes ``realize.md``
+    BEFORE its manifest, so a fresh queue appearing in the race window is caught
+    by the locked re-check instead of being clobbered by a stale drain."""
     path = manifest_path(codoc_dir)
     if not path.exists():
         return []
-    data = read_json(path, default={})
-    directives = [Directive(id=d.get("id") or "", feature_id=d.get("feature_id") or "",
-                            kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
-                            text=d.get("text") or "", baseline=d.get("baseline") or "",
-                            handed_off=bool(d.get("handed_off", True)))
-                  for d in data.get("directives", [])]
-    if not (Path(codoc_dir) / REALIZE_FILENAME).exists():
+    directives = _parse_manifest(read_json(path, default={}))
+    if (Path(codoc_dir) / REALIZE_FILENAME).exists():
+        return directives
+    with _edits_lock(codoc_dir):
+        if (Path(codoc_dir) / REALIZE_FILENAME).exists():
+            # A new queue landed while we waited for the lock — nothing is stale.
+            return _parse_manifest(read_json(path, default={}))
+        directives = _parse_manifest(read_json(path, default={}))
         drafts = [d for d in directives if not d.handed_off]
+        done = [d for d in directives if d.handed_off]
+        # The queue draining is the only completion signal a directive ever
+        # emits — record it durably BEFORE the manifest entry vanishes, so
+        # "what happened to my edit?" stays answerable (join realized.jsonl
+        # against events.caused_by for the code changes it produced).
+        if done:
+            _log_realized(codoc_dir, done)
         if drafts:
+            if done:
+                write_manifest(codoc_dir, drafts)  # drop completed entries once
             return drafts  # held drafts survive without a realize.md
         clear_manifest(codoc_dir)
         return []
-    return directives
 
 
 def clear_manifest(codoc_dir: str | Path) -> None:
@@ -751,6 +775,67 @@ def clear_manifest(codoc_dir: str | Path) -> None:
         manifest_path(codoc_dir).unlink()
     except FileNotFoundError:
         pass
+
+
+_REALIZED_LOG_MAX = 200  # bounded tail — old outcomes stop mattering
+
+
+def _log_realized(codoc_dir: str | Path, directives: list[Directive]) -> None:
+    """Append completed directives to ``realized.jsonl`` (idempotent by id).
+
+    Best-effort: the log is a feedback surface, not a correctness channel, so
+    IO errors are swallowed rather than blocking the drain."""
+    import time as _time
+    from datetime import datetime, timezone
+
+    path = Path(codoc_dir) / REALIZED_LOG_FILENAME
+    try:
+        seen: set[str] = set()
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                try:
+                    seen.add(json.loads(line).get("id") or "")
+                except (ValueError, TypeError):
+                    continue
+        fresh = [d for d in directives if d.id and d.id not in seen]
+        if not fresh:
+            return
+        now_iso = datetime.now(timezone.utc).isoformat()
+        now_ts = _time.time()
+        with open(path, "a", encoding="utf-8") as fh:
+            for d in fresh:
+                fh.write(json.dumps({
+                    "id": d.id, "feature_id": d.feature_id, "kind": d.kind,
+                    "caused_by": d.caused_by, "text": d.text,
+                    "completed_at": now_iso, "ts": now_ts,
+                }, ensure_ascii=False) + "\n")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) > _REALIZED_LOG_MAX:
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text("\n".join(lines[-_REALIZED_LOG_MAX:]) + "\n",
+                           encoding="utf-8")
+            tmp.replace(path)
+    except OSError:
+        pass
+
+
+def read_realized(codoc_dir: str | Path, limit: int = 50) -> list[dict]:
+    """Recent directive outcomes, newest last — the durable answer to "what
+    happened to my edit" after the realize queue drained."""
+    path = Path(codoc_dir) / REALIZED_LOG_FILENAME
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in raw.splitlines():
+        try:
+            e = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(e, dict) and e.get("id"):
+            out.append(e)
+    return out[-limit:]
 
 
 # ─── doc-wins hold set (classify table row 13) ───────────────────────────────

@@ -28,9 +28,11 @@ without losing, renaming, or rewriting the existing features.
 
 ## How to express it
 
-Give each new theme a temporary id (`"id": "t1"`) and `add_node` it (with a real
-1–3 sentence description). Then `move_node` each existing feature by its real
-`f-...` id under a theme via `parent_id`.
+Give each new theme a temporary id (`"id": "t1"`) and `add_node` it with a real
+1–3 sentence description: the theme's purpose in plain everyday words — what
+this group of features accomplishes together, understandable without reading
+any code. Then `move_node` each existing feature by its real `f-...` id under a
+theme via `parent_id`.
 
 ## Output — return ONLY this, inside solution tags:
 

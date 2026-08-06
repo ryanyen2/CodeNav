@@ -72,7 +72,8 @@ function ribbonDom(steps: AgentStep[], role: string, prevCount: number): HTMLEle
     for (let i = 0; i < steps.length; i++) {
         const s = steps[i];
         const row = document.createElement('div');
-        row.className = 'ce-ribbon-step' + (s.done ? ' done' : ' active');
+        row.className = 'ce-ribbon-step' + (s.done ? ' done' : ' active')
+            + (s.kind ? ` kind-${s.kind}` : '');
         // only rows past the previously-rendered count get the entrance animation —
         // a step flipping active→done must never re-trigger its own entrance.
         if (i < prevCount) row.style.animation = 'none';

@@ -29,6 +29,9 @@ conflict with the new intent. Prefer small, surgical edits over large rewrites.
   before anything else.
 - A `Consult:` line cites an external page. Fetch and read it (WebFetch) before
   implementing that item — it carries details the intent text omits.
+- An `Author asked:` line quotes what the human actually requested this session,
+  in their own words. It is the ground-truth goal — implement THAT; where the
+  reconstructed intent text and the author's ask differ, the author's ask wins.
 
 ## Changes to apply
 

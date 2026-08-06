@@ -250,13 +250,59 @@ def read_status(codoc_dir: str) -> dict:
         except Exception:
             state = "in_sync"
         dead = _dead_refs(codoc_dir)
+        # Recent author prompts (UserPromptSubmit capture) — lets a fresh
+        # session resume where the author left off without re-asking.
+        try:
+            from codoc.loop.intent import recent_intent
+            intent = recent_intent(codoc_dir)
+        except Exception:  # noqa: BLE001 — advisory
+            intent = []
         return {
             "ok": True, "features": len(feats), "pending": len(pending),
             "unrealized": len(unrealized), "state": state,
             # Count is exact; the list is capped so a repo with hundreds of stale
             # refs doesn't flood the agent's context through a status call.
             "dead_refs": len(dead), "dead_ref_list": dead[:20],
+            "recent_intent": intent,
         }
+
+
+def feature_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
+    """The blame timeline of one feature: every applied change newest-first,
+    each with who (actor) / how (mode) / why (caused_by + rationale), plus the
+    title/description snapshot an AMEND left behind — enough to reconstruct how
+    the feature's story evolved without reading the whole ledger."""
+    from datetime import datetime, timezone
+
+    fid = feature_id.strip("⟨⟩")
+    with open_store(codoc_dir) as store:
+        f = store.get_feature(fid)
+        if f is None:
+            return {"ok": False, "error": f"no feature {feature_id!r}"}
+        entries = []
+        for e in store.events_for_feature(fid, limit=limit):
+            entry: dict = {
+                "event_id": e.id,
+                "at": datetime.fromtimestamp(
+                    e.at.wall_clock / 1000, tz=timezone.utc).isoformat(),
+                "kind": e.op.kind.value,
+                "source": e.source,
+                "actor": e.actor,
+                "mode": e.mode,
+            }
+            if e.caused_by:
+                entry["caused_by"] = e.caused_by
+            if e.op.rationale:
+                entry["rationale"] = e.op.rationale
+            if e.op.title is not None:
+                entry["title"] = e.op.title
+            if e.op.description is not None:
+                entry["description"] = e.op.description
+            if e.op.bindings:
+                entry["bindings"] = [s for (_, s) in e.op.bindings]
+            entries.append(entry)
+        return {"ok": True, "feature_id": fid, "title": f.title,
+                "events": entries}
 
 
 # ─── single-op proposals / binds ───────────────────────────────────────────────

@@ -14,6 +14,9 @@ export interface ActivityEpoch {
     open: boolean;
     started_at: string | null;
     ended_at: string | null;
+    /** W1: the coding agent that owns this epoch (claude-code | codex | …). Absent
+     *  on epochs written before per-agent identity — readers fall back to 'claude'. */
+    agent?: { id: string };
 }
 
 export interface TouchedEntry {
@@ -29,6 +32,11 @@ export interface RecentEntry {
     feature_ids: string[];
     at: string;
     phase: string;
+    /** W1: an ACTION entry (a Bash test-run / git verb the hook classified) —
+     *  `label` renders verbatim in the ribbon; `action` is its kind. File-touch
+     *  entries omit both. */
+    action?: string;
+    label?: string;
 }
 
 /** Per-feature reflection phase, written by the hook (editing) + MCP reflect/attach
@@ -70,6 +78,13 @@ export function parseActivity(text: string): ActivityData {
     } catch {
         return {};
     }
+}
+
+/** W1: the role id of the coding agent owning the current epoch — drives the
+ *  presence avatar name/tint, the ribbon "who", and (via role) any per-agent
+ *  colour. Falls back to 'claude' for epochs written before per-agent identity. */
+export function agentRole(data: ActivityData): string {
+    return data.epoch?.agent?.id || 'claude';
 }
 
 /**
@@ -216,8 +231,8 @@ export function featureSteps(
     sidecar: SidecarData | null,
     mtimeMs?: number,
     nowMs: number = Date.now(),
-): Map<string, { label: string; done: boolean }[]> {
-    const out = new Map<string, { label: string; done: boolean }[]>();
+): Map<string, { label: string; done: boolean; kind?: string }[]> {
+    const out = new Map<string, { label: string; done: boolean; kind?: string }[]>();
     if (!isAgentActive(data, mtimeMs, nowMs)) return out;
 
     // Trust an already-resolved (and, for a file shared by several features,
@@ -234,17 +249,23 @@ export function featureSteps(
 
     const recent = data.recent ?? [];
     if (recent.length) {
-        const labelsByFid = new Map<string, string[]>();
+        const labelsByFid = new Map<string, { label: string; kind?: string }[]>();
         for (const r of recent) {                       // chronological
-            const label = `${toolVerb(r.tool)} ${baseName(r.file)}`;
-            for (const fid of fidsFor(r.file, r.feature_ids)) {
+            // W1: an ACTION entry (test run / git verb) carries its own label and
+            // is attributed ONLY to the features the hook saw as being edited —
+            // never re-broadened through the file→feature fallback (no file).
+            const isAction = !!r.label;
+            const label = isAction ? r.label! : `${toolVerb(r.tool)} ${baseName(r.file)}`;
+            const kind = isAction ? r.action : undefined;
+            const fids = isAction ? new Set(r.feature_ids ?? []) : fidsFor(r.file, r.feature_ids);
+            for (const fid of fids) {
                 const list = labelsByFid.get(fid) ?? labelsByFid.set(fid, []).get(fid)!;
-                if (list[list.length - 1] !== label) list.push(label);  // collapse consecutive dupes
+                if (list[list.length - 1]?.label !== label) list.push({ label, kind });  // collapse consecutive dupes
             }
         }
         for (const [fid, labels] of labelsByFid) {
             const trimmed = labels.slice(-MAX_STEPS);
-            out.set(fid, trimmed.map((label, i) => ({ label, done: i < trimmed.length - 1 })));
+            out.set(fid, trimmed.map((s, i) => ({ ...s, done: i < trimmed.length - 1 })));
         }
         return out;
     }

@@ -34,7 +34,7 @@ import { assembleThreads } from '../state/threads';
 import { buildHoverCards } from '../state/registry-model';
 import { BridgeController } from './bridge-controller';
 import { declLines, featureIdsForChangedLines, changedLineNumbers, userTouchedFids } from '../state/bridge';
-import { isAgentActive } from '../state/activity-model';
+import { isAgentActive, agentRole } from '../state/activity-model';
 import type { SidecarData } from '../state/bindings-model';
 import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData, WebviewPrefs } from '../webview/protocol';
 
@@ -46,6 +46,23 @@ const PREFS_KEY = 'codoc.webviewPrefs';
 
 export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'codoc.tree-editor';
+
+    /** Open panels by tree.codoc uri — lets code→doc navigation reveal a feature
+     *  in the LIVE webview instead of dumping the user into the raw text editor.
+     *  Latest resolve wins (a re-opened editor replaces its stale entry). */
+    private static panelByUri = new Map<string, vscode.WebviewPanel>();
+
+    /** Reveal `fid` in the open webview for `treeUri`. Returns false when no
+     *  panel is live (caller falls back / retries after opening one). The
+     *  webview buffers the message until its first projection paints, so racing
+     *  a freshly-opened editor is safe. */
+    public static revealFeature(treeUri: vscode.Uri, fid: string): boolean {
+        const panel = CodocTreeEditorProvider.panelByUri.get(treeUri.toString());
+        if (!panel) return false;
+        panel.reveal(panel.viewColumn, false);
+        void panel.webview.postMessage({ kind: 'reveal-feature', fid });
+        return true;
+    }
 
     constructor(
         private readonly context: vscode.ExtensionContext,
@@ -82,6 +99,12 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  this in-memory mirror is authoritative for the synchronous buildPayload. Seeded
      *  from edits.json on editor open so held drafts survive a reload. */
     private draftFidsByUri = new Map<string, Set<string>>();
+    /** W3 saved-flash: fid → settle timestamp, per doc uri. A settled title/
+     *  description edit lands here; when a later projection shows the fid NOT
+     *  held (prose-only → committed live), the webview gets a quiet "saved"
+     *  flash — the edit's only acknowledgment. Held fids drop silently (the
+     *  pending badge covers them); stale entries expire. */
+    private savedPendingByUri = new Map<string, Map<string, number>>();
 
     async resolveCustomTextEditor(
         document: vscode.TextDocument,
@@ -115,7 +138,27 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         for (const d of seedEdits.drafts ?? []) seedSet.add(d.feature_id);
 
         const post = (): void => {
-            panel.webview.postMessage({ kind: 'doc', payload: this.buildPayload(document, panel.webview) });
+            const payload = this.buildPayload(document, panel.webview);
+            panel.webview.postMessage({ kind: 'doc', payload });
+            // W3 saved-flash drain: a settled prose edit is acknowledged on the
+            // first projection where its feature is NOT held. The age floor
+            // skips the settle's own immediate repost (holds are stale there —
+            // the daemon hasn't classified yet); the ceiling expires entries a
+            // dead daemon will never acknowledge.
+            const savedPending = this.savedPending(document);
+            if (savedPending.size) {
+                const held = new Set(payload.awaitingAI ?? []);
+                const now = Date.now();
+                const flash: string[] = [];
+                for (const [fid, ts] of savedPending) {
+                    const age = now - ts;
+                    if (held.has(fid) || age > 15_000) { savedPending.delete(fid); continue; }
+                    if (age < 600) continue;  // too soon — wait for the daemon's echo
+                    flash.push(fid);
+                    savedPending.delete(fid);
+                }
+                if (flash.length) panel.webview.postMessage({ kind: 'saved-flash', fids: flash });
+            }
         };
 
         const subs: vscode.Disposable[] = [
@@ -140,7 +183,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             }),
             this.state.onDidChange(() => post()),
         ];
-        panel.onDidDispose(() => { for (const s of subs) s.dispose(); });
+        CodocTreeEditorProvider.panelByUri.set(document.uri.toString(), panel);
+        panel.onDidDispose(() => {
+            for (const s of subs) s.dispose();
+            // Only clear our own registration — a newer panel may have taken the slot.
+            if (CodocTreeEditorProvider.panelByUri.get(document.uri.toString()) === panel) {
+                CodocTreeEditorProvider.panelByUri.delete(document.uri.toString());
+            }
+        });
 
         panel.webview.onDidReceiveMessage(async msg => {
             switch (msg.kind) {
@@ -234,12 +284,12 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     private prefsFor(document: vscode.TextDocument): WebviewPrefs {
         const all = this.context.workspaceState.get<Record<string, WebviewPrefs>>(PREFS_KEY) ?? {};
         const p = all[document.uri.toString()];
-        return { glance: !!p?.glance };
+        return { glance: !!p?.glance, blame: !!p?.blame };
     }
 
     private async setPref(
         document: vscode.TextDocument,
-        pref: 'glance',
+        pref: 'glance' | 'blame',
         value: boolean,
     ): Promise<void> {
         const all = this.context.workspaceState.get<Record<string, WebviewPrefs>>(PREFS_KEY) ?? {};
@@ -476,6 +526,8 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             phase: Object.fromEntries(phases),
             realize: this.parseRealizeProgress(status.detail),
             steps: Object.fromEntries(featureSteps(activity, sidecar, this.state.activityMtimeMs)),   // P2b agent ribbon
+            sessionLive: isAgentActive(activity, this.state.activityMtimeMs),  // W3: gates nudge wording
+            agent: agentRole(activity),  // W1: which agent owns the epoch
         };
 
         // Authoritative rich doc (U4): the daemon-written store projection, read above.
@@ -601,6 +653,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             blocks,
             mintedByLocalId: mintedByLocalId(sidecar),
             prefs: this.prefsFor(document),
+            history: sidecar.feature_history ?? {},
             rev: ++this.rev,
         };
     }
@@ -746,6 +799,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const commands = settleCommands(hist, baselineId, fallback, featureUnits(doc), Date.now());
         if (!commands.length) return;  // no identity-keyed change
         await this.emitCommands(document, commands);
+        // W3: remember which existing features this settle edited, so the next
+        // projection can acknowledge a prose-only commit with a saved-flash.
+        const savedPending = this.savedPending(document);
+        for (const c of commands) {
+            if ((c.kind === 'set_title' || c.kind === 'set_description') && c.feature_id) {
+                savedPending.set(c.feature_id, Date.now());
+            }
+        }
         // Held-draft gate (U4): mark every touched EXISTING feature a draft so its
         // code-implying directive stays held until hand-off. A retire/add carries its
         // own hand-off semantics (retire is destructive; add mints), so only the
@@ -761,6 +822,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  repost — the daemon's resulting sidecar/status write drives the UI refresh. */
     private async withdrawRealization(document: vscode.TextDocument, featureId: string): Promise<void> {
         await this.appendHostOp(document, 'appendCancellation', { feature_id: featureId, ts: Date.now() });
+    }
+
+    /** W3: the per-uri saved-flash pending map; created empty on first use. */
+    private savedPending(document: vscode.TextDocument): Map<string, number> {
+        const uri = document.uri.toString();
+        let m = this.savedPendingByUri.get(uri);
+        if (!m) { m = new Map(); this.savedPendingByUri.set(uri, m); }
+        return m;
     }
 
     /** The in-memory held-draft set for a doc uri (U4); created empty on first use. */

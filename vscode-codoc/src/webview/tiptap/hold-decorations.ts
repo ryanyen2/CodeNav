@@ -22,6 +22,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import type { HoldDetail } from '../../state/bindings-model';
+import { alignParas, mdDisplayText, paraDisplayText } from './display-text';
 import { icon } from '../icons';
 
 export const HOLDS_UPDATED = 'codocHoldsUpdated';
@@ -36,6 +37,9 @@ export interface HoldDecorationsOptions {
     /** Withdraw the queued realization for a feature (U6) — cancels the directive,
      *  keeps the prose. Wired to the ✕ on the badge; omitted ⇒ no ✕ (e.g. tests). */
     onWithdraw?: (fid: string) => void;
+    /** W3: whether an agent session is live — a queued edit lands on its next turn
+     *  automatically, so the nudge wording must not tell the user to run anything. */
+    getSessionLive?: () => boolean;
 }
 
 /** The contiguous changed region of `current` vs `baseline`, snapped out to whole words
@@ -59,15 +63,6 @@ export function changedRange(baseline: string, current: string): { start: number
     return { start, end };
 }
 
-/** True when a paragraph holds a non-text node (a codeRef chip): its text diverges from
- *  both `textContent` and the stored description, so the baseline↔current char diff can't
- *  be position-mapped safely there — skip the underline (the rail + dot still mark it). */
-function hasNonTextChild(para: PMModelNode): boolean {
-    let found = false;
-    para.forEach(child => { if (!child.isText) found = true; });
-    return found;
-}
-
 /** Build the badge decorations: one node decoration + one trailing chip widget per
  *  held feature heading. The chip carries a ✕ to withdraw the realization when
  *  `onWithdraw` is given. Exported for headless tests (no DOM needed to construct;
@@ -76,91 +71,111 @@ export function buildHoldDecorations(
     doc: PMModelNode, held: Set<string>,
     onWithdraw?: (fid: string) => void,
     detail?: Record<string, HoldDetail>,
+    sessionLive = false,
 ): DecorationSet {
     if (!held.size) return DecorationSet.empty;
     const decos: Decoration[] = [];
     // The doc is a FLAT sequence of featureHeading + paragraph blocks; a feature's
-    // description is the paragraph(s) between its heading and the next heading. We walk
-    // the top-level nodes statefully so a held heading's body blocks get the pending
-    // rail + underline, not just the heading.
-    let activeFid: string | null = null;
-    let bodyParaIdx = 0;                       // paragraph index within the active feature
-    let baseParas: string[] | null = null;     // the active feature's pre-edit paragraphs
+    // description is the paragraph(s) between its heading and the next heading.
+    // Group each held heading with its body paragraphs FIRST, so the baseline
+    // pairing can align whole paragraph lists (display-text.alignParas) instead
+    // of pairing blindly by index — one inserted/removed paragraph must not
+    // shift every later underline onto the wrong neighbour.
+    interface Para { node: PMModelNode; pos: number }
+    interface Group { fid: string; headNode: PMModelNode; headPos: number; paras: Para[] }
+    const groups: Group[] = [];
+    let g: Group | null = null;
     doc.forEach((node, pos) => {
         if (node.type.name === 'featureHeading') {
             const fid = node.attrs.fid as string | null;
-            if (!fid || !held.has(fid)) { activeFid = null; baseParas = null; return; }
-            activeFid = fid;
-            bodyParaIdx = 0;
-            const bl = detail?.[fid]?.baseline ?? '';
-            baseParas = bl ? bl.split(/\n+/).map(s => s.trim()).filter(Boolean) : null;
-            // Heading: a calm PENDING marker — a dashed hollow pulsing dot meaning
-            // "this edit is QUEUED for the agent; it is NOT running". It is implemented
-            // only when you run /codoc:sync; the active "realizing" shimmer is a separate
-            // signal (activity-decorations.ts, driven by the agent mid-sync). Hover shows
-            // the plain-language gloss of what's queued; the ✕ withdraws it.
-            const gloss = detail?.[fid]?.intent;
-            decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'ce-realizing' }));
-            decos.push(Decoration.widget(pos + node.nodeSize - 1, () => {
-                const chip = document.createElement('span');
-                chip.className = 'ce-pending-badge';
-                chip.contentEditable = 'false';
-                chip.title = 'Pending — this edit is queued for the agent and is implemented when you '
-                    + 'run /codoc:sync (nothing is running yet)'
-                    + (gloss ? `: the agent will ${gloss}.` : '.');
-                // pending = phase 2 → a FILLED DIAMOND glyph (§C.1 "open/fill = phase"): the
-                // captured note crystallised into a task and was sent — "◆ queued."
-                const dot = document.createElement('span');
-                dot.className = 'ce-pending-dot';
-                dot.append(icon('diamond-fill'));
-                chip.append(dot);
-                if (onWithdraw) {
-                    const x = document.createElement('button');
-                    x.type = 'button';
-                    x.className = 'ce-realize-withdraw';
-                    x.textContent = '✕';
-                    x.title = 'Withdraw — cancel the queued change (keeps your text)';
-                    x.addEventListener('mousedown', ev => ev.preventDefault());
-                    x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); onWithdraw(fid); });
-                    chip.append(x);
-                }
-                return chip;
-            }, { side: 1, key: 'hold-' + fid }));
+            g = fid && held.has(fid) ? { fid, headNode: node, headPos: pos, paras: [] } : null;
+            if (g) groups.push(g);
             return;
         }
-        // A body block of the current held feature → the pending-intent rail. Its hover
-        // title is the plain-language gloss of WHAT codoc understood, so the author can
-        // confirm recognition (not just that *something* is queued); it falls back to a
-        // generic line when only a live intent holds the feature (no queued directive).
-        if (activeFid && node.type.name === 'paragraph' && node.content.size > 0) {
-            const gloss = detail?.[activeFid]?.intent;
+        if (g && node.type.name === 'paragraph' && node.content.size > 0) g.paras.push({ node, pos });
+    });
+    for (const grp of groups) {
+        const { fid, headNode: node, headPos: pos } = grp;
+        // Heading: a calm PENDING marker — a dashed hollow pulsing dot meaning
+        // "this edit is QUEUED for the agent; it is NOT running". It is implemented
+        // only when you run /codoc:sync; the active "realizing" shimmer is a separate
+        // signal (activity-decorations.ts, driven by the agent mid-sync). Hover shows
+        // the plain-language gloss of what's queued; the ✕ withdraws it.
+        const gloss = detail?.[fid]?.intent;
+        decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'ce-realizing' }));
+        decos.push(Decoration.widget(pos + node.nodeSize - 1, () => {
+            const chip = document.createElement('span');
+            chip.className = 'ce-pending-badge';
+            chip.contentEditable = 'false';
+            // Session-aware (W3): with a live agent session the queue drains on its
+            // next turn by itself — telling the user to run something would be wrong.
+            chip.title = (sessionLive
+                ? 'Pending — queued for the agent; it lands on the next agent turn '
+                  + '(nothing to run)'
+                : 'Pending — this edit is queued for the agent and is implemented when '
+                  + 'you run /codoc:sync in a Claude session (or `codoc realize`)')
+                + (gloss ? `: the agent will ${gloss}.` : '.');
+            // pending = phase 2 → a FILLED DIAMOND glyph (§C.1 "open/fill = phase"): the
+            // captured note crystallised into a task and was sent — "◆ queued."
+            const dot = document.createElement('span');
+            dot.className = 'ce-pending-dot';
+            dot.append(icon('diamond-fill'));
+            chip.append(dot);
+            if (onWithdraw) {
+                const x = document.createElement('button');
+                x.type = 'button';
+                x.className = 'ce-realize-withdraw';
+                x.textContent = '✕';
+                x.title = 'Withdraw — cancel the queued change (keeps your text)';
+                x.addEventListener('mousedown', ev => ev.preventDefault());
+                x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); onWithdraw(fid); });
+                chip.append(x);
+            }
+            return chip;
+        }, { side: 1, key: 'hold-' + fid }));
+
+        // Body blocks → the pending-intent rail + the changed-text underline. The
+        // baseline pairs with the current paragraphs by ALIGNMENT (not index) and
+        // both sides diff in display space, so chips and inserted paragraphs no
+        // longer skew the underline.
+        const bl = detail?.[fid]?.baseline ?? '';
+        const baseParas = bl
+            ? bl.split(/\n+/).map(s => mdDisplayText(s.trim())).filter(Boolean)
+            : null;
+        const curTexts = grp.paras.map(p => paraDisplayText(p.node));
+        const pairing = baseParas ? alignParas(baseParas, curTexts) : null;
+        grp.paras.forEach((p, k) => {
+            // Hover title = the plain-language gloss of WHAT codoc understood, so the
+            // author can confirm recognition (not just that *something* is queued); it
+            // falls back to a generic line when only a live intent holds the feature.
+            const landing = sessionLive ? 'Lands on the next agent turn.' : 'Awaiting /codoc:sync.';
             const title = gloss
-                ? `Queued for the agent: ${gloss}. Awaiting /codoc:sync.`
-                : 'Queued for the agent — awaiting /codoc:sync.';
-            decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'ce-pending-rail', title }));
-            const contentEnd = pos + node.nodeSize - 1; // last valid inline position
-            if (baseParas && !hasNonTextChild(node)) {
+                ? `Queued for the agent: ${gloss}. ${landing}`
+                : `Queued for the agent — ${landing.toLowerCase()}`;
+            decos.push(Decoration.node(p.pos, p.pos + p.node.nodeSize, { class: 'ce-pending-rail', title }));
+            const contentEnd = p.pos + p.node.nodeSize - 1; // last valid inline position
+            if (baseParas && pairing) {
                 // Underline the text the author actually CHANGED vs the pre-edit baseline —
-                // the in-situ "what's pending" highlight. Safe only for ref-free paragraphs,
-                // where textContent maps 1:1 onto document positions.
-                const r = changedRange(baseParas[bodyParaIdx] ?? '', node.textContent);
+                // the in-situ "what's pending" highlight. An unpaired (inserted) paragraph
+                // diffs against '' and underlines whole, which is the truthful reading.
+                const bi = pairing[k];
+                const r = changedRange(bi == null ? '' : baseParas[bi], curTexts[k]);
                 if (r) {
-                    const from = pos + 1 + r.start;
-                    const to = Math.min(contentEnd, pos + 1 + r.end);
+                    const from = p.pos + 1 + r.start;
+                    const to = Math.min(contentEnd, p.pos + 1 + r.end);
                     if (to > from) decos.push(Decoration.inline(from, to, { class: 'ce-intent-underline' }));
                 }
-            } else if (!baseParas) {
+            } else {
                 // No baseline (ADD / steer / legacy directive) → fall back to underlining the
                 // bold "focus" runs (the author's emphasis).
-                node.forEach((child, offset) => {
+                p.node.forEach((child, offset) => {
                     if (child.isText && child.marks.some(m => m.type.name === 'bold')) {
-                        decos.push(Decoration.inline(pos + 1 + offset, pos + 1 + offset + child.nodeSize, { class: 'ce-intent-underline' }));
+                        decos.push(Decoration.inline(p.pos + 1 + offset, p.pos + 1 + offset + child.nodeSize, { class: 'ce-intent-underline' }));
                     }
                 });
             }
-            bodyParaIdx++;
-        }
-    });
+        });
+    }
     return DecorationSet.create(doc, decos);
 }
 
@@ -175,14 +190,15 @@ export const HoldDecorations = Extension.create<HoldDecorationsOptions>({
         const getHeld = (): Set<string> => this.options.getHeld();
         const getDetail = (): Record<string, HoldDetail> => this.options.getDetail?.() ?? {};
         const onWithdraw = this.options.onWithdraw;
+        const live = (): boolean => this.options.getSessionLive?.() ?? false;
         return [
             new Plugin({
                 key: holdKey,
                 state: {
-                    init: (_c, state) => buildHoldDecorations(state.doc, getHeld(), onWithdraw, getDetail()),
+                    init: (_c, state) => buildHoldDecorations(state.doc, getHeld(), onWithdraw, getDetail(), live()),
                     apply: (tr, old, _o, newState) => {
                         if (tr.getMeta(HOLDS_UPDATED) || tr.docChanged) {
-                            return buildHoldDecorations(newState.doc, getHeld(), onWithdraw, getDetail());
+                            return buildHoldDecorations(newState.doc, getHeld(), onWithdraw, getDetail(), live());
                         }
                         return old.map(tr.mapping, tr.doc);
                     },

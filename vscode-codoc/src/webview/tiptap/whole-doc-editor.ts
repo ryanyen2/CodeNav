@@ -29,6 +29,8 @@ import {
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
+import { BlameDecorations, BLAME_UPDATED } from './blame-decorations';
+import type { HistoryEntry } from '../../state/bindings-model';
 import { RevealDecorations, REVEAL_UPDATED } from './reveal-decorations';
 import { AgentRibbon, STEPS_UPDATED } from './agent-ribbon';
 import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
@@ -40,7 +42,7 @@ import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
-import { gateProjection } from '../doc-gate';
+import { gateProjection, shouldDeferProjection } from '../doc-gate';
 import { mintCommentId, CommentThread } from '../../state/comment-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
@@ -105,6 +107,9 @@ export interface WholeDocEditorHandle {
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
     setSteps: (steps: Record<string, AgentStep[]>) => void;
+    setSessionLive: (live: boolean) => void;
+    setHistory: (history: Record<string, HistoryEntry[]>) => void;
+    setBlame: (on: boolean) => void;
     /** Update the currently-active agent's role — tints the ribbon + resolves its "who" label
      *  (state/presence.ts's roleName/roleInk), matching the presence avatar's tint. */
     setRole: (role: string) => void;
@@ -224,6 +229,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentSteps: Record<string, AgentStep[]> = {};   // P2b agent-action ribbon
     let currentRole = 'claude';   // the ribbon's "who" — matches the presence avatar's role
     let currentHeld = new Set<string>();   // handed-off features (staged & sent) → pending badge
+    let currentSessionLive = false;        // W3: live agent session → "lands next turn" wording
+    let currentBlame = false;              // W2: History (blame) stance on
+    let currentHistory: Record<string, HistoryEntry[]> = {};  // W2: per-feature edit history
     let currentHoldDetail: Record<string, HoldDetail> = {};  // queued-directive {kind,intent} per held fid
     // Edit-lifecycle phase 1 (U3): the "captured" set is computed in the plugin from
     // (live doc vs baseline) ∪ drafts, minus handed-off. The baseline is the feature text
@@ -274,12 +282,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onConsult: opts.onConsult,
             }),
             ActivityDecorations.configure({ getPhases: () => currentPhases }),
+            BlameDecorations.configure({
+                getEnabled: () => currentBlame,
+                getHistory: () => currentHistory,
+            }),
             RevealDecorations.configure({ getPhases: () => currentPhases }),
             AgentRibbon.configure({ getSteps: () => currentSteps, getRole: () => currentRole }),
             HoldDecorations.configure({
                 getHeld: () => currentHeld,
                 getDetail: () => currentHoldDetail,
                 onWithdraw: opts.onWithdrawRealization,
+                getSessionLive: () => currentSessionLive,
             }),
             BlockDecorations.configure({
                 getBlocks: () => currentBlocks,
@@ -780,6 +793,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let composer: HTMLElement | null = null;
     let composeMode: ComposeMode = 'create';
     let composeRange: { from: number; to: number } | null = null;
+    // W5 fix: a projection that arrives while a comment composer / selection bubble
+    // is open is DEFERRED here (not dropped), then re-applied on close — else the
+    // doc sits stale until the next unrelated write. Only the LATEST is kept.
+    let pendingProjection: PMNode | null = null;
+    const isComposing = (): boolean => shouldDeferProjection(!!composer, bubble.style.display !== 'none');
+    function flushPendingProjection(): void {
+        if (!pendingProjection || isComposing()) return;
+        const p = pendingProjection;
+        pendingProjection = null;
+        handle.setDoc(p);
+    }
     let composeFid: string | null = null;
     let composeAnchor = '';
     let composeThreadId = '';
@@ -801,7 +825,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         bubble.style.left = `${Math.max(8, Math.min(rect.left + rect.width / 2 - bw / 2, window.innerWidth - bw - 8))}px`;
         bubble.style.top = `${Math.max(8, rect.top - bubble.offsetHeight - 8)}px`;
     }
-    function closeBubble(): void { bubble.style.display = 'none'; }
+    function closeBubble(): void { bubble.style.display = 'none'; flushPendingProjection(); }
 
     function selectedText(from: number, to: number): string {
         return editor.state.doc.textBetween(from, to, ' ', ' ');
@@ -929,6 +953,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         composer = null;
         syncCommentsPresence();   // close the margin if no threads remain (prose slides back)
         renderCommentMargin();    // re-place cards now that the prose width changed
+        flushPendingProjection(); // W5: apply any projection deferred while composing
     }
 
     function commentMarkRange(threadId: string): { from: number; to: number } | null {
@@ -1129,14 +1154,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
     window.addEventListener('resize', repositionFloatingSurfaces);
 
-    return {
+    const handle: WholeDocEditorHandle = {
         element: wrap,
         setDoc: (incoming: PMNode) => {
             patchMintedIds(incoming); // learn minted ids even mid-edit (prevents a double-add)
             // A reload while a comment composer / bubble is open would remap or destroy
             // the captured range under it (the "selection vanished mid-comment" bug).
-            // Defer the WHOLE update — the next payload reloads cleanly.
-            if (composer || bubble.style.display !== 'none') return;
+            // DEFER the WHOLE update (keeping only the latest) and re-apply it the
+            // moment the composer/bubble closes — so the doc never sits stale waiting
+            // on an unrelated next write (W5 composer-drop fix).
+            if (isComposing()) { pendingProjection = incoming; return; }
             // U5 per-feature HLC version gate (R14 / KTD4) — replaces the whole-doc
             // `if (dirty) return`. Merge the incoming projection with the live doc PER
             // FEATURE: a feature with no pending local edit adopts the projection; a
@@ -1250,6 +1277,20 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // recompute both families in one transaction.
             editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true).setMeta(CAPTURED_UPDATED, true));
         },
+        setSessionLive: (live: boolean) => {
+            if (currentSessionLive === live) return;
+            currentSessionLive = live;
+            editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true)); // re-word tooltips
+        },
+        setHistory: (history: Record<string, HistoryEntry[]>) => {
+            currentHistory = history;
+            editor.view.dispatch(editor.state.tr.setMeta(BLAME_UPDATED, true));
+        },
+        setBlame: (on: boolean) => {
+            if (currentBlame === on) return;
+            currentBlame = on;
+            editor.view.dispatch(editor.state.tr.setMeta(BLAME_UPDATED, true));
+        },
         setDrafts: (fids: string[]) => {
             currentDrafts = new Set(fids);  // recorded, not yet handed off → captured
             editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
@@ -1318,4 +1359,5 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             editor.destroy();
         },
     };
+    return handle;
 }

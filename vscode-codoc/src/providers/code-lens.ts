@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { WorkspaceState } from '../state/workspace-state';
 import { entriesForFile } from '../state/bindings-model';
+import { declName as declNameOf } from '../state/bridge';
 
 export class CodocCodeLensProvider implements vscode.CodeLensProvider {
     constructor(private state: WorkspaceState) {}
@@ -27,13 +28,11 @@ export class CodocCodeLensProvider implements vscode.CodeLensProvider {
         const lenses: vscode.CodeLens[] = [];
         for (let i = 0; i < document.lineCount; i++) {
             const line = document.lineAt(i).text;
-            const isDecl = /^\s*(def |class |function |async def |export\s+(function|class|default))/.test(line);
-            if (!isDecl) continue;
-
-            const declName = (/(?:def |class |function |async def )\s*(\w+)/.exec(line) ?? [])[1];
+            const declName = declNameOf(line);  // keyword + arrow/const forms (parity with the indexer)
+            if (!declName) continue;
             const range = new vscode.Range(i, 0, i, line.length);
 
-            const entry = declName ? byLeaf.get(declName) : undefined;
+            const entry = byLeaf.get(declName);
             if (entry) {
                 lenses.push(new vscode.CodeLens(range, {
                     title: `codoc: ${entry.title}`,

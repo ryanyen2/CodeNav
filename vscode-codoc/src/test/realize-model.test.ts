@@ -71,3 +71,36 @@ describe('pendingCodeByFile', () => {
         expect(map.get('new_file.py')).toEqual([{ title: 'X', kind: 'update' }]);
     });
 });
+
+// ── W3: directive outcomes (.codoc/realized.jsonl) ───────────────────────────
+import { parseRealizedLog, newOutcomes } from '../state/realize-model';
+
+describe('W3: parseRealizedLog', () => {
+    it('parses outcome lines and skips torn/garbage ones', () => {
+        const text = [
+            '{"id":"d-1","feature_id":"f-1","kind":"amend","caused_by":"e-9","text":"…","completed_at":"2026-08-03T00:00:00Z","ts":1}',
+            '{"id":"d-2","feature_id":"f-2","kind":"add",  "completed_at":"2026-08-03T00:01:00Z"',  // torn
+            'not json at all',
+            '"a bare string"',
+            '{"no_id": true}',
+            '{"id":"d-3","feature_id":"f-3","kind":"retire","caused_by":"","text":"","completed_at":"2026-08-03T00:02:00Z","ts":3}',
+        ].join('\n');
+        const got = parseRealizedLog(text);
+        expect(got.map(o => o.id)).toEqual(['d-1', 'd-3']);
+        expect(got[0].featureId).toBe('f-1');
+        expect(got[0].causedBy).toBe('e-9');
+    });
+
+    it('handles empty / missing text', () => {
+        expect(parseRealizedLog('')).toEqual([]);
+    });
+});
+
+describe('W3: newOutcomes', () => {
+    it('returns only unseen outcomes, preserving order', () => {
+        const entries = parseRealizedLog(
+            '{"id":"d-1","feature_id":"f-1"}\n{"id":"d-2","feature_id":"f-2"}\n{"id":"d-3","feature_id":"f-3"}');
+        expect(newOutcomes(entries, new Set(['d-1', 'd-3'])).map(o => o.id)).toEqual(['d-2']);
+        expect(newOutcomes(entries, new Set()).map(o => o.id)).toEqual(['d-1', 'd-2', 'd-3']);
+    });
+});
