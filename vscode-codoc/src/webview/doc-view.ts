@@ -23,7 +23,8 @@ import { CommandPalette } from './palette-view';
 import type { PaletteContext, PaletteItem } from './palette';
 import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
-import { acquireHostApi, isVsCodeHost } from './host-bridge';
+import { acquireHostApi, isVsCodeHost, type Delivery } from './host-bridge';
+import { mountViewerStatus } from './viewer-status';
 
 // One transport seam for both homes (U2): the real VS Code host API, or — in a
 // standalone browser served by `codoc serve` — a network shim that POSTs commands
@@ -216,6 +217,15 @@ const app = document.getElementById('app')!;
 // token values. Inside VS Code the host's --vscode-* vars win and the editor stays
 // theme-aware — this class is never added there.
 if (!isVsCodeHost()) document.body.classList.add('codoc-standalone');
+
+// Hub only. In VS Code the answer to "what happens to what I type" is always the
+// same, and a chip restating it would be noise; on the hub it depends on your
+// GitHub permission and on whether the hub is reachable, and until now nothing
+// said so. Created before the first payload so the very first delivery change —
+// which can precede any projection — has somewhere to land.
+const viewerStatus = isVsCodeHost()
+    ? undefined
+    : mountViewerStatus(document.body, showTransientNotice);
 
 // ─── DOM helpers ────────────────────────────────────────────────────────────
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -1216,6 +1226,12 @@ window.addEventListener('message', ev => {
     // Code→doc spark (P2 / §A.3): a bound source file was edited — land the inbound glyph on
     // each touched heading and pulse its tree row, even when that section is scrolled off.
     if (msg.kind === 'code-touch') { onCodeTouch(msg.fids ?? [], msg.big ?? []); return; }
+    // Hub only: what is happening to the things this client sends. Arrives as a
+    // window message like everything else, so there is one inbound path.
+    if (msg.kind === 'delivery') {
+        viewerStatus?.setDelivery((ev.data as { delivery: Delivery }).delivery);
+        return;
+    }
     // W3: a prose-only edit committed live to the tree (daemon echoed it back,
     // no directive minted) — flash a quiet "saved" confirmation on the heading
     // so the edit doesn't vanish into silence.
@@ -1234,6 +1250,7 @@ window.addEventListener('message', ev => {
     if (msg.payload.rev < lastRev) return; // ignore stale posts
     lastRev = msg.payload.rev;
     payload = msg.payload;
+    viewerStatus?.setViewer(payload.viewer);
     awaitingAI = new Set(payload.awaitingAI ?? []);
     draftSet = new Set(payload.drafts ?? []);
     divergent = payload.divergent ?? {};

@@ -55,7 +55,15 @@ function buildGlanceDecorations(
         const title = (node.textContent ?? '').trim();
         if (!pitch || pitch === title) return;
         // A widget AFTER the heading node — inert, side:1 so it sits below the title.
-        decos.push(Decoration.widget(pos + node.nodeSize, () => pitchWidget(pitch), { side: 1 }));
+        // The key is what lets ProseMirror REUSE this widget's DOM instead of
+        // recreating it: this layer rebuilds on every keystroke (its output depends
+        // on the heading text, so it is not structure-keyed and cannot use
+        // decoration-policy), and without a key every rebuild tore down and rebuilt
+        // one <div> per feature. The pitch is part of the key because a changed
+        // pitch must produce a DIFFERENT widget — keying on fid alone would make
+        // ProseMirror consider the old and new widgets equal and keep stale text.
+        decos.push(Decoration.widget(pos + node.nodeSize, () => pitchWidget(pitch),
+                                     { side: 1, key: `glance-${fid}:${pitch}` }));
     });
     return DecorationSet.create(doc, decos);
 }

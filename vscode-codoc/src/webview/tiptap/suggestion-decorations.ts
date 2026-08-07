@@ -6,6 +6,7 @@
  * in the doc by the host (agent-proposals.applyAgentProposals); add/move/retire keep a
  * compact widget here. (Plus the per-feature "Connections" threads line below.)
  */
+import { nextDecorations } from './decoration-policy';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -366,10 +367,12 @@ export const DependencyDecorations = Extension.create<DependencyDecorationsOptio
                 key: depKey,
                 state: {
                     init: (_c, state) => buildThreadDecorations(state.doc, getThreads(), onNavigate, onOpenBinding, onConsult),
-                    apply: (tr, old, _o, newState) => {
-                        if (tr.getMeta(DEPS_UPDATED) || tr.docChanged) return buildThreadDecorations(newState.doc, getThreads(), onNavigate, onOpenBinding, onConsult);
-                        return old.map(tr.mapping, tr.doc);
-                    },
+                    // Structure-keyed — see decoration-policy.ts. Threads hang off
+                    // headings and come from the payload, not from the prose.
+                    apply: (tr, old, _o, newState) => nextDecorations(
+                        tr, old, !!tr.getMeta(DEPS_UPDATED),
+                        () => buildThreadDecorations(newState.doc, getThreads(), onNavigate, onOpenBinding, onConsult),
+                    ),
                 },
                 props: { decorations(state) { return depKey.getState(state); } },
             }),

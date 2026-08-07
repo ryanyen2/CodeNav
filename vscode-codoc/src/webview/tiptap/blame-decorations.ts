@@ -19,6 +19,7 @@
  * Pure builder (unit-tested); the plugin rebuilds on a BLAME_UPDATED meta or a
  * doc change, else maps positions forward like every other decoration plugin.
  */
+import { nextDecorations } from './decoration-policy';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -106,12 +107,13 @@ export const BlameDecorations = Extension.create<BlameDecorationsOptions>({
                 key: blameKey,
                 state: {
                     init: (_c, state) => buildBlameDecorations(state.doc, enabled(), history(), now()),
-                    apply: (tr, old, _o, newState) => {
-                        if (tr.getMeta(BLAME_UPDATED) || tr.docChanged) {
-                            return buildBlameDecorations(newState.doc, enabled(), history(), now());
-                        }
-                        return old.map(tr.mapping, tr.doc);
-                    },
+                    // Structure-keyed: blame is drawn per feature from history, so
+                    // typing a character changes no blame fact — mapping is not
+                    // merely cheaper than rebuilding, it is the correct answer.
+                    apply: (tr, old, _o, newState) => nextDecorations(
+                        tr, old, !!tr.getMeta(BLAME_UPDATED),
+                        () => buildBlameDecorations(newState.doc, enabled(), history(), now()),
+                    ),
                 },
                 props: { decorations(state) { return blameKey.getState(state); } },
             }),

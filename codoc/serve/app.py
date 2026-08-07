@@ -180,6 +180,19 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None, rate_
                 return JSONResponse({"error": str(exc)}, status_code=exc.status)
             return JSONResponse(result)
 
+    def _viewer(request: Request) -> dict:
+        """This connection's capability block. With no auth configured (the
+        localhost-only mode) the single local viewer is the maintainer, so it
+        reports HANDOFF — the same authority the routes will actually grant."""
+        from codoc.serve.payload import viewer_block
+
+        session = _session(request)
+        if auth is None:
+            return viewer_block(Capability.HANDOFF)
+        if session is None:
+            return viewer_block(Capability.NONE)
+        return viewer_block(session.capability, session.login or "")
+
     @app.get("/api/payload")
     def api_payload(request: Request) -> JSONResponse:
         blocked = _gate(request)
@@ -187,7 +200,9 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None, rate_
             return blocked
         from codoc.serve.payload import build_browser_payload
 
-        return JSONResponse(build_browser_payload(codoc_dir))
+        payload = build_browser_payload(codoc_dir)
+        payload["viewer"] = _viewer(request)
+        return JSONResponse(payload)
 
     @app.get("/api/media/{name}")
     def api_media(name: str, request: Request):
@@ -213,7 +228,11 @@ def build_app(codoc_dir: str, *, static_dir: str | None = None, auth=None, rate_
         from codoc.serve.push import event_source
 
         return EventSourceResponse(
-            event_source(codoc_dir, is_disconnected=request.is_disconnected)
+            event_source(
+                codoc_dir,
+                is_disconnected=request.is_disconnected,
+                viewer=_viewer(request),
+            )
         )
 
     spa = Path(static_dir) if static_dir else None

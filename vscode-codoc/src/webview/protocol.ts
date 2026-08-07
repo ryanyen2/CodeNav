@@ -12,6 +12,7 @@ import type { Suggestion } from '../state/suggestion-model';
 import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
 import type { HoldDetail, HistoryEntry } from '../state/bindings-model';
+import type { ViewerInfo } from './viewer-status';
 
 /** An autocomplete candidate for the `@`-triggered code-reference picker (U5).
  *  Sourced from the sidecar `by_file` (bound symbols only). */
@@ -133,6 +134,13 @@ export interface DocPayload {
      *  arrived — which prevents a settle computed pre-payload from reading a
      *  daemon-added feature as a user deletion (a phantom retire). */
     baselineId?: number;
+    /** What THIS viewer may do (hub only; absent in VS Code, where the answer is
+     *  always "everything"). Attached per connection rather than built into the
+     *  shared payload — see codoc/serve/payload.py:viewer_block — so one viewer's
+     *  authority is never served to another. The client renders affordances from
+     *  it instead of drawing the maintainer's UI for everyone and letting the hub
+     *  refuse the result. */
+    viewer?: ViewerInfo;
     /** The authoritative whole-tree rich doc (tree.doc.json, reconciled with the
      *  current structure). The webview mounts the editor from it so authorship
      *  marks survive. Absent on legacy payloads. */

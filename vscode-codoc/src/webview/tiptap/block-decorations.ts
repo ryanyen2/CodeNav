@@ -18,6 +18,7 @@
  * prior + new content; Loop B's `lower` dispatch turns the delta into a scoped
  * directive (a diagram edge add/remove → a code change). Read-only by default.
  */
+import { nextDecorations } from './decoration-policy';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -245,10 +246,9 @@ export const BlockDecorations = Extension.create<BlockDecorationsOptions>({
                 state: {
                     init: (_c, state) => buildBlockDecorations(state.doc, getBlocks(), onEdit),
                     apply: (tr, old, _o, newState) => {
-                        if (tr.getMeta(BLOCKS_UPDATED) || tr.docChanged) {
-                            return buildBlockDecorations(newState.doc, getBlocks(), onEdit);
-                        }
-                        return old.map(tr.mapping, tr.doc);
+                        // Structure-keyed — see decoration-policy.ts.
+                        return nextDecorations(tr, old, !!tr.getMeta(BLOCKS_UPDATED),
+                            () => buildBlockDecorations(newState.doc, getBlocks(), onEdit));
                     },
                 },
                 props: { decorations(state) { return blockKey.getState(state); } },

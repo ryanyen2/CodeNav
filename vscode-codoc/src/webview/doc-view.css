@@ -1580,3 +1580,54 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-saved-flash::after {
 .ce-blame-rail.ce-blame-human::before { background: var(--blame-human); }
 .ce-blame-rail.ce-blame-agent::before { background: var(--blame-agent); }
 .ce-blame-rail.ce-blame-loop::before  { background: var(--blame-loop); }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Viewer status (hub only) — what happens to what I type.
+
+   Two facts, one chip, bottom-left so it never competes with the bottom-centre
+   transient notice or the caret. Deliberately quiet at rest: the role reads as
+   a hairline label and the delivery half is absent entirely while everything is
+   landing. A permanent green "connected" badge is exactly the kind of chrome
+   people stop seeing, which makes it useless on the one day it matters.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-viewer-status {
+    position: fixed; bottom: 14px; left: 16px; z-index: 55;
+    display: flex; align-items: center; gap: 8px;
+    font: 11px var(--font-body, var(--vscode-font-family));
+    pointer-events: none;                 /* never in the way of the document */
+    user-select: none;
+}
+.ce-viewer-status[hidden] { display: none; }
+
+.ce-viewer-role {
+    pointer-events: auto;                 /* the hint is worth hovering for */
+    padding: 2px 9px; border-radius: 999px;
+    color: var(--vscode-descriptionForeground, #8a8a8a);
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    cursor: default;
+    transition: color 160ms ease-out, background 160ms ease-out;
+}
+/* Read-only is the one role whose consequence is a refusal, so it is the one
+   given a warm tint. Suggesting and Editing both end with the words landing —
+   colouring them would rank collaborators by permission for no useful purpose. */
+.ce-viewer-role[data-cap="none"] { color: var(--vscode-charts-orange, #c98a4b); }
+
+.ce-viewer-delivery {
+    color: var(--vscode-descriptionForeground, #8a8a8a);
+    opacity: 0.9;
+}
+.ce-viewer-delivery[hidden] { display: none; }
+/* Offline is the only state that earns colour: it is the only one where waiting
+   longer does not help and the reader may need to act. */
+.ce-viewer-status[data-state="offline"] .ce-viewer-delivery {
+    color: var(--vscode-charts-orange, #c98a4b);
+}
+/* "Saving…" breathes so an in-flight queue reads as motion rather than a stuck
+   label. No reduced-motion override is needed here: the `body.vscode-reduce-motion *`
+   blanket above already zeroes every animation, and adding a second gate on a
+   made-up class name would look like accessibility while doing nothing. */
+.ce-viewer-status[data-state="queued"] .ce-viewer-delivery {
+    animation: ce-viewer-breathe 1.6s ease-in-out infinite;
+}
+@keyframes ce-viewer-breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }

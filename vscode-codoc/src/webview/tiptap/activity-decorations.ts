@@ -10,6 +10,7 @@
  * a hollow dot while it reflects the work back. `done` (and a closed epoch)
  * clears the decoration. Animation respects prefers-reduced-motion (CSS).
  */
+import { nextDecorations } from './decoration-policy';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -51,10 +52,9 @@ export const ActivityDecorations = Extension.create<ActivityDecorationsOptions>(
                 state: {
                     init: (_c, state) => buildPhaseDecorations(state.doc, getPhases()),
                     apply: (tr, old, _o, newState) => {
-                        if (tr.getMeta(PHASES_UPDATED) || tr.docChanged) {
-                            return buildPhaseDecorations(newState.doc, getPhases());
-                        }
-                        return old.map(tr.mapping, tr.doc);
+                        // Structure-keyed — see decoration-policy.ts.
+                        return nextDecorations(tr, old, !!tr.getMeta(PHASES_UPDATED),
+                            () => buildPhaseDecorations(newState.doc, getPhases()));
                     },
                 },
                 props: { decorations(state) { return phaseKey.getState(state); } },

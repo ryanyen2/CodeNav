@@ -74,10 +74,41 @@ export interface NetworkBridgeOptions {
     storage?: StorageLike;
 }
 
+/**
+ * What is happening to the things this client sends — the one fact the browser
+ * hub never told anyone.
+ *
+ * `state` answers "will what I type next actually land": `live` when the queue is
+ * empty and the last POST succeeded, `queued` while messages are in flight,
+ * `offline` once a POST has failed and the queue is only growing.
+ *
+ * It is derived from the POST path, NOT from the SSE stream. SSE governs whether
+ * updates arrive, and EventSource reconnects on its own — wiring an indicator to
+ * it would flicker "offline" through every routine reconnect while saying nothing
+ * about whether the user's edit is safe. The POST path is the one that answers
+ * the question actually being asked.
+ *
+ * `rejected` carries the last message the hub REFUSED (4xx). Those are dropped
+ * from the queue on purpose — a capability the caller lacks never succeeds on
+ * retry, and keeping it would wedge every later message behind it — but dropping
+ * silently is how a read collaborator's prose used to disappear: refused by the
+ * hub, removed from the outbox, still on screen looking saved until the next
+ * projection replaced it. Reporting it is what makes the drop honest.
+ */
+export interface Delivery {
+    state: 'live' | 'queued' | 'offline';
+    queued: number;
+    rejected?: { msg: WebviewMessage; status: number };
+}
+
 /** A network bridge exposes `flush()` so the shell can retry the outbox on an
  *  `online` event / interval without the bridge importing `window`. */
 export interface NetworkBridge extends HostBridge {
     flush(): Promise<void>;
+    /** Subscribe to delivery changes. Returns an unsubscribe fn. */
+    onDelivery(cb: (d: Delivery) => void): () => void;
+    /** The current delivery state, for a late subscriber. */
+    delivery(): Delivery;
 }
 
 const OUTBOX_KEY = 'codoc.outbox';
@@ -109,6 +140,21 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
     }
     const persist = () => storage?.setItem(OUTBOX_KEY, JSON.stringify(queue));
 
+    const deliveryListeners = new Set<(d: Delivery) => void>();
+    let lastPostFailed = false;
+    let lastRejected: { msg: WebviewMessage; status: number } | undefined;
+    const delivery = (): Delivery => ({
+        state: queue.length === 0 ? 'live' : lastPostFailed ? 'offline' : 'queued',
+        queued: queue.length,
+        ...(lastRejected ? { rejected: lastRejected } : {}),
+    });
+    const announce = () => {
+        const d = delivery();
+        // Snapshot the listener set: a subscriber that unsubscribes while being
+        // notified would otherwise mutate the set mid-iteration.
+        for (const cb of [...deliveryListeners]) cb(d);
+    };
+
     let flushing = false;
     async function flush(): Promise<void> {
         if (flushing) return;
@@ -135,16 +181,23 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
                     // rest of the queue keeps flowing.
                     if (!ok && res && res.status >= 400 && res.status < 500 && res.status !== 429) {
                         rejected = true;
+                        lastRejected = { msg, status: res.status };
                     }
                 } catch {
                     ok = false;
                 }
-                if (!ok && !rejected) break; // offline / 5xx / rate-limited → keep, retry later
+                if (!ok && !rejected) {
+                    // offline / 5xx / rate-limited → keep, retry later
+                    lastPostFailed = true;
+                    break;
+                }
+                lastPostFailed = false;
                 queue.shift();
                 persist();
             }
         } finally {
             flushing = false;
+            announce();
         }
     }
 
@@ -168,12 +221,18 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
         postMessage(msg) {
             queue.push(msg);
             persist();
+            announce();          // queued, before the POST is even attempted
             void flush();
         },
         onPayload(cb) {
             listeners.add(cb);
             return () => listeners.delete(cb);
         },
+        onDelivery(cb) {
+            deliveryListeners.add(cb);
+            return () => deliveryListeners.delete(cb);
+        },
+        delivery,
         getState<T,>() {
             if (!storage) return undefined;
             try {
@@ -218,6 +277,14 @@ export function acquireHostApi(networkOptions?: NetworkBridgeOptions): VsCodeApi
     bridge.onPayload((payload) => {
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new MessageEvent('message', { data: { kind: 'doc', payload } }));
+        }
+    });
+    // Delivery arrives the same way payloads do, so the shell keeps ONE inbound
+    // path (`window` messages) rather than growing a second, transport-specific
+    // subscription that only exists in the browser.
+    bridge.onDelivery((delivery) => {
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new MessageEvent('message', { data: { kind: 'delivery', delivery } }));
         }
     });
     if (typeof window !== 'undefined') {

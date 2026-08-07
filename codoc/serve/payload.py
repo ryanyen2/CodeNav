@@ -347,8 +347,36 @@ def _blocks_with_media(blocks: dict) -> dict:
     return out
 
 
+def viewer_block(capability, login: str = "") -> dict:
+    """What THIS viewer may do, for the client to render honestly.
+
+    The hub has always enforced capabilities server-side, but the browser client
+    had no way to learn its own role: it drew the maintainer's affordances for
+    everyone, a read collaborator's settle came back 403, and the outbox dropped
+    it (correctly — a 403 never succeeds on retry) with nobody told. Their prose
+    sat on screen looking saved until the next projection quietly replaced it.
+    Enforcement without legibility is just a silent loss with extra steps.
+
+    Kept OUT of :func:`build_browser_payload` deliberately. That payload is
+    computed once and shared by every connected viewer (``PayloadStream`` caches
+    and de-dupes it), so a capability baked in there would be whatever the first
+    viewer happened to have — handing a contributor a payload that claims HANDOFF
+    and unlocking affordances the server then refuses. Worse than not knowing.
+    Attach this per connection instead, where the session actually is.
+    """
+    return {
+        "capability": capability.value,
+        "login": login or "",
+        "canSuggest": capability.can_suggest(),
+        "canHandOff": capability.can_hand_off(),
+    }
+
+
 def build_browser_payload(codoc_dir: str | Path) -> dict:
-    """The full DocPayload for the browser suggest surface, derived from files."""
+    """The full DocPayload for the browser suggest surface, derived from files.
+
+    Viewer-independent by construction — see :func:`viewer_block`.
+    """
     codoc_dir = Path(codoc_dir)
     sidecar = _sidecar(codoc_dir)
     features = sidecar.get("features") or {}
