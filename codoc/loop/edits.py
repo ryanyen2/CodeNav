@@ -174,6 +174,14 @@ class Command:
     * ``base_rev`` is the per-feature version the edit was authored from (the U5
       version gate uses it; recorded here for the channel, unused on the Phase-A
       apply path).
+    * ``base_text`` is the value of the field this command REPLACES, as the author
+      last knew it. ``None`` means "no claim" (a legacy or CLI-authored command)
+      and applies unconditionally, exactly as before. When present, Loop B refuses
+      to overwrite a feature whose stored text has moved since — see
+      :func:`codoc.loop.loop_b._base_conflict`. It is the full text rather than a
+      hash so the comparison uses ONE normalizer (the daemon's own) on both sides;
+      a hash would require a byte-identical hash implementation in TypeScript and
+      Python, and any drift between them would read as a conflict on every edit.
     * ``payload`` carries the kind's data: ``add`` → ``title``/``description``/
       ``parent_id``; ``set_title`` → ``title``; ``set_description`` →
       ``description``; ``move`` → ``parent_id``; ``retire`` → (nothing)."""
@@ -182,6 +190,9 @@ class Command:
     feature_id: str = ""
     local_id: str = ""
     base_rev: int = 0
+    base_text: str | None = None
+    session: str = ""   # the editing session that authored it — lets the daemon tell
+                        # "I am continuing my own edit" from "someone else wrote here"
     payload: dict = field(default_factory=dict)
 
 
@@ -221,6 +232,10 @@ class Directive:
                              # is handed off on mint. Once True it is STICKY (never demoted).
                              # Default True here so a LEGACY manifest entry (written before
                              # the held-draft model, lacking the field) still realizes.
+    ts: int = 0        # unix ms when this directive was minted. Only a HELD DRAFT uses
+                       # it, to expire its doc-wins hold (see :func:`hold_set`). 0 means
+                       # "unknown" (a legacy entry) and never expires — an unknown age is
+                       # not evidence of abandonment.
 
 
 def edits_path(codoc_dir: str | Path) -> Path:
@@ -270,6 +285,8 @@ def read_commands(codoc_dir: str | Path) -> list[Command]:
         out.append(Command(
             id=cid, kind=kind, feature_id=c.get("feature_id") or "",
             local_id=c.get("local_id") or "", base_rev=int(c.get("base_rev") or 0),
+            base_text=c["base_text"] if isinstance(c.get("base_text"), str) else None,
+            session=c.get("session") or "",
             payload=dict(payload) if isinstance(payload, dict) else {}))
     return out
 
@@ -412,10 +429,15 @@ def clear_commands(codoc_dir: str | Path, applied_ids: set[str]) -> None:
 def append_command(codoc_dir: str | Path, cmd: Command) -> Path | None:
     """Append an identity-keyed authored command (host emit affordance; CLI/tests).
     Preserves the other edits.json lists. Drained + applied by Loop B (U3)."""
-    commands = (_load(codoc_dir).get("commands") or []) + [{
+    entry = {
         "id": cmd.id, "kind": cmd.kind, "feature_id": cmd.feature_id,
         "local_id": cmd.local_id, "base_rev": cmd.base_rev, "payload": dict(cmd.payload),
-    }]
+    }
+    if cmd.base_text is not None:
+        entry["base_text"] = cmd.base_text
+    if cmd.session:
+        entry["session"] = cmd.session
+    commands = (_load(codoc_dir).get("commands") or []) + [entry]
     return _rewrite(codoc_dir, commands=commands)
 
 
@@ -717,7 +739,7 @@ def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
     atomic_write_json(dest, {"version": 1, "directives": [
         {"id": d.id, "feature_id": d.feature_id, "kind": d.kind,
          "caused_by": d.caused_by, "text": d.text, "baseline": d.baseline,
-         "handed_off": d.handed_off}
+         "handed_off": d.handed_off, "ts": d.ts}
         for d in directives
     ]})
     return dest
@@ -727,7 +749,8 @@ def _parse_manifest(data: dict) -> list[Directive]:
     return [Directive(id=d.get("id") or "", feature_id=d.get("feature_id") or "",
                       kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
                       text=d.get("text") or "", baseline=d.get("baseline") or "",
-                      handed_off=bool(d.get("handed_off", True)))
+                      handed_off=bool(d.get("handed_off", True)),
+                      ts=int(d.get("ts") or 0))
             for d in data.get("directives", [])]
 
 
@@ -843,7 +866,22 @@ def read_realized(codoc_dir: str | Path, limit: int = 50) -> list[dict]:
 def hold_set(codoc_dir: str | Path, *, now_ms: int | None = None) -> set[str]:
     """Feature ids with pending doc-ahead intent: live suggestions (``intents``)
     ∪ queued directives (``realize.json``). Code-side AMEND/RETIRE/MOVE proposals
-    on these features are suppressed until the hold releases — doc always wins."""
+    on these features are suppressed until the hold releases — doc always wins.
+
+    Two kinds of hold, with different lifetimes, because they mean different things:
+
+    * A HANDED-OFF directive is work an agent is doing. It holds until the queue
+      drains, however long that takes — releasing early would let Loop A rewrite a
+      feature out from under a running agent.
+    * A HELD DRAFT is an edit the author made and has not handed off. It expires.
+      Without that backstop, tweaking a description and never pressing hand-off held
+      the feature FOREVER: Loop A could no longer propose an amend, retire or move on
+      it, and never badged it as drifted, so the feature quietly stopped tracking its
+      code for the life of the repository. Nothing surfaced, and each such edit
+      subtracted one more feature from the tree's usefulness.
+
+    Same reasoning, and the same window, as an abandoned intent.
+    """
     now = now_ms if now_ms is not None else int(time.time() * 1000)
     held: set[str] = set()
     for i in read_intents(codoc_dir):
@@ -851,8 +889,11 @@ def hold_set(codoc_dir: str | Path, *, now_ms: int | None = None) -> set[str]:
             continue  # abandoned suggestion — backstop against a forever-hold
         held.add(i.feature_id)
     for d in read_manifest(codoc_dir):
-        if d.feature_id:
-            held.add(d.feature_id)
+        if not d.feature_id:
+            continue
+        if not d.handed_off and d.ts and now - d.ts > INTENT_STALE_MS:
+            continue  # abandoned draft — the same backstop, for the same reason
+        held.add(d.feature_id)
     return held
 
 

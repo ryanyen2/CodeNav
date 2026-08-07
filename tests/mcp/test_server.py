@@ -266,3 +266,75 @@ def test_read_status_tolerates_missing_registry(codoc_dir):
     st = tools.read_status(codoc_dir)
     assert st["dead_refs"] == 0
     assert st["dead_ref_list"] == []
+
+
+# ─── doc always wins: an agent may not overwrite prose the author is editing ──
+
+def _hold_feature(codoc_dir, fid: str, *, directive_id: str = "d-1", handed_off: bool = False):
+    """Put `fid` in the hold set the way a real held draft does. The timestamp must
+    be recent: an abandoned draft deliberately stops holding (see hold_set)."""
+    import time
+
+    from codoc.loop import edits
+
+    edits.write_manifest(codoc_dir, [
+        edits.Directive(id=directive_id, feature_id=fid, kind="amend",
+                        handed_off=handed_off, ts=int(time.time() * 1000)),
+    ])
+
+
+def test_agent_amend_on_a_held_feature_becomes_a_proposal_not_an_overwrite(codoc_dir):
+    """The author is mid-edit on this feature (it holds a draft). An agent amend
+    small enough to auto-apply would have rewritten their prose out from under
+    them — the MCP path never checked holds, though Loop A always has. It must
+    surface for review instead, and the stored description must not move."""
+    f = _seed(codoc_dir, title="Auth", description="The author is still writing this sentence here.")
+    _hold_feature(codoc_dir, f.id)
+
+    res = tools.reflect(codoc_dir, ops=[
+        {"kind": "amend", "feature_id": f.id, "description": "The author is still writing this sentence here!"},
+    ])
+
+    assert res["ok"] and res["results"][0]["applied"] is False
+    with open_store(codoc_dir) as s:
+        assert s.get_feature(f.id).description == "The author is still writing this sentence here."
+        assert len(s.pending_events()) == 1   # kept for review, not discarded
+
+
+def test_an_agent_completing_its_own_directive_still_applies(codoc_dir):
+    """When an agent finishes realizing a directive it reflects the result while
+    that very directive still holds the feature. It is completing the hold, not
+    fighting it — blocking this would break the loop's closing step."""
+    f = _seed(codoc_dir, title="Auth", description="Validates the session token on every request.")
+    _hold_feature(codoc_dir, f.id, directive_id="d-mine", handed_off=True)
+    (__import__("pathlib").Path(codoc_dir) / "realize.md").write_text("### 1. ⟨d-mine⟩ …")
+
+    res = tools.reflect(codoc_dir, ops=[
+        {"kind": "amend", "feature_id": f.id, "description": "Validates the session token on every request!"},
+    ], caused_by="d-mine")
+
+    assert res["results"][0]["applied"] is True
+    with open_store(codoc_dir) as s:
+        assert s.get_feature(f.id).description == "Validates the session token on every request!"
+
+
+def test_an_unheld_feature_is_unaffected(codoc_dir):
+    """No hold, no change in behaviour — small amends still apply straight through."""
+    f = _seed(codoc_dir, title="Auth", description="Validates the session token on every request.")
+
+    res = tools.reflect(codoc_dir, ops=[
+        {"kind": "amend", "feature_id": f.id, "description": "Validates the session token on every request!"},
+    ])
+
+    assert res["results"][0]["applied"] is True
+
+
+def test_binding_maintenance_is_never_suppressed_by_a_hold(codoc_dir):
+    """Bindings are attribution, not intent: code attribution must stay correct
+    while the author edits prose (classify row 13 exempts attach/detach/refresh)."""
+    f = _seed(codoc_dir, title="Auth", description="mid-edit")
+    _hold_feature(codoc_dir, f.id)
+
+    res = tools.reflect(codoc_dir, ops=[{"kind": "attach", "feature_id": f.id, "binds": ["a.py::x"]}])
+
+    assert res["results"][0]["applied"] is True

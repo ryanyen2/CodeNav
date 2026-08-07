@@ -25,6 +25,7 @@ import { CommentMark } from './comment-mark';
 // model wires it (U3+); registering it here puts the marks in the schema so
 // agent-authored tracked changes can be rendered and serialization can strip them.
 import { TrackChangesExtension } from './track-changes';
+import { MarkHygiene } from './mark-hygiene';
 
 export function codocExtensions(): Extensions {
     return [
@@ -53,6 +54,10 @@ export function codocExtensions(): Extensions {
         // featureHeading is the outliner's block node; register it for node-level
         // change tracking (the global dataTracked attr) alongside paragraph.
         TrackChangesExtension.configure({ mode: 'edit', additionalBlockTypes: ['featureHeading'] }),
+        // …and immediately after it, the rule that keeps those marks off the human's
+        // text. An agent's insertion mark means "drop this when projecting to
+        // tree.codoc", so a keystroke that inherited one would erase itself on save.
+        MarkHygiene,
     ];
 }
 

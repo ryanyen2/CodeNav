@@ -120,6 +120,19 @@ export interface CommandEntry {
     feature_id?: string;        // target (empty for `add`, which mints)
     local_id?: string;          // webview client-side node id for `add` (minted-fid correlation)
     base_rev?: number;          // per-feature version the edit was authored from (U5 gate)
+    /** The value this command REPLACES, as this editor last knew the store to hold it.
+     *  It is the common ancestor the daemon merges from when the feature has moved
+     *  since (see loop_b._resolve_content): edits on different lines both land,
+     *  and where they truly overlap a person's edit beats an agent's while two
+     *  peers' edits go up for review rather than one silently erasing the other.
+     *  Full text, not a hash: the comparison then uses ONE normalizer — the
+     *  daemon's — so there is no TypeScript/Python hash parity to drift. */
+    base_text?: string;
+    /** The editing session that authored this command. The daemon uses it to tell a
+     *  continuation of this editor's own work (base legitimately behind, because the
+     *  projection has not caught up yet) from a genuine disagreement with someone
+     *  else's write. */
+    session?: string;
     payload?: {
         title?: string;
         description?: string;

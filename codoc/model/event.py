@@ -55,6 +55,28 @@ MODE_SUGGEST = "suggest"
 MODE_AUTO = "auto"
 
 
+def outranks(actor: str, other: str) -> bool:
+    """Whether ``actor``'s edit wins over ``other``'s where the two contend.
+
+    One rule: a person outranks anything that is not a person. The human is the
+    author of intent; agents and the loop maintain an index of it. Where the two
+    disagree about the same sentence the human is not proposing a change, they
+    are correcting one, and making them accept their own words back through a
+    review surface teaches them the tree argues with them.
+
+    Deliberately NOT a graded scale. Ranking agents against the loop, or one
+    agent against another, would invent an authority ordering nothing in the
+    system can justify — and every level added is another way for the wrong side
+    to win silently. Non-human sources tie, and a tie never overwrites: the
+    caller keeps the incoming text as a proposal instead of guessing.
+
+    An unknown actor ("" — a row written before provenance was recorded) ranks
+    as non-human. That is the honest reading: it means codoc cannot show anyone
+    who wrote this, which is not a claim to authority over someone who can.
+    """
+    return actor == ACTOR_HUMAN and other != ACTOR_HUMAN
+
+
 def default_provenance(source: str, applied: bool) -> tuple[str, str]:
     """(actor, mode) inferred from a legacy ``source`` string — the back-compat
     bridge for call sites that don't (yet) carry explicit provenance."""

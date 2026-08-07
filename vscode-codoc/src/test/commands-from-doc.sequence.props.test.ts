@@ -183,7 +183,7 @@ function runSequence(seed: number, allowRetire: boolean): SeqStats {
         state = state.apply(tr);
         stats.appliedSteps++;
         const next = featureUnits(state.doc.toJSON() as PMNode);   // I-total: must not throw
-        const cmds = commandsForSettle(baseline, next, step + 1);  // I-total: must not throw
+        const cmds = commandsForSettle(baseline, next, 't');  // I-total: must not throw
         assertSettleInvariants(cmds, baseline, next);
         stats.retires += cmds.filter(c => c.kind === 'retire').length;
         stats.addsSeen += cmds.filter(c => c.kind === 'add').length;

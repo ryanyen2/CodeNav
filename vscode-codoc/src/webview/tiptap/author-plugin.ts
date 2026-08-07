@@ -13,9 +13,10 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { AuthorMode, AuthorRole } from '../../state/pm-doc';
+import { AUTHOR_META, isUserInput } from './edit-origin';
+import { clampRanges, insertedRanges } from './tx-ranges';
 
-export const AUTHOR_META = 'codocAuthorStamp';
-export const REFLECT_META = 'codocReflect';
+export { AUTHOR_META, REFLECT_META } from './edit-origin';
 
 export interface AuthorIdentity {
     authorId: string;
@@ -55,40 +56,23 @@ export const AuthorStamp = Extension.create<AuthorStampOptions>({
             new Plugin({
                 key: authorStampKey,
                 appendTransaction: (transactions, _oldState, newState) => {
-                    const relevant = transactions.filter(
-                        tr => tr.docChanged && !tr.getMeta(AUTHOR_META) && !tr.getMeta(REFLECT_META),
-                    );
-                    if (relevant.length === 0) return null;
+                    if (!transactions.some(tr => tr.docChanged && isUserInput(tr))) return null;
 
                     const markType = newState.schema.marks.author;
                     if (!markType) return null;
 
-                    // Collect inserted ranges, mapped to final-doc coordinates.
-                    const ranges: Array<[number, number]> = [];
-                    for (const tr of relevant) {
-                        tr.steps.forEach((step, idx) => {
-                            step.getMap().forEach((_fromA, _toA, fromB, toB) => {
-                                if (toB <= fromB) return;
-                                const rest = tr.mapping.slice(idx + 1);
-                                const from = rest.map(fromB, 1);
-                                const to = rest.map(toB, -1);
-                                if (to > from) ranges.push([from, to]);
-                            });
-                        });
-                    }
+                    // Inserted spans in final-doc coordinates. Shared with mark hygiene so
+                    // both plugins agree on "what the user just typed" (see tx-ranges.ts).
+                    const ranges = clampRanges(
+                        insertedRanges(transactions, isUserInput),
+                        newState.doc.content.size,
+                    );
                     if (ranges.length === 0) return null;
 
                     const { authorId, role, mode } = controller.get();
                     const mark = markType.create({ authorId, role, mode, ts: now() });
                     const tr = newState.tr.setMeta(AUTHOR_META, true);
-                    const size = newState.doc.content.size;
-                    for (const [from, to] of ranges) {
-                        // Clamp to the final doc bounds — with batched/IME transactions a
-                        // stale-mapped range could exceed bounds and make addMark throw.
-                        const f = Math.max(0, Math.min(from, size));
-                        const t = Math.max(f, Math.min(to, size));
-                        if (t > f) tr.addMark(f, t, mark);
-                    }
+                    for (const [from, to] of ranges) tr.addMark(from, to, mark);
                     return tr.steps.length ? tr : null;
                 },
             }),

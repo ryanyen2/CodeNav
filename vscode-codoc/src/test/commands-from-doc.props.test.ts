@@ -89,8 +89,8 @@ describe('property: I-total — never throws, deterministic (well-formed + malfo
             const b = specsToDoc(randomSpecs(rng, true));
             let ua: ReturnType<typeof featureUnits>, ub: typeof ua;
             expect(() => { ua = featureUnits(a); ub = featureUnits(b); }).not.toThrow();
-            const c1 = commandsForSettle(ua!, ub!, 1);
-            const c2 = commandsForSettle(ua!, ub!, 1);
+            const c1 = commandsForSettle(ua!, ub!, 't');
+            const c2 = commandsForSettle(ua!, ub!, 't');
             expect(c2).toEqual(c1);              // deterministic
         }
     });
@@ -104,7 +104,7 @@ describe('property: I-idempotence — a projection vs itself yields zero command
             // the editor renders and re-settles against. It must never self-churn.
             const minted = randomSpecs(rng, true).map((s, i) => ({ ...s, fid: `f-${i}` }));
             const units = featureUnits(specsToDoc(minted));
-            expect(commandsForSettle(units, units, seed & 0xffff)).toEqual([]);
+            expect(commandsForSettle(units, units, 't')).toEqual([]);
         }
     });
 
@@ -116,7 +116,7 @@ describe('property: I-idempotence — a projection vs itself yields zero command
         for (const seed of SEEDS) {
             const rng = mulberry32(seed);
             const units = featureUnits(specsToDoc(randomSpecs(rng, true)));
-            const cmds = commandsForSettle(units, units, seed & 0xffff);
+            const cmds = commandsForSettle(units, units, 't');
             for (const c of cmds) {
                 expect(c.kind).toBe('add');
                 expect(c.id).toBe(`c-add-${c.local_id}`);   // deterministic → ledger-folded
@@ -135,7 +135,7 @@ describe('property: I1 — a vanished heading is NEVER a retire', () => {
             // Next: keep a random subset (simulate backspace-merge / select-all delete /
             // a mid-edit transient) — still nothing flagged retired.
             const next = featureUnits(specsToDoc(base.filter(() => rng() < 0.5)));
-            const cmds = commandsForSettle(prev, next, 1);
+            const cmds = commandsForSettle(prev, next, 't');
             expect(cmds.filter(c => c.kind === 'retire')).toEqual([]);
         }
     });
@@ -156,7 +156,7 @@ describe('property: retire is emitted iff the retired flag transitions false→t
                 if (retire) flipped.add(s.fid);
                 return { ...s, retired: retire };
             })));
-            const retires = commandsForSettle(prev, next, 1).filter(c => c.kind === 'retire');
+            const retires = commandsForSettle(prev, next, 't').filter(c => c.kind === 'retire');
             expect(new Set(retires.map(c => c.feature_id))).toEqual(flipped);
             expect(retires).toHaveLength(flipped.size);
         }
@@ -216,7 +216,7 @@ describe('property: I-content-safe — text-only edits never restructure', () =>
                 title: rng() < 0.5 ? s.title + ' x' : s.title,
                 paras: s.paras.map(p => (rng() < 0.5 ? p + ' y' : p)),
             }))));
-            const kinds = new Set(commandsForSettle(prev, next, 1).map(c => c.kind));
+            const kinds = new Set(commandsForSettle(prev, next, 't').map(c => c.kind));
             for (const k of kinds) expect(['set_title', 'set_description']).toContain(k);
         }
     });

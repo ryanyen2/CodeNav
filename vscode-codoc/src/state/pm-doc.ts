@@ -107,6 +107,15 @@ export function paragraphOwner(node: PMNode): string | null {
     return (node.attrs as { ownerId?: string | null } | undefined)?.ownerId ?? null;
 }
 
+/** The per-feature HLC the store projection stamps on each `featureHeading`
+ *  (`feature.updated_at.to_str()`). Empty for a heading the store has not seen yet.
+ *  This is the version an edit is made AGAINST — the version gate compares it, and
+ *  a command's identity is derived from it. */
+export function headingVersion(node: PMNode): string {
+    const v = (node.attrs as { version?: unknown } | undefined)?.version;
+    return typeof v === 'string' ? v : '';
+}
+
 /**
  * For a whole-tree doc, compute the owner each UN-owned paragraph should adopt: the
  * identity (fid ?? localId) of the nearest preceding heading. Returns a map from

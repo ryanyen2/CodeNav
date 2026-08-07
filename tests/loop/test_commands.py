@@ -349,6 +349,59 @@ def test_command_with_vanished_feature_id_is_skipped(dirs):
     assert edits_channel.read_commands(codoc_dir) == []
 
 
+# ── a command landing on a RETIRED feature is stale, not applicable ──────────
+def test_command_on_retired_feature_is_skipped_not_written_to_the_tombstone(dirs):
+    """The projection only ever shows LIVE features, so a command naming a retired
+    one was authored before the retire landed. Applying it wrote prose onto a
+    tombstone: invisible in every render, but real enough to mint a directive and
+    hold the feature forever."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="original"))
+    s = open_store(codoc_dir)
+    s.retire_feature("f-1")
+    s.close()
+
+    append_command(codoc_dir, Command(id="r-1", kind="set_description",
+                                      feature_id="f-1", payload={"description": "typed after the retire"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert not res.error
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "original"   # the tombstone is untouched
+    assert s.command_applied("r-1") is True                 # and not retried forever
+    s.close()
+    assert edits_channel.read_commands(codoc_dir) == []
+
+
+def test_lifecycle_version_advances_even_when_the_clock_goes_backwards(dirs, monkeypatch):
+    """A lifecycle change must be strictly NEWER than what it followed.
+
+    Stamping the raw wall clock meant a backwards correction — NTP, a laptop waking
+    in another timezone — produced a version LOWER than the amend before it. The
+    webview adopts a projection only when it is strictly newer, so it would then
+    refuse to ever show the retire: the editor keeps offering a feature the store
+    has already tombstoned, and no later render can talk it round.
+    """
+    import codoc.model.hlc as hlc_mod
+
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="body"))
+    s = open_store(codoc_dir)
+    before = s.get_feature("f-1").updated_at
+
+    class _ClockJumpedBack:
+        @staticmethod
+        def time() -> float:
+            return 0.0
+    monkeypatch.setattr(hlc_mod, "time", _ClockJumpedBack)
+
+    s.retire_feature("f-1")
+    after = s.get_feature("f-1").updated_at
+    s.close()
+
+    assert after.to_str() > before.to_str()
+
+
 # ── KTD9: the daemon is the sole writer of tree.doc.json (U4) ────────────────
 def test_loop_b_pass_writes_tree_doc_json_matching_projection(dirs):
     """A Loop B pass that moved the store re-renders tree.doc.json from the store
@@ -384,3 +437,431 @@ def test_dry_run_does_not_write_tree_doc_json(dirs):
     run_loop_b(root, codoc_dir, dry_run=True)
 
     assert not (Path(codoc_dir) / DOC_FILENAME).exists()
+
+
+# ─── base enforcement: neither side's text is overwritten in silence ──────────
+
+def _write_as(codoc_dir, fid: str, description: str, *, source: str, writer: str = "") -> None:
+    """Write a description through the real boundary, so the writer AND the role
+    are recorded the way rank arbitration will read them."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    s = open_store(codoc_dir)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=description),
+             s, source=source, applied=True, writer=writer)
+    s.close()
+
+
+def test_a_command_a_PEER_overlapped_is_kept_for_review(dirs):
+    """Content commands used to apply blind — last writer won, silently, in both
+    directions. Here another PERSON rewrote the same line after the author started
+    typing, so the author's whole-description command would erase it. Neither of
+    them outranks the other, so the store keeps the peer's text and the author's
+    version survives as a pending proposal: nobody's work is discarded, and the
+    disagreement is visible rather than resolved by whoever typed last."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="as the author saw it"))
+    _write_as(codoc_dir, "f-1", "a colleague rewrote this",
+              source="user", writer="sess-b")   # a person, on another session
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text="as the author saw it",           # what the author's editor last knew
+        payload={"description": "as the author saw it, extended"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 1 and res.merged == 0 and not res.error
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "a colleague rewrote this"  # not overwritten
+    pending = s.pending_events()
+    assert len(pending) == 1
+    assert pending[0].op.description == "as the author saw it, extended"   # nor discarded
+    s.close()
+
+
+# ─── role precedence: a person outranks an agent where the two contend ───────
+
+def test_the_author_wins_the_line_an_agent_rewrote(dirs):
+    """The human authors the intent; the agent maintains an index of it. Where the
+    two rewrote the SAME line, sending the author to a review surface to accept
+    their own words back would teach them the tree argues with them. Their edit
+    lands, and the agent's superseded text stays in the event ledger — which is
+    what `codoc history` reads, so it is recorded, not destroyed."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="as the author saw it"))
+    _write_as(codoc_dir, "f-1", "the agent rewrote this", source="loop_a")
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text="as the author saw it",
+        payload={"description": "as the author saw it, extended"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.merged == 1 and res.conflicted == 0 and not res.error
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "as the author saw it, extended"
+    assert not s.pending_events()          # nothing for the author to arbitrate
+    superseded = [e for e in s.events_for_feature("f-1")
+                  if e.op.description == "the agent rewrote this"]
+    assert superseded, "the agent's text must remain findable in the ledger"
+    s.close()
+
+
+def test_an_agent_does_not_win_the_line_a_person_wrote(dirs):
+    """The rule is asymmetric on purpose, and the asymmetry is the whole point.
+    An agent relaying a command through the same channel does NOT get to overwrite
+    a person's words — its version goes up for review instead."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="the shared base"))
+    _write_as(codoc_dir, "f-1", "what the person wrote", source="user", writer="sess-a")
+
+    edits_channel.append_annotation(codoc_dir, edits_channel.EditAnnotation(
+        feature_id="f-1", fields=["description"], actor="claude-code", mode="pen"))
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="agent-1",
+        base_text="the shared base",
+        payload={"description": "what the agent wrote"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 1 and res.merged == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "what the person wrote"
+    assert [e.op.description for e in s.pending_events()] == ["what the agent wrote"]
+    s.close()
+
+
+def test_edits_on_different_lines_merge_instead_of_conflicting(dirs):
+    """Rank only arbitrates OVERLAP. An author fixing the first paragraph while an
+    agent rewrote the third has not disagreed with anyone, and the old all-or-
+    nothing refusal handled exactly this case worst: it called the edit a conflict
+    and threw the author onto a review surface over words nobody contested."""
+    root, codoc_dir = dirs
+    base = "first paragraph\n\nsecond paragraph\n\nthird paragraph"
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description=base))
+    _write_as(codoc_dir, "f-1",
+              "first paragraph\n\nsecond paragraph\n\nthird paragraph, rewritten by the agent",
+              source="loop_a")
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text=base,
+        payload={"description": "first paragraph, fixed by the author\n\nsecond paragraph\n\nthird paragraph"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.merged == 1 and res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == (
+        "first paragraph, fixed by the author\n\nsecond paragraph\n\n"
+        "third paragraph, rewritten by the agent"
+    )
+    s.close()
+
+
+def test_an_agents_new_paragraph_survives_the_authors_whole_description_settle(dirs):
+    """The shape this whole mechanism exists for.
+
+    A settle carries the WHOLE description, computed from a baseline taken before
+    the agent appended anything. So the author's text does not merely disagree
+    with the agent's paragraph — it does not contain it at all, and applying the
+    command verbatim reads as a deliberate deletion. The three-way merge is what
+    tells the difference between "never saw it" and "removed it": the paragraph
+    is absent from the author's version but also absent from their base, so it
+    was never theirs to delete."""
+    root, codoc_dir = dirs
+    base = "what the feature does\n\nhow it is used"
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description=base))
+    _write_as(codoc_dir, "f-1", base + "\n\nan agent appended this", source="loop_a")
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text=base,   # taken BEFORE the agent's paragraph existed
+        payload={"description": "what the feature really does\n\nhow it is used"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.merged == 1 and res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == (
+        "what the feature really does\n\nhow it is used\n\nan agent appended this"
+    )
+    s.close()
+
+
+def test_deleting_a_paragraph_the_author_actually_saw_is_honoured(dirs):
+    """The other side of the same coin, and the reason the merge keys off the
+    author's BASE rather than off "is this paragraph missing". Here the agent's
+    paragraph was in the text they were editing, so leaving it out is a deletion
+    and must survive — otherwise nothing an agent writes could ever be removed."""
+    root, codoc_dir = dirs
+    base = "what the feature does\n\nan agent appended this"
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description=base))
+    _write_as(codoc_dir, "f-1", base, source="loop_a")   # agent wrote it; author saw it
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text=base, payload={"description": "what the feature does"}))
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "what the feature does"
+    s.close()
+
+
+def test_peers_editing_different_lines_also_merge(dirs):
+    """Merging is a question about TEXT, not authority — two people who never
+    touched the same words both get their edit. Rank is consulted only when the
+    lines actually contend."""
+    root, codoc_dir = dirs
+    base = "alpha\n\nbeta\n\ngamma"
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description=base))
+    _write_as(codoc_dir, "f-1", "alpha\n\nbeta\n\ngamma, by a colleague",
+              source="user", writer="sess-b")
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text=base, payload={"description": "alpha, by me\n\nbeta\n\ngamma"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.merged == 1 and res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "alpha, by me\n\nbeta\n\ngamma, by a colleague"
+    s.close()
+
+
+def test_a_command_that_survives_nothing_leaves_the_writer_record_alone(dirs):
+    """The type-then-undo shape, arriving at the daemon. The command's merged
+    result is exactly what the store already holds, so there is nothing to write.
+    Writing it back anyway would be harmless to the TEXT and corrosive to the
+    writer record: this session would be stamped as the author of the agent's
+    prose, and its next stale command would then read as 'continuing my own work'
+    and overwrite that prose with no merge at all."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="the base"))
+    _write_as(codoc_dir, "f-1", "the agent's text", source="loop_a")
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text="the base", payload={"description": "the base"}))  # typed and undone
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.merged == 0 and res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "the agent's text"
+    assert s.feature_writer_info("f-1")[1] == "loop"   # still the agent's, not ours
+    assert s.command_applied("c-1") is True            # and it never replays
+    s.close()
+
+
+def test_both_sides_arriving_at_the_same_text_is_not_a_conflict(dirs):
+    """Convergence, not disagreement. A lagging projection racing an echo of the
+    author's own edit produces exactly this, and calling it a conflict would ask
+    someone to arbitrate between two identical paragraphs."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="the base"))
+    _write_as(codoc_dir, "f-1", "the very same words", source="loop_a")
+
+    append_command(codoc_dir, Command(
+        id="c-1", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text="the base", payload={"description": "the very same words"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "the very same words"
+    s.close()
+
+
+def test_ordinary_consecutive_typing_never_conflicts(dirs):
+    """The load-bearing negative. A second settle arrives before any projection has
+    returned, so it cites the text the FIRST settle wrote — which the editor tracks
+    optimistically. If that read as a conflict, every burst of typing would stall
+    behind a review prompt and the feature would be unusable."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="one"))
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_description", feature_id="f-1",
+                                      base_text="one", payload={"description": "one two"}))
+    run_loop_b(root, codoc_dir, dry_run=False)
+    append_command(codoc_dir, Command(id="c-2", kind="set_description", feature_id="f-1",
+                                      base_text="one two", payload={"description": "one two three"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "one two three"
+    s.close()
+
+
+def test_whitespace_the_author_cannot_see_is_not_a_conflict(dirs):
+    """The base is compared through the daemon's own normalizer. Render and parse
+    both reshape blank lines and trailing spaces, so text can differ by bytes the
+    author never typed — treating that as a disagreement would conflict constantly."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="one\n\n\ntwo  "))
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_description", feature_id="f-1",
+                                      base_text="one\n\ntwo", payload={"description": "edited"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "edited"
+    s.close()
+
+
+def test_a_command_making_no_base_claim_applies_as_before(dirs):
+    """`base_text=None` is how the CLI, tests and any pre-existing queued command
+    speak. They must keep working exactly as they did."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="original"))
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_description",
+                                      feature_id="f-1", payload={"description": "no claim"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "no claim"
+    s.close()
+
+
+def test_a_title_command_checks_the_title_it_replaces(dirs):
+    """A title is one line, so any two renames necessarily contend — the merge
+    degenerates to pure precedence, with no special case for it. Between peers
+    that means neither wins and the rename goes up for review."""
+    root, codoc_dir = dirs
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="d"))
+    s = open_store(codoc_dir)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1", title="Renamed by someone else"),
+             s, source="user", applied=True, writer="sess-b")
+    s.close()
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_title", feature_id="f-1",
+                                      session="sess-a", base_text="Auth",
+                                      payload={"title": "Authentication"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 1
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").title == "Renamed by someone else"
+    s.close()
+
+
+def test_a_title_an_agent_renamed_yields_to_the_author(dirs):
+    """Same degenerate merge, opposite ranks: the author's rename lands."""
+    root, codoc_dir = dirs
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="d"))
+    s = open_store(codoc_dir)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1", title="Renamed by the loop"),
+             s, source="loop_a", applied=True)
+    s.close()
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_title", feature_id="f-1",
+                                      session="sess-a", base_text="Auth",
+                                      payload={"title": "Authentication"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 0 and res.merged == 1
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").title == "Authentication"
+    s.close()
+
+
+def test_a_conflicted_command_is_ledgered_and_not_retried_forever(dirs):
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="moved on"))
+    append_command(codoc_dir, Command(id="c-1", kind="set_description", feature_id="f-1",
+                                      base_text="stale", payload={"description": "mine"}))
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    s = open_store(codoc_dir)
+    assert s.command_applied("c-1") is True
+    s.close()
+    assert edits_channel.read_commands(codoc_dir) == []
+
+
+def test_the_same_session_may_keep_typing_past_its_own_commands(dirs):
+    """A stale base is not by itself a disagreement. Someone typing faster than the
+    projection round-trip sends commands against a store that has already absorbed
+    the earlier ones, so their base legitimately trails. Treating that as a conflict
+    would stall every burst of typing behind a review prompt — the timing-aware
+    harness caught exactly this, with a single author and no agent anywhere."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="one"))
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_description", feature_id="f-1",
+                                      base_text="one", session="sess-a",
+                                      payload={"description": "one two"}))
+    run_loop_b(root, codoc_dir, dry_run=False)
+    # The projection has not returned, so this still cites the ORIGINAL text.
+    append_command(codoc_dir, Command(id="c-2", kind="set_description", feature_id="f-1",
+                                      base_text="one", session="sess-a",
+                                      payload={"description": "one two three"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "one two three"
+    s.close()
+
+
+def test_a_second_editing_session_is_somebody_else(dirs):
+    """Two windows on one repository are two authors. The second must not silently
+    erase the first."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="one"))
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_description", feature_id="f-1",
+                                      base_text="one", session="window-a",
+                                      payload={"description": "window A wrote this"}))
+    run_loop_b(root, codoc_dir, dry_run=False)
+    append_command(codoc_dir, Command(id="c-2", kind="set_description", feature_id="f-1",
+                                      base_text="one", session="window-b",
+                                      payload={"description": "window B wrote this"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.conflicted == 1
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "window A wrote this"
+    s.close()
+
+
+def test_an_agent_write_breaks_the_authors_own_lineage(dirs):
+    """The writer AND the role are recorded at the one apply boundary, so an
+    agent's write counts as somebody else without every agent path having to say
+    so. The author's next command is therefore reconciled rather than applied
+    blind — and because it is a person's edit against the loop's, they win the
+    line they both rewrote."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="one"))
+
+    append_command(codoc_dir, Command(id="c-1", kind="set_description", feature_id="f-1",
+                                      base_text="one", session="sess-a",
+                                      payload={"description": "the author wrote this"}))
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    s = open_store(codoc_dir)
+    assert s.feature_writer_info("f-1") == ("sess-a", "human")
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1", description="the agent wrote this"),
+             s, source="loop_a", applied=True)
+    assert s.feature_writer_info("f-1") == ("loop_a", "loop")   # lineage broken
+    s.close()
+
+    append_command(codoc_dir, Command(id="c-2", kind="set_description", feature_id="f-1",
+                                      base_text="the author wrote this", session="sess-a",
+                                      payload={"description": "the author kept typing"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.merged == 1 and res.conflicted == 0
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "the author kept typing"
+    s.close()

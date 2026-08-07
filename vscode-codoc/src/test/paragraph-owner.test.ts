@@ -84,3 +84,48 @@ describe('keepParagraphOwnerPlugin — crystallize + preserve across transforms'
         expect(paraOwners(twice)).toEqual(['f-a']);
     });
 });
+
+/**
+ * Arrived vs stayed (L6). Prose that STAYS keeps its owner however the headings
+ * around it move — that is I2. Prose that ARRIVES belongs where it landed.
+ *
+ * The gap between those two was a silent misfiling: a paragraph copied out of one
+ * feature and pasted under another carried the old `ownerId` in its attrs, so the
+ * settle diff routed its text back to the feature it came from. The words appeared
+ * under the new heading and were stored under the old one, with nothing on screen
+ * to suggest it.
+ */
+describe('keepParagraphOwnerPlugin — a pasted paragraph adopts its new home', () => {
+    it('re-owns a paragraph inserted under a different feature', () => {
+        const state = stateWith(makeDoc([
+            head('f-a'), paragraphNode(textToInlineRuns('a body'), 'f-a'),
+            head('f-b'), paragraphNode(textToInlineRuns('b body'), 'f-b'),
+        ]));
+        // Paste a copy of A's paragraph (attrs and all) at the end, under B.
+        const stray = paragraphNode(textToInlineRuns('a body'), 'f-a');
+        const node = PMNodeType.fromJSON(schema, stray as never);
+        const next = state.apply(state.tr.insert(state.doc.content.size, node));
+
+        expect(paraOwners(next)).toEqual(['f-a', 'f-b', 'f-b']);
+    });
+
+    it('still refuses to re-own prose that merely STAYED put (I2 anti-steal)', () => {
+        // A heading inserted ABOVE owned prose does not take it: the prose did not move.
+        const state = stateWith(makeDoc([
+            head('f-a'), paragraphNode(textToInlineRuns('belongs to A'), 'f-a'),
+        ]));
+        const heading = PMNodeType.fromJSON(schema, head('f-b') as never);
+        const at = state.doc.child(0).nodeSize;   // between the heading and its prose
+        const next = state.apply(state.tr.insert(at, heading));
+
+        expect(paraOwners(next)).toEqual(['f-a']);
+    });
+
+    it('keeps both halves of a split with their owner', () => {
+        const state = stateWith(makeDoc([
+            head('f-a'), paragraphNode(textToInlineRuns('one two'), 'f-a'),
+        ]));
+        const next = state.apply(state.tr.split(state.doc.child(0).nodeSize + 4));
+        expect(paraOwners(next)).toEqual(['f-a', 'f-a']);
+    });
+});

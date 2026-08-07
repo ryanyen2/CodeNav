@@ -200,10 +200,18 @@ describe('gateProjection — cross-feature no-clobber (R14 / KTD4)', () => {
 });
 
 describe('shouldDeferProjection — W5 composer-drop fix', () => {
+    const idle = { composerOpen: false, bubbleOpen: false, imeComposing: false };
+
     it('defers while a composer or bubble is open, applies otherwise', () => {
-        expect(shouldDeferProjection(false, false)).toBe(false); // idle → apply now
-        expect(shouldDeferProjection(true, false)).toBe(true);   // composer open → defer
-        expect(shouldDeferProjection(false, true)).toBe(true);   // selection bubble open → defer
-        expect(shouldDeferProjection(true, true)).toBe(true);
+        expect(shouldDeferProjection(idle)).toBe(false);                          // apply now
+        expect(shouldDeferProjection({ ...idle, composerOpen: true })).toBe(true); // composer open
+        expect(shouldDeferProjection({ ...idle, bubbleOpen: true })).toBe(true);   // bubble open
+        expect(shouldDeferProjection({ ...idle, composerOpen: true, bubbleOpen: true })).toBe(true);
+    });
+
+    it('defers during an IME composition (T1.9)', () => {
+        // Replacing the doc mid-composition aborts it and drops or doubles the
+        // characters — every CJK writer would hit this on every word.
+        expect(shouldDeferProjection({ ...idle, imeComposing: true })).toBe(true);
     });
 });

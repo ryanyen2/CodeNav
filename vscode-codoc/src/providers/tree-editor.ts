@@ -91,6 +91,33 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  unbounded across agent realize epochs while the user types. */
     private baselinesByUri = new Map<string, Array<{ id: number; units: FeatureUnit[] }>>();
     private baselineSeq = 0;
+    /** Per uri: what this host believes the STORE currently holds for each feature.
+     *  Reset from every projection, and advanced optimistically as commands are
+     *  emitted — a command carries this as its `base_text` so the daemon can tell a
+     *  clean continuation from someone else having written in between. Without the
+     *  optimistic half, two settles before a projection returns (ordinary typing)
+     *  would each cite text the store had already moved past, and every one of them
+     *  would read as a conflict. */
+    private knownStoreByUri = new Map<string, Map<string, FeatureUnit>>();
+    /** Whether the current append outage has already been reported (re-armed on success),
+     *  so a persistent failure doesn't fire a dialog per keystroke. */
+    private hostOpFailureNotified = false;
+    /** Names one emission of commands — a settle, or a drag. See `settleToken`. */
+    private emissionSeq = 0;
+    private readonly sessionTag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+    /**
+     * A fresh token for one emission of commands, unique for the life of the machine.
+     *
+     * The counter alone would restart at 0 with the extension host and could then
+     * reuse an id that an earlier, never-applied command already claimed — the
+     * daemon would fold the new edit as a replay of an edit that never happened.
+     * The session tag makes each host process's ids disjoint from every other's,
+     * including its own past lives and a second window open on the same repo.
+     */
+    private settleToken(): string {
+        return `${this.sessionTag}.${++this.emissionSeq}`;
+    }
     private static readonly BASELINE_HISTORY = 16;
     /** Suggesting-mode DRAFTS (U4), per doc uri: feature ids whose edit the human is
      *  holding as a draft (the daemon keeps their code-implying directive out of the
@@ -541,6 +568,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         // EXACT baseline it was computed from (#4), immune to an in-flight projection.
         const baselineUnits = featureUnits(doc);
         this.projectedUnitsByUri.set(uri, baselineUnits);
+        // A fresh projection IS the store, so it resets what we believe the store
+        // holds — discarding any optimistic entries whose commands it has absorbed.
+        this.knownStoreByUri.set(uri, new Map(baselineUnits.filter(u => u.fid).map(u => [u.fid!, u])));
         const baselineId = ++this.baselineSeq;
         const hist = this.baselinesByUri.get(uri) ?? [];
         hist.push({ id: baselineId, units: baselineUnits });
@@ -714,13 +744,60 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         }
     }
 
-    /** Append ONE op to edits.host.jsonl (the IDE→daemon log). Pure append — no read, no
-     *  lock — so it never races the daemon's locked merge. `fn` names the daemon-side
-     *  writer (appendCommand / appendSteer / appendBlockEdit / appendCancellation /
-     *  appendHandoffs / setDrafts); `arg` is its payload (see edits.py:_dispatch_host_op). */
+    /**
+     * Append ops to edits.host.jsonl (the IDE→daemon log). Pure append — no read, no
+     * lock — so it never races the daemon's locked merge. `fn` names the daemon-side
+     * writer (appendCommand / appendSteer / appendBlockEdit / appendCancellation /
+     * appendHandoffs / setDrafts); `arg` is its payload (see edits.py:_dispatch_host_op).
+     *
+     * A batch is written as ONE append. The message handler is async and VS Code does
+     * not serialize it, so a per-op append lets a concurrent settle, drag or comment
+     * interleave its lines between ours — and the daemon applies in file order, which
+     * would then be the wrong order. One write keeps a batch contiguous.
+     *
+     * Failure is REPORTED, never swallowed. This used to throw into a floating promise:
+     * the append vanished, the repost after it never ran, and the editor sat showing
+     * "saved" over an edit that had reached nothing.
+     */
+    private async appendHostOps(
+        document: vscode.TextDocument,
+        ops: ReadonlyArray<{ fn: string; arg: unknown }>,
+    ): Promise<boolean> {
+        if (!ops.length) return true;
+        const payload = ops.map(op => JSON.stringify(op) + '\n').join('');
+        const target = this.hostOpsUri(document).fsPath;
+        try {
+            await fs.appendFile(target, payload, 'utf-8');
+            this.hostOpFailureNotified = false;   // re-arm: a later outage is worth saying again
+            return true;
+        } catch (first) {
+            try {
+                // The usual cause is a missing .codoc (a fresh or re-initialized workspace).
+                await fs.mkdir(path.dirname(target), { recursive: true });
+                await fs.appendFile(target, payload, 'utf-8');
+                this.hostOpFailureNotified = false;
+                return true;
+            } catch {
+                this.reportHostOpFailure(first);
+                return false;
+            }
+        }
+    }
+
     private async appendHostOp(document: vscode.TextDocument, fn: string, arg: unknown): Promise<void> {
-        const line = JSON.stringify({ fn, arg }) + '\n';
-        await fs.appendFile(this.hostOpsUri(document).fsPath, line, 'utf-8');
+        await this.appendHostOps(document, [{ fn, arg }]);
+    }
+
+    /** Tell the author their edit did not land. Silence here is the worst outcome:
+     *  they keep typing into a surface that is no longer recording anything. */
+    private reportHostOpFailure(err: unknown): void {
+        console.error('[codoc] could not append to edits.host.jsonl', err);
+        if (this.hostOpFailureNotified) return;
+        this.hostOpFailureNotified = true;
+        const detail = err instanceof Error ? err.message : String(err);
+        void vscode.window.showErrorMessage(
+            `codoc could not record your edit (${detail}). Recent changes to the tree are NOT saved.`,
+        );
     }
 
     /** Mark the held-draft set for a batch of edited feature ids (U4 suggesting mode).
@@ -742,7 +819,27 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  structural/description edit reaches Loop B now — the host never persists
      *  tree.doc.json (KTD9). Idempotent on the store ledger (KTD8): a re-emitted id folds. */
     private async emitCommands(document: vscode.TextDocument, commands: readonly CommandEntry[]): Promise<void> {
-        for (const c of commands) await this.appendHostOp(document, 'appendCommand', c);
+        const ok = await this.appendHostOps(document, commands.map(c => ({ fn: 'appendCommand', arg: c })));
+        if (ok) this.advanceKnownStore(document, commands);
+    }
+
+    /** Fold emitted commands into "what the store holds", so the NEXT command cites
+     *  the text this one is about to write rather than the text before it. Only on a
+     *  successful append: if the edit never reached the log, the store never moved. */
+    private advanceKnownStore(document: vscode.TextDocument, commands: readonly CommandEntry[]): void {
+        const uri = document.uri.toString();
+        const known = this.knownStoreByUri.get(uri) ?? new Map<string, FeatureUnit>();
+        for (const c of commands) {
+            const fid = c.feature_id;
+            if (!fid) continue;
+            const prior = known.get(fid);
+            if (!prior) continue;   // never projected — the daemon will tell us soon enough
+            if (c.kind === 'set_title') known.set(fid, { ...prior, title: c.payload?.title ?? prior.title });
+            if (c.kind === 'set_description') {
+                known.set(fid, { ...prior, description: c.payload?.description ?? prior.description });
+            }
+        }
+        this.knownStoreByUri.set(uri, known);
     }
 
     /** Read the daemon-written store projection (tree.doc.json) for this tree (U4/KTD9).
@@ -796,7 +893,8 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         // appear in `prev` but not `next` and be misread as a user deletion → a retire.
         const hist = this.baselinesByUri.get(uri) ?? [];
         const fallback = this.projectedUnitsByUri.get(uri) ?? featureUnits(this.readProjectionDoc(document));
-        const commands = settleCommands(hist, baselineId, fallback, featureUnits(doc), Date.now());
+        const commands = settleCommands(hist, baselineId, fallback, featureUnits(doc),
+                                        this.settleToken(), this.knownStoreByUri.get(uri), this.sessionTag);
         if (!commands.length) return;  // no identity-keyed change
         await this.emitCommands(document, commands);
         // W3: remember which existing features this settle edited, so the next
@@ -911,7 +1009,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  not-yet-minted node (no fid) is dropped: it has no stable store identity to move. */
     private async editMove(document: vscode.TextDocument, sourceId: string, newParentId: string | null): Promise<void> {
         if (!sourceId) return;
-        await this.emitCommands(document, [moveCommand(sourceId, newParentId, Date.now())]);
+        await this.emitCommands(document, [moveCommand(sourceId, newParentId, this.settleToken())]);
         await this.markDrafts(document, [sourceId]);
     }
 

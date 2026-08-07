@@ -40,7 +40,7 @@ from codoc.blocks.base import Capability, LowerContext
 from codoc.blocks.builtins import ensure_builtins
 from codoc.codoc_file.diff import CodocDiff
 from codoc.codoc_file.doc_render import build_doc_from_store
-from codoc.codoc_file.parse import extract_bold, extract_links
+from codoc.codoc_file.parse import extract_bold, extract_links, normalize_description
 from codoc.codoc_file.render import write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop import inbox, status
@@ -49,8 +49,9 @@ from codoc.loop.classify import edit_mints_directive
 from codoc.loop.filenames import DOC_FILENAME, REALIZE_FILENAME
 from codoc.loop.fsio import atomic_write_json, atomic_write_text
 from codoc.loop.locks import loop_lock
+from codoc.loop.merge3 import merge3
 from codoc.model.block import Block, BlockLifecycle, Provenance
-from codoc.model.event import NodeOp, NodeOpKind
+from codoc.model.event import NodeOp, NodeOpKind, default_provenance, outranks
 from codoc.model.ids import new_directive_id
 from codoc.store.db import Store, open_store
 
@@ -64,6 +65,156 @@ _DIRECTIVE_ID_RE = re.compile(r"⟨(d-[0-9a-f]+)⟩")
 _EXPLICIT_REALIZE_KINDS = frozenset({
     "steer", NodeOpKind.RETIRE_NODE.value, NodeOpKind.ADD_NODE.value,
 })
+
+
+def _command_target_gone(store: Store, op: NodeOp) -> bool:
+    """Whether an identity-keyed command's target can no longer accept it.
+
+    Commands are authored against a projection, and the projection only ever shows
+    LIVE features — so a command naming a retired one was written before the retire
+    landed and is stale by construction. ``get_feature`` returns tombstones as well
+    as live rows, so checking only for ``None`` let those stale edits through: the
+    prose landed on a feature no render will ever show, minted a directive for an
+    invisible node, and left a hold on it that nothing could release.
+    """
+    feature = store.get_feature(op.feature_id)
+    return feature is None or feature.retired
+
+
+def _feature_label(store: Store, feature_id: str | None) -> str:
+    f = store.get_feature(feature_id) if feature_id else None
+    return f.title if f and f.title else (feature_id or "a feature")
+
+
+CLEAN = "clean"          # nobody else wrote; the command applies verbatim
+MERGED = "merged"        # both wrote, on different lines; both land
+SUPERSEDED = "superseded"  # both wrote the same lines; the incoming side outranks
+DEFERRED = "deferred"    # both wrote the same lines; neither outranks the other
+NOOP = "noop"            # the command asks for text the store already holds
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """What Loop B should do with one content command.
+
+    ``text`` is what the field should hold afterwards, or ``None`` when nothing
+    should be written. ``DEFERRED`` is the only outcome that writes nothing —
+    and the only one whose incoming text needs a proposal to survive.
+    """
+
+    outcome: str
+    text: str | None = None
+
+    @property
+    def keeps_proposal(self) -> bool:
+        return self.outcome == DEFERRED
+
+
+def _command_actor(ann: "edits_channel.EditAnnotation | None") -> str:
+    """The role an incoming command edits in.
+
+    Read from the settle's own authorship annotation, falling back to the same
+    derivation ``apply_op`` will use for the event it is about to write. Sharing
+    the derivation is the point: the role that arbitrates a contended edit and
+    the role recorded as having made it are one value, so the ledger can never
+    disagree with the decision it justified. The command channel's producers are
+    the webview and the hub, both human surfaces; an agent relaying through it
+    must annotate itself, exactly as it must to appear correctly in blame.
+    """
+    actor = ann.actor if ann else ""
+    return actor or default_provenance("user", True)[0]
+
+
+def _resolve_content(
+    store: Store,
+    cmd: "edits_channel.Command",
+    op: NodeOp,
+    incoming_actor: str,
+) -> Resolution:
+    """Reconcile one content command against whatever the store now holds.
+
+    Four outcomes, from two independent questions — do the edits overlap, and if
+    so does the author outrank whoever wrote here. Fusing those into one boolean
+    (the previous ``_base_conflict``) meant an author fixing a typo in the first
+    paragraph while an agent rewrote the third was told they "conflicted" and
+    sent to a review surface, for edits that never touched the same words.
+
+    Content commands used to apply blind: whoever wrote last won, silently, in both
+    directions. An agent amend landing while the author typed was overwritten by the
+    author's next settle (which carried a whole description computed from text
+    predating the amend); an author's in-progress prose was overwritten by the agent.
+    Neither side was told, and the losing text left no trace anywhere.
+
+    ``base_text`` is what the author's editor last knew the store to hold for the
+    field being replaced. If that still matches, this edit is a clean continuation
+    and applies. If it does not, somebody else wrote in between and this command
+    would erase their work without either party knowing.
+
+    Comparison is by NORMALIZED text using the daemon's own normalizer on both
+    sides, so the whitespace differences that render and parse away — the ones the
+    author never typed and cannot see — are not mistaken for a conflict.
+
+    ``base_text is None`` means the command makes no claim (a legacy entry, the CLI,
+    a test) and applies unconditionally, exactly as before.
+
+    A stale base is NOT by itself a disagreement. Someone typing faster than the
+    projection round-trip sends several commands against a store that has already
+    absorbed the earlier ones, so their base legitimately trails — and treating that
+    as a conflict would stall ordinary typing behind a review prompt on every burst.
+    What distinguishes the cases is who put the current text there: if this same
+    editing session did, this command continues its own work; if anyone else did,
+    the two genuinely disagree and neither may be overwritten in silence.
+
+    Where they truly do contend, rank decides (:func:`model.event.outranks`): a
+    person's edit beats an agent's, because the human authors the intent and the
+    agent maintains an index of it. The superseded agent text is not destroyed —
+    it stays in the event ledger, which is what ``codoc history`` reads. Only the
+    losing INCOMING text needs a proposal, because that text is nowhere else yet.
+    """
+    if cmd.base_text is None or not op.feature_id:
+        return Resolution(CLEAN)
+    feature = store.get_feature(op.feature_id)
+    if feature is None:
+        return Resolution(CLEAN)
+    if op.description is not None:
+        current, incoming = (feature.description or ""), op.description
+        moved = normalize_description(cmd.base_text) != normalize_description(current)
+    elif op.title is not None:
+        current, incoming = (feature.title or ""), op.title
+        moved = cmd.base_text.strip() != current.strip()
+    else:
+        return Resolution(CLEAN)
+    if not moved:
+        return Resolution(CLEAN)
+    writer, holder_actor = store.feature_writer_info(op.feature_id)
+    if cmd.session and writer == cmd.session:
+        return Resolution(CLEAN)
+
+    # The MOVED test above normalizes; the merge below does not. Deliberate: the
+    # normalizer exists so whitespace the author cannot see never reads as a
+    # disagreement, and it keeps those cases out of the merge entirely. But it is
+    # a comparison tool, not a rewriter — merging normalized text would store the
+    # normalized form, quietly reflowing prose the author never touched.
+    merged = merge3(cmd.base_text, current, incoming)
+    if merged.text == current:
+        # The merge asks for exactly what is already stored — the command
+        # carries no surviving change (its author typed and undid, or it
+        # restates its own base). Writing it back would be harmless to the text
+        # and NOT harmless to the writer record: it would stamp this session as
+        # the author of prose someone else actually wrote, and the next stale
+        # command from that session would then read as "continuing my own work"
+        # and overwrite them with no merge at all.
+        return Resolution(NOOP)
+    if not merged.contended:
+        # Disjoint edits. Both land, nobody arbitrates, nobody reviews — the
+        # case the old all-or-nothing refusal handled worst.
+        return Resolution(MERGED, merged.text)
+    if outranks(incoming_actor, holder_actor):
+        return Resolution(SUPERSEDED, merged.text)
+    # Peers disagreeing about the same words. Applying the disjoint half here
+    # would build a document neither of them wrote, in the one case where nobody
+    # has the authority to be merged into. The whole edit goes up for review.
+    return Resolution(DEFERRED)
 
 
 def _norm_title(t: str | None) -> str:
@@ -106,6 +257,11 @@ class LoopBResult:
     rejected: int = 0
     user_edits: int = 0
     commands: int = 0  # identity-keyed authored commands applied this pass (U3)
+    conflicted: int = 0  # commands refused because a PEER wrote the same lines and
+                         # neither side outranks the other (the incoming text is kept
+                         # as a pending proposal — see _resolve_content)
+    merged: int = 0      # commands reconciled with a concurrent write: disjoint edits
+                         # combined, or the author's edit winning a contended region
     steered: int = 0  # inline `> …` steering comments drained this pass
     canceled: int = 0  # queued directives withdrawn this pass (U6)
     soft_retired: int = 0  # nodes the human deleted from the doc → soft (detach-only) retire
@@ -129,6 +285,10 @@ class LoopBResult:
         parts = [f"accepted {self.accepted}", f"rejected {self.rejected}", f"edits {self.user_edits}"]
         if self.commands:
             parts.append(f"commands {self.commands}")
+        if self.merged:
+            parts.append(f"merged {self.merged}")
+        if self.conflicted:
+            parts.append(f"{self.conflicted} conflicted (kept for review)")
         if self.steered:
             parts.append(f"steered {self.steered}")
         if self.canceled:
@@ -707,8 +867,12 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
                     live_title_parent.add(key)
                     if cmd.local_id:
                         fids_by_local[cmd.local_id] = fid
-            elif op.feature_id and store.get_feature(op.feature_id) is None:
-                # Target vanished (already retired / never existed): skip, don't crash.
+            elif op.feature_id and _command_target_gone(store, op):
+                # The target no longer accepts this command: it never existed, or it is
+                # a tombstone. `get_feature` returns retired rows too, so testing only
+                # for None let content land on a retired feature — prose written where
+                # no render will ever show it, a directive minted for an invisible
+                # node, and a hold on it that nothing can release. Skip, don't crash.
                 store.mark_command_applied(cmd.id)
                 applied_cmd_ids.add(cmd.id)
                 continue
@@ -732,13 +896,60 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
                 # it (edits.json); an edit with no annotation defaults to human/pen. Same
                 # stamping step 2 applied to a diff op, now applied to the command op.
                 ann = annotations.get(op.feature_id or "")
+                resolution = _resolve_content(store, cmd, op, _command_actor(ann))
+                if resolution.keeps_proposal:
+                    # Peers wrote the same lines and neither outranks the other.
+                    # Record the incoming edit as a pending proposal instead of
+                    # applying it: the other party's text stays live, the author's
+                    # text is kept intact on the review surface, and NEITHER is
+                    # thrown away. The alternative — the old behaviour — was to
+                    # overwrite and tell nobody, which is how work disappeared in
+                    # both directions.
+                    with store.transaction():
+                        if not store.try_claim_command(cmd.id):
+                            applied_cmd_ids.add(cmd.id)
+                            continue
+                        apply_op(op, store, source="user", applied=False,
+                                 actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
+                                 caused_by=(ann.suggestion_id if ann else ""))
+                    store.mark_command_applied(cmd.id)
+                    applied_cmd_ids.add(cmd.id)
+                    res.conflicted += 1
+                    res.edit_notes.append(
+                        f"conflict: {_feature_label(store, op.feature_id)} changed since you "
+                        f"started editing — your version is waiting for review",
+                    )
+                    continue
+                if resolution.outcome == NOOP:
+                    # Nothing survives to write. Ledger it so the command never
+                    # replays, and leave the store — and the writer record —
+                    # exactly as they are.
+                    store.mark_command_applied(cmd.id)
+                    applied_cmd_ids.add(cmd.id)
+                    continue
+                if resolution.text is not None:
+                    # A merge happened: the op now carries the reconciled text
+                    # rather than the author's raw slice, so what the store
+                    # receives is what both sides' surviving edits add up to.
+                    if op.description is not None:
+                        op.description = resolution.text
+                    else:
+                        op.title = resolution.text
+                    res.merged += 1
+                    res.edit_notes.append(
+                        f"merged: {_feature_label(store, op.feature_id)} also changed while you "
+                        + ("were editing — your version won where they overlapped"
+                           if resolution.outcome == SUPERSEDED
+                           else "were editing — both edits kept"),
+                    )
                 with store.transaction():
                     if not store.try_claim_command(cmd.id):
                         applied_cmd_ids.add(cmd.id)
                         continue
                     apply_op(op, store, source="user", applied=True,
                              actor=(ann.actor if ann else ""), mode=(ann.mode if ann else ""),
-                             caused_by=(ann.suggestion_id if ann else ""))
+                             caused_by=(ann.suggestion_id if ann else ""),
+                             writer=cmd.session)
                     # A command `retire` is a SOFT, DETACH-ONLY retire (mirrors the
                     # verdict-accept RETIRE branch): mark retired AND detach the
                     # feature's bindings so the code isn't left bound to a now-hidden
@@ -1052,9 +1263,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # realize.md. (CLAUDE.md: "apply tree edits, don't queue realization".)
     if not realize:
         res.directive_ids = [new_directive_id() for _ in rendered]
+        minted_ts = int(time.time() * 1000)
         all_directives = existing + [
             edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause,
-                                    text=text, baseline=baselines.get(fid, ""), handed_off=False)
+                                    text=text, baseline=baselines.get(fid, ""), handed_off=False,
+                                    ts=minted_ts)
             for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
         ]
         edits_channel.write_manifest(codoc_dir, all_directives)
@@ -1071,9 +1284,10 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # decides by handing off.
     handoffs = set(edits_channel.drain_handoffs(codoc_dir))
     res.directive_ids = [new_directive_id() for _ in rendered]
+    minted_ts = int(time.time() * 1000)
     all_directives = existing + [
         edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text,
-                                baseline=baselines.get(fid, ""), handed_off=False)
+                                baseline=baselines.get(fid, ""), handed_off=False, ts=minted_ts)
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ]
     for d in all_directives:

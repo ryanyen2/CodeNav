@@ -25,6 +25,8 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { NODE_PARAGRAPH, NODE_FEATURE_HEADING } from '../../state/pm-doc';
+import { isUserInput } from './edit-origin';
+import { insertedRanges, nodeArrived } from './tx-ranges';
 
 const keepOwnerKey = new PluginKey('codocParagraphOwner');
 
@@ -39,6 +41,11 @@ export function keepParagraphOwnerPlugin() {
         key: keepOwnerKey,
         appendTransaction(transactions, _oldState, newState) {
             if (!transactions.some(tr => tr.docChanged)) return null;
+            // Spans this batch INSERTED, so a paragraph that arrived can be told from
+            // one that merely stayed put. System transactions (a projection load) are
+            // excluded — they insert the entire document, and every projected owner
+            // would otherwise be re-derived from geometry on the spot.
+            const arrivals = insertedRanges(transactions, isUserInput);
             const fixes: { pos: number; attrs: Record<string, unknown> }[] = [];
             let nearest: string | null = null;
             newState.doc.forEach((node, pos) => {
@@ -47,6 +54,15 @@ export function keepParagraphOwnerPlugin() {
                 } else if (node.type.name === NODE_PARAGRAPH) {
                     const owner = (node.attrs.ownerId as string | null) ?? null;
                     if (!owner && nearest) {
+                        fixes.push({ pos, attrs: { ...node.attrs, ownerId: nearest } });
+                    } else if (owner && owner !== nearest && nearest
+                               && nodeArrived(arrivals, pos, node.nodeSize)) {
+                        // A paragraph copied out of one feature and pasted under another
+                        // carries the old owner in its attrs, so the settle diff routed
+                        // its text back to the feature it came from — the prose appeared
+                        // under the new heading but was filed under the old one, with
+                        // nothing on screen to suggest it. Arriving somewhere new means
+                        // belonging there; only staying put preserves an owner (I2).
                         fixes.push({ pos, attrs: { ...node.attrs, ownerId: nearest } });
                     }
                 }

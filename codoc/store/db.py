@@ -152,6 +152,25 @@ CREATE TABLE IF NOT EXISTS applied_commands (
     id          TEXT PRIMARY KEY,
     applied_at  TEXT NOT NULL
 );
+
+-- Who wrote each feature last. An authored edit declares the text it is REPLACING
+-- (Command.base_text) so the daemon can refuse to overwrite a feature that moved
+-- under its author. But "moved" is not the same as "moved because of someone
+-- else": an author typing faster than the projection round-trip sends several
+-- commands against a store that has already absorbed the earlier ones, and the
+-- base legitimately trails. Recording the last writer separates the two cases —
+-- if the feature's current text came from this same editing session, this command
+-- continues it; if it came from anyone else, the two genuinely disagree.
+-- `role` is that writer's actor ("human" | agent id | "loop"), recorded so a
+-- contended edit can be arbitrated by rank without re-deriving authorship from
+-- the writer string. The writer is an opaque session tag; only the boundary
+-- that performed the write knows what it was.
+CREATE TABLE IF NOT EXISTS feature_writers (
+    feature_id  TEXT PRIMARY KEY,
+    writer      TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT '',
+    at          TEXT NOT NULL
+);
 """
 
 # Stamped into ``PRAGMA user_version`` after the schema + migrations have run, so
@@ -159,7 +178,7 @@ CREATE TABLE IF NOT EXISTS applied_commands (
 # table_info scans entirely (open_store runs several times per loop tick — the
 # schema replay was measurable overhead on every one). Bump when _SCHEMA or
 # _migrate changes; version 0 (never stamped) always takes the slow path.
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 5
 
 
 class Store:
@@ -261,6 +280,16 @@ class Store:
             "CREATE INDEX IF NOT EXISTS idx_events_feature"
             " ON events(feature_id, at)"
         )
+        wcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(feature_writers)")}
+        if "role" not in wcols:
+            # Default '' ⇒ writers recorded before roles existed rank as
+            # non-human (see model.event.outranks). Backfilling them as human
+            # would hand every pre-existing row authority it was never granted,
+            # and the rows are mostly loop_a's — exactly the ones a person's
+            # edit is supposed to win against.
+            self.conn.execute(
+                "ALTER TABLE feature_writers ADD COLUMN role TEXT NOT NULL DEFAULT ''"
+            )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -361,11 +390,54 @@ class Store:
             cur = f.parent_id if f else None
         return False
 
+    def set_feature_writer(self, feature_id: str, writer: str, role: str = "") -> None:
+        """Record who most recently wrote this feature, and in what role
+        (see `feature_writers`)."""
+        if not feature_id or not writer:
+            return
+        self.conn.execute(
+            "INSERT INTO feature_writers (feature_id, writer, role, at) VALUES (?,?,?,?)"
+            " ON CONFLICT(feature_id) DO UPDATE SET writer=excluded.writer,"
+            " role=excluded.role, at=excluded.at",
+            (feature_id, writer, role, datetime.now(timezone.utc).isoformat()),
+        )
+        self._commit()
+
+    def feature_writer_info(self, feature_id: str) -> tuple[str, str]:
+        """``(writer, role)`` for the last write — one lookup, since a resolver
+        that asks "is this mine?" always also asks "and if not, whose?"."""
+        row = self.conn.execute(
+            "SELECT writer, role FROM feature_writers WHERE feature_id=?", (feature_id,)
+        ).fetchone()
+        if not row:
+            return "", ""
+        return (row[0] or ""), (row[1] or "")
+
+    def feature_writer(self, feature_id: str) -> str:
+        return self.feature_writer_info(feature_id)[0]
+
+    def _next_version(self, feature_id: str) -> str:
+        """The next version stamp for a feature — strictly after its current one.
+
+        ``HLC.now()`` is the raw wall clock, so a backwards clock adjustment (an NTP
+        correction, a laptop waking up elsewhere) can stamp a change with a version
+        LOWER than the change it followed. Everything downstream asks "is this
+        newer?" — above all the webview's per-feature adopt gate — and would then
+        refuse the update indefinitely, leaving the editor showing a feature the
+        store has already retired. ``advance()`` is monotonic per feature by
+        construction, so the answer stays truthful whatever the clock does.
+        """
+        row = self.conn.execute(
+            "SELECT updated_at FROM features WHERE id=?", (feature_id,)
+        ).fetchone()
+        current = HLC.from_str(row[0]) if row and row[0] else None
+        return (current.advance() if current else HLC.now()).to_str()
+
     def retire_feature(self, feature_id: str) -> None:
         # lifecycle is authoritative; retired=1 kept in sync for back-compat readers.
         self.conn.execute(
             "UPDATE features SET lifecycle='retired', retired=1, updated_at=? WHERE id=?",
-            (HLC.now().to_str(), feature_id),
+            (self._next_version(feature_id), feature_id),
         )
         self._commit()
 
@@ -377,7 +449,7 @@ class Store:
         self.conn.execute(
             "UPDATE features SET lifecycle='active', retired=0, realized=1, updated_at=?"
             " WHERE id=? AND lifecycle='retired'",
-            (HLC.now().to_str(), feature_id),
+            (self._next_version(feature_id), feature_id),
         )
         self._commit()
 
@@ -388,7 +460,7 @@ class Store:
         self.conn.execute(
             "UPDATE features SET lifecycle='active', realized=1, updated_at=?"
             " WHERE id=? AND lifecycle='planned'",
-            (HLC.now().to_str(), feature_id),
+            (self._next_version(feature_id), feature_id),
         )
         self._commit()
 

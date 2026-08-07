@@ -69,3 +69,50 @@ describe('Step 5 — unique localId among live headings', () => {
         expect(headingLocalIds(next)).toEqual(['lid-a', 'lid-b']);  // unchanged
     });
 });
+
+/**
+ * WHICH of a colliding pair is the clone is not answered by document order.
+ *
+ * Pasting a copied heading ABOVE its original puts the copy first, so keeping
+ * "the first" handed the copy the original's identity and re-minted the ORIGINAL
+ * as a brand-new feature — its history, bindings and code attribution silently
+ * transferred to a duplicate the user had just made, and the real feature started
+ * over as if it had never existed.
+ */
+describe('which duplicate is the clone — the one that ARRIVED', () => {
+    const heading = (localId: string, fid: string | null, title: string) =>
+        featureHeadingNode({ fid, localId, level: 0, retired: false, realized: true },
+            textToInlineRuns(title));
+
+    it('keeps the identity on the node that was already in the document', () => {
+        const state = stateWithPlugin(makeDoc([
+            heading('lid-1', 'f-orig', 'Original'),
+            paragraphNode(textToInlineRuns('body')),
+        ]));
+        // Paste a copy of that heading ABOVE the original (position 0).
+        const clone = PMNodeType.fromJSON(schema, heading('lid-1', 'f-orig', 'Original') as never);
+        const next = state.apply(state.tr.insert(0, clone));
+
+        const ids = headingLocalIds(next);
+        const fids: (string | null)[] = [];
+        next.doc.forEach(n => { if (n.type.name === 'featureHeading') fids.push(n.attrs.fid as string | null); });
+
+        expect(ids[1]).toBe('lid-1');      // the original, now second, keeps its identity
+        expect(fids[1]).toBe('f-orig');    // and its store id
+        expect(ids[0]).not.toBe('lid-1');  // the pasted copy is the new node
+        expect(fids[0]).toBeNull();
+    });
+
+    it('falls back to document order when the batch inserted both (a pasted subtree)', () => {
+        const state = stateWithPlugin(makeDoc([heading('lid-keep', 'f-a', 'Kept')]));
+        const a = PMNodeType.fromJSON(schema, heading('lid-2', null, 'One') as never);
+        const b = PMNodeType.fromJSON(schema, heading('lid-2', null, 'Two') as never);
+        const size = state.doc.content.size;
+        const next = state.apply(state.tr.insert(size, [a, b]));
+
+        const ids = headingLocalIds(next);
+        expect(ids[1]).toBe('lid-2');       // first of the pasted pair keeps the id
+        expect(ids[2]).not.toBe('lid-2');   // the second is re-minted
+        expect(new Set(ids).size).toBe(ids.length);
+    });
+});

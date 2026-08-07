@@ -12,7 +12,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-    featureBlocks, ftKey, capturedFids, blockDiffSpans, type FeatureText,
+    featureBlocks, ftKey, capturedFids, blockDiffSpans, rebaseCaptured, settledPendingFids,
+    type FeatureText,
 } from '../webview/tiptap/captured-decorations';
 import { makeDoc, featureHeadingNode, paragraphNode, textToInlineRuns, type PMNode } from '../state/pm-doc';
 
@@ -125,5 +126,87 @@ describe('U3: blockDiffSpans (add underline range + deletion caret position)', (
 
     it('no change → no spans', () => {
         expect(blockDiffSpans('same', 'same', 1)).toEqual([]);
+    });
+});
+
+/**
+ * The baseline a change is measured against belongs to ONE feature. It used to be
+ * replaced wholesale on any real reload, so a daemon write to an unrelated feature
+ * erased the change marks under the user's cursor mid-sentence.
+ */
+describe('rebaseCaptured — a projection only re-baselines what it was adopted for', () => {
+    const ft = (title: string, ...paras: string[]): FeatureText => ({ title, paras });
+
+    it('keeps the baseline of a feature the gate kept LOCAL', () => {
+        const prev = new Map([['f-a', ft('A', 'as committed')]]);
+        // The merged doc carries the user's in-flight text for f-a (it was not adopted).
+        const next = new Map([['f-a', ft('A', 'as the user is typing it')]]);
+
+        const out = rebaseCaptured(prev, next, new Set());
+        expect(out.get('f-a')!.paras).toEqual(['as committed']);
+    });
+
+    it('moves the baseline of a feature that DID adopt the projection', () => {
+        const prev = new Map([['f-a', ft('A', 'old')]]);
+        const next = new Map([['f-a', ft('A', 'from the daemon')]]);
+
+        const out = rebaseCaptured(prev, next, new Set(['f-a']));
+        expect(out.get('f-a')!.paras).toEqual(['from the daemon']);
+    });
+
+    it('an unrelated feature updating cannot disturb the one being edited', () => {
+        const prev = new Map([['f-a', ft('A', 'as committed')], ['f-b', ft('B', 'old b')]]);
+        const next = new Map([['f-a', ft('A', 'mid-edit')], ['f-b', ft('B', 'new b')]]);
+
+        const out = rebaseCaptured(prev, next, new Set(['f-b']));   // only B adopted
+        expect(out.get('f-a')!.paras).toEqual(['as committed']);    // A's marks survive
+        expect(out.get('f-b')!.paras).toEqual(['new b']);
+    });
+
+    it('drops features gone from the document and leaves brand-new ones baseline-free', () => {
+        const prev = new Map([['f-gone', ft('G', 'x')]]);
+        const next = new Map([['lid-new', ft('N', 'fresh')]]);
+
+        const out = rebaseCaptured(prev, next, new Set());
+        expect(out.has('f-gone')).toBe(false);
+        // Present with the projection's own text; absence-from-prev is what marks it new.
+        expect(out.get('lid-new')!.paras).toEqual(['fresh']);
+    });
+});
+
+/**
+ * "Pending" protects an un-acked local edit from a returning projection. It was
+ * cleared only by adopting a NEWER projection — so typing and undoing left the
+ * feature pending against text identical to the daemon's, and since the daemon
+ * never advanced that feature's version, the gate refused every later update to
+ * it for the life of the window.
+ */
+describe('settledPendingFids — an edit undone stops being pending', () => {
+    const ft = (title: string, ...paras: string[]): FeatureText => ({ title, paras });
+
+    it('drops a feature whose text is back to what it last adopted', () => {
+        const current = new Map([['f-a', ft('A', 'original')]]);
+        const adopted = new Map([['f-a', ftKey(ft('A', 'original'))]]);
+
+        expect(settledPendingFids(new Set(['f-a']), current, adopted).has('f-a')).toBe(false);
+    });
+
+    it('keeps a feature that still differs', () => {
+        const current = new Map([['f-a', ft('A', 'edited')]]);
+        const adopted = new Map([['f-a', ftKey(ft('A', 'original'))]]);
+
+        expect(settledPendingFids(new Set(['f-a']), current, adopted).has('f-a')).toBe(true);
+    });
+
+    it('keeps a feature that has never adopted anything (nothing to compare)', () => {
+        const current = new Map([['lid-new', ft('N', 'fresh')]]);
+        expect(settledPendingFids(new Set(['lid-new']), current, new Map()).has('lid-new')).toBe(true);
+    });
+
+    it('ignores whitespace-only differences, like every other captured comparison', () => {
+        const current = new Map([['f-a', ft('A', 'original  ')]]);
+        const adopted = new Map([['f-a', ftKey(ft('A', 'original'))]]);
+
+        expect(settledPendingFids(new Set(['f-a']), current, adopted).has('f-a')).toBe(false);
     });
 });

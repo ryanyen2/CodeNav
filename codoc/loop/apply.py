@@ -75,6 +75,7 @@ def apply_op(
     actor: str = "",
     mode: str = "",
     caused_by: str = "",
+    writer: str = "",
 ) -> Event:
     """Log an Event for ``op``; if ``applied``, mutate the store accordingly.
 
@@ -86,6 +87,14 @@ def apply_op(
     ``actor`` / ``mode`` / ``caused_by`` stamp the change ledger. When the
     caller carries no explicit provenance (legacy paths), actor/mode are
     inferred from ``source`` via :func:`default_provenance`.
+
+    ``writer`` names the editing session behind an authored command; every other
+    caller falls back to ``source``. It is recorded per feature so a later command
+    can tell "I am continuing my own edit" (base legitimately behind, because the
+    projection has not caught up) from "someone else wrote here" (a real
+    disagreement) — see :func:`codoc.loop.loop_b._base_conflict`. Recording it here,
+    at the one write boundary, is what makes an agent's write count as someone else
+    without every agent path having to remember to say so.
     """
     d_actor, d_mode = default_provenance(source, applied)
     # Write-boundary sanitization: authored text must never carry id-shaped
@@ -117,6 +126,12 @@ def apply_op(
     store.append_event(event)
     if applied:
         _mutate(op, store, fp_lookup or {}, th_lookup or {})
+        if op.feature_id:
+            # The event's actor doubles as the writer's ROLE. It is already
+            # resolved here (explicit provenance, else derived from source), so
+            # rank arbitration reads the same authorship the ledger records
+            # rather than a parallel notion that could disagree with it.
+            store.set_feature_writer(op.feature_id, writer or source, event.actor)
         store.mark_applied(event.id)  # stamp accepted_at for the audit log
     return event
 

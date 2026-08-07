@@ -19,7 +19,14 @@ import { Editor, Extension } from '@tiptap/core';
 import { TextSelection } from '@tiptap/pm/state';
 import { codocExtensions } from './schema';
 import { AuthorStamp, AuthorController, REFLECT_META } from './author-plugin';
+import {
+    backspaceVerdict,
+    deleteForwardVerdict,
+    verdictTransaction,
+    type BoundaryVerdict,
+} from './block-boundary';
 import { CodeRefSuggestion, RefSymbol } from './code-ref-suggestion';
+import { newLocalId } from './local-id';
 import {
     indentHeading,
     outdentHeading,
@@ -37,7 +44,10 @@ import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
 import { BlockDecorations, BLOCKS_UPDATED, type BlockEditMsg } from './block-decorations';
 import { BlockSuggestion } from './block-suggestion';
 import type { UIBlock } from '../protocol';
-import { CapturedDecorations, CAPTURED_UPDATED, featureBlocks, type FeatureText } from './captured-decorations';
+import {
+    CapturedDecorations, CAPTURED_UPDATED, featureBlocks, ftKey,
+    rebaseCaptured, settledPendingFids, type FeatureText,
+} from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
@@ -172,11 +182,31 @@ function iconButton(label: string, title: string, onClick: () => void, cls = '')
 function makeKeymap(commit: () => void): Extension {
     return Extension.create({
         name: 'codocOutlinerKeymap',
+        // Above StarterKit's base keymap (default 100): its Backspace/Delete bindings
+        // are precisely the ones that would merge prose into a feature title, so our
+        // boundary guard has to be offered the keystroke first or it never runs.
+        priority: 1000,
         addKeyboardShortcuts() {
             const ed = this.editor;
+            /** Run a block-boundary verdict: move the caret instead of merging across
+             *  a heading, or return false to let ProseMirror's default deletion run. */
+            const boundary = (verdict: (s: typeof ed.state) => BoundaryVerdict) => (): boolean => {
+                const tr = verdictTransaction(ed.state, verdict(ed.state));
+                if (!tr) return false;
+                ed.view.dispatch(tr);
+                return true;
+            };
             return {
                 Tab: () => indentHeading(ed),
                 'Shift-Tab': () => outdentHeading(ed),
+                // Every backward-deletion chord routes through the same guard, so a
+                // title can only change by editing the title (see block-boundary.ts).
+                Backspace: boundary(backspaceVerdict),
+                'Mod-Backspace': boundary(backspaceVerdict),
+                'Alt-Backspace': boundary(backspaceVerdict),
+                Delete: boundary(deleteForwardVerdict),
+                'Mod-Delete': boundary(deleteForwardVerdict),
+                'Alt-Delete': boundary(deleteForwardVerdict),
                 // ⌘S / Ctrl-S = "save the file" → stage & send (U4). The host never dirties
                 // the text document (single-writer), so the native save is a no-op we
                 // repurpose; returning true preventDefaults it so no save dialog flashes.
@@ -260,6 +290,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // state is intentionally empty after a window reload → the first projection adopts).
     const localVersions = new Map<string, string>();
     const pendingFids = new Set<string>();
+    // The text of each feature as last ADOPTED from a projection. An edit that returns
+    // to it has nothing left to protect, so the feature stops being pending — without
+    // this an undo pins a feature pending forever and no projection can reach it again.
+    const adoptedText = new Map<string, string>();
 
     const editor = new Editor({
         element: surface,
@@ -421,6 +455,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = 0; }
         if (!dirty) return;
         dirty = false;
+        // Anything now back to the text it last adopted has nothing left to protect,
+        // so it stops being pending. Without this an undo leaves the feature pending
+        // against text identical to the daemon's, and — since the daemon never
+        // advanced its version — no future projection is ever "strictly newer" and
+        // the gate refuses every later update to it.
+        const stillPending = settledPendingFids(
+            pendingFids, featureBlocks(editor.getJSON() as PMNode), adoptedText,
+        );
+        pendingFids.clear();
+        for (const fid of stillPending) pendingFids.add(fid);
         // ONE edit path (U3): the human's edit always COMMITS. The daemon classifies
         // it (pure-doc vs code-implying) and, when it implies code, lands the feature
         // in the hold set → the calm "being realized" badge surfaces back. No
@@ -794,16 +838,24 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let composeMode: ComposeMode = 'create';
     let composeRange: { from: number; to: number } | null = null;
     // W5 fix: a projection that arrives while a comment composer / selection bubble
-    // is open is DEFERRED here (not dropped), then re-applied on close — else the
-    // doc sits stale until the next unrelated write. Only the LATEST is kept.
+    // is open — or while an IME composition is in flight — is DEFERRED here (not
+    // dropped), then re-applied the moment that clears. Only the LATEST is kept.
     let pendingProjection: PMNode | null = null;
-    const isComposing = (): boolean => shouldDeferProjection(!!composer, bubble.style.display !== 'none');
+    const isComposing = (): boolean => shouldDeferProjection({
+        composerOpen: !!composer,
+        bubbleOpen: bubble.style.display !== 'none',
+        imeComposing: !!editor.view?.composing,
+    });
     function flushPendingProjection(): void {
         if (!pendingProjection || isComposing()) return;
         const p = pendingProjection;
         pendingProjection = null;
         handle.setDoc(p);
     }
+    // ProseMirror finishes its own composition bookkeeping after this event, so the
+    // deferred projection lands on the next tick — applying it inline would replace
+    // the document while the view is still resolving the composition.
+    surface.addEventListener('compositionend', () => setTimeout(flushPendingProjection, 0));
     let composeFid: string | null = null;
     let composeAnchor = '';
     let composeThreadId = '';
@@ -1154,6 +1206,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
     window.addEventListener('resize', repositionFloatingSurfaces);
 
+    // Text typed since the last settle exists ONLY in this editor's memory: the
+    // debounce is trailing-edge, so a burst with no 1.2 s gap in it has never been
+    // sent anywhere. Every way out of this editor therefore flushes first — the
+    // panel closing, the window hiding, the tab going away. `settleNow` is a no-op
+    // when nothing is dirty, so this costs nothing in the common case.
+    const flushOnHide = (): void => { if (document.visibilityState === 'hidden') settleNow(); };
+    window.addEventListener('pagehide', settleNow);
+    document.addEventListener('visibilitychange', flushOnHide);
+
     const handle: WholeDocEditorHandle = {
         element: wrap,
         setDoc: (incoming: PMNode) => {
@@ -1164,6 +1225,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // moment the composer/bubble closes — so the doc never sits stale waiting
             // on an unrelated next write (W5 composer-drop fix).
             if (isComposing()) { pendingProjection = incoming; return; }
+            // Flush before anything can replace the document. The version gate below
+            // resolves a same-feature disagreement by swapping a whole slice, and when
+            // the projection wins, whatever the user had typed since the last settle
+            // goes with it — unsent, unrecorded, gone. Settling first puts that text on
+            // the wire, where the daemon's three-way merge decides its fate honestly:
+            // it applies, merges with whoever else wrote, or is kept for review. Every
+            // path ends with it existing somewhere — which is the point, because the
+            // gate's own resolution is a slice swap that ends with it existing nowhere.
+            // `settleNow` is a no-op unless the user actually typed.
+            settleNow();
             // U5 per-feature HLC version gate (R14 / KTD4) — replaces the whole-doc
             // `if (dirty) return`. Merge the incoming projection with the live doc PER
             // FEATURE: a feature with no pending local edit adopts the projection; a
@@ -1175,9 +1246,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             const doc = gate.doc;
             // Fold the adopted per-feature versions into the local tracking and clear
             // their pending edits — those features are now in sync with the projection.
+            // `projected` is also what a later edit is compared against to decide the
+            // feature is back in sync, so it is recorded here, before the echo
+            // short-circuit below can return.
+            const projected = featureBlocks(doc);
             for (const [fid, v] of gate.adopted) {
                 localVersions.set(fid, v);
                 pendingFids.delete(fid);
+                const ft = projected.get(fid);
+                if (ft) adoptedText.set(fid, ftKey(ft));
             }
             // Skip the reload when BOTH the baseline text AND the agent-proposal set
             // are unchanged — the common case right after a settle round-trips;
@@ -1192,10 +1269,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // The captured edit persists (visible) until the user stages & sends (commit).
                 return;
             }
-            // A real reload (external/agent change, or first load) → re-baseline the captured
-            // set against the new canonical doc. Commit is the other re-baseline point
-            // (commitNow), so a user's own uncommitted edits don't clear here.
-            capturedBaseline = featureBlocks(doc);
+            // A real reload (external/agent change, or first load) → re-baseline the
+            // captured set, but only for the features that actually ADOPTED this
+            // projection. A feature the gate kept local keeps its own baseline, so an
+            // unrelated daemon write can no longer erase the change marks under the
+            // user's cursor. Commit is the other re-baseline point (commitNow).
+            capturedBaseline = rebaseCaptured(capturedBaseline, projected, new Set(gate.adopted.keys()));
             lastProposalsSig = sig;
 
             const keepFid = activeFid();          // stable anchor for existing features
@@ -1216,8 +1295,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 }
             } catch {
                 editor.commands.setContent(doc as unknown as Record<string, unknown>, false);
+            } finally {
+                // MUST be `finally`: if anything below throws while this is still set,
+                // `onUpdate` returns early forever and the editor silently stops
+                // settling — the user keeps typing into a surface that no longer saves.
+                suppressUpdate = false;
             }
-            suppressUpdate = false;
             // Keep the user's caret WHERE IT WAS instead of yanking it to the feature
             // heading. The common case is a settle round-trip where the new doc is ~identical,
             // so restoring the pre-reload absolute position (clamped) keeps the caret exactly
@@ -1322,7 +1405,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             const t = title.trim();
             if (!t) return;
             const heading = editor.schema.nodes.featureHeading.create(
-                { fid: null, level: 0, retired: false, realized: true },
+                // A localId, like every other creation path. Without one this node has
+                // NO identity until the daemon mints its fid: it is dropped from the
+                // captured set (so it shows no "recorded" mark), and the mint that
+                // eventually arrives cannot be matched to it by id, falling back to
+                // guessing by title and document order — which binds the wrong fid
+                // outright when two features are created in quick succession.
+                { fid: null, localId: newLocalId(), level: 0, retired: false, realized: true },
                 editor.schema.text(t),
             );
             const end = editor.state.doc.content.size;
@@ -1343,6 +1432,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         isDirty: () => dirty,
         touchFeatures: (fids: string[], big?: Set<string>) => touchFeaturesInternal(fids, big),
         destroy: () => {
+            // Never discard an unsent edit on the way out — but never let a failed
+            // send abort teardown either, or the listeners and timers below outlive
+            // the editor they belong to.
+            try { settleNow(); } catch { /* best effort: teardown must still finish */ }
             if (settleTimer) clearTimeout(settleTimer);
             if (railTimer) clearTimeout(railTimer);
             if (muteTimer) clearTimeout(muteTimer);
@@ -1351,6 +1444,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             for (const t of touchTimers.values()) clearTimeout(t); // P2 code→doc spark timers
             for (const t of tickTimers.values()) clearTimeout(t);   // P2 fix 2 tick-lifetime timers
             window.removeEventListener('resize', repositionFloatingSurfaces);
+            window.removeEventListener('pagehide', settleNow);
+            document.removeEventListener('visibilitychange', flushOnHide);
             if (spyRaf) cancelAnimationFrame(spyRaf); // else the RAF fires onActiveFeature on a destroyed editor
             closeComposer();
             bubble.remove();

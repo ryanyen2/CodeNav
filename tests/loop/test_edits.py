@@ -70,6 +70,61 @@ def test_hold_set_unions_intents_and_directives_with_staleness(dirs):
     assert held == {"f-fresh", "f-queued"}  # stale intent ignored — no forever-hold
 
 
+def test_abandoned_held_draft_stops_holding_its_feature(dirs):
+    """A held draft is an edit the author never handed off. It used to hold the
+    feature FOREVER — Loop A could no longer propose an amend, retire or move on it
+    and never badged it as drifted, so the feature silently stopped tracking its
+    code. Nothing surfaced; each such edit quietly subtracted a feature from the
+    tree. Same backstop, and the same window, as an abandoned intent."""
+    _, codoc_dir = dirs
+    now = 1_000_000_000_000
+    edits.write_manifest(codoc_dir, [
+        edits.Directive(id="d-old", feature_id="f-abandoned", kind="amend",
+                        handed_off=False, ts=now - edits.INTENT_STALE_MS - 1),
+        edits.Directive(id="d-new", feature_id="f-recent", kind="amend",
+                        handed_off=False, ts=now - 1000),
+    ])
+
+    assert edits.hold_set(codoc_dir, now_ms=now) == {"f-recent"}
+
+
+def test_an_in_flight_directive_holds_however_long_it_takes(dirs):
+    """A handed-off directive is work an agent is doing. Releasing its hold on a
+    timer would let Loop A rewrite the feature out from under a running agent, so
+    age is irrelevant here — only draining releases it."""
+    _, codoc_dir = dirs
+    now = 1_000_000_000_000
+    realize_path(codoc_dir).write_text("### 1. ⟨d-slow⟩ …")
+    edits.write_manifest(codoc_dir, [
+        edits.Directive(id="d-slow", feature_id="f-running", kind="amend",
+                        handed_off=True, ts=now - edits.INTENT_STALE_MS * 10),
+    ])
+
+    assert edits.hold_set(codoc_dir, now_ms=now) == {"f-running"}
+
+
+def test_a_legacy_directive_without_a_timestamp_never_expires(dirs):
+    """`ts=0` means "unknown", which is not evidence of abandonment — a manifest
+    written before this field existed must keep behaving exactly as it did."""
+    _, codoc_dir = dirs
+    realize_path(codoc_dir).write_text("### 1. ⟨d-legacy⟩ …")
+    edits.write_manifest(codoc_dir, [
+        edits.Directive(id="d-legacy", feature_id="f-legacy", kind="amend", handed_off=False),
+    ])
+
+    assert edits.hold_set(codoc_dir, now_ms=1_000_000_000_000) == {"f-legacy"}
+
+
+def test_a_drafts_timestamp_survives_a_manifest_round_trip(dirs):
+    """The expiry only works if `ts` is the mint time and not refreshed by passes
+    that merely rewrite the manifest."""
+    _, codoc_dir = dirs
+    edits.write_manifest(codoc_dir, [
+        edits.Directive(id="d-1", feature_id="f-1", kind="amend", handed_off=False, ts=1234),
+    ])
+    assert edits.read_manifest(codoc_dir)[0].ts == 1234
+
+
 # ─── Loop B integration ──────────────────────────────────────────────────────
 
 def _seed_feature(codoc_dir, *, title="Validator", desc="Validates input.") -> str:

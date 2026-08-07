@@ -118,10 +118,28 @@ export function featureUnits(doc: PMNode): FeatureUnit[] {
     }));
 }
 
-/** Mint an idempotency-key'd command id (KTD8). Stable per (kind, identity) within a
- *  settle so a re-emit of the same logical edit supersedes rather than stacks. */
-function commandId(kind: string, id: string, salt: number): string {
-    return `c-${kind}-${id}-${salt}`;
+/**
+ * A command's id is (what kind of edit, to which feature, in which emission).
+ *
+ * `token` names the emission — one settle, or one drag. Within a single settle a
+ * feature gets at most one command per kind, so (kind, feature, token) is unique;
+ * across emissions the token differs. The host mints tokens from a per-session
+ * counter, which matters more than it looks.
+ *
+ * The predecessor salted with `Date.now()`. A debounced settle firing in the same
+ * millisecond as a Cmd-S commit produced the SAME id for DIFFERENT content, and
+ * the daemon's ledger folded the second as a replay — the edit was gone, with
+ * nothing anywhere recording that it had ever existed.
+ *
+ * Content-addressing looks like the tidier answer and is a trap: type "A", settle,
+ * type "B", settle, type "A" again, and — with no projection in between to advance
+ * the base version — the third command hashes to the first and folds, leaving "B"
+ * in the store. Every edit a person makes is a NEW instruction, even when it
+ * restores earlier text. Only the replay of a RECORDED command is a replay, and
+ * that carries its recorded id, so the ledger still catches it.
+ */
+function commandId(kind: string, id: string, token: string): string {
+    return `c-${kind}-${id}-${token}`;
 }
 
 /** The DETERMINISTIC id for an `add` command, derived purely from the node's localId
@@ -146,7 +164,13 @@ function addCommandId(localId: string): string {
  * the daemon correlates them on the same pass (apply commands in order). For a settle
  * that only renames/re-describes existing features, no add/move is produced.
  */
-export function commandsForSettle(prev: FeatureUnit[], next: FeatureUnit[], salt: number): CommandEntry[] {
+export function commandsForSettle(
+    prev: FeatureUnit[],
+    next: FeatureUnit[],
+    token: string,
+    known?: ReadonlyMap<string, FeatureUnit>,
+    session = '',
+): CommandEntry[] {
     const out: CommandEntry[] = [];
     const beforeByFid = new Map<string, FeatureUnit>();
     for (const u of prev) if (u.fid) beforeByFid.set(u.fid, u);
@@ -180,19 +204,27 @@ export function commandsForSettle(prev: FeatureUnit[], next: FeatureUnit[], salt
         // command. Baseline projections exclude retired features, so `!b.retired` always
         // holds in practice; the guard documents the false→true transition.
         if (u.retired && !b.retired) {
-            out.push({ id: commandId('retire', u.fid, salt), kind: 'retire', feature_id: u.fid });
+            out.push({ id: commandId('retire', u.fid, token), kind: 'retire', feature_id: u.fid });
             continue;  // a retiring node's title/description/parent edits are moot
         }
+        // What we believe the STORE holds right now — which is not the same as the
+        // baseline this diff is computed against. The diff baseline is what the user
+        // was looking at; `known` also folds in the commands this editor has already
+        // emitted but whose projection has not returned yet. Without that, two settles
+        // in a row (perfectly ordinary typing) would look like a conflict with itself.
+        const stored = known?.get(u.fid) ?? b;
         if (b.title !== u.title) {
-            out.push({ id: commandId('set_title', u.fid, salt), kind: 'set_title',
-                       feature_id: u.fid, payload: { title: u.title } });
+            out.push({ id: commandId('set_title', u.fid, token), kind: 'set_title',
+                       feature_id: u.fid, base_text: stored.title, session,
+                       payload: { title: u.title } });
         }
         if (b.description !== u.description) {
-            out.push({ id: commandId('set_description', u.fid, salt), kind: 'set_description',
-                       feature_id: u.fid, payload: { description: u.description } });
+            out.push({ id: commandId('set_description', u.fid, token), kind: 'set_description',
+                       feature_id: u.fid, base_text: stored.description, session,
+                       payload: { description: u.description } });
         }
         if ((b.parentId ?? null) !== (u.parentId ?? null)) {
-            out.push({ id: commandId('move', u.fid, salt), kind: 'move',
+            out.push({ id: commandId('move', u.fid, token), kind: 'move',
                        feature_id: u.fid, payload: { parent_id: u.parentId } });
         }
     }
@@ -202,10 +234,12 @@ export function commandsForSettle(prev: FeatureUnit[], next: FeatureUnit[], salt
     return out;
 }
 
-/** A single explicit move command (the tree-pane drag handler), keyed by fid. */
-export function moveCommand(fid: string, newParentId: string | null, salt: number): CommandEntry {
-    return { id: commandId('move', fid, salt), kind: 'move', feature_id: fid,
-             payload: { parent_id: newParentId } };
+/** A single explicit move command (the tree-pane drag handler), keyed by fid.
+ *  `token` names this drag: dragging a feature back where it was is a fresh
+ *  instruction, not a replay of the drag that first put it there. */
+export function moveCommand(fid: string, newParentId: string | null, token: string): CommandEntry {
+    return { id: commandId('move', fid, token), kind: 'move',
+             feature_id: fid, payload: { parent_id: newParentId } };
 }
 
 /** One entry in the host's short projection-baseline history (#4). */
@@ -231,9 +265,11 @@ export function settleCommands(
     baselineId: number | undefined,
     fallbackUnits: FeatureUnit[],
     nextUnits: FeatureUnit[],
-    salt: number,
+    token: string,
+    known?: ReadonlyMap<string, FeatureUnit>,
+    session = '',
 ): CommandEntry[] {
     const cited = baselineId != null ? history.find(b => b.id === baselineId) : undefined;
     const prevUnits = cited ? cited.units : fallbackUnits;
-    return commandsForSettle(prevUnits, nextUnits, salt);
+    return commandsForSettle(prevUnits, nextUnits, token, known, session);
 }

@@ -20,6 +20,8 @@ from pathlib import Path
 
 from codoc.loop.activity import PHASE_DONE, PHASE_EDITING, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
+from codoc.loop.classify import suppressed_by_hold
+from codoc.loop.edits import hold_set, read_manifest
 from codoc.loop.inbox import drop_verdicts as _inbox_drop
 from codoc.loop.inbox import read_verdicts as inbox_read
 from codoc.loop.locks import loop_lock
@@ -307,6 +309,40 @@ def feature_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
 
 # ─── single-op proposals / binds ───────────────────────────────────────────────
 
+def _auto_apply_allowed(codoc_dir: str, op: NodeOp, held: set[str], own_holds: set[str]) -> bool:
+    """Whether an agent op may write straight through, or must become a proposal.
+
+    Doc always wins (classify row 13): a feature with pending doc-ahead intent is
+    being re-specified by its author, so a code-side amend must not rewrite the
+    prose under their cursor. Loop A has honoured this from the start; the MCP path
+    never did, which is how an agent's ``codoc_reflect`` could silently overwrite an
+    author's in-progress description — the very "the model rewrote what I was
+    writing" failure the hold exists to prevent.
+
+    Suppressed here means PROPOSED, not dropped. Loop A can drop its own
+    observation and recompute it next pass; an agent's reflection is a one-shot
+    report of work already done, so discarding it would lose the information for
+    good. As a proposal it reaches the author's review surface intact.
+
+    ``own_holds`` is the exception that keeps the loop closing: when an agent
+    finishes realizing a directive it reflects the result while that very directive
+    still holds the feature. It is completing the hold, not fighting it.
+    """
+    if op.feature_id in own_holds:
+        return True
+    return not suppressed_by_hold(op, held)
+
+
+def _hold_context(codoc_dir: str, caused_by: str) -> tuple[set[str], set[str]]:
+    """(features currently held, features this call is itself the completion of)."""
+    held = hold_set(codoc_dir)
+    own: set[str] = set()
+    if caused_by:
+        own = {d.feature_id for d in read_manifest(codoc_dir)
+               if d.id == caused_by and d.feature_id}
+    return held, own
+
+
 def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
                   caused_by: str = "", actor: str = "") -> dict:
     # Hold the shared codoc-loop lock across the agent's mutation + re-render so an MCP
@@ -322,7 +358,9 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
             if store.get_feature(op.parent_id) is None:
                 return _err(f"unknown parent_id {op.parent_id!r}")
 
-        applied = should_auto_apply(op, store)
+        held, own_holds = _hold_context(codoc_dir, caused_by)
+        applied = should_auto_apply(op, store) and _auto_apply_allowed(
+            codoc_dir, op, held, own_holds)
         ev = apply_op(op, store, source=source, applied=applied,
                       caused_by=caused_by, actor=actor)
         wrote = safe_write_tree(store, codoc_dir)
@@ -395,6 +433,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
     applied_n = proposed_n = 0
     # Serialize the whole reflection (mutation + render) against the loops (loop/locks.py).
     with loop_lock(codoc_dir), open_store(codoc_dir) as store:
+        held, own_holds = _hold_context(codoc_dir, caused_by)
         for raw in ops:
             try:
                 kind = NodeOpKind(raw["kind"])
@@ -422,9 +461,14 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
                 results.append(_err(f"unknown parent_id {op.parent_id!r}"))
                 continue
 
-            applied = should_auto_apply(op, store)
+            op_cause = raw.get("caused_by") or caused_by
+            op_own = own_holds
+            if op_cause != caused_by:
+                _, op_own = _hold_context(codoc_dir, op_cause)
+            applied = should_auto_apply(op, store) and _auto_apply_allowed(
+                codoc_dir, op, held, op_own)
             ev = apply_op(op, store, source=source, applied=applied,
-                          caused_by=raw.get("caused_by") or caused_by, actor=actor)
+                          caused_by=op_cause, actor=actor)
             applied_ops.append(op)
             applied_n += int(applied)
             proposed_n += int(not applied)

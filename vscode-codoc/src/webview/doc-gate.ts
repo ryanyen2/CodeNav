@@ -28,15 +28,9 @@
  * Pure + DOM-free → unit-testable in isolation (the editor wiring lives in
  * whole-doc-editor.ts's `setDoc`).
  */
-import { NODE_FEATURE_HEADING, type PMNode } from '../state/pm-doc';
+import { NODE_FEATURE_HEADING, headingVersion, type PMNode } from '../state/pm-doc';
 
-/** The per-feature version carried on a `featureHeading`'s attrs by the store
- *  projection (U2: `feature.updated_at.to_str()`). Empty/absent for a not-yet-minted
- *  authored heading. */
-export function headingVersion(heading: PMNode): string {
-    const v = (heading.attrs as { version?: unknown } | undefined)?.version;
-    return typeof v === 'string' ? v : '';
-}
+export { headingVersion };
 
 export function headingFid(heading: PMNode): string | null {
     const f = (heading.attrs as { fid?: unknown } | undefined)?.fid;
@@ -56,15 +50,32 @@ export function shouldAdopt(incomingVersion: string, localVersion: string, hasPe
     return incomingVersion > localVersion;
 }
 
+/** Conditions under which the document must not be replaced out from under the user. */
+export interface DeferConditions {
+    /** A comment composer is open over the doc (its captured range would be remapped). */
+    composerOpen: boolean;
+    /** The selection bubble is open (same reason). */
+    bubbleOpen: boolean;
+    /**
+     * An IME composition is in flight (`EditorView.composing`). Replacing the document
+     * mid-composition force-flushes the DOM and aborts the composition, so the
+     * characters a Japanese, Chinese or Korean writer is part-way through either
+     * vanish or double. Everyone typing in those scripts hits this on every word,
+     * which is why it belongs beside the composer case and not in a special case
+     * somewhere downstream.
+     */
+    imeComposing: boolean;
+}
+
 /**
- * W5 composer-drop fix — whether an incoming projection must be DEFERRED rather
- * than applied right now, because a comment composer or selection bubble is open
- * over the doc (applying would remap/destroy the captured range under it). The
- * caller stashes the latest deferred projection and re-applies it on close.
+ * Whether an incoming projection must be DEFERRED rather than applied right now.
+ * The caller stashes the latest deferred projection and re-applies it the moment
+ * the condition clears — deferring never drops (W5).
+ *
  * Pure so the defer/keep-latest contract is testable without the editor.
  */
-export function shouldDeferProjection(composerOpen: boolean, bubbleOpen: boolean): boolean {
-    return composerOpen || bubbleOpen;
+export function shouldDeferProjection(conditions: DeferConditions): boolean {
+    return conditions.composerOpen || conditions.bubbleOpen || conditions.imeComposing;
 }
 
 /** A feature's slice of the flat doc: its heading + the body blocks that follow it
