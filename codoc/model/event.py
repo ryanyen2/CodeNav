@@ -104,6 +104,14 @@ class NodeOp(BaseModel):
     bindings: list[tuple[str, str]] = Field(default_factory=list)  # (file, symbol_path)
     rationale: str = ""            # one-line justification, shown in proposal hunks
     realized: bool | None = None   # ADD_NODE realization (None ⇒ default True); False = plan placeholder
+    # Sibling ORDER, given as neighbour identities rather than an index (MOVE_NODE
+    # and ADD_NODE). An index is a re-derived positional guess — by the time the op
+    # applies, another pass may have added or retired a sibling and "third child"
+    # means something else — whereas "after A, before B" still means what its author
+    # meant. Both empty = no opinion about order, which appends. Placing a node
+    # FIRST is said by naming only what it goes before.
+    after_id: str = ""             # the sibling this node follows ("" = none / first)
+    before_id: str = ""            # the sibling this node precedes ("" = none / last)
     local_id: str = ""             # ADD_NODE: the webview's client-side node id (KTD8). Persisted on the
                                    #   minted feature so the host matches the minted fid back to the exact
                                    #   in-progress node (no title/order guessing → no duplicate/orphan adds).

@@ -244,8 +244,13 @@ def _command_to_op(cmd: "edits_channel.Command") -> NodeOp | None:
         return NodeOp(kind=NodeOpKind.AMEND, feature_id=cmd.feature_id,
                       description=p.get("description", ""))
     if cmd.kind == "move":
+        # after_id/before_id name the siblings the node was dropped between.
+        # Absent (a legacy command, the CLI) means no opinion about order, which
+        # appends — the behaviour every pre-ordering caller already had.
         return NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=cmd.feature_id,
-                      parent_id=p.get("parent_id"))
+                      parent_id=p.get("parent_id"),
+                      after_id=str(p.get("after_id") or ""),
+                      before_id=str(p.get("before_id") or ""))
     if cmd.kind == "retire":
         return NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=cmd.feature_id)
     return None

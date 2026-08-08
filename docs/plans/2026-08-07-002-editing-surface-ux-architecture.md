@@ -172,28 +172,86 @@ and rebuilt one `<div>` per feature on every keystroke while Glance was on. The
 key includes the pitch, because keying on fid alone would make ProseMirror treat
 a changed pitch as the same widget and keep the stale text.
 
-## 4. Still open, in priority order
+## 4. Ordering and drag-to-reorder — LANDED
 
-1. **Sibling reorder reverts silently** (T2.7 from the engine audit) — the move
-   payload carries a parent but no ordinal, so a reorder within one parent is a
-   no-op the UI still animates. Reordering must land in the data model before it
-   is offered as a gesture.
-2. **No drag-to-reorder.** Notion's signature gesture; nothing in the webview
-   listens for drag at all. Deliberately ordered AFTER (1): offering a gesture
-   whose data model silently discards the result is worse than not offering it.
-3. **No editor placeholder / empty state.** A fresh tree opens as a blank page
+The tree had no representation of order at all: siblings came back
+`ORDER BY created_at`, so a reorder emitted a `move` whose `parent_id` had not
+changed, `apply_op` wrote the parent it already had, and the next render put the
+node back. The gesture animated and then reverted.
+
+**`rank`, a fractional key** (`codoc/model/rank.py`, schema v6). Base-62 and
+ASCII-ordered, so Python `<` and SQLite `ORDER BY` agree with no collation; keys
+never end in the zero digit, so equal keys mean equal positions rather than an
+encoding accident.
+
+> *I might break this if…* order were a dense integer `ord` renumbered on every
+> reorder. Moving one node would write every sibling row — and every write stamps
+> `feature_writers`, so dragging one node would mark all its siblings as freshly
+> written and the author's next edit to any of them would read as a conflict with
+> a stranger (`loop_b._resolve_content`). Moving one node must touch one row.
+> Pinned by `test_a_reorder_touches_exactly_one_row`.
+
+**Position is NEIGHBOUR IDENTITY, never an index.** `NodeOp.after_id/before_id`,
+resolved to a key at the write boundary by `Store.rank_between`.
+
+> *I might break this if…* the command carried "third child". By the time it
+> drains, Loop A may have added or retired a sibling and the index means
+> something else. "After A, before B" still means what its author meant — and
+> when A vanished the other half still applies; when both vanished it appends
+> rather than guessing; when A is no longer a child of that parent, its key is a
+> position in a different list and is ignored.
+
+**The client emits the minimum.** `reorderTargets` takes the complement of a
+longest increasing subsequence, so one drag is one command. Anchoring is
+asymmetric on purpose: `afterId` is the immediate predecessor (commands are
+emitted in document order, so a predecessor is always already placed), `beforeId`
+is the nearest following sibling *that is not moving* (a following mover has not
+been placed yet). Giving both bounds is what makes the result independent of
+which longest subsequence was chosen — with one bound, a run of adjacent movers
+can satisfy every anchor it was given and still land wrong. A 500-permutation
+fuzz replays the emitted commands and asserts they reproduce exactly the order
+the user saw.
+
+The concurrency property falls out of restricting the comparison to ids both
+sides know: the agent inserting or retiring a sibling leaves every surviving
+neighbour relationship intact, so it produces no phantom moves.
+
+**The gesture is a document edit.** `feature-drag.ts` moves a *slice* — the
+heading plus its prose plus its nested features — in one transaction, so undo
+restores it in one step. It writes no command itself: the settle pipeline sees
+the changed order and emits the move. Slice boundaries use the CLAMPED depth, the
+same one that decides parentage everywhere else, so a drag can never grab a
+different subtree than the indentation shows.
+
+`drag-handle.ts` uses pointer events (the native drag image is unstylable across
+hosts and `dragover` stutters the drop line) and event delegation (binding a
+closure per handle would mean re-creating every handle on every keystroke — the
+churn `decoration-policy` exists to remove). Escape abandons a drag mid-flight; a
+press that never travelled 4px is a click, not a zero-length move. **⌥⌘↑/↓ moves
+a feature by sibling**, because a drag is mouse-only and restructuring a tree must
+not be — and the grip reveals on `:focus-within` as well as hover, so the
+affordance is visible to the people who depend on that path.
+
+**Migration preserves what users already see**: ranks backfill per parent in
+`created_at` order, so upgrading does not reshuffle anybody's tree.
+
+## 5. Still open, in priority order
+
+1. **No editor placeholder / empty state.** A fresh tree opens as a blank page
    with no first action.
-4. **Markdown affordance gap.** `> ` (steering) and `**bold**` (focus) are
+2. **Markdown affordance gap.** `> ` (steering) and `**bold**` (focus) are
    load-bearing signals per CLAUDE.md, but only `#` has an input rule, so two of
    the three give no feedback as you type them.
 
 ---
 
-## 5. Verification
+## 6. Verification
 
-1324 pytest · 788 vitest · `tsc --noEmit` clean · esbuild clean.
+1364 pytest · 825 vitest · `tsc --noEmit` clean · esbuild clean.
 New: `tests/serve/test_viewer.py` (3), `src/test/viewer-status.test.ts` (13),
-`src/test/decoration-policy.test.ts` (13), `src/test/decoration-cost.perf.test.ts`
+`src/test/decoration-policy.test.ts` (13), `tests/model/test_rank.py` (25),
+`tests/loop/test_reorder.py` (15), `src/test/reorder-commands.test.ts` (18),
+`src/test/feature-drag.test.ts` (19), `src/test/decoration-cost.perf.test.ts`
 (2 — the measurement is recorded as a fact rather than asserted as a threshold,
 because machines vary and a perf number pinned to this laptop is a future false
 failure).

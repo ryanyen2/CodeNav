@@ -174,6 +174,7 @@ export function commandsForSettle(
     const out: CommandEntry[] = [];
     const beforeByFid = new Map<string, FeatureUnit>();
     for (const u of prev) if (u.fid) beforeByFid.set(u.fid, u);
+    const reorder = reorderTargets(prev, next);
 
     for (const u of next) {
         if (!u.fid) {
@@ -223,9 +224,14 @@ export function commandsForSettle(
                        feature_id: u.fid, base_text: stored.description, session,
                        payload: { description: u.description } });
         }
-        if ((b.parentId ?? null) !== (u.parentId ?? null)) {
-            out.push({ id: commandId('move', u.fid, token), kind: 'move',
-                       feature_id: u.fid, payload: { parent_id: u.parentId } });
+        // One move per node, whether it changed parent, changed position among its
+        // siblings, or both — a reparent that also lands at a chosen spot is still
+        // one gesture, and emitting two commands for it would make the second race
+        // the first's result.
+        const moved = reorder.get(u.fid);
+        if ((b.parentId ?? null) !== (u.parentId ?? null) || moved) {
+            out.push(moveCommand(u.fid, u.parentId ?? null, token,
+                                 moved?.afterId ?? '', moved?.beforeId ?? ''));
         }
     }
 
@@ -234,12 +240,126 @@ export function commandsForSettle(
     return out;
 }
 
-/** A single explicit move command (the tree-pane drag handler), keyed by fid.
+/** A single explicit move command (the tree-pane / drag handlers), keyed by fid.
  *  `token` names this drag: dragging a feature back where it was is a fresh
- *  instruction, not a replay of the drag that first put it there. */
-export function moveCommand(fid: string, newParentId: string | null, token: string): CommandEntry {
-    return { id: commandId('move', fid, token), kind: 'move',
-             feature_id: fid, payload: { parent_id: newParentId } };
+ *  instruction, not a replay of the drag that first put it there.
+ *
+ *  `afterId`/`beforeId` name the siblings it was dropped between. Omitted means
+ *  no opinion about order, which appends — the behaviour every caller had before
+ *  ordering existed. */
+export function moveCommand(
+    fid: string, newParentId: string | null, token: string,
+    afterId = '', beforeId = '',
+): CommandEntry {
+    const payload: Record<string, unknown> = { parent_id: newParentId };
+    if (afterId) payload.after_id = afterId;
+    if (beforeId) payload.before_id = beforeId;
+    return { id: commandId('move', fid, token), kind: 'move', feature_id: fid, payload };
+}
+
+/** Sentinel parent key for root-level features (`parentId === null`). A plain
+ *  string that cannot collide with a feature id, which is always `f-…`. */
+const ROOT_KEY = 'root:';
+
+/** Sibling sequences per parent, restricted to `keep`.
+ *
+ *  Restriction is what makes a concurrent change cost nothing: limited to the ids
+ *  both sides know, the agent inserting a sibling between A and B — or retiring
+ *  one — leaves every surviving neighbour relationship intact, so no move is
+ *  emitted for prose nobody dragged. It also guarantees every anchor is a fid the
+ *  daemon can resolve; a heading typed a moment ago has only a localId. */
+function siblingSequences(units: FeatureUnit[], keep: Set<string>): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    for (const u of units) {
+        const self = u.fid ?? u.localId;
+        if (!self || !keep.has(self)) continue;
+        const parent = u.parentId ?? ROOT_KEY;
+        const seq = out.get(parent) ?? [];
+        seq.push(self);
+        out.set(parent, seq);
+    }
+    return out;
+}
+
+/** Indices of a longest strictly-increasing subsequence of `xs` (patience sort). */
+function longestIncreasing(xs: number[]): Set<number> {
+    const tails: number[] = [];                       // index in xs of each length's smallest tail
+    const prev: number[] = new Array(xs.length).fill(-1);
+    for (let i = 0; i < xs.length; i++) {
+        let lo = 0, hi = tails.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (xs[tails[mid]] < xs[i]) lo = mid + 1; else hi = mid;
+        }
+        prev[i] = lo > 0 ? tails[lo - 1] : -1;
+        tails[lo] = i;
+    }
+    const keep = new Set<number>();
+    for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = prev[i]) keep.add(i);
+    return keep;
+}
+
+/** Where each REORDERED feature was dropped, keyed by fid, in document order.
+ *
+ * The nodes that MOVED are everything outside a longest increasing subsequence of
+ * the settled order — the standard minimum. Dragging one node emits one command,
+ * which matters beyond tidiness: every write stamps `feature_writers`, so a
+ * reorder that touched all N siblings would mark them all as freshly written, and
+ * the author's next edit to any of them would read as a conflict with a stranger.
+ *
+ * Anchoring is what makes the minimum safe, and it is asymmetric on purpose:
+ *
+ *   • `afterId` is the immediately preceding sibling, whoever it is. Commands are
+ *     emitted in document order, so a preceding node is either untouched or was
+ *     emitted earlier — either way it is already in its final place by the time
+ *     this one applies.
+ *   • `beforeId` is the nearest following sibling THAT IS NOT MOVING. A following
+ *     mover has not been placed yet, so naming it would anchor against a position
+ *     that is about to change.
+ *
+ * Giving both bounds wherever they exist is what makes the result independent of
+ * WHICH longest subsequence was chosen. With only one bound, a run of adjacent
+ * movers can satisfy every anchor it was given and still land in the wrong order.
+ */
+export function reorderTargets(
+    base: FeatureUnit[], next: FeatureUnit[],
+): Map<string, { afterId: string; beforeId: string }> {
+    const idsOf = (us: FeatureUnit[]) =>
+        new Set(us.map(u => u.fid ?? u.localId).filter(Boolean) as string[]);
+    const inNext = idsOf(next);
+    const common = new Set([...idsOf(base)].filter(x => inNext.has(x)));
+
+    const baseSeqs = siblingSequences(base, common);
+    const nextSeqs = siblingSequences(next, common);
+    const spots = new Map<string, { afterId: string; beforeId: string }>();
+
+    for (const [parent, seq] of nextSeqs) {
+        const wasAt = new Map((baseSeqs.get(parent) ?? []).map((id, i) => [id, i] as const));
+        // A node that arrived from another parent has no baseline index HERE. It is
+        // moving by definition, and must never be treated as a fixed point that
+        // other nodes anchor against — hence the sentinel that keeps it out of the
+        // increasing subsequence.
+        const positions = seq.map(id => wasAt.get(id) ?? Number.MAX_SAFE_INTEGER);
+        const fixed = longestIncreasing(positions);
+        const isFixed = (i: number) => fixed.has(i) && positions[i] !== Number.MAX_SAFE_INTEGER;
+
+        for (let i = 0; i < seq.length; i++) {
+            if (isFixed(i)) continue;
+            let before = '';
+            for (let j = i + 1; j < seq.length; j++) {
+                if (isFixed(j)) { before = seq[j]; break; }
+            }
+            spots.set(seq[i], { afterId: i > 0 ? seq[i - 1] : '', beforeId: before });
+        }
+    }
+
+    // Re-key in document order, so the caller emits each anchor before the node
+    // that references it.
+    const ordered = new Map<string, { afterId: string; beforeId: string }>();
+    for (const u of next) {
+        if (u.fid && spots.has(u.fid)) ordered.set(u.fid, spots.get(u.fid)!);
+    }
+    return ordered;
 }
 
 /** One entry in the host's short projection-baseline history (#4). */

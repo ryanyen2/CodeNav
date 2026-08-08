@@ -205,6 +205,7 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
         add_parent_id = _live_parent_id(store, op.parent_id)
         f = Feature(title=op.title or "Untitled", description=op.description or "",
                     parent_id=add_parent_id, local_id=op.local_id,
+                    rank=store.rank_between(add_parent_id, op.after_id, op.before_id),
                     realized=(op.realized if op.realized is not None else True))
         if op.feature_id:
             f.id = op.feature_id
@@ -234,7 +235,15 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
                 # was retired (or deleted) since the op was minted would strand the
                 # node under an invisible ancestor. Land it on the nearest LIVE
                 # parent instead of the requested (dead) one.
-                f.parent_id = _live_parent_id(store, op.parent_id)
+                new_parent = _live_parent_id(store, op.parent_id)
+                # Order is resolved HERE, at the write boundary, because only the
+                # store knows what the destination's children currently are. A move
+                # that crosses parents must always be re-ranked — the old key was a
+                # position among different siblings and means nothing here — while a
+                # reorder within one parent re-ranks from the neighbours it was given.
+                if new_parent != f.parent_id or op.after_id or op.before_id:
+                    f.rank = store.rank_between(new_parent, op.after_id, op.before_id)
+                f.parent_id = new_parent
                 f.updated_at = f.updated_at.advance()
                 store.upsert_feature(f)
     elif k is NodeOpKind.RETIRE_NODE:

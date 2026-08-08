@@ -184,7 +184,14 @@ class Command:
       Python, and any drift between them would read as a conflict on every edit.
     * ``payload`` carries the kind's data: ``add`` → ``title``/``description``/
       ``parent_id``; ``set_title`` → ``title``; ``set_description`` →
-      ``description``; ``move`` → ``parent_id``; ``retire`` → (nothing)."""
+      ``description``; ``move`` → ``parent_id`` + ``after_id``/``before_id``;
+      ``retire`` → (nothing).
+
+      ``after_id``/``before_id`` name the SIBLINGS a node was dropped between,
+      never an index. An index is a re-derived positional guess — by the time the
+      daemon applies it another pass may have added or retired a sibling, and
+      "third child" means something else — whereas "after A, before B" still means
+      what its author meant. Both absent = no opinion about order (appends)."""
     id: str
     kind: str
     feature_id: str = ""

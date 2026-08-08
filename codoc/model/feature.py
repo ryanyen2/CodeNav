@@ -67,6 +67,11 @@ class Feature(BaseModel):
     # so a freshly-minted fid can be matched back to the exact in-progress node. Empty
     # for code-derived / bootstrap / agent-added features (they never had a localId).
     local_id: str = ""
+    # Sibling order key (codoc.model.rank) — a base-62 fraction compared as a plain
+    # string. Empty means "unranked": the store treats it as append-at-the-end and
+    # assigns one, so a caller that never heard of ordering keeps working and the
+    # feature still lands somewhere deterministic.
+    rank: str = ""
     created_at: HLC = Field(default_factory=HLC.now)
     updated_at: HLC = Field(default_factory=HLC.now)  # advances on any field mutation
 

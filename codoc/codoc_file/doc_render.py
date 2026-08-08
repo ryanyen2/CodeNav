@@ -315,13 +315,14 @@ def _preorder(features: list) -> list:
     """Reorder live features into the tree's depth-first PRE-ORDER — the same order
     the left-nav gets from ``render_tree`` (a ``walk(None, 0)`` over ``store.children``).
 
-    ``store.list_features()`` returns a FLAT ``ORDER BY created_at`` list, so emitting
-    the doc in that order lays a child out wherever it happened to be created — not
-    under its parent. That desynchronizes the doc body from the nav (scroll-spy then
+    ``store.list_features()`` returns a FLAT list (ordered by sibling ``rank``), so
+    emitting the doc in that order lays a child out wherever its key happens to fall —
+    not under its parent. That desynchronizes the doc body from the nav (scroll-spy then
     jumps). Walking parent→children here makes the doc order faithful to the tree.
 
-    Siblings keep their ``created_at`` order (``list_features`` already sorts by it, and
-    ``store.children`` sorts the same way), so this matches the nav 1:1. Cycle-safe: a
+    Siblings keep their ``rank`` order (``list_features`` already sorts by it, and
+    ``store.children`` sorts the same way), so this matches the nav 1:1 — and a
+    reorder the user performed shows up here without this walk knowing about it. Cycle-safe: a
     ``seen`` guard bounds the walk, and any feature never reached from a root (orphaned
     by a dangling ``parent_id`` or a pre-existing cycle) is appended afterward so it is
     still projected rather than silently dropped."""

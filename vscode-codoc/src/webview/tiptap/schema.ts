@@ -26,6 +26,7 @@ import { CommentMark } from './comment-mark';
 // agent-authored tracked changes can be rendered and serialization can strip them.
 import { TrackChangesExtension } from './track-changes';
 import { MarkHygiene } from './mark-hygiene';
+import { DragHandle } from './drag-handle';
 
 export function codocExtensions(): Extensions {
     return [
@@ -58,6 +59,9 @@ export function codocExtensions(): Extensions {
         // text. An agent's insertion mark means "drop this when projecting to
         // tree.codoc", so a keystroke that inherited one would erase itself on save.
         MarkHygiene,
+        // Reordering a feature by hand. Registered in the shared schema because
+        // the hub serves this same bundle — the gesture is not a VS Code extra.
+        DragHandle,
     ];
 }
 

@@ -1631,3 +1631,61 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-saved-flash::after {
     animation: ce-viewer-breathe 1.6s ease-in-out infinite;
 }
 @keyframes ce-viewer-breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Moving a feature — the grip and the drop line.
+
+   The grip is a widget decoration, so it never becomes content. It rests at
+   zero opacity and is revealed by hovering the feature, which keeps the left
+   margin quiet while reading and puts the affordance exactly where the hand
+   already is when the intention forms.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-drag-handle {
+    position: absolute;
+    left: -22px;
+    width: 14px; height: 18px;
+    margin-top: 0.15em;
+    border-radius: 4px;
+    cursor: grab;
+    opacity: 0;
+    transition: opacity 120ms ease-out, background 120ms ease-out;
+    /* Six dots, drawn rather than shipped as an asset so it inherits ink colour
+       and needs no icon font in the standalone hub. */
+    background-image: radial-gradient(currentColor 1px, transparent 1.2px);
+    background-size: 5px 5px;
+    background-position: 2px 3px;
+    background-repeat: repeat;
+    color: var(--vscode-descriptionForeground, #8a8a8a);
+}
+.codoc-feature-heading:hover .ce-drag-handle,
+.ce-drag-handle:hover { opacity: 0.75; }
+/* Keyboard users never hover, so the grip must also surface when the caret is
+   inside the feature — otherwise the ⌥⌘↑/↓ affordance is invisible to exactly
+   the people who depend on it. */
+.codoc-feature-heading:focus-within .ce-drag-handle { opacity: 0.75; }
+.ce-drag-handle:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }
+.ce-drag-handle:active { cursor: grabbing; }
+
+/* While a drag is live: dim the prose so the structure being rearranged reads as
+   the subject, and suppress the text I-beam everywhere so the pointer keeps
+   saying "moving", not "selecting". */
+body.ce-dragging-feature { cursor: grabbing; }
+body.ce-dragging-feature .ProseMirror * { cursor: grabbing !important; }
+body.ce-dragging-feature .ProseMirror p { opacity: 0.55; transition: opacity 120ms ease-out; }
+
+.ce-drop-line {
+    position: relative;
+    height: 0;
+    border-top: 2px solid var(--accent, var(--vscode-focusBorder, #5aa6e0));
+    border-radius: 2px;
+    margin: -1px 0;
+    pointer-events: none;
+}
+/* A dot at the leading edge — the line alone reads as a rule/divider, which is
+   already vocabulary in this document. */
+.ce-drop-line::before {
+    content: '';
+    position: absolute; left: -4px; top: -4px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent, var(--vscode-focusBorder, #5aa6e0));
+}

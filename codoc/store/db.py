@@ -38,13 +38,19 @@ CREATE TABLE IF NOT EXISTS features (
     -- The webview's client-side node id for a hand-authored feature (KTD8), so a
     -- minted fid matches back to the exact in-progress node. '' for code-derived nodes.
     local_id    TEXT NOT NULL DEFAULT '',
+    -- Sibling order key (codoc.model.rank): a base-62 fraction compared as a plain
+    -- string, so ORDER BY needs no collation. Before this the tree had no order of
+    -- its own — siblings came back in created_at order, so a reorder wrote a
+    -- parent_id that had not changed and the next render put the node back.
+    rank        TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_features_parent ON features(parent_id);
--- list_features()/children() filter retired=0 and ORDER BY created_at on every
--- render pass — a composite index serves both without a scan+sort.
-CREATE INDEX IF NOT EXISTS idx_features_retired_created ON features(retired, created_at);
+-- The (retired, rank, created_at) covering index is created in _migrate, NOT here:
+-- on a pre-rank database `CREATE TABLE IF NOT EXISTS` is a no-op, so this script
+-- would try to index a column that the ALTER has not added yet and every open of
+-- an existing workspace would fail. Same reason idx_events_feature lives there.
 
 CREATE TABLE IF NOT EXISTS bindings (
     id          TEXT PRIMARY KEY,
@@ -178,7 +184,13 @@ CREATE TABLE IF NOT EXISTS feature_writers (
 # table_info scans entirely (open_store runs several times per loop tick — the
 # schema replay was measurable overhead on every one). Bump when _SCHEMA or
 # _migrate changes; version 0 (never stamped) always takes the slow path.
-_SCHEMA_VERSION = 5
+#: Sibling order: the rank key first, then created_at as a deterministic tiebreak.
+#: The tiebreak matters — two features can legitimately share a rank (a restore, a
+#: hand-edited db, an import), and without it SQLite is free to return them in
+#: either order, so the tree would shuffle between renders for no visible reason.
+_ORDER_BY = " ORDER BY rank, created_at"
+
+_SCHEMA_VERSION = 6
 
 
 class Store:
@@ -280,6 +292,35 @@ class Store:
             "CREATE INDEX IF NOT EXISTS idx_events_feature"
             " ON events(feature_id, at)"
         )
+        if "rank" not in cols:
+            # Sibling order keys. The backfill must reproduce EXACTLY the order the
+            # tree is being rendered in today — created_at, per parent — or the
+            # first render after upgrading silently reshuffles somebody's tree and
+            # every feature looks moved. Ranks are assigned per parent group in
+            # that order, evenly spaced so the first reorders need no relabelling.
+            from codoc.model.rank import ordinal_keys
+
+            self.conn.execute(
+                "ALTER TABLE features ADD COLUMN rank TEXT NOT NULL DEFAULT ''"
+            )
+            groups: dict[object, list[str]] = {}
+            for row in self.conn.execute(
+                "SELECT id, parent_id FROM features ORDER BY created_at, id"
+            ):
+                groups.setdefault(row["parent_id"], []).append(row["id"])
+            for ids in groups.values():
+                keys = ordinal_keys(len(ids))
+                self.conn.executemany(
+                    "UPDATE features SET rank=? WHERE id=?", list(zip(keys, ids))
+                )
+        # Unconditionally idempotent, like idx_events_feature: a fresh database gets
+        # `rank` from _SCHEMA and never enters the branch above, so the index has to
+        # be created outside it.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_features_retired_rank"
+            " ON features(retired, rank, created_at)"
+        )
+
         wcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(feature_writers)")}
         if "role" not in wcols:
             # Default '' ⇒ writers recorded before roles existed rank as
@@ -312,8 +353,8 @@ class Store:
     def upsert_feature(self, f: Feature) -> None:
         self.conn.execute(
             """
-            INSERT INTO features (id, title, description, parent_id, lifecycle, retired, realized, local_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO features (id, title, description, parent_id, lifecycle, retired, realized, local_id, rank, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title,
                 description=excluded.description,
@@ -323,6 +364,10 @@ class Store:
                 realized=excluded.realized,
                 -- keep a known local_id if a re-upsert (refresh/move) carries none
                 local_id=CASE WHEN excluded.local_id != '' THEN excluded.local_id ELSE features.local_id END,
+                -- Same rule as local_id: a re-upsert that carries no rank (a refresh,
+                -- a caller built from a pre-rank Feature) must not blank the order the
+                -- tree is currently rendered in.
+                rank=CASE WHEN excluded.rank != '' THEN excluded.rank ELSE features.rank END,
                 updated_at=excluded.updated_at
             """,
             (
@@ -336,6 +381,7 @@ class Store:
                 int(f.retired),
                 int(f.realized),
                 f.local_id,
+                f.rank,
                 f.created_at.to_str(),
                 f.updated_at.to_str(),
             ),
@@ -350,20 +396,79 @@ class Store:
         sql = "SELECT * FROM features"
         if not include_retired:
             sql += " WHERE retired=0"
-        sql += " ORDER BY created_at"
+        sql += _ORDER_BY
         return [_row_to_feature(r) for r in self.conn.execute(sql).fetchall()]
 
     def children(self, parent_id: str | None) -> list[Feature]:
         if parent_id is None:
             rows = self.conn.execute(
-                "SELECT * FROM features WHERE parent_id IS NULL AND retired=0 ORDER BY created_at"
+                "SELECT * FROM features WHERE parent_id IS NULL AND retired=0" + _ORDER_BY
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM features WHERE parent_id=? AND retired=0 ORDER BY created_at",
+                "SELECT * FROM features WHERE parent_id=? AND retired=0" + _ORDER_BY,
                 (parent_id,),
             ).fetchall()
         return [_row_to_feature(r) for r in rows]
+
+    def _sibling_rank(self, parent_id: str | None, feature_id: str) -> str:
+        """``feature_id``'s rank, but only if it really is a live child of
+        ``parent_id``. A neighbour that was retired or reparented since the author
+        saw it is not a position any more, and using its rank would place the node
+        somewhere nobody asked for."""
+        if not feature_id:
+            return ""
+        f = self.get_feature(feature_id)
+        if f is None or f.retired or f.parent_id != parent_id:
+            return ""
+        return f.rank
+
+    def rank_between(
+        self, parent_id: str | None, after_id: str = "", before_id: str = ""
+    ) -> str:
+        """An order key placing a feature between two named siblings.
+
+        Positions are given as NEIGHBOUR IDENTITIES, never as an index. An index
+        is a re-derived guess: by the time the daemon applies it, Loop A may have
+        added or retired a sibling and "third child" means something else.
+        "After A, before B" still means what its author meant.
+
+        Both ids empty means *no opinion about order* — a plain reparent, or a
+        caller that predates ordering — and appends. Placing a node FIRST is said
+        by naming what it goes before, which the client always knows.
+        """
+        from codoc.model.rank import RankError, append_after, between
+
+        after = self._sibling_rank(parent_id, after_id)
+        before = self._sibling_rank(parent_id, before_id)
+        if not after and not before:
+            return self.rank_for_append(parent_id)
+        if after and before and after >= before:
+            # The two are no longer adjacent (something landed between them, or
+            # one moved). "After A" is the more specific half of the intent —
+            # it names where the author dropped the node — so keep it.
+            before = ""
+        try:
+            return between(after, before)
+        except RankError:
+            return append_after(after)
+
+    def rank_for_append(self, parent_id: str | None) -> str:
+        """An order key placing a feature last among ``parent_id``'s children."""
+        from codoc.model.rank import append_after
+
+        if parent_id is None:
+            row = self.conn.execute(
+                "SELECT rank FROM features WHERE parent_id IS NULL AND retired=0"
+                " ORDER BY rank DESC, created_at DESC LIMIT 1"
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT rank FROM features WHERE parent_id=? AND retired=0"
+                " ORDER BY rank DESC, created_at DESC LIMIT 1",
+                (parent_id,),
+            ).fetchone()
+        return append_after((row[0] if row else "") or "")
 
     def would_move_create_cycle(self, feature_id: str, new_parent_id: str | None) -> bool:
         """True if re-parenting ``feature_id`` under ``new_parent_id`` would form a cycle
@@ -886,6 +991,7 @@ def _row_to_feature(r: sqlite3.Row) -> Feature:
         parent_id=r["parent_id"],
         lifecycle=lifecycle,
         local_id=(r["local_id"] if "local_id" in keys else ""),
+        rank=(r["rank"] if "rank" in keys else ""),
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )
