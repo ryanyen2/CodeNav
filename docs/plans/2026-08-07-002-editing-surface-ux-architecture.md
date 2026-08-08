@@ -235,23 +235,73 @@ affordance is visible to the people who depend on that path.
 **Migration preserves what users already see**: ranks backfill per parent in
 `created_at` order, so upgrading does not reshuffle anybody's tree.
 
-## 5. Still open, in priority order
+## 5. Authoring cues and empty states — LANDED
 
-1. **No editor placeholder / empty state.** A fresh tree opens as a blank page
-   with no first action.
-2. **Markdown affordance gap.** `> ` (steering) and `**bold**` (focus) are
-   load-bearing signals per CLAUDE.md, but only `#` has an input rule, so two of
-   the three give no feedback as you type them.
+Both remaining items, and one of them turned out to be a documentation bug.
 
----
+**The markdown-signal gap was half the size I recorded, and differently shaped.**
+CLAUDE.md described *three* signals feeding Loop B directives. Checking the code
+rather than the doc:
 
-## 6. Verification
+| signal | live? | feedback before |
+|---|---|---|
+| `**bold**` → `Focus:` | yes (`_signal_lines`, command path) | yes — StarterKit input rule |
+| `[label](https://…)` → `Consult:` | yes (`_signal_lines`) | **none** |
+| `> …` → `STEER` | **no** — retired in U7 | n/a |
 
-1364 pytest · 825 vitest · `tsc --noEmit` clean · esbuild clean.
+`loop_b` step 2.7 is explicit: once the webview stopped writing `tree.codoc`, the
+text-comment → STEER loop was dead and was deleted. Steers arrive through the
+inline-comment surface via `edits.json`. So typing `> ` in a description has been
+ordinary prose for some time, while CLAUDE.md told every reader — human and agent
+— that it queued a directive. Corrected there.
+
+> *I might break this if…* I had shipped the cue this plan originally called for.
+> Styling `> ` lines as steering callouts would have made a retired path look
+> live, which is worse than the silence it replaced: the author would believe the
+> agent had been told something nobody sent.
+
+**Consult links are now marked** (`consult-decorations.ts`). A decoration, not a
+schema mark: the description round-trips through `inlineRunsToText` to the exact
+markdown the daemon parses, and a Link mark would insert a serializer between the
+author's text and that parser — one more place for the two to disagree. The
+pattern mirrors `parse._LINK_RE` character for character, and nine table-driven
+cases assert the TypeScript and Python matches agree, including the ones that
+must NOT match (`codoc:` refs, bare URLs, unclosed brackets). A cue that
+over-matches is a lie about what the agent was told.
+
+**Placeholders** (`placeholder.ts`). Two, because they answer different
+questions: the empty *document* offers the first action unconditionally, and an
+empty *description* prompts only on the block holding the caret — prompting every
+empty block at once turns a document into a form. Both name the affordances that
+existed but were undiscoverable (`/` for a block, `@` for a code reference, ⌘K
+for a feature); the tree pane's existing message says "run `codoc init`", which a
+hub contributor cannot do and which mentions neither.
+
+Placeholder text lives in a data attribute rendered by CSS `::before`, so nothing
+enters the document — nothing to serialise into `tree.codoc`, nothing to settle,
+nothing a select-all can copy. Pinned by a test.
+
+## 6. Nothing further open
+
+The §1–§5 work closes every item this audit opened. Known limits, recorded rather
+than pending:
+
+- `blame`/`glance` still cost more per keystroke than a mapped layer when their
+  toggles are on. Measured, bounded, and correct — the remaining cost is building
+  decorations that genuinely changed.
+- Drag-and-drop is verified by unit tests over the geometry and by `tsc`/esbuild;
+  the pointer choreography itself (drop-line tracking, the grab cursor) is
+  DOM-behaviour that this suite cannot execute, since it runs node-env with no
+  jsdom by design.
+
+## 7. Verification
+
+1364 pytest · 845 vitest · `tsc --noEmit` clean · esbuild clean.
 New: `tests/serve/test_viewer.py` (3), `src/test/viewer-status.test.ts` (13),
 `src/test/decoration-policy.test.ts` (13), `tests/model/test_rank.py` (25),
 `tests/loop/test_reorder.py` (15), `src/test/reorder-commands.test.ts` (18),
-`src/test/feature-drag.test.ts` (19), `src/test/decoration-cost.perf.test.ts`
+`src/test/feature-drag.test.ts` (19), `src/test/authoring-cues.test.ts` (20),
+`src/test/decoration-cost.perf.test.ts`
 (2 — the measurement is recorded as a fact rather than asserted as a threshold,
 because machines vary and a perf number pinned to this laptop is a future false
 failure).

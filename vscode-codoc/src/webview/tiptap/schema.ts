@@ -27,6 +27,8 @@ import { CommentMark } from './comment-mark';
 import { TrackChangesExtension } from './track-changes';
 import { MarkHygiene } from './mark-hygiene';
 import { DragHandle } from './drag-handle';
+import { Placeholder } from './placeholder';
+import { ConsultDecorations } from './consult-decorations';
 
 export function codocExtensions(): Extensions {
     return [
@@ -62,6 +64,10 @@ export function codocExtensions(): Extensions {
         // Reordering a feature by hand. Registered in the shared schema because
         // the hub serves this same bundle — the gesture is not a VS Code extra.
         DragHandle,
+        // What an empty document and an empty description say, and the cue that a
+        // link has become an instruction the agent will read.
+        Placeholder,
+        ConsultDecorations,
     ];
 }
 

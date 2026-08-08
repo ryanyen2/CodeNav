@@ -1689,3 +1689,37 @@ body.ce-dragging-feature .ProseMirror p { opacity: 0.55; transition: opacity 120
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--accent, var(--vscode-focusBorder, #5aa6e0));
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Placeholders. The text lives in a data attribute rendered by ::before, never
+   in the document — so there is nothing to serialise into tree.codoc, nothing
+   to settle, and nothing a select-all can copy.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-placeholder::before {
+    content: attr(data-placeholder);
+    position: absolute;
+    pointer-events: none;                 /* the caret still goes where you click */
+    color: var(--vscode-descriptionForeground, #8a8a8a);
+    opacity: 0.55;
+    font-weight: 400;                     /* never inherit a heading's weight */
+    font-style: normal;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ce-placeholder { position: relative; }
+/* The whole-document prompt is the one thing on screen, so it may sit at reading
+   size; the per-block prompt must not compete with the prose around it. */
+.ce-placeholder-doc::before { font-size: 0.95em; opacity: 0.65; }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Consult links — `[label](https://…)`, which the realizing agent reads before
+   implementing. Marked, not rewritten: the text stays the exact markdown the
+   daemon parses.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-consult {
+    border-bottom: 1px solid color-mix(in srgb, var(--accent, #5aa6e0) 45%, transparent);
+    color: color-mix(in srgb, var(--vscode-foreground) 78%, var(--accent, #5aa6e0));
+    cursor: help;
+}

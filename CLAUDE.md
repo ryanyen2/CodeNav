@@ -56,13 +56,18 @@ to `.codoc/inbox.json`; there is no accept/reject *syntax*). Feature ids
 (`⟨f-id⟩`) stay on disk for stable identity but the IDE hides them. Code is cited
 inline with markdown links: `[label](codoc:file.py#symbol)`.
 
-Three markdown-native signals in descriptions feed Loop B directives:
-- `> …` blockquote lines are **steering comments** — imperative notes to the
-  agent, drained into `STEER FEATURE` directives and consumed on the next render.
+Two markdown-native signals in descriptions feed Loop B directives:
 - `**bold**` is **focus** — newly-bolded spans ride in as a `Focus:` line; an
   imperative bolded span queues a directive even when the prose reads descriptive.
 - `[label](https://…)` external links become `Consult:` lines — the realizing
-  agent WebFetches them before implementing.
+  agent WebFetches them before implementing. The editor underlines them so an
+  author can see the link registered as an instruction.
+
+**Steering comments** (`STEER FEATURE` directives) come from the IDE's inline-
+comment surface, which writes them to `edits.json` (`drain_steers`). Typing a
+`> …` line into a description does NOT create one: that text path was retired in
+U7 when the webview stopped writing `tree.codoc` (see `loop_b` step 2.7), so a
+`> ` line is now ordinary prose.
 
 ## Architecture
 
