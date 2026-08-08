@@ -1,6 +1,6 @@
 """Three-way text merge — the resolution half of the divergence story.
 
-Detecting that two parties edited the same feature (``loop_b._base_conflict``,
+Detecting that two parties edited the same feature (``loop_b._resolve_content``,
 via ``Command.base_text``) stopped the silent overwrites, but it resolved every
 disagreement the same way: refuse the incoming edit wholesale and park it as a
 proposal. That is right when the two edits genuinely contend and no one has

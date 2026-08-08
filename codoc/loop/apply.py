@@ -92,7 +92,7 @@ def apply_op(
     caller falls back to ``source``. It is recorded per feature so a later command
     can tell "I am continuing my own edit" (base legitimately behind, because the
     projection has not caught up) from "someone else wrote here" (a real
-    disagreement) — see :func:`codoc.loop.loop_b._base_conflict`. Recording it here,
+    disagreement) — see :func:`codoc.loop.loop_b._resolve_content`. Recording it here,
     at the one write boundary, is what makes an agent's write count as someone else
     without every agent path having to remember to say so.
     """
@@ -126,11 +126,15 @@ def apply_op(
     store.append_event(event)
     if applied:
         _mutate(op, store, fp_lookup or {}, th_lookup or {})
-        if op.feature_id:
+        if op.feature_id and (op.title is not None or op.description is not None):
             # The event's actor doubles as the writer's ROLE. It is already
             # resolved here (explicit provenance, else derived from source), so
             # rank arbitration reads the same authorship the ledger records
             # rather than a parallel notion that could disagree with it.
+            # Content-bearing ops only: feature_writers answers "who put the
+            # current TEXT here", and a MOVE/RETIRE would otherwise claim
+            # authorship of prose it never touched — skewing the next
+            # contended-edit arbitration toward whoever last dragged the node.
             store.set_feature_writer(op.feature_id, writer or source, event.actor)
         store.mark_applied(event.id)  # stamp accepted_at for the audit log
     return event
@@ -259,6 +263,12 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
             if owner is not None:
                 for child in store.children(op.feature_id):
                     child.parent_id = owner.parent_id
+                    # A cross-parent move must always be re-ranked (same rule as
+                    # MOVE_NODE above): the old key was a position among the
+                    # retiree's children and means nothing among the grandparent's.
+                    # children() iterates in rank order, so appending keeps the
+                    # promoted siblings' relative order.
+                    child.rank = store.rank_for_append(owner.parent_id)
                     child.updated_at = child.updated_at.advance()
                     store.upsert_feature(child)
             # Mark retired only. Binding detach is a PATH decision, not a property of

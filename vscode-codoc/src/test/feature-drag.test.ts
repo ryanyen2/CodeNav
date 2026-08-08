@@ -14,6 +14,7 @@ import {
     featureSlices, sliceAt, dropPositions, nearestDrop, moveSlice, nudgeTarget,
 } from '../webview/tiptap/feature-drag';
 import { featureUnits } from '../state/commands-from-doc';
+import { isUserInput } from '../webview/tiptap/edit-origin';
 import type { PMNode } from '../state/pm-doc';
 
 const schema = codocSchema();
@@ -192,5 +193,35 @@ describe('the keyboard equivalent', () => {
         const s = state([['A', 0], ['A1', 1], ['B', 0]]);
         const a1 = featureSlices(s.doc)[1];
         expect(nudgeTarget(s.doc, a1, 1)).toBeNull();   // A1 is an only child
+    });
+});
+
+describe('nudge stays inside the parent', () => {
+    it('does not step from the last child of A onto the first child of B', () => {
+        // Same depth is not same parent: stepping A1 "down" onto B1 would silently
+        // reparent it under B, while every surface promises "among its siblings".
+        const s = state([['A', 0], ['A1', 1], ['B', 0], ['B1', 1]]);
+        const slices = featureSlices(s.doc);
+        expect(nudgeTarget(s.doc, slices[1], 1)).toBeNull();   // A1 down → would land in B
+        expect(nudgeTarget(s.doc, slices[3], -1)).toBeNull();  // B1 up → would land in A
+    });
+
+    it('still steps across a sibling whose own children sit in between', () => {
+        const s = state([['A', 0], ['A1', 1], ['A1a', 2], ['A2', 1]]);
+        const a1 = featureSlices(s.doc)[1];
+        const tr = moveSlice(s, a1, nudgeTarget(s.doc, a1, 1)!)!;
+        expect(titles(s.apply(tr))).toEqual(['A', 'A2', 'A1', 'A1a']);
+    });
+});
+
+describe('a move is structural, not typing', () => {
+    it('tags its transaction so author-stamp and mark-hygiene skip the slice', () => {
+        // Without the tag, dragging a feature that carries agent proposal marks
+        // strips them into plain "human-typed" text — a silent proposal
+        // resolution neither Accept nor Reject produced.
+        const s = state([['A', 0], ['B', 0]]);
+        const a = featureSlices(s.doc)[0];
+        const tr = moveSlice(s, a, nudgeTarget(s.doc, a, 1)!)!;
+        expect(isUserInput(tr)).toBe(false);
     });
 });

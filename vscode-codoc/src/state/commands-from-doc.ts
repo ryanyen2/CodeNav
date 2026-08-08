@@ -176,18 +176,42 @@ export function commandsForSettle(
     for (const u of prev) if (u.fid) beforeByFid.set(u.fid, u);
     const reorder = reorderTargets(prev, next);
 
-    for (const u of next) {
+    // Order anchors for a brand-new node: its nearest baseline-known siblings
+    // under the same parent (the same restriction reorderTargets applies). A
+    // heading typed BETWEEN two features must land there, not at the end of its
+    // parent — apply's ADD ranks from these exactly as move does.
+    const addAnchors = (idx: number): { afterId: string; beforeId: string } => {
+        const parent = next[idx].parentId ?? null;
+        let afterId = '', beforeId = '';
+        for (let j = idx - 1; j >= 0; j--) {
+            const s = next[j];
+            if ((s.parentId ?? null) === parent && s.fid && beforeByFid.has(s.fid)) { afterId = s.fid; break; }
+        }
+        for (let j = idx + 1; j < next.length; j++) {
+            const s = next[j];
+            if ((s.parentId ?? null) === parent && s.fid && beforeByFid.has(s.fid)) { beforeId = s.fid; break; }
+        }
+        return { afterId, beforeId };
+    };
+
+    for (let idx = 0; idx < next.length; idx++) {
+        const u = next[idx];
         if (!u.fid) {
             // Newly authored node — an `add` keyed to its localId so the minted fid
             // echoes back. A node with neither fid nor localId is skipped (can't key it);
             // a brand-new node already flagged retired never reached the store, so there
             // is nothing to add and nothing to retire.
             if (!u.localId || u.retired) continue;
+            const anchors = addAnchors(idx);
+            const payload: NonNullable<CommandEntry['payload']> =
+                { title: u.title, description: u.description, parent_id: u.parentId };
+            if (anchors.afterId) payload.after_id = anchors.afterId;
+            if (anchors.beforeId) payload.before_id = anchors.beforeId;
             out.push({
                 id: addCommandId(u.localId),  // deterministic (no salt) → replay collides on the ledger (FIX B)
                 kind: 'add',
                 local_id: u.localId,
-                payload: { title: u.title, description: u.description, parent_id: u.parentId },
+                payload,
             });
             continue;
         }
@@ -251,7 +275,7 @@ export function moveCommand(
     fid: string, newParentId: string | null, token: string,
     afterId = '', beforeId = '',
 ): CommandEntry {
-    const payload: Record<string, unknown> = { parent_id: newParentId };
+    const payload: NonNullable<CommandEntry['payload']> = { parent_id: newParentId };
     if (afterId) payload.after_id = afterId;
     if (beforeId) payload.before_id = beforeId;
     return { id: commandId('move', fid, token), kind: 'move', feature_id: fid, payload };

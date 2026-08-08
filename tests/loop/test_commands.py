@@ -865,3 +865,79 @@ def test_an_agent_write_breaks_the_authors_own_lineage(dirs):
     s = open_store(codoc_dir)
     assert s.get_feature("f-1").description == "the author kept typing"
     s.close()
+
+
+# ── the same-session continuation must not erase merged-in concurrent edits ──
+def test_continuation_settle_keeps_the_agents_merged_in_edit(dirs):
+    """SEQUENCE: agent amends p3 → author's settle merges (author becomes the
+    feature's writer, text now carries the agent's p3) → author keeps typing and
+    settles again against the SAME stale base (projection not returned yet).
+    The old writer==session shortcut applied that second settle verbatim,
+    silently reverting the agent's just-merged paragraph."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    root, codoc_dir = dirs
+    base = "p1\n\np2\n\np3"
+    _seed_tree(codoc_dir, Feature(id="f-1", title="F", description=base))
+
+    s = open_store(codoc_dir)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1",
+                    description="p1\n\np2\n\np3y"),
+             s, source="agent", applied=True)
+    s.close()
+
+    append_command(codoc_dir, Command(
+        id="cmd-s1", kind="set_description", feature_id="f-1",
+        session="sess-a", base_text=base,
+        payload={"description": "p1x\n\np2\n\np3"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+    assert not res.error
+    s = open_store(codoc_dir)
+    assert s.get_feature("f-1").description == "p1x\n\np2\n\np3y"  # disjoint merge
+    s.close()
+
+    # The poison settle: same session (now the writer), same stale base.
+    append_command(codoc_dir, Command(
+        id="cmd-s2", kind="set_description", feature_id="f-1",
+        session="sess-a", base_text=base,
+        payload={"description": "p1x2\n\np2\n\np3"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+    assert not res.error
+    s = open_store(codoc_dir)
+    final = s.get_feature("f-1").description
+    s.close()
+    assert "p3y" in final          # the agent's merged-in edit SURVIVES
+    assert "p1x2" in final         # and the author's own continuation lands
+
+
+# ── a move must not claim authorship of text it never touched ────────────────
+def test_a_move_does_not_claim_authorship_of_the_text(dirs):
+    """The agent wrote the description; the human then drags the node. The
+    writer record must still say the agent wrote the TEXT, or the human's next
+    contended edit is DEFERRED to review instead of winning (human beats agent
+    only when the holder really is the agent)."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir,
+               Feature(id="f-1", title="A", description="agent prose"),
+               Feature(id="f-2", title="B", description=""))
+
+    s = open_store(codoc_dir)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1",
+                    description="agent prose v2"),
+             s, source="agent", applied=True)
+    writer_before = s.feature_writer_info("f-1")
+    s.close()
+
+    append_command(codoc_dir, Command(
+        id="cmd-mv", kind="move", feature_id="f-1",
+        payload={"parent_id": None, "after_id": "f-2"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+    assert not res.error
+
+    s = open_store(codoc_dir)
+    assert s.feature_writer_info("f-1") == writer_before
+    s.close()

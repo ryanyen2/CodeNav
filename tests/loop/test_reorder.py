@@ -273,3 +273,127 @@ def test_the_migration_preserves_the_order_users_already_see(tmp_path):
     assert [f.title for f in s.children(None)] == order
     assert all(f.rank for f in s.children(None))   # and everyone got a key
     s.close()
+
+
+def test_retiring_a_parent_keeps_its_children_together_in_order(tmp_path):
+    """Promoted children carried a rank scoped to the RETIRED parent, so they
+    interleaved arbitrarily among the grandparent's siblings. A cross-parent
+    promotion must re-rank, exactly like MOVE_NODE does."""
+    s = _tree(tmp_path, "g1", "mid", "g2")
+    s.upsert_feature(Feature(id="c-0", title="c1", parent_id="f-1",
+                             rank=s.rank_for_append("f-1")))
+    s.upsert_feature(Feature(id="c-1", title="c2", parent_id="f-1",
+                             rank=s.rank_for_append("f-1")))
+    apply_op(NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id="f-1"),
+             s, source="user", applied=True)
+    assert _order(s) == ["g1", "g2", "c1", "c2"]
+    s.close()
+
+
+def test_an_add_command_lands_where_it_was_typed(tmp_path):
+    """The add command's after_id/before_id must survive the command→op mapping
+    (the move branch mapped them; the add branch dropped them, so a heading
+    typed mid-document teleported to the end of its parent)."""
+    from codoc.codoc_file.render import write_tree
+    from codoc.loop.edits import Command, append_command
+    from codoc.loop.loop_b import run_loop_b
+
+    root = tmp_path / "repo"; root.mkdir()
+    codoc_dir = tmp_path / ".codoc"; codoc_dir.mkdir()
+    s = open_store(codoc_dir)
+    for i, t in enumerate(["Alpha", "Beta"]):
+        s.upsert_feature(Feature(id=f"f-{i}", title=t, rank=s.rank_for_append(None)))
+    write_tree(s, codoc_dir)
+    s.close()
+
+    append_command(codoc_dir, Command(
+        id="c-add-mid", kind="add", local_id="L-mid",
+        payload={"title": "Mid", "description": "",
+                 "after_id": "f-0", "before_id": "f-1"}))
+    res = run_loop_b(str(root), str(codoc_dir), dry_run=False)
+    assert not res.error
+
+    s = open_store(codoc_dir)
+    assert [f.title for f in s.children(None)] == ["Alpha", "Mid", "Beta"]
+    s.close()
+
+
+def test_a_torn_rank_migration_heals_on_the_next_open(tmp_path):
+    """sqlite3 auto-commits the ALTER separately from the backfill UPDATEs, so a
+    crash in between leaves the column present with every rank ''. Gating the
+    backfill on column EXISTENCE then skips it forever (every drag appends to
+    the end, silently). The backfill must be gated on the DATA."""
+    import sqlite3
+
+    db = tmp_path / "codoc.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE features (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT, lifecycle TEXT NOT NULL DEFAULT 'active',
+            retired INTEGER NOT NULL DEFAULT 0, realized INTEGER NOT NULL DEFAULT 1,
+            local_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE bindings (id TEXT PRIMARY KEY, feature_id TEXT NOT NULL, file TEXT NOT NULL,
+            symbol_path TEXT NOT NULL, fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL,
+            UNIQUE(file, symbol_path));
+        CREATE TABLE events (id TEXT PRIMARY KEY, at TEXT NOT NULL, source TEXT NOT NULL,
+            op_json TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 1, accepted_at TEXT);
+        """
+    )
+    def _hlc(ms: int) -> str:
+        return f"{ms:020d}-{0:020d}-n"
+
+    order = ["zulu", "alpha", "mike"]
+    for i, t in enumerate(order):
+        conn.execute(
+            "INSERT INTO features (id,title,parent_id,created_at,updated_at) VALUES (?,?,?,?,?)",
+            (f"f-{i}", t, None, _hlc(1000 + i), _hlc(1000 + i)),
+        )
+    # The torn state: the ALTER committed, the backfill did not.
+    conn.execute("ALTER TABLE features ADD COLUMN rank TEXT NOT NULL DEFAULT ''")
+    conn.commit(); conn.close()
+
+    s = Store(db).open()
+    assert [f.title for f in s.children(None)] == order
+    assert all(f.rank for f in s.children(None))
+    s.close()
+
+
+def test_migration_breaks_created_at_ties_by_insertion_order(tmp_path):
+    """Same-millisecond created_at is the COMMON case (HLC logical time is 0 and
+    bootstrap mints sibling batches in a tight loop). The old ORDER BY created_at
+    scans resolved those ties by rowid; tie-breaking by the random id fragment
+    would reshuffle every such batch on upgrade."""
+    import sqlite3
+
+    db = tmp_path / "codoc.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE features (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT, lifecycle TEXT NOT NULL DEFAULT 'active',
+            retired INTEGER NOT NULL DEFAULT 0, realized INTEGER NOT NULL DEFAULT 1,
+            local_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE bindings (id TEXT PRIMARY KEY, feature_id TEXT NOT NULL, file TEXT NOT NULL,
+            symbol_path TEXT NOT NULL, fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL,
+            UNIQUE(file, symbol_path));
+        CREATE TABLE events (id TEXT PRIMARY KEY, at TEXT NOT NULL, source TEXT NOT NULL,
+            op_json TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 1, accepted_at TEXT);
+        """
+    )
+    hlc = f"{1000:020d}-{0:020d}-n"  # ONE timestamp for the whole batch
+    rows = [("f-9", "first"), ("f-2", "second"), ("f-7", "third"), ("f-0", "fourth")]
+    for fid, t in rows:  # ids deliberately NOT in insertion-sorted order
+        conn.execute(
+            "INSERT INTO features (id,title,parent_id,created_at,updated_at) VALUES (?,?,?,?,?)",
+            (fid, t, None, hlc, hlc),
+        )
+    conn.commit(); conn.close()
+
+    s = Store(db).open()
+    assert [f.title for f in s.children(None)] == ["first", "second", "third", "fourth"]
+    s.close()

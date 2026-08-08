@@ -137,6 +137,10 @@ export interface CommandEntry {
         title?: string;
         description?: string;
         parent_id?: string | null;
+        /** Sibling anchors for `move` and `add` — the features the node landed
+         *  between. Omitted means no opinion about order (appends). */
+        after_id?: string;
+        before_id?: string;
     };
 }
 

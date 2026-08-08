@@ -454,6 +454,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     function settleNow(): void {
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = 0; }
         if (!dirty) return;
+        // Never ship a half-composed word. The trailing debounce (or a
+        // pagehide/visibility flush) can fire while an IME composition is open,
+        // and the doc then holds raw composition text the author has not
+        // committed — settling it would mint a permanent, id-stamped edit from
+        // garbled input. Reschedule instead; the compositionend transaction
+        // re-enters the ordinary debounce path. The incoming direction already
+        // defers the same way (DeferConditions.imeComposing).
+        if (editor.view.composing) { scheduleSettle(); return; }
         dirty = false;
         // Anything now back to the text it last adopted has nothing left to protect,
         // so it stops being pending. Without this an undo leaves the feature pending

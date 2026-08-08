@@ -319,3 +319,46 @@ describe('command identity — per-emission tokens (T3.5)', () => {
         expect(moveCommand('f-2', 'f-1', 'tok-1').id).not.toBe(moveCommand('f-2', 'f-1', 'tok-3').id);
     });
 });
+
+describe('a new node carries its position (adds used to teleport to the end)', () => {
+    it('an add BETWEEN two known siblings names them as anchors', () => {
+        const prevU = featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Auth', 'a'),
+            ...feat({ fid: 'f-2' }, 'Theme', 't'),
+        ]));
+        const nextU = featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Auth', 'a'),
+            ...feat({ localId: 'L-mid' }, 'Between', ''),
+            ...feat({ fid: 'f-2' }, 'Theme', 't'),
+        ]));
+        const cmds = commandsForSettle(prevU, nextU, 't1');
+        expect(cmds).toHaveLength(1);
+        expect(cmds[0]).toMatchObject({
+            kind: 'add', local_id: 'L-mid',
+            payload: { title: 'Between', after_id: 'f-1', before_id: 'f-2' },
+        });
+    });
+
+    it('anchors are restricted to the SAME parent', () => {
+        // The new node is A's child; the root feature B after it is not a sibling
+        // and must not be cited as one.
+        const prevU = featureUnits(makeDoc([
+            ...feat({ fid: 'f-a' }, 'A', ''),
+            ...feat({ fid: 'f-a1', level: 1 }, 'A1', ''),
+            ...feat({ fid: 'f-b' }, 'B', ''),
+        ]));
+        const nextU = featureUnits(makeDoc([
+            ...feat({ fid: 'f-a' }, 'A', ''),
+            ...feat({ fid: 'f-a1', level: 1 }, 'A1', ''),
+            ...feat({ localId: 'L-a2', level: 1 }, 'A2', ''),
+            ...feat({ fid: 'f-b' }, 'B', ''),
+        ]));
+        const cmds = commandsForSettle(prevU, nextU, 't1');
+        expect(cmds).toHaveLength(1);
+        expect(cmds[0]).toMatchObject({
+            kind: 'add', local_id: 'L-a2',
+            payload: { parent_id: 'f-a', after_id: 'f-a1' },
+        });
+        expect(cmds[0].payload?.before_id).toBeUndefined();
+    });
+});

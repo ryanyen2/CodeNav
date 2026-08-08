@@ -14,6 +14,7 @@
  */
 import type { Node as PMModelNode } from '@tiptap/pm/model';
 import type { EditorState, Transaction } from '@tiptap/pm/state';
+import { FEATURE_MOVE_META } from './edit-origin';
 
 const HEADING = 'featureHeading';
 
@@ -114,6 +115,11 @@ export function moveSlice(state: EditorState, slice: FeatureSlice, to: number): 
     // the destination through that same change rather than adjusting by hand.
     const dest = tr.mapping.map(to, -1);
     tr.insert(dest, content);
+    // Declared structural (not typing) so author-stamp and mark-hygiene leave the
+    // re-inserted slice alone: it keeps its authorship and any agent proposal
+    // marks instead of being committed as the dragger's own prose. History stays
+    // on — undo restores the move.
+    tr.setMeta(FEATURE_MOVE_META, true);
     return tr.docChanged ? tr : null;
 }
 
@@ -128,9 +134,24 @@ export function moveSlice(state: EditorState, slice: FeatureSlice, to: number): 
  */
 export function nudgeTarget(doc: PMModelNode, slice: FeatureSlice, dir: -1 | 1): number | null {
     const slices = featureSlices(doc);
-    const siblings = slices.filter(s => s.depth === slice.depth);
+    const at = slices.findIndex(s => s.from === slice.from);
+    if (at < 0) return null;
+    // Siblings share a PARENT, not merely a depth. The sibling run is the
+    // same-depth slices around this one, cut at the nearest SHALLOWER heading on
+    // each side — a same-depth slice beyond that boundary lives under a different
+    // parent, and stepping onto it would silently reparent the feature when every
+    // surface promises "one step among its siblings". Deeper slices in between
+    // are a sibling's descendants and are stepped over, not into.
+    const siblings: FeatureSlice[] = [slice];
+    for (let j = at - 1; j >= 0; j--) {
+        if (slices[j].depth < slice.depth) break;
+        if (slices[j].depth === slice.depth) siblings.unshift(slices[j]);
+    }
+    for (let j = at + 1; j < slices.length; j++) {
+        if (slices[j].depth < slice.depth) break;
+        if (slices[j].depth === slice.depth) siblings.push(slices[j]);
+    }
     const i = siblings.findIndex(s => s.from === slice.from);
-    if (i < 0) return null;
     if (dir < 0) return i > 0 ? siblings[i - 1].from : null;
     const next = siblings[i + 1];
     if (!next) return null;

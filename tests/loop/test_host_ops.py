@@ -107,3 +107,29 @@ def test_run_loop_b_absorbs_host_ops_end_to_end(dirs):
     with open_store(codoc_dir) as s:
         assert any(f.title == "Live feature" for f in s.list_features())
     assert not host_ops_path(codoc_dir).exists()  # consumed
+
+def test_merge_preserves_base_text_and_session(dirs):
+    """The merge-claim fields ride the host-op round trip. Dropping them here
+    silently disabled the whole 3-way merge for every real IDE command
+    (base_text=None -> CLEAN -> blind last-writer-wins in both directions)."""
+    _, codoc_dir = dirs
+    append_host_op(codoc_dir, "appendCommand", {
+        "id": "c-bt", "kind": "set_description", "feature_id": "f-1",
+        "base_text": "old text", "session": "sess-9",
+        "payload": {"description": "new text"}})
+    assert merge_host_ops(codoc_dir) == 1
+    (cmd,) = ec.read_commands(codoc_dir)
+    assert cmd.base_text == "old text"
+    assert cmd.session == "sess-9"
+
+
+def test_merge_keeps_an_empty_base_text_claim(dirs):
+    """'' is a real claim (the field was empty when the author started), distinct
+    from None (no claim at all) — `or`-style coalescing would erase it."""
+    _, codoc_dir = dirs
+    append_host_op(codoc_dir, "appendCommand", {
+        "id": "c-bt2", "kind": "set_description", "feature_id": "f-1",
+        "base_text": "", "payload": {"description": "text"}})
+    assert merge_host_ops(codoc_dir) == 1
+    (cmd,) = ec.read_commands(codoc_dir)
+    assert cmd.base_text == ""

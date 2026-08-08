@@ -181,3 +181,18 @@ def test_unknown_and_malformed_rejected(tmp_path):
                  Capability.HANDOFF, cd)  # not a remote-surface command
     with pytest.raises(CommandError):
         dispatch({"kind": "withdraw-realization"}, Capability.SUGGEST, cd)  # missing featureId
+
+
+# The merge-claim fields survive the hub ingestion path (the same drop that
+# disabled merge3 on the IDE's host-op path existed here too).
+def test_command_preserves_base_text_and_session(tmp_path):
+    cd = str(tmp_path)
+    res = dispatch(
+        {"kind": "set_description", "id": "c-hub-1", "featureId": "f-1",
+         "baseText": "before", "session": "hub-3",
+         "payload": {"description": "after"}},
+        Capability.SUGGEST, cd)
+    assert res.get("ok")
+    (cmd,) = edits.read_commands(cd)
+    assert cmd.base_text == "before"
+    assert cmd.session == "hub-3"

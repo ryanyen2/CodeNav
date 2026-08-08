@@ -135,7 +135,7 @@ def _resolve_content(
 
     Four outcomes, from two independent questions — do the edits overlap, and if
     so does the author outrank whoever wrote here. Fusing those into one boolean
-    (the previous ``_base_conflict``) meant an author fixing a typo in the first
+    (a single base-conflict check) meant an author fixing a typo in the first
     paragraph while an agent rewrote the third was told they "conflicted" and
     sent to a review surface, for edits that never touched the same words.
 
@@ -187,8 +187,7 @@ def _resolve_content(
     if not moved:
         return Resolution(CLEAN)
     writer, holder_actor = store.feature_writer_info(op.feature_id)
-    if cmd.session and writer == cmd.session:
-        return Resolution(CLEAN)
+    same_session = bool(cmd.session) and writer == cmd.session
 
     # The MOVED test above normalizes; the merge below does not. Deliberate: the
     # normalizer exists so whitespace the author cannot see never reads as a
@@ -208,6 +207,14 @@ def _resolve_content(
     if not merged.contended:
         # Disjoint edits. Both land, nobody arbitrates, nobody reviews — the
         # case the old all-or-nothing refusal handled worst.
+        return Resolution(MERGED, merged.text)
+    if same_session:
+        # Continuing this session's own work: its rewrite wins the words it is
+        # rewriting (contended regions resolve to incoming), but edits merged in
+        # from OTHER parties since this base — an agent amend landing mid-burst —
+        # ride along instead of vanishing. The old shortcut returned CLEAN before
+        # the merge ran, which applied the stale text verbatim and silently
+        # erased exactly those merged-in disjoint edits.
         return Resolution(MERGED, merged.text)
     if outranks(incoming_actor, holder_actor):
         return Resolution(SUPERSEDED, merged.text)
@@ -234,9 +241,13 @@ def _command_to_op(cmd: "edits_channel.Command") -> NodeOp | None:
     None for an unhandled kind (defensive; ``read_commands`` already filters)."""
     p = cmd.payload or {}
     if cmd.kind == "add":
+        # after_id/before_id: same contract as move below — a node typed between
+        # two siblings must land there, not at the end of its parent.
         return NodeOp(kind=NodeOpKind.ADD_NODE, title=p.get("title") or "",
                       description=p.get("description") or "",
-                      parent_id=p.get("parent_id"), local_id=cmd.local_id)
+                      parent_id=p.get("parent_id"), local_id=cmd.local_id,
+                      after_id=str(p.get("after_id") or ""),
+                      before_id=str(p.get("before_id") or ""))
     if cmd.kind == "set_title":
         return NodeOp(kind=NodeOpKind.AMEND, feature_id=cmd.feature_id,
                       title=p.get("title", ""))

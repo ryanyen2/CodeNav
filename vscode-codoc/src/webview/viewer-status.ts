@@ -118,6 +118,9 @@ export function mountViewerStatus(
 
     let viewer: ViewerInfo | undefined;
     let seenRejection: string | undefined;
+    // The last delivery state survives viewer repaints: an SSE payload arriving
+    // while POSTs are failing must not erase "Offline — N changes waiting".
+    let lastDelivery: Delivery | undefined;
 
     const paint = (d?: Delivery) => {
         const label = roleLabel(viewer);
@@ -134,8 +137,9 @@ export function mountViewerStatus(
 
     paint();
     return {
-        setViewer(v) { viewer = v; paint(); },
+        setViewer(v) { viewer = v; paint(lastDelivery); },
         setDelivery(d) {
+            lastDelivery = d;
             paint(d);
             const notice = noticeFor(d, seenRejection, viewer);
             if (notice) {

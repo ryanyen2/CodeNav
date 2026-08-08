@@ -22,17 +22,19 @@
  *   • the heading structure changed            → rebuild
  *   • otherwise                                → map
  *
- * This is deliberately NOT offered to every layer. `hold`, `captured` and
- * `reveal` derive their decorations from the TEXT (a changed-range underline, a
- * per-word animation), so for them a keystroke really is invalidating and
- * mapping would show a stale span. They are cheap anyway — they decorate the one
- * feature being edited, not all of them. Structure-keyed layers (blame, phases,
- * blocks, threads, glance) are the ones that pay for the whole document to
- * redraw nothing, and they are the ones this serves.
+ * This is deliberately NOT offered to every layer. `hold`, `captured`, `reveal`
+ * and `glance` derive their decorations from the TEXT (a changed-range
+ * underline, a per-word animation, a title-vs-pitch comparison), so for them a
+ * keystroke really is invalidating and mapping would show a stale span. They
+ * are cheap anyway — they decorate the one feature being edited, not all of
+ * them. Structure-keyed layers (blame, phases, blocks, threads, drag handles)
+ * are the ones that pay for the whole document to redraw nothing, and they are
+ * the ones this serves.
  */
 import type { Transaction } from '@tiptap/pm/state';
 import type { Node as PMModelNode } from '@tiptap/pm/model';
 import { DecorationSet } from '@tiptap/pm/view';
+import { REFLECT_META } from './edit-origin';
 
 /**
  * Whether this transaction changed the sequence of blocks a structure-keyed layer
@@ -90,6 +92,12 @@ export function nextDecorations(
     stateChanged: boolean,
     rebuild: () => DecorationSet,
 ): DecorationSet {
-    if (stateChanged || structureChanged(tr)) return rebuild();
+    // A projection reload replaces the whole doc in ONE ReplaceStep; mapping
+    // through it deletes every decoration inside the replaced range, and for a
+    // text-only external change structureChanged() is false — the layer would
+    // come back empty and stay empty until its next meta. REFLECT transactions
+    // are rare (a daemon write, an id mint), so always rebuilding on them costs
+    // nothing per keystroke.
+    if (stateChanged || tr.getMeta(REFLECT_META) || structureChanged(tr)) return rebuild();
     return old.map(tr.mapping, tr.doc);
 }

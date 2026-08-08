@@ -13,6 +13,7 @@ import { EditorState, TextSelection } from '@tiptap/pm/state';
 import { DecorationSet, Decoration } from '@tiptap/pm/view';
 import { codocSchema } from '../webview/tiptap/schema';
 import { structureChanged, nextDecorations } from '../webview/tiptap/decoration-policy';
+import { REFLECT_META } from '../webview/tiptap/edit-origin';
 import type { PMNode } from '../state/pm-doc';
 
 const schema = codocSchema();
@@ -145,5 +146,26 @@ describe('nextDecorations', () => {
         ]);
         const out = nextDecorations(s.tr.insertText('abc', 1), old, false, () => DecorationSet.empty);
         expect(out.find()[0].from).toBe(headSize + 3);
+    });
+});
+
+describe('a projection reload always rebuilds', () => {
+    it('a REFLECT whole-doc replace rebuilds instead of mapping to nothing', () => {
+        // A text-only agent amend replaces the WHOLE doc in one ReplaceStep: the
+        // structure is unchanged (structureChanged is false), but mapping through
+        // a full-doc replace deletes every decoration inside it — the layer would
+        // come back empty and stay empty until its next meta. The REFLECT tag
+        // must force the rebuild.
+        const s = state();
+        const d = doc(3) as unknown as { content: Array<{ content: Array<{ text: string }> }> };
+        d.content[1].content[0].text = 'Rewritten by the agent.';
+        const replacement = PMNodeType.fromJSON(schema, d as never);
+        const tr = s.tr.replaceWith(0, s.doc.content.size, replacement.content);
+        tr.setMeta(REFLECT_META, true);
+        let rebuilt = false;
+        nextDecorations(tr, DecorationSet.empty, false,
+                        () => { rebuilt = true; return DecorationSet.empty; });
+        expect(rebuilt).toBe(true);
+        expect(structureChanged(tr)).toBe(false);  // i.e. the map branch would have run
     });
 });

@@ -178,7 +178,7 @@ class Command:
       last knew it. ``None`` means "no claim" (a legacy or CLI-authored command)
       and applies unconditionally, exactly as before. When present, Loop B refuses
       to overwrite a feature whose stored text has moved since — see
-      :func:`codoc.loop.loop_b._base_conflict`. It is the full text rather than a
+      :func:`codoc.loop.loop_b._resolve_content`. It is the full text rather than a
       hash so the comparison uses ONE normalizer (the daemon's own) on both sides;
       a hash would require a byte-identical hash implementation in TypeScript and
       Python, and any drift between them would read as a conflict on every edit.
@@ -657,6 +657,8 @@ def _dispatch_host_op(codoc_dir: str | Path, fn: str, arg) -> bool:
             id=arg.get("id") or "", kind=arg.get("kind") or "",
             feature_id=arg.get("feature_id") or "", local_id=arg.get("local_id") or "",
             base_rev=int(arg.get("base_rev") or 0),
+            base_text=arg["base_text"] if isinstance(arg.get("base_text"), str) else None,
+            session=arg.get("session") or "",
             payload=arg.get("payload") if isinstance(arg.get("payload"), dict) else {}))
     elif fn == "appendSteer" and isinstance(arg, dict):
         append_steer(codoc_dir, Steer(

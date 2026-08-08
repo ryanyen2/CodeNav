@@ -61,12 +61,26 @@ export function dragHandlePlugin(): Plugin<DragState> {
     let targets: number[] = [];
     let armed = false;
     let startX = 0, startY = 0;
+    /** Tear down the live drag's window listeners and closure state WITHOUT
+     *  dispatching. Held at plugin scope so a re-entrant pointerdown, a doc
+     *  change this drag did not make, or the editor's destroy can abort a
+     *  gesture they did not start — otherwise a pointerup swallowed outside the
+     *  webview leaves the listeners attached and the UI stuck dragging forever. */
+    let abortDrag: (() => void) | null = null;
 
     return new Plugin<DragState>({
         key: dragKey,
         state: {
             init: (_c, state) => ({ handles: buildHandles(state.doc), dropAt: null }),
             apply: (tr, prev, _o, newState) => {
+                // Any doc change this drag did not make (a projection reload, an
+                // id mint, a keystroke) invalidates the slice and drop targets
+                // captured at pointerdown — dropping with them would slice the
+                // NEW doc at OLD coordinates (a RangeError, or silently moving
+                // an unrelated span). Abort the gesture; a microtask because
+                // dispatching from inside apply is illegal, and dropAt is
+                // already cleared by the docChanged branch below.
+                if (tr.docChanged && dragging) queueMicrotask(() => abortDrag?.());
                 const drop = tr.getMeta(SET_DROP);
                 return {
                     // Structure-keyed: a handle belongs to a heading, so typing
@@ -97,7 +111,23 @@ export function dragHandlePlugin(): Plugin<DragState> {
                 pointerdown: (view, ev) => {
                     const el = (ev.target as HTMLElement | null)?.closest?.(`[${HANDLE_ATTR}]`);
                     if (!el) return false;
-                    const slice = sliceAt(view.state.doc, Number(el.getAttribute(HANDLE_ATTR)));
+                    // A drag is already live (its pointerup was swallowed, or a
+                    // second pointer pressed): replace it rather than letting two
+                    // gestures share the closure state.
+                    abortDrag?.();
+                    // Resolve the dragged feature from the DOM at EVENT time. The
+                    // attribute's position was baked when the widget was built and
+                    // goes stale as soon as anyone types above it — the widget
+                    // itself maps to its new position, the attribute does not, so
+                    // trusting it drags nothing or the WRONG feature. The
+                    // attribute stays as the selector hook and a last-resort
+                    // fallback for a detached element.
+                    let pos = -1;
+                    try { pos = view.posAtDOM(el as HTMLElement, 0); } catch { /* detached */ }
+                    const slices = featureSlices(view.state.doc);
+                    const slice = slices.find(s => s.from + 1 === pos)
+                        ?? slices.filter(s => s.from < pos && pos <= s.to).pop()
+                        ?? sliceAt(view.state.doc, Number(el.getAttribute(HANDLE_ATTR)));
                     if (!slice) return false;
 
                     dragging = slice;
@@ -113,10 +143,12 @@ export function dragHandlePlugin(): Plugin<DragState> {
                     const finish = () => {
                         window.removeEventListener('pointermove', move);
                         window.removeEventListener('pointerup', up);
+                        window.removeEventListener('pointercancel', cancel);
                         window.removeEventListener('keydown', onKey, true);
                         document.body.classList.remove('ce-dragging-feature');
-                        dragging = null; armed = false;
+                        dragging = null; armed = false; abortDrag = null;
                     };
+                    const cancel = () => { finish(); setDrop(null); };
                     const move = (e: PointerEvent) => {
                         if (!dragging) return;
                         if (!armed) {
@@ -147,12 +179,23 @@ export function dragHandlePlugin(): Plugin<DragState> {
 
                     window.addEventListener('pointermove', move);
                     window.addEventListener('pointerup', up);
+                    window.addEventListener('pointercancel', cancel);
                     window.addEventListener('keydown', onKey, true);
+                    // Capture so pointerup reaches us even when released over the
+                    // workbench chrome outside the webview's iframe — the exact
+                    // overshoot a narrow docked panel invites.
+                    try { (el as HTMLElement).setPointerCapture?.((ev as PointerEvent).pointerId); } catch { /* non-fatal */ }
+                    // finish, not cancel: the teardown must be dispatch-free so
+                    // apply's microtask and the editor's destroy can call it.
+                    abortDrag = finish;
                     ev.preventDefault();   // no caret placement / text selection
                     return true;
                 },
             },
         },
+        view: () => ({
+            destroy: () => { abortDrag?.(); },
+        }),
     });
 }
 
@@ -161,7 +204,9 @@ export function dragHandlePlugin(): Plugin<DragState> {
  *  The keyboard half of the gesture. Not an afterthought: a drag is mouse-only,
  *  and restructuring a tree must not be. */
 export function nudgeFeature(view: EditorView, dir: -1 | 1): boolean {
-    const here = view.state.selection.$from.before(1);
+    const $from = view.state.selection.$from;
+    if ($from.depth < 1) return false;   // doc-level selection: before(1) would throw
+    const here = $from.before(1);
     // The caret is usually in a feature's PROSE, not its heading, so resolve to
     // the slice that contains it rather than requiring an exact heading hit.
     const slice = featureSlices(view.state.doc).filter(s => s.from <= here && here < s.to).pop();

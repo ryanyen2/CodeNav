@@ -23,8 +23,13 @@ export const AUTHOR_META = 'codocAuthorStamp';
 export const REFLECT_META = 'codocReflect';
 /** The mark-hygiene cleanup pass. */
 export const MARK_HYGIENE_META = 'codocMarkHygiene';
+/** A whole-feature move (drag / keyboard nudge). Structural, not typing: the
+ *  moved slice must keep its existing authorship and any agent proposal marks —
+ *  re-stamping it as the dragger's prose (or stripping the agent's marks into
+ *  plain text) would silently resolve a proposal no one accepted. */
+export const FEATURE_MOVE_META = 'codocFeatureMove';
 
-const SYSTEM_METAS = [AUTHOR_META, REFLECT_META, MARK_HYGIENE_META] as const;
+const SYSTEM_METAS = [AUTHOR_META, REFLECT_META, MARK_HYGIENE_META, FEATURE_MOVE_META] as const;
 
 /**
  * True when this transaction represents a person editing — the only kind whose

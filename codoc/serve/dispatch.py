@@ -173,11 +173,16 @@ def _command(message: dict, codoc_dir: str) -> dict:
     if not cid:
         raise CommandError(f"'{kind}' command requires an id (idempotency key)")
     payload = message.get("payload")
+    base_text = message.get("baseText")
+    if not isinstance(base_text, str):
+        base_text = message.get("base_text")
     edits.append_command(codoc_dir, Command(
         id=cid, kind=kind,
         feature_id=message.get("featureId") or message.get("feature_id") or "",
         local_id=message.get("localId") or message.get("local_id") or "",
         base_rev=int(message.get("baseRev") or message.get("base_rev") or 0),
+        base_text=base_text if isinstance(base_text, str) else None,
+        session=message.get("session") or "",
         payload=dict(payload) if isinstance(payload, dict) else {}))
     return {"ok": True, "queued": True}
 

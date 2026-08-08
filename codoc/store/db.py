@@ -293,19 +293,35 @@ class Store:
             " ON events(feature_id, at)"
         )
         if "rank" not in cols:
-            # Sibling order keys. The backfill must reproduce EXACTLY the order the
-            # tree is being rendered in today — created_at, per parent — or the
-            # first render after upgrading silently reshuffles somebody's tree and
-            # every feature looks moved. Ranks are assigned per parent group in
-            # that order, evenly spaced so the first reorders need no relabelling.
-            from codoc.model.rank import ordinal_keys
-
             self.conn.execute(
                 "ALTER TABLE features ADD COLUMN rank TEXT NOT NULL DEFAULT ''"
             )
+        # The backfill is gated on the DATA, not the column: sqlite3 auto-commits
+        # the ALTER (DDL) on its own, separately from the UPDATEs below, so a
+        # crash between them leaves the column present with every rank '' — and a
+        # column-existence guard would then skip the backfill forever (every drag
+        # silently appends-to-end once ranks are all-empty). Re-checking the rows
+        # makes that torn state heal on the next open. Only the all-'' state
+        # backfills: partial rank data means reorders already happened and must
+        # not be recomputed from creation order.
+        counts = self.conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(rank=''),0) AS empty FROM features"
+        ).fetchone()
+        if counts["n"] and counts["empty"] == counts["n"]:
+            # Sibling order keys. The backfill must reproduce EXACTLY the order the
+            # tree is being rendered in today — created_at, per parent, ties broken
+            # by rowid — or the first render after upgrading silently reshuffles
+            # somebody's tree and every feature looks moved. rowid, not id: the old
+            # ORDER BY created_at scans resolved same-millisecond ties by the
+            # index's implicit rowid (insertion order), while id is a random uuid
+            # fragment that would shuffle every bootstrap-minted sibling batch.
+            # Ranks are assigned per parent group in that order, evenly spaced so
+            # the first reorders need no relabelling.
+            from codoc.model.rank import ordinal_keys
+
             groups: dict[object, list[str]] = {}
             for row in self.conn.execute(
-                "SELECT id, parent_id FROM features ORDER BY created_at, id"
+                "SELECT id, parent_id FROM features ORDER BY created_at, rowid"
             ):
                 groups.setdefault(row["parent_id"], []).append(row["id"])
             for ids in groups.values():
