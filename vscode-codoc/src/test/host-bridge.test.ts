@@ -126,6 +126,90 @@ describe('network bridge — outbound commands + offline outbox (R14)', () => {
         expect(JSON.parse(storage.getItem('codoc.outbox') as string)).toHaveLength(0);
     });
 
+    it('retries a transient failure on its own clock, with no further user action', async () => {
+        // P-5: the outbox used to drain only on an `online` event or the next
+        // postMessage. A hub restart or a momentary 502 fires no `online` — the network
+        // never went down — and an author who has just finished editing sends nothing
+        // more. Their last settle sat in the queue looking sent until they typed again.
+        vi.useFakeTimers();
+        try {
+            let up = false;
+            const fetchImpl = vi.fn(async () => (up ? { ok: true } : { ok: false, status: 502 }) as Response);
+            const bridge = createNetworkBridge({
+                fetchImpl: fetchImpl as unknown as typeof fetch,
+                storage: new FakeStorage(),
+            });
+            bridge.postMessage({ kind: 'hand-off' });
+            await vi.waitFor(() => expect(fetchImpl.mock.calls.length).toBe(1));
+            expect(bridge.delivery().state).toBe('offline');
+
+            // Still down: the retry fires anyway, and backs off rather than spinning.
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(fetchImpl.mock.calls.length).toBe(2);
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(fetchImpl.mock.calls.length).toBe(2);   // next attempt is at 2s
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(fetchImpl.mock.calls.length).toBe(3);
+
+            up = true;
+            await vi.advanceTimersByTimeAsync(4_000);
+            expect(bridge.delivery()).toEqual({ state: 'live', queued: 0 });
+
+            // Drained: no timer is left running to poll a hub that is answering.
+            const settled = fetchImpl.mock.calls.length;
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(fetchImpl.mock.calls.length).toBe(settled);
+            bridge.dispose();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not retry a definite rejection — it drops it and keeps the queue moving', async () => {
+        // A capability the caller lacks never succeeds on retry; retrying it forever
+        // would wedge every later message behind it AND hammer the hub.
+        vi.useFakeTimers();
+        try {
+            const fetchImpl = vi.fn(async () => ({ ok: false, status: 403 }) as Response);
+            const bridge = createNetworkBridge({
+                fetchImpl: fetchImpl as unknown as typeof fetch,
+                storage: new FakeStorage(),
+            });
+            bridge.postMessage({ kind: 'hand-off' });
+            await vi.waitFor(() => expect(fetchImpl.mock.calls.length).toBe(1));
+
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(fetchImpl.mock.calls.length).toBe(1);
+            expect(bridge.delivery().queued).toBe(0);
+            expect(bridge.delivery().rejected?.status).toBe(403);
+            bridge.dispose();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('dispose stops the retry timer and closes the stream', async () => {
+        vi.useFakeTimers();
+        try {
+            const es = new FakeEventSource();
+            const fetchImpl = vi.fn(async () => { throw new Error('offline'); });
+            const bridge = createNetworkBridge({
+                fetchImpl: fetchImpl as unknown as typeof fetch,
+                eventSourceFactory: () => es,
+                storage: new FakeStorage(),
+            });
+            bridge.postMessage({ kind: 'hand-off' });
+            await vi.waitFor(() => expect(fetchImpl.mock.calls.length).toBe(1));
+
+            bridge.dispose();
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(fetchImpl.mock.calls.length).toBe(1);
+            expect(es.closed).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('restores a persisted outbox on construction and drains it on flush', async () => {
         const storage = new FakeStorage();
         storage.setItem('codoc.outbox', JSON.stringify([{ kind: 'hand-off' }]));

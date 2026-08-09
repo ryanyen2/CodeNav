@@ -109,7 +109,24 @@ export interface NetworkBridge extends HostBridge {
     onDelivery(cb: (d: Delivery) => void): () => void;
     /** The current delivery state, for a late subscriber. */
     delivery(): Delivery;
+    /** Cancel the retry timer and close the SSE stream. For tests and teardown; a
+     *  browser page normally lives as long as the bridge. */
+    dispose(): void;
 }
+
+/** Backoff for retrying a TRANSIENT failure (offline, 5xx, 429).
+ *
+ *  Without a timer the outbox only drained on an `online` event or the next
+ *  `postMessage`, and neither is guaranteed to come: a hub restart or a momentary 502
+ *  fires no `online` (the network never went down), and an author who has just finished
+ *  editing sends nothing more. Their last settle then sat in the queue looking sent,
+ *  until they happened to type again — the delivery indicator said `offline`, which is
+ *  honest, but nothing was working to change it.
+ *
+ *  Doubling from a second to half a minute keeps a brief blip nearly invisible while a
+ *  hub that is down for an hour is polled twice a minute rather than continuously. */
+const RETRY_BASE_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
 
 const OUTBOX_KEY = 'codoc.outbox';
 const VIEWSTATE_KEY = 'codoc.viewstate';
@@ -155,6 +172,22 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
         for (const cb of [...deliveryListeners]) cb(d);
     };
 
+    // One retry timer for the whole queue, not one per message: the queue is a FIFO
+    // drained by a single flush, so a timer per message would stampede the hub with N
+    // concurrent flushes the moment it came back.
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryDelay = RETRY_BASE_MS;
+    function scheduleRetry(): void {
+        if (retryTimer !== null) return;
+        retryTimer = setTimeout(() => { retryTimer = null; void flush(); }, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
+    }
+    function cancelRetry(): void {
+        if (retryTimer !== null) clearTimeout(retryTimer);
+        retryTimer = null;
+        retryDelay = RETRY_BASE_MS;   // the next outage starts from a fast retry again
+    }
+
     let flushing = false;
     async function flush(): Promise<void> {
         if (flushing) return;
@@ -197,13 +230,18 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
             }
         } finally {
             flushing = false;
+            // Anything still queued failed transiently (a definite rejection is dropped
+            // above), so keep trying on our own clock; an empty queue re-arms the backoff.
+            if (queue.length) scheduleRetry(); else cancelRetry();
             announce();
         }
     }
 
     const esFactory = opts.eventSourceFactory ?? _defaultEventSourceFactory();
+    let source: EventSourceLike | null = null;
     if (esFactory) {
         const es = esFactory(`${base}${opts.eventsPath ?? '/api/events'}`);
+        source = es;
         es.addEventListener('message', (ev) => {
             let payload: DocPayload;
             try {
@@ -246,6 +284,11 @@ export function createNetworkBridge(opts: NetworkBridgeOptions = {}): NetworkBri
             storage?.setItem(VIEWSTATE_KEY, JSON.stringify(state));
         },
         flush,
+        dispose() {
+            cancelRetry();
+            source?.close();
+            source = null;
+        },
     };
 }
 
