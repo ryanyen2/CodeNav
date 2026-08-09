@@ -103,3 +103,23 @@ def test_extract_links_skips_codoc_refs():
     assert [(l.label, l.url) for l in links] == [
         ("docs", "https://example.com/spec"), ("api", "http://api.io/v2")]
     assert extract_links("") == []
+
+
+def test_the_link_pattern_is_pinned_because_a_second_copy_mirrors_it():
+    """A canary, not a tautology.
+
+    The editor underlines a link so the author can see it registered as an instruction,
+    and it finds one with its own regex — `consult-decorations.ts:CONSULT_RE`, a
+    hand-transcribed copy of this pattern. Its parity test compares against another
+    hand-transcribed copy, so changing THIS pattern breaks nothing over there: the two
+    surfaces would quietly disagree about what counts as a Consult link, and the cue
+    would stop matching prose the daemon still parses (the write-side/read-side signal
+    drift documented in docs/solutions/logic-errors/).
+
+    Nothing can import a Python regex into vitest, so the guard is here: if this
+    assertion fails, update `CONSULT_RE` and `PY_LINK_RE`
+    (vscode-codoc/src/test/authoring-cues.test.ts) in the same change.
+    """
+    from codoc.codoc_file.parse import _LINK_RE
+
+    assert _LINK_RE.pattern == r"\[(?P<label>[^\]]*)\]\((?P<url>https?://[^)\s]+)\)"

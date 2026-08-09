@@ -34,6 +34,10 @@ const state = (blocks: unknown[]) =>
     EditorState.create({ schema, doc: PMNodeType.fromJSON(schema, docOf(blocks) as never) });
 
 /** The pattern the daemon uses, transcribed from codoc/codoc_file/parse.py. */
+// A hand-transcribed copy of `parse.py:_LINK_RE` — nothing can import a Python regex
+// here. The other half of the guard lives in Python
+// (tests/codoc_file/test_steering.py::test_the_link_pattern_is_pinned_…), which pins the
+// literal so a change there cannot silently pass while this copy drifts.
 const PY_LINK_RE = /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
 
 describe('the consult cue matches what the daemon reads', () => {
