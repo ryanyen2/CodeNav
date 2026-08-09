@@ -65,9 +65,9 @@ Two markdown-native signals in descriptions feed Loop B directives:
 
 **Steering comments** (`STEER FEATURE` directives) come from the IDE's inline-
 comment surface, which writes them to `edits.json` (`drain_steers`). Typing a
-`> …` line into a description does NOT create one: that text path was retired in
-U7 when the webview stopped writing `tree.codoc` (see `loop_b` step 2.7), so a
-`> ` line is now ordinary prose.
+`> …` line into a description does NOT create one: the webview stopped writing
+`tree.codoc` in U6, and U7 retired the text-ingest path that used to read `> ` lines
+out of it (see `loop_b` step 2.7), so a `> ` line is now ordinary prose.
 
 ## Architecture
 
@@ -155,8 +155,14 @@ exact baseline (not an in-flight one — no phantom retire). Both `tree.doc.json
 export; the daemon is their sole writer).
 A per-feature HLC version gate keeps a returning projection from clobbering a newer
 local edit, and a **draft / hand-off** gate keeps code-implying edits
-safe-by-default. The editing-model details + key source files are in
-`docs/architecture.md`.
+safe-by-default. Two provenance rules make concurrent editing safe: the EDITOR owns the
+baseline citation (stamped at the end of an adopt, so a settle flushed by an arriving
+projection still cites what its text was typed against), and a command's `base_text`
+comes from this host's own unechoed writes (`state/known-store.ts`) else the cited
+baseline — never from a projection the author may not have adopted. On the hub the
+BROWSER emits the commands (`webview/command-emitter.ts`) through those same modules,
+since it is the only party there that sees a projection. The editing-model details + key
+source files are in `docs/architecture.md`.
 
 ### The deployed hub (`codoc serve`)
 
@@ -164,8 +170,9 @@ An optional Tier-1 web surface (`codoc/serve/`) that serves the tree to
 GitHub-authorized **remote** users from the maintainer's own machine: contributors
 *suggest* edits, a maintainer hands them off, and the hub realizes them on a git
 worktree → code PR. It is a **separate process** that supervises the daemon and is
-a file-channel client (reads `.codoc/*`, writes only the verdict/draft channels,
-never `tree.codoc`). See `docs/serve-deployment.md` (setup) and `docs/architecture.md`
+a file-channel client (reads `.codoc/*`, writes only the authored-edit + verdict/draft
+channels of `edits.json`/`inbox.json` — never `tree.codoc`, and never `tree.doc.json`,
+which is the daemon's own projection). See `docs/serve-deployment.md` (setup) and `docs/architecture.md`
 (modules). README "Flow 3" is the user-facing overview.
 
 ## Tests

@@ -135,8 +135,11 @@ verdicts, (3) applies legacy annotation ops stamped with the annotating actor/mo
 (6) builds a directive from each code-implying op. Each gets a `d-…` id (in its
 `### N.` heading + the `realize.json` manifest) and is written to `realize.md` with
 status `awaiting_impl` for the live session — the queue **appends, never clobbers**.
-`> …` steering, `**bold**` focus, and external links drain here into
-STEER / `Focus:` / `Consult:` lines.
+`**bold**` focus and external links drain here into `Focus:` / `Consult:` lines.
+Steering notes arrive as `steers` on `edits.json` (`drain_steers`), written by the IDE's
+inline-comment surface — a `> …` line typed into a description is ordinary prose, since
+the text-ingest channel it used to ride was retired with the rest of the doc-diff
+inference (U7).
 
 **RETIRE is path-asymmetric:** accepting an auto-raised RETIRE from the inbox is
 **detach-only** (never queue code removal — a Loop-A retire off transient drift
@@ -280,11 +283,21 @@ state** and is re-emitted on every pass even when the text render is held back
   sidecar `feature_drift` slice (excludes held + unrealized).
 - **`inbox.json`** — `{verdicts:[{event_id, accept}]}`, written by the IDE/hub,
   drained by Loop B, then cleared. Read-modify-write is `filelock`-guarded.
-- **`edits.json`** — the host's provenance/intent channel: `edits` (authorship
-  annotations), `intents`/`drafts` (live doc-ahead suggestions + held pending edits
-  — the doc-wins hold set), `cancellations`/`steers`, and `block_edits` (v6 —
-  typed-media block edits drained by Loop B's `lower` dispatch). Read-modify-write is
-  `filelock`-guarded (the hub is a second writer).
+- **`edits.json`** — the authored-edit + provenance channel: `commands` (the
+  identity-keyed add/set_title/set_description/move/retire Loop B applies), `edits`
+  (authorship annotations), `intents`/`drafts` (live doc-ahead suggestions + held pending
+  edits — the doc-wins hold set), `handoffs` (the one-shot positive realize signal),
+  `cancellations`/`steers`, and `block_edits` (v6 — typed-media block edits drained by
+  Loop B's `lower` dispatch). Read-modify-write is `filelock`-guarded (the hub is a second
+  writer).
+- **`edits.host.jsonl`** — the IDE→daemon **append-only op log**, and the only thing the
+  extension host writes. It is a separate process that does not hold the `edits.json`
+  lock, so a read-modify-write from there could clobber the daemon's or the hub's; instead
+  it appends one `{fn, arg}` op per line (O_APPEND is atomic per small write, so two IDE
+  windows may append concurrently) and the daemon MERGES the log into `edits.json` under
+  the lock at the start of every Loop B pass (`edits.merge_host_ops`, crash-safe via a
+  `.merging` sidestep). The hub has no such log: it holds the lock itself, so
+  `serve/dispatch.py` writes `edits.json` directly.
 
 ## Environment variables
 
@@ -327,7 +340,26 @@ ledger for idempotency — nothing is inferred from a doc diff (the old
 `doc_presence` / `doc-fids.json` deletion-inference is retired). A **per-feature
 HLC version gate** (replacing the old `rev`/`docAhead` exact-text equality)
 prevents a returning projection from clobbering a newer un-acked local edit on a
-different feature. Human edits surface **in situ** as a derived `changedRange`
+different feature.
+
+Two provenance rules make concurrent editing safe, and both exist because getting them
+wrong loses text in silence rather than loudly:
+
+- **The editor owns the citation.** A settle names the `baselineId` of the projection its
+  content was ADOPTED from (`whole-doc-editor.setDoc` stamps it at the end of the adopt),
+  and the host diffs against that exact baseline. An arriving projection FLUSHES unsent
+  typing, so that flush carries pre-adoption content — citing the arriving payload instead
+  made every feature the daemon had just changed read as a user edit that reverted it.
+- **`base_text` comes from the author, never from a projection they may not have seen.**
+  A command's `base_text` is this host's own emitted-but-unechoed write for that field
+  (`state/known-store.ts`, an optimistic overlay advanced only by successful appends and
+  *pruned* — never seeded — by a projection that confirms them), else the text of the
+  baseline the settle cites. The host reads projections the webview may never adopt (the
+  gate defers on IME/composer and keeps a feature local while its edit is unsent), and a
+  `base_text` taken from one of those equals the store's current text — which reads as a
+  clean continuation, so the daemon applies over the other party with no merge and no
+  record. When a citation cannot be resolved at all, the OLDEST retained baseline is used:
+  under-claiming the base makes the daemon cautious, over-claiming makes it blind. Human edits surface **in situ** as a derived `changedRange`
 underline against a stable per-episode baseline; agent→human changes surface via
 the vendored MIT track-changes engine's marks (`webview/tiptap/track-changes/`). A
 **draft / hand-off** gate keeps code-implying edits safe-by-default: the host marks
@@ -369,7 +401,14 @@ them off; the hub realizes them on a git worktree and opens a code PR. See
 - `auth.py` — GitHub collaborator permission → capability (read→suggest,
   write→hand-off); server-side sessions (the browser holds only an opaque cookie).
 - `dispatch.py` — capability-gated routing of browser commands to the file channels;
-  remote `commit`/settle is held (only an explicit hand-off crosses to execution).
+  remote `commit`/settle is held (only an explicit hand-off crosses to execution, and
+  `hand-off` writes `handoffs` — the positive signal Loop B reads — not just clearing
+  `drafts`). A settle carries no content: the browser emits identity-keyed **commands**
+  itself (`webview/command-emitter.ts`, the same `settleCommands` + `known-store` modules
+  the extension host uses), so nothing here writes a derived artifact. It used to persist
+  the posted doc to `tree.doc.json`, which the daemon has owned since U4 and nothing has
+  read as input since U7 — the remote author's prose was overwritten at the next render,
+  and the write made `safe_write_tree` skip re-rendering both exports.
 - `ratelimit.py` / `tunnel.py` — per-identity token bucket; cloudflared launcher.
 - `sandbox.py` — the enforced realize sandbox (allowed tools, path allow/denylist,
   secret-read exclusion, out-of-scope gate).

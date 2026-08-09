@@ -56,11 +56,14 @@ fully-hardened deployment.
   a daemon drain racing the write) can resurrect or lose a verdict. Fix: route Accept/Reject
   through the `edits.host.jsonl` append log the command channel already uses (add an
   `appendVerdict` host-op + daemon dispatch). (control-file P1-1)
-- **base_rev version gate is client-only** (`codoc/loop/edits.py:173-175`): the server applies
-  `set_title`/`set_description` commands in drain order with last-writer-wins; concurrent edits
-  to one feature from two windows silently drop the earlier one. Fix: compare `cmd.base_rev`
-  to the feature's `updated_at` in loop_b step 0.5 and route a mismatch to the diff surface.
-  (wrong-action P1)
+- ~~**base_rev version gate is client-only**~~ — **RESOLVED (2026-08-08).** Commands now
+  carry `base_text` (the value the author last knew for the field being replaced) and
+  `loop_b._resolve_content` merges from it: disjoint edits both land, contended ones are
+  arbitrated by rank, peers go to review. The integer `base_rev` gate was never read and has
+  been deleted. Getting the FIELD right was the hard half — a `base_text` sourced from the
+  newest projection equals the store's current text and reads as a clean continuation, so the
+  overwrite came back in silence; see
+  `docs/solutions/logic-errors/base-text-provenance-silent-overwrite.md`.
 - **Fresh clone / deleted `codoc.db` can't restore the store from committed `tree.codoc`**:
   the store is gitignored and authoritative, but there is no `tree.codoc`→store importer, so a
   teammate who clones has the tree file and an empty store. `init` now refuses to clobber an

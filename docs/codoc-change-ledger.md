@@ -106,6 +106,36 @@ deferred "wholesale rewrite can drop earlier queued directives" gap). Deleted
 together with `realize.md` when the queue completes; a manifest with no
 `realize.md` beside it is stale and ignored.
 
+## Two parties, one feature: the arbitration table
+
+The decision table above says what a change MEANS. This one says who wins when two
+changes to the same feature reach the store without having seen each other — a person
+typing while an agent amends, or two hub contributors on one description.
+
+Each authored command declares `base_text`: the value the AUTHOR last knew for the field
+it replaces (not a hash — the comparison then uses one normalizer, the daemon's own, so
+there is no TypeScript/Python parity to drift). `loop_b._resolve_content` answers two
+independent questions from it, which the predecessor fused into one boolean and got wrong
+in both directions:
+
+| overlap? | who wrote the current text | outcome | recorded as |
+|---|---|---|---|
+| base still matches | — | CLEAN — apply verbatim | an ordinary edit |
+| disjoint edits | anyone | MERGED — both land, nobody reviews | `merged: … both edits kept` |
+| same lines | this same editing session | MERGED — its rewrite wins its own words, other parties' disjoint edits ride along | `merged: … your version won` |
+| same lines | someone this author outranks (`model.event.outranks`: a person beats an agent) | SUPERSEDED — the author wins; the agent's text stays in the event ledger | `codoc history` |
+| same lines | a peer | DEFERRED — the whole edit goes up for review; nobody is overwritten in silence | a pending proposal |
+
+The load-bearing part is the PROVENANCE of `base_text`, because every failure mode here is
+silent: a `base_text` that happens to equal the store's current text reads as a clean
+continuation, so the write lands verbatim with no merge, no arbitration and no record. It
+therefore comes only from the author — the emitting host's own not-yet-echoed writes
+(`state/known-store.ts`), else the projection baseline the settle CITES — and never from
+"the newest projection the host has read", which the author may never have adopted. Where
+the base cannot be established at all, the OLDEST retained baseline is claimed: an
+under-claimed base makes the daemon cautious (it merges, or defers), an over-claimed one
+makes it blind.
+
 ## The causality chain (surface-back)
 
 A doc edit is *always underspecified* — the user edits the core intent and the
