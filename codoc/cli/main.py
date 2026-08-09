@@ -633,15 +633,21 @@ def migrate(root: str = typer.Option(".", "--root", help="Repository root.")):
 def install_hooks_cmd(
     root: str = typer.Option(".", "--root", help="Repository root."),
 ):
-    """Install codoc Claude Code hooks into .claude/settings.json.
+    """Install the codoc Claude Code plugin: hooks, the codoc-intent skill, the
+    /codoc:* commands, and the MCP server registration.
 
-    Idempotent — safe to run multiple times.
+    Idempotent — safe to run multiple times, and the way to wire up a fresh clone
+    without re-bootstrapping the tree.
     """
     from codoc.agent.install_hooks import install_hooks
 
     install_hooks(root)
-    typer.echo("✓ Claude Code hooks installed in .claude/settings.json")
-    typer.echo("  Hooks: SessionStart, Stop, PreToolUse(Edit|Write|Read), PostToolUse(Edit|Write)")
+    typer.echo("✓ Claude Code plugin installed")
+    typer.echo("  Hooks (.claude/settings.json): SessionStart, Stop, SessionEnd, "
+               "PreToolUse(Edit|Write|Read), PostToolUse(Edit|Write), UserPromptSubmit")
+    typer.echo("  Skill: .claude/skills/codoc-intent/SKILL.md")
+    typer.echo("  Commands: /codoc:plan, /codoc:sync")
+    typer.echo("  MCP server: registered in .mcp.json")
 
 
 if __name__ == "__main__":

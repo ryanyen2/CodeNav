@@ -231,7 +231,9 @@
 
 <div class="callout">
   <strong>Manual / no-IDE path.</strong> For scripting or headless use:
-  <pre>uv tool install codoc          <span class="dim"># isolated, version-pinned; or: pip install -e .  (Python 3.11+)</span>
+  <pre><span class="dim"># codoc is not on PyPI — that name belongs to an unrelated project. Install from git:</span>
+uv tool install git+https://github.com/ryanyen2/CodeNav.git   <span class="dim"># isolated (Python 3.11–3.12)</span>
+<span class="dim">#   …or from a clone:  git clone … && cd CodeNav && pip install -e .</span>
 export CODOC_PROVIDER=claude   <span class="dim"># reuse your Claude Code login — no separate key</span>
 <span class="dim">#   …or OpenAI:  export CODOC_PROVIDER=openai && export OPENAI_API_KEY=sk-…</span>
 cd ~/code/my-project && codoc init</pre>

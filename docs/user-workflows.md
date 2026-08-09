@@ -13,7 +13,7 @@ see the README's [Flow 1 / Flow 2 / Flow 3](../README.md).
 | Workflow | Who | Where edits happen | Auth you set up |
 |---|---|---|---|
 | **1. Solo** | one person | VS Code (or CLI) on your machine | none (LLM key only) |
-| **2. Team via git** | several people, each with a checkout | each person's own VS Code | none (LLM key only) |
+| **2. Team via git** ⚠️ | several people, each with a checkout | — | *not yet supported — a fresh clone's `codoc init` overwrites the committed tree* |
 | **3. Deployed hub** | remote contributors with **no checkout** | a browser, served from one machine | a **GitHub App** |
 
 ---
@@ -23,7 +23,8 @@ see the README's [Flow 1 / Flow 2 / Flow 3](../README.md).
 You edit code and intent on one machine; codoc keeps them aligned.
 
 1. **Install + init.** Install the **codoc** VS Code extension and run *"codoc: Set
-   up codoc"* (or `uv tool install codoc` + `codoc init`). This indexes the repo,
+   up codoc"* (or `uv tool install git+https://github.com/ryanyen2/CodeNav.git`
+   — codoc is not on PyPI — then `codoc init`). This indexes the repo,
    proposes the initial tree, and starts the `codoc watch` daemon. See
    [getting-started](getting-started-claude-code.md).
 2. **Edit code → the tree follows.** Save source files; codoc auto-applies safe
@@ -37,25 +38,37 @@ You edit code and intent on one machine; codoc keeps them aligned.
 
 Nothing leaves your machine; the only network call is to your LLM provider.
 
-## Workflow 2 — A team sharing one repo (local + git)
+## Workflow 2 — A team sharing one repo (local + git) — ⚠️ not yet supported
 
-Several developers, each with their own checkout, sharing the feature tree through
-your normal git remote (GitHub, GitLab, a bare repo — codoc doesn't care).
+> **This workflow does not work end to end today.** It is described here because
+> the split it assumes is already in place, and because you should know why not to
+> attempt it yet. Use **Workflow 3** to bring teammates in.
+>
+> **What breaks:** `codoc init` bootstraps the tree *from code* every time. It has
+> no importer for a committed `tree.codoc` / `tree.doc.json`, and its
+> already-initialized guard checks only for `codoc.db` — which is gitignored. So on
+> a teammate's fresh clone the guard doesn't fire, `init` runs a full bootstrap, and
+> the team's authored tree is **overwritten** by a freshly-derived one with new
+> feature ids.
+>
+> Concurrent edits do **not** merge as text either: `tree.codoc` is a read-only
+> export rendered from the store, so a git-merged file is discarded and re-rendered
+> from whichever store is local.
 
-- **Commit** `.codoc/tree.codoc` (and the webview's `.codoc/tree.doc.json`). The
-  feature tree is your team's shared intent, versioned with the code.
+What is already true, and what a working version would build on:
+
+- **Commit** `.codoc/tree.doc.json` (and `.codoc/tree.codoc` — it diffs well in
+  review). The feature tree is your team's shared intent, versioned with the code.
 - **Don't commit** the rest of `.codoc/` (`codoc.db`, `lancedb/`, `cocoindex.db/`,
-  the transient control files) — it's **derived per checkout** and rebuilt by
-  `codoc init` / `codoc watch`. The shipped `.gitignore` already encodes this split.
-- **Each teammate runs their own `codoc watch`** on their own checkout — there is
-  no shared daemon and no codoc server.
-- **Concurrent edits merge as text.** Two people editing `tree.codoc` resolve
-  through a **normal git merge**; codoc re-attributes code to the merged tree on
-  the next pass. (Today codoc is single-writer *per checkout*, and the change
-  ledger records every human edit as `actor=human` — *which* teammate edited is
-  not modeled yet.)
+  the transient control files) — it's **derived per checkout**. The shipped
+  `.gitignore` already encodes this split.
+- **Each teammate would run their own `codoc watch`** on their own checkout — there
+  is no shared daemon and no codoc server.
+- codoc is single-writer *per checkout*, and the change ledger records every human
+  edit as `actor=human` — *which* teammate edited is not modeled yet.
 
-This is the right model when everyone can clone the repo and run codoc locally.
+Two things are missing: an importer that adopts a committed tree into a fresh
+store (preserving feature ids), and a merge story for two stores that diverged.
 
 ## Workflow 3 — Remote contributors via the deployed hub (`codoc serve`)
 
@@ -107,10 +120,12 @@ fast-follow; today's hub is async (suggest → hand-off → PR).
 ## Which workflow am I?
 
 - **Just me** → Workflow 1. No setup beyond the extension.
-- **My team, everyone clones the repo** → Workflow 2. Commit `tree.codoc`; the
-  rest is automatic.
-- **Someone needs to weigh in without cloning** → Workflow 3. Click **Share**;
-  add the GitHub App + tunnel when they're off your machine.
+- **Someone else needs to weigh in** → Workflow 3, whether or not they have a
+  checkout. Click **Share**; add the GitHub App + tunnel when they're off your
+  machine. This is the only multi-person path that works today.
+- **My team all want their own local tree** → Workflow 2, once the tree importer
+  lands. Attempting it now costs you the shared tree on the first teammate's
+  `codoc init`.
 
 See also: [getting-started](getting-started-claude-code.md) ·
 [README flows](../README.md) · [collaborative-editing model

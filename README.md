@@ -5,10 +5,10 @@ codoc maintains a **human-intent-level feature tree** synchronized to a codebase
 ## Two interaction flows
 
 **Flow 1 — Bottom-up (code → tree):**
-You (or an agent) change source files → codoc detects what moved → auto-applies safe updates (refresh bindings, small description tweaks, carry attribution across a move/rename) → surfaces structural proposals (add/move/retire nodes) in-situ in `tree.codoc` → you Accept/Reject via the VS Code CodeLens.
+You (or an agent) change source files → codoc detects what moved → auto-applies safe updates (refresh bindings, small description tweaks, carry attribution across a move/rename) → surfaces structural proposals (add/move/retire nodes) in-situ at their tree position → you Accept/Reject inline (the `✓`/`✗` buttons in the **Codoc Tree** view, or the CodeLens in the raw-text editor). When code changes under a description that *didn't* change, the feature is marked **questioned** rather than silently rewritten — authored intent is yours to correct.
 
 **Flow 2 — Top-down (tree → code):**
-You (or Claude Code) edit or add features in `tree.codoc` → codoc builds a coding directive and **queues it for your live Claude Code session** in `.codoc/realize.md` (status `awaiting_impl`) → you run `/codoc:sync`, which implements the change and reflects it back into the tree. codoc never spawns a headless agent and never writes code itself; only edits that *request* code ("should…", "Add…", an accepted plan node) queue work — documenting existing code never triggers a build.
+You (or Claude Code) edit or add features in the **Codoc Tree** view → codoc builds a coding directive and **queues it for your live Claude Code session** in `.codoc/realize.md` (status `awaiting_impl`) → you run `/codoc:sync`, which implements the change and reflects it back into the tree. codoc never spawns a headless agent and never writes code itself; only edits that *request* code ("should…", "Add…", an accepted plan node) queue work — documenting existing code never triggers a build.
 
 ## How codoc and Claude Code work together
 
@@ -22,7 +22,7 @@ integration surfaces into your repo:
 | **MCP server** (`codoc`) | `.mcp.json` → `codoc-mcp` (FastMCP, stdio) | The agent's reflection API: `codoc_context` (the relevant tree slice for the files you're editing — the primary read), `codoc_tree` (whole tree, scopeable), `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`. The agent carries real intent straight into the store instead of leaving it to a blind index-diff. |
 | **Slash commands** | `.claude/commands/codoc/` | `/codoc:plan <task>` — propose plan nodes *before* writing code; `/codoc:sync` — reconcile whichever side is behind (implements queued directives, drains tree edits, or reflects code drift). |
 | **Skill** `codoc-intent` | `.claude/skills/codoc-intent/SKILL.md` | Auto-loaded every session; teaches Claude the MCP-first propose-then-implement workflow for this repo. |
-| **Hooks** | `.claude/settings.json` | `SessionStart` · `Stop` · `PreToolUse` · `PostToolUse` · `UserPromptSubmit` — maintain `.codoc/activity.json` (the live agent touch-log → VS Code gutter decorations), run recovery reflection when the session stops, and nudge `/codoc:sync` when work is queued. Fire-and-forget; they never block the agent. |
+| **Hooks** | `.claude/settings.json` | `SessionStart` · `Stop` · `SessionEnd` · `PreToolUse` · `PostToolUse` · `UserPromptSubmit` — maintain `.codoc/activity.json` (the live agent touch-log → VS Code gutter decorations), run recovery reflection when the session stops, and nudge `/codoc:sync` when work is queued. Fire-and-forget; they never block the agent. |
 
 Claude is the **planner and the implementer**; codoc is the bookkeeper that keeps
 intent and code aligned. It never runs a headless model — the work always happens
@@ -101,7 +101,9 @@ repo and propose the initial tree, and starts the `codoc watch` daemon **for you
 ### Advanced: the CLI (no IDE, or scripting)
 
 ```bash
-uv tool install codoc            # or: pip install -e .
+# codoc is not on PyPI (the name belongs to an unrelated project) — install from git:
+uv tool install git+https://github.com/ryanyen2/CodeNav.git
+# …or from a clone:  git clone … && cd CodeNav && pip install -e .   (Python 3.11–3.12)
 
 export CODOC_PROVIDER=claude     # reuse your Claude Code login (no separate key)
 # …or the OpenAI path:
@@ -130,6 +132,11 @@ codoc status              # feature count, pending proposals, code↔binding cov
 codoc sync                # one-shot (no daemon): apply tree edits (Loop B), then reflect code (Loop A)
 codoc accept <e-id>       # CLI verdict path — mirrors the IDE Accept (then runs Loop B)
 codoc reject <e-id>       # CLI verdict path — mirrors the IDE Reject
+codoc history <feature>   # one feature's blame timeline (who/when/why, by id or title fragment)
+codoc realize             # implement the realize queue NOW, in the foreground
+codoc serve               # the deployed hub — serve the tree to remote users (Flow 3)
+codoc migrate             # idempotent workspace heal; also runs on daemon startup
+codoc install-hooks       # (re)install the CC hooks + MCP registration
 ```
 
 (`codoc reflect` runs a recovery-grade state reconciliation by hand, and
@@ -138,7 +145,10 @@ and tests; in normal use the agent reflects via MCP and you Accept in the IDE.)
 
 ## The `tree.codoc` file
 
-The only human surface. Located at `.codoc/tree.codoc`:
+The tree in plain text, at `.codoc/tree.codoc` — readable, greppable, and
+reviewable in a diff. It is a **read-only export**: the daemon renders it from the
+store and is its sole writer. You author in the **Codoc Tree** view (or through
+the MCP tools); a hand edit here is overwritten on the next loop pass.
 
 ```
 - Authentication flow  ⟨f-3a9c2e⟩
@@ -179,28 +189,59 @@ The parser extracts them; the IDE makes them clickable.
 
 `+` add / `~` move·amend — these render as in-situ text hunks; RETIRE/AMEND on a
 *live* node decorate it in place (strike / inline diff) rather than adding a line.
-Accept or Reject using the VS Code CodeLens buttons — no text syntax to type.
+Accept or Reject with the inline `✓`/`✗` in the **Codoc Tree** view (or the
+CodeLens in the raw-text editor) — there is no accept/reject syntax to type.
 Verdicts flow through `.codoc/inbox.json`; the loop applies them.
+
+### Two signals you can write into a description
+
+Both are ordinary markdown, and both are visibly acknowledged in the editor so you
+can see that they registered:
+
+- `**bold**` — **focus.** A newly-bolded span rides into the realize directive as a
+  `Focus:` line, and a bolded span that reads as an instruction queues work on its own.
+- `[label](https://…)` — **consult.** An external link becomes a `Consult:` line the
+  realizing agent fetches before implementing. The editor underlines it.
+
+Notes addressed to the agent are written through the **inline-comment surface**
+(select prose → the comment bubble → a composer), not by typing into a description.
+A `> …` blockquote in a description is ordinary prose — that text path was retired.
 
 ## `.codoc/` layout
 
 ```
 .codoc/
   # ── shared intent (commit these) ───────────────────────────────────────────
-  tree.codoc          — human-authored feature tree (the team's shared intent map)
-  tree.doc.json       — the webview's authored rich doc (tree.codoc is its byte-identical render)
+  tree.doc.json       — the authored feature tree (the team's shared intent map)
+  tree.codoc          — read-only text export of the same tree, rendered from the store
   # ── derived per checkout (gitignored; rebuilt by `codoc init` / `codoc watch`) ─
-  tree.bindings.json  — IDE sidecar: feature↔symbol index + dependency edges + proposals + change feed (v5)
+  tree.bindings.json  — IDE sidecar: feature↔symbol index + dependency edges + proposals + change feed (v6)
   status.json         — loop lifecycle: in_sync / code_drift / tree_dirty / awaiting_impl / realizing
   inbox.json          — verdict channel: Accept/Reject writes here, the loop drains it
-  edits.json          — provenance/intent channel: settle authorship + live doc-ahead suggestions
+  edits.json          — the edit channel: identity-keyed commands, authorship annotations,
+                        steers, withdrawals, and the draft/hand-off set (the loop drains it)
+  edits.host.jsonl    — the IDE's append-only op log; the daemon merges it into edits.json
+                        under the lock each Loop B pass (the host holds no cross-process lock)
   realize.md          — the realization queue: directives the live session implements via /codoc:sync
   realize.json        — machine-readable directive manifest (ids → features → causes)
+  realize_done.json   — completed-directive marker, so a finished queue isn't re-run
+  realized.jsonl      — realization outcomes, replayed as completion toasts in the IDE
+  drift.json          — per-feature drift signal (questioned / binding-lost) computed by Loop A
+  resolution.json     — per-feature divergence resolution state
+  intent.jsonl        — captured author prompts (the UserPromptSubmit hook), quoted back
+                        to the realizing agent as `Author asked:`
   activity.json       — agent touch-log: the CC hooks write here, the VS Code extension reads it
-  codoc.db            — features + bindings + event log (SQLite WAL)
+  index.meta.json     — indexing checkpoint (lets an interrupted `codoc init` resume)
+  codoc.db            — features + bindings + event log + blocks/marks/comments (SQLite WAL)
   lancedb/            — cocoindex-managed chunk index: AST + identity hashes (chunk embeddings only when CODOC_EMBED_CHUNKS=1)
   cocoindex.db/       — cocoindex internal memoization (resumes interrupted indexing)
 ```
+
+> **`tree.codoc` is a derived export.** The daemon is its sole writer. Editing it
+> by hand does nothing — the next loop pass re-renders it from the store and logs
+> that it overwrote your edit. Author in the **Codoc Tree** view (or via the MCP
+> tools); `tree.codoc` exists so the tree is readable, greppable, and diffable in
+> a plain text editor and in code review.
 
 ### Working as a team (multi-user)
 
@@ -215,19 +256,36 @@ rides whatever git remote you already use (GitHub, GitLab, a bare repo…). The 
 credential codoc touches is your **LLM provider** (an `OPENAI_API_KEY` /
 `ANTHROPIC_API_KEY`, or *nothing* when it reuses your local Claude Code login).
 
-- **Commit** `.codoc/tree.codoc` (and the webview's `.codoc/tree.doc.json`) — the
-  authored feature tree is the team's shared intent, versioned alongside the code.
+- **Commit** `.codoc/tree.codoc` (and the authored `.codoc/tree.doc.json`) — the
+  feature tree is the team's shared intent, versioned alongside the code.
 - **Don't commit** the rest of `.codoc/`. `codoc.db`, `lancedb/`, `cocoindex.db/`
-  and the transient control files are **derived per checkout**; after a clone,
-  `codoc init` then `codoc watch` rebuilds them locally. The shipped `.gitignore`
-  already encodes this split (it tracks only `tree.codoc` + `tree.doc.json`).
+  and the transient control files are **derived per checkout**. The shipped
+  `.gitignore` already encodes this split (it tracks only `tree.codoc` +
+  `tree.doc.json`).
 
 Each teammate runs their own `codoc watch` over their own checkout — no shared
-daemon. A feature-tree edit is an ordinary text change to `tree.codoc`, so two
-people editing it **resolve through a normal git text merge**; codoc re-attributes
-code to the merged tree on the next Loop A pass. (codoc is single-writer *per
-checkout*. Per-author identity in the change ledger — *which* teammate edited — is
-not modeled yet; every human edit records `actor=human`.)
+daemon. codoc is single-writer *per checkout*. Per-author identity in the change
+ledger — *which* teammate edited — is not modeled yet; every human edit records
+`actor=human`.
+
+> ### ⚠️ Known limitation: a fresh clone does not import the committed tree
+>
+> `codoc init` bootstraps the tree **from code**, every time. It does not read a
+> committed `tree.codoc` / `tree.doc.json` into a new store, and its
+> already-initialized guard only checks for the gitignored `codoc.db`. So on a
+> fresh clone — where the committed tree is present but `codoc.db` is not — `init`
+> runs a full bootstrap and **overwrites the team's authored tree** with a
+> freshly-derived one carrying new feature ids.
+>
+> Until an importer lands, treat the shared tree as **one machine's** for now: the
+> solo workflow ([Flow 1](#two-interaction-flows) / [Flow 2](#two-interaction-flows))
+> and the [deployed hub](#flow-3--remote-suggestions-via-the-deployed-hub-codoc-serve)
+> — which serves *one* maintainer's live tree to remote contributors and needs no
+> second checkout — are the paths that work end to end today.
+>
+> For the same reason, two people editing the tree do **not** resolve through a
+> git text merge: `tree.codoc` is a derived export, so a merged file is discarded
+> and re-rendered from whichever store is local.
 
 **2. The deployed hub (`codoc serve`) — for *remote* contributors without a
 checkout.** [Flow 3](#flow-3--remote-suggestions-via-the-deployed-hub-codoc-serve)
@@ -305,7 +363,7 @@ description) and a feature with no typed media is absent from the map.
 
 | Var | Default | Description |
 |---|---|---|
-| `CODOC_PROVIDER` | `openai` | LLM provider for reflection: `claude` (reuse Claude Code's login via headless `claude -p`, no key), `openai`, or `ollama`. The extension sets `claude` by default. |
+| `CODOC_PROVIDER` | auto-detected | LLM provider for reflection: `claude` (reuse Claude Code's login via headless `claude -p`, no key), `openai`, `anthropic`, or `ollama`. When unset, resolution is: `OPENAI_API_KEY` present → `openai`; else `ANTHROPIC_API_KEY` present → `anthropic`; else `claude` (keyless). An explicit value always wins, and the extension sets `claude`. |
 | `CODOC_MODEL` | `gpt-5.4-mini` | LLM model name (defaults to `sonnet` when `CODOC_PROVIDER=claude`). Pins the model for *all* calls. |
 | `CODOC_MODEL_FAST` | provider fast tier | Fast-tier model for the two high-volume extraction calls (per-save tree update, per-file bootstrap). Defaults to the provider's fast model (`haiku` / `claude-haiku-4-5` / `gpt-5.4-mini`); an explicit `CODOC_MODEL` overrides it. |
 | `OPENAI_API_KEY` | — | OpenAI API key (only for `CODOC_PROVIDER=openai`) |
