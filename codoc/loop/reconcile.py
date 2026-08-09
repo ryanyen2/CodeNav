@@ -1,18 +1,20 @@
-"""Non-destructive tree.codoc writes.
+"""Non-destructive tree writes.
 
-``tree.codoc`` is rendered from the store, but a human (or the IDE) can save text
-edits to it that the store hasn't absorbed yet. A naive ``write_tree`` regenerates
-the file from the store and would silently overwrite those saved edits — e.g. when
-the coding agent reflects via the MCP tools mid-session, or the watch daemon
-re-renders after a code-only Loop A.
+Both ``tree.codoc`` and ``tree.doc.json`` are rendered from the store, and the
+daemon is their sole writer. ``safe_write_tree`` guards the one case where a
+re-render could still destroy something: an authored ``tree.doc.json`` the store
+has not absorbed yet (comments minted by the IDE before a migrate, say). When that
+file diverges, the write is SKIPPED so the authored state survives until the next
+Loop B pass / ``migrate`` absorbs it.
 
-``safe_write_tree`` closes that hole: it renders **only when the on-disk file has
-no un-applied user edits** (``diff_codoc`` is empty). When the file diverges (a
-human edited it), the write is skipped so the edit survives; the proper Loop B
-pass — the only place allowed to apply user edits and spawn the coding agent —
-absorbs and re-renders it on the next cycle (or at epoch close). The store's own
-changes (e.g. an agent's MCP proposal) are not lost either: they live in the store
-and flush to the file as soon as it is clean again.
+``tree.codoc`` is treated differently, because it is a READ-ONLY export: the
+text-ingest channel is retired (``loop_b._merge_channels`` returns an empty diff),
+so a divergent on-disk ``tree.codoc`` — a stray manual edit, a git merge or
+checkout, a torn write — can never be absorbed. The former guard skipped the render
+to "preserve" such an edit, which instead wedged BOTH files permanently while
+status still read ``in_sync``. So a divergent ``tree.codoc`` is overwritten from
+the store (and the overwrite logged, so a surprised manual edit is traceable) and
+the workspace self-heals.
 """
 from __future__ import annotations
 

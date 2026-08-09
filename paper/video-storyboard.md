@@ -1,5 +1,22 @@
 # codoc demo video — storyboard
 
+> ## ⚠️ Superseded — do not shoot this as written
+>
+> **Scene 6 demonstrates a retired input path.** Typing a `> …` blockquote into a
+> description no longer creates a steering comment; that text channel died in U7
+> when the webview stopped writing `tree.codoc` (`loop_b.py` step 2.7). A `> ` line
+> is now ordinary prose and will produce no directive. Steering notes are authored
+> through the inline-comment surface (select prose → comment bubble → composer).
+>
+> The replacement scenario is
+> [`docs/paper/uist-walkthrough-storyboard.md`](../docs/paper/uist-walkthrough-storyboard.md)
+> — a maintainer whose retry policy drifted across three files while their design
+> doc stayed frozen. It leads with the beat this one lacks: the document detecting
+> that it has gone stale.
+>
+> Keep this file for the shot list and the scene-to-paper-section mapping at the
+> bottom, both of which still hold.
+
 Scenario: the UIST paper's running example. Maya inherits `mini-coding-agent`
 (a small local coding agent) and has to make its Ollama model calls resilient
 to a flaky server, in code she hasn't read.

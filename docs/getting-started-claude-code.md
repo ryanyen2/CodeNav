@@ -32,7 +32,9 @@ straight to §4 — the rest of §1–§3 describes what setup does under the ho
 the manual CLI path for no-IDE / scripting use).
 
 ```bash
-uv tool install codoc        # isolated, version-pinned; or: pip install -e .  (Python 3.11+)
+# codoc is not on PyPI — that name belongs to an unrelated project. Install from git:
+uv tool install git+https://github.com/ryanyen2/CodeNav.git   # isolated (Python 3.11–3.12)
+#   …or from a clone:  git clone … && cd CodeNav && pip install -e .
 export CODOC_PROVIDER=claude  # reuse your Claude Code login — no separate key
 #   …or OpenAI:  export CODOC_PROVIDER=openai && export OPENAI_API_KEY=sk-…
 codoc --help
@@ -116,6 +118,7 @@ straight into the store:
 "hooks": {
   "SessionStart":     [{ "command": "python -m codoc.agent.hook session-start" }],
   "Stop":             [{ "command": "python -m codoc.agent.hook stop" }],
+  "SessionEnd":       [{ "command": "python -m codoc.agent.hook session-end" }],
   "PreToolUse":       [{ "matcher": "Edit|Write|MultiEdit|Read",
                          "command": "python -m codoc.agent.hook pre-tool" }],
   "PostToolUse":      [{ "matcher": "Edit|Write|MultiEdit",
@@ -257,30 +260,47 @@ loop applies them. (From the shell you can also `codoc accept <e-id>` /
 
 ## 7. Editing the tree yourself
 
-You don't have to go through Claude. Edit `tree.codoc` directly:
+You don't have to go through Claude. Edit in the **Codoc Tree** view — it is the
+default editor for `tree.codoc`, and it writes to the store, which is the single
+source of truth:
 
-- **Rename a node** — just change the title text.
-- **Add a node** — add a new `- Title` line at the right indentation. No id
-  needed; codoc mints one on the next write.
-- **Retire a node** — change `-` to `~`.
-- **Adjust a description** — edit the prose below any title.
+- **Rename a feature** — edit the heading text.
+- **Add one** — ⌘K → *Add feature*, or start a new heading. codoc mints the id.
+- **Retire one** — the retire action on the feature.
+- **Adjust a description** — type in the prose under any heading.
+- **Reorder siblings** — drag the handle, or ⌘⌥↑ / ⌘⌥↓.
 
-Save. `codoc watch` detects the change and runs Loop B. If the edit *requests* code
-(an imperative description on a node with bound symbols — "should validate…",
-"Add…"), Loop B queues a directive in `.codoc/realize.md` for you to implement with
-`/codoc:sync`. A descriptive edit just updates the prose.
+As you type, changed words pick up a thin underline and the heading shows a hollow
+dashed circle: **recorded and staged locally, not sent.** Nothing runs. Press **⌘S**
+(or *Commit & send*) to hand the staged edits over; the badge becomes a filled
+diamond. If the edit *requests* code (an imperative description on a feature with
+bound symbols — "should validate…", "Add…"), Loop B queues a directive in
+`.codoc/realize.md` for you to implement with `/codoc:sync`; the `✕` on the badge
+withdraws it and keeps your prose. A descriptive edit just updates the prose and
+queues nothing.
 
-**Three markdown-native signals** steer the agent from inside a description — no
-special syntax:
+> **Do not edit `.codoc/tree.codoc` as text.** It is a read-only export rendered
+> from the store, and the daemon is its sole writer — a hand edit (or a git merge
+> into it) is discarded and re-rendered on the next loop pass. Its job is to make
+> the tree readable, greppable, and reviewable in a diff.
 
-- `> …` blockquote = a **steering comment** addressed to the agent. Loop B drains
-  each into a `STEER FEATURE` directive (appended to an in-flight queue, so you can
-  steer mid-generation); the next render consumes it. In the Codoc Tree view you
-  author one by selecting prose → the comment bubble → a composer.
+**Two markdown-native signals** steer the agent from inside a description — no
+special syntax, and both are visibly acknowledged so you can see they registered:
+
 - `**bold**` = **focus**: newly-bolded spans ride into the directive as a `Focus:`
   line, and a newly-bolded span that reads imperative queues a directive on its own.
 - `[label](https://…)` external link = **consult**: a `Consult:` line the realizing
-  agent WebFetches before implementing.
+  agent WebFetches before implementing. The editor underlines it.
+
+**Notes addressed to the agent** are a third channel, written through the inline
+comment surface: select prose → the comment bubble → a composer (⏎ sends, and you
+can attach a screenshot the agent consults once). Loop B drains each into a
+`STEER FEATURE` directive, appended to an in-flight queue so you can steer
+mid-generation.
+
+> Typing a `> …` blockquote into a description does **not** create a steering
+> comment. That text path was retired when the webview stopped writing
+> `tree.codoc`; a `> ` line is now ordinary prose.
 
 ## 8. The commands
 
@@ -301,13 +321,20 @@ agent reflecting via MCP and you Accepting in the IDE.)
 
 ```
 .codoc/
-  tree.codoc          # the one human surface (commit with your code)
-  tree.bindings.json  # IDE sidecar: feature↔symbol index + edges + proposals + change feed + feature_phase/holds (v5)
+  tree.doc.json       # the authored feature tree (commit with your code)
+  tree.codoc          # read-only text export of the same tree (commit it too — it diffs well)
+  tree.bindings.json  # IDE sidecar: feature↔symbol index + edges + proposals + change feed + feature_phase/holds (v6)
   status.json         # loop lifecycle: in_sync / code_drift / tree_dirty / awaiting_impl / realizing
   inbox.json          # verdict channel: Accept/Reject writes here, the loop drains it
+  edits.json          # edit channel: commands, authorship, steers, withdrawals, drafts
+  edits.host.jsonl    # the IDE's append-only op log, merged into edits.json by the daemon
   realize.md          # realization queue: directives the live session implements via /codoc:sync
+  realize.json        # machine-readable manifest for that queue (ids → features → causes)
+  realized.jsonl      # realization outcomes (drives the IDE's completion toasts)
+  drift.json          # per-feature drift signal (questioned / binding-lost) from Loop A
+  intent.jsonl        # captured author prompts, quoted to the agent as `Author asked:`
   activity.json       # agent touch log: hooks write here, VS Code extension reads it
-  codoc.db            # features + bindings + event log (SQLite)
+  codoc.db            # features + bindings + event log + blocks/marks/comments (SQLite)
   lancedb/            # incremental code-chunk index (cocoindex)
 
 .claude/
@@ -341,11 +368,23 @@ integration travels with the repo.
 ## 10. Re-installing after a fresh clone
 
 ```bash
-codoc init
+codoc install-hooks     # wire the CC plugin into the new checkout
+codoc watch             # start the loops
 ```
 
-`codoc init` is idempotent — it re-indexes only changed files and deep-merges the
-plugin (hooks into `.claude/settings.json`, the MCP entry into `.mcp.json`, the
-skill + commands into `.claude/`) without clobbering existing entries. Run it after
-cloning a repo that has a `.codoc/` directory to wire up the integration on the new
-machine.
+`codoc install-hooks` deep-merges the plugin (hooks into `.claude/settings.json`,
+the MCP entry into `.mcp.json`, the skill + commands into `.claude/`) without
+clobbering existing entries, so it is safe to re-run on any machine.
+
+> ### ⚠️ Do not run `codoc init` on a clone that already has a committed tree
+>
+> `init` bootstraps the tree **from code**, every time — it does not import a
+> committed `tree.codoc` / `tree.doc.json` into a new store. Its
+> already-initialized guard checks only for `codoc.db`, which is gitignored, so on
+> a fresh clone the guard does not fire and the bootstrap **overwrites the
+> committed tree** with a freshly-derived one carrying new feature ids.
+>
+> There is no importer yet, so a shared tree currently lives on one machine. If you
+> want teammates to work on it, the [deployed hub](serve-deployment.md)
+> (`codoc serve`) is the path that works today — it serves your live tree to them
+> in a browser, with no second checkout and no second store.
