@@ -160,7 +160,7 @@ def test_org_pass_groups_top_level_features(store):
     def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
         return [_add("n1", f"Feat {file}", [(file, c["symbol_path"]) for c in chunks])]
 
-    def propose_org(features, edges, *, repo_name, config):
+    def propose_org(features, edges, *, repo_name, config, flows=None):
         ops = [_add("t1", "Theme", [])]
         for f in features:
             ops.append(NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=f["id"], parent_id="t1"))
@@ -181,7 +181,7 @@ def test_org_skipped_for_single_top_level_feature(store):
     def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
         return [_add("n1", "Only", [(file, c["symbol_path"]) for c in chunks])]
 
-    def propose_org(features, edges, *, repo_name, config):
+    def propose_org(features, edges, *, repo_name, config, flows=None):
         called.append(True)
         return []
 

@@ -105,13 +105,23 @@ def propose_organization(
     *,
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
+    flows: list[str] | None = None,
 ) -> list[NodeOp]:
-    """One LLM call: group file-level features under broad theme parents."""
+    """One LLM call: group file-level features under broad theme parents.
+
+    ``flows`` are the package's main call paths (:mod:`codoc.loop.surface`).
+    Coupling counts alone can only produce clusters — "these two call each other
+    a lot" — and a top level built from clusters reads as a filing system. The
+    paths say which features participate in one operation and in what order,
+    which is what lets a theme be a stage of the work instead of a bucket.
+    """
     template = load_prompt("bootstrap_org")
     prompt = format_prompt(
         template,
         repo_name=repo_name,
         features=json.dumps(features, indent=2),
         edges=json.dumps(edges, indent=2),
+        flows="\n".join(f"- {f}" for f in flows) if flows
+              else "(no call paths could be derived)",
     )
     return _ops_from(run_agent(prompt, config))
