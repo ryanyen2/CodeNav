@@ -682,6 +682,17 @@ def run_watch(
         except Exception as e:  # noqa: BLE001
             printer(f"⚠ startup reconcile failed (continuing to watch): {e}")
 
+    # Re-render the derived exports once the daemon is up. Startup is exactly when
+    # the IDE opens the tree, and reconcile_drift writes the sidecar and status but
+    # neither tree.codoc nor tree.doc.json — so without this the webview's document
+    # pane stayed blank on every fresh workspace open until some code file changed
+    # and a batch happened to call `_render`. Guarded like every other render: a
+    # pending webview edit skips it rather than clobbering an in-flight intent.
+    try:
+        _render(codoc_dir)
+    except Exception as e:  # noqa: BLE001 — a failed seed must not stop the daemon
+        printer(f"⚠ startup render failed (the doc pane may be blank): {e}")
+
     suffix = "  (--auto-realize: unattended implement when no session is open)" if auto_realize else ""
     printer(f"codoc watching {root_dir} — edit code or .codoc/tree.codoc (Ctrl-C to stop){suffix}")
     # `yield_on_timeout` wakes the loop every PARENT_POLL_MS even with no file

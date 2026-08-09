@@ -38,6 +38,14 @@ from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
 from codoc.store.db import Store, open_store
 
 _SNIPPET = 600
+# Added chunks per tree-update call. Sized so the model can actually honour "place
+# every chunk in `added`": past roughly this many the instruction degrades into a
+# couple of umbrella ops, and everything else silently falls to the coverage net.
+_MAX_ADDED_PER_CALL = 25
+# Chunks one feature may absorb through the coverage net in a single pass. The net
+# is a safety net for what the LLM missed, not a placement strategy — past a few
+# chunks it is filling a gap it cannot see the shape of.
+_COVERAGE_ATTACH_BUDGET = 5
 
 
 def _detect_relocations(
@@ -381,6 +389,7 @@ class LoopAResult:
     applied_structural: list[NodeOp] = field(default_factory=list)
     proposed: list[NodeOp] = field(default_factory=list)      # pending review hunks
     llm_called: bool = False
+    llm_calls: int = 0   # >1 when a large added set was batched across calls
     impacted: list[str] = field(default_factory=list)         # feature IDs of upstream dependents
     held_back: int = 0  # intent ops suppressed by a doc-wins hold (classify row 13)
     # U5: realize-divergence outcome for this pass — {receiving feature_id → reason}
@@ -731,7 +740,34 @@ def apply_changeset(
     if voice:
         changes["author_voice"] = voice
 
-    ops = propose(changes, subtree, all_titles, repo_name=repo_name, config=config)
+    # One call per batch of added chunks, not one call for all of them. The pass
+    # is asked to place every added chunk, and that instruction stops being
+    # followable somewhere well under a hundred: given 246 unbound chunks in a
+    # single prompt a model returns one or two umbrella ops and the coverage net
+    # inherits the rest, which is how a tree ends up with a single node owning a
+    # whole package. Batching by file keeps each call a tractable question and
+    # keeps a file's chunks together, so the model can still see that a class and
+    # its methods belong to one feature.
+    ops: list[NodeOp] = []
+    # An empty list still means one call: this pass may have been triggered by an
+    # emptied feature or in-place modification, where the question is a retire or
+    # an amend and there is nothing added to batch.
+    batches = _added_batches(changes["added"], _MAX_ADDED_PER_CALL) or [[]]
+    titles_for_call = list(all_titles)
+    for batch in batches:
+        changes["added"] = batch
+        fresh = propose(changes, subtree, titles_for_call,
+                        repo_name=repo_name, config=config)
+        ops.extend(fresh)
+        # Later batches must see what earlier ones just proposed, or two calls
+        # mint near-duplicate nodes for the same concern in different files. The
+        # ids are placeholders: the list is de-duplication context, not identity.
+        titles_for_call = titles_for_call + [
+            {"id": "(proposed this pass)", "title": op.title, "parent_id": op.parent_id}
+            for op in fresh if op.kind is NodeOpKind.ADD_NODE and op.title
+        ]
+    if len(batches) > 1:
+        result.llm_calls = len(batches)
 
     # 4. Apply: safe → now; structural → pending proposal. An ADD_NODE whose
     #    (title) already names a live, still-unbound feature is the SAME concept
@@ -824,6 +860,32 @@ def apply_changeset(
     return result
 
 
+def _added_batches(added: list[dict], size: int) -> list[list[dict]]:
+    """Split the added-chunk list into per-call batches, never splitting a file.
+
+    Keeping a file whole matters more than hitting the size exactly: a class and
+    its methods arrive as separate chunks, and a batch boundary between them
+    would ask two calls to name the same feature. A single file larger than the
+    batch size is sent whole rather than cut — a partial file is the one input
+    guaranteed to produce a wrong answer.
+    """
+    if len(added) <= size:
+        return [added] if added else []
+    by_file: dict[str, list[dict]] = {}
+    for entry in added:
+        by_file.setdefault(entry.get("file", ""), []).append(entry)
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    for _file, chunks in sorted(by_file.items()):
+        if current and len(current) + len(chunks) > size:
+            batches.append(current)
+            current = []
+        current.extend(chunks)
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _cover_uncovered_adds(
     added_unbound: list,
     covered_by_ops: set[tuple[str, str]],
@@ -836,15 +898,29 @@ def _cover_uncovered_adds(
 ) -> None:
     from codoc.graph.query import neighbor_feature
 
+    from codoc.loop.bootstrap import _title_from_file
+
     cause = cause or (lambda op: "")
 
+    absorbed: dict[str, int] = {}   # feature_id → chunks taken by the net this pass
+    leftover_by_file: dict[str, list] = {}
     for a in added_unbound:
         if (a.file, a.symbol_path) in covered_by_ops:
             continue  # placed by an LLM op (applied or pending proposal)
         if store.binding_at(a.file, a.symbol_path) is not None:
             continue  # already bound
         owner = neighbor_feature(store, a.symbol_path)
-        if owner:
+        # A graph neighbour is good evidence for a handful of chunks and no
+        # evidence at all for a hundred. Placing new code with the feature it
+        # calls is the point of this net; but when the tree covers two files and
+        # the index covers eighteen, every orphan in the package resolves to
+        # whichever few nodes exist, and one of them ends up owning everything.
+        # Past the budget the signal has stopped being about this chunk, so the
+        # chunk goes to a proposal instead — an unplaced chunk shows as drift and
+        # gets asked about again, while a wrongly-attached one looks settled
+        # forever.
+        if owner and absorbed.get(owner, 0) < _COVERAGE_ATTACH_BUDGET:
+            absorbed[owner] = absorbed.get(owner, 0) + 1
             op = NodeOp(
                 kind=NodeOpKind.ATTACH,
                 feature_id=owner,
@@ -855,16 +931,31 @@ def _cover_uncovered_adds(
                      caused_by=cause(op))
             result.auto["attach"] = result.auto.get("attach", 0) + 1
         else:
-            op = NodeOp(
-                kind=NodeOpKind.ADD_NODE,
-                title=a.symbol_path.split("::", 1)[-1],
-                description="",
-                bindings=[(a.file, a.symbol_path)],
-                rationale="coverage: unplaced added chunk — needs a home",
-            )
-            apply_op(op, store, source=source, applied=False, fp_lookup=fp, th_lookup=th,
-                     caused_by=cause(op))
-            result.proposed.append(op)
+            leftover_by_file.setdefault(a.file, []).append(a)
+
+    # What is left becomes ONE proposal per file rather than one per symbol.
+    # Per-symbol fallbacks named nodes after the symbol they held
+    # ("HTTPDigestAuth.handle_401", "__module__", "CONTENT_TYPE_MULTI_PART") with
+    # an empty description — that is not a feature tree, it is the symbol index
+    # with extra steps, and accepting those proposals would bake the shape of the
+    # code into a document whose whole purpose is to describe intent instead.
+    #
+    # A lone orphan keeps its symbol name: for one chunk that is the more
+    # informative label, and it is the file's whole story anyway. The filename
+    # only becomes the better name once several chunks share it.
+    for file, chunks in sorted(leftover_by_file.items()):
+        title = (chunks[0].symbol_path.split("::", 1)[-1] if len(chunks) == 1
+                 else _title_from_file(file))
+        op = NodeOp(
+            kind=NodeOpKind.ADD_NODE,
+            title=title,
+            description="",
+            bindings=[(c.file, c.symbol_path) for c in chunks],
+            rationale=f"coverage: {len(chunks)} chunk(s) in {file} that no feature claims yet",
+        )
+        apply_op(op, store, source=source, applied=False, fp_lookup=fp, th_lookup=th,
+                 caused_by=cause(op))
+        result.proposed.append(op)
 
 
 def run_loop_a(
