@@ -1,9 +1,14 @@
 """#7 — cycle / orphan guards keep the feature tree reachable from the roots.
 
-A cycle or an orphaned subtree is invisible to every walk-from-root surface
-(render_tree, the doc projection, the sidecar) while its features stay live and
-bound (their chunks read as "covered", so Loop A never re-homes them) — a silent,
-unrecoverable disappearance. These tests pin the three guards:
+A feature orphaned by a dangling ``parent_id`` (its parent was retired, or the id
+never existed) is promoted to a root by ``tree_order.preorder`` — the walk shared
+by ``render_tree`` and the doc projection (``codoc/codoc_file/tree_order.py``) —
+so it stays visible rather than silently vanishing from one or both surfaces. A
+pure CYCLE among live features (crash / pre-guard debris, unreachable from any
+root either way) is a narrower case: it stays invisible to ``render_tree`` until
+healed. Either way the STORE ROW is still wrong (a stale ``parent_id``), so this
+is a display-time fallback, not a fix — ``heal_tree_integrity`` is the durable
+backstop that re-homes the row itself. These tests pin the three guards:
 
   * apply_op MOVE_NODE rejects a cycle-forming move (no-op, tree unchanged);
   * apply_op RETIRE_NODE re-parents live children to the grandparent;
@@ -88,11 +93,13 @@ def test_retire_root_reparents_children_to_root(store):
 def test_heal_reattaches_orphan_pointing_at_missing_parent(store):
     # A live feature whose parent id names a feature that doesn't exist.
     store.upsert_feature(Feature(id="x", title="X", parent_id="ghost"))
-    assert "X" not in render_tree(store)          # invisible (orphan)
+    # Promoted to a root at render time (tree_order), so it's already visible...
+    assert "X" in render_tree(store)
+    assert store.get_feature("x").parent_id == "ghost"   # ...but the STORE ROW is still dangling
     healed = heal_tree_integrity(store)
     assert healed == 1
-    assert store.get_feature("x").parent_id is None
-    assert "X" in render_tree(store)              # now reachable
+    assert store.get_feature("x").parent_id is None      # now durably fixed, not just displayed
+    assert "X" in render_tree(store)
 
 
 def test_heal_breaks_a_cycle(store):
