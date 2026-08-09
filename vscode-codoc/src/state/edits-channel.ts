@@ -119,7 +119,6 @@ export interface CommandEntry {
     kind: CommandKind;
     feature_id?: string;        // target (empty for `add`, which mints)
     local_id?: string;          // webview client-side node id for `add` (minted-fid correlation)
-    base_rev?: number;          // per-feature version the edit was authored from (U5 gate)
     /** The value this command REPLACES, as this editor last knew the store to hold it.
      *  It is the common ancestor the daemon merges from when the feature has moved
      *  since (see loop_b._resolve_content): edits on different lines both land,

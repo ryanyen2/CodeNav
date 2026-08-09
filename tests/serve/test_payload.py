@@ -306,3 +306,37 @@ def test_payload_version_monotonic_and_restart_safe(tmp_path):
     # restart-safe: the version comes from the durable wall-clock HLC, never a
     # per-process counter, so it cannot regress when the server restarts.
     assert payload_version(cd) == v3
+
+
+# ── the browser is the emitter, so the payload has to name itself ─────────────
+
+def test_payload_carries_a_citable_baseline_id(tmp_path):
+    """The browser emits identity-keyed commands itself and diffs each settle against the
+    baseline its content was typed against. With no id, every settle falls back to
+    "whatever projection I read last" — which is how another party's write gets claimed as
+    the author's own base and overwritten with no merge and no record."""
+    cd = _seed(tmp_path, sidecar={"version": 6, "features": {}, "by_feature": {}},
+               status=_status_at(HLC(wall_clock=1000, logical_time=0)))
+    p = build_browser_payload(cd)
+    assert p["baselineId"] == p["rev"] > 0
+
+
+def test_baseline_id_advances_with_the_projection(tmp_path):
+    cd = _seed(tmp_path, sidecar={"version": 6, "features": {}, "by_feature": {}},
+               status=_status_at(HLC(wall_clock=1000, logical_time=0)))
+    first = build_browser_payload(cd)["baselineId"]
+    (Path(cd) / "status.json").write_text(json.dumps(
+        _status_at(HLC(wall_clock=5000, logical_time=0))))
+    assert build_browser_payload(cd)["baselineId"] > first
+
+
+def test_payload_maps_local_ids_to_the_fids_the_store_minted(tmp_path):
+    """A node authored in the browser carries only a client-side localId until the store
+    mints its fid. Without the echo the browser cannot tell that the projection's new
+    heading IS its own node, and both linger in the doc."""
+    cd = _seed(tmp_path, sidecar={
+        "version": 6, "by_feature": {}, "features": {
+            "f-minted": {"title": "Authored here", "parent_id": None, "local_id": "L-7"},
+            "f-derived": {"title": "From code", "parent_id": None},
+        }}, status=_status_at(HLC(wall_clock=1000, logical_time=0)))
+    assert build_browser_payload(cd)["mintedByLocalId"] == {"L-7": "f-minted"}

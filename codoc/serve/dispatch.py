@@ -7,11 +7,20 @@ invariants enforce "outsiders can only suggest":
     withdraw-own; only a HANDOFF role (write collaborator) may write verdicts or
     hand off. NONE is denied everything.
   • Safe-by-default settle — a remote ``commit`` (the editor's "Save" gesture) is
-    treated as a HELD settle, NOT auto-sent: it persists the doc but does not cross
-    to execution. The ONLY suggestion→execution crossing is the explicit
-    ``hand-off`` command, which the realization trigger (U7) consumes. So even
-    though the daemon may write realize.md, nothing runs until an authorized
+    treated as a HELD settle, NOT auto-sent. The ONLY suggestion→execution crossing is
+    the explicit ``hand-off`` command, which the realization trigger (U7) consumes. So
+    even though the daemon may write realize.md, nothing runs until an authorized
     hand-off — the trigger is the gate, which is where that decision belongs.
+
+The EDIT itself does not arrive here as a document. A settle is an acknowledgement; the
+author's change arrives as identity-keyed ``commands`` (the five kinds below), emitted by
+the browser through the same modules the VS Code host uses
+(``vscode-codoc/src/webview/command-emitter.ts``). This handler used to write the posted
+doc to ``tree.doc.json``, which stopped being an input at U4 (the daemon became its sole
+writer) and stopped being read as one at U7 (the doc-diff inference was retired): the
+remote author's prose was overwritten by the next daemon render, and the write itself made
+``reconcile.safe_write_tree`` treat the projection as ahead of the store and skip
+re-rendering both exports. Nothing here writes a derived artifact any more.
 
 Transport-agnostic: ``dispatch`` takes a parsed message + the caller's capability;
 the HTTP/CSRF/session wiring lives in app.py. All file writes go through the
@@ -24,7 +33,6 @@ from pathlib import Path
 
 from codoc.serve.auth import Capability
 
-_DOC_FILENAME = "tree.doc.json"
 
 
 class CommandError(Exception):
@@ -81,35 +89,23 @@ def dispatch(message: dict, capability: Capability, codoc_dir: str | Path) -> di
 
 # ── handlers ───────────────────────────────────────────────────────────────
 
-def _persist_doc(message: dict, codoc_dir: str) -> None:
-    """Persist the browser's whole-doc edit to tree.doc.json (the authoritative
-    webview artifact the daemon's Loop B reads). Never writes tree.codoc."""
-    doc = message.get("doc")
-    if doc is None:
-        return
-    from codoc.loop.fsio import atomic_write_json
-
-    atomic_write_json(Path(codoc_dir) / _DOC_FILENAME, doc)
-
-
 def _noop(_message: dict, _codoc_dir: str) -> dict:
     return {"ok": True}
 
 
-def _settle(message: dict, codoc_dir: str) -> dict:
-    # Optimistic concurrency (U9): if the client tells us which version it edited
-    # from (`baseRev`) and the hub has since advanced past it, another writer's
-    # change would be clobbered — reject so the browser reloads the fresh snapshot.
-    # A whole-doc last-write-wins guarded by the store-derived version; finer
-    # per-feature CRDT merge is the deferred Tier-2 work. Absent baseRev → no guard.
-    base_rev = message.get("baseRev")
-    if isinstance(base_rev, int):
-        from codoc.serve.payload import payload_version
+def _settle(_message: dict, _codoc_dir: str) -> dict:
+    """Acknowledge a settle / commit. It carries no content to store.
 
-        if base_rev < payload_version(codoc_dir):
-            raise CommandError("stale doc — reload and retry", status=409)
-    # Held settle: persist the doc; execution waits for an explicit hand-off (U7).
-    _persist_doc(message, codoc_dir)
+    The edit arrives as identity-keyed commands (see the module docstring), each carrying
+    the ``base_text`` its author last knew — so concurrency is resolved per FIELD by the
+    daemon's three-way merge (``loop_b._resolve_content``), which is what U9's whole-doc
+    ``baseRev`` guard existed to approximate until the finer merge landed. That guard is
+    gone with the doc write it protected: rejecting a contentless ack with 409 would tell
+    the client its change was refused (a 4xx is dropped from the outbox and surfaced to
+    the author) when nothing about the change was even in the message.
+
+    ``held`` stays in the reply: a remote commit records the edit and waits for an
+    explicit hand-off, and the client reads that as confirmation."""
     return {"ok": True, "held": True}
 
 
@@ -124,12 +120,22 @@ def _verdict(message: dict, codoc_dir: str) -> dict:
 
 
 def _hand_off(_message: dict, codoc_dir: str) -> dict:
+    """Release every held directive to the agent — the one suggestion→execution crossing.
+
+    ``handoffs`` is the POSITIVE signal: Loop B flips a held directive to handed_off when
+    its feature appears there, and the U7 trigger runs from realize.md. Clearing ``drafts``
+    is only the UI half ("captured" drops); on its own it hands nothing off, which is what
+    this did after the held-draft model landed — a maintainer's hand-off on the hub
+    silently did nothing. The IDE writes both (tree-editor.handOff) and so does this."""
     from codoc.loop import edits
 
-    # Clear the held drafts — the daemon's next pass marks every held directive
-    # handed_off; the U7 realization trigger then runs the frozen snapshot.
+    held = list(dict.fromkeys(
+        d.feature_id for d in edits.read_manifest(codoc_dir)
+        if d.feature_id and not d.handed_off))
+    if held:
+        edits.append_handoffs(codoc_dir, held)
     edits.set_drafts(codoc_dir, [])
-    return {"ok": True}
+    return {"ok": True, "handed_off": len(held)}
 
 
 def _withdraw(message: dict, codoc_dir: str) -> dict:
@@ -154,7 +160,6 @@ def _comment_create(message: dict, codoc_dir: str) -> dict:
         raise CommandError("comment-create requires thread featureId + body")
     edits.append_steer(codoc_dir, Steer(feature_id=fid, text=text, comment_id=cid,
                                         ts=int(time.time() * 1000)))
-    _persist_doc(message, codoc_dir)
     return {"ok": True}
 
 
@@ -164,7 +169,10 @@ def _command(message: dict, codoc_dir: str) -> dict:
     only SUGGEST; add/move/retire need HANDOFF — KTD10), so by the time we get here
     the kind is allowed for this caller. The daemon's Loop B drains + applies it via
     ``apply_op`` (idempotent on the command id). The wire shape mirrors the Python
-    ``Command`` dataclass: ``{kind, id, featureId?, localId?, baseRev?, payload?}``."""
+    ``Command`` dataclass: ``{kind, id, featureId?, localId?, baseText?, session?,
+    payload?}``. An older client's ``baseRev`` is ignored: the per-feature integer gate it
+    fed was superseded by ``base_text`` (the value the author last knew), which is what the
+    daemon merges from."""
     from codoc.loop import edits
     from codoc.loop.edits import Command
 
@@ -180,17 +188,22 @@ def _command(message: dict, codoc_dir: str) -> dict:
         id=cid, kind=kind,
         feature_id=message.get("featureId") or message.get("feature_id") or "",
         local_id=message.get("localId") or message.get("local_id") or "",
-        base_rev=int(message.get("baseRev") or message.get("base_rev") or 0),
         base_text=base_text if isinstance(base_text, str) else None,
         session=message.get("session") or "",
         payload=dict(payload) if isinstance(payload, dict) else {}))
     return {"ok": True, "queued": True}
 
 
-def _comment_passthrough(message: dict, codoc_dir: str) -> dict:
-    # comment-edit / comment-resolve: persist the doc (mark edit/removal); the
-    # `> …` steering lifecycle is reconciled by the daemon.
-    _persist_doc(message, codoc_dir)
+def _comment_passthrough(_message: dict, _codoc_dir: str) -> dict:
+    """comment-edit / comment-resolve: acknowledged, not yet applied remotely.
+
+    These used to be implemented by writing the posted doc to ``tree.doc.json``, which
+    carried the mark edit/removal — a shared-writer arrangement that U4 ended (comment
+    threads live in the store's ``comments`` table and the daemon owns the projection).
+    There is no remote channel for editing or resolving an existing thread yet:
+    ``edits.json`` carries one-shot ``steers``, which is what ``comment-create`` uses.
+    Acknowledging is honest; the write it replaced did not apply the change either, and
+    it made the daemon skip re-rendering the exports as a side effect."""
     return {"ok": True}
 
 

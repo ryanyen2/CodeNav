@@ -13,6 +13,7 @@ import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
 import type { HoldDetail, HistoryEntry } from '../state/bindings-model';
 import type { ViewerInfo } from './viewer-status';
+import type { CommandKind } from '../state/edits-channel';
 
 /** An autocomplete candidate for the `@`-triggered code-reference picker (U5).
  *  Sourced from the sidecar `by_file` (bound symbols only). */
@@ -258,7 +259,32 @@ export type WebviewMessage =
      *  pass derives every held directive's `handed_off` as true and writes realize.md
      *  (the agent trigger). Prose stays exactly as committed. */
     | { kind: 'hand-off' }
-    | { kind: 'move'; sourceId: string; newParentId: string | null }
+    /** The tree pane's drag-to-reparent GESTURE (VS Code home): the host turns it into a
+     *  `move` command. It is deliberately not the `move` command itself — the network home
+     *  emits that directly (command-emitter.ts), and one wire name meaning two shapes is
+     *  how the hub ended up appending a move with no feature id to edits.json. */
+    | { kind: 'tree-move'; sourceId: string; newParentId: string | null }
+    /** An identity-keyed authored command (U3), posted DIRECTLY by the client. Only the
+     *  NETWORK home does this: in VS Code the extension host derives commands from a
+     *  `doc-settle` because it owns the projection baselines, while on the hub the browser
+     *  is the only party that sees a projection at all (see command-emitter.ts). The wire
+     *  shape mirrors the Python `Command` dataclass as `serve/dispatch._command` reads it;
+     *  the per-kind capability gate is server-side (KTD10). */
+    | {
+          kind: CommandKind;
+          id: string;
+          featureId?: string;
+          localId?: string;
+          baseText?: string;
+          session?: string;
+          payload?: {
+              title?: string;
+              description?: string;
+              parent_id?: string | null;
+              after_id?: string;
+              before_id?: string;
+          };
+      }
     | { kind: 'open-binding'; file: string; symbol: string }
     /** Open an external Consult link (a description's `https://` link) in the browser. */
     | { kind: 'open-link'; url: string }

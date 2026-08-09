@@ -171,9 +171,6 @@ class Command:
     * ``local_id`` is the webview's client-side node id for ``add`` (KTD8): the
       minted fid is correlated back to it so the host adopts the right node — no
       title/order guessing, no duplicate/orphan add.
-    * ``base_rev`` is the per-feature version the edit was authored from (the U5
-      version gate uses it; recorded here for the channel, unused on the Phase-A
-      apply path).
     * ``base_text`` is the value of the field this command REPLACES, as the author
       last knew it. ``None`` means "no claim" (a legacy or CLI-authored command)
       and applies unconditionally, exactly as before. When present, Loop B refuses
@@ -196,7 +193,6 @@ class Command:
     kind: str
     feature_id: str = ""
     local_id: str = ""
-    base_rev: int = 0
     base_text: str | None = None
     session: str = ""   # the editing session that authored it — lets the daemon tell
                         # "I am continuing my own edit" from "someone else wrote here"
@@ -291,7 +287,7 @@ def read_commands(codoc_dir: str | Path) -> list[Command]:
         payload = c.get("payload")
         out.append(Command(
             id=cid, kind=kind, feature_id=c.get("feature_id") or "",
-            local_id=c.get("local_id") or "", base_rev=int(c.get("base_rev") or 0),
+            local_id=c.get("local_id") or "",
             base_text=c["base_text"] if isinstance(c.get("base_text"), str) else None,
             session=c.get("session") or "",
             payload=dict(payload) if isinstance(payload, dict) else {}))
@@ -438,7 +434,7 @@ def append_command(codoc_dir: str | Path, cmd: Command) -> Path | None:
     Preserves the other edits.json lists. Drained + applied by Loop B (U3)."""
     entry = {
         "id": cmd.id, "kind": cmd.kind, "feature_id": cmd.feature_id,
-        "local_id": cmd.local_id, "base_rev": cmd.base_rev, "payload": dict(cmd.payload),
+        "local_id": cmd.local_id, "payload": dict(cmd.payload),
     }
     if cmd.base_text is not None:
         entry["base_text"] = cmd.base_text
@@ -656,7 +652,6 @@ def _dispatch_host_op(codoc_dir: str | Path, fn: str, arg) -> bool:
         append_command(codoc_dir, Command(
             id=arg.get("id") or "", kind=arg.get("kind") or "",
             feature_id=arg.get("feature_id") or "", local_id=arg.get("local_id") or "",
-            base_rev=int(arg.get("base_rev") or 0),
             base_text=arg["base_text"] if isinstance(arg.get("base_text"), str) else None,
             session=arg.get("session") or "",
             payload=arg.get("payload") if isinstance(arg.get("payload"), dict) else {}))

@@ -22,7 +22,8 @@ import { activeFeatureModes, featurePhases, featureSteps } from '../state/activi
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
 import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
-import { settleCommands, moveCommand, featureUnits, FeatureUnit } from '../state/commands-from-doc';
+import { moveCommand, featureUnits } from '../state/commands-from-doc';
+import { EditProvenance } from '../state/edit-provenance';
 import {
     CommentThread, commentNoteText, reconcileComments,
 } from '../state/comment-model';
@@ -79,26 +80,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  sole writer); the in-memory copy is just the diff baseline + the live comment
      *  thread store. */
     private docFileByUri = new Map<string, DocFile>();
-    /** The feature units of the last projection rendered to the editor, per uri — the
-     *  fallback baseline `settleDoc` diffs against when a settle cites no / an unknown
-     *  baseline. Refreshed whenever a new projection is read in buildPayload. */
-    private projectedUnitsByUri = new Map<string, FeatureUnit[]>();
-    /** Short per-uri history of projection baselines a settle may cite (#4): each payload
-     *  is stamped with a monotonic `baselineId` and its feature units are recorded here.
-     *  settleDoc diffs against the EXACT baseline the settle cites (the editor's view when
-     *  the user typed) — not a newer projection — so a feature the daemon added in flight
-     *  is never misread as a user deletion (a phantom retire). Bounded so it can't grow
-     *  unbounded across agent realize epochs while the user types. */
-    private baselinesByUri = new Map<string, Array<{ id: number; units: FeatureUnit[] }>>();
+    /** Per open tree: what this host has told the editor, and what it has written itself —
+     *  the citable projection baselines plus the optimistic `base_text` overlay
+     *  (state/edit-provenance.ts, shared with the hub's browser-side emitter so one rule
+     *  serves both homes). Every projection read is `observe`d; every settle diffs against
+     *  the baseline the editor CITES rather than against whatever landed last. */
+    private provenanceByUri = new Map<string, EditProvenance>();
     private baselineSeq = 0;
-    /** Per uri: what this host believes the STORE currently holds for each feature.
-     *  Reset from every projection, and advanced optimistically as commands are
-     *  emitted — a command carries this as its `base_text` so the daemon can tell a
-     *  clean continuation from someone else having written in between. Without the
-     *  optimistic half, two settles before a projection returns (ordinary typing)
-     *  would each cite text the store had already moved past, and every one of them
-     *  would read as a conflict. */
-    private knownStoreByUri = new Map<string, Map<string, FeatureUnit>>();
     /** Whether the current append outage has already been reported (re-armed on success),
      *  so a persistent failure doesn't fire a dialog per keystroke. */
     private hostOpFailureNotified = false;
@@ -118,7 +106,6 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     private settleToken(): string {
         return `${this.sessionTag}.${++this.emissionSeq}`;
     }
-    private static readonly BASELINE_HISTORY = 16;
     /** Suggesting-mode DRAFTS (U4), per doc uri: feature ids whose edit the human is
      *  holding as a draft (the daemon keeps their code-implying directive out of the
      *  agent queue until hand-off). The host is the SOLE writer of edits.json `drafts`
@@ -242,7 +229,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await this.handOff(document);
                     post();  // drafts cleared → the hand-off button drops on the next paint
                     return;
-                case 'move':
+                case 'tree-move':
                     await this.editMove(document, msg.sourceId, msg.newParentId);
                     post();  // U2b: doc-level move → repost (saved doc leads tree.codoc)
                     return;
@@ -566,16 +553,8 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         // settle diffs against (commandsForSettle) — replaces the docAhead text compare.
         // Stamp a monotonic baselineId and keep a short history so a settle can cite the
         // EXACT baseline it was computed from (#4), immune to an in-flight projection.
-        const baselineUnits = featureUnits(doc);
-        this.projectedUnitsByUri.set(uri, baselineUnits);
-        // A fresh projection IS the store, so it resets what we believe the store
-        // holds — discarding any optimistic entries whose commands it has absorbed.
-        this.knownStoreByUri.set(uri, new Map(baselineUnits.filter(u => u.fid).map(u => [u.fid!, u])));
         const baselineId = ++this.baselineSeq;
-        const hist = this.baselinesByUri.get(uri) ?? [];
-        hist.push({ id: baselineId, units: baselineUnits });
-        while (hist.length > CodocTreeEditorProvider.BASELINE_HISTORY) hist.shift();
-        this.baselinesByUri.set(uri, hist);
+        this.provenance(document).observe(featureUnits(doc), baselineId);
 
         // Comment lifecycle (U4): the projection carries the anchor MARKS; the thread
         // bodies live in the in-memory store (seeded from the last tree.doc.json, kept
@@ -820,26 +799,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  tree.doc.json (KTD9). Idempotent on the store ledger (KTD8): a re-emitted id folds. */
     private async emitCommands(document: vscode.TextDocument, commands: readonly CommandEntry[]): Promise<void> {
         const ok = await this.appendHostOps(document, commands.map(c => ({ fn: 'appendCommand', arg: c })));
-        if (ok) this.advanceKnownStore(document, commands);
-    }
-
-    /** Fold emitted commands into "what the store holds", so the NEXT command cites
-     *  the text this one is about to write rather than the text before it. Only on a
-     *  successful append: if the edit never reached the log, the store never moved. */
-    private advanceKnownStore(document: vscode.TextDocument, commands: readonly CommandEntry[]): void {
-        const uri = document.uri.toString();
-        const known = this.knownStoreByUri.get(uri) ?? new Map<string, FeatureUnit>();
-        for (const c of commands) {
-            const fid = c.feature_id;
-            if (!fid) continue;
-            const prior = known.get(fid);
-            if (!prior) continue;   // never projected — the daemon will tell us soon enough
-            if (c.kind === 'set_title') known.set(fid, { ...prior, title: c.payload?.title ?? prior.title });
-            if (c.kind === 'set_description') {
-                known.set(fid, { ...prior, description: c.payload?.description ?? prior.description });
-            }
-        }
-        this.knownStoreByUri.set(uri, known);
+        // Only on a successful append: if the edit never reached the log the store never
+        // moved, and claiming it did would make the next edit cite text that exists nowhere.
+        if (ok) this.provenance(document).record(commands);
     }
 
     /** Read the daemon-written store projection (tree.doc.json) for this tree (U4/KTD9).
@@ -885,16 +847,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      * re-renders both files; the file-watch repaint closes the loop.
      */
     private async settleDoc(document: vscode.TextDocument, doc: PMNode, baselineId?: number): Promise<void> {
-        const uri = document.uri.toString();
-        // #4 — diff against the EXACT projection the settle was computed from. The webview
-        // echoes the payload's baselineId; we look it up in the short history. Diffing
-        // against a NEWER projection (whatever last landed in projectedUnitsByUri) is the
-        // phantom-retire bug: a feature the daemon added after the editor's baseline would
-        // appear in `prev` but not `next` and be misread as a user deletion → a retire.
-        const hist = this.baselinesByUri.get(uri) ?? [];
-        const fallback = this.projectedUnitsByUri.get(uri) ?? featureUnits(this.readProjectionDoc(document));
-        const commands = settleCommands(hist, baselineId, fallback, featureUnits(doc),
-                                        this.settleToken(), this.knownStoreByUri.get(uri), this.sessionTag);
+        // #4 — diff against the EXACT projection the settle was computed from. The editor
+        // stamps that baseline when it ADOPTS a projection and echoes the id back here.
+        // Diffing against a newer one instead is the phantom-retire / silent-revert bug: a
+        // feature the daemon changed after the editor's baseline reads as a user edit.
+        const commands = this.provenance(document).settle(
+            featureUnits(doc), baselineId, this.settleToken(),
+            () => featureUnits(this.readProjectionDoc(document)));
         if (!commands.length) return;  // no identity-keyed change
         await this.emitCommands(document, commands);
         // W3: remember which existing features this settle edited, so the next
@@ -920,6 +879,14 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      *  repost — the daemon's resulting sidecar/status write drives the UI refresh. */
     private async withdrawRealization(document: vscode.TextDocument, featureId: string): Promise<void> {
         await this.appendHostOp(document, 'appendCancellation', { feature_id: featureId, ts: Date.now() });
+    }
+
+    /** The per-uri edit-provenance book; created on first use. */
+    private provenance(document: vscode.TextDocument): EditProvenance {
+        const uri = document.uri.toString();
+        let p = this.provenanceByUri.get(uri);
+        if (!p) { p = new EditProvenance(this.sessionTag); this.provenanceByUri.set(uri, p); }
+        return p;
     }
 
     /** W3: the per-uri saved-flash pending map; created empty on first use. */

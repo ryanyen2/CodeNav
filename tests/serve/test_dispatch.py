@@ -63,16 +63,41 @@ def test_suggest_commit_is_held_not_handed_off(tmp_path):
                    Capability.SUGGEST, cd)
     assert res.get("held") is True
     assert edits.read_drafts(cd) == {"f-1"}  # NOT cleared → not handed off
-    assert (tmp_path / "tree.doc.json").exists()  # doc persisted
+    assert edits.read_handoffs(cd) == []     # …and nothing crossed to execution
+    # The settle stores nothing: tree.doc.json is the daemon's projection output (KTD9),
+    # and writing it from here dropped the edit and stalled the derived re-render.
+    assert not (tmp_path / "tree.doc.json").exists()
 
 
-# Flow 4 — a write collaborator hands off → drafts cleared (the realize trigger acts in U7).
-def test_handoff_clears_drafts(tmp_path):
+# Flow 4 — a write collaborator hands off → the held directives are RELEASED (U7 trigger).
+def test_handoff_releases_the_held_directives(tmp_path):
+    """`handoffs` is the positive signal Loop B reads; clearing `drafts` is only the UI
+    half. Under the held-draft model this handler cleared drafts and nothing else, so a
+    maintainer's hand-off on the hub silently did nothing."""
     cd = str(tmp_path)
+    edits.write_manifest(cd, [
+        edits.Directive(id="d-1", feature_id="f-1", kind="amend", caused_by="c-1",
+                        text="do f-1", baseline="", handed_off=False, ts=1),
+        edits.Directive(id="d-2", feature_id="f-2", kind="amend", caused_by="c-2",
+                        text="do f-2", baseline="", handed_off=False, ts=2),
+        edits.Directive(id="d-3", feature_id="f-3", kind="amend", caused_by="c-3",
+                        text="already sent", baseline="", handed_off=True, ts=3),
+    ])
     edits.set_drafts(cd, ["f-1", "f-2"])
+
     res = dispatch({"kind": "hand-off"}, Capability.HANDOFF, cd)
+
     assert res["ok"] is True
+    assert res["handed_off"] == 2
+    assert edits.read_handoffs(cd) == ["f-1", "f-2"]   # d-3 was already across
     assert edits.read_drafts(cd) == set()
+
+
+def test_handoff_with_nothing_held_is_a_harmless_noop(tmp_path):
+    cd = str(tmp_path)
+    res = dispatch({"kind": "hand-off"}, Capability.HANDOFF, cd)
+    assert (res["ok"], res["handed_off"]) == (True, 0)
+    assert edits.read_handoffs(cd) == []
 
 
 def test_handoff_writes_verdict(tmp_path):

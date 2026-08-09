@@ -25,6 +25,9 @@ import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 import { acquireHostApi, isVsCodeHost, type Delivery } from './host-bridge';
 import { mountViewerStatus } from './viewer-status';
+import { createCommandEmitter, commandMessage, type CommandEmitter } from './command-emitter';
+import { moveCommand } from '../state/commands-from-doc';
+import type { CommandEntry } from '../state/edits-channel';
 
 // One transport seam for both homes (U2): the real VS Code host API, or — in a
 // standalone browser served by `codoc serve` — a network shim that POSTs commands
@@ -226,6 +229,20 @@ if (!isVsCodeHost()) document.body.classList.add('codoc-standalone');
 const viewerStatus = isVsCodeHost()
     ? undefined
     : mountViewerStatus(document.body, showTransientNotice);
+
+// Hub only. An authored edit reaches Loop B as an identity-keyed COMMAND (U3/U4); in VS
+// Code the extension host derives those from a `doc-settle` because it owns the
+// projection baselines, and on the hub the browser is the only party that ever sees a
+// projection — so here the client emits them itself, through the same modules the host
+// uses (see ./command-emitter). Before this, a remote settle posted the whole doc and the
+// hub wrote it to `tree.doc.json`: a daemon-owned artifact nobody reads as input, so the
+// edit was dropped and the derived re-render stalled.
+const commands: CommandEmitter | undefined = isVsCodeHost() ? undefined : createCommandEmitter();
+
+/** Put authored commands on the wire (hub only — in VS Code the host derives them). */
+function postCommands(cmds: readonly CommandEntry[]): void {
+    for (const c of cmds) vscode.postMessage(commandMessage(c));
+}
 
 // ─── DOM helpers ────────────────────────────────────────────────────────────
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -666,7 +683,7 @@ function reconcile(): void {
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
         wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
-        wholeEditor.setDoc(payload.doc);
+        wholeEditor.setDoc(payload.doc, payload.baselineId);
         applyGlance();     // refresh pitch map (a loop pass may have rewritten pitches)
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
@@ -926,7 +943,15 @@ function appendRow(parent: HTMLElement, id: string): void {
         ev.preventDefault();
         row.classList.remove('drop-target');
         if (dragSourceId && dragSourceId !== id && !isDescendant(dragSourceId, id)) {
-            vscode.postMessage({ kind: 'move', sourceId: dragSourceId, newParentId: id });
+            // The GESTURE, not the command: in VS Code the host turns it into a move
+            // command (it mints the emission token); on the hub the client emits it.
+            if (commands) {
+                const cmd = moveCommand(dragSourceId, id, commands.token());
+                commands.record([cmd]);
+                vscode.postMessage(commandMessage(cmd));
+            } else {
+                vscode.postMessage({ kind: 'tree-move', sourceId: dragSourceId, newParentId: id });
+            }
         }
         dragSourceId = null;
     };
@@ -949,8 +974,24 @@ function renderDocHost(): HTMLElement {
         getSymbols: () => payload.symbols ?? [],
         // Cite the projection this editor was rendered from (#4) so the host diffs the
         // settle against that exact baseline, not a newer projection that landed in flight.
-        onSettle: doc => vscode.postMessage({ kind: 'doc-settle', doc, baselineId: payload.baselineId }),
-        onCommit: doc => { fireSaveShimmer(); vscode.postMessage({ kind: 'commit', doc, baselineId: payload.baselineId }); },
+        // The EDITOR supplies the citation, not `payload` — see WholeDocEditorOptions.
+        // A settle flushed by an arriving projection carries pre-adoption content, and
+        // `payload` has already been reassigned to the new projection by then, so reading
+        // it here stamped the wrong baseline and turned the daemon's in-flight edits into
+        // user edits that revert them (#2).
+        onSettle: (doc, baselineId) => {
+            if (commands) { postCommands(commands.settle(doc, baselineId)); return; }
+            vscode.postMessage({ kind: 'doc-settle', doc, baselineId });
+        },
+        onCommit: (doc, baselineId) => {
+            fireSaveShimmer();
+            if (!commands) { vscode.postMessage({ kind: 'commit', doc, baselineId }); return; }
+            // Hub: commit is settle + (if this viewer may) hand off. The capability gate
+            // is server-side; checking it here only avoids a refusal notice for a
+            // suggest-only contributor, whose edits are recorded and held either way.
+            postCommands(commands.settle(doc, baselineId));
+            if (payload.viewer?.canHandOff) vscode.postMessage({ kind: 'hand-off' });
+        },
         onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdrawRealization: featureId => vscode.postMessage({ kind: 'withdraw-realization', featureId }),
@@ -986,7 +1027,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
     wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
     wholeEditor.setHistory(payload.history ?? {});   // W2 blame data
-    wholeEditor.setDoc(payload.doc);
+    wholeEditor.setDoc(payload.doc, payload.baselineId);
     applyGlance();      // seed pitch + glance state into the fresh editor
     applyBlame();       // seed the History stance into the fresh editor
     // Presence rides the doc surface — re-place the avatar as the surface scrolls (the agent's
@@ -1250,6 +1291,9 @@ window.addEventListener('message', ev => {
     if (msg.payload.rev < lastRev) return; // ignore stale posts
     lastRev = msg.payload.rev;
     payload = msg.payload;
+    // Record the projection as a citable baseline BEFORE anything renders from it, so a
+    // settle flushed by the render below can still resolve what it cites (hub only).
+    commands?.observe(payload);
     viewerStatus?.setViewer(payload.viewer);
     awaitingAI = new Set(payload.awaitingAI ?? []);
     draftSet = new Set(payload.drafts ?? []);

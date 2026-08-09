@@ -65,11 +65,18 @@ import type { ThreadsData, AgentStep } from '../protocol';
 export interface WholeDocEditorOptions {
     controller: AuthorController;
     getSymbols: () => RefSymbol[];
-    /** Commit the whole settled doc (debounced). The single edit path — captures locally. */
-    onSettle: (doc: PMNode) => void;
+    /** Commit the whole settled doc (debounced). The single edit path — captures locally.
+     *  `baselineId` is the projection this doc was ADOPTED from — the baseline its content
+     *  was typed against, which the host diffs it and sources `base_text` from. The editor
+     *  owns that citation because only it knows what it adopted: a settle flushed BY an
+     *  arriving projection (setDoc) carries content from the PREVIOUS baseline, and reading
+     *  the newest payload's id at post time was finding #2 — the daemon's in-flight changes
+     *  then read as user edits that revert them. Undefined before the first adopt. */
+    onSettle: (doc: PMNode, baselineId?: number) => void;
     /** Stage & SEND (U4): the explicit Save/Commit gesture (⌘S or the Commit button).
-     *  Flushes the latest edit and hands the staged code-implying edits to the agent. */
-    onCommit?: (doc: PMNode) => void;
+     *  Flushes the latest edit and hands the staged code-implying edits to the agent.
+     *  Cites the adopted baseline for the same reason `onSettle` does. */
+    onCommit?: (doc: PMNode, baselineId?: number) => void;
     onAccept: (s: Suggestion) => void;
     onReject: (s: Suggestion) => void;
     /** Withdraw a queued realization for a feature (U6) — the ✕ on its "realizing"
@@ -104,8 +111,10 @@ export interface WholeDocEditorOptions {
 
 export interface WholeDocEditorHandle {
     element: HTMLElement;
-    /** Re-seed from an external payload (skipped while the user has unsettled edits). */
-    setDoc: (doc: PMNode) => void;
+    /** Re-seed from an external payload (skipped while the user has unsettled edits).
+     *  `baselineId` names the projection: it becomes this editor's citation once the doc
+     *  is actually adopted, so every later settle diffs against what the author saw. */
+    setDoc: (doc: PMNode, baselineId?: number) => void;
     /** Update the pending diff list (re-renders the inline diff decorations). */
     setSuggestions: (suggestions: Suggestion[]) => void;
     /** Update the per-feature dependency threads (reads / used-by / code refs). */
@@ -290,6 +299,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // state is intentionally empty after a window reload → the first projection adopts).
     const localVersions = new Map<string, string>();
     const pendingFids = new Set<string>();
+    // The projection baseline this editor's content is computed FROM — stamped at the
+    // end of an adopt (setDoc), so it always trails the doc rather than leading it. Every
+    // settle cites this, which is what makes a flush triggered BY an arriving projection
+    // (setDoc's settleNow) diff against the text the author actually typed against (#2).
+    let adoptedBaselineId: number | undefined;
     // The text of each feature as last ADOPTED from a projection. An edit that returns
     // to it has nothing left to protect, so the feature stops being pending — without
     // this an undo pins a feature pending forever and no projection can reach it again.
@@ -477,7 +491,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         // it (pure-doc vs code-implying) and, when it implies code, lands the feature
         // in the hold set → the calm "being realized" badge surfaces back. No
         // client-side suggest/strip/dual-state.
-        opts.onSettle(editor.getJSON() as PMNode);
+        opts.onSettle(editor.getJSON() as PMNode, adoptedBaselineId);
         markSaving('saved');
         rebuildRail();
     }
@@ -496,7 +510,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         // the SECOND re-baseline point (the other is a real reload in setDoc).
         capturedBaseline = featureBlocks(doc);
         editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
-        opts.onCommit?.(doc);
+        opts.onCommit?.(doc, adoptedBaselineId);
         markSaving('sent');
     }
 
@@ -848,7 +862,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // W5 fix: a projection that arrives while a comment composer / selection bubble
     // is open — or while an IME composition is in flight — is DEFERRED here (not
     // dropped), then re-applied the moment that clears. Only the LATEST is kept.
-    let pendingProjection: PMNode | null = null;
+    // Carries its baselineId with it: a deferred projection must not be adopted under a
+    // citation that has since moved on (the id and the doc are one fact, not two).
+    let pendingProjection: { doc: PMNode; baselineId?: number } | null = null;
     const isComposing = (): boolean => shouldDeferProjection({
         composerOpen: !!composer,
         bubbleOpen: bubble.style.display !== 'none',
@@ -858,7 +874,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         if (!pendingProjection || isComposing()) return;
         const p = pendingProjection;
         pendingProjection = null;
-        handle.setDoc(p);
+        handle.setDoc(p.doc, p.baselineId);
     }
     // ProseMirror finishes its own composition bookkeeping after this event, so the
     // deferred projection lands on the next tick — applying it inline would replace
@@ -1225,14 +1241,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
 
     const handle: WholeDocEditorHandle = {
         element: wrap,
-        setDoc: (incoming: PMNode) => {
+        setDoc: (incoming: PMNode, baselineId?: number) => {
             patchMintedIds(incoming); // learn minted ids even mid-edit (prevents a double-add)
             // A reload while a comment composer / bubble is open would remap or destroy
             // the captured range under it (the "selection vanished mid-comment" bug).
             // DEFER the WHOLE update (keeping only the latest) and re-apply it the
             // moment the composer/bubble closes — so the doc never sits stale waiting
             // on an unrelated next write (W5 composer-drop fix).
-            if (isComposing()) { pendingProjection = incoming; return; }
+            if (isComposing()) { pendingProjection = { doc: incoming, baselineId }; return; }
             // Flush before anything can replace the document. The version gate below
             // resolves a same-feature disagreement by swapping a whole slice, and when
             // the projection wins, whatever the user had typed since the last settle
@@ -1264,6 +1280,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 const ft = projected.get(fid);
                 if (ft) adoptedText.set(fid, ftKey(ft));
             }
+            // The citation advances HERE — after the flush above sent the previous
+            // baseline's content, and before either exit path below. Every later settle
+            // therefore diffs against this projection, which is the one the author is
+            // about to be looking at.
+            //
+            // It advances even when the gate kept a feature local: this projection is
+            // still what the author saw, and their unsent edit to that feature diffs
+            // against it as the edit it is. Its `base_text` comes from the host's
+            // optimistic overlay (the text it already emitted), not from here.
+            adoptedBaselineId = baselineId;
             // Skip the reload when BOTH the baseline text AND the agent-proposal set
             // are unchanged — the common case right after a settle round-trips;
             // reloading would reset the caret. Reload when the baseline text changed

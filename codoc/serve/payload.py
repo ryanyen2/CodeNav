@@ -433,5 +433,20 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
         # `mediaSrc` the browser can load directly (mirrors the webview's
         # `asWebviewUri` translation — see codoc/serve/media.py).
         "blocks": _blocks_with_media(_sidecar(codoc_dir).get("blocks") or {}),
+        # The projection's identity, for a settle to CITE. The browser emits identity-keyed
+        # commands itself (webview/command-emitter.ts) and diffs each settle against the
+        # baseline its content was typed against; without an id every settle would fall
+        # back to "whatever projection the client read last", which is how a concurrent
+        # write ends up claimed as the author's own base and overwritten in silence. Same
+        # value as `rev` on purpose: it is the daemon's HLC stamp, so it moves exactly when
+        # the projection can have changed, and it survives a hub restart.
+        "baselineId": payload_version(codoc_dir),
+        # localId → minted fid, so a node authored in the browser adopts the fid the store
+        # gave it instead of lingering beside the projection's copy of itself.
+        "mintedByLocalId": {
+            str(meta.get("local_id")): fid
+            for fid, meta in features.items()
+            if isinstance(meta, dict) and meta.get("local_id")
+        },
         "rev": payload_version(codoc_dir),
     }

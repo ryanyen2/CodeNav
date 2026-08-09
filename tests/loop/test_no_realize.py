@@ -73,7 +73,7 @@ def test_no_realize_records_code_implying_edit_as_held_draft(dirs):
                              fingerprint="fp"))
     s.close()
     append_command(codoc_dir, Command(
-        id="c-2", kind="set_description", feature_id=f.id, base_rev=1,
+        id="c-2", kind="set_description", feature_id=f.id,
         payload={"description": "Rework the login flow entirely."}))
 
     res = run_loop_b(root, codoc_dir, realize=False)

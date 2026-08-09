@@ -37,6 +37,7 @@ import {
     paragraphOwner,
 } from './pm-doc';
 import type { CommandEntry } from './edits-channel';
+import type { KnownStore } from './known-store';
 
 /** One feature as it appears in a doc: identity + the fields a command targets. */
 export interface FeatureUnit {
@@ -168,7 +169,7 @@ export function commandsForSettle(
     prev: FeatureUnit[],
     next: FeatureUnit[],
     token: string,
-    known?: ReadonlyMap<string, FeatureUnit>,
+    known?: KnownStore,
     session = '',
 ): CommandEntry[] {
     const out: CommandEntry[] = [];
@@ -232,20 +233,23 @@ export function commandsForSettle(
             out.push({ id: commandId('retire', u.fid, token), kind: 'retire', feature_id: u.fid });
             continue;  // a retiring node's title/description/parent edits are moot
         }
-        // What we believe the STORE holds right now — which is not the same as the
-        // baseline this diff is computed against. The diff baseline is what the user
-        // was looking at; `known` also folds in the commands this editor has already
-        // emitted but whose projection has not returned yet. Without that, two settles
-        // in a row (perfectly ordinary typing) would look like a conflict with itself.
-        const stored = known?.get(u.fid) ?? b;
+        // `base_text` — the value the AUTHOR last knew (see known-store.ts). Two
+        // sources, in order: this editor's own already-emitted-but-unechoed writes
+        // (`known`, or two settles in a row — ordinary typing faster than the round
+        // trip — would each cite text the store had moved past and read as a conflict
+        // with itself), else the CITED baseline `b`, which is what the author was
+        // looking at. Never a newer projection: the author may never have adopted it,
+        // and claiming they saw a stranger's write is what makes the daemon apply this
+        // text verbatim over it.
+        const known1 = known?.get(u.fid);
         if (b.title !== u.title) {
             out.push({ id: commandId('set_title', u.fid, token), kind: 'set_title',
-                       feature_id: u.fid, base_text: stored.title, session,
+                       feature_id: u.fid, base_text: known1?.title ?? b.title, session,
                        payload: { title: u.title } });
         }
         if (b.description !== u.description) {
             out.push({ id: commandId('set_description', u.fid, token), kind: 'set_description',
-                       feature_id: u.fid, base_text: stored.description, session,
+                       feature_id: u.fid, base_text: known1?.description ?? b.description, session,
                        payload: { description: u.description } });
         }
         // One move per node, whether it changed parent, changed position among its
@@ -403,6 +407,15 @@ export interface Baseline { id: number; units: FeatureUnit[]; }
  * uncited/evicted baseline: the fallback can only ever produce (possibly redundant)
  * content commands, which the daemon's ledger + idempotent apply absorb. An explicit
  * retire the user actually toggled is honoured even against the fallback.
+ *
+ * The cited baseline is also the `base_text` of last resort (see known-store.ts), which
+ * is why the citation has to name the baseline the settled CONTENT was computed from —
+ * not whatever the editor is showing now. The editor stamps it at the end of its adopt
+ * (`whole-doc-editor.setDoc`), so a settle flushed BY an arriving projection still cites
+ * the baseline it was typed against. Reading the newest payload's id at post time was
+ * finding #2: the flushed pre-adoption text diffed against post-adoption units, so every
+ * feature the daemon had just changed read as a user edit that reverted it.
+ *
  */
 export function settleCommands(
     history: readonly Baseline[],
@@ -410,10 +423,19 @@ export function settleCommands(
     fallbackUnits: FeatureUnit[],
     nextUnits: FeatureUnit[],
     token: string,
-    known?: ReadonlyMap<string, FeatureUnit>,
+    known?: KnownStore,
     session = '',
 ): CommandEntry[] {
     const cited = baselineId != null ? history.find(b => b.id === baselineId) : undefined;
-    const prevUnits = cited ? cited.units : fallbackUnits;
+    // When the citation cannot be resolved, fall back to the OLDEST baseline still
+    // retained, not the newest projection. The asymmetry is the point: an under-claimed
+    // base makes the daemon cautious (it sees divergence and merges, or parks a proposal),
+    // while an over-claimed one makes it blind (base == current reads as a clean
+    // continuation and applies verbatim over somebody else's write). Both are wrong; only
+    // one loses text. The extra commands a stale baseline produces are text the author
+    // already has, so they resolve to no-ops.
+    const prevUnits = cited ? cited.units
+        : history.length ? history[0].units
+        : fallbackUnits;
     return commandsForSettle(prevUnits, nextUnits, token, known, session);
 }
