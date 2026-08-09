@@ -568,6 +568,8 @@ def propose(
     feature: str = typer.Option(None, "--feature", help="Target feature id (amend / retire_node / move_node)."),
     rationale: str = typer.Option("", "--rationale", help="One-line justification shown in the diff block."),
     bind: list[str] = typer.Option(None, "--bind", help="Binding as file.py::symbol_path (repeatable)."),
+    after: str = typer.Option(None, "--after", help="Place it after this sibling feature id (add_node / move_node)."),
+    before: str = typer.Option(None, "--before", help="Place it before this sibling feature id (add_node / move_node)."),
 ):
     """Author an agent plan proposal in the codoc feature tree.
 
@@ -581,6 +583,12 @@ def propose(
         codoc propose add_node --title "Date formatting" \\
             --description "ISO-8601 date helpers." \\
             --bind utils/dates.py::format_date
+
+    ``--after`` / ``--before`` name the siblings the node goes between (feature ids), for
+    ``add_node`` and ``move_node``. Omit both to append. A ``move_node`` that repeats the
+    node's current ``--parent`` and gives new anchors IS a reorder::
+
+        codoc propose move_node --feature f-1a2b --parent f-cafe --after f-beef
     """
     from codoc.agent.propose import propose_plan
 
@@ -594,6 +602,8 @@ def propose(
             feature_id=feature,
             rationale=rationale,
             binds=list(bind) if bind else [],
+            after_id=after or "",
+            before_id=before or "",
         )
         typer.echo(f"✓ Proposal created  ⟨{eid}⟩")
         typer.echo("  Accept it in the VS Code IDE (inline action on the diff block).")

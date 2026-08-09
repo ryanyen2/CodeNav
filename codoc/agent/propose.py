@@ -47,6 +47,8 @@ def propose_plan(
     feature_id: str | None = None,
     rationale: str = "",
     binds: list[str] | None = None,
+    after_id: str = "",
+    before_id: str = "",
 ) -> str:
     """Create a plan proposal (``applied=False`` Event) and re-render the tree.
 
@@ -68,6 +70,11 @@ def propose_plan(
         One-line justification shown in the pending-changes hunk.
     binds:
         Bindings as ``"file.py::symbol_path"`` strings.
+    after_id / before_id:
+        The siblings the node goes between, for ``add_node`` / ``move_node`` — sibling
+        order stated as neighbour IDENTITIES rather than an index, so a sibling added or
+        retired before the proposal is accepted cannot change where the node lands. Both
+        empty means no opinion about order, which appends.
 
     Returns
     -------
@@ -100,6 +107,8 @@ def propose_plan(
         description=description,
         bindings=parsed_binds,
         rationale=rationale,
+        after_id=after_id,
+        before_id=before_id,
         # A plan ADD_NODE is an explicit, not-yet-built placeholder: born
         # unrealized (parity with mcp.tools.plan_add) so the lifecycle flips it
         # realized only when code first binds, and so Loop B treats accepting it

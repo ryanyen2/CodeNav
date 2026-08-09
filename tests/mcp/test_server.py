@@ -338,3 +338,87 @@ def test_binding_maintenance_is_never_suppressed_by_a_hold(codoc_dir):
     res = tools.reflect(codoc_dir, ops=[{"kind": "attach", "feature_id": f.id, "binds": ["a.py::x"]}])
 
     assert res["results"][0]["applied"] is True
+
+
+# ── ordering is not a human-only capability ───────────────────────────────────
+#
+# The rank machinery is symmetric — `apply_op` resolves after_id/before_id at the write
+# boundary for any source — but the agent surfaces dropped the anchors before they got
+# there: `reflect` rebuilt each op without them and `propose_move` had no order params.
+# So every agent move appended, and an agent that split a feature could not put the new
+# node beside the one it came from. These pin the plumbing end to end.
+
+def _accept_all(codoc_dir):
+    """Apply every pending proposal, the way an IDE accept does."""
+    from codoc.loop.apply import apply_op
+
+    with open_store(codoc_dir) as s:
+        for ev in s.pending_events():
+            apply_op(ev.op, s, source=ev.source, applied=True)
+            s.mark_applied(ev.id)
+
+
+def _order(codoc_dir, parent=None):
+    with open_store(codoc_dir) as s:
+        return [f.title for f in s.children(parent)]
+
+
+def _seed_ranked(codoc_dir, *titles) -> list[Feature]:
+    out = []
+    with open_store(codoc_dir) as s:
+        for t in titles:
+            f = Feature(title=t, rank=s.rank_for_append(None))
+            s.upsert_feature(f)
+            out.append(f)
+    return out
+
+
+def test_reflect_honours_the_sibling_anchors_on_a_move(codoc_dir):
+    a, b, c = _seed_ranked(codoc_dir, "Alpha", "Beta", "Gamma")
+    assert _order(codoc_dir) == ["Alpha", "Beta", "Gamma"]
+
+    res = tools.reflect(codoc_dir, ops=[{
+        "kind": "move_node", "feature_id": c.id, "parent_id": None,
+        "after_id": a.id, "before_id": b.id, "rationale": "belongs beside Alpha",
+    }])
+    assert res["ok"]
+    _accept_all(codoc_dir)
+
+    assert _order(codoc_dir) == ["Alpha", "Gamma", "Beta"]
+
+
+def test_reflect_without_anchors_still_appends(codoc_dir):
+    """The behaviour every caller had before ordering existed: no opinion → last."""
+    a, b = _seed_ranked(codoc_dir, "Alpha", "Beta")
+    with open_store(codoc_dir) as s:
+        child = Feature(title="Child", parent_id=a.id, rank=s.rank_for_append(a.id))
+        s.upsert_feature(child)
+
+    tools.reflect(codoc_dir, ops=[{"kind": "move_node", "feature_id": child.id,
+                                  "parent_id": None}])
+    _accept_all(codoc_dir)
+
+    assert _order(codoc_dir) == ["Alpha", "Beta", "Child"]
+
+
+def test_propose_move_can_reorder_within_one_parent(codoc_dir):
+    """A reorder IS a move whose parent is unchanged and whose anchors differ — the
+    gesture a human drag makes, now sayable by an agent."""
+    a, b, c = _seed_ranked(codoc_dir, "Alpha", "Beta", "Gamma")
+
+    res = tools.propose_move(codoc_dir, feature_id=a.id, parent_id=None,
+                             after_id=b.id, before_id=c.id, rationale="reads better here")
+    assert res["ok"]
+    _accept_all(codoc_dir)
+
+    assert _order(codoc_dir) == ["Beta", "Alpha", "Gamma"]
+
+
+def test_propose_add_lands_between_the_siblings_it_names(codoc_dir):
+    a, b = _seed_ranked(codoc_dir, "Alpha", "Gamma")
+
+    tools.propose_add(codoc_dir, title="Beta", description="in between",
+                      after_id=a.id, before_id=b.id)
+    _accept_all(codoc_dir)
+
+    assert _order(codoc_dir) == ["Alpha", "Beta", "Gamma"]

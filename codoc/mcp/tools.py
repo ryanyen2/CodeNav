@@ -373,10 +373,14 @@ def propose_add(codoc_dir: str, *, title: str, description: str = "",
                 parent_id: str | None = None, binds: list[str] | None = None,
                 rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
                 realized: bool | None = None, caused_by: str = "",
-                actor: str = "") -> dict:
+                actor: str = "", after_id: str = "", before_id: str = "") -> dict:
+    """``after_id``/``before_id`` name the siblings the new node goes between — the same
+    identity-anchored ordering a human drag emits. Both empty means no opinion, which
+    appends (every caller's behaviour before ordering existed)."""
     op = NodeOp(kind=NodeOpKind.ADD_NODE, title=title, description=description,
                 parent_id=parent_id, bindings=_parse_binds(binds),
-                rationale=rationale, realized=realized)
+                rationale=rationale, realized=realized,
+                after_id=after_id, before_id=before_id)
     return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
@@ -391,9 +395,16 @@ def propose_amend(codoc_dir: str, *, feature_id: str, title: str | None = None,
 
 def propose_move(codoc_dir: str, *, feature_id: str, parent_id: str | None,
                  rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
-                 caused_by: str = "", actor: str = "") -> dict:
+                 caused_by: str = "", actor: str = "",
+                 after_id: str = "", before_id: str = "") -> dict:
+    """``after_id``/``before_id`` name the siblings the node lands between, so a move can
+    say WHERE and not only under whom. Without them every agent move appended, which made
+    ordering a human-only capability even though the rank machinery is symmetric: an agent
+    could not put a newly-split feature back beside the one it came from. Reordering
+    within one parent is a move whose ``parent_id`` is unchanged and whose anchors move."""
     op = NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=feature_id,
-                parent_id=parent_id, rationale=rationale)
+                parent_id=parent_id, rationale=rationale,
+                after_id=after_id, before_id=before_id)
     return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
@@ -425,8 +436,12 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
     """Submit the whole change set the agent just made, in one call.
 
     Each op is ``{kind, feature_id?, parent_id?, title?, description?, binds?,
-    rationale?, realized?}``. Safe ops apply immediately; structural ops become
-    proposals. Returns per-op results plus applied/proposed counts.
+    rationale?, realized?, after_id?, before_id?}``. Safe ops apply immediately;
+    structural ops become proposals. Returns per-op results plus applied/proposed counts.
+
+    ``after_id``/``before_id`` (add_node / move_node) name the siblings the node goes
+    between. They used to be dropped here, which silently made every agent-side move an
+    append — the one tree gesture a human could make and an agent could not.
     """
     results: list[dict] = []
     applied_ops: list[NodeOp] = []
@@ -449,6 +464,11 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
                 bindings=_parse_binds(raw.get("binds")),
                 rationale=raw.get("rationale") or rationale,
                 realized=raw.get("realized"),
+                # Sibling order, by neighbour IDENTITY (never an index — by the time this
+                # applies, Loop A may have added or retired a sibling and "third child"
+                # would mean something else).
+                after_id=str(raw.get("after_id") or ""),
+                before_id=str(raw.get("before_id") or ""),
             )
             # Validate references.
             if kind in (NodeOpKind.AMEND, NodeOpKind.RETIRE_NODE, NodeOpKind.MOVE_NODE,

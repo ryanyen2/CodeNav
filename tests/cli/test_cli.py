@@ -119,6 +119,43 @@ def test_propose_creates_pending_event(tmp_path):
     assert pending[0].op.title == "Date formatting"
 
 
+def test_propose_carries_the_sibling_anchors(tmp_path):
+    """`--after` / `--before` make ordering sayable from the shell, for agents and tests
+    that have no IDE. Without them every proposed add/move appended, so an agent could not
+    place a node where a reader expects it."""
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    from codoc.codoc_file.render import write_tree
+    from codoc.model.feature import Feature
+
+    with open_store(cd) as s:
+        # Rank each AFTER the previous one is stored — rank_for_append reads the store,
+        # so computing both first would hand them the same key.
+        first = Feature(title="Alpha", rank=s.rank_for_append(None))
+        s.upsert_feature(first)
+        last = Feature(title="Gamma", rank=s.rank_for_append(None))
+        s.upsert_feature(last)
+        write_tree(s, str(cd))
+
+    r = runner.invoke(app, [
+        "propose", "add_node",
+        "--root", str(tmp_path),
+        "--title", "Beta",
+        "--description", "in between.",
+        "--after", first.id,
+        "--before", last.id,
+    ])
+    assert r.exit_code == 0, r.output
+
+    with open_store(cd) as s:
+        op = s.pending_events()[0].op
+        assert (op.after_id, op.before_id) == (first.id, last.id)
+        # …and the anchors resolve to a rank between the two on accept.
+        from codoc.loop.apply import apply_op
+        apply_op(op, s, source="user", applied=True)
+        assert [f.title for f in s.children(None)] == ["Alpha", "Beta", "Gamma"]
+
+
 def test_propose_invalid_kind_exits_nonzero(tmp_path):
     cd = tmp_path / ".codoc"
     cd.mkdir()

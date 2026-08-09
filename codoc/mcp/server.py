@@ -103,10 +103,16 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str = "") -> 
     call. This is the primary code-first reflection entrypoint.
 
     Each op: {kind, feature_id?, parent_id?, title?, description?, binds?,
-    rationale?, caused_by?}. kind ∈ attach|detach|refresh|amend|add_node|move_node|retire_node.
+    rationale?, caused_by?, after_id?, before_id?}.
+    kind ∈ attach|detach|refresh|amend|add_node|move_node|retire_node.
     binds are "file.py::symbol_path" strings. Safe ops (attach/refresh/detach and
     small amends) apply immediately; structural ops become proposals the user
     reviews. Prefer `attach` to an existing feature over `add_node`.
+
+    ORDER (add_node / move_node): after_id / before_id name the siblings the node goes
+    between, by feature id. Omit both to append. Use them to keep a split feature beside
+    the one it came from, or to place a new node where a reader expects it — a move whose
+    parent_id is unchanged and whose anchors differ IS a reorder.
 
     When implementing a ``.codoc/realize.md`` directive, pass its ``⟨d-…⟩`` id as
     ``caused_by`` — the IDE uses it to group your reflected changes under the doc
@@ -118,14 +124,19 @@ def codoc_reflect(ops: list[dict], rationale: str = "", caused_by: str = "") -> 
 @mcp.tool
 def codoc_propose_add(title: str, description: str = "", parent_id: str | None = None,
                       binds: list[str] | None = None, rationale: str = "",
-                      caused_by: str = "") -> dict:
+                      caused_by: str = "", after_id: str = "",
+                      before_id: str = "") -> dict:
     """Propose a NEW feature for code no existing node covers (a reviewable
     proposal). Set parent_id from `codoc_tree` to nest it; binds are
-    "file.py::symbol_path"."""
+    "file.py::symbol_path".
+
+    after_id / before_id name the siblings it goes between (by feature id); omit both to
+    append it last among its parent's children."""
     cd, err = _need_dir()
     return err or tools.propose_add(cd, title=title, description=description,
                                     parent_id=parent_id, binds=binds, rationale=rationale,
-                                    caused_by=caused_by)
+                                    caused_by=caused_by,
+                                    after_id=after_id, before_id=before_id)
 
 
 @mcp.tool
@@ -142,12 +153,18 @@ def codoc_propose_amend(feature_id: str, title: str | None = None,
 
 @mcp.tool
 def codoc_propose_move(feature_id: str, parent_id: str | None, rationale: str = "",
-                       caused_by: str = "") -> dict:
-    """Propose reparenting a feature (restructure). parent_id=null moves it to the
-    top level. Reviewable."""
+                       caused_by: str = "", after_id: str = "",
+                       before_id: str = "") -> dict:
+    """Propose reparenting or REORDERING a feature (restructure). parent_id=null moves it
+    to the top level; pass its current parent to reorder it in place. Reviewable.
+
+    after_id / before_id name the siblings it lands between, by feature id — omit both to
+    append. Positions are neighbour identities rather than indices, so a sibling added or
+    retired before this applies cannot silently change where the node goes."""
     cd, err = _need_dir()
     return err or tools.propose_move(cd, feature_id=feature_id, parent_id=parent_id,
-                                     rationale=rationale, caused_by=caused_by)
+                                     rationale=rationale, caused_by=caused_by,
+                                     after_id=after_id, before_id=before_id)
 
 
 @mcp.tool
