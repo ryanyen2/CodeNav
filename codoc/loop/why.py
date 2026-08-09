@@ -80,11 +80,19 @@ _NOISE_SUBJECT = re.compile(
 # A subject this short cannot state a reason ("fix bug", "update").
 _MIN_SUBJECT_CHARS = 12
 
-# Body lines that are metadata, not reasoning.
+# Body lines that are metadata, not reasoning. The colon is required, not
+# decorative: "Fixes: #412" is a trailer, while "Fixes applied from the review:"
+# is the opening sentence of the reasoning. Matching the bare word swallowed the
+# body of any commit whose explanation happened to start with Fixes, Closes,
+# Refs or CC — silently, since a commit with no stated reason looks identical to
+# one whose reason was thrown away.
 _TRAILER = re.compile(
-    r"^\s*(co-authored-by|signed-off-by|claude-session|claude-code|reviewed-by"
-    r"|acked-by|tested-by|cc|refs?|closes|fixes|resolves|see also|change-id"
-    r"|🤖\s*generated with)\b[:\s]",
+    r"^\s*(?:"
+    r"(?:co-authored-by|signed-off-by|claude-session|claude-code|reviewed-by"
+    r"|acked-by|tested-by|cc|refs?|closes|fixes|resolves|see also|change-id)"
+    r"\s*:"
+    r"|🤖\s*generated with"      # no colon in the marker git-tools emit
+    r")",
     re.IGNORECASE,
 )
 

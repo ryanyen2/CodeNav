@@ -134,6 +134,26 @@ class TestParsing:
     def test_body_gist_of_empty_body(self):
         assert _body_gist("") == ""
 
+    @pytest.mark.parametrize("opening", [
+        "Fixes applied from the review, every one confirmed first:",
+        "Closes a gap nobody had noticed in the drain path.",
+        "Refs the earlier attempt, which failed for a different reason.",
+        "CC everyone who touched the queue last quarter.",
+    ])
+    def test_prose_starting_with_a_trailer_word_is_kept(self, opening):
+        """A trailer needs its colon. Matching the bare word threw away the
+        body of any commit whose explanation opened with Fixes or Closes —
+        invisibly, since a discarded reason looks like an absent one."""
+        assert _body_gist(opening + "\n\nMore detail.") == opening
+
+    @pytest.mark.parametrize("trailer", [
+        "Fixes: #412", "Closes:#9", "Refs: abc123", "CC: someone@example.com",
+        "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+    ])
+    def test_real_trailers_still_end_the_gist(self, trailer):
+        assert _body_gist(f"The queue raced itself.\n{trailer}") == \
+            "The queue raced itself."
+
     def test_subject_with_newline_body_does_not_leak_into_file_list(self):
         rec = "\x1eabc\x1fSubject here\x1fline one\nline two\x1fsrc/a.py\nsrc/b.py\n"
         (subject, body, files) = _parse_log(rec)[0]
