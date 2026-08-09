@@ -12,6 +12,7 @@ dedup pass is needed anywhere downstream.
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -192,6 +193,11 @@ _ORDER_BY = " ORDER BY rank, created_at"
 
 _SCHEMA_VERSION = 6
 
+#: How many times :meth:`Store._ensure_schema` re-attempts a lock-contended schema pass.
+#: Each step is idempotent, so a retry is free; the contention window is one peer's
+#: migration (a handful of small DDL statements), so a few tries cover it comfortably.
+_SCHEMA_ATTEMPTS = 5
+
 
 class Store:
     def __init__(self, db_path: str | Path):
@@ -212,25 +218,75 @@ class Store:
     def open(self) -> "Store":
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        # A brief wait instead of an instant "database is locked" when a concurrent
-        # writer (an out-of-lock migrate / startup render) holds the WAL write slot.
+        # busy_timeout first: it is what makes every statement below WAIT for a peer's
+        # write lock instead of failing outright.
         self._conn.execute("PRAGMA busy_timeout=5000")
-        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
-        if version != _SCHEMA_VERSION:
-            # Concurrency: the daemon, the CLI and the MCP server share this store, so
-            # several processes can reach here at once on a workspace's first open after
-            # an upgrade. Nothing serializes them — `executescript` COMMITs before it runs
-            # and DDL auto-commits, so an outer transaction is not available. Instead every
-            # step is written to be safe when a peer has already done it: _SCHEMA is all
-            # `IF NOT EXISTS`, each ALTER goes through `_add_column`, and every backfill is
-            # gated on the data (see `_migrate`). The stamp below is then the same value
-            # from whichever process gets there last.
-            self._conn.executescript(_SCHEMA)
-            self._migrate()
-            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-        self._conn.commit()
+        self._set_wal()
+        self._ensure_schema()
         return self
+
+    def _set_wal(self) -> None:
+        """Put the database in WAL mode, tolerating a peer doing it at the same moment.
+
+        Journal mode is a property of the FILE, not of this connection, and switching it
+        is the one thing ``busy_timeout`` cannot wait for: another connection merely
+        HAVING the database open blocks the change, and SQLite returns SQLITE_BUSY
+        immediately rather than queueing. Several processes opening a fresh workspace
+        together therefore raced, and the loser's open failed outright — on a database
+        that a moment later was in exactly the mode it wanted.
+
+        So skip the switch when the file is already WAL (the common case, and one cheap
+        statement), and read a lock refusal as the peer having it in hand. Whoever wins
+        sets the mode for everyone, including the connections that lost.
+        """
+        assert self._conn is not None
+        mode = self._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        if str(mode).lower() == "wal":
+            return
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+
+    def _ensure_schema(self) -> None:
+        """Bring the schema up to ``_SCHEMA_VERSION``, tolerating concurrent openers.
+
+        The daemon, the CLI and the MCP server share this store, so several processes can
+        reach here at once on a workspace's first open after an upgrade. Nothing
+        serializes them: ``executescript`` COMMITs before it runs and DDL auto-commits, so
+        there is no outer transaction to hold. Every step is therefore written to be safe
+        when a peer has already done it — ``_SCHEMA`` is all ``IF NOT EXISTS``, each ALTER
+        goes through :meth:`_add_column`, every backfill is gated on the data it writes
+        (see :meth:`_migrate`) — and the version stamp is the same value whoever lands
+        last writes.
+
+        Safe-to-repeat is not enough on its own, because SQLite can refuse rather than
+        wait: ``busy_timeout`` covers a peer holding a write lock, but a lock UPGRADE
+        (this connection already reading, now wanting to write) returns SQLITE_BUSY
+        immediately — waiting would deadlock, so there is nothing for the timeout to do.
+        That surfaced as a bare "database is locked" on a concurrent first open. Since
+        every step is idempotent, retrying the whole thing is the honest answer: by the
+        next attempt the peer has usually finished, and the version check then makes this
+        a no-op.
+        """
+        assert self._conn is not None
+        for attempt in range(_SCHEMA_ATTEMPTS):
+            try:
+                version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+                if version != _SCHEMA_VERSION:
+                    self._conn.executescript(_SCHEMA)
+                    self._migrate()
+                    self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+                self._conn.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == _SCHEMA_ATTEMPTS - 1:
+                    raise
+                self._conn.rollback()
+                # Linear backoff: the contention window is one process's migration, which
+                # is a handful of small DDL statements, not a long transaction.
+                time.sleep(0.05 * (attempt + 1))
 
     def _add_column(self, table: str, column: str, decl: str) -> None:
         """Add a column unless it is already there — safe against a concurrent opener.

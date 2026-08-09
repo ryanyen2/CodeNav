@@ -291,10 +291,26 @@ def test_concurrent_first_opens_of_a_legacy_db_all_succeed(tmp_path):
         t.join(timeout=20)
 
     assert not errors, errors
-    # …and the workspace ends up migrated exactly once, with the rank backfill intact.
+    # …and the workspace ends up migrated exactly once, with the rank backfill intact,
+    # on a WAL database. The journal-mode switch is the one step busy_timeout cannot wait
+    # for (another connection merely having the file open refuses it), so the loser of
+    # that race proceeds without it — but SOMEBODY must have set it, since the mode is a
+    # property of the file rather than of a connection.
     s = Store(db).open()
     try:
         assert s.get_feature("f-legacy").rank
+        assert s.conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    finally:
+        s.close()
+
+
+def test_a_fresh_store_is_opened_in_wal_mode(tmp_path):
+    """WAL is what lets a reader (a render, the hub) run against a writing daemon. The
+    switch is skipped when the file already has it, so this pins that the first open
+    still performs it."""
+    s = open_store(tmp_path)
+    try:
+        assert s.conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     finally:
         s.close()
 
