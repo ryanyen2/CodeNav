@@ -110,6 +110,17 @@ def cmd_score(args) -> int:
     artifacts = json.loads(p["artifacts"].read_text(encoding="utf-8"))
     item_list = items_mod.read_items(p["items"])
 
+    # A capped codoc arm describes part of the package while the baseline read
+    # all of it. Scoring that reports a harness setting as a method result — the
+    # first such run produced a two-file tree and looked like a total loss.
+    capped = [a for a, v in artifacts.items() if "capped" in (v.get("detail") or "")]
+    if capped and not args.allow_partial:
+        print(f"refusing to score: {', '.join(capped)} was built partially "
+              f"({artifacts[capped[0]]['detail']}) while the other arm saw everything.\n"
+              f"  rebuild without --max-files, or pass --allow-partial to score anyway",
+              file=sys.stderr)
+        return 1
+
     results: list[score_mod.Result] = []
     for arm, payload in sorted(artifacts.items()):
         if not payload.get("ok"):
@@ -171,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sc = sub.add_parser("score", help="read and judge both arms")
     sc.add_argument("--corpus", required=True)
+    sc.add_argument("--allow-partial", action="store_true",
+                    help="score even when an arm was built from part of the corpus")
     sc.set_defaults(fn=cmd_score)
 
     rp = sub.add_parser("report", help="summary across corpora")
