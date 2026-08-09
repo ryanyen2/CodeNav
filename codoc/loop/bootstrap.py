@@ -46,6 +46,7 @@ def run_bootstrap(
 
     from codoc.graph.query import build_graph
     from codoc.loop.bootstrap_hier import bootstrap_hier_from_chunks
+    from codoc.loop.loop_b import write_tree_doc
     from codoc.loop.status import refresh_status
 
     say = printer or (lambda *_a, **_k: None)
@@ -70,6 +71,7 @@ def run_bootstrap(
         # tell the user why the tree is empty.
         with open_store(codoc_dir) as store:
             write_tree(store, codoc_dir)
+            write_tree_doc(store, codoc_dir)
             refresh_status(codoc_dir, store)
         say("  No supported source files found — codoc indexes Python & TypeScript. "
             "Add code and re-run `codoc init`, or start `codoc watch`.")
@@ -86,6 +88,14 @@ def run_bootstrap(
                 config=config, organize=organize, printer=say, root_dir=root_dir,
             )
         write_tree(store, codoc_dir)
+        # Seed the doc projection too. The webview's document pane renders
+        # tree.doc.json and nothing else; its outline comes from tree.codoc, so a
+        # workspace missing the projection shows a full tree of titles beside a
+        # blank page — which reads as "codoc wrote nothing" rather than as a
+        # missing file. Loop B writes this on a mutating pass and `_render` on a
+        # file change, so before this line a freshly-inited workspace stayed blank
+        # until the user happened to edit some code.
+        write_tree_doc(store, codoc_dir)
         # Write status so the IDE shows a real state (in_sync) on a freshly
         # bootstrapped repo instead of "not initialized".
         refresh_status(codoc_dir, store)
