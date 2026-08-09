@@ -8,7 +8,9 @@ import pytest
 
 from codoc.loop.activity import write_activity
 from codoc.loop.filenames import INTENT_FILENAME
-from codoc.loop.intent import _MAX_ENTRIES, record_intent, recent_intent
+from codoc.loop.intent import (
+    _MAX_ENTRIES, record_intent, recent_intent, relevant_intent,
+)
 
 
 @pytest.fixture
@@ -105,6 +107,54 @@ class TestRecentIntent:
         path.write_text("{not json\n")
         record_intent(codoc_dir, "s", "good")
         assert recent_intent(codoc_dir) == ["good"]
+
+
+class TestRelevantIntent:
+    """Recency answers "what was the user just doing"; a description needs to
+    know which ask was about *this* code."""
+
+    def test_picks_the_prompt_about_the_changed_symbols(self, codoc_dir):
+        record_intent(codoc_dir, "s", "rework the billing invoice totals")
+        record_intent(codoc_dir, "s", "make the ollama client retry on timeout")
+        record_intent(codoc_dir, "s", "update the readme")
+        got = relevant_intent(codoc_dir, {"mini.py::OllamaClient.complete"})
+        assert "make the ollama client retry on timeout" in got
+        assert "rework the billing invoice totals" not in got
+
+    def test_keeps_the_newest_prompt_even_with_no_overlap(self, codoc_dir):
+        """A follow-up turn ("now do the same for the other one") shares no
+        words with the diff, and recency is the only signal it leaves."""
+        record_intent(codoc_dir, "s", "make the ollama client retry on timeout")
+        record_intent(codoc_dir, "s", "now do the same over there")
+        got = relevant_intent(codoc_dir, {"mini.py::OllamaClient.complete"})
+        assert got[-1] == "now do the same over there"
+
+    def test_splits_camel_case_to_find_the_match(self, codoc_dir):
+        record_intent(codoc_dir, "s", "the retry logic in the ollama client is wrong")
+        record_intent(codoc_dir, "s", "unrelated later ask")
+        got = relevant_intent(codoc_dir, {"m.py::OllamaClient.complete"})
+        assert "the retry logic in the ollama client is wrong" in got
+
+    def test_stop_words_do_not_create_a_match(self, codoc_dir):
+        record_intent(codoc_dir, "s", "can you make this file work for the tests")
+        record_intent(codoc_dir, "s", "the newest ask")
+        got = relevant_intent(codoc_dir, {"billing.py::Invoice.total"})
+        assert got == ["the newest ask"]
+
+    def test_returns_chronological_order(self, codoc_dir):
+        record_intent(codoc_dir, "s", "add retry to the ollama client")
+        record_intent(codoc_dir, "s", "give the ollama client a timeout")
+        got = relevant_intent(codoc_dir, {"m.py::OllamaClient"})
+        assert got == ["add retry to the ollama client",
+                       "give the ollama client a timeout"]
+
+    def test_falls_back_to_recency_without_terms(self, codoc_dir):
+        record_intent(codoc_dir, "s", "first")
+        record_intent(codoc_dir, "s", "second")
+        assert relevant_intent(codoc_dir, set()) == ["first", "second"]
+
+    def test_empty_when_no_file(self, codoc_dir):
+        assert relevant_intent(codoc_dir, {"a.py::b"}) == []
 
 
 class TestLoopAThreading:

@@ -83,7 +83,7 @@ def run_bootstrap(
             build_graph(store, rows)
             res = bootstrap_hier_from_chunks(
                 rows, store, repo_name=repo_name or os.path.basename(os.path.abspath(root_dir)),
-                config=config, organize=organize, printer=say,
+                config=config, organize=organize, printer=say, root_dir=root_dir,
             )
         write_tree(store, codoc_dir)
         # Write status so the IDE shows a real state (in_sync) on a freshly

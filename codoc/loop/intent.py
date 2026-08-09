@@ -14,6 +14,7 @@ never reach version control.
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,19 +60,12 @@ def _trim(path: Path) -> None:
     tmp.replace(path)
 
 
-def recent_intent(
-    codoc_dir: str | Path,
-    *,
-    limit: int = _RECALL_LIMIT,
-    max_age_s: float = _MAX_AGE_S,
-) -> list[str]:
-    """The recent prompts most likely to explain the change under reflection,
-    oldest → newest.
+def _pool(codoc_dir: str | Path, max_age_s: float) -> list[dict]:
+    """Fresh captured prompts, oldest → newest, session-preferred.
 
     Prefers prompts from the session that owns the current activity epoch (the
     session whose writes are being reflected); falls back to any fresh-enough
-    prompts when that session captured none. Consecutive duplicates collapse.
-    Never raises."""
+    prompts when that session captured none. Never raises."""
     path = Path(codoc_dir) / INTENT_FILENAME
     try:
         raw = path.read_text(encoding="utf-8")
@@ -93,10 +87,92 @@ def recent_intent(
         owned = [e for e in fresh if e.get("session_id") == sid]
         if owned:
             fresh = owned
+    return fresh
+
+
+def recent_intent(
+    codoc_dir: str | Path,
+    *,
+    limit: int = _RECALL_LIMIT,
+    max_age_s: float = _MAX_AGE_S,
+) -> list[str]:
+    """The most recent prompts, oldest → newest. Consecutive duplicates collapse."""
     prompts: list[str] = []
-    for e in fresh[-limit:]:
+    for e in _pool(codoc_dir, max_age_s)[-limit:]:
         if not prompts or prompts[-1] != e["prompt"]:
             prompts.append(str(e["prompt"]))
+    return prompts
+
+
+# Words too common to signal that a prompt is about a particular change.
+_STOP = frozenset("""
+the a an and or but if then this that these those with without for from into
+you your we our it its is are was were be been being do does did done make
+made add adds added fix fixes fixed use uses used can could should would will
+please just also now new old code file files test tests run running why what
+how when where which who all any some more most other another
+""".split())
+
+
+def _terms(text: str) -> set[str]:
+    """Content words of a prompt or symbol path, camelCase and snake_case split.
+
+    Symbols are the bridge between a prompt and a change: a user who wrote
+    "make the ollama client retry" and a diff that touched
+    ``OllamaClient.complete`` share ``ollama`` and ``client`` once both sides
+    are broken into words. Matching on raw identifiers would miss it."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text or "")
+    words = re.split(r"[^A-Za-z0-9]+", spaced.lower())
+    return {w for w in words if len(w) > 2 and w not in _STOP}
+
+
+def relevant_intent(
+    codoc_dir: str | Path,
+    terms: set[str] | list[str] | None = None,
+    *,
+    limit: int = _RECALL_LIMIT,
+    max_age_s: float = _MAX_AGE_S,
+) -> list[str]:
+    """The captured prompts most likely to explain *this* change, oldest → newest.
+
+    ``recent_intent`` answers "what was the user just doing", which is the right
+    question for a status line and the wrong one for a description: in a session
+    that touched four areas, plain recency attributes every change to whatever
+    the user typed last. Scoring each prompt against the changed symbols picks
+    the prompt that is actually about the code in front of us.
+
+    The newest prompt is always kept regardless of score — a change with no
+    lexical overlap is usually a follow-up turn ("now do the same for the other
+    one"), where recency is the only signal there is. Ties break toward the
+    newer prompt for the same reason.
+    """
+    pool = _pool(codoc_dir, max_age_s)
+    if not pool:
+        return []
+    wanted = _terms(" ".join(str(t) for t in terms)) if terms else set()
+    if not wanted:
+        return recent_intent(codoc_dir, limit=limit, max_age_s=max_age_s)
+
+    scored: list[tuple[float, int, dict]] = []
+    for idx, e in enumerate(pool):
+        overlap = _terms(str(e.get("prompt", ""))) & wanted
+        # Normalized so a long prompt that mentions everything does not outrank
+        # a short one that is precisely about this change.
+        score = len(overlap) / (len(wanted) ** 0.5)
+        scored.append((score, idx, e))
+    newest_idx = len(pool) - 1
+    chosen = {newest_idx}
+    for _score, idx, _e in sorted(scored, key=lambda s: (-s[0], -s[1])):
+        if len(chosen) >= limit:
+            break
+        if _score > 0:
+            chosen.add(idx)
+
+    prompts: list[str] = []
+    for idx in sorted(chosen):
+        text = str(pool[idx]["prompt"])
+        if not prompts or prompts[-1] != text:
+            prompts.append(text)
     return prompts
 
 

@@ -106,7 +106,9 @@ graph/       # code dependency graph (derived, rebuildable): extract.py, query.p
 loop/        # the two loops + pieces: classify.py (decision table), phase.py (the
              #   single feature-phase projection — holds/drift/resolution are views),
              #   diff.py (compute_changeset), apply.py, loop_a.py / loop_b.py, edits.py
-             #   (edits.json + realize.json), inbox.py, status.py, fsio.py (atomic
+             #   (edits.json + realize.json), why.py (grounded rationale for
+             #   descriptions: commit messages / realized directives / recorded
+             #   rationale), inbox.py, status.py, fsio.py (atomic
              #   IO), subtree.py, bootstrap_hier.py, title_dedup.py (opt-in semantic
              #   title dedup), migrate.py (one-time store-authoritative workspace
              #   heal), sdk_realize.py / autorealize.py, watch.py

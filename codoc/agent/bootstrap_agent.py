@@ -64,6 +64,7 @@ def propose_file_features(
     *,
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
+    why: list[dict] | None = None,
 ) -> list[NodeOp]:
     """One LLM call: propose a small coherent feature set for a single file.
 
@@ -72,6 +73,13 @@ def propose_file_features(
     block varies per call. Within a bootstrap wave every call shares the same
     titles snapshot, so the whole prefix is identical across the wave.
     Structured extraction → fast model tier by default.
+
+    ``why`` is this file's commit rationale (:func:`codoc.loop.why.commit_rationales`).
+    It goes in the volatile tail with the file itself — it is per-file by
+    construction, and putting it in the prefix would break the wave's shared
+    cache for no benefit. At bootstrap this is the *only* why-evidence there is:
+    nobody has edited the tree yet, so there are no directives and no recorded
+    rationale to fall back on.
     """
     # Split the raw template FIRST, then substitute per segment — substituted
     # values are repo-derived and may contain a literal marker.
@@ -82,6 +90,8 @@ def propose_file_features(
         chunks=json.dumps(chunks, indent=2, sort_keys=True),
         edges=json.dumps(edges, indent=2, sort_keys=True),
         existing_titles="\n".join(f"- {t}" for t in existing_titles) or "(none yet)",
+        why=(json.dumps(why, indent=2, sort_keys=True) if why
+             else "(no commit history recorded for this file)"),
     )
     prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
     volatile = format_prompt(volatile_tpl, **kwargs)
