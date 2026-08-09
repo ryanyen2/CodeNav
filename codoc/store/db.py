@@ -218,84 +218,110 @@ class Store:
         self._conn.execute("PRAGMA busy_timeout=5000")
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
         if version != _SCHEMA_VERSION:
+            # Concurrency: the daemon, the CLI and the MCP server share this store, so
+            # several processes can reach here at once on a workspace's first open after
+            # an upgrade. Nothing serializes them — `executescript` COMMITs before it runs
+            # and DDL auto-commits, so an outer transaction is not available. Instead every
+            # step is written to be safe when a peer has already done it: _SCHEMA is all
+            # `IF NOT EXISTS`, each ALTER goes through `_add_column`, and every backfill is
+            # gated on the data (see `_migrate`). The stamp below is then the same value
+            # from whichever process gets there last.
             self._conn.executescript(_SCHEMA)
             self._migrate()
             self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         self._conn.commit()
         return self
 
+    def _add_column(self, table: str, column: str, decl: str) -> None:
+        """Add a column unless it is already there — safe against a concurrent opener.
+
+        The PRAGMA check and the ALTER are two statements, and Python's sqlite3 runs DDL
+        in autocommit, so there is no transaction holding them together. The daemon, the
+        CLI and the MCP server all open the same store, and two first-opens of a
+        pre-upgrade workspace can interleave: both read "column missing", both ALTER, and
+        the loser used to raise ``duplicate column name`` — a failed open, from a
+        workspace that is in fact correctly migrated.
+
+        Treating the duplicate as success is what makes the race benign: the two processes
+        wanted the same column, so the loser's work is already done. It also covers the
+        case where a crash landed the ALTER but not the stamp, which is the same state.
+        """
+        cols = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+        if column in cols:
+            return
+        try:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
     def _migrate(self) -> None:
         """Idempotent additive migrations. ``CREATE TABLE IF NOT EXISTS`` never
-        alters an existing table, so new columns are added here PRAGMA-guarded."""
-        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(features)")}
-        if "realized" not in cols:
-            # Default 1 ⇒ every pre-existing node is realized (preserves behavior).
-            self.conn.execute(
-                "ALTER TABLE features ADD COLUMN realized INTEGER NOT NULL DEFAULT 1"
-            )
-            cols.add("realized")
-        if "lifecycle" not in cols:
-            # Proposal A1: add the authoritative named state column, then backfill
-            # it from the legacy bool pair so existing rows get a correct lifecycle
-            # without a data-loss window (retired dominates; unrealized → planned).
-            self.conn.execute(
-                "ALTER TABLE features ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active'"
-            )
-            self.conn.execute(
-                "UPDATE features SET lifecycle = CASE"
-                " WHEN retired=1 THEN 'retired'"
-                " WHEN realized=0 THEN 'planned'"
-                " ELSE 'active' END"
-            )
-        if "local_id" not in cols:
-            # Additive: hand-authored-node id for minted-fid reconciliation. '' for
-            # every pre-existing row (they were never authored through the webview's
-            # localId path), which is the correct "no client id" sentinel.
-            self.conn.execute(
-                "ALTER TABLE features ADD COLUMN local_id TEXT NOT NULL DEFAULT ''"
-            )
-            cols.add("local_id")
-        bcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(bindings)")}
-        if "types_hash" not in bcols:
-            # Default '' ⇒ pre-existing bindings have no recorded AST shape; rename
-            # detection degrades gracefully for them until they are next refreshed.
-            self.conn.execute(
-                "ALTER TABLE bindings ADD COLUMN types_hash TEXT NOT NULL DEFAULT ''"
-            )
-        ecols = {r["name"] for r in self.conn.execute("PRAGMA table_info(events)")}
+        alters an existing table, so new columns are added here PRAGMA-guarded.
+
+        Two rules make this recovery-grade rather than merely idempotent, and both come
+        from the same fact: sqlite3 auto-commits each DDL statement on its own, so a
+        migration is a SEQUENCE of commits with no transaction around it.
+
+        1. Every ``ALTER`` goes through :meth:`_add_column`, which tolerates a concurrent
+           opener having added the same column.
+        2. Every BACKFILL is gated on the DATA it would write, never on the presence of
+           the column it writes into. A crash between the ALTER and its UPDATE leaves the
+           column present and empty; a column-existence gate would then skip the backfill
+           forever, and the workspace would carry a silently unpopulated index for the
+           rest of its life. Re-checking the rows makes the torn state heal on the next
+           open, which is also what makes the whole method safe to re-run.
+        """
+        self._add_column("features", "realized", "INTEGER NOT NULL DEFAULT 1")
+        # Proposal A1: `lifecycle` is the authoritative named state; the legacy bool pair
+        # is kept in sync as derived columns. Backfilled from that pair (retired
+        # dominates; unrealized → planned), gated on DISAGREEMENT rather than on the
+        # column being new — the only way the two can disagree is a torn migration, and
+        # this heals it.
+        self._add_column("features", "lifecycle", "TEXT NOT NULL DEFAULT 'active'")
+        _LIFECYCLE_FROM_BOOLS = (
+            "CASE WHEN retired=1 THEN 'retired'"
+            " WHEN realized=0 THEN 'planned' ELSE 'active' END"
+        )
+        self.conn.execute(
+            f"UPDATE features SET lifecycle = {_LIFECYCLE_FROM_BOOLS}"
+            f" WHERE lifecycle <> {_LIFECYCLE_FROM_BOOLS}"
+        )
+        # Additive: hand-authored-node id for minted-fid reconciliation. '' for
+        # every pre-existing row (they were never authored through the webview's
+        # localId path), which is the correct "no client id" sentinel.
+        self._add_column("features", "local_id", "TEXT NOT NULL DEFAULT ''")
+        # Default '' ⇒ pre-existing bindings have no recorded AST shape; rename
+        # detection degrades gracefully for them until they are next refreshed.
+        self._add_column("bindings", "types_hash", "TEXT NOT NULL DEFAULT ''")
         # Change-ledger provenance. Default '' ⇒ legacy events have unknown
         # actor/mode and no causality link; readers treat '' as "render as today".
         for col in ("actor", "mode", "caused_by"):
-            if col not in ecols:
-                self.conn.execute(
-                    f"ALTER TABLE events ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
-                )
-        if "feature_id" not in ecols:
-            # Blame index (v3): the feature an event touched, lifted out of the
-            # op_json payload so per-feature history is a single indexed lookup
-            # instead of a full-scan JSON parse. Backfilled from the payload.
-            # json_valid guard: json_extract RAISES on malformed JSON, so one
-            # torn/corrupt historical row would otherwise brick the migration —
-            # and with it every store open. A corrupt row keeps '' (it was never
-            # readable as an Event anyway); everything else backfills.
-            self.conn.execute(
-                "ALTER TABLE events ADD COLUMN feature_id TEXT NOT NULL DEFAULT ''"
-            )
-            self.conn.execute(
-                "UPDATE events SET feature_id ="
-                " COALESCE(json_extract(op_json, '$.feature_id'), '')"
-                " WHERE json_valid(op_json)"
-            )
-        # Outside the guard: a fresh DB gets the column from _SCHEMA (no ALTER),
+            self._add_column("events", col, "TEXT NOT NULL DEFAULT ''")
+        # Blame index (v3): the feature an event touched, lifted out of the op_json
+        # payload so per-feature history is a single indexed lookup instead of a
+        # full-scan JSON parse.
+        self._add_column("events", "feature_id", "TEXT NOT NULL DEFAULT ''")
+        # Gated on the ROWS, not the column (see the method docstring): a crash between
+        # the ALTER above and this UPDATE left every event unindexed, and a
+        # column-existence guard would have skipped the backfill for good — leaving
+        # `codoc history` permanently empty for everything that predates the upgrade.
+        # json_valid guard: json_extract RAISES on malformed JSON, so one torn/corrupt
+        # historical row would otherwise brick the migration — and with it every store
+        # open. A corrupt row keeps '' (it was never readable as an Event anyway).
+        self.conn.execute(
+            "UPDATE events SET feature_id ="
+            " COALESCE(json_extract(op_json, '$.feature_id'), '')"
+            " WHERE feature_id = '' AND json_valid(op_json)"
+            " AND json_extract(op_json, '$.feature_id') IS NOT NULL"
+        )
+        # Outside any guard: a fresh DB gets the column from _SCHEMA (no ALTER),
         # so the index must be created unconditionally-idempotently here.
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_feature"
             " ON events(feature_id, at)"
         )
-        if "rank" not in cols:
-            self.conn.execute(
-                "ALTER TABLE features ADD COLUMN rank TEXT NOT NULL DEFAULT ''"
-            )
+        self._add_column("features", "rank", "TEXT NOT NULL DEFAULT ''")
         # The backfill is gated on the DATA, not the column: sqlite3 auto-commits
         # the ALTER (DDL) on its own, separately from the UPDATEs below, so a
         # crash between them leaves the column present with every rank '' — and a
@@ -337,16 +363,11 @@ class Store:
             " ON features(retired, rank, created_at)"
         )
 
-        wcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(feature_writers)")}
-        if "role" not in wcols:
-            # Default '' ⇒ writers recorded before roles existed rank as
-            # non-human (see model.event.outranks). Backfilling them as human
-            # would hand every pre-existing row authority it was never granted,
-            # and the rows are mostly loop_a's — exactly the ones a person's
-            # edit is supposed to win against.
-            self.conn.execute(
-                "ALTER TABLE feature_writers ADD COLUMN role TEXT NOT NULL DEFAULT ''"
-            )
+        # Default '' ⇒ writers recorded before roles existed rank as non-human (see
+        # model.event.outranks). Backfilling them as human would hand every
+        # pre-existing row authority it was never granted, and the rows are mostly
+        # loop_a's — exactly the ones a person's edit is supposed to win against.
+        self._add_column("feature_writers", "role", "TEXT NOT NULL DEFAULT ''")
 
     def close(self) -> None:
         if self._conn is not None:

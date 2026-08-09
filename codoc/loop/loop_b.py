@@ -34,6 +34,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from codoc.agent.base import format_prompt, load_prompt
 from codoc.blocks.base import Capability, LowerContext
@@ -570,6 +571,28 @@ def _rewrite_queue(root_dir: str, codoc_dir: str, survivors: list) -> None:
             pass
 
 
+def _keep_directives(
+    root_dir: str, codoc_dir: str,
+    keep: "Callable[[edits_channel.Directive], bool]",
+) -> int:
+    """Rewrite the realize queue as the directives ``keep`` accepts. Returns the count
+    dropped, and writes nothing when it drops nothing.
+
+    Three callers prune the queue for different reasons — a withdrawal, a fresh edit
+    superseding its own earlier directive, and a feature that no longer exists — and each
+    one has to rebuild BOTH files together (``realize.json`` and the ``realize.md``
+    trigger, or remove both when the queue empties). Sharing the rewrite is what keeps
+    them from diverging on the part that is easy to get wrong: leaving a trigger behind
+    for a directive the manifest no longer holds tells the agent to implement something
+    nothing is tracking."""
+    existing = edits_channel.read_manifest(codoc_dir)
+    survivors = [d for d in existing if keep(d)]
+    removed = len(existing) - len(survivors)
+    if removed:
+        _rewrite_queue(root_dir, codoc_dir, survivors)
+    return removed
+
+
 def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
     """U6 — withdraw queued realizations. Drain the host's cancellations (feature
     ids) and prune the matching directives from the queue (rewrite the manifest +
@@ -582,12 +605,7 @@ def _apply_cancellations(root_dir: str, codoc_dir: str) -> int:
     cancels = set(edits_channel.drain_cancellations(codoc_dir))
     if not cancels:
         return 0
-    existing = edits_channel.read_manifest(codoc_dir)
-    survivors = [d for d in existing if d.feature_id not in cancels]
-    removed = len(existing) - len(survivors)
-    if removed:
-        _rewrite_queue(root_dir, codoc_dir, survivors)
-    return removed
+    return _keep_directives(root_dir, codoc_dir, lambda d: d.feature_id not in cancels)
 
 
 def _supersede_directives(root_dir: str, codoc_dir: str, fids: set[str]) -> int:
@@ -596,7 +614,6 @@ def _supersede_directives(root_dir: str, codoc_dir: str, fids: set[str]) -> int:
     and reverting it to a descriptive (non code-implying) text withdraws the queued
     change entirely. Steers (additive author notes) and other features' directives are
     preserved. Returns the count dropped."""
-    existing = edits_channel.read_manifest(codoc_dir)
     # INV8: directives currently in realize.md are being actively realized by the
     # agent. Superseding them mid-realization would waste the agent's in-progress
     # work and break the caused_by causality chain (the agent's reflect call cites
@@ -606,14 +623,44 @@ def _supersede_directives(root_dir: str, codoc_dir: str, fids: set[str]) -> int:
     # Steers (additive notes) and block directives (independent structural edits) are
     # never superseded by a description AMEND — only AMEND/RETIRE directives are
     # replaced by the fresh directive for the same feature (R3-A / INV11).
-    survivors = [d for d in existing
-                 if d.kind == "steer" or d.kind.startswith("block:")
-                 or d.feature_id not in fids
-                 or (d.id and d.id in in_flight)]
-    removed = len(existing) - len(survivors)
-    if removed:
-        _rewrite_queue(root_dir, codoc_dir, survivors)
-    return removed
+    return _keep_directives(root_dir, codoc_dir, lambda d: (
+        d.kind == "steer" or d.kind.startswith("block:")
+        or d.feature_id not in fids
+        or (d.id and d.id in in_flight)))
+
+
+def _prune_dead_directives(store: Store, root_dir: str, codoc_dir: str) -> int:
+    """Drop queued directives whose feature no longer exists, or is retired and the
+    directive is not the retire itself. Returns the count dropped.
+
+    This is the STATE invariant behind the per-site supersede calls: the realize queue
+    never asks the agent to implement a change to a feature that is not in the tree. The
+    per-site calls are how it normally holds — a command-driven retire supersedes that
+    feature's directives right after applying it — but they are a separate write, outside
+    the transaction that applied the retire and ledgered its command. A crash in that
+    window leaves the retire permanently applied AND its command permanently ledgered, so
+    nothing ever replays to make the supersede happen again, and the stale directive
+    outlives the feature: the agent is eventually told to implement prose that no longer
+    exists anywhere. Re-deriving the invariant once per pass makes the window heal itself
+    rather than needing to be closed.
+
+    A ``retire`` directive for a retired feature is exactly right and is kept — that is
+    the destructive ``~`` asking the agent to delete the code. Handed-off directives in
+    ``realize.md`` are also kept, on the same INV8 reasoning as
+    :func:`_supersede_directives`: the agent may be mid-implementation, and its reflect
+    call cites the directive id.
+    """
+    in_flight = _in_flight_directive_ids(codoc_dir)
+
+    def _alive(d) -> bool:
+        if not d.feature_id or (d.id and d.id in in_flight):
+            return True
+        feature = store.get_feature(d.feature_id)
+        if feature is None:
+            return False
+        return not feature.retired or d.kind == "retire"
+
+    return _keep_directives(root_dir, codoc_dir, _alive)
 
 
 def _in_flight_directive_ids(codoc_dir: str) -> frozenset[str]:
@@ -1267,6 +1314,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     #    The session implements via /codoc:sync; the Stop-hook reflection / epoch-close
     #    Loop A closes the loop. Drafts surface via the in-situ diff + pending dots
     #    (hold_set reads the manifest), no realize.md needed.
+    _prune_dead_directives(store, root_dir, codoc_dir)
     existing = edits_channel.read_manifest(codoc_dir)
     if not existing and not res.directives:
         status.refresh_status(codoc_dir, store)

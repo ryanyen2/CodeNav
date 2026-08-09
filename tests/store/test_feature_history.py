@@ -100,6 +100,75 @@ def test_migration_backfills_feature_id_from_op_json(tmp_path):
         assert row["feature_id"] == "f-legacy"
 
 
+def test_torn_feature_id_migration_heals_on_the_next_open(tmp_path):
+    """The ALTER auto-commits separately from the backfill, so a crash between them
+    leaves the column present and every event unindexed. Gating the backfill on the
+    COLUMN then skips it forever: `codoc history` stays permanently empty for
+    everything that predates the upgrade. The gate must be on the DATA."""
+    db_path = tmp_path / "codoc.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE features (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT, retired INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE events (
+            id TEXT PRIMARY KEY, at TEXT NOT NULL, source TEXT NOT NULL,
+            op_json TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 1, accepted_at TEXT
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO events (id, at, source, op_json) VALUES (?, ?, ?, ?)",
+        ("e-torn", "0001", "user",
+         '{"kind": "amend", "feature_id": "f-legacy", "description": "old"}'),
+    )
+    # The torn state: the column landed, the UPDATE did not.
+    conn.execute("ALTER TABLE events ADD COLUMN feature_id TEXT NOT NULL DEFAULT ''")
+    conn.commit()
+    conn.close()
+
+    with open_store(tmp_path) as store:
+        row = store.conn.execute(
+            "SELECT feature_id FROM events WHERE id='e-torn'").fetchone()
+        assert row["feature_id"] == "f-legacy"
+
+
+def test_backfill_leaves_a_corrupt_op_json_row_alone(tmp_path):
+    """json_extract RAISES on malformed JSON, so one torn historical row would brick
+    the migration — and with it every store open, for good."""
+    db_path = tmp_path / "codoc.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE features (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT, retired INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE events (
+            id TEXT PRIMARY KEY, at TEXT NOT NULL, source TEXT NOT NULL,
+            op_json TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 1, accepted_at TEXT
+        );
+        """
+    )
+    conn.executemany(
+        "INSERT INTO events (id, at, source, op_json) VALUES (?, ?, ?, ?)",
+        [("e-torn-json", "0001", "user", '{"kind": "amend", "feature'),
+         ("e-good", "0002", "user",
+          '{"kind": "amend", "feature_id": "f-ok", "description": "d"}')],
+    )
+    conn.commit()
+    conn.close()
+
+    with open_store(tmp_path) as store:
+        rows = dict(store.conn.execute("SELECT id, feature_id FROM events").fetchall())
+    assert rows["e-good"] == "f-ok"
+    assert rows["e-torn-json"] == ""
+
+
 def test_mcp_feature_history(tmp_path):
     from codoc.mcp import tools
 

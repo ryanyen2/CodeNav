@@ -1017,15 +1017,27 @@ def heal_tree_integrity(store: Store) -> int:
 
     Broken nodes are re-parented to root (``parent_id=None``): the minimal, always-correct
     repair (it both reattaches an orphan and breaks a cycle). Fixing a top-level orphan
-    first reconnects its live descendants, so only genuinely-broken nodes move."""
+    first reconnects its live descendants, so only genuinely-broken nodes move.
+
+    A re-homed node is also RE-RANKED, the same rule ``apply_op`` applies to every
+    cross-parent move: a rank key is a position among one parent's children and means
+    nothing among another's. Carrying the old key to root would drop the node at an
+    arbitrary point in the root list — or collide with a root's key, leaving the two
+    ordered by the created_at tiebreak instead of by anything anyone chose. Appending is
+    the honest answer: nobody has said where a recovered node belongs."""
     healed = 0
+
+    def _rehome_to_root(f) -> None:
+        f.parent_id = None
+        f.rank = store.rank_for_append(None)
+        f.updated_at = f.updated_at.advance()
+        store.upsert_feature(f)
+
     # Phase 1 — orphans: a live feature whose parent is retired/missing → re-home to root.
     live = {f.id: f for f in store.list_features()}
     for f in list(live.values()):
         if f.parent_id is not None and f.parent_id not in live:
-            f.parent_id = None
-            f.updated_at = f.updated_at.advance()
-            store.upsert_feature(f)
+            _rehome_to_root(f)
             healed += 1
     if healed:
         live = {f.id: f for f in store.list_features()}  # refresh after re-homing orphans
@@ -1045,9 +1057,7 @@ def heal_tree_integrity(store: Store) -> int:
         stack.extend(children_of.get(nid, []))
     for f in live.values():
         if f.id not in reachable:
-            f.parent_id = None
-            f.updated_at = f.updated_at.advance()
-            store.upsert_feature(f)
+            _rehome_to_root(f)
             healed += 1
     return healed
 

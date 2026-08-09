@@ -109,3 +109,37 @@ def test_heal_breaks_a_cycle(store):
 def test_heal_is_a_noop_on_a_sound_tree(store):
     _tree(store, ("a", None), ("b", "a"), ("c", "a"))
     assert heal_tree_integrity(store) == 0
+
+def test_heal_re_ranks_a_re_homed_node_among_the_roots(store):
+    """A rank key is a position among ONE parent's children. Carrying it to root drops
+    the node at an arbitrary point in the root list, or collides with a root's key and
+    leaves the two ordered by the created_at tiebreak — the same class as the retire and
+    move re-rank rules in apply_op."""
+    roots = ["r1", "r2"]
+    for rid in roots:
+        store.upsert_feature(Feature(id=rid, title=rid.upper(),
+                                     rank=store.rank_for_append(None)))
+    # A deep child with a rank that sorts BEFORE both roots: under its own parent that
+    # meant "first among my siblings"; at root it would mean "before everything".
+    store.upsert_feature(Feature(id="deep", title="DEEP", parent_id="ghost", rank="1"))
+
+    assert heal_tree_integrity(store) == 1
+
+    healed = store.get_feature("deep")
+    assert healed.parent_id is None
+    # Appended, not teleported to the front: nobody has said where a recovered node goes.
+    assert [f.id for f in store.children(None)] == ["r1", "r2", "deep"]
+    assert healed.rank > store.get_feature("r2").rank
+
+
+def test_heal_gives_a_rankless_orphan_a_rank(store):
+    """Debris from a path that never set one (a hand-edited db, an import) must not stay
+    rank-'': an empty key sorts before every real one, so the recovered node would jump
+    to the top of the tree on the next render."""
+    store.upsert_feature(Feature(id="r1", title="R1", rank=store.rank_for_append(None)))
+    store.upsert_feature(Feature(id="x", title="X", parent_id="ghost", rank=""))
+
+    heal_tree_integrity(store)
+
+    assert store.get_feature("x").rank != ""
+    assert [f.id for f in store.children(None)] == ["r1", "x"]

@@ -241,6 +241,80 @@ def test_event_ledger_columns_migrate_on_legacy_db(tmp_path):
         s.close()
 
 
+def test_concurrent_first_opens_of_a_legacy_db_all_succeed(tmp_path):
+    """The daemon, the CLI and the MCP server share one store, so several processes can
+    reach the migration at once on a workspace's first open after an upgrade. Nothing
+    serializes them (executescript commits, and DDL auto-commits), so two openers both
+    see "column missing" and both ALTER — and the loser used to raise `duplicate column
+    name`, i.e. a failed open on a workspace that IS correctly migrated."""
+    import sqlite3
+    import threading
+
+    from codoc.model.hlc import HLC
+
+    now = HLC.now().to_str()
+    db = tmp_path / "codoc.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE features (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT, retired INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO features (id,title,parent_id,created_at,updated_at)"
+        " VALUES ('f-legacy','Legacy',NULL,?,?)", (now, now))
+    conn.commit()
+    conn.close()
+
+    ready = threading.Barrier(4)
+    errors: list[BaseException] = []
+
+    def opener() -> None:
+        try:
+            ready.wait(timeout=5)
+            s = Store(db).open()
+            try:
+                assert s.get_feature("f-legacy") is not None
+            finally:
+                s.close()
+        except BaseException as exc:   # noqa: BLE001 — the assertion IS "nothing raised"
+            errors.append(exc)
+
+    threads = [threading.Thread(target=opener) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert not errors, errors
+    # …and the workspace ends up migrated exactly once, with the rank backfill intact.
+    s = Store(db).open()
+    try:
+        assert s.get_feature("f-legacy").rank
+    finally:
+        s.close()
+
+
+def test_migrate_is_safe_to_run_twice_on_the_same_connection(tmp_path):
+    """Every step is gated on the state it would change, so re-entering the migration —
+    which is what a concurrent opener effectively does — writes nothing new."""
+    s = open_store(tmp_path)
+    try:
+        f = Feature(title="Ranked", rank=s.rank_for_append(None))
+        s.upsert_feature(f)
+        before = s.get_feature(f.id)
+        s._migrate()
+        s._migrate()
+        after = s.get_feature(f.id)
+        assert (after.rank, after.lifecycle) == (before.rank, before.lifecycle)
+    finally:
+        s.close()
+
+
 def test_store_reopen_persists(tmp_path):
     s = open_store(tmp_path)
     f = Feature(title="Persisted")
