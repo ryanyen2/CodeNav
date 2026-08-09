@@ -11,7 +11,7 @@ was fixed, what was found while fixing it, and what is knowingly still open.
 | #2 (P0) settle cites the arriving baseline | The editor owns the citation: `adoptedBaselineId` stamped at the end of `setDoc`, passed out through `onSettle`/`onCommit`. A deferred projection carries its baseline id with it. |
 | #7 (P1) `base_text` from an unadopted projection | `state/known-store.ts`: a per-field optimistic overlay, advanced only by this host's successful appends and *pruned* (never seeded) by a confirming projection; everything else falls back to the cited baseline. |
 | #16 hub viewer capability untested at the route level | `tests/serve/test_viewer.py` — no-auth → HANDOFF, per-session capability on `/api/payload`, the SSE route's viewer argument, and the 401 gate ahead of it. |
-| #17 concurrent first-open can race the v6 migration | Every `ALTER` goes through `Store._add_column` (tolerates a peer's duplicate column); every backfill is gated on the data it writes. Pinned by a 4-thread concurrent-open test. |
+| #17 concurrent first-open can race the v6 migration | Every `ALTER` goes through `Store._add_column` (tolerates a peer's duplicate column); every backfill is gated on the data it writes; the schema pass retries a lock-refused attempt; and the journal-mode switch — the one lock `busy_timeout` cannot wait for — tolerates a peer performing it. Pinned by a 4-thread concurrent-open test, which caught the last two by flaking. |
 | #18 fuzzer alphabet omits paste/IME/drag | Both prop fuzzers gained the three gestures as multi-transaction gestures, plus the projection-arrival flush and property `N2` (no silent revert). |
 | P-3 `events.feature_id` backfill crash hazard | Data-gated like `rank`; a torn migration heals on the next open. |
 | P-4 `heal_tree_integrity` re-parents without re-ranking | Re-homed nodes get a fresh append rank at their new parent. |
@@ -65,3 +65,7 @@ nothing.
 - **`decoration-cost.perf.test.ts` is timing-sensitive** — it failed once under a parallel
   load and passed on every re-run. If it flakes in CI, give it a floor rather than a
   deadline.
+- **The concurrent-open test is a race, so it can only ever be evidence, not proof.** It
+  found two real defects by flaking (see `00b34f9`) and is now 40/40 with a 60-trial probe
+  clean, but a rarer interleaving would show up the same way: as a flake. Treat a failure
+  there as a store bug until proven otherwise.
