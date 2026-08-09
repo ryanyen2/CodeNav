@@ -139,7 +139,7 @@ def test_one_file_call_per_file_with_scoped_chunks(store):
 
     seen: list[tuple[str, set]] = []
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
         seen.append((file, {c["symbol_path"] for c in chunks}))
         return [_add("n1", f"Feature {file}", [(file, c["symbol_path"]) for c in chunks])]
 
@@ -157,7 +157,7 @@ def test_org_pass_groups_top_level_features(store):
     rows = [FakeRow("a.py", "a.py::af"), FakeRow("b.py", "b.py::bf")]
     build_graph(store, rows)
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
         return [_add("n1", f"Feat {file}", [(file, c["symbol_path"]) for c in chunks])]
 
     def propose_org(features, edges, *, repo_name, config):
@@ -178,7 +178,7 @@ def test_org_skipped_for_single_top_level_feature(store):
     build_graph(store, rows)
     called = []
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
         return [_add("n1", "Only", [(file, c["symbol_path"]) for c in chunks])]
 
     def propose_org(features, edges, *, repo_name, config):
@@ -224,7 +224,7 @@ def test_every_chunk_bound_after_bootstrap(store):
     ]
     build_graph(store, rows)
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
         # Cover only the first chunk; coverage net must catch the rest.
         first = chunks[0]
         return [_add("n1", f"F {file}", [(file, first["symbol_path"])])]

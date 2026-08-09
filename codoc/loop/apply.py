@@ -4,9 +4,11 @@
 safe ops (no LLM): a modified bound chunk → REFRESH, a removed bound chunk →
 DETACH. ``apply_op`` writes an Event and, when ``applied``, mutates the store.
 
-The single similarity threshold in the whole system lives here:
-``AMEND_SAFE_RATIO`` decides whether an LLM-proposed description edit is small
-enough to auto-apply or large enough to surface for review.
+The thresholds that decide whether an LLM-proposed description edit lands
+silently or surfaces for review live here. The question they answer is not "is
+this edit small" but "does it keep what was already written" — and it is asked
+more strictly of prose a person wrote than of prose the loop wrote, because
+those are not the same thing to overwrite (see :func:`preserved_ratio`).
 """
 from __future__ import annotations
 
@@ -14,11 +16,24 @@ from difflib import SequenceMatcher
 
 from codoc.loop.diff import ChangeSet
 from codoc.model.binding import Binding
-from codoc.model.event import SAFE_OPS, Event, NodeOp, NodeOpKind, default_provenance
+from codoc.model.event import (
+    ACTOR_HUMAN, SAFE_OPS, Event, NodeOp, NodeOpKind, default_provenance,
+)
 from codoc.model.feature import Feature, Lifecycle
 from codoc.store.db import Store
 
 AMEND_SAFE_RATIO = 0.30  # description edits changing ≤30% of the text auto-apply
+
+# How much of the existing prose must survive as recognisable, contiguous runs
+# for an amend to count as a repair rather than a rewrite. Higher for text a
+# person wrote: their wording is the thing being protected.
+PRESERVE_RATIO_HUMAN = 0.85
+PRESERVE_RATIO_MACHINE = 0.50
+# A shared run must be at least this long to count as preserved. Below it,
+# matches are just the vocabulary any two descriptions of the same code share
+# ("the", "returns the", "when the file") — counting those would score a total
+# rewrite as faithful.
+_MIN_PRESERVED_RUN = 24
 
 
 def derive_auto_ops(cs: ChangeSet, store: Store) -> list[NodeOp]:
@@ -42,14 +57,51 @@ def derive_auto_ops(cs: ChangeSet, store: Store) -> list[NodeOp]:
     return ops
 
 
+def preserved_ratio(old: str, new: str) -> float:
+    """How much of ``old`` survives in ``new`` as long, contiguous runs (0…1).
+
+    The question an amend gate needs to answer is "did this keep what was
+    there?", and overall similarity answers a different one. Two descriptions of
+    the same code share most of their vocabulary, so a complete rewrite in the
+    model's own voice scores as similar; meanwhile appending one true sentence
+    to an accurate description scores as a large change, though it destroyed
+    nothing. Both readings are backwards.
+
+    Measuring only runs long enough to be a preserved *clause* separates the two
+    cases: a repair leaves the surrounding prose intact and shows up as a couple
+    of long matches, while a re-say of the same idea leaves only short scattered
+    ones no matter how familiar it reads.
+    """
+    if not old:
+        return 1.0
+    matcher = SequenceMatcher(None, old, new, autojunk=False)
+    kept = sum(b.size for b in matcher.get_matching_blocks()
+               if b.size >= _MIN_PRESERVED_RUN)
+    return min(1.0, kept / len(old))
+
+
 def is_small_amend(op: NodeOp, store: Store) -> bool:
-    """True if an AMEND changes ≤ AMEND_SAFE_RATIO of the existing description."""
+    """True if an AMEND is a repair of the existing description, not a rewrite.
+
+    A rewrite is not refused — it becomes a pending proposal, where the author
+    sees the before/after and decides. That is the whole difference between a
+    tool that maintains someone's document and one that gradually replaces it.
+    """
     if op.kind is not NodeOpKind.AMEND:
         return False
     f = store.get_feature(op.feature_id) if op.feature_id else None
     old = (f.description if f else "") or ""
     new = op.description if op.description is not None else old
     if not old and not new:
+        return True
+    if not old:
+        return True  # first prose on a bare node displaces nothing
+    written_by = store.feature_writer_info(op.feature_id)[1] if op.feature_id else ""
+    if written_by == ACTOR_HUMAN:
+        # Only the author's own words are held to the strict bar; anything the
+        # loop wrote it may freely revise.
+        return preserved_ratio(old, new) >= PRESERVE_RATIO_HUMAN
+    if preserved_ratio(old, new) >= PRESERVE_RATIO_MACHINE:
         return True
     change = 1.0 - SequenceMatcher(None, old, new).ratio()
     return change <= AMEND_SAFE_RATIO

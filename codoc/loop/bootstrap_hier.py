@@ -27,6 +27,7 @@ from collections import Counter
 from codoc.agent.bootstrap_agent import propose_file_features, propose_organization
 from codoc.loop.apply import apply_op
 from codoc.loop.bootstrap import BootstrapResult, _title_from_file
+from codoc.loop.why import commit_rationales
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_feature_id
 from codoc.store.db import Store
@@ -184,8 +185,15 @@ def bootstrap_hier_from_chunks(
     config=None,
     organize: bool = True,
     printer=None,
+    root_dir: str | None = None,
 ) -> BootstrapResult:
-    """Two-phase bootstrap: per-file features, then top-level organization."""
+    """Two-phase bootstrap: per-file features, then top-level organization.
+
+    ``root_dir`` enables the why-evidence pass: one cached ``git log`` for the
+    whole repo, sliced per file. Bootstrap is where it matters most — the
+    initial tree is written from code alone, so without commit messages every
+    "why" in it is invention.
+    """
     import os as _os
 
     say = printer or (lambda *_a, **_k: None)
@@ -246,12 +254,16 @@ def bootstrap_hier_from_chunks(
                     for r in file_rows
                 ]
                 edges = _file_edges(file_rows, store)
-                prepared.append((file, file_rows, chunks, edges))
+                # Commit rationale for this file. The first call warms one
+                # repo-wide log; every later file slices the same cached scan,
+                # so this is one subprocess per bootstrap, not one per file.
+                why = commit_rationales(root_dir, [file]) if root_dir else []
+                prepared.append((file, file_rows, chunks, edges, why))
 
             def _call(item):
-                file, _rows, chunks, edges = item
+                file, _rows, chunks, edges, why = item
                 return propose_file(file, chunks, edges, titles_snapshot,
-                                    repo_name=repo_name, config=config)
+                                    repo_name=repo_name, config=config, why=why)
 
             if executor is not None and len(wave) > 1:
                 try:
@@ -269,7 +281,7 @@ def bootstrap_hier_from_chunks(
             else:
                 results = [_call(item) for item in prepared]
 
-            for offset, ((file, file_rows, _c, _e), ops) in enumerate(zip(prepared, results)):
+            for offset, ((file, file_rows, _c, _e, _w), ops) in enumerate(zip(prepared, results)):
                 idx = wave_start + offset + 1
                 if idx == 1 or idx == total or idx % step == 0:
                     say(f"  · [{idx}/{total}] {file}")

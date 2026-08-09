@@ -44,12 +44,26 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
 
 - `title`: a 3–6 word sentence-case noun phrase naming the intent ("HTTP
   transport adapter") — NEVER the bare filename.
-- `description`: 1–3 short sentences that hand a newcomer the *theory* of the
-  feature. Open with its purpose — the problem it solves, in plain everyday
-  words a reader who has never seen the code understands. Then, when the code
-  shows it, the key design choice and its why (the constraint, failure, or
-  tradeoff it answers). No jargon, no restating the title, no lists of code
-  locations (bindings carry that). You MAY include AT MOST one inline citation
+- `description`: ONE paragraph, 1–3 short sentences, that hands a newcomer the
+  *theory* of the feature — what they need to know to change this code
+  confidently. Open with its purpose: the problem it solves, in plain everyday
+  words a reader who has never seen the code understands. Then, when you can
+  say it, why it is built this way — the constraint, failure, or tradeoff the
+  design answers — and what would break if someone changed it without knowing.
+  Write it as flowing prose, not as labelled parts.
+
+  **Say the why as plainly as your evidence allows, and no further.** When the
+  commit history below states a reason, assert it flatly ("retries only on
+  timeout, because the server can duplicate a non-idempotent post"). Otherwise
+  describe what the code achieves rather than narrating a decision ("computes
+  the total on write, so a reader never sees a stale number" needs no warrant).
+  NEVER invent history, people, or rejected alternatives — no "added after users
+  reported", no "the team chose X over Y". If you were not shown a reason, do
+  not report one. Do not hedge with "presumably" / "appears to" either; state
+  behavior flatly and reasons only where you have them.
+
+  No jargon, no restating the title, no lists of code locations (bindings carry
+  that). You MAY include AT MOST one inline citation
   `[symbol()](codoc:file.py#symbol)` — file and symbol verbatim from your own
   bindings — when one symbol anchors the claim. Never emit lines starting with
   `> ` or `**bold**` spans (reserved author channels). NEVER leave it empty.
@@ -77,5 +91,15 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
 ### Relationships near these chunks
 
 {edges}
+
+### Why this file looks the way it does — recent commits touching it
+
+{why}
+
+Each entry is a commit that changed this file: its `subject`, and `why` (the
+opening of its message) when the author wrote one. This is the only record of
+intent you have — the code itself cannot tell you why a choice was made. Use it
+for the *why* half of a description, and only for claims the text actually
+makes. Ignore entries that describe the edit without giving a reason.
 
 Now return this file's feature set, inside solution tags.

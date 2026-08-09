@@ -33,6 +33,7 @@ from codoc.loop.title_dedup import (
     make_loop_embedder,
     semantic_dedup_enabled,
 )
+from codoc.loop.why import gather_why_evidence
 from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
 from codoc.store.db import Store, open_store
 
@@ -434,6 +435,10 @@ def apply_changeset(
     # ``<codoc_dir>/drift.json`` so render's index-free ``write_sidecar`` can
     # re-emit it (KTD2). Bare unit-test callers pass None → drift is skipped.
     codoc_dir: str | None = None,
+    # The repository root, used only to read commit messages for the why-evidence
+    # block (:mod:`codoc.loop.why`). Optional for the same reason ``codoc_dir``
+    # is: a bare caller loses rationale context, never correctness.
+    root_dir: str | None = None,
     # The file scope this pass examined (the watch daemon passes the edited
     # files). When set, drift is MERGED — only features re-examined this pass
     # (those owning a binding in scope) have their entry refreshed; out-of-scope
@@ -682,17 +687,49 @@ def apply_changeset(
             }
             for fid, syms in dep_features.items()
         ]
+    # The features this change is *about* — the ones whose prose may need to
+    # move. Used to scope both the intent match and the recorded-rationale
+    # lookup, so neither spends its budget on features nobody touched.
+    touched_features = {
+        e["current_feature_id"] for e in changes["modified"] if e["current_feature_id"]
+    } | set(emptied)
+    changed_terms = {c.symbol_path for c in (cs.added + cs.modified)} | cs.touched_files()
+
     # Author intent (captured by the UserPromptSubmit hook): what the human
     # actually asked their coding agent for. Rides into the prompt so amended /
     # added descriptions can state the why instead of guessing it from the diff.
+    # Matched against the changed symbols rather than taken by recency — in a
+    # session that touched several areas, the last thing typed is usually about
+    # a different one.
     if codoc_dir:
         try:
-            from codoc.loop.intent import recent_intent
-            intents = recent_intent(codoc_dir)
+            from codoc.loop.intent import relevant_intent
+            intents = relevant_intent(codoc_dir, changed_terms)
         except Exception:  # noqa: BLE001 — advisory context only
             intents = []
         if intents:
             changes["author_intent"] = intents
+
+    # Why-evidence: the places a real rationale is written down (commit
+    # messages, the directive the author handed off, what past passes already
+    # recorded). Absent this, a description's "why" is invention — see
+    # :mod:`codoc.loop.why` and the assertion register in the prompt.
+    evidence = gather_why_evidence(
+        root_dir=root_dir, codoc_dir=codoc_dir, store=store,
+        files=cs.touched_files(), feature_ids=touched_features,
+    )
+    if evidence:
+        changes["why_evidence"] = evidence
+
+    # The author's own writing, shown as the register to match. A new node has
+    # no prose of its own to take a cue from, so without this every added
+    # feature arrives in house style regardless of how the tree around it reads.
+    try:
+        voice = store.human_written_descriptions()
+    except Exception:  # noqa: BLE001 — advisory context only
+        voice = []
+    if voice:
+        changes["author_voice"] = voice
 
     ops = propose(changes, subtree, all_titles, repo_name=repo_name, config=config)
 
@@ -861,8 +898,8 @@ def run_loop_a(
                                      config=config, adopt_placeholders=adopt_placeholders,
                                      allow_retire=False, held=held,
                                      caused_by_map=cb_map, default_caused_by=default_cb,
-                                     codoc_dir=codoc_dir, file_scope=file_scope,
-                                     embed_fn=embed_fn)
+                                     codoc_dir=codoc_dir, root_dir=root_dir,
+                                     file_scope=file_scope, embed_fn=embed_fn)
             # Block `lift` (U3): re-derive persistent, LIFT-capable blocks (e.g. diagrams)
             # from the freshly-updated graph/bindings. Read-only on code (attribution),
             # and doc-wins — a block on a held feature is skipped, so a human's pending
@@ -1146,7 +1183,7 @@ def reconcile_drift(
                                      config=config, adopt_placeholders=adopt_placeholders,
                                      allow_retire=True, amend_on_change=True, held=held,
                                      caused_by_map=cb_map, default_caused_by=default_cb,
-                                     codoc_dir=codoc_dir, file_scope=file_scope,
-                                     embed_fn=embed_fn)
+                                     codoc_dir=codoc_dir, root_dir=root_dir,
+                                     file_scope=file_scope, embed_fn=embed_fn)
             refresh_status(codoc_dir, store)
             return result

@@ -31,7 +31,8 @@ without losing, renaming, or rewriting the existing features.
 Give each new theme a temporary id (`"id": "t1"`) and `add_node` it with a real
 1–3 sentence description: the theme's purpose in plain everyday words — what
 this group of features accomplishes together, understandable without reading
-any code. Then `move_node` each existing feature by its real `f-...` id under a
+any code. Say what the group is *for*; do not narrate decisions or history you
+were not shown, and do not hedge with "presumably" or "appears to". Then `move_node` each existing feature by its real `f-...` id under a
 theme via `parent_id`.
 
 ## Output — return ONLY this, inside solution tags:

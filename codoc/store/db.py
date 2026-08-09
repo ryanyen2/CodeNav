@@ -20,7 +20,7 @@ from pathlib import Path
 from codoc.model.annotation import CommentStatus, CommentThread, Mark, MarkKind
 from codoc.model.binding import Binding
 from codoc.model.block import Block, BlockLifecycle, Provenance
-from codoc.model.event import Event, NodeOp
+from codoc.model.event import ACTOR_HUMAN, Event, NodeOp
 from codoc.model.feature import Feature, Lifecycle
 from codoc.model.hlc import HLC
 
@@ -613,6 +613,25 @@ class Store:
 
     def feature_writer(self, feature_id: str) -> str:
         return self.feature_writer_info(feature_id)[0]
+
+    def human_written_descriptions(self, limit: int = 2) -> list[str]:
+        """The most recent descriptions a *person* wrote, newest first.
+
+        These are shown to the describing model as the house voice to match.
+        Samples beat any derived metric here: telling a model "the author writes
+        short sentences at a high level of abstraction" produces its idea of
+        that, while showing it two of their paragraphs produces theirs. Long
+        enough to have a register (very short ones are titles in disguise), and
+        capped hard — this is a style cue, not a corpus.
+        """
+        rows = self.conn.execute(
+            "SELECT f.description FROM features f"
+            " JOIN feature_writers w ON w.feature_id = f.id"
+            " WHERE w.role = ? AND f.retired = 0 AND length(f.description) >= 60"
+            " ORDER BY w.at DESC LIMIT ?",
+            (ACTOR_HUMAN, max(0, limit)),
+        ).fetchall()
+        return [r[0] for r in rows if r and r[0]]
 
     def _next_version(self, feature_id: str) -> str:
         """The next version stamp for a feature — strictly after its current one.

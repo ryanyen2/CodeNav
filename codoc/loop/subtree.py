@@ -90,15 +90,21 @@ def select_context(
         f = store.get_feature(fid)
         if not f or f.retired:
             continue
-        subtree.append(
-            {
-                "id": f.id,
-                "title": f.title,
-                "description": f.description,
-                "parent_id": f.parent_id,
-                "bindings": [b.symbol_path for b in store.bindings_for_feature(fid)],
-            }
-        )
+        entry = {
+            "id": f.id,
+            "title": f.title,
+            "description": f.description,
+            "parent_id": f.parent_id,
+            "bindings": [b.symbol_path for b in store.bindings_for_feature(fid)],
+        }
+        # Who last wrote this prose. Without it a describing model treats every
+        # description as equally rewritable, and a person's wording is laundered
+        # into house style one amend at a time — a loss nothing else detects,
+        # since each individual edit looks like a small improvement.
+        _writer, role = store.feature_writer_info(fid)
+        if role:
+            entry["written_by"] = role
+        subtree.append(entry)
 
     all_titles = [
         {"id": f.id, "title": f.title, "parent_id": f.parent_id}
