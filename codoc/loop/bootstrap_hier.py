@@ -27,6 +27,7 @@ from collections import Counter
 from codoc.agent.bootstrap_agent import propose_file_features, propose_organization
 from codoc.loop.apply import apply_op
 from codoc.loop.bootstrap import BootstrapResult, _title_from_file
+from codoc.loop.surface import flow_lines
 from codoc.loop.why import commit_rationales
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_feature_id
@@ -303,7 +304,8 @@ def bootstrap_hier_from_chunks(
             for f in top_level
         ]
         coupling = _feature_coupling(store)
-        ops = propose_org(features, coupling, repo_name=repo_name, config=config)
+        ops = propose_org(features, coupling, repo_name=repo_name, config=config,
+                          flows=flow_lines(store))
         _apply_ops_with_local_ids(ops, store, {}, source="bootstrap")
         calls += 1
     elif organize and len(top_level) > _ORG_FEATURE_CAP:

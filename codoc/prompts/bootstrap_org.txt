@@ -14,6 +14,22 @@ without losing, renaming, or rewriting the existing features.
 - Each line `A → B (n)` means feature A's code calls or imports feature B's code
   `n` times. Strongly-coupled features usually belong under the same theme.
 
+## How work flows through this codebase (main call paths)
+
+{flows}
+
+- Each line follows one operation inward from where it enters the system,
+  through the modules it passes on the way. These are the paths a person has to
+  learn to work here, and they matter MORE than the coupling counts above:
+  coupling says two things touch often, a path says they are steps in the same
+  job, in this order.
+- Prefer themes that name a **stage of the work** ("Preparing a request",
+  "Sending and retrying") over themes that name a **kind of thing** ("Utilities",
+  "Models", "Helpers"). A reader who knows the stages can find anything; a
+  reader given a filing cabinet has to open every drawer.
+- A feature that appears early in several paths is usually an entry point and
+  belongs near the top of the tree, not filed under whatever it happens to call.
+
 ## What to do
 
 1. Create a SMALL number of broad **theme** parents so that, after grouping, the
