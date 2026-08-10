@@ -237,6 +237,7 @@ def bootstrap_hier_from_chunks(
     conc_env = _os.environ.get("CODOC_BOOTSTRAP_CONCURRENCY", "").strip()
     # Always ≥ 1: a non-positive / non-numeric value falls back to 8.
     concurrency = int(conc_env) if conc_env.isdigit() and int(conc_env) > 0 else 8
+    failures: list[tuple[str, Exception | None]] = []
     executor = None
     if concurrency > 1 and total > 1:
         from concurrent.futures import ThreadPoolExecutor
@@ -262,19 +263,40 @@ def bootstrap_hier_from_chunks(
                 prepared.append((file, file_rows, chunks, edges, why))
 
             def _call(item):
+                """One file's proposal, retried once, then given up on.
+
+                A bootstrap is a few dozen independent calls, and losing all of
+                them because one sample came back with a stray quote in a
+                description is a bad trade: the user paid for the rest, and a
+                tree missing one file's prose is worth far more than no tree at
+                all. Returning nothing hands the file to ``_ensure_file_coverage``,
+                which mints one node named after it with no description — a
+                visible, fillable gap rather than a silent hole.
+
+                A retry is worth its cost because the common causes — a
+                truncated response, a rate limit, a transient network error —
+                do not repeat. What does repeat is a hard configuration problem
+                (no key, no CLI), and that fails every file, which the caller
+                below still treats as fatal.
+                """
                 file, _rows, chunks, edges, why = item
-                return propose_file(file, chunks, edges, titles_snapshot,
-                                    repo_name=repo_name, config=config, why=why)
+                last: Exception | None = None
+                for _attempt in (1, 2):
+                    try:
+                        return propose_file(file, chunks, edges, titles_snapshot,
+                                            repo_name=repo_name, config=config, why=why)
+                    except Exception as exc:  # noqa: BLE001 — per-file tolerance
+                        last = exc
+                failures.append((file, last))
+                return []
 
             if executor is not None and len(wave) > 1:
                 try:
                     results = list(executor.map(_call, prepared))
                 except BaseException:
-                    # One failed call aborts the bootstrap (the caller's
-                    # transaction rolls back). In-flight sibling calls can't be
-                    # killed — say why the exit isn't instant instead of hanging
-                    # silently in the interpreter's thread join for up to
-                    # CODOC_LLM_TIMEOUT.
+                    # In-flight sibling calls can't be killed — say why the exit
+                    # isn't instant instead of hanging silently in the
+                    # interpreter's thread join for up to CODOC_LLM_TIMEOUT.
                     say("  ✗ a bootstrap LLM call failed — waiting for the "
                         "wave's in-flight calls to finish before rolling back…")
                     executor.shutdown(wait=True, cancel_futures=True)
@@ -297,6 +319,21 @@ def bootstrap_hier_from_chunks(
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
+    # Every file failing is not bad luck, it is a broken setup — no key, no
+    # `claude` CLI, an unreachable endpoint. Tolerating that would hand back a
+    # tree of empty filename nodes and call it a success, so it still raises and
+    # the caller's transaction rolls back to nothing.
+    if failures and len(failures) == total:
+        raise RuntimeError(
+            f"every bootstrap call failed ({total}/{total}); last error: {failures[-1][1]}"
+        )
+    if failures:
+        say(f"  ⚠ {len(failures)} of {total} files could not be described "
+            f"(retried once each): {', '.join(f for f, _ in failures[:5])}"
+            + (" …" if len(failures) > 5 else ""))
+        say("    Each is in the tree as a node named after its file, with no "
+            "description — fill them in, or re-run `codoc init` to retry.")
+
     top_level = store.children(None)
     if organize and 1 < len(top_level) <= _ORG_FEATURE_CAP:
         features = [
@@ -316,4 +353,5 @@ def bootstrap_hier_from_chunks(
         chunks=len(rows),
         features=len(store.list_features()),
         batches=calls,
+        skipped=[f for f, _ in failures],
     )

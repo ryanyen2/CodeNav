@@ -235,3 +235,62 @@ def test_every_chunk_bound_after_bootstrap(store):
 
     bound = {(b.file, b.symbol_path) for b in store.all_bindings()}
     assert bound == {(r.file, r.symbol_path) for r in rows}
+
+
+def _rows(pairs):
+    return [FakeRow(file=f, symbol_path=sym) for f, sym in pairs]
+
+
+class TestPerFileTolerance:
+    """One bad sample must not cost the whole bootstrap.
+
+    Nineteen files' worth of calls were paid for and thrown away because file
+    seven's description contained a quotation mark. The rest of the tree was
+    fine and the user never saw it.
+    """
+
+    def test_one_failing_file_does_not_sink_the_others(self, store):
+        rows = _rows([("a.py", "a.py::one"), ("b.py", "b.py::two"),
+                      ("c.py", "c.py::three")])
+
+        def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                         why=None):
+            if file == "b.py":
+                raise ValueError("Expecting ',' delimiter: line 3 column 3")
+            return [_add("n1", f"Feature for {file}",
+                         [(file, c["symbol_path"]) for c in chunks])]
+
+        res = bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                                         propose_org=lambda *a, **k: [], organize=False)
+        titles = {f.title for f in store.list_features()}
+        assert "Feature for a.py" in titles
+        assert "Feature for c.py" in titles
+        assert res.skipped == ["b.py"]
+
+    def test_the_failed_file_is_still_represented(self, store):
+        """`_ensure_file_coverage` gives it a node named after the file with no
+        description — a visible, fillable gap rather than a silent hole."""
+        rows = _rows([("a.py", "a.py::one"), ("b.py", "b.py::two")])
+
+        def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                         why=None):
+            if file == "b.py":
+                raise ValueError("bad json")
+            return [_add("n1", "A feature", [("a.py", "a.py::one")])]
+
+        bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                                   propose_org=lambda *a, **k: [], organize=False)
+        assert store.binding_at("b.py", "b.py::two") is not None
+
+    def test_every_file_failing_is_a_broken_setup_and_raises(self, store):
+        """No key, no CLI, unreachable endpoint — handing back a tree of empty
+        filename nodes and calling it success would be worse than failing."""
+        rows = _rows([("a.py", "a.py::one"), ("b.py", "b.py::two")])
+
+        def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                         why=None):
+            raise RuntimeError("no LLM configured")
+
+        with pytest.raises(RuntimeError, match="every bootstrap call failed"):
+            bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                                       propose_org=lambda *a, **k: [], organize=False)

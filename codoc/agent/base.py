@@ -97,14 +97,78 @@ def format_prompt(template: str, **kwargs) -> str:
     return result
 
 
+def repair_json(text: str) -> str:
+    """Escape the two things a model reliably gets wrong inside a JSON string.
+
+    Descriptions are prose, and prose contains quotation marks and line breaks.
+    A model asked to state a reason will happily write ``"description": "Signs
+    the request the server calls "stale"."`` — the inner quote closes the string
+    and the parser then asks for a comma it will never find. Raw newlines inside
+    a string fail the same way.
+
+    Both are recoverable without guessing at meaning: walk the text tracking
+    string state, and treat a quote as *closing* only when the next non-space
+    character is one that can legally follow a string (``,:}]`` or the end).
+    Anything else is a quote the model meant literally, so escape it.
+
+    This is a rescue path, not a licence to emit sloppy JSON — the prompts still
+    ask for clean output. But one malformed sample used to cost an entire
+    bootstrap, and a description is exactly the field most likely to carry a
+    quotation.
+    """
+    out: list[str] = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if not in_string:
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+            i += 1
+            continue
+        if ch == "\\":            # already escaped — copy the pair verbatim
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if ch == '"':
+            nxt = next((c for c in text[i + 1:] if not c.isspace()), "")
+            if nxt in (",", ":", "}", "]", ""):
+                in_string = False
+                out.append(ch)
+            else:
+                out.append('\\"')  # a quote the model meant as punctuation
+            i += 1
+            continue
+        if ch == "\n":
+            out.append("\\n")
+            i += 1
+            continue
+        if ch == "\t":
+            out.append("\\t")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _loads(raw: str) -> dict | list:
+    """Strict first, repaired second — so a clean sample is never rewritten."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return json.loads(repair_json(raw))
+
+
 def parse_solution(response: str) -> dict | list:
     match = re.search(r"<solution>(.*?)</solution>", response, re.DOTALL)
     if match:
-        return json.loads(match.group(1).strip())
+        return _loads(match.group(1).strip())
 
     fence = re.search(r"```(?:json)?\s*([\[{].*?)\s*```", response, re.DOTALL)
     if fence:
-        return json.loads(fence.group(1))
+        return _loads(fence.group(1))
 
     for start_char, end_char in (("[", "]"), ("{", "}")):
         idx = response.find(start_char)
@@ -130,7 +194,7 @@ def parse_solution(response: str) -> dict | list:
                     depth -= 1
                     if depth == 0:
                         try:
-                            return json.loads(response[idx : i + 1])
+                            return _loads(response[idx : i + 1])
                         except json.JSONDecodeError:
                             break
 

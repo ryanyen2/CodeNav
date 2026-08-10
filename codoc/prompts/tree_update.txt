@@ -76,12 +76,15 @@ feature's history — write it for them, not as a log line.
    verbatim from the bindings/chunks in this prompt. Never emit lines starting
    with `> `, `**bold**` spans, or external links — reserved author channels.
 7. **Say the why as plainly as your evidence allows, and no further.**
-   - When `why_evidence` or `author_intent` states a reason, assert it flatly:
-     "Retries only on timeout, because the server can duplicate a
-     non-idempotent post."
+   - When `why_evidence` or `author_intent` states a reason, assert it flatly —
+     e.g. retries only on timeout, because the server can duplicate a
+     non-idempotent post.
    - With no such evidence, describe what the code achieves instead of narrating
-     a decision. "Computes the total on write, so a reader never sees a stale
-     number" is an observation and needs no warrant.
+     a decision — e.g. computes the total on write, so a reader never sees a
+     stale number. That is an observation and needs no warrant.
+   - Write every title and description as plain prose with NO double-quote
+     characters. These are JSON string values, and a bare `"` inside one makes
+     the whole response unparseable.
    - NEVER invent history, people, or rejected alternatives: no "added after
      users reported", no "the team chose X over Y", no "was rewritten to". If
      you were not shown a reason, do not report one.

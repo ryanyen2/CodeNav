@@ -8,7 +8,7 @@ write an initial status.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from codoc.store.db import open_store
 
@@ -25,9 +25,14 @@ class BootstrapResult:
     chunks: int = 0
     features: int = 0
     batches: int = 0
+    # Files whose LLM call could not be used after a retry. Their chunks stay
+    # unbound, so the next reconcile proposes them — a gap the user can see and
+    # fill, rather than a bootstrap that produced nothing.
+    skipped: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
-        return f"{self.chunks} chunks → {self.features} features ({self.batches} LLM batches)"
+        base = f"{self.chunks} chunks → {self.features} features ({self.batches} LLM batches)"
+        return base + (f", {len(self.skipped)} file(s) skipped" if self.skipped else "")
 
 
 def run_bootstrap(
