@@ -860,6 +860,31 @@ def apply_changeset(
     return result
 
 
+def _fallback_title(file: str, chunks: list, taken: set[str]) -> str:
+    """A name for a coverage proposal that is not already somebody else's name.
+
+    Three things go wrong if the leaf symbol is used unconditionally. Several
+    chunks in a file have no single leaf to be named after. A pseudo-symbol like
+    ``__module__`` names the file's top level, and since every Python file has
+    one, N files with a lone module-level orphan produced N nodes all called
+    ``__module__`` — indistinguishable in the outline, and the filename that
+    would have told them apart was the very thing discarded. And a leaf can
+    simply collide with a feature that already exists.
+
+    The file name resolves all three, so it is the fallback in each case. Unlike
+    the LLM's ADD_NODEs, these ops go straight to ``apply_op`` and never pass the
+    (title, parent) identity guard, so the check has to happen here.
+    """
+    from codoc.loop.bootstrap import _title_from_file
+
+    leaf = chunks[0].symbol_path.split("::", 1)[-1] if len(chunks) == 1 else ""
+    is_pseudo = leaf.startswith("__") and leaf.endswith("__")
+    candidate = leaf if (leaf and not is_pseudo) else _title_from_file(file)
+    if candidate.strip().lower() in taken:
+        candidate = _title_from_file(file)
+    return candidate
+
+
 def _added_batches(added: list[dict], size: int) -> list[list[dict]]:
     """Split the added-chunk list into per-call batches, never splitting a file.
 
@@ -897,8 +922,6 @@ def _cover_uncovered_adds(
     cause=None,
 ) -> None:
     from codoc.graph.query import neighbor_feature
-
-    from codoc.loop.bootstrap import _title_from_file
 
     cause = cause or (lambda op: "")
 
@@ -943,9 +966,11 @@ def _cover_uncovered_adds(
     # A lone orphan keeps its symbol name: for one chunk that is the more
     # informative label, and it is the file's whole story anyway. The filename
     # only becomes the better name once several chunks share it.
+    minted: set[str] = {(f.title or "").strip().lower() for f in store.list_features()
+                        if not f.retired}
     for file, chunks in sorted(leftover_by_file.items()):
-        title = (chunks[0].symbol_path.split("::", 1)[-1] if len(chunks) == 1
-                 else _title_from_file(file))
+        title = _fallback_title(file, chunks, minted)
+        minted.add(title.strip().lower())
         op = NodeOp(
             kind=NodeOpKind.ADD_NODE,
             title=title,
