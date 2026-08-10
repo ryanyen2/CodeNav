@@ -1,23 +1,22 @@
 /**
  * agent-ribbon.ts — the inline "what the agent is doing" ribbon (P2b).
  *
- * Under a feature heading the agent is actively working, a quiet ribbon lists its
- * steps — "reading agent.py", "editing models.py", "running pytest" — each ticking
- * to a check as the agent moves on, the live counterpart of the prototype's
- * "codoc · Bug Fixer · reading… → root cause…". The steps are derived from
- * activity.json (`featureSteps`, state/activity-model) and arrive as
- * `payload.sync.steps[fid]`; this plugin only renders them as a widget decoration.
+ * Under a feature heading the agent is actively working, ONE quiet line says who is
+ * there and what they are doing right now — "Claude · reading sessions.py". The
+ * steps are derived from activity.json (`featureSteps`, state/activity-model) and
+ * arrive as `payload.sync.steps[fid]`; this plugin renders only the CURRENT one (the
+ * last step) as a widget decoration. The earlier steps are history the agent has
+ * already moved past, and stacking them under every heading turned a liveness cue
+ * into a block of text — the line simply re-labels itself as the agent moves on.
  *
  * The "who" is the same role the presence avatar resolves (state/presence.ts's
- * roleName/roleInk), tinting the ribbon to match. New rows entering the list get a
- * brief entrance stagger (existing rows never re-animate); when a feature's steps
- * empty out (the agent finished), the ribbon doesn't just vanish — it collapses its
- * step rows (motion.ts's collapseRowOut) down to the settled head line, holds
- * briefly, then clears.
+ * roleName/roleInk), tinting the line to match. When a feature's steps empty out (the
+ * agent finished), the line doesn't just vanish — it ticks to a check, holds briefly,
+ * then collapses out (motion.ts's collapseRowOut).
  *
  * STATUS axis (no hue beyond the existing role-ink family): motion is CSS/anime.js,
  * gated on prefers-reduced-motion throughout. The widget is inert (no doc mutation),
- * keyed on the step labels so ProseMirror reuses the DOM across reconciles (no flicker).
+ * keyed on the rendered line so ProseMirror reuses the DOM across reconciles (no flicker).
  */
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
@@ -31,22 +30,27 @@ export const STEPS_UPDATED = 'codocStepsUpdated';
 const RIBBON_CLEAR = 'codocRibbonClear';
 const stepsKey = new PluginKey('codocAgentRibbon');
 
-/** Per-row entrance stagger; the collapse-to-summary hold shape (rows shrink over
- *  ~ROW_COLLAPSE_MS each, the settled head line then holds SUMMARY_HOLD_MS before
- *  the widget itself clears). */
-const STEP_STEP_MS = 40;
+/** The finish shape: the line ticks to a check, holds SUMMARY_HOLD_MS so the reader
+ *  registers that this feature is done, then collapses over ~ROW_COLLAPSE_MS. */
 const ROW_COLLAPSE_MS = 180;
-const SUMMARY_HOLD_MS = 900;
+const SUMMARY_HOLD_MS = 700;
 
 export interface AgentRibbonOptions {
     getSteps: () => Record<string, AgentStep[]>;
     getRole: () => string;
 }
 
+/** The step the ribbon shows: the last one, which `featureSteps` marks active. */
+export function currentStep(steps: AgentStep[]): AgentStep | null {
+    return steps.length ? steps[steps.length - 1] : null;
+}
+
 /** A stable key for a feature's ribbon so PM reuses the widget DOM across reconciles
- *  (only rebuilds when the steps actually change → no flicker / re-animation). */
+ *  (only rebuilds when the RENDERED line changes → no flicker / re-animation; an
+ *  earlier step ticking to done is history the line no longer shows). */
 export function ribbonKey(fid: string, steps: AgentStep[]): string {
-    return fid + '|' + steps.map(s => (s.done ? '✓' : '▸') + s.label).join('§');
+    const cur = currentStep(steps);
+    return fid + '|' + (cur ? (cur.done ? '✓' : '▸') + cur.label : '');
 }
 
 /** fids whose steps just emptied (the agent finished that feature) — non-empty in
@@ -55,57 +59,45 @@ export function justFinished(prev: Record<string, AgentStep[]>, cur: Record<stri
     return Object.keys(prev).filter(fid => (prev[fid]?.length ?? 0) > 0 && !(cur[fid]?.length));
 }
 
-function ribbonDom(steps: AgentStep[], role: string, prevCount: number): HTMLElement {
+/** The one line: `● Claude · reading sessions.py`. */
+function ribbonDom(steps: AgentStep[], role: string): HTMLElement {
+    const cur = currentStep(steps);
     const wrap = document.createElement('div');
-    wrap.className = 'ce-ribbon';
+    wrap.className = 'ce-ribbon' + (cur?.done ? ' done' : '') + (cur?.kind ? ` kind-${cur.kind}` : '');
     wrap.contentEditable = 'false';
     wrap.dataset.ink = roleInk(role);
-    const head = document.createElement('div');
-    head.className = 'ce-ribbon-head';
     const mark = document.createElement('span');
     mark.className = 'ce-ribbon-mark';
     const who = document.createElement('span');
     who.className = 'ce-ribbon-who';
     who.textContent = roleName(role);
-    head.append(mark, who);
-    wrap.appendChild(head);
-    for (let i = 0; i < steps.length; i++) {
-        const s = steps[i];
-        const row = document.createElement('div');
-        row.className = 'ce-ribbon-step' + (s.done ? ' done' : ' active')
-            + (s.kind ? ` kind-${s.kind}` : '');
-        // only rows past the previously-rendered count get the entrance animation —
-        // a step flipping active→done must never re-trigger its own entrance.
-        if (i < prevCount) row.style.animation = 'none';
-        else row.style.animationDelay = `${(i - prevCount) * STEP_STEP_MS}ms`;
-        const tick = document.createElement('span');
-        tick.className = 'ce-ribbon-tick';
+    wrap.append(mark, who);
+    if (cur) {
         const label = document.createElement('span');
         label.className = 'ce-ribbon-label';
-        label.textContent = s.label;
-        row.append(tick, label);
-        wrap.appendChild(row);
+        label.textContent = cur.label;
+        wrap.append(label);
+        wrap.title = `${roleName(role)} is here: ${cur.label}`;
     }
     return wrap;
 }
 
-/** The settled widget for a feature that just finished: the same head + step rows,
- *  but every row immediately starts collapsing to 0 (deferred a frame so the node
- *  has real layout once ProseMirror inserts it — collapseRowOut reads offsetHeight).
- *  Leaves the head line — agent name + tint — as the held summary. */
+/** The settled widget for a feature that just finished: the same line with its mark
+ *  ticked to a check, held SUMMARY_HOLD_MS so the reader sees the work land, then
+ *  collapsed away (collapseRowOut reads offsetHeight, so this must run after layout). */
 function ribbonSummaryDom(steps: AgentStep[], role: string): HTMLElement {
-    const wrap = ribbonDom(steps, role, steps.length); // no entrance — every row was already seen
-    requestAnimationFrame(() => {
-        wrap.querySelectorAll<HTMLElement>('.ce-ribbon-step').forEach(row => {
-            collapseRowOut(row, () => row.remove(), { duration: ROW_COLLAPSE_MS });
-        });
-    });
+    const last = currentStep(steps);
+    const wrap = ribbonDom(last ? [{ ...last, done: true }] : [], role);
+    window.setTimeout(
+        () => collapseRowOut(wrap, () => wrap.remove(), { duration: ROW_COLLAPSE_MS }),
+        SUMMARY_HOLD_MS,
+    );
     return wrap;
 }
 
 interface RibbonState {
     set: DecorationSet;
-    /** The steps map as of the last STEPS_UPDATED — the entrance-stagger baseline. */
+    /** The steps map as of the last STEPS_UPDATED — the finished-feature baseline. */
     lastSteps: Record<string, AgentStep[]>;
     /** fid → its last-known steps, for a feature currently collapsing to its summary. */
     collapsing: Record<string, AgentStep[]>;
@@ -114,7 +106,6 @@ interface RibbonState {
 function build(
     doc: PMModelNode,
     steps: Record<string, AgentStep[]>,
-    prevSteps: Record<string, AgentStep[]>,
     collapsing: Record<string, AgentStep[]>,
     role: string,
 ): DecorationSet {
@@ -127,8 +118,7 @@ function build(
         const at = pos + node.nodeSize;
         const fsteps = steps[fid];
         if (fsteps && fsteps.length) {
-            const prevCount = prevSteps[fid]?.length ?? 0;
-            decos.push(Decoration.widget(at, () => ribbonDom(fsteps, role, prevCount), {
+            decos.push(Decoration.widget(at, () => ribbonDom(fsteps, role), {
                 key: ribbonKey(fid, fsteps),
                 side: -1,
                 ignoreSelection: true,
@@ -160,7 +150,7 @@ export const AgentRibbon = Extension.create<AgentRibbonOptions>({
                 state: {
                     init: (_c, state): RibbonState => {
                         const steps = getSteps();
-                        return { set: build(state.doc, steps, steps, {}, getRole()), lastSteps: { ...steps }, collapsing: {} };
+                        return { set: build(state.doc, steps, {}, getRole()), lastSteps: { ...steps }, collapsing: {} };
                     },
                     apply: (tr, value, _o, newState): RibbonState => {
                         let { lastSteps, collapsing } = value;
@@ -173,14 +163,13 @@ export const AgentRibbon = Extension.create<AgentRibbonOptions>({
                                 collapsing = { ...collapsing };
                                 finished.forEach(f => { collapsing[f] = lastSteps[f]; });
                             }
-                            const prevSteps = lastSteps;
                             lastSteps = { ...cur };
-                            return { set: build(newState.doc, cur, prevSteps, collapsing, getRole()), lastSteps, collapsing };
+                            return { set: build(newState.doc, cur, collapsing, getRole()), lastSteps, collapsing };
                         }
                         if (!cleared && !tr.docChanged) {
                             return { set: value.set.map(tr.mapping, tr.doc), lastSteps, collapsing };
                         }
-                        return { set: build(newState.doc, getSteps(), lastSteps, collapsing, getRole()), lastSteps, collapsing };
+                        return { set: build(newState.doc, getSteps(), collapsing, getRole()), lastSteps, collapsing };
                     },
                 },
                 props: { decorations(state) { return stepsKey.getState(state)?.set; } },
@@ -195,8 +184,7 @@ export const AgentRibbon = Extension.create<AgentRibbonOptions>({
                         for (const fid of Object.keys(st.collapsing)) {
                             if (timed.has(fid)) continue;
                             timed.add(fid);
-                            const rows = st.collapsing[fid].length;
-                            const dur = rows * ROW_COLLAPSE_MS + SUMMARY_HOLD_MS;
+                            const dur = SUMMARY_HOLD_MS + ROW_COLLAPSE_MS + 60;
                             window.setTimeout(() => {
                                 if (view.isDestroyed) return;
                                 timed.delete(fid);

@@ -35,6 +35,9 @@ import {
     headingPosForFid,
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
+import { AutoEditDecorations, AUTO_EDITS_UPDATED } from './auto-edit-decorations';
+import { dwellFor } from '../../state/auto-edits';
+import type { AutoEditInfo } from '../protocol';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { BlameDecorations, BLAME_UPDATED } from './blame-decorations';
 import type { HistoryEntry } from '../../state/bindings-model';
@@ -97,6 +100,9 @@ export interface WholeDocEditorOptions {
      *  `source==='scroll'`) the eased tree re-center. `'selection'` fires on every caret move,
      *  so re-centering on it would animate the tree on every keystroke (KTD2). */
     onActiveFeature?: (fid: string | null, source: 'scroll' | 'selection') => void;
+    /** v6: the reader has now read a feature whose description the loop rewrote —
+     *  the acknowledgement is the dwell, not a click (state/auto-edits.ts). */
+    onAutoEditSeen?: (fid: string, at: string) => void;
     /** Pointer hovering a depends-on / used-by link — drives a transient tree-pane
      *  highlight + scroll-to (preview navigation). null on leave. */
     onHoverFeature?: (fid: string | null) => void;
@@ -126,6 +132,8 @@ export interface WholeDocEditorHandle {
     /** Update the live agent-activity phases (hooks → activity.json → sync.phase). */
     setPhases: (phases: Record<string, FeaturePhase>) => void;
     setSteps: (steps: Record<string, AgentStep[]>) => void;
+    /** v6: the unasked loop rewrites still owed attention (already seen-filtered). */
+    setAutoEdits: (edits: Record<string, AutoEditInfo>) => void;
     setSessionLive: (live: boolean) => void;
     setHistory: (history: Record<string, HistoryEntry[]>) => void;
     setBlame: (on: boolean) => void;
@@ -266,6 +274,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentSteps: Record<string, AgentStep[]> = {};   // P2b agent-action ribbon
+    // v6: unasked loop rewrites the reader has not caught up on yet. Cleared by
+    // READING — see the dwell timer below, and state/auto-edits.ts for why there is
+    // no dismiss button.
+    let currentAutoEdits: Record<string, AutoEditInfo> = {};
     let currentRole = 'claude';   // the ribbon's "who" — matches the presence avatar's role
     let currentHeld = new Set<string>();   // handed-off features (staged & sent) → pending badge
     let currentSessionLive = false;        // W3: live agent session → "lands next turn" wording
@@ -322,7 +334,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // dual-state — the human never composes an inline suggestion (U3).
                 getSuggestions: () => currentSuggestions,
                 handlers: { accept: opts.onAccept, reject: opts.onReject },
+                // A proposal on a feature the user has already edited (captured locally
+                // or handed off) is contested — the strip says so rather than letting
+                // Accept look like a formality that costs them nothing.
+                getLocallyEdited: () => new Set([...currentDrafts, ...currentHeld]),
             }),
+            AutoEditDecorations.configure({ getUnseen: () => currentAutoEdits }),
             DependencyDecorations.configure({
                 getThreads: () => currentThreads,
                 onNavigate: fid => scrollToFeatureInternal(fid, true),
@@ -710,8 +727,35 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // Only notify on an actual section change — scroll-spy runs every RAF frame,
             // and onActiveFeature drives the tree highlight + dependency spotlight recompute
             // (an O(rows) DOM pass), so firing it per-frame thrashes a large tree.
-            if (current && current !== lastSpyFid) { lastSpyFid = current; opts.onActiveFeature?.(current, 'scroll'); }
+            if (current && current !== lastSpyFid) {
+                lastSpyFid = current;
+                opts.onActiveFeature?.(current, 'scroll');
+                armDwell();
+            }
         });
+    }
+
+    // ── dwell-to-acknowledge (v6) ────────────────────────────────────────────
+    // A loop rewrite clears when the reader has actually been on that section, not
+    // when they press a button: the notification already knows when it is finished,
+    // so asking for a gesture would only add a chore. A section CHANGE re-arms the
+    // timer, so scrolling past at speed acknowledges nothing — and prose the loop
+    // took from the reader is held to a longer dwell (state/auto-edits.dwellFor), so
+    // the case that matters survives a fast scan of the document.
+    let dwellTimer = 0;
+    function armDwell(): void {
+        if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = 0; }
+        const fid = lastSpyFid;
+        if (!fid) return;
+        const edit = currentAutoEdits[fid];
+        if (!edit) return;
+        dwellTimer = window.setTimeout(() => {
+            dwellTimer = 0;
+            // Still here? Then it has been read. (Re-check: the reader may have moved
+            // on, and a stale timer must not acknowledge a section they left.)
+            if (lastSpyFid !== fid || !currentAutoEdits[fid]) return;
+            opts.onAutoEditSeen?.(fid, edit.at);
+        }, dwellFor(edit));
     }
     let railTimer = 0;
     function scheduleRail(): void {
@@ -1383,6 +1427,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             currentSteps = steps;
             editor.view.dispatch(editor.state.tr.setMeta(STEPS_UPDATED, true));
         },
+        setAutoEdits: (edits: Record<string, AutoEditInfo>) => {
+            currentAutoEdits = edits;
+            editor.view.dispatch(editor.state.tr.setMeta(AUTO_EDITS_UPDATED, true));
+            armDwell();   // the reader may already be sitting on one of them
+        },
         setRole: (role: string) => {
             currentRole = role;
             editor.view.dispatch(editor.state.tr.setMeta(STEPS_UPDATED, true));
@@ -1392,7 +1441,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             currentHoldDetail = detail ?? {};
             // Held changes also move the captured set (handed-off suppresses captured), so
             // recompute both families in one transaction.
-            editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true).setMeta(CAPTURED_UPDATED, true));
+            editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true)
+                .setMeta(CAPTURED_UPDATED, true).setMeta(SUGGESTIONS_UPDATED, true));
         },
         setSessionLive: (live: boolean) => {
             if (currentSessionLive === live) return;
@@ -1410,7 +1460,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setDrafts: (fids: string[]) => {
             currentDrafts = new Set(fids);  // recorded, not yet handed off → captured
-            editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
+            // Also re-run the suggestion layer: the draft set feeds its "you edited this"
+            // contest note, so a new draft on a proposed feature must repaint the strip.
+            editor.view.dispatch(editor.state.tr
+                .setMeta(CAPTURED_UPDATED, true).setMeta(SUGGESTIONS_UPDATED, true));
         },
         setBlocks: (blocks: Record<string, UIBlock[]>) => {
             currentBlocks = blocks;

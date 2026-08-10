@@ -70,8 +70,10 @@ For a single change you can also call the focused tools directly:
   the tree to drifted code (`code_drift`). Run it when a prompt reminder says
   changes are queued, when the user asks to sync, or whenever you're unsure
   which loop applies.
-- **`/codoc:plan <task>`** — plan a change doc-first: propose placeholder nodes
-  (`codoc_plan_add`, `realized=false`), block on the user's Accept/Reject via
+- **`/codoc:plan <task>`** — plan a change doc-first: say what each affected
+  feature WILL do (`codoc_propose_amend` — the default, since most tasks change
+  existing intent) and add placeholder nodes only for intent nothing covers yet
+  (`codoc_plan_add`, `realized=false`); block on the user's Accept/Reject via
   `codoc_await_verdicts`, then implement what was accepted in the same turn.
 
 ## The tree format (for reading)

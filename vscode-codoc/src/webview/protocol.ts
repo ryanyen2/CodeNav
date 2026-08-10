@@ -89,6 +89,12 @@ export interface UINode {
         tag: string;
         title?: string | null;
         description?: string | null;
+        /** What accepting does to the CODE (grammar.consequenceOf): "build" for a
+         *  plan placeholder, "remove" for a delete-code retire, null for the
+         *  majority that only reconcile the tree to code that already exists. */
+        writesCode?: 'build' | 'remove' | null;
+        /** A verdict is recorded for this proposal and has not drained yet. */
+        verdictPending?: boolean;
     };
     isProposal?: boolean;
     proposalOp?: 'add' | 'move';
@@ -103,6 +109,16 @@ export interface UINode {
  *  marks a step the agent moved past. `kind` distinguishes action steps
  *  (test/git) from file touches so the ribbon can style them. */
 export interface AgentStep { label: string; done: boolean; kind?: string }
+
+/** A description the loop rewrote unasked (sidecar `auto_edits`). Mirrors
+ *  state/bindings-model.AutoEdit; re-declared here so the protocol stays the one
+ *  contract the hub and the extension both compile against. */
+export interface AutoEditInfo {
+    at: string;
+    prev: string;
+    written_by: string;
+    rationale: string;
+}
 
 export interface SyncState {
     state: string;
@@ -148,6 +164,10 @@ export interface DocPayload {
     doc?: PMNode;
     /** Bound-symbol autocomplete candidates for the `@` code-ref picker (U5). */
     symbols?: RefSymbol[];
+    /** v6: descriptions the LOOP rewrote unasked, per feature. The one automatic op
+     *  the reader is told about — refresh/attach/detach are machinery and are
+     *  deliberately absent (see render._auto_edits). */
+    autoEdits?: Record<string, AutoEditInfo>;
     /** Unified pending diffs: code-ahead (agent → human, accept/reject) + doc-ahead
      *  (human → agent, awaiting implementation). Rendered as persistent inline
      *  word-level diffs that only clear on resolution by the correct party. */
@@ -240,6 +260,9 @@ export interface WebviewPrefs {
 
 /** Messages the webview posts back to the host. */
 export type WebviewMessage =
+    /** The reader dwelled long enough on a feature the loop had rewritten to count as
+     *  having read it (state/auto-edits.ts). Persisted host-side so it survives a reload. */
+    | { kind: 'auto-edit-seen'; fid: string; at: string }
     | { kind: 'ready' }
     /** Whole-doc settle (R3 / U2b): the entire edited ProseMirror doc. The host diffs it
      *  against the projection baseline `baselineId` names (#4) to emit identity-keyed

@@ -4,7 +4,8 @@ from __future__ import annotations
 import pytest
 
 from codoc.loop.apply import apply_op
-from codoc.model.event import NodeOp, NodeOpKind
+from codoc.model.event import ACTOR_HUMAN, NodeOp, NodeOpKind
+from codoc.model.feature import Feature
 from codoc.store.db import open_store
 
 
@@ -102,3 +103,44 @@ def test_add_under_retired_parent_is_rehomed_visible(store):
     leaf = next(f for f in store.list_features() if f.title == "New leaf")
     assert leaf.parent_id != theme.id
     assert leaf.id in _render_reachable_ids(store)
+
+
+# -- what an auto-applied amend displaced (v6) -----------------------------------
+# Loop A rewrites descriptions without asking. The old wording is unrecoverable one
+# instruction later, so apply_op records it at the write boundary — otherwise the IDE
+# can only say "this paragraph is different from the one you remember".
+
+def test_applied_amend_records_the_prose_it_displaced(store):
+    f = Feature(title="Session lifecycle", description="Original human prose.")
+    store.upsert_feature(f)
+    store.set_feature_writer(f.id, "user", ACTOR_HUMAN)
+
+    e = apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id,
+                        description="Rewritten by the loop."),
+                 store, source="loop_a", applied=True)
+
+    assert e.op.prev_description == "Original human prose."
+    # …and WHOSE words were displaced, read before the write reassigns authorship —
+    # the IDE weights the cue by whether a person's own sentences were overwritten.
+    assert e.op.prev_written_by == ACTOR_HUMAN
+    assert store.get_feature(f.id).description == "Rewritten by the loop."
+    # the write did reassign it, which is exactly why it had to be read first
+    assert store.feature_writer_info(f.id)[1] == "loop"
+
+
+def test_a_pending_amend_proposal_displaces_nothing_yet(store):
+    f = Feature(title="Session lifecycle", description="Original prose.")
+    store.upsert_feature(f)
+    e = apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id, description="Proposed."),
+                 store, source="loop_a", applied=False)
+    assert e.op.prev_description is None
+    assert store.get_feature(f.id).description == "Original prose."
+
+
+def test_a_no_op_amend_records_nothing(store):
+    """Re-asserting the same text is not a rewrite, and must not raise a cue."""
+    f = Feature(title="T", description="Same prose.")
+    store.upsert_feature(f)
+    e = apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id, description="Same prose."),
+                 store, source="loop_a", applied=True)
+    assert e.op.prev_description is None

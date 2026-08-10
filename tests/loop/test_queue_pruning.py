@@ -9,11 +9,14 @@ once per pass instead of being maintained only at the call site.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from codoc.codoc_file.render import write_tree
 from codoc.loop import edits as edits_channel
 from codoc.loop.loop_b import realize_path, run_loop_b
+from codoc.loop.status import AWAITING_IMPL, status_path
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
 
@@ -107,6 +110,106 @@ def test_an_in_flight_directive_is_protected_even_for_a_retired_feature(repo):
     did = _queue(codoc_dir, f.id, handed_off=True)
     _trigger(codoc_dir, did)
     _retire(codoc_dir, f.id)
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert [d.id for d in edits_channel.read_manifest(codoc_dir)] == [did]
+
+
+# ── the queue closes on evidence of the work, not on a file being deleted ────────
+# Completion used to have exactly ONE signal: someone removing realize.md. So an agent
+# could implement a directive, reflect it, and attach the code, and the queue would
+# still read awaiting_impl forever — the status bar reporting work "to implement" that
+# demonstrably exists, and every feature it named wearing a "sent, awaiting the agent"
+# badge. The only repair was a hand-run `rm` in the right directory.
+
+def _implement(codoc_dir, fid, did):
+    """What the agent does when it carries a directive out: change the code and reflect
+    it, citing the directive. That citation is the proof the queue now reads."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    with open_store(codoc_dir) as s:
+        apply_op(NodeOp(kind=NodeOpKind.ATTACH, feature_id=fid,
+                        bindings=[("mod.py", "mod.py::thing")]),
+                 s, source="loop_a_agent", applied=True, caused_by=did)
+
+
+def test_an_implemented_directive_closes_itself_without_anyone_deleting_realize_md(repo):
+    import json
+
+    root, codoc_dir = repo
+    f = _seed(codoc_dir)
+    did = _queue(codoc_dir, f.id, handed_off=True)
+    _trigger(codoc_dir, did)
+    _implement(codoc_dir, f.id, did)          # agent did the work and said so
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert edits_channel.read_manifest(codoc_dir) == []
+    assert not realize_path(codoc_dir).exists()   # the trigger goes with it
+    state = json.loads(status_path(codoc_dir).read_text())["state"]
+    assert state != AWAITING_IMPL                 # …and the status bar stops lying
+
+
+def test_the_outcome_is_still_recorded_when_the_ledger_closes_the_queue(repo):
+    """"What happened to my edit?" has to stay answerable however the entry left."""
+    import json
+
+    root, codoc_dir = repo
+    f = _seed(codoc_dir)
+    did = _queue(codoc_dir, f.id, handed_off=True)
+    _trigger(codoc_dir, did)
+    _implement(codoc_dir, f.id, did)
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    log = Path(codoc_dir) / "realized.jsonl"
+    assert log.exists()
+    assert did in {json.loads(line)["id"] for line in log.read_text().splitlines()}
+
+
+def test_a_handed_off_directive_nobody_has_implemented_yet_survives(repo):
+    """The in-flight protection still holds — this closes it only once the reflect call
+    the protection was waiting for has actually happened."""
+    root, codoc_dir = repo
+    f = _seed(codoc_dir)
+    did = _queue(codoc_dir, f.id, handed_off=True)
+    _trigger(codoc_dir, did)
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert [d.id for d in edits_channel.read_manifest(codoc_dir)] == [did]
+    assert realize_path(codoc_dir).exists()
+
+
+def test_an_unrelated_reflection_does_not_close_the_queue(repo):
+    """Only a citation of THIS directive counts. Loop A reflects constantly; work that
+    merely happened nearby is not evidence that the queued intent was carried out."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    root, codoc_dir = repo
+    f = _seed(codoc_dir)
+    did = _queue(codoc_dir, f.id, handed_off=True)
+    _trigger(codoc_dir, did)
+    with open_store(codoc_dir) as s:
+        apply_op(NodeOp(kind=NodeOpKind.ATTACH, feature_id=f.id,
+                        bindings=[("other.py", "other.py::x")]),
+                 s, source="loop_a", applied=True, caused_by="d-somethingelse")
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert [d.id for d in edits_channel.read_manifest(codoc_dir)] == [did]
+
+
+def test_a_held_draft_is_never_closed_by_the_ledger(repo):
+    """A draft was never handed to anyone, so nothing can have implemented it — even if
+    an event happens to carry its id, it is the author's to send or withdraw."""
+    root, codoc_dir = repo
+    f = _seed(codoc_dir)
+    did = _queue(codoc_dir, f.id, handed_off=False)
+    _implement(codoc_dir, f.id, did)
 
     run_loop_b(root, codoc_dir, dry_run=False)
 

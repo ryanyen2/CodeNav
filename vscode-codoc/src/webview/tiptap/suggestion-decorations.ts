@@ -3,16 +3,35 @@
  * list in the whole-doc editor (R4). Since U3/U2b the human commits directly, so the
  * only suggestions here are agent code-ahead proposals (Reject / Accept → inbox.json
  * verdict). AMEND diffs render from the engine's insertion/deletion marks materialized
- * in the doc by the host (agent-proposals.applyAgentProposals); add/move/retire keep a
- * compact widget here. (Plus the per-feature "Connections" threads line below.)
+ * in the doc by the host (agent-proposals.applyAgentProposals). (Plus the per-feature
+ * "Connections" threads line below.)
+ *
+ * TWO RULES, after the surface grew a Reject/Accept pair in four different places:
+ *
+ * 1. The PROPOSAL is drawn, not a card about it. An amend shows as tracked changes in
+ *    the prose it changes; a retire strikes the heading it retires; an add is a dimmed
+ *    placeholder node standing where the node will stand, at the end of its parent's
+ *    subtree. A blue strip pinned under the parent's heading said "something is
+ *    proposed near here" and read, wrongly, as an edit to the parent's own text.
+ *
+ * 2. One resolution surface per feature, on the feature. The verdict is a quiet pair
+ *    of buttons at the end of the heading line (or of the placeholder), revealed on
+ *    hover like the drag handle. At rest the reader sees the change itself and nothing
+ *    else; when they want to act, the control is on the thing they are looking at.
+ *    Everything at once still goes through the toolbar's Accept all / Reject all.
  */
 import { nextDecorations } from './decoration-policy';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
-import { directionLabel, directionActions } from '../../state/grammar';
-import { collapseRowOut } from '../motion';
+import {
+    directionLabel, directionActions,
+    consequenceOf, consequenceVerb, consequenceNote, leavesForAgent,
+} from '../../state/grammar';
+import { icon } from '../icons';
+import { launchPlane } from '../motion';
+import { MAX_HEADING_LEVEL } from './feature-heading';
 import type { Suggestion } from '../../state/suggestion-model';
 import type { ThreadsData } from '../protocol';
 import { THREADS_COLLAPSE_AT } from '../protocol';
@@ -25,6 +44,9 @@ export interface SuggestionHandlers {
 export interface SuggestionDecorationsOptions {
     getSuggestions: () => Suggestion[];
     handlers: SuggestionHandlers;
+    /** Features carrying an unlanded edit of the user's own (captured or handed off) —
+     *  a proposal on one of these is contested, and the verdict strip says so. */
+    getLocallyEdited?: () => ReadonlySet<string>;
 }
 
 export const SUGGESTIONS_UPDATED = 'codocSuggestionsUpdated';
@@ -47,95 +69,70 @@ function actionButton(label: string, cls: string, onClick: () => void): HTMLButt
     return b;
 }
 
-/** A plan proposal describes code that does not exist yet (an unrealized
- *  placeholder); a reflection/drift proposal describes code that already landed.
- *  The two are encoded by TEXTURE (dashed vs solid) + marker fill (△ vs ▲) —
- *  never by a new colour (colour stays direction). */
+/** A plan proposal describes code that does not exist yet; a reflection/drift
+ *  proposal describes code that already landed. Encoded by TEXTURE (dashed vs solid),
+ *  never by a new colour. Reads the same `consequenceOf` every other surface reads —
+ *  it used to sniff the tag string here and nowhere else, so the texture and the
+ *  button could disagree about the same proposal. */
 function isPlanned(s: Suggestion): boolean {
-    return s.direction === 'code-ahead' && (s.tag ?? '').includes('plan');
+    return s.direction === 'code-ahead' && consequenceOf(s.writesCode, s.tag) === 'build';
 }
 
-function makeWidget(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
-    // Authorship rides on INK OPACITY (the pen/pencil axis): a human's own words
-    // at full ink, an agent's proposal pencil-faded until accepted.
-    const author = s.originRole === 'human' ? 'by-human' : 'by-agent';
-    const planned = isPlanned(s) ? ' planned' : '';
-    const box = elc('div', `ce-diff ${s.direction} ${s.kind} ${author}${planned}`);
-    box.contentEditable = 'false';
-    box.setAttribute('data-suggestion', s.id);
+/**
+ * The verdict: a quiet Reject/Accept pair, hidden until the feature is hovered.
+ *
+ * It carries the origin in plain words ("from code") rather than leaving direction to
+ * hue alone — the colourblind/high-contrast floor (U6/R8) — and the cascade cue when
+ * the change surfaced back from implementing one of the user's own edits.
+ */
+function verdictStrip(
+    s: Suggestion, handlers: SuggestionHandlers, locallyEdited = false,
+): HTMLElement {
+    const cq = consequenceOf(s.writesCode, s.tag);
+    const row = elc('span', 'ce-verdict ' + s.direction + ' cq-' + cq
+        + (locallyEdited ? ' contested' : ''));
+    row.contentEditable = 'false';
+    row.setAttribute('data-suggestion', s.id);
 
-    // a tiny inline direction marker (▲ code-ahead / ▼ doc-ahead) — not a header
-    // line. A plan proposal (code not yet real) hollows the marker: △.
-    const glyph = s.direction === 'code-ahead' ? (planned ? '△' : '▲') : '▼';
-    const mark = elc('span', 'ce-diff-mark', glyph);
-    mark.title = directionLabel(s.direction)
-        + (planned ? ' · not yet in code' : '')
-        + (s.tag ? ' · ' + s.tag : '');
-    box.append(mark);
-
-    // Cascade cue: a non-empty causedBy means this surfaced back from implementing
-    // one of the user's own doc edits — the lightest possible grouping (text only,
-    // existing direction colour, no new surface).
-    if (s.causedBy) {
-        const cascade = elc('span', 'ce-diff-cascade', '↳ from your edit');
-        cascade.title = `implements ${s.causedBy}`;
-        box.append(cascade);
+    // A verdict already recorded and not yet drained. Re-offering Accept here would
+    // read as "your click did nothing" and invite a second one; say what is true
+    // instead. The proposal itself stays on screen — it has not been applied.
+    if (s.verdictPending) {
+        const wait = elc('span', 'ce-verdict-waiting', 'recorded · waiting to apply');
+        wait.title = leavesForAgent(cq)
+            ? 'Your verdict is recorded. It applies on the next pass that can hand '
+              + 'code work to the agent (a live session, or `codoc sync`).'
+            : 'Your verdict is recorded. It applies on the daemon\'s next pass.';
+        row.append(wait);
+        row.classList.add('waiting');
+        return row;
     }
 
-    // The structural kind, compact. makeWidget only ever renders add / move / retire —
-    // amend suggestions render inline via amendBlock (the tracked-change overlay), so
-    // there is deliberately no amend branch here.
-    const body = elc('span', 'ce-diff-body');
-    if (s.kind === 'add') {
-        body.append(elc('span', 'ce-diff-kind', '+ new'), document.createTextNode(' ' + (s.titleNew || '(untitled)')));
-    } else if (s.kind === 'retire') {
-        body.append(elc('span', 'ce-diff-kind', '~ retire'), document.createTextNode(' — detaches bindings; code kept'));
-    } else if (s.kind === 'move') {
-        body.append(elc('span', 'ce-diff-kind', '→ move'));
-    }
-    box.append(body);
-
-    const actions = elc('span', 'ce-diff-actions');
-    // Disable the row after the first click so the card can't fire twice while it's
-    // still on screen (the authoritative removal arrives with the next payload). On ACCEPT
-    // (§C.3) the row also height-collapses to 0 before the payload drops it — never a hard
-    // vanish; gated in collapseRowOut (reduced motion → instant). Reject stays a quiet vanish.
-    const once = (fn: (s: Suggestion) => void, collapse: boolean) => () => {
-        actions.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
-        actions.classList.add('applying');
-        fn(s);
-        if (collapse) collapseRowOut(box, () => { /* payload removal is authoritative; keep collapsed */ });
-    };
-    // All suggestions are agent code-ahead proposals (the human commits directly
-    // since U3) → Reject / Accept, the human's verdict over the agent's change.
-    const [secondary, primary] = directionActions(s.direction);
-    actions.append(
-        actionButton(secondary, 'reject', once(handlers.reject, false)),
-        actionButton(primary, 'accept', once(handlers.accept, true)),
-    );
-    box.append(actions);
-    return box;
-}
-
-// ── agent AMEND affordance (the tracked-change marks render the diff) ───────────
-// The {old,new} diff is materialized as engine insertion/deletion marks in the doc
-// (host-side agent-proposals.applyAgentProposals); the engine + CSS render the
-// Google-Docs look (struck old / inserted new, agent-tinted). Here we only place the
-// compact accept/reject affordance beneath the heading. add/move/retire keep their
-// own compact widget (they can't be expressed as in-prose tracked changes).
-
-/** The compact resolution affordance (direction marker + accept/reject). */
-function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement {
-    const row = elc('div', 'ce-tc-actions ' + s.direction);
-    const planned = isPlanned(s);
-    const mark = elc('span', 'ce-tc-mark', planned ? '△' : '▲');
-    mark.title = directionLabel(s.direction) + (planned ? ' · not yet in code' : '') + (s.tag ? ' · ' + s.tag : '');
-    row.append(mark);
-    // Non-color direction label (U6/R8): the diff's origin reads WITHOUT relying on hue or a
-    // hover tooltip — "from code" for a code-ahead amend (the code→codoc update the user wants
-    // to see), so colourblind + high-contrast users get the direction in plain text.
     if (s.direction === 'code-ahead') {
-        row.append(elc('span', 'ce-tc-dir', planned ? 'from code · planned' : 'from code'));
+        const dir = elc('span', 'ce-tc-dir', 'from code');
+        dir.title = directionLabel(s.direction) + (s.tag ? ' · ' + s.tag : '');
+        row.append(dir);
+    }
+    // The consequence, in one plain sentence, only where it is not the boring one.
+    // A `record` accept says nothing here — the absence IS the signal, and printing
+    // "no code changes" on the 4-in-5 case would be noise that trains people to skip
+    // the line on the 1-in-5 case that matters.
+    if (leavesForAgent(cq)) {
+        const note = elc('span', 'ce-verdict-cq');
+        note.append(icon('paper-plane-tilt'), document.createTextNode(consequenceNote(cq)));
+        row.append(note);
+    }
+    // The user has their own unlanded edit on this feature. Accepting is then a
+    // choice between two versions rather than a formality — especially for a retire,
+    // where it discards words they just wrote. Say so instead of letting the click
+    // look free. (Deliberately NOT auto-rejecting: deferring a decision, editing, and
+    // coming back later is a normal way to work, not a verdict.)
+    if (locallyEdited) {
+        const warn = elc('span', 'ce-tc-contested', '· you edited this');
+        warn.title = s.kind === 'retire'
+            ? 'You have an unlanded edit here. Accepting removes this feature and your edit with it.'
+            : 'You have an unlanded edit here. Accepting replaces it with the agent\'s version.';
+        row.append(warn);
     }
     if (s.causedBy) {
         const c = elc('span', 'ce-tc-cascade', '↳ from your edit');
@@ -143,53 +140,160 @@ function amendActions(s: Suggestion, handlers: SuggestionHandlers): HTMLElement 
         row.append(c);
     }
     const actions = elc('span', 'ce-tc-btns');
-    const once = (fn: (s: Suggestion) => void) => () => {
+    // Disable after the first click so one verdict can't fire twice while the control
+    // is still on screen — the authoritative removal arrives with the next payload.
+    const once = (fn: (s: Suggestion) => void, launch: boolean) => () => {
         actions.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
         actions.classList.add('applying');
+        // MOTION as the third channel for the same bit: a bookkeeping accept settles
+        // in place, a code-writing one LAUNCHES — the plane flies off exactly as it
+        // does on Commit & send, because the same thing just happened (work left for
+        // the agent). Gated on reduced motion inside launchPlane.
+        if (launch) launchPlane(actions.querySelector<HTMLElement>('.ce-icon'));
         fn(s);
     };
-    const [secondary, primary] = directionActions(s.direction);
-    actions.append(actionButton(secondary, 'reject', once(handlers.reject)),
-                   actionButton(primary, 'accept', once(handlers.accept)));
+    const [secondary] = directionActions(s.direction);
+    // The VERB carries the consequence. "Accept" for the 4-in-5 that only rewrite
+    // words; "Accept & build" / "Accept & delete code" when the click reaches code.
+    const primary = s.direction === 'code-ahead'
+        ? consequenceVerb(cq) : directionActions(s.direction)[1];
+    const acceptBtn = actionButton(primary, 'accept', once(handlers.accept, leavesForAgent(cq)));
+    acceptBtn.title = consequenceNote(cq);
+    if (leavesForAgent(cq)) acceptBtn.prepend(icon('paper-plane-tilt'));
+    const rejectBtn = actionButton(secondary, 'reject', once(handlers.reject, false));
+    rejectBtn.title = leavesForAgent(cq)
+        ? 'Discard this request. Nothing is written.'
+        : 'Discard this update. The tree keeps its current wording.';
+    actions.append(rejectBtn, acceptBtn);
     row.append(actions);
     return row;
 }
 
-interface FeatureLoc { headingPos: number; heading: PMModelNode; }
+/**
+ * A proposed node, drawn where it will live: a dimmed title at the child level plus
+ * its description, reading exactly like the accepted-but-unbuilt feature it becomes.
+ * A MOVE shows the same way at its destination (the live node keeps its place until
+ * the verdict lands, so the two ends of the move are both visible).
+ */
+function ghostFeatureDom(
+    s: Suggestion, level: number, label: string, handlers: SuggestionHandlers,
+): HTMLElement {
+    const wrap = elc('div', 'ce-ghost-feature ' + s.kind + (isPlanned(s) ? ' planned' : ''));
+    wrap.contentEditable = 'false';
+    wrap.dataset.level = String(level);
+    wrap.setAttribute('data-suggestion', s.id);
+    const title = elc('div', 'ce-ghost-title', label || '(untitled)');
+    title.title = s.kind === 'move'
+        ? 'The agent proposes moving this feature here. Nothing has moved yet.'
+        : 'The agent proposes this feature. ' + consequenceNote(consequenceOf(s.writesCode, s.tag));
+    wrap.append(title);
+    // A move's description is already on screen at the node's current home — repeating
+    // it here would read as a second copy of the feature rather than as its destination.
+    const desc = s.kind === 'move' ? '' : (s.descNew ?? '').trim();
+    if (desc) wrap.append(elc('div', 'ce-ghost-desc', desc));
+    wrap.append(verdictStrip(s, handlers));
+    return wrap;
+}
+
+/** A heading's visible text — the title of the node a MOVE relocates (the suggestion
+ *  itself carries no title for a move; the node it points at does). */
+function headingText(node: PMModelNode): string {
+    return node.textBetween(0, node.content.size, '', '').trim();
+}
+
+interface FeatureLoc {
+    headingPos: number;
+    heading: PMModelNode;
+    level: number;
+    /** End of this feature's OWN blocks — the next heading at any level. What a
+     *  retire actually removes: children are promoted, not retired with it. */
+    bodyEnd: number;
+    /** End of this feature's whole subtree — the next heading at this level or
+     *  shallower. Where a new child would be inserted. */
+    subtreeEnd: number;
+    /** This feature's own description blocks, as {pos,node} in document order. */
+    body: { pos: number; node: PMModelNode }[];
+}
+
+/** Index every feature heading with its outline level, its own body blocks, and the
+ *  two boundaries the proposal decorations need. */
+export function locateFeatures(doc: PMModelNode): Map<string, FeatureLoc> {
+    const heads: { pos: number; node: PMModelNode; level: number }[] = [];
+    const blocks: { pos: number; node: PMModelNode }[] = [];
+    doc.forEach((node, pos) => {
+        blocks.push({ pos, node });
+        if (node.type.name === 'featureHeading') heads.push({ pos, node, level: Number(node.attrs.level ?? 0) });
+    });
+    const docEnd = doc.content.size;
+    const loc = new Map<string, FeatureLoc>();
+    heads.forEach((h, i) => {
+        const next = heads[i + 1];
+        const bodyEnd = next ? next.pos : docEnd;
+        // The subtree runs until the next heading at this level or shallower.
+        let subtreeEnd = docEnd;
+        for (let j = i + 1; j < heads.length; j++) {
+            if (heads[j].level <= h.level) { subtreeEnd = heads[j].pos; break; }
+        }
+        const fid = h.node.attrs.fid as string | null;
+        if (!fid) return;
+        const body = blocks.filter(b => b.pos > h.pos && b.pos < bodyEnd);
+        loc.set(fid, { headingPos: h.pos, heading: h.node, level: h.level, bodyEnd, subtreeEnd, body });
+    });
+    return loc;
+}
 
 function buildDecorations(
     doc: PMModelNode, suggestions: Suggestion[], handlers: SuggestionHandlers,
+    locallyEdited: ReadonlySet<string> = new Set(),
 ): DecorationSet {
-    // Locate every feature heading (the amend diff renders from in-doc marks now, so
-    // we no longer need to track the description blocks for a hidden-overlay).
-    const loc = new Map<string, FeatureLoc>();
-    doc.forEach((node, pos) => {
-        if (node.type.name !== 'featureHeading') return;
-        const fid = node.attrs.fid as string | null;
-        if (fid) loc.set(fid, { headingPos: pos, heading: node });
-    });
-
+    const loc = locateFeatures(doc);
+    const docEnd = doc.content.size;
     const decos: Decoration[] = [];
     for (const s of suggestions) {
-        if (s.kind === 'add') {
+        if (s.kind === 'add' || s.kind === 'move') {
+            // The placeholder lands where the node itself will: last child of the
+            // destination parent, i.e. the end of that parent's subtree. Anchoring it
+            // right under the parent's heading (the old behaviour) put it between the
+            // parent's title and the parent's own prose, where it read as an edit to it.
             const parent = s.parentId ? loc.get(s.parentId) : null;
-            const pos = parent ? parent.headingPos + parent.heading.nodeSize : 0;
-            decos.push(Decoration.widget(pos, () => makeWidget(s, handlers), { side: 1, key: 'sug-' + s.id }));
+            const at = parent ? parent.subtreeEnd : docEnd;
+            const level = parent ? Math.min(parent.level + 1, MAX_HEADING_LEVEL - 1) : 0;
+            let label = s.titleNew ?? '';
+            if (s.kind === 'move' && s.featureId) {
+                const src = loc.get(s.featureId);
+                if (src) {
+                    label = label || headingText(src.heading);
+                    decos.push(Decoration.node(src.headingPos, src.headingPos + src.heading.nodeSize,
+                                               { class: 'ce-move-source' }));
+                }
+            }
+            decos.push(Decoration.widget(at, () => ghostFeatureDom(s, level, label, handlers),
+                                         { side: 1, key: 'sug-' + s.id }));
             continue;
         }
         const l = s.featureId ? loc.get(s.featureId) : null;
         if (!l) continue;
-        const after = l.headingPos + l.heading.nodeSize;
-        if (s.kind === 'move' || s.kind === 'retire') {
-            if (s.kind === 'retire') decos.push(Decoration.node(l.headingPos, after, { class: 'ce-retire-proposed' }));
-            decos.push(Decoration.widget(after, () => makeWidget(s, handlers), { side: 1, key: 'sug-' + s.id }));
-            continue;
+        // retire — the strike on the heading IS the proposal; amend — the tracked-change
+        // ins/del marks the host materialized in the prose are. Either way the only thing
+        // to add is the verdict, inline at the end of the heading line so there is exactly
+        // one place per feature to resolve it.
+        if (s.kind === 'retire') {
+            // The WHOLE node is going away, so the whole node has to look like it: the
+            // title alone struck while its description sat at full ink read as "the title
+            // is being deleted". Scoped to this feature's own blocks (`bodyEnd`, the next
+            // heading at ANY level) because apply.py promotes live children to the
+            // grandparent rather than retiring them — striking the subtree would claim
+            // they are going too.
+            decos.push(Decoration.node(l.headingPos, l.headingPos + l.heading.nodeSize,
+                                       { class: 'ce-retire-proposed' }));
+            for (const b of l.body) {
+                decos.push(Decoration.node(b.pos, b.pos + b.node.nodeSize,
+                                           { class: 'ce-retire-proposed-body' }));
+            }
         }
-        // amend — the tracked-change diff itself is materialized as engine ins/del
-        // marks in the doc by the host (agent-proposals.applyAgentProposals); the
-        // engine + CSS render it inline (struck old / inserted new, agent-tinted). We
-        // only anchor the compact accept/reject affordance after the heading.
-        decos.push(Decoration.widget(after, () => amendActions(s, handlers), { side: 1, key: 'sug-' + s.id }));
+        decos.push(Decoration.widget(l.headingPos + 1 + l.heading.content.size,
+                                     () => verdictStrip(s, handlers, locallyEdited.has(s.featureId ?? '')),
+                                     { side: 1, key: 'sug-' + s.id + (locallyEdited.has(s.featureId ?? '') ? ':edited' : '') }));
     }
     return DecorationSet.create(doc, decos);
 }
@@ -384,23 +488,32 @@ export const SuggestionDecorations = Extension.create<SuggestionDecorationsOptio
     name: 'suggestionDecorations',
 
     addOptions() {
-        return { getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {} } };
+        return {
+            getSuggestions: () => [], handlers: { accept: () => {}, reject: () => {} },
+            getLocallyEdited: () => new Set<string>(),
+        };
     },
 
     addProseMirrorPlugins() {
         const getSuggestions = (): Suggestion[] => this.options.getSuggestions();
         const handlers = this.options.handlers;
+        const getEdited = (): ReadonlySet<string> =>
+            this.options.getLocallyEdited?.() ?? new Set<string>();
+        const build = (doc: PMModelNode): DecorationSet =>
+            buildDecorations(doc, getSuggestions(), handlers, getEdited());
         return [
             new Plugin({
                 key: decoKey,
                 state: {
-                    init: (_config, state) => buildDecorations(state.doc, getSuggestions(), handlers),
-                    apply: (tr, old, _oldState, newState) => {
-                        if (tr.getMeta(SUGGESTIONS_UPDATED) || tr.docChanged) {
-                            return buildDecorations(newState.doc, getSuggestions(), handlers);
-                        }
-                        return old.map(tr.mapping, tr.doc);
-                    },
+                    init: (_config, state) => build(state.doc),
+                    // Structure-keyed — see decoration-policy.ts. These hang off headings
+                    // and come from the payload, never from the prose, so typing inside a
+                    // description only MOVES them. Rebuilding per keystroke also tore down
+                    // and recreated the verdict buttons mid-interaction, which drops
+                    // keyboard focus and re-runs their entrance every character.
+                    apply: (tr, old, _oldState, newState) => nextDecorations(
+                        tr, old, !!tr.getMeta(SUGGESTIONS_UPDATED), () => build(newState.doc),
+                    ),
                 },
                 props: {
                     decorations(state) { return decoKey.getState(state); },

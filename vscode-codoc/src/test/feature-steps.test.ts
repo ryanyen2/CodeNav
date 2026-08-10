@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { featureSteps, EPOCH_UI_TTL_MS, type ActivityData } from '../state/activity-model';
+import {
+    featureSteps, activeFeatureModes, stepCutoff,
+    EPOCH_UI_TTL_MS, STEP_TTL_MS, type ActivityData,
+} from '../state/activity-model';
 import { emptySidecar, type SidecarData } from '../state/bindings-model';
 
 function openEpoch(over: Partial<ActivityData> = {}): ActivityData {
@@ -90,6 +93,77 @@ describe('featureSteps', () => {
         const steps = featureSteps(data, sidecar);
         expect(steps.has('f-one')).toBe(true);
         expect(steps.has('f-two')).toBe(false);
+    });
+});
+
+// ── a step stops narrating once the agent has moved on ────────────────────────
+
+describe('step staleness (STEP_TTL_MS, agent-relative)', () => {
+    const iso = (ms: number): string => new Date(ms).toISOString();
+    const T0 = Date.parse('2026-08-09T12:00:00.000Z');
+
+    it('drops a feature the agent left behind, while the epoch is still open', () => {
+        // The agent read sessions.py once, then spent the next few minutes elsewhere.
+        // `recent` is pruned by COUNT, never by age, so both entries are still on disk.
+        const data = openEpoch({
+            recent: [
+                { tool: 'Read', file: 'sessions.py', feature_ids: ['f-old'], at: iso(T0), phase: 'pre' },
+                { tool: 'Edit', file: 'adapters.py', feature_ids: ['f-now'],
+                  at: iso(T0 + STEP_TTL_MS + 1), phase: 'pre' },
+            ],
+        });
+        const now = T0 + STEP_TTL_MS + 1;
+        const steps = featureSteps(data, null, now, now);
+        expect(steps.has('f-old')).toBe(false);
+        expect(steps.get('f-now')!.map(s => s.label)).toEqual(['editing adapters.py']);
+    });
+
+    it('keeps a step that is still the newest thing the agent did, however long it runs', () => {
+        // A 3-minute pytest is the newest event by the agent's own clock; a wall-clock
+        // cutoff would blank the ribbon mid-run and claim the agent left.
+        const data = openEpoch({
+            recent: [{ tool: 'Bash', file: '', feature_ids: ['f-1'], at: iso(T0), phase: 'pre',
+                       action: 'test', label: 'running pytest' }],
+        });
+        const later = T0 + 5 * STEP_TTL_MS;
+        expect(featureSteps(data, null, later - 1_000, later).get('f-1')!.map(s => s.label))
+            .toEqual(['running pytest']);
+    });
+
+    it('ages the touched fallback the same way', () => {
+        const data = openEpoch({
+            touched: {
+                'old.py': { symbols: [], feature_ids: ['f-old'], last: iso(T0), mode: 'read' },
+                'now.py': { symbols: [], feature_ids: ['f-now'],
+                            last: iso(T0 + STEP_TTL_MS + 1), mode: 'write' },
+            },
+        });
+        const now = T0 + STEP_TTL_MS + 1;
+        const steps = featureSteps(data, null, now, now);
+        expect(steps.has('f-old')).toBe(false);
+        expect(steps.has('f-now')).toBe(true);
+    });
+
+    it('stops the tree row pulsing on a feature the agent left', () => {
+        const data = openEpoch({
+            touched: {
+                'old.py': { symbols: [], feature_ids: ['f-old'], last: iso(T0), mode: 'write' },
+                'now.py': { symbols: [], feature_ids: ['f-now'],
+                            last: iso(T0 + STEP_TTL_MS + 1), mode: 'write' },
+            },
+        });
+        const now = T0 + STEP_TTL_MS + 1;
+        const modes = activeFeatureModes(data, null, now, now);
+        expect(modes.has('f-old')).toBe(false);
+        expect(modes.get('f-now')).toBe('write');
+    });
+
+    it('keeps everything when nothing carries a parseable timestamp (older activity.json)', () => {
+        expect(stepCutoff([null, undefined, 'not-a-date'])).toBeNull();
+        const data = openEpoch({
+            recent: [{ tool: 'Edit', file: 'a.py', feature_ids: ['f1'], at: 'nope', phase: 'pre' }],
+        });
+        expect(featureSteps(data, null, Date.now()).has('f1')).toBe(true);
     });
 });
 

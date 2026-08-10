@@ -130,6 +130,12 @@ def codoc_propose_add(title: str, description: str = "", parent_id: str | None =
     proposal). Set parent_id from `codoc_tree` to nest it; binds are
     "file.py::symbol_path".
 
+    Check codoc_propose_amend FIRST. Most changes extend what a feature already
+    does, and amending its description keeps one intent in one place — adding a
+    node instead splits it in two and leaves the original description stale. "It
+    is a new function/file/class" is not the test; the test is whether a reader
+    would look for this under its own name.
+
     after_id / before_id name the siblings it goes between (by feature id); omit both to
     append it last among its parent's children."""
     cd, err = _need_dir()
@@ -144,7 +150,12 @@ def codoc_propose_amend(feature_id: str, title: str | None = None,
                         description: str | None = None, rationale: str = "",
                         caused_by: str = "") -> dict:
     """Propose editing a feature's title and/or description (e.g. its meaning
-    shifted). Small description edits apply immediately; larger ones are reviewed."""
+    shifted). Small description edits apply immediately; larger ones are reviewed.
+
+    The DEFAULT way to record a change to existing intent, including a planned one:
+    write the description as it should read once the change lands. The user reviews
+    it as a tracked-change diff on their own prose, per feature, rather than as a
+    new node appearing next to it."""
     cd, err = _need_dir()
     return err or tools.propose_amend(cd, feature_id=feature_id, title=title,
                                       description=description, rationale=rationale,
@@ -206,7 +217,12 @@ def codoc_plan_add(title: str, description: str = "", parent_id: str | None = No
                    binds: list[str] | None = None, rationale: str = "") -> dict:
     """Propose a PLAN placeholder node (used by /codoc:plan, before writing code).
     Accepted, it enters the tree as an unrealized placeholder until code binds to
-    it. Do NOT edit code in the planning step."""
+    it. Do NOT edit code in the planning step.
+
+    Only for intent no existing feature covers. If the plan changes what an existing
+    feature does, use codoc_propose_amend on that feature instead — the IDE shows
+    that as a tracked-change diff on its description, which is what the user is
+    actually deciding about."""
     cd, err = _need_dir()
     return err or tools.plan_add(cd, title=title, description=description,
                                  parent_id=parent_id, binds=binds, rationale=rationale)

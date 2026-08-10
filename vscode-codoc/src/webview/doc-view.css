@@ -226,7 +226,6 @@ body.vscode-high-contrast {
     --select-bg: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 70%, transparent);
 }
 body.vscode-high-contrast .row.selected,
-body.vscode-high-contrast .ce-diff,
 body.vscode-high-contrast .ce-peek {
     outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
 }
@@ -241,10 +240,9 @@ body.vscode-high-contrast .row.selected {
    `color`; the gutter rail stays a background. */
 body.vscode-high-contrast .ce-captured-dot,
 body.vscode-high-contrast .ce-pending-dot,
-body.vscode-high-contrast .badge.captured,
-body.vscode-high-contrast .badge.pending,
-body.vscode-high-contrast .badge.unrealized,
-body.vscode-high-contrast .badge.divergent { color: var(--vscode-foreground); }
+body.vscode-high-contrast .badge.staged,
+body.vscode-high-contrast .badge.sent,
+body.vscode-high-contrast .badge.proposed { color: var(--vscode-foreground); }
 body.vscode-high-contrast .ce-captured-rail::before { background: var(--vscode-foreground); }
 /* the deletion caret stays vivid in HC (pin to the contrast border); the add underline to fg */
 body.vscode-high-contrast .ce-captured-del { background: var(--vscode-contrastBorder, #d1483f); }
@@ -470,7 +468,9 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
     letter-spacing: -0.005em;
 }
 .row.retired .title { text-decoration: line-through; opacity: 0.55; }
-.row.has-retire .title { text-decoration: line-through; color: var(--fg-muted); opacity: 0.7; }
+/* a proposed retire strikes the tree row's title in the SAME direction hue the doc
+   pane strikes its heading with — one fact, one colour, whichever pane you are in. */
+.row.has-retire .title { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
 .row.unrealized .title { font-style: italic; opacity: 0.78; }
 
 .amend-inline {
@@ -478,57 +478,66 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
     color: var(--dir-review); margin-left: 12px; opacity: 0.88;
     flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%;
 }
-/* code-ahead change on a live row → direction tint (kind shown by shape: ✎ inline / strike) */
-.row.has-amend { background: color-mix(in srgb, var(--dir-review) 5%, transparent); }
-.row.has-amend:hover { background: color-mix(in srgb, var(--dir-review) 9%, transparent); }
-.row.has-retire { background: color-mix(in srgb, var(--dir-review) 4%, transparent); }
+/* A live row with a pending change carries the same signals a proposal ROW does: the
+   one `proposed` badge plus the shape (strike for retire, → new title for amend). The
+   background washes are gone — with three shades of the same tint in the tree, "this
+   row is tinted" stopped meaning anything, and hover already answers "which row". */
+.row.has-amend:hover, .row.has-retire:hover { background: color-mix(in srgb, var(--dir-review) 9%, transparent); }
 
 .badge { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-left: 10px; }
 /* Lifecycle badges (U3) now host an inline Phosphor glyph (P0/§C.1) instead of a bare dot:
    the SHAPE carries the phase, HUE stays the existing token. An icon-bearing badge drops the
-   dot box (auto-size to the glyph); the dot families (active-write/read, amend/retire) keep
+   dot box (auto-size to the glyph); the dot families (working write/read) keep
    the 6px circle below. */
 .badge:has(.ce-icon) {
     width: auto; height: auto; border-radius: 0;
     background: none !important; border: none !important; box-shadow: none !important;
     display: inline-flex; align-items: center;
 }
-/* lifecycle = STATUS axis (no hue, U3/H4): unrealized = dashed-circle glyph, muted */
-.badge.unrealized { color: var(--fg-muted); }
-/* pending code-ahead change → direction colour (kind is shown by shape, not the dot) */
-.badge.amend, .badge.retire { background: var(--dir-review); }
-/* divergent realization (U5) → a warning-diamond glyph in the direction colour, so "the AI
-   changed this beyond your edit" reads as needing attention. Status axis: no new hue. */
-.badge.divergent { color: var(--dir-review); }
+/* ── ONE badge, ONE state (feature-state.ts) ───────────────────────────────────
+   A row draws at most one of these, chosen by lifecycle order: working → proposed →
+   sent → staged. "Planned" (accepted, no code yet) has no glyph — the dimmed italic
+   title already says it — and a settled feature draws nothing at all. Each glyph is
+   a distinct SHAPE so the state survives without hue; the hover text says what it
+   means and what to do about it. */
 
-/* live agent activity = STATUS axis: MOTION distinguishes write (pulsing) from read (steady), not hue */
-.badge.active-write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }
-.badge.active-read { background: var(--fg-muted); }
+/* working — the agent is in this code now. MOTION distinguishes write from read. */
+.badge.working.write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }
+.badge.working.read { background: var(--fg-muted); }
 
-/* "captured" (recorded, not sent) = the calmest member of the ramp: a thin dashed-circle
-   glyph in the editing/captured hue. "pending" (staged & sent, queued for /codoc:sync — NOT
-   running) = a diamond glyph in the staged hue with a slow breathe. The live ce-phase-*
-   shimmer layers on top ONLY while the agent is actually mid-edit during a sync — THAT is the
-   real "realizing." Reduced-motion freezes the pulse. */
-.badge.captured { color: color-mix(in srgb, var(--ce-editing) 80%, transparent); }
-.badge.pending {
+/* proposed — waiting on your verdict. The one state that blocks on the human, so it
+   takes the direction hue (code-ahead review blue) and a hollow diamond. */
+.badge.proposed { color: var(--dir-review); }
+
+/* sent — handed off, the agent will implement it. Filled diamond (§C.1 "fill = phase"),
+   staged hue, a slow breathe: queued, not running. */
+.badge.sent {
     color: color-mix(in srgb, var(--ce-staged) 90%, transparent);
     animation: breathe 2.6s ease-in-out infinite;
 }
+/* staged — recorded here only, not sent. The calmest member of the ramp. */
+.badge.staged { color: color-mix(in srgb, var(--ce-editing) 80%, transparent); }
 @keyframes breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.95; } }
 
 /* (the tree-pane refs pill was removed — code refs now live in the doc threads line, U4) */
 
-/* Ghost rows for pending ADD/MOVE */
-/* tree-pane ghosts are code-ahead proposals → ONE direction colour; the glyph (+ / →) is the kind */
-.row.proposal { background: color-mix(in srgb, var(--dir-review) 7%, transparent); }
-.row.proposal:hover { background: color-mix(in srgb, var(--dir-review) 12%, transparent); }
+/* Placeholder rows for pending ADD/MOVE — the tree twin of .ce-ghost-feature. A node
+   that does not exist yet reads as a dimmed italic title at the position it will take:
+   the same voice as an accepted-but-unbuilt feature, so accepting it barely moves the
+   page. Direction stays the ONE code-ahead hue; the background wash and the origin-tag
+   chip are gone (they made every proposal shout before the reader knew what it was). */
 .row.proposal .pglyph { width: 14px; text-align: center; flex-shrink: 0; font: 12px var(--vscode-editor-font-family); }
-.row.proposal .pglyph, .row.proposal .ghost-title { color: var(--dir-review); }
-.row .ghost-tag { font: 10px var(--vscode-font-family); color: var(--fg-muted); margin-left: 10px; opacity: 0.7; flex-shrink: 0; }
+.row.proposal .pglyph { color: var(--dir-review); }
+.row.proposal .ghost-title {
+    font-style: italic;
+    color: color-mix(in srgb, var(--dir-review) 62%, var(--fg-muted));
+}
+.row.proposal:hover { background: color-mix(in srgb, var(--dir-review) 10%, transparent); }
 
+/* ONE resolution surface per row, on hover — same rule for a proposal row and a live
+   row carrying an amend/retire, so there is never a second always-lit pair elsewhere. */
 .row .verdict { display: inline-flex; gap: 4px; margin-left: 12px; flex-shrink: 0; opacity: 0; transition: opacity 100ms ease; }
-.row:hover .verdict, .row.selected .verdict, .row.proposal .verdict { opacity: 1; }
+.row:hover .verdict, .row.selected .verdict, .row .verdict:focus-within, .row .verdict.applying { opacity: 1; }
 /* the verdict buttons now hold a Phosphor glyph (§C.1): a filled check (accept) / x-circle
    (reject). The icon carries the meaning + hue; the button is a quiet hit target. */
 .row .verdict button {
@@ -559,12 +568,24 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 /* optimistic "applying…" feedback while a verdict round-trips through a loop (live: tree-pane verdicts) */
 .verdict button:disabled { opacity: 0.45; cursor: default; }
 .verdict.applying { opacity: 0.6; }
+/* A verdict is ONE decision with several surfaces (tree row, doc strip, toolbar
+   bulk, palette). While one is in flight, every OTHER way to resolve a proposal is
+   inert — otherwise Accept-all leaves each feature's own Accept live and the same
+   event can be voted on twice. The 5s applyingTimer releases this and says why if
+   nothing drained the inbox. */
 body.applying .toolbar .toggle.bulk { opacity: 0.5; pointer-events: none; }
+/* Dim the BUTTONS, not their container: the hover rules that reveal a verdict strip
+   are more specific than anything scoped on `body`, so an opacity here would lose the
+   fight on hover and show a lit control that does nothing. */
+body.applying .row .verdict,
+body.applying .ce-verdict { pointer-events: none; }
+body.applying .row .verdict button,
+body.applying .ce-verdict button { opacity: 0.45; }
 
 @media (prefers-reduced-motion: reduce) {
     /* fallback gate (the body-class rule below is authoritative in webviews — KTD4).
        Only the live animated elements remain after the read-view CSS was removed. */
-    .toolbar .status.realizing .dot, .badge.active-write, .badge.pending,
+    .toolbar .status.realizing .dot, .badge.working.write, .badge.sent,
     .ce-pending-dot,
     .codoc-feature-heading.ce-phase-editing::after {
         transition: none !important; animation: none !important;
@@ -822,53 +843,52 @@ body.vscode-reduce-motion .ce-resolving-sweep::after,
 body.vscode-using-screen-reader .ce-resolving-sweep::after { animation: none; content: none; }
 
 /* ── Agent-action ribbon (P2b, agent-ribbon.ts) ───────────────────────────────
-   The live "what the agent is doing" list under a feature heading: a named, tinted
-   agent (the same role-ink family as the presence avatar) + pulsing mark, then mono
-   step rows that stagger in, tick to a check as the agent moves on, and collapse to
-   the settled head line when the feature is done. */
+   ONE line under a feature heading: who is here, and what they are doing right now —
+   "● Claude · reading sessions.py". The tint is the role-ink family the presence
+   avatar uses. The step history used to stack as rows here; it turned a one-glance
+   liveness cue into a paragraph, so the line just re-labels itself instead. */
 .ce-ribbon {
-    margin: 8px 0 12px; padding-left: 12px;
-    border-left: 2px solid color-mix(in srgb, var(--ce-ink, var(--vscode-charts-blue)) 55%, transparent);
-    display: grid; gap: 2px; user-select: none;
-    animation: ce-pop-in .26s cubic-bezier(.16,1,.3,1);
+    display: flex; align-items: baseline; gap: 8px; width: fit-content; max-width: 100%;
+    margin: 4px 0 8px; user-select: none;
+    font: 12px/1.5 var(--vscode-font-family);
+    animation: ce-pop-in .22s cubic-bezier(.16,1,.3,1);
 }
 /* role tint (set via data-ink, matches .ce-presence): claude lilac / codex mint / gemini wheat / cursor clay */
 .ce-ribbon[data-ink="claude"] { --ce-ink: var(--ink-claude); }
 .ce-ribbon[data-ink="codex"]  { --ce-ink: var(--ink-codex); }
 .ce-ribbon[data-ink="gemini"] { --ce-ink: var(--ink-gemini); }
 .ce-ribbon[data-ink="cursor"] { --ce-ink: var(--ink-cursor); }
-.ce-ribbon-head { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--fg-strong); margin-bottom: 2px; }
-.ce-ribbon-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--ce-ink, var(--vscode-charts-blue)); animation: pulse 1.4s ease-in-out infinite; }
-.ce-ribbon-who { color: color-mix(in srgb, var(--ce-ink, var(--vscode-charts-blue)) 75%, var(--vscode-foreground)); }
-.ce-ribbon-step {
-    display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); padding: 1px 0;
-    animation: ce-step-in .22s var(--ease-out) backwards;
+.ce-ribbon-mark {
+    flex: 0 0 auto; align-self: center;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ce-ink, var(--vscode-charts-blue));
+    animation: pulse 1.4s ease-in-out infinite;
 }
-@keyframes ce-step-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
-.ce-ribbon-step.active { color: var(--fg-strong); }
-.ce-ribbon-tick { width: 12px; height: 12px; flex: 0 0 12px; position: relative; }
-.ce-ribbon-step.done .ce-ribbon-tick::after {
-    content: ''; position: absolute; left: 4px; top: 0; width: 4px; height: 8px;
-    border: 1.5px solid var(--vscode-charts-green); border-top: 0; border-left: 0; transform: rotate(40deg);
+/* the agent moved on: the mark ticks to a check for the hold before it collapses */
+.ce-ribbon.done .ce-ribbon-mark {
+    width: 4px; height: 8px; border-radius: 0; background: transparent; animation: none;
+    border: 1.5px solid var(--vscode-charts-green); border-top: 0; border-left: 0;
+    transform: rotate(40deg) translateY(-1px);
 }
-.ce-ribbon-step.active .ce-ribbon-tick::after {
-    content: ''; position: absolute; inset: 2.5px; border-radius: 50%;
-    background: var(--ce-ink, var(--vscode-charts-blue)); animation: pulse 1.2s ease-in-out infinite;
+.ce-ribbon-who {
+    flex: 0 0 auto; font-weight: 600;
+    color: color-mix(in srgb, var(--ce-ink, var(--vscode-charts-blue)) 75%, var(--vscode-foreground));
 }
-/* W1: action steps (tests / git) read in mono — a command, not a file touch. */
-.ce-ribbon-step.kind-test .ce-ribbon-label,
-.ce-ribbon-step.kind-git .ce-ribbon-label { font-family: var(--font-mono); font-size: 11.5px; }
-.ce-ribbon-step.kind-test.active .ce-ribbon-tick::after { background: var(--vscode-charts-yellow); }
+.ce-ribbon-label {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-muted);
+}
+.ce-ribbon-label::before { content: '·'; margin-right: 8px; opacity: 0.5; }
+/* W1: a test run gets the one warm accent — the only step kind worth distinguishing. */
+.ce-ribbon.kind-test .ce-ribbon-mark { background: var(--vscode-charts-yellow); }
 @media (prefers-reduced-motion: reduce) {
-    .ce-ribbon, .ce-ribbon-step { animation: none; }
-    .ce-ribbon-mark, .ce-ribbon-step.active .ce-ribbon-tick::after { animation: none; }
+    .ce-ribbon { animation: none; }
+    .ce-ribbon-mark { animation: none; }
 }
-body.vscode-reduce-motion .ce-ribbon-step,
-body.vscode-using-screen-reader .ce-ribbon-step,
+body.vscode-reduce-motion .ce-ribbon,
+body.vscode-using-screen-reader .ce-ribbon,
 body.vscode-reduce-motion .ce-ribbon-mark,
-body.vscode-using-screen-reader .ce-ribbon-mark,
-body.vscode-reduce-motion .ce-ribbon-step.active .ce-ribbon-tick::after,
-body.vscode-using-screen-reader .ce-ribbon-step.active .ce-ribbon-tick::after { animation: none; }
+body.vscode-using-screen-reader .ce-ribbon-mark { animation: none; }
 
 /* ── Code→doc spark (P2 / spec §A.3) ──────────────────────────────────────────
    A bound source file was edited → an INBOUND glyph (arrow-bend-down-left, §C.1) lands at
@@ -912,7 +932,7 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
     margin-left: 10px; vertical-align: middle; user-select: none;
 }
 /* the pending marker: a DIAMOND glyph (P0/§C.1 "sent"), slow breathe — the heading-pane
-   twin of the tree row's .badge.pending. Means "queued for /codoc:sync", NOT "running now".
+   twin of the tree row's .badge.sent. Means "queued for /codoc:sync", NOT "running now".
    Hosts the inline icon, fills with the staged hue. */
 .ce-pending-dot {
     display: inline-flex; align-items: center;
@@ -920,13 +940,21 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
     animation: breathe 2.6s ease-in-out infinite;
 }
 /* withdraw ✕ — cancels the AI realization (keeps the text). Quiet until hover. */
+/* Withdraw sits with the verdicts on the "revealed on hover" tier: the diamond states
+   the fact, the ✕ is the action, and an always-lit action beside every queued heading
+   was one more permanently-visible control competing for the reader's attention. */
 .ce-realize-withdraw {
     border: none; background: transparent; cursor: pointer; padding: 0 1px;
-    font-size: 9px; line-height: 1; color: var(--fg-muted); opacity: 0.6;
+    font-size: 9px; line-height: 1; color: var(--fg-muted);
     border-radius: 3px;
+    opacity: 0; transition: opacity var(--dur-fast) var(--ease);
 }
-.ce-realize-withdraw:hover { opacity: 1; color: var(--vscode-foreground);
-    background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); }
+.codoc-feature-heading:hover .ce-realize-withdraw,
+.codoc-feature-heading:focus-within .ce-realize-withdraw { opacity: 0.6; }
+.ce-realize-withdraw:hover, .ce-realize-withdraw:focus-visible {
+    opacity: 1; color: var(--vscode-foreground);
+    background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+}
 
 /* Pending-intent rail + underline — the in-situ "what did I edit that's queued, and
    did codoc recognise it" signal. The RAIL is a calm 2px accent tick in the left
@@ -971,7 +999,55 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
     margin-left: 10px; vertical-align: middle; user-select: none;
     color: color-mix(in srgb, var(--ce-editing) 80%, transparent);
 }
-/* (the tree-row twin .badge.captured now hosts a circle-dashed glyph — see the badges block) */
+/* (the tree-row twin .badge.staged now hosts a circle-dashed glyph — see the badges block) */
+
+/* ── the loop rewrote this while you weren't looking (v6, auto-edit-decorations) ─
+   Same SHAPE as your own uncommitted edit — a gutter rail plus an underline on the
+   words that moved — because "something changed here, and here is what" is one idea
+   and should not need a second visual language depending on who did it. What differs
+   is the INK: your edits are the editing hue, the loop's are neutral foreground,
+   since this is not a phase of your work and borrowing a lifecycle colour would
+   imply it was. Solid rail vs the captured rail's dashes: dashed has meant "yours,
+   provisional, not sent" throughout, and this is neither yours nor provisional —
+   it already landed. */
+.ce-autoedit { position: relative; }
+.ce-autoedit::before {
+    content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
+    width: 2px; border-radius: 1px;
+    background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
+}
+/* it displaced YOUR sentences — the one case worth more than a neutral rail */
+.ce-autoedit.mine::before { background: color-mix(in srgb, var(--ce-del) 65%, transparent); }
+.ce-autoedit-add {
+    text-decoration: underline dotted color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
+    text-decoration-thickness: 1.5px; text-underline-offset: 3px;
+}
+.ce-autoedit.mine .ce-autoedit-add {
+    text-decoration-color: color-mix(in srgb, var(--ce-del) 70%, transparent);
+}
+/* the heading mark: hover carries the WHY (the loop's own recorded rationale) */
+.ce-autoedit-chip {
+    display: inline-flex; align-items: center;
+    margin-left: 10px; vertical-align: middle; user-select: none;
+    color: color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
+}
+.ce-autoedit-chip .ce-icon { width: 11px; height: 11px; }
+.ce-autoedit-chip.mine { color: color-mix(in srgb, var(--ce-del) 80%, transparent); }
+/* Arrival only, and only if you are looking at it: the rail draws down. There is no
+   catch-up animation for marks that were already there when you scrolled to them —
+   replaying changes you missed reads as the UI talking to itself. */
+@keyframes ce-autoedit-in { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.ce-autoedit::before { transform-origin: top; animation: ce-autoedit-in 220ms var(--ease-out); }
+@media (prefers-reduced-motion: reduce) { .ce-autoedit::before { animation: none; } }
+body.vscode-reduce-motion .ce-autoedit::before,
+body.vscode-using-screen-reader .ce-autoedit::before { animation: none; }
+body.vscode-high-contrast .ce-autoedit::before { background: var(--vscode-foreground); }
+body.vscode-high-contrast .ce-autoedit-add { text-decoration-color: var(--vscode-foreground); }
+/* the toolbar catch-up line — present only while something is owed */
+.toolbar .toggle.autoedits { color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent); }
+.toolbar .toggle.autoedits .ce-icon { width: 11px; height: 11px; vertical-align: -1px; }
+/* glance mode hides prose, so the in-prose marks go with it; the toolbar line stays */
+body.glance .ce-whole-surface .ce-autoedit-chip { display: none; }
 
 /* In-situ captured DIFF (the user's own live edit, vs the last-committed baseline):
    ADDED words get a solid accent underline; DELETED text — which has no glyph left to
@@ -1053,35 +1129,101 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
 body.vscode-high-contrast .ce-tick { background: var(--vscode-foreground); }
 body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBorder, var(--vscode-foreground)); }
 
-/* ── Persistent diff cards (suggestions) ──────────────────────────────────── */
-/* ── pending change — a slim IN-SITU strip, not a card. Shows only the change + a little
-   context (the live prose sits right below, so no full restatement). Direction = the thin
-   left tint + a tiny ▲/▼ marker; the change pops via shape (strike / underline); the
-   actions are quiet (full on hover). ─────────────────────────────────────────────────── */
-.ce-diff {
-    display: flex; align-items: baseline; gap: 8px;
-    margin: 0.15em 0 0.5em; padding: 1px 0 1px 8px;
-    border-left: 2px solid transparent;
-    font: 12px/1.5 var(--vscode-font-family); user-select: none;
+/* ── Proposed nodes drawn as placeholders (suggestion-decorations.ts) ──────────
+   An ADD (and a MOVE's destination) is a node that does not exist yet, so it is drawn
+   as the node it will become — the same dimmed italic voice an accepted-but-unbuilt
+   feature already wears — standing where it will stand. Accepting it barely changes
+   the page, which is precisely what accepting it means. It replaced a blue "+ new X /
+   Reject / Accept" strip pinned under the parent's heading, which read as an edit to
+   the parent's own prose. Dimming is the whole signal; no card, no chip, no wash. */
+.ce-ghost-feature {
+    position: relative; padding-left: 14px; user-select: none;
+    /* dashed rail = "not in the code yet" (TEXTURE, never a new hue) — the same
+       language as the unrealized node's hollow dashed ring. */
+    border-left: 1px dashed color-mix(in srgb, var(--dir-review) 40%, transparent);
 }
-.ce-diff.code-ahead { border-left-color: var(--dir-review); }
-/* realization = TEXTURE (never a colour): a plan proposal describes code that
-   doesn't exist yet → dashed edge + hollow △ marker (set in markup), rhyming
-   with the unrealized node's hollow dashed ring. Landed-code reflections stay
-   solid ▲. */
-.ce-diff.planned { border-left-style: dashed; }
-.ce-diff-mark { flex: 0 0 auto; font-size: 9px; line-height: 1.7; }
-.ce-diff.code-ahead .ce-diff-mark { color: var(--dir-review); }
-/* cascade cue: this diff surfaced back from implementing the user's own edit */
-.ce-diff-cascade { flex: 0 0 auto; font-size: 10px; opacity: 0.75; }
-.ce-diff.code-ahead .ce-diff-cascade { color: var(--dir-review); }
-.ce-diff-body { flex: 1 1 auto; min-width: 0; color: var(--fg-muted); }
-/* authorship = INK OPACITY: an agent's proposal is pencil-faded until you accept it. */
-.ce-diff.by-agent .ce-diff-body { opacity: 0.72; }
-.ce-diff-kind { color: var(--vscode-foreground); }
+/* HC floor: the low-% dashed rail vanishes under high contrast — pin it, and drop the
+   opacity dimming, so a proposed node is still distinguishable there. */
+body.vscode-high-contrast .ce-ghost-feature {
+    border-left-color: var(--vscode-contrastBorder, var(--vscode-foreground));
+}
+body.vscode-high-contrast .ce-ghost-title,
+body.vscode-high-contrast .ce-ghost-desc { color: var(--vscode-foreground); opacity: 1; }
+.ce-ghost-title { font-style: italic; color: var(--fg-muted); opacity: 0.8; }
+.ce-ghost-feature[data-level="0"] .ce-ghost-title { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
+.ce-ghost-feature[data-level="1"] .ce-ghost-title { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }
+.ce-ghost-feature[data-level="2"] .ce-ghost-title { font-size: 1.04rem; font-weight: 640; margin: 1.2em 0 0.35em; }
+.ce-ghost-feature[data-level="3"] .ce-ghost-title { font-size: 0.9rem;  font-weight: 650; margin: 1em 0 0.3em; }
+.ce-ghost-desc {
+    margin: 0 0 0.6em; max-width: 70ch; white-space: pre-wrap;
+    font: 13.5px/1.7 var(--font-doc);
+    color: color-mix(in srgb, var(--vscode-foreground) 52%, transparent);
+}
+/* the live node a MOVE would relocate — dimmed at its current home, so both ends read */
+.codoc-feature-heading.ce-move-source { opacity: 0.55; }
 
-.ce-diff-actions { flex: 0 0 auto; display: inline-flex; gap: 4px; align-items: center; opacity: 0.55; transition: opacity 100ms ease; }
-.ce-diff:hover .ce-diff-actions, .ce-diff-actions.applying { opacity: 1; }
+/* ── proposed retire — the WHOLE node reads as going away ─────────────────────
+   Strike is the SHAPE, direction is the colour. The title alone struck while its
+   description sat at full ink read as "the title is being deleted"; a retire takes
+   the node with its prose. The body is DIMMED rather than struck — four struck lines
+   are unreadable, and the reader still has to judge what they are losing — and a
+   dashed removal rail runs down the block so the extent of the node is unmistakable.
+   Scoped to the feature's own blocks: children are promoted by apply.py, not retired. */
+.codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
+.ce-retire-proposed-body {
+    opacity: 0.5;
+    padding-left: 10px;
+    border-left: 1px dashed color-mix(in srgb, var(--dir-review) 45%, transparent);
+}
+/* best-effort: the bindings/consult line is a widget between the heading and the
+   prose, so it can only be reached by adjacency — dim it too when it is there. */
+.codoc-feature-heading.ce-retire-proposed + .ce-threads { opacity: 0.5; }
+body.vscode-high-contrast .ce-retire-proposed-body {
+    opacity: 1; border-left-color: var(--vscode-contrastBorder, var(--vscode-foreground));
+}
+
+/* ── the ONE verdict surface (suggestion-decorations.verdictStrip) ─────────────
+   The proposal is already visible — tracked changes in the prose, a strike on a
+   retired heading, a dimmed placeholder for an add. So the control that resolves it
+   stays out of the way until you go to the feature: it rides the end of the heading
+   line (or of the placeholder) and fades in on hover/focus, like the drag handle. One
+   per feature; everything at once goes through the toolbar's Accept all / Reject all. */
+.ce-verdict {
+    display: inline-flex; align-items: center; gap: 8px; margin-left: 10px;
+    vertical-align: middle; white-space: nowrap; user-select: none;
+    font: 11px var(--vscode-font-family); color: var(--fg-muted);
+    opacity: 0; transition: opacity var(--dur-fast) var(--ease);
+}
+.codoc-feature-heading:hover .ce-verdict,
+.codoc-feature-heading:focus-within .ce-verdict,
+.ce-ghost-feature:hover .ce-verdict,
+.ce-ghost-feature:focus-within .ce-verdict,
+.ce-verdict:focus-within,
+.ce-verdict:hover,
+.ce-verdict.applying { opacity: 1; }
+/* An amend's diff sits in the DESCRIPTION but its verdict rides the heading, so a
+   reader looking straight at the changed prose would find no control. The scroll-spy
+   already knows which feature they are on: surface that one's verdict quietly, full
+   strength on hover. Nothing is permanently lit; the reader still only ever sees the
+   control for the feature in front of them. */
+.codoc-feature-heading.ce-current .ce-verdict { opacity: 0.55; }
+/* Two states earn their place WITHOUT a hover, because both change what the reader
+   should do next and neither is discoverable by accident: a proposal that will write
+   or delete code, and one whose verdict is already recorded and waiting. Everything
+   else stays hidden until you go to the feature. */
+.ce-verdict.cq-build, .ce-verdict.cq-remove, .ce-verdict.waiting { opacity: 0.8; }
+/* the placeholder's verdict sits under its text rather than inline with a heading */
+.ce-ghost-feature .ce-verdict { display: flex; margin: 0 0 0.6em; }
+/* the non-color direction label (U6/R8): "from code" in plain text so the change's
+   origin reads without relying on hue. */
+.ce-tc-dir { font: 10px var(--vscode-font-family); color: var(--fg-muted); letter-spacing: 0.01em; }
+.ce-tc-cascade { font-size: 10px; opacity: 0.8; color: var(--dir-review); }
+/* the user has an unlanded edit on this feature — accepting is a choice between two
+   versions, not a formality. Warm, not alarming; the wording carries the weight. */
+.ce-tc-contested { font-size: 10px; color: var(--ce-del); }
+/* a contested proposal is worth noticing without hovering for it */
+.ce-verdict.contested { opacity: 0.75; }
+.ce-tc-btns { display: inline-flex; gap: 4px; align-items: center; }
 .ce-diff-btn {
     font: 11px var(--vscode-font-family); padding: 1px 8px; border-radius: 4px; cursor: pointer;
     border: 1px solid transparent; background: transparent; color: var(--fg-muted);
@@ -1090,27 +1232,62 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
 .ce-diff-btn.accept { color: var(--accent); font-weight: 600; }
 .ce-diff-btn.accept:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
-/* a feature whose retire is proposed (code-ahead) — struck heading */
-/* proposed retire (code-ahead) — strike is the SHAPE, direction is the colour */
-.codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
-
-/* ── agent-AMEND resolve row (U4) ──────────────────────────────────────────────
-   The {old,new} diff itself renders from the engine's ins/del marks in the doc
-   (agent-proposals.applyAgentProposals); here we style only the quiet accept/reject
-   row anchored beneath the heading — direction marker + an optional cascade cue +
-   the buttons, muted until hover. */
-.ce-tc-actions {
-    display: flex; align-items: center; gap: 8px; margin-top: 3px;
-    font: 11px var(--vscode-font-family); color: var(--fg-muted); user-select: none;
+/* ── "what will this Accept do to my code?" ───────────────────────────────────
+   Four proposals in five only rewrite words; two kinds hand work to the agent (a
+   plan placeholder = build it, a delete-code retire = remove it). That difference
+   was invisible, and guessing wrong is asymmetric — a wrong `record` costs a
+   sentence, a wrong `build` costs a code change nobody asked for. So it gets three
+   redundant channels and no new colour: the VERB ("Accept & build"), the PLANE
+   glyph (already means "leaves for the agent" on Commit & send), and the launch
+   MOTION. A `record` accept stays exactly as it was — the absence is the signal. */
+.ce-verdict.cq-build .ce-diff-btn.accept,
+.ce-verdict.cq-remove .ce-diff-btn.accept {
+    color: var(--ce-staged);                       /* the hue that already means "sent" */
+    background: color-mix(in srgb, var(--ce-staged) 10%, transparent);
 }
-.ce-tc-mark { font-size: 9px; }
-.ce-tc-actions.code-ahead .ce-tc-mark { color: var(--dir-review); }
-/* the non-color direction label (U6/R8): "from code" beside the ▲ marker — plain text so the
-   diff's origin reads without hue or hover. Muted weight; the marker carries the direction hue. */
-.ce-tc-dir { font: 10px var(--vscode-font-family); color: var(--fg-muted); letter-spacing: 0.01em; }
-.ce-tc-cascade { font-size: 10px; opacity: 0.8; color: var(--dir-review); }
-.ce-tc-btns { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
-.ce-tc-actions:hover .ce-tc-btns, .ce-tc-btns.applying { opacity: 1; }
+.ce-verdict.cq-build .ce-diff-btn.accept:hover,
+.ce-verdict.cq-remove .ce-diff-btn.accept:hover {
+    background: color-mix(in srgb, var(--ce-staged) 20%, transparent);
+}
+.ce-diff-btn.accept .ce-icon { width: 11px; height: 11px; margin-right: 4px; vertical-align: -1px; }
+/* the one-line consequence, shown ONLY on the two kinds that reach code */
+.ce-verdict-cq {
+    display: inline-flex; align-items: center; gap: 5px;
+    font: 10px var(--vscode-font-family); color: var(--ce-staged);
+}
+.ce-verdict-cq .ce-icon { width: 10px; height: 10px; }
+/* tree row: the plane REPLACES the check when accepting hands work to the agent */
+.row .verdict .v-accept.sends { color: var(--ce-staged); }
+.toolbar .toggle.bulk.sends { color: var(--ce-staged); }
+.toolbar .toggle.bulk .ce-icon { width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; }
+
+/* ── "recorded, waiting to apply" ─────────────────────────────────────────────
+   A verdict that reached inbox.json but has not drained. Re-offering Accept read as
+   "your click did nothing" and invited a second one; this states the truth and is
+   deliberately NOT a button. Slow spin = the system is holding it, not stuck. */
+/* opacity is set once, in the "visible without hovering" rule above — declaring it
+   again here at equal specificity would make the value depend on source order. */
+.ce-verdict.waiting, .row .verdict.waiting {
+    color: var(--fg-muted); font: 10px var(--vscode-font-family);
+    display: inline-flex; align-items: center; gap: 5px;
+}
+.ce-verdict-waiting { letter-spacing: 0.01em; }
+.row .verdict.waiting .ce-icon, .ce-verdict.waiting .ce-icon {
+    width: 11px; height: 11px; animation: ce-slow-spin 3.2s linear infinite;
+}
+@keyframes ce-slow-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .row .verdict.waiting .ce-icon, .ce-verdict.waiting .ce-icon { animation: none; }
+}
+body.vscode-reduce-motion .row .verdict.waiting .ce-icon,
+body.vscode-using-screen-reader .row .verdict.waiting .ce-icon,
+body.vscode-reduce-motion .ce-verdict.waiting .ce-icon,
+body.vscode-using-screen-reader .ce-verdict.waiting .ce-icon { animation: none; }
+/* a waiting mark is a STATE, not an affordance — it stays visible without hovering */
+.row .verdict.waiting { opacity: 0.8; }
+/* keyboard parity: the buttons are invisible until hover, so a tab-focused one must
+   show itself rather than being actioned blind. */
+.ce-diff-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
 /* ── unified dependency "threads" line under a heading + peek popover (U4) ───── */
 .ce-threads {
@@ -1345,8 +1522,8 @@ body.glance .ce-whole-surface .ProseMirror > ul,
 body.glance .ce-whole-surface .ProseMirror > ol,
 body.glance .ce-whole-surface .ProseMirror > pre,
 body.glance .ce-whole-surface .ce-threads,
-body.glance .ce-whole-surface .ce-diff,
-body.glance .ce-whole-surface .ce-tc-actions { display: none; }
+body.glance .ce-whole-surface .ce-ghost-desc,
+body.glance .ce-whole-surface .ce-verdict { display: none; }
 /* the injected one-line pitch under each heading */
 .ce-glance-pitch {
     font: 11.5px/1.45 var(--font-doc);
@@ -1410,9 +1587,9 @@ body.glance .ce-whole-surface .ce-tc-actions { display: none; }
 .ce-presence-twin .ce-presence-label { display: none; }
 .ce-presence-twin .ce-presence-glyph { width: 14px; height: 14px; }
 .ce-presence-twin .ce-presence-glyph .ce-icon { width: 9px; height: 9px; }
-/* §B.3: the twin REPLACES the row's own active-write dot (set by presence-layer.placeTwin) —
-   hide the row's active-write badge (+ the P2 code-touch pulse) so one fact isn't double-shown. */
-.row.ce-twin-here .badge.active-write,
+/* §B.3: the twin REPLACES the row's own "working" dot (set by presence-layer.placeTwin) —
+   hide the row's working badge (+ the P2 code-touch pulse) so one fact isn't double-shown. */
+.row.ce-twin-here .badge.working.write,
 .row.ce-twin-here .ce-touch-pulse { display: none; }
 
 /* off-screen clamp (§B.5): a tiny chevron next to the avatar, Figma off-screen-cursor style */

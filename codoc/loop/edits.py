@@ -807,6 +807,13 @@ def clear_manifest(codoc_dir: str | Path) -> None:
 _REALIZED_LOG_MAX = 200  # bounded tail — old outcomes stop mattering
 
 
+def log_realized(codoc_dir: str | Path, directives: list[Directive]) -> None:
+    """Public alias — the ledger-driven queue close (loop_b._prune_implemented_directives)
+    records outcomes through the same path the stale-drain does, so a directive completed
+    either way leaves the same trail in ``realized.jsonl``."""
+    _log_realized(codoc_dir, directives)
+
+
 def _log_realized(codoc_dir: str | Path, directives: list[Directive]) -> None:
     """Append completed directives to ``realized.jsonl`` (idempotent by id).
 

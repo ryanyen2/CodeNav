@@ -173,6 +173,17 @@ def apply_op(
     if op.kind is NodeOpKind.ADD_NODE and applied and not op.feature_id:
         from codoc.model.ids import new_feature_id
         op.feature_id = new_feature_id()
+    # Record what an applied AMEND displaces, before _mutate destroys it. This is the
+    # only moment the old wording and its authorship both exist; a safe auto-amend
+    # asks nobody, so without this the author cannot be shown what changed — only that
+    # the paragraph is different from the one they remember. Reading the writer here
+    # also matters: set_feature_writer below reassigns it to whoever is writing now.
+    if (op.kind is NodeOpKind.AMEND and applied and op.description is not None
+            and op.feature_id and op.prev_description is None):
+        prior = store.get_feature(op.feature_id)
+        if prior is not None and (prior.description or "") != op.description:
+            op.prev_description = prior.description or ""
+            op.prev_written_by = store.feature_writer_info(op.feature_id)[1]
     event = Event(source=source, op=op, applied=applied,
                   actor=actor or d_actor, mode=mode or d_mode, caused_by=caused_by)
     store.append_event(event)

@@ -15,19 +15,35 @@ any code until the user accepts the plan.**
   know them) for the relevant features + a whole-tree title outline; fall back
   to `codoc_tree` (optionally `root_id`/`depth`-scoped) when the task is
   tree-wide. Check `codoc_status` for the current state.
-- Decide what the task implies: which NEW features are needed, and which EXISTING
-  features it touches. Prefer extending existing features over inventing new ones.
+- Decide what the task implies, feature by feature. For each one ask **"does a
+  feature for this intent already exist?"** — because most tasks change what an
+  existing feature does rather than introducing a new unit of intent.
 
-## 2. Propose the plan as placeholder nodes (no code yet)
-- For each new feature the task needs, call `codoc_plan_add(title, description,
-  parent_id?, binds?, rationale)`. These enter the tree as **unrealized
-  placeholders** (shown highlighted in the IDE) once accepted.
+## 2. Propose the plan (no code yet) — amend first, add only when you must
+
+**Default to `codoc_propose_amend`.** If the task changes, extends, or narrows what
+an existing feature already does, amend that feature's description to say what it
+will do once the work lands. The user reviews that as a tracked-change diff on the
+prose they wrote, which is far easier to judge than a new node appearing beside it.
+Adding a node instead splits one intent across two places and leaves the original
+description silently stale.
+
+Add a node ONLY when the task introduces intent no existing feature covers — a
+genuinely separate thing a reader would look for under its own name. "It's a new
+function/file/class" is not the test; a new helper inside an existing feature's job
+is an amend, not an add.
+
+- To amend: `codoc_propose_amend(feature_id, description=…, rationale=…)` — write
+  the description as it should read AFTER the change, not as a note about the change.
+  Reuse `codoc_propose_move` when the task also relocates a feature.
+- To add: `codoc_plan_add(title, description, parent_id?, binds?, rationale)`. These
+  enter the tree as **unrealized placeholders** — the IDE draws them dimmed, in the
+  position they will occupy — once accepted.
   - Choose `parent_id` from the titles outline / subtree you read so each node
     sits under the right parent.
   - Keep titles short (3–6 words) and give a 1–2 sentence description of intent.
   - You may pre-bind a node to the code you intend to write via `binds`
     (`"file.py::symbol"`); the binding will mark it realized once that code exists.
-- For changes to existing features, use `codoc_propose_amend` / `codoc_propose_move`.
 
 ## 3. Hand the plan to the user and wait for their verdict
 - Summarize the plan you proposed (the placeholder nodes + any amendments).

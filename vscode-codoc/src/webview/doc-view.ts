@@ -12,7 +12,12 @@ import './doc-view.css';
 import { mountWholeDocEditor, WholeDocEditorHandle } from './tiptap/whole-doc-editor';
 import { isSaveChord } from './save-chord';
 import { AuthorController } from './tiptap/author-plugin';
-import { kindGlyph } from '../state/grammar';
+import {
+    kindGlyph, consequenceOf, consequenceVerb, consequenceNote, leavesForAgent,
+    type Consequence,
+} from '../state/grammar';
+import { featureState, stateBadge, PLANNED_TITLE } from '../state/feature-state';
+import { unseenEdits, catchUpLabel } from '../state/auto-edits';
 import { icon, iconMaskDataUri } from './icons';
 import { tweenScrollTop, TweenController, popLanded, spinReject, saveShimmer, launchPlane } from './motion';
 import { shouldCenter, centerScrollTarget } from './tree-center';
@@ -320,9 +325,20 @@ function beginApplying(group: HTMLElement | null): void {
     // W3: the timeout is not a silent revert any more — if no projection acked
     // the verdict (the ack = the payload whose arrival calls endApplying), say
     // so instead of letting the buttons quietly pop back with no explanation.
+    //
+    // The message has to distinguish two states it used to conflate. If a payload
+    // came back marking the proposal `verdictPending`, the daemon DID read the click
+    // and is holding it — a code-implying accept waits for a pass that can hand work
+    // to the agent. Telling that user to check whether `codoc watch` is running sends
+    // them to debug something that is not broken.
     applyingTimer = window.setTimeout(() => {
+        const recorded = Object.values(payload.nodes)
+            .some(n => n.proposal?.verdictPending);
         endApplying();
-        showTransientNotice('Verdict not picked up — is `codoc watch` (or a Claude session) running?');
+        showTransientNotice(recorded
+            ? 'Recorded — this one waits for a pass that can hand code work to the agent '
+              + '(a live Claude session, or run `codoc sync`).'
+            : 'Verdict not picked up — is `codoc watch` (or a Claude session) running?');
     }, 5000);
 }
 
@@ -342,29 +358,52 @@ function endApplying(): void {
 
 /** After a tree re-render, re-disable verdict controls if a verdict is still
  *  in-flight (body.applying) — else freshly-built buttons become clickable again
- *  mid-apply and a duplicate verdict can fire. */
+ *  mid-apply and a duplicate verdict can fire.
+ *
+ *  `.ce-verdict` (the doc pane's per-feature strip) is in the list because a verdict
+ *  is ONE decision with several surfaces: clicking Accept in the tree, or Accept all
+ *  in the toolbar, must not leave the doc's own Accept live for the same event. CSS
+ *  (`body.applying`) blocks the pointer immediately; this covers controls rebuilt
+ *  while the verdict is still in flight. */
 function reapplyApplyingTo(root: ParentNode): void {
     if (!document.body.classList.contains('applying')) return;
-    root.querySelectorAll('.verdict, .inline-verdict').forEach(g => {
+    root.querySelectorAll('.verdict, .inline-verdict, .ce-verdict').forEach(g => {
         g.classList.add('applying');
         g.querySelectorAll('button').forEach(b => { (b as HTMLButtonElement).disabled = true; });
     });
 }
 
-function verdictButtons(eventId: string): HTMLElement {
-    const wrap = el('span', 'verdict');
-    const acc = el('button', 'v-accept'); acc.title = 'Accept';
-    acc.append(icon('check-circle')); // §C.1: filled check = landed
+/**
+ * The tree row's verdict pair. The row is too narrow for the doc pane's verb, so the
+ * consequence rides the other three channels instead — the GLYPH (a paper plane
+ * replaces the check when accepting hands work to the agent), the HOVER TEXT (the
+ * same sentence the doc shows), and the MOTION (launch vs settle). A reader who
+ * learns "plane = my code changes" in one place has learned it everywhere.
+ */
+function verdictButtons(eventId: string, cq: Consequence = 'record'): HTMLElement {
+    const wrap = el('span', 'verdict cq-' + cq);
+    const sends = leavesForAgent(cq);
+    const acc = el('button', 'v-accept' + (sends ? ' sends' : ''));
+    acc.title = consequenceVerb(cq) + ' — ' + consequenceNote(cq);
+    acc.setAttribute('aria-label', consequenceVerb(cq));
+    // §C.1: filled check = landed; the plane = "this leaves for the agent".
+    acc.append(icon(sends ? 'paper-plane-tilt' : 'check-circle'));
     acc.onclick = ev => {
         ev.stopPropagation();
-        // §C.3 accept: an optimistic "landed" pop on the glyph + a green row flash. The
-        // authoritative removal arrives async (or the 5s applyingTimer reverts) — we never
-        // fake-collapse the row here, the next payload drops it once the verdict drains.
-        popLanded(acc.querySelector<HTMLElement>('.ce-icon'));
+        // §C.3 accept: an optimistic cue + a green row flash. The authoritative removal
+        // arrives async (or the 5s applyingTimer reverts) — we never fake-collapse the
+        // row here, the next payload drops it once the verdict drains. A code-writing
+        // accept LAUNCHES instead of settling: the same motion Commit & send uses,
+        // because the same thing just happened.
+        const glyph = acc.querySelector<HTMLElement>('.ce-icon');
+        if (sends) launchPlane(glyph); else popLanded(glyph);
         flashAccept(wrap.closest<HTMLElement>('.row'));
         beginApplying(wrap); postVerdict([eventId], true);
     };
-    const rej = el('button', 'v-reject'); rej.title = 'Reject';
+    const rej = el('button', 'v-reject');
+    rej.title = sends ? 'Reject — discard this request. Nothing is written.'
+                      : 'Reject — the tree keeps its current wording.';
+    rej.setAttribute('aria-label', 'Reject');
     rej.append(icon('x-circle'));     // §C.1: x-circle = dismissed
     rej.onclick = ev => {
         ev.stopPropagation();
@@ -373,6 +412,45 @@ function verdictButtons(eventId: string): HTMLElement {
     };
     wrap.append(rej, acc);
     return wrap;
+}
+
+/** A row whose verdict is recorded but not yet drained: the pair is replaced by a
+ *  quiet "waiting" mark, so the click never looks like it failed and can't be fired
+ *  a second time. Mirrors the doc pane's `.ce-verdict.waiting`. */
+function verdictWaiting(): HTMLElement {
+    const wrap = el('span', 'verdict waiting');
+    wrap.title = 'Recorded — waiting for the daemon to apply it.';
+    wrap.append(icon('arrows-clockwise'));
+    return wrap;
+}
+
+/** The consequence of accepting a tree-pane proposal, from the sidecar overlay. */
+function nodeConsequence(p: UINode['proposal']): Consequence {
+    return consequenceOf(p?.writesCode ?? null, p?.tag);
+}
+
+/** Every live feature id in document order — the order the catch-up walk follows, so
+ *  "next" means the next one down the page rather than an arbitrary map order. */
+function docOrderFids(): string[] {
+    const out: string[] = [];
+    const walk = (id: string): void => {
+        const n = payload.nodes[id];
+        if (!n) return;
+        if (!n.isProposal) out.push(id);
+        n.children.forEach(walk);
+    };
+    payload.roots.forEach(walk);
+    return out;
+}
+
+/** The consequence of a pending event id, looked up through whichever node carries
+ *  it — a live node (amend/retire) or a ghost (add/move). Lets the bulk actions say
+ *  what the batch will do without a second payload field. */
+function consequenceForEvent(eventId: string): Consequence {
+    for (const n of Object.values(payload.nodes)) {
+        if (n.proposal?.eventId === eventId) return nodeConsequence(n.proposal);
+    }
+    return 'record';
 }
 
 /** §C.3 accept: a brief (1px-flash-grade) green row flash ("this is now yours") — held for
@@ -457,12 +535,12 @@ function onCodeTouch(fids: string[], big: string[]): void {
     for (const fid of fids) {
         const row = document.querySelector<HTMLElement>('.row[data-id="' + cssEsc(fid) + '"]');
         if (!row) continue;
-        // a transient blue active-write pulse on the row's badge (§A.3) — add a momentary
+        // a transient "working" pulse on the row's badge (§A.3) — add a momentary
         // badge if the row has none, then drop it after the 1.4s pulse so the resting row
         // is unchanged.
-        let badge = row.querySelector<HTMLElement>('.badge.active-write.ce-touch-pulse');
+        let badge = row.querySelector<HTMLElement>('.badge.working.write.ce-touch-pulse');
         if (!badge) {
-            badge = el('span', 'badge active-write ce-touch-pulse');
+            badge = el('span', 'badge working write ce-touch-pulse');
             row.append(badge);
         }
         const prev = treePulseTimers.get(fid);
@@ -672,6 +750,7 @@ function reconcile(): void {
         wholeEditor.setThreads(payload.threads ?? {});
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setSteps(payload.sync.steps ?? {});
+        wholeEditor.setAutoEdits(payload.autoEdits ?? {});
         wholeEditor.setSessionLive(payload.sync.sessionLive ?? false);
         wholeEditor.setHistory(payload.history ?? {});   // W2 blame data (refresh each pass)
         // Lifecycle split (U3/U4): drafts = recorded-but-not-sent → "captured"; held minus
@@ -766,12 +845,48 @@ function renderToolbar(): HTMLElement {
     blame.onclick = () => { setPref('blame', !prefs.blame); applyBlame(); rerenderToolbar(); };
     actions.append(blame);
 
+    // ── catch-up: descriptions the loop rewrote while you were elsewhere ──────
+    // The only automatic op that changes what the document says, and nobody was
+    // asked. This is deliberately a LINE, not a panel: a log is a place you have to
+    // remember to visit, and nobody visits it. It appears only when something is
+    // owed, walks you to each one, and disappears for good as they are read.
+    const autoEdits = payload.autoEdits ?? {};
+    const unseen = unseenEdits(autoEdits, new Set(), docOrderFids());
+    if (unseen.length) {
+        actions.append(el('span', 'tb-sep'));
+        const pill = el('button', 'toggle autoedits');
+        pill.append(icon('arrows-clockwise'), document.createTextNode(' ' + catchUpLabel(unseen)));
+        pill.title = 'codoc changed these descriptions itself, to match the code. '
+            + 'Click to read them one at a time — each clears once you have.';
+        pill.onclick = () => {
+            // Walk to the next one PAST the current selection so repeated clicks
+            // advance rather than bouncing on the first.
+            const after = unseen.findIndex(u => u.fid === selectedId);
+            setSelected(unseen[(after + 1) % unseen.length].fid, true);
+        };
+        actions.append(pill);
+    }
+
     const ids = payload.pendingEventIds;
     if (ids.length) {
         actions.append(el('span', 'tb-sep'));
-        const accAll = el('button', 'toggle bulk', `✓ Accept all (${ids.length})`);
+        // Accept-all is the one click that can resolve a proposal the reader never
+        // looked at, so it is the one place a hidden consequence does the most damage:
+        // "Accept all (7)" gave no hint that two of the seven ask the agent to write or
+        // delete code. Count them and say so on the button itself.
+        const sending = ids.filter(id => leavesForAgent(consequenceForEvent(id)));
+        const accAll = el('button', 'toggle bulk' + (sending.length ? ' sends' : ''));
+        if (sending.length) accAll.append(icon('paper-plane-tilt'));
+        accAll.append(document.createTextNode(sending.length
+            ? ` Accept all (${ids.length}, ${sending.length} to build)`
+            : `✓ Accept all (${ids.length})`));
+        accAll.title = sending.length
+            ? `${ids.length} pending — ${sending.length} of them ask the agent to write or `
+              + 'delete code. The rest only update the tree\'s wording.'
+            : `${ids.length} pending — all of them only update the tree's wording. No code changes.`;
         accAll.onclick = () => { beginApplying(null); postVerdict(ids.slice(), true); };
         const rejAll = el('button', 'toggle bulk', `✗ Reject all (${ids.length})`);
+        rejAll.title = 'Discard every pending proposal. Nothing is written.';
         rejAll.onclick = () => { beginApplying(null); postVerdict(ids.slice(), false); };
         actions.append(accAll, rejAll);
     }
@@ -815,18 +930,34 @@ function renderTree(): HTMLElement {
     return wrap;
 }
 
+/**
+ * A proposed node, drawn as the node it will become rather than as a card about it.
+ *
+ * An ADD used to render as a blue "+ new <title>  Reject  Accept" strip wedged under
+ * the destination parent's heading, which read as an edit to that parent's own text.
+ * A node that does not exist yet is a placeholder, so it is drawn as one: the same
+ * dimmed italic title an accepted-but-unbuilt feature already wears, at the position
+ * it will occupy. Accepting it changes almost nothing on screen, which is exactly
+ * what accepting it means. The verdict rides the row's hover like every other row's.
+ */
 function appendGhostRow(parent: HTMLElement, n: UINode): void {
-    const row = el('div', 'row proposal ' + (n.proposalOp || 'add'));
+    const op = n.proposalOp || 'add';
+    const row = el('div', 'row proposal ' + op);
     row.dataset.id = n.id;
     row.style.setProperty('--depth', String(n.depth));
     if (selectedId === n.id) row.classList.add('selected');
-    // colour = direction (code-ahead; CSS), shape = kind via the lead glyph (U3 grammar)
-    row.append(el('span', 'pglyph', kindGlyph(n.proposalOp || 'add')));
+    // A move is a relocation of something that exists (keep the → kind glyph); an add
+    // is a placeholder, and its dimming already says so — no glyph.
+    if (op === 'move') row.append(el('span', 'pglyph', kindGlyph('move')));
     const t = el('span', 'title ghost-title');
     t.textContent = n.title || '(untitled)';
+    const cq = nodeConsequence(n.proposal);
+    row.title = op === 'move'
+        ? 'The agent proposes moving this feature here. Nothing has moved yet.'
+        : 'The agent proposes this feature. ' + consequenceNote(cq);
     row.append(t);
-    if (n.proposal?.tag) row.append(el('span', 'ghost-tag', n.proposal.tag));
-    if (n.proposal) row.append(verdictButtons(n.proposal.eventId));
+    if (n.proposal?.verdictPending) row.append(verdictWaiting());
+    else if (n.proposal) row.append(verdictButtons(n.proposal.eventId, cq));
     row.onclick = () => setSelected(n.id, true);
     parent.append(row);
 }
@@ -879,7 +1010,22 @@ function appendRow(parent: HTMLElement, id: string): void {
     row.append(disc);
 
     const titleWrap = el('span', 'title', n.title || '(untitled)');
-    titleWrap.title = 'Open in the document editor';
+    // ONE badge, ONE state (feature-state.ts). A feature used to wear up to six markers
+    // at once — activity dot, captured circle, queued diamond, divergence warning,
+    // unrealized ring, amend/retire chip — all true, none ranked, so the row read as a
+    // legend nobody had. They are stages of one lifecycle; only the furthest-along one
+    // changes what to do next, and it is the only one drawn.
+    const signals = {
+        activeMode: n.activeMode,
+        proposalOp: n.proposal?.op ?? null,
+        divergent: !!divergent[id],
+        sent: awaitingAI.has(id) && !draftSet.has(id),
+        staged: draftSet.has(id),
+        realized: n.realized,
+        queuedIntent: (payload.holdDetail ?? {})[id]?.intent,
+    };
+    const state = featureState(signals);
+    titleWrap.title = state === 'planned' ? PLANNED_TITLE : 'Open in the document editor';
     // Titles are edited in the whole-doc editor now — double-click just scrolls there.
     titleWrap.ondblclick = ev => { ev.stopPropagation(); setSelected(id, true); };
     row.append(titleWrap);
@@ -888,44 +1034,22 @@ function appendRow(parent: HTMLElement, id: string): void {
         row.append(el('span', 'amend-inline', '→ ' + n.proposal.title));
     }
 
-    if (n.activeMode === 'write') row.append(el('span', 'badge active-write'));
-    else if (n.activeMode === 'read') row.append(el('span', 'badge active-read'));
-    // Edit lifecycle (U3/U4): a held DRAFT is "captured" — recorded & staged locally but
-    // NOT sent (Save / Commit hands it off). A handed-off edit is "pending" — sent, the
-    // agent will implement it. The active shimmer (write/read) is a separate axis.
-    if (draftSet.has(id)) {
-        const b = el('span', 'badge captured');
-        b.title = 'Captured — recorded & staged locally. Save (⌘S) or Commit to send it to the agent.';
-        b.append(icon('circle-dashed')); // §C.1: thin dashed circle = mine, local
-        row.append(b);
-    } else if (awaitingAI.has(id)) {
-        const b = el('span', 'badge pending');
-        b.title = 'Pending — staged & sent; the agent will implement it (run /codoc:sync if no daemon).';
-        // §C.1 "open/fill = phase": captured (draft) draws the hollow circle; once handed off
-        // (sent & queued) the badge advances to the FILLED diamond — "◆ queued".
-        b.append(icon('diamond-fill'));
+    const badge = stateBadge(state, signals);
+    if (badge) {
+        const b = el('span', 'badge ' + badge.cls);
+        b.title = badge.title;
+        if (badge.icon) b.append(icon(badge.icon));
         row.append(b);
     }
-    // "review what the AI did": a realization changed this feature beyond the one you
-    // edited (U5 scope divergence). The change itself shows as a proposal below.
-    if (divergent[id]) {
-        const b = el('span', 'badge divergent');
-        b.title = 'Review — the AI changed this while realizing another of your edits.';
-        b.append(icon('warning-diamond')); // §C.1: warning-diamond = divergent
-        row.append(b);
-    }
-    if (!n.realized) {
-        const b = el('span', 'badge unrealized');
-        b.append(icon('circle-dashed')); // §C.1: thin dashed circle = accepted plan, no code yet
-        row.append(b);
-    }
-    if (n.proposal?.op === 'amend') row.append(el('span', 'badge amend'));
-    if (n.proposal?.op === 'retire') row.append(el('span', 'badge retire'));
 
     // (code refs moved into the document's inline "threads" line under each heading — U4)
 
+    // One resolution surface per feature: the row's own hover-revealed verdict, for
+    // whatever the agent proposes on it. Add/move proposals carry theirs on their own
+    // placeholder row (appendGhostRow), so they are not repeated here.
     if (n.proposal && (n.proposal.op === 'amend' || n.proposal.op === 'retire')) {
-        row.append(verdictButtons(n.proposal.eventId));
+        if (n.proposal.verdictPending) row.append(verdictWaiting());
+        else row.append(verdictButtons(n.proposal.eventId, nodeConsequence(n.proposal)));
     }
 
     row.onclick = () => { setSelected(id, true); focusTree(); };
@@ -1000,6 +1124,7 @@ function renderDocHost(): HTMLElement {
         onCommentCreate: (doc, thread, media) => vscode.postMessage({ kind: 'comment-create', doc, thread, mediaData: media?.data, mediaMime: media?.mime }),
         onCommentEdit: (id, body) => vscode.postMessage({ kind: 'comment-edit', id, body }),
         onCommentResolve: (doc, id) => vscode.postMessage({ kind: 'comment-resolve', doc, id }),
+        onAutoEditSeen: (fid, at) => vscode.postMessage({ kind: 'auto-edit-seen', fid, at }),
         onActiveFeature: (fid, source) => {
             if (!fid) { onBridgeCaretLeave(); return; }
             // Caret moved to a different feature without an intervening edit → clear the
@@ -1020,6 +1145,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setSteps(payload.sync.steps ?? {});
+    wholeEditor.setAutoEdits(payload.autoEdits ?? {});
     wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
     wholeEditor.setDrafts(payload.drafts ?? []);
     wholeEditor.setBlocks(payload.blocks ?? {});

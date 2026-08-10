@@ -117,6 +117,17 @@ class NodeOp(BaseModel):
                                    #   in-progress node (no title/order guessing → no duplicate/orphan adds).
     delete_code: bool = False      # RETIRE_NODE: True ⇒ also remove the bound code (explicit intent —
                                    #   an agent via MCP, or a human `~`); False ⇒ detach-only untrack
+    # What an APPLIED amend displaced, recorded at the write boundary (apply_op) because
+    # it is unrecoverable a moment later. A safe auto-amend never asks anyone — the loop
+    # rewrites a description and the author finds out only if they happen to reread it —
+    # so the IDE needs the previous wording to show WHAT changed, not merely that
+    # something did. Same pattern as ADD_NODE pre-minting its feature_id: the event
+    # records its own outcome rather than leaving it to be re-derived. Empty on a pending
+    # proposal (nothing displaced yet) and on ops loaded from rows written before this.
+    prev_description: str | None = None
+    prev_written_by: str = ""      # authorship of the displaced prose ("human" | agent | "loop"),
+                                   #   read BEFORE the write reassigns it — the IDE weights the
+                                   #   cue by whether the loop overwrote a person's own words.
 
 
 class Event(BaseModel):

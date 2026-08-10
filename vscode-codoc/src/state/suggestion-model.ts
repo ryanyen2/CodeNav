@@ -48,6 +48,12 @@ export interface Suggestion {
     titleNew?: string;
     descOld?: string;
     descNew?: string;
+    /** What accepting does to the CODE — see grammar.consequenceOf. Absent on a
+     *  payload from a daemon older than the field; the tag is the fallback. */
+    writesCode?: 'build' | 'remove' | null;
+    /** A verdict is already recorded for this proposal and has not drained yet, so
+     *  the surface must say "waiting" rather than offer the click again. */
+    verdictPending?: boolean;
 }
 
 /** The tree.doc.json wrapper: settled doc + persisted doc-ahead suggestions +
@@ -98,13 +104,14 @@ export function codeAheadSuggestions(
 
     for (const [fid, p] of Object.entries(props.by_feature ?? {})) {
         if (p.op === 'retire') {
-            out.push({ id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'retire', featureId: fid, originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined });
+            out.push({ id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'retire', featureId: fid, originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined, writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending });
         } else if (p.op === 'amend') {
             out.push({
                 id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'amend', featureId: fid,
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 titleOld: currentTitle(fid), titleNew: p.title ?? currentTitle(fid),
                 descOld: currentDescription(fid), descNew: p.description ?? currentDescription(fid),
+                writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
             });
         }
     }
@@ -114,11 +121,13 @@ export function codeAheadSuggestions(
                 id: eventId, eventId, direction: 'code-ahead', kind: 'add', featureId: null, parentId: p.parent_id ?? null,
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 titleNew: p.title ?? '', descNew: p.description ?? '',
+                writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
             });
         } else if (p.op === 'move') {
             out.push({
                 id: eventId, eventId, direction: 'code-ahead', kind: 'move', featureId: p.feature_id ?? null, parentId: p.parent_id ?? null,
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
+                writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
             });
         }
     }

@@ -952,6 +952,31 @@ class Store:
         ).fetchall()
         return [_row_to_event(r) for r in rows]
 
+    def implemented_directive_ids(self, ids: set[str]) -> set[str]:
+        """Which of ``ids`` some APPLIED event cites as its ``caused_by``.
+
+        The ledger's own evidence that a queued directive was carried out: the agent
+        implements it and reflects the result with ``caused_by=<directive id>``, so the
+        id turns up on an applied event. Used to close the realize queue from what
+        actually happened rather than from a file being deleted afterwards — see
+        ``loop_b._prune_implemented_directives``.
+        """
+        if not ids:
+            return set()
+        out: set[str] = set()
+        # Chunked so a large queue can't exceed SQLite's variable limit.
+        batch = list(ids)
+        for i in range(0, len(batch), 400):
+            part = batch[i:i + 400]
+            marks = ",".join("?" * len(part))
+            rows = self.conn.execute(
+                f"SELECT DISTINCT caused_by FROM events"
+                f" WHERE applied=1 AND caused_by IN ({marks})",
+                part,
+            ).fetchall()
+            out.update(r[0] for r in rows if r[0])
+        return out
+
     def mark_applied(self, event_id: str) -> None:
         self.conn.execute(
             "UPDATE events SET applied=1, accepted_at=? WHERE id=?",

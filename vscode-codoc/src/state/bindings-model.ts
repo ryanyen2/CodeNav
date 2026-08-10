@@ -123,6 +123,13 @@ export interface FeatureProposal {
     actor?: string;               // "human" | agent id | "loop"
     mode?: string;                // "pen" | "suggest" | "auto"
     caused_by?: string;           // directive (d-…) / event / suggestion id
+    // v6: what ACCEPTING does to the code. "build" (a plan placeholder — the code
+    // does not exist yet) | "remove" (a delete-code retire) | null/absent (the
+    // majority: reconciles the tree to code that already exists, touches nothing).
+    writes_code?: 'build' | 'remove' | null;
+    // v6: a verdict for this proposal is already sitting un-drained in inbox.json —
+    // the click registered, the loop has not applied it yet.
+    verdict_pending?: boolean;
 }
 
 /** Overlay for an ADD/MOVE ghost (also emitted as a text hunk). */
@@ -138,6 +145,10 @@ export interface EventProposal {
     actor?: string;
     mode?: string;
     caused_by?: string;
+    /** v6 — see FeatureProposal.writes_code. */
+    writes_code?: 'build' | 'remove' | null;
+    /** v6 — see FeatureProposal.verdict_pending. */
+    verdict_pending?: boolean;
 }
 
 /** One entry of the v4 `changes` feed — a recent APPLIED event with provenance,
@@ -151,6 +162,17 @@ export interface ChangeEntry {
     actor: string;
     mode: string;
     caused_by: string;
+}
+
+/** A description the loop rewrote without asking. `prev` is the displaced wording,
+ *  recorded at the write boundary because it is unrecoverable a moment later;
+ *  `written_by` is whose sentences were displaced ("human" | agent | "loop"), which
+ *  is what decides how insistent the cue should be. */
+export interface AutoEdit {
+    at: string;
+    prev: string;
+    written_by: string;
+    rationale: string;
 }
 
 /** One entry of the W2 `feature_history` blame slice — an applied event on this
@@ -184,6 +206,10 @@ export interface SidecarData {
     proposals?: ProposalsMap;
     // v4: recent applied events with provenance (newest first).
     changes?: ChangeEntry[];
+    // v6: descriptions the LOOP rewrote on its own authority, newest per feature.
+    // The only automatic op the IDE is told about — see render._auto_edits for the
+    // triage (refresh/attach/detach are machinery; an unasked prose rewrite is not).
+    auto_edits?: Record<string, AutoEdit>;
     // v4: features with pending doc-ahead intent (doc-wins hold set).
     holds?: string[];
     // v5: per-held-feature {kind, intent} for the pending-intent decoration's hover.

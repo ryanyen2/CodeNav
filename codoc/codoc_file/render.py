@@ -35,7 +35,9 @@ from collections import defaultdict
 from pathlib import Path
 
 from codoc.codoc_file.tree_order import children_map
-from codoc.model.event import LOOP_A_AGENT_SOURCE, PLAN_SOURCE, Event, NodeOpKind
+from codoc.model.event import (
+    LOOP_A_AGENT_SOURCE, MODE_AUTO, PLAN_SOURCE, Event, NodeOpKind,
+)
 from codoc.store.db import Store
 
 TREE_FILENAME = "tree.codoc"
@@ -124,7 +126,7 @@ def _source_tag(e: Event) -> str:
     return "code drift"
 
 
-def _proposals_map(store: Store) -> dict[str, dict]:
+def _proposals_map(store: Store, voted: set[str] | None = None) -> dict[str, dict]:
     """Sidecar payload describing pending proposals for the IDE to render in place.
 
     ``by_feature`` keys RETIRE/AMEND (and the *source* annotation of a MOVE) by
@@ -134,28 +136,51 @@ def _proposals_map(store: Store) -> dict[str, dict]:
     each destination parent (``""`` = top level) so the IDE can anchor an
     Accept/Reject affordance at the parent node, not only on the ghost line. Both
     halves carry the origin ``tag`` and ``rationale``.
+
+    Two fields exist so the IDE can tell the user what ACCEPTING will actually do,
+    which is the one thing the old payload could not express. Every proposal looks
+    alike on screen, but only two kinds hand work to the agent:
+
+    * ``writes_code`` — ``"build"`` for a plan placeholder (``ADD_NODE`` with
+      ``realized=False``: describes code that does not exist yet, so accepting is a
+      build request) and ``"remove"`` for a delete-code retire. Absent/None for the
+      majority, which merely reconcile the tree to code that already exists.
+    * ``verdict_pending`` — a verdict for this proposal is already sitting in
+      ``inbox.json``, un-drained. The click WAS registered; the loop has not applied
+      it yet (no daemon running, or a code-implying accept deferred to a realize
+      pass). Without this the IDE could only show a fresh Accept button again, which
+      reads as "your click did nothing".
     """
+    voted = voted or set()
     by_feature: dict[str, dict] = {}
     by_event: dict[str, dict] = {}
     by_parent: dict[str, list[str]] = {}
     for e in store.pending_events():
         op = e.op
         tag = _source_tag(e)
-        prov = {"actor": e.actor, "mode": e.mode, "caused_by": e.caused_by}
+        prov = {"actor": e.actor, "mode": e.mode, "caused_by": e.caused_by,
+                "verdict_pending": e.id in voted}
         if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
             by_feature[op.feature_id] = {
                 "op": "retire", "event_id": e.id, "tag": tag, "rationale": op.rationale,
+                # A default retire is detach-only: it untracks the feature and leaves
+                # the code alone. Only an explicit delete_code retire removes code.
+                "writes_code": "remove" if op.delete_code else None,
                 **prov,
             }
         elif op.kind is NodeOpKind.AMEND and op.feature_id:
             by_feature[op.feature_id] = {
                 "op": "amend", "event_id": e.id, "tag": tag, "rationale": op.rationale,
-                "title": op.title, "description": op.description, **prov,
+                "title": op.title, "description": op.description,
+                "writes_code": None,   # a reflection amend restates code that already changed
+                **prov,
             }
         elif op.kind is NodeOpKind.ADD_NODE:
             by_event[e.id] = {
                 "op": "add", "parent_id": op.parent_id, "tag": tag, "rationale": op.rationale,
-                "title": op.title, "description": op.description, **prov,
+                "title": op.title, "description": op.description,
+                "writes_code": "build" if op.realized is False else None,
+                **prov,
             }
             by_parent.setdefault(op.parent_id or "", []).append(e.id)
         elif op.kind is NodeOpKind.MOVE_NODE:
@@ -163,7 +188,9 @@ def _proposals_map(store: Store) -> dict[str, dict]:
             # source node by scanning `by_event` for op=="move" and its feature_id.
             by_event[e.id] = {
                 "op": "move", "feature_id": op.feature_id, "parent_id": op.parent_id,
-                "tag": tag, "rationale": op.rationale, **prov,
+                "tag": tag, "rationale": op.rationale,
+                "writes_code": None,   # reorganizing the tree is never code work
+                **prov,
             }
             by_parent.setdefault(op.parent_id or "", []).append(e.id)
     return {"by_feature": by_feature, "by_event": by_event, "by_parent": by_parent}
@@ -206,6 +233,48 @@ def _changes_feed(events: list) -> list[dict]:
 _HISTORY_FEED_SCAN = 300       # events read per pass (one indexed LIMIT query)
 _HISTORY_PER_FEATURE = 6       # newest entries kept per feature
 _HISTORY_RATIONALE_CAP = 200   # trim a long rationale so the sidecar stays lean
+
+
+def _auto_edits(events: list, live_ids: set[str]) -> dict[str, dict]:
+    """`{feature_id: {at, prev, written_by, rationale}}` — descriptions the LOOP
+    rewrote on its own authority, newest per feature.
+
+    Deliberately the narrowest possible slice of "what happened automatically". Loop A
+    auto-applies four op kinds and only one of them is worth a person's attention:
+
+      * REFRESH recomputes a fingerprint on every edit to a bound symbol. Announcing it
+        would set the noise floor and teach the reader to ignore this channel entirely.
+      * ATTACH / DETACH are the index doing its job. The only version anyone cares
+        about — a feature that now describes nothing — is already reported as
+        ``feature_drift`` / unrealized, and a second signal for one fact is worse
+        than none.
+      * AMEND rewrote prose. Nobody was asked, and unlike every other automatic op it
+        changes what the document SAYS. That is the whole slice.
+
+    ``prev`` is the displaced wording (recorded at the write boundary — see
+    ``NodeOp.prev_description``) so the IDE can show what changed rather than merely
+    that something did, and ``written_by`` says whose sentences were displaced so the
+    cue can be weighted: the loop revising its own bootstrap prose is housekeeping,
+    the loop editing a person's words is not.
+    """
+    out: dict[str, dict] = {}
+    for e in events:
+        if not e.applied or e.mode != MODE_AUTO:
+            continue
+        op = e.op
+        if op.kind is not NodeOpKind.AMEND or op.prev_description is None:
+            continue
+        fid = op.feature_id or ""
+        if not fid or fid not in live_ids or fid in out:
+            continue  # newest wins; a retired feature has nothing to show
+        out[fid] = {
+            "at": e.at.to_str(),
+            "prev": op.prev_description,
+            "written_by": op.prev_written_by,
+            "rationale": op.rationale[:_HISTORY_RATIONALE_CAP],
+        }
+    return out
+
 
 
 def _history_feed(events: list, live_ids: set[str]) -> dict[str, list[dict]]:
@@ -557,6 +626,25 @@ def _blocks_map(store: Store, feature_ids: set[str]) -> dict[str, list[dict]]:
     return out
 
 
+def _voted_event_ids(codoc_dir: str | Path) -> set[str]:
+    """Event ids with a verdict already waiting in ``inbox.json``.
+
+    Read here rather than modelled as a loop outcome so the IDE gets the same honest
+    answer whichever way a verdict is stuck: the daemon is down, the pass has not run
+    yet, or Loop B deliberately deferred a code-implying accept to a realize pass. In
+    every case the fact the user needs is the same — "recorded, not applied yet" —
+    and re-offering a fresh Accept button instead reads as the click having failed.
+
+    Never raises: a missing or malformed inbox just means nothing is pending.
+    """
+    try:
+        from codoc.loop import inbox
+
+        return {v.event_id for v in inbox.read_verdicts(codoc_dir)}
+    except Exception:  # pragma: no cover — a derived hint must never break the render
+        return set()
+
+
 def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     """Write ``.codoc/tree.bindings.json`` atomically (tmp → rename).
 
@@ -632,10 +720,13 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         "by_file": by_file,
         "features": feats_meta,
         "feature_edges": edges,
-        "proposals": _proposals_map(store),
+        "proposals": _proposals_map(store, _voted_event_ids(codoc_dir)),
         # v4: the provenance ledger surfaced to the IDE — recent applied events
         # (who/how/why-chained) + the doc-wins hold set.
         "changes": _changes_feed(recent_events),
+        # v6: descriptions the loop rewrote unasked — see _auto_edits for why
+        # this is the ONLY automatic op the IDE is told about.
+        "auto_edits": _auto_edits(recent_events, {f.id for f in features}),
         "holds": proj.holds,
         # v5: per-held-feature detail for the in-situ "pending intent" decoration —
         # the queued directive's kind + a plain-language intent gloss, so the IDE can

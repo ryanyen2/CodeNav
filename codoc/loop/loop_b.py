@@ -663,6 +663,44 @@ def _prune_dead_directives(store: Store, root_dir: str, codoc_dir: str) -> int:
     return _keep_directives(root_dir, codoc_dir, _alive)
 
 
+def _prune_implemented_directives(store: Store, root_dir: str, codoc_dir: str) -> int:
+    """Drop queued directives the ledger shows were already carried out. Returns the
+    count dropped.
+
+    Until this existed, a directive had exactly ONE way to be marked done: someone
+    deleting ``realize.md`` out of band (see ``edits.read_manifest``'s stale-drain).
+    That makes completion a property of a file operation rather than of the work, and
+    the failure is silent and permanent — the agent implements the change, reflects it,
+    attaches the code, and the queue still reads ``awaiting_impl`` forever because
+    nothing removed the trigger. The status bar then reports work "to implement" that
+    demonstrably exists, every feature it names wears a "sent, awaiting the agent"
+    badge, and the only repair is a hand-run ``rm`` in the right directory.
+
+    The evidence was already in the ledger. Implementing a directive means reflecting
+    it with ``caused_by=<directive id>``, so an APPLIED event carrying that id is proof
+    the work landed — stronger proof than the absence of a file. Re-deriving it once
+    per pass makes the queue close itself, the same self-healing argument
+    :func:`_prune_dead_directives` makes for a feature that no longer exists.
+
+    This is precisely the exit condition the in-flight protection was missing. That
+    guard keeps a handed-off directive alive because "the agent may be mid-
+    implementation and its reflect call cites the directive id" — once that reflect
+    call HAS happened, the reason to protect it is spent.
+
+    Completion is logged to ``realized.jsonl`` before the entry disappears, so the
+    "what happened to my edit?" trail survives the queue that carried it.
+    """
+    queued = edits_channel.read_manifest(codoc_dir)
+    handed_off = {d.id for d in queued if d.handed_off and d.id}
+    if not handed_off:
+        return 0
+    done = store.implemented_directive_ids(handed_off)
+    if not done:
+        return 0
+    edits_channel.log_realized(codoc_dir, [d for d in queued if d.id in done])
+    return _keep_directives(root_dir, codoc_dir, lambda d: d.id not in done)
+
+
 def _in_flight_directive_ids(codoc_dir: str) -> frozenset[str]:
     """Directive ids that have been HANDED OFF to the agent — the ids in ``realize.md``.
 
@@ -1315,6 +1353,9 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     #    Loop A closes the loop. Drafts surface via the in-situ diff + pending dots
     #    (hold_set reads the manifest), no realize.md needed.
     _prune_dead_directives(store, root_dir, codoc_dir)
+    # …and directives the ledger shows were already carried out, so the queue
+    # closes on evidence of the work rather than on someone deleting realize.md.
+    _prune_implemented_directives(store, root_dir, codoc_dir)
     existing = edits_channel.read_manifest(codoc_dir)
     if not existing and not res.directives:
         status.refresh_status(codoc_dir, store)

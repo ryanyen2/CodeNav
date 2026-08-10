@@ -312,3 +312,75 @@ def test_accepted_delete_code_retire_queues_removal_directive(dirs):
     assert s2.get_feature(f.id).retired is True
     assert s2.binding_at("legacy.py", "legacy.py::run") is not None
     s2.close()
+
+
+def test_accept_all_over_a_mixed_batch_leaves_no_proposal_behind(dirs):
+    """"Accept all" — the toolbar posting every pending event id in one write — must
+    resolve EVERY kind in the batch, and a retired node must then be gone from both
+    surfaces the IDE renders (the doc projection and tree.codoc).
+
+    Pinned after a report of a node still showing after Accept all: the accepted retire
+    has to leave the projection, not merely be flagged, or the reader is looking at a
+    feature the store no longer has.
+    """
+    from codoc.codoc_file.doc_render import build_doc_from_store
+    from codoc.codoc_file.render import render_tree
+
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    parent = Feature(title="Session request lifecycle", description="The session.")
+    s.upsert_feature(parent)
+    doomed = Feature(title="Session QUERY helper", description="Adds Session.query().",
+                     parent_id=parent.id)
+    s.upsert_feature(doomed)
+    s.upsert_binding(Binding(feature_id=doomed.id, file="sessions.py",
+                             symbol_path="sessions.py::Session.query", fingerprint="h"))
+    drifted = Feature(title="Redirect handling mixin", description="Old text.",
+                      parent_id=parent.id)
+    s.upsert_feature(drifted)
+    mover = Feature(title="Transport adapter", description="Carries a request.")
+    s.upsert_feature(mover)
+
+    events = [
+        Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=doomed.id, rationale="gone")),
+        Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.AMEND, feature_id=drifted.id,
+                        description="New text describing the mixin.", rationale="drift")),
+        Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, parent_id=parent.id,
+                        title="Session setting merge helpers",
+                        description="Combines request- and session-level options.")),
+        Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=mover.id, parent_id=parent.id)),
+    ]
+    for e in events:
+        s.append_event(e)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    for e in events:                       # exactly what the toolbar's Accept all posts
+        inbox.append_verdict(codoc_dir, e.id, accept=True)
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.accepted == 4
+    assert res.rejected == 0
+    s2 = open_store(codoc_dir)
+    assert s2.pending_events() == []                    # nothing left pending anywhere
+    assert s2.get_feature(doomed.id).retired is True
+    assert s2.bindings_for_feature(doomed.id) == []     # detached, not orphaned
+    assert s2.get_feature(drifted.id).description == "New text describing the mixin."
+    assert s2.get_feature(mover.id).parent_id == parent.id
+
+    titles = {f.title for f in s2.list_features()}      # live only
+    assert "Session QUERY helper" not in titles
+    assert "Session setting merge helpers" in titles
+
+    # …and the retired node is absent from BOTH rendered surfaces, not just the store.
+    doc_titles = [
+        b["content"][0]["text"] for b in build_doc_from_store(s2)["content"]
+        if b["type"] == "featureHeading" and b.get("content")
+    ]
+    assert "Session QUERY helper" not in doc_titles
+    assert "Session QUERY helper" not in render_tree(s2)
+    s2.close()

@@ -19,6 +19,7 @@ import * as path from 'path';
 import { WorkspaceState } from '../state/workspace-state';
 import { parseTreeCodoc, extractLinks } from '../state/tree-model';
 import { activeFeatureModes, featurePhases, featureSteps } from '../state/activity-model';
+import { editKey, pruneSeen } from '../state/auto-edits';
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
 import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
@@ -36,7 +37,7 @@ import { buildHoverCards } from '../state/registry-model';
 import { BridgeController } from './bridge-controller';
 import { declLines, featureIdsForChangedLines, changedLineNumbers, userTouchedFids } from '../state/bridge';
 import { isAgentActive, agentRole } from '../state/activity-model';
-import type { SidecarData } from '../state/bindings-model';
+import type { AutoEdit, SidecarData } from '../state/bindings-model';
 import type { DocPayload, UINode, SyncState, RefSymbol, ThreadsData, WebviewPrefs } from '../webview/protocol';
 
 const DOC_FILENAME = 'tree.doc.json';
@@ -44,6 +45,8 @@ const DOC_FILENAME = 'tree.doc.json';
 /** workspaceState key for the per-workspace webview prefs (B-U2: the glance toggle).
  *  One blob per document uri so two open trees keep separate prefs. */
 const PREFS_KEY = 'codoc.webviewPrefs';
+/** workspaceState key for acknowledged loop rewrites (`fid@at`) — see unseenAutoEdits. */
+const AUTO_SEEN_KEY = 'codoc.seenAutoEdits';
 
 export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'codoc.tree-editor';
@@ -273,6 +276,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await this.handleBlockEdit(document, msg.block);
                     post();  // reflect the queued directive / dropped projection
                     return;
+                case 'auto-edit-seen':
+                    // The reader dwelled on a feature the loop had rewritten. Persist the
+                    // acknowledgement HOST-side so it survives a window reload, and repost
+                    // so the mark clears now rather than on the next daemon write.
+                    await this.markAutoEditSeen(msg.fid, msg.at);
+                    post();
+                    return;
                 case 'set-pref':
                     await this.setPref(document, msg.pref, msg.value);
                     // No payload repost needed — the webview already applied it
@@ -311,6 +321,40 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const cur = all[key] ?? { glance: false };
         all[key] = { ...cur, [pref]: value };
         await this.context.workspaceState.update(PREFS_KEY, all);
+    }
+
+    // ── unasked loop rewrites: which ones the reader has caught up on (v6) ──────
+    //    Kept HOST-side (workspaceState) rather than in the webview's own state so an
+    //    acknowledgement survives a window reload — being told twice about the same
+    //    rewrite is exactly the noise this feature exists to avoid. Keyed `fid@at`, so
+    //    a LATER rewrite of the same feature is news again rather than pre-acknowledged.
+    //    The host also does the filtering: the webview only ever receives rewrites that
+    //    are still owed attention, which keeps the catch-up count honest by construction.
+
+    private seenAutoEdits(): Set<string> {
+        return new Set(this.context.workspaceState.get<string[]>(AUTO_SEEN_KEY) ?? []);
+    }
+
+    private async markAutoEditSeen(fid: string, at: string): Promise<void> {
+        const seen = this.seenAutoEdits();
+        seen.add(fid + '@' + at);
+        // Bounded: the set is pruned to what is still on offer on every payload, but a
+        // hard cap keeps a pathological session from growing the memento without end.
+        await this.context.workspaceState.update(AUTO_SEEN_KEY, [...seen].slice(-400));
+    }
+
+    /** The rewrites still owed attention, and a pruned seen-set (dropping keys whose
+     *  rewrite is no longer offered, so acknowledgements can't accumulate forever). */
+    private unseenAutoEdits(sidecar: SidecarData): Record<string, AutoEdit> {
+        const all = sidecar.auto_edits ?? {};
+        const seen = this.seenAutoEdits();
+        const pruned = pruneSeen(seen, all);
+        if (pruned.size !== seen.size) void this.context.workspaceState.update(AUTO_SEEN_KEY, [...pruned]);
+        const out: Record<string, AutoEdit> = {};
+        for (const [fid, e] of Object.entries(all)) {
+            if (!pruned.has(editKey(fid, e))) out[fid] = e;
+        }
+        return out;
     }
 
     // ── inline comments — span-anchored steering notes (see comment-model.ts) ────
@@ -476,6 +520,8 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     tag: prop.tag,
                     title: prop.title ?? null,
                     description: prop.description ?? null,
+                    writesCode: prop.writes_code ?? null,
+                    verdictPending: !!prop.verdict_pending,
                 } : null,
                 depth,
                 children: [],
@@ -504,7 +550,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 realized: true,
                 refCount: 0,
                 bindings: [],
-                proposal: { op: p.op, eventId, tag: p.tag, title: p.title ?? null, description: p.description ?? null },
+                proposal: {
+                    op: p.op, eventId, tag: p.tag,
+                    title: p.title ?? null, description: p.description ?? null,
+                    writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
+                },
                 isProposal: true,
                 proposalOp: p.op,
                 depth,
@@ -646,6 +696,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             baselineId,
             doc: docForPayload,
             symbols: this.buildSymbols(sidecar),
+            // v6: what the loop rewrote on its own authority (auto AMENDs only —
+            // the sidecar already excludes refresh/attach/detach as machinery).
+            autoEdits: this.unseenAutoEdits(sidecar),
             suggestions,
             threads,
             comments: docFile.comments,

@@ -50,7 +50,7 @@ export class PresenceLayer {
     private staleTimer = 0;
     private doneTimer = 0;
     private repaintRaf = 0;
-    /** The tree row whose own active-write dot we hid for the twin (§B.3) — so we can restore it. */
+    /** The tree row whose own working dot we hid for the twin (§B.3) — so we can restore it. */
     private twinSuppressedRow: HTMLElement | null = null;
 
     constructor(private readonly refs: PaneRefs) {}
@@ -181,7 +181,7 @@ export class PresenceLayer {
     }
 
     /** The tree-twin rides the active feature's row right edge (§B.3), REPLACING the row's own
-     *  active-write dot (not coexisting) — so one fact isn't double-signalled at the row edge. */
+     *  working dot (not coexisting) — so one fact isn't double-signalled at the row edge. */
     private placeTwin(p: AgentPresence): void {
         const tree = this.refs.treePane();
         const row = tree?.querySelector<HTMLElement>(`.row[data-id="${cssEscape(p.fid)}"]`);
@@ -190,7 +190,7 @@ export class PresenceLayer {
             this.restoreTwinRow();
             return;
         }
-        // §B.3: the row's own active-write dot (+ the P2 ce-touch-pulse twin) is redundant with
+        // §B.3: the row's own working dot (+ the P2 ce-touch-pulse twin) is redundant with
         // the avatar parked there — suppress it while the twin is on this row.
         if (this.twinSuppressedRow !== row) this.restoreTwinRow();
         row.classList.add('ce-twin-here');
@@ -201,7 +201,7 @@ export class PresenceLayer {
         this.treeAvatar.dataset.ink = roleInk(p.role);
     }
 
-    /** Un-suppress the previously-twinned row's active-write dot (§B.3). */
+    /** Un-suppress the previously-twinned row's working dot (§B.3). */
     private restoreTwinRow(): void {
         this.twinSuppressedRow?.classList.remove('ce-twin-here');
         this.twinSuppressedRow = null;
@@ -288,7 +288,7 @@ export class PresenceLayer {
         if (this.doneTimer) { clearTimeout(this.doneTimer); this.doneTimer = 0; }
         if (this.repaintRaf) { cancelAnimationFrame(this.repaintRaf); this.repaintRaf = 0; }
         if (this.spin) { this.spin.cancel(); this.spin = null; }
-        this.restoreTwinRow();   // §B.3: give the row its active-write dot back
+        this.restoreTwinRow();   // §B.3: give the row its working dot back
         this.docAvatar?.remove(); this.docAvatar = null;
         this.treeAvatar?.remove(); this.treeAvatar = null;
         this.label = null;

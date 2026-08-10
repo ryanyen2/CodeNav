@@ -8,7 +8,9 @@ import pytest
 
 from codoc.codoc_file.diff import diff_codoc
 from codoc.codoc_file.parse import ParsedNode, ParsedTree, parse_text
-from codoc.codoc_file.render import _compute_feature_edges, _proposals_map, render_tree
+from codoc.codoc_file.render import (
+    _compute_feature_edges, _proposals_map, _voted_event_ids, render_tree,
+)
 from codoc.model.binding import Binding
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
@@ -292,6 +294,8 @@ def test_retire_and_move_proposals_render(store):
     assert proposals["by_feature"][child.id] == {
         "op": "retire", "event_id": retire.id, "tag": "code drift", "rationale": "gone",
         "actor": "loop", "mode": "suggest", "caused_by": "",
+        # a default retire is detach-only — accepting it never touches the code
+        "writes_code": None, "verdict_pending": False,
     }
     # Move still emits a destination ghost hunk in text.
     assert re.search(r"(?m)^~ \s*- Index snapshot diff", text)
@@ -337,6 +341,7 @@ def test_sidecar_proposals_map_shape(store):
         "op": "amend", "event_id": amend.id, "tag": "agent plan", "rationale": "",
         "title": "New title", "description": "New prose.",
         "actor": "claude-code", "mode": "suggest", "caused_by": "",
+        "writes_code": None, "verdict_pending": False,
     }
     assert m["by_event"][add.id]["op"] == "add"
     assert m["by_event"][add.id]["parent_id"] == root.id
@@ -376,3 +381,138 @@ def test_compute_feature_edges_aggregates_symbol_edges(store):
     assert edges[0]["kinds"] == ["call"]
     # callee has no outgoing edges to other features
     assert callee.id not in result
+
+
+# -- what ACCEPTING a proposal will actually do ---------------------------
+# Every proposal looks alike on screen, but only two kinds hand work to the agent.
+# The IDE cannot label the verdict honestly unless the sidecar says which is which.
+
+def test_proposals_map_marks_the_two_kinds_that_write_code(store):
+    root, child, *_ = _tree(store)
+    plan = Event(source="plan", applied=False,
+                 op=NodeOp(kind=NodeOpKind.ADD_NODE, parent_id=root.id, title="Not built yet",
+                           description="intent", realized=False))
+    plain_add = Event(source="loop_a", applied=False,
+                      op=NodeOp(kind=NodeOpKind.ADD_NODE, parent_id=root.id,
+                                title="Already in the code", description="found it"))
+    kill = Event(source="loop_a_agent", applied=False,
+                 op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=child.id, delete_code=True))
+    for e in (plan, plain_add, kill):
+        store.append_event(e)
+
+    m = _proposals_map(store)
+    # a plan placeholder describes code that does not exist → accepting is a build request
+    assert m["by_event"][plan.id]["writes_code"] == "build"
+    # an ADD that binds code already on disk is pure bookkeeping
+    assert m["by_event"][plain_add.id]["writes_code"] is None
+    # only an explicit delete-code retire removes code
+    assert m["by_feature"][child.id]["writes_code"] == "remove"
+
+
+def test_proposals_map_flags_a_verdict_already_waiting_in_the_inbox(store, tmp_path):
+    """A click that has not landed yet must read as "recorded, waiting" — not as a
+    fresh Accept button, which looks like the click failed. Covers every reason a
+    verdict can be stuck: no daemon, pass not run, or a code-implying accept that
+    Loop B deferred to a realize pass."""
+    from codoc.loop import inbox
+
+    root, child, *_ = _tree(store)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.RETIRE_NODE, feature_id=child.id))
+    store.append_event(e)
+
+    codoc_dir = tmp_path / "cd"
+    codoc_dir.mkdir()
+    assert _proposals_map(store, _voted_event_ids(codoc_dir))["by_feature"][child.id][
+        "verdict_pending"] is False
+
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
+    assert _proposals_map(store, _voted_event_ids(codoc_dir))["by_feature"][child.id][
+        "verdict_pending"] is True
+
+
+def test_voted_event_ids_survives_a_missing_or_broken_inbox(tmp_path):
+    """A derived legibility hint must never be able to break the render."""
+    assert _voted_event_ids(tmp_path / "nope") == set()
+    d = tmp_path / "cd"
+    d.mkdir()
+    (d / "inbox.json").write_text("{not json")
+    assert _voted_event_ids(d) == set()
+
+
+# -- the auto-edit slice: exactly one automatic op, deliberately ------------------
+
+def _auto_slice(store):
+    from codoc.codoc_file.render import _auto_edits
+    live = {f.id for f in store.list_features()}
+    return _auto_edits(store.recent_events(50), live)
+
+
+def test_auto_edits_reports_a_loop_rewrite_with_the_prose_it_displaced(store):
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import ACTOR_HUMAN
+
+    root, *_ = _tree(store)
+    store.set_feature_writer(root.id, "user", ACTOR_HUMAN)
+    before = store.get_feature(root.id).description
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=root.id,
+                    description="The loop's new wording.", rationale="code drifted"),
+             store, source="loop_a", applied=True)
+
+    slice_ = _auto_slice(store)
+    assert slice_[root.id]["prev"] == before
+    assert slice_[root.id]["written_by"] == ACTOR_HUMAN   # it overwrote a person's words
+    assert slice_[root.id]["rationale"] == "code drifted"
+
+
+def test_auto_edits_excludes_the_machinery_nobody_needs_to_know_about(store):
+    """refresh/attach/detach fire constantly and no decision depends on them. Reporting
+    them would set the noise floor and teach the reader to ignore the channel — the one
+    failure mode this slice exists to avoid."""
+    from codoc.loop.apply import apply_op
+
+    root, child, *_ = _tree(store)
+    for kind in (NodeOpKind.ATTACH, NodeOpKind.REFRESH):
+        apply_op(NodeOp(kind=kind, feature_id=child.id,
+                        bindings=[("a.py", "a.py::f")]), store, source="loop_a", applied=True)
+    apply_op(NodeOp(kind=NodeOpKind.DETACH, feature_id=child.id,
+                    bindings=[("a.py", "a.py::f")]), store, source="loop_a", applied=True)
+    assert _auto_slice(store) == {}
+
+
+def test_auto_edits_excludes_a_human_edit_and_an_unapplied_proposal(store):
+    """Only changes the reader did not make and was not asked about. Their own edit is
+    not news to them, and a proposal has not happened yet."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import ACTOR_HUMAN, MODE_PEN
+
+    root, child, *_ = _tree(store)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=root.id, description="I wrote this."),
+             store, source="user", applied=True, actor=ACTOR_HUMAN, mode=MODE_PEN)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=child.id, description="Merely proposed."),
+             store, source="loop_a", applied=False)
+    assert _auto_slice(store) == {}
+
+
+def test_auto_edits_keeps_only_the_newest_rewrite_per_feature(store):
+    from codoc.loop.apply import apply_op
+
+    root, *_ = _tree(store)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=root.id, description="First rewrite."),
+             store, source="loop_a", applied=True)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=root.id, description="Second rewrite."),
+             store, source="loop_a", applied=True)
+    # newest wins: what the reader needs is the wording they last saw replaced
+    assert _auto_slice(store)[root.id]["prev"] == "First rewrite."
+
+
+def test_auto_edits_drops_a_retired_feature(store):
+    """A rewrite of prose that is no longer in the document has nothing to point at."""
+    from codoc.loop.apply import apply_op
+
+    root, child, *_ = _tree(store)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=child.id, description="Rewritten."),
+             store, source="loop_a", applied=True)
+    assert child.id in _auto_slice(store)
+    store.retire_feature(child.id)
+    assert child.id not in _auto_slice(store)

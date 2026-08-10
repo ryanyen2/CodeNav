@@ -70,6 +70,59 @@ export const EPOCH_UI_TTL_MS = 90_000;
 // session leaves a feature's skeleton/"editing" animation stuck forever.
 export const FEATURE_PHASE_TTL_MS = 120_000;
 
+// How long a single touch/step stays "live" after the agent moved on. Neither
+// `recent` nor `touched` is ever pruned by AGE — `recent` rolls by count and
+// `touched` only grows — and only the Stop hook clears them. So a file the agent
+// read once keeps narrating "reading sessions.py" under every feature bound to it
+// for the rest of the session, long after the agent is somewhere else entirely.
+export const STEP_TTL_MS = 30_000;
+
+/** The hook writes `at` as a full ISO-8601 stamp (`_now_iso`). Insist on that shape
+ *  before trusting it as a clock: `Date.parse` happily reads a bare "3" as the year
+ *  2003, which would silently pin the cutoff to a fictional moment and blank the
+ *  ribbon. Anything else is treated as unstamped. */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}[T ]/;
+
+function atMs(at: string | null | undefined): number | null {
+    if (!at || !ISO_DATE.test(at)) return null;
+    const t = Date.parse(at);
+    return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * The instant before which a touch/step counts as stale: STEP_TTL_MS back from the
+ * agent's OWN most recent event, not from the wall clock.
+ *
+ * The agent's clock is the honest one here. A single tool call can run for minutes
+ * (a full pytest, a long build) and stays the newest thing that happened, so a
+ * wall-clock cutoff would blank the ribbon mid-run and claim the agent left. Read
+ * relatively, that same event holds the line open while genuinely older touches age
+ * out behind it. Returns null when nothing carries a parseable timestamp (an older
+ * activity.json) — no clock, no staleness verdict.
+ */
+export function stepCutoff(times: (string | null | undefined)[]): number | null {
+    let latest: number | null = null;
+    for (const t of times) {
+        const v = atMs(t);
+        if (v !== null && (latest === null || v > latest)) latest = v;
+    }
+    return latest === null ? null : latest - STEP_TTL_MS;
+}
+
+/** An entry with no parseable timestamp is kept — same convention as featurePhases. */
+function freshAt(at: string | null | undefined, cutoff: number | null): boolean {
+    if (cutoff === null) return true;
+    const v = atMs(at);
+    return v === null || v >= cutoff;
+}
+
+/** The touched entries the agent is still plausibly on — see stepCutoff. */
+function liveTouched(data: ActivityData): [string, TouchedEntry][] {
+    const all = Object.entries(data.touched ?? {});
+    const cutoff = stepCutoff(all.map(([, e]) => e.last));
+    return all.filter(([, e]) => freshAt(e.last, cutoff));
+}
+
 /** Parse the text content of activity.json into ActivityData. Returns {} on any error. */
 export function parseActivity(text: string): ActivityData {
     if (!text.trim()) return {};
@@ -122,7 +175,7 @@ export function computeActiveFeatureLines(
 
     const featureIds = new Set<string>();
 
-    for (const [filePath, entry] of Object.entries(data.touched ?? {})) {
+    for (const [filePath, entry] of liveTouched(data)) {
         if (entry.feature_ids.length) {
             // The hook already resolved (and, when a file is shared by several
             // features, narrowed to) the feature(s) actually being touched —
@@ -171,7 +224,7 @@ export function activeFeatureModes(
         modes.set(fid, mode);
     };
 
-    for (const [filePath, entry] of Object.entries(data.touched ?? {})) {
+    for (const [filePath, entry] of liveTouched(data)) {
         const mode: 'write' | 'read' = entry.mode === 'write' ? 'write' : 'read';
         if (entry.feature_ids.length) {
             for (const fid of entry.feature_ids) mark(fid, mode);
@@ -247,7 +300,11 @@ export function featureSteps(
         return s;
     };
 
-    const recent = data.recent ?? [];
+    // Only the tail the agent is still on — an event it has moved past must stop
+    // narrating under its feature (see stepCutoff).
+    const allRecent = data.recent ?? [];
+    const recentCutoff = stepCutoff(allRecent.map(r => r.at));
+    const recent = allRecent.filter(r => freshAt(r.at, recentCutoff));
     if (recent.length) {
         const labelsByFid = new Map<string, { label: string; kind?: string }[]>();
         for (const r of recent) {                       // chronological
@@ -272,7 +329,7 @@ export function featureSteps(
 
     // Fallback: derive a step per touched file (no event log available).
     const byFid = new Map<string, string[]>();
-    for (const [file, entry] of Object.entries(data.touched ?? {})) {
+    for (const [file, entry] of liveTouched(data)) {
         const verb = entry.mode === 'write' ? 'editing' : 'reading';
         const label = `${verb} ${baseName(file)}`;
         for (const fid of fidsFor(file, entry.feature_ids)) {
