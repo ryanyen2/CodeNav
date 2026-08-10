@@ -167,3 +167,27 @@ class TestFallbackTitles:
 
         (add,) = [op for op in res.proposed if op.kind is NodeOpKind.ADD_NODE]
         assert add.title == "standalone"
+
+    def test_module_level_orphans_are_named_after_their_file(self, store):
+        """Every Python file has a `__module__` chunk, so naming nodes after the
+        leaf symbol gave six files six nodes all called `__module__` —
+        indistinguishable in the outline, and the filename that would have told
+        them apart was exactly what got discarded."""
+        _feature(store, "Known")
+        added = [ChunkRef(f, f"{f}::__module__", f"fp{f}")
+                 for f in ("auth.py", "certs.py", "api.py")]
+        res = apply_changeset(ChangeSet(added=added), store, propose=lambda *a, **k: [])
+
+        titles = [op.title for op in res.proposed if op.kind is NodeOpKind.ADD_NODE]
+        assert "__module__" not in titles
+        assert len(titles) == len(set(titles)) == 3
+
+    def test_a_leaf_that_collides_with_an_existing_feature_is_qualified(self, store):
+        """These ops go straight to apply_op and never pass the (title, parent)
+        identity guard, so the collision check has to happen in the net."""
+        _feature(store, "Standalone")
+        added = [ChunkRef("solo.py", "solo.py::Standalone", "fp")]
+        res = apply_changeset(ChangeSet(added=added), store, propose=lambda *a, **k: [])
+
+        (add,) = [op for op in res.proposed if op.kind is NodeOpKind.ADD_NODE]
+        assert (add.title or "").lower() != "standalone"
