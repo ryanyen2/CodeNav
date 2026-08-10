@@ -53,10 +53,13 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
   Write it as flowing prose, not as labelled parts.
 
   **Say the why as plainly as your evidence allows, and no further.** When the
-  commit history below states a reason, assert it flatly ("retries only on
-  timeout, because the server can duplicate a non-idempotent post"). Otherwise
-  describe what the code achieves rather than narrating a decision ("computes
-  the total on write, so a reader never sees a stale number" needs no warrant).
+  commit history below states a reason, assert it flatly — e.g. retries only on
+  timeout, because the server can duplicate a non-idempotent post. Otherwise
+  describe what the code achieves rather than narrating a decision — e.g.
+  computes the total on write, so a reader never sees a stale number, which
+  needs no warrant. Write descriptions as plain prose with NO double-quote
+  characters in them; every field here is a JSON string, and a bare `"` inside
+  one makes the whole response unparseable.
   NEVER invent history, people, or rejected alternatives — no "added after users
   reported", no "the team chose X over Y". If you were not shown a reason, do
   not report one. Do not hedge with "presumably" / "appears to" either; state
