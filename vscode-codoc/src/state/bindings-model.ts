@@ -50,6 +50,13 @@ export interface FeatureMeta {
     // minted from a webview ADD. Lets the host map a freshly-minted fid back to the
     // exact in-progress node (localId→fid) instead of guessing by title/order.
     local_id?: string;
+    // v6: this node's own BCP-47 language tag, present ONLY when it differs from
+    // the tree's `doc_language` — a tree may be deliberately bilingual (intent in
+    // Chinese, one node revised in English). Absent means "the tree's language".
+    // Rendered as a `lang` attribute so the browser picks fonts, line-breaking, and
+    // quotation conventions per element, which it cannot do from a document-level
+    // tag that half the content contradicts.
+    lang?: string;
 }
 
 /** A1: the named, persistent lifecycle state on a feature. */
@@ -200,6 +207,10 @@ export interface SidecarData {
     by_feature: Record<string, SymbolEntry[]>;
     by_file: Record<string, FileEntry[]>;
     features: Record<string, FeatureMeta>;
+    // v6: the language the tree is AUTHORED in (codoc/doclang.py). Absent on an
+    // older sidecar, which is indistinguishable from an English tree — the right
+    // fallback, since that is what every pre-v6 tree was.
+    doc_language?: { code: string; name: string; script?: string };
     // Optional for backward compat — sidecar version 1 has no edges.
     feature_edges?: Record<string, FeatureEdge[]>;
     // Optional for backward compat — sidecar < v3 has no proposals overlay.
@@ -332,7 +343,11 @@ export function mintedByLocalId(sidecar: SidecarData): Record<string, string> {
 
 /** Return an empty sidecar (used when the file hasn't been created yet). */
 export function emptySidecar(): SidecarData {
-    return { version: 6, by_feature: {}, by_file: {}, features: {}, proposals: { by_feature: {}, by_event: {} } };
+    return {
+        version: 6, by_feature: {}, by_file: {}, features: {},
+        doc_language: { code: 'en', name: 'English' },
+        proposals: { by_feature: {}, by_event: {} },
+    };
 }
 
 /** The typed-media blocks for a feature (v6), normalized + ordered by `ord` — the

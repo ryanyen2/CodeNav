@@ -9,6 +9,10 @@ available.
 ## 1. Read the state
 - Call `codoc_status`. Note `state` (one of `in_sync`, `code_drift`, `tree_dirty`,
   `awaiting_impl`, `realizing`), `pending`, and `unrealized`.
+- Note `doc_language` too. When its `code` is not `en`, every `title`,
+  `description`, and `rationale` you write below goes in that language — the tree
+  is one document and must read as one. The code you write is unaffected: match the
+  surrounding files, and never translate an identifier, path, or `codoc:` target.
 
 ## 2. Dispatch on the state
 

@@ -30,6 +30,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from codoc.doclang import (
+    DocLanguage, detect_prose_language, resolve, workspace_doc_language,
+)
 from codoc.loop.edits import (
     DRIFT_BINDING_LOST,
     Directive,
@@ -79,19 +82,63 @@ def is_held(feature_id: str | None, held: set[str]) -> bool:
     return bool(feature_id and feature_id in held)
 
 
-def intent_gloss(kind: str) -> str:
+#: The four glosses, per doc language. Keyed by the directive-kind bucket
+#: :func:`intent_gloss` derives, then by BCP-47 tag. This is codoc speaking to the
+#: author about their own edit, so it belongs in the tree's language and not the
+#: daemon's: a Chinese tree that answers "what will this do?" in English has
+#: broken the recognition this line exists to provide. A language with no entry
+#: falls back to English rather than to nothing — an untranslated sentence still
+#: informs, a blank hover does not.
+_GLOSSES: dict[str, dict[str, str]] = {
+    "steer": {
+        "en": "apply your note to this feature's code",
+        "zh-Hans": "把你的批注应用到该功能的代码上",
+        "zh-Hant": "將你的批註套用到該功能的程式碼上",
+        "ja": "このメモをこの機能のコードに反映する",
+        "ko": "메모를 이 기능의 코드에 반영합니다",
+    },
+    "retire": {
+        "en": "remove this feature's code",
+        "zh-Hans": "删除该功能的代码",
+        "zh-Hant": "刪除該功能的程式碼",
+        "ja": "この機能のコードを削除する",
+        "ko": "이 기능의 코드를 제거합니다",
+    },
+    "add": {
+        "en": "implement this feature in code",
+        "zh-Hans": "在代码中实现该功能",
+        "zh-Hant": "在程式碼中實作該功能",
+        "ja": "この機能をコードで実装する",
+        "ko": "이 기능을 코드로 구현합니다",
+    },
+    "amend": {
+        "en": "update the code to match your new intent",
+        "zh-Hans": "更新代码以符合你新的意图",
+        "zh-Hant": "更新程式碼以符合你新的意圖",
+        "ja": "新しい意図に合わせてコードを更新する",
+        "ko": "새 의도에 맞게 코드를 업데이트합니다",
+    },
+}
+
+
+def intent_gloss(kind: str, lang: DocLanguage | None = None) -> str:
     """A one-line, plain-language summary of what a queued directive will DO,
     surfaced as the held feature's hover title. Recognition over count: the author
     confirms codoc understood the *kind* of work their edit implied (update vs
-    implement vs remove vs steer), in their own words."""
+    implement vs remove vs steer), in their own words — which means in their own
+    language, so ``lang`` picks the wording (None ⇒ English)."""
     k = (kind or "").lower()
     if "steer" in k:
-        return "apply your note to this feature's code"
-    if "retire" in k:
-        return "remove this feature's code"
-    if "add" in k:
-        return "implement this feature in code"
-    return "update the code to match your new intent"  # amend / default
+        bucket = "steer"
+    elif "retire" in k:
+        bucket = "retire"
+    elif "add" in k:
+        bucket = "add"
+    else:
+        bucket = "amend"
+    by_lang = _GLOSSES[bucket]
+    code = (lang or resolve(None)).code
+    return by_lang.get(code) or by_lang["en"]
 
 
 @dataclass(frozen=True)
@@ -108,6 +155,10 @@ class PhaseInputs:
     directives: list[Directive]       # the realize.json manifest
     drift: dict[str, str]             # drift.json (questioned / binding-lost), unfiltered
     resolution: dict[str, str]        # resolution.json (scope / intent divergence), unfiltered
+    # The tree's authoring language, for the one author-facing sentence this
+    # projection generates (`hold_detail.intent`). None ⇒ English; the field keeps
+    # `compute_phases` pure, so `project_from_store` resolves it at the IO seam.
+    doc_language: DocLanguage | None = None
 
 
 @dataclass(frozen=True)
@@ -173,7 +224,8 @@ def _live_resolution(features_by_id: dict[str, Feature], pending_feature_ids: se
 
 
 def _hold_detail(directives: list[Directive],
-                 features_by_id: dict[str, Feature]) -> dict[str, dict]:
+                 features_by_id: dict[str, Feature],
+                 lang: DocLanguage | None = None) -> dict[str, dict]:
     """Per-held-feature detail (the former ``render._hold_detail``, centralized):
     the queued directive's ``kind`` + a plain-language gloss + the AMEND baseline,
     keyed by feature id. Every manifest directive's feature is in the hold set, so
@@ -186,9 +238,17 @@ def _hold_detail(directives: list[Directive],
         f = features_by_id.get(d.feature_id)
         if f is None or f.retired:
             continue
+        # The gloss follows THIS feature's language, not the workspace default: it
+        # is a sentence rendered next to the node's own prose, so a Chinese default
+        # would caption an English node in Chinese and vice versa. The node's prose
+        # is the only thing that can settle which reads correctly there.
         out[d.feature_id] = {
             "kind": d.kind,
-            "intent": intent_gloss(d.kind),
+            "intent": intent_gloss(
+                d.kind,
+                detect_prose_language(f.description or f.title or "",
+                                      lang or resolve(None)),
+            ),
             "baseline": d.baseline,
         }
     return out
@@ -226,7 +286,7 @@ def compute_phases(inp: PhaseInputs) -> Projection:
 
     drift = _live_drift(features_by_id, inp.bound_ids, inp.drift)
     resolution = _live_resolution(features_by_id, inp.pending_feature_ids, inp.resolution)
-    hold_detail = _hold_detail(inp.directives, features_by_id)
+    hold_detail = _hold_detail(inp.directives, features_by_id, inp.doc_language)
 
     phase: dict[str, str] = {}
     for f in inp.features:
@@ -269,4 +329,5 @@ def project_from_store(store: Store, codoc_dir: str) -> Projection:
         directives=read_manifest(codoc_dir),
         drift=read_drift(codoc_dir),
         resolution=read_resolution(codoc_dir),
+        doc_language=workspace_doc_language(codoc_dir),
     ))

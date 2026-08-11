@@ -32,6 +32,23 @@ hand or shell out to `codoc propose`; use the tools.
   Use it only for genuinely tree-wide work (restructuring, auditing).
 - `codoc_status` — counts + pipeline state.
 
+## Write in the tree's language
+
+Every read above returns a **`doc_language`** block (`{code, name, instruction?}`).
+When its `code` is not `en`, that is the language this tree is authored in, and
+every `title`, `description`, and `rationale` you submit must be in it — the tree
+is somebody's document, and half of it arriving in English is a defect even when
+each sentence is correct. If you did not read first, you do not know the language;
+read `codoc_context` before you write.
+
+Never translate code, in any language: identifiers, symbol paths, file paths,
+`codoc:` link targets, and anything in backticks are copied verbatim from the
+source. A translated symbol names a binding that does not exist. The language of
+the *code you write* is likewise unaffected — match the surrounding files.
+
+If a write comes back with a `warning` about script mismatch, the op still applied;
+follow it with a `codoc_propose_amend` in the right language rather than leaving it.
+
 ## Reflect your code changes (the code-first loop)
 
 After you finish a code change, reflect it in ONE call:
@@ -98,5 +115,7 @@ For a single change you can also call the focused tools directly:
 - ❌ Don't hand-edit `.codoc/tree.codoc` or any `⟨…⟩` marker.
 - ❌ Don't edit code during the planning step of `/codoc:plan`.
 - ❌ Don't create a node whose title duplicates an existing one — attach instead.
+- ❌ Don't write English prose into a tree whose `doc_language` is something else,
+  and don't translate an identifier into any language.
 - ✅ Read `codoc_context` (scoped to your files) first; reflect via the MCP
   tools; prefer attach over add.

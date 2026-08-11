@@ -48,7 +48,7 @@ def _realize_queue_size(codoc_dir: str | Path) -> int:
     status can report how many changes are awaiting implementation.
     """
     try:
-        text = (Path(codoc_dir) / REALIZE_FILENAME).read_text()
+        text = (Path(codoc_dir) / REALIZE_FILENAME).read_text(encoding="utf-8")
     except OSError:
         return 0
     if not text.strip():

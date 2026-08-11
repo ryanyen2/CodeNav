@@ -30,6 +30,7 @@ import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 import { acquireHostApi, isVsCodeHost, type Delivery } from './host-bridge';
 import { mountViewerStatus } from './viewer-status';
+import { langAttrFor, languageName, shortLanguageLabel } from './doc-lang';
 import { createCommandEmitter, commandMessage, type CommandEmitter } from './command-emitter';
 import { moveCommand } from '../state/commands-from-doc';
 import type { CommandEntry } from '../state/edits-channel';
@@ -668,6 +669,7 @@ function applyPendingRestore(): void {
 // ─── Top-level render ─────────────────────────────────────────────────────────
 function renderAll(): void {
     app.replaceChildren();
+    applyTreeLang();
     app.append(renderToolbar());
     const main = el('div', 'main');
     main.append(renderTree(), renderColResizer(), renderDocHost());
@@ -733,6 +735,11 @@ function renderColResizer(): HTMLElement {
 
 // ─── Reconcile (subsequent payloads) ─────────────────────────────────────────
 function reconcile(): void {
+    // Before the toolbar: a payload can carry a language the author just switched to,
+    // and `renderAll` runs only once — so without this, <html lang> kept the language
+    // the workspace had when the editor opened and every :lang() rule stayed wrong for
+    // the rest of the session.
+    applyTreeLang();
     document.querySelector('.toolbar')?.replaceWith(renderToolbar());
     reconcileTree();
     // Refresh the dependency spotlight: a loop pass may have changed payload.threads
@@ -779,6 +786,121 @@ function reconcileTree(): void {
     tree.replaceWith(next);
     setTreeScroll(next, scroll);     // restore without tripping the manual-scroll suppression
     if (had) next.focus({ preventScroll: true });
+}
+
+// ─── Authoring language ──────────────────────────────────────────────────────
+
+/** The tree's language tag (payload → 'en' on a legacy payload, which is what
+ *  every pre-v6 tree was). */
+function treeLangTag(): string {
+    return payload.docLanguage?.code || 'en';
+}
+
+/** Stamp a row with its own `lang` only when it differs from the tree's — `lang`
+ *  inherits, so tagging the majority would be noise and would bury the exceptions
+ *  this attribute exists to mark. */
+function applyNodeLang(host: HTMLElement, n: UINode): void {
+    const tag = langAttrFor(n.lang, treeLangTag());
+    if (tag) host.lang = tag;
+}
+
+/** Put the tree's language on the document root, where CSS `:lang()` and the
+ *  browser's own font-fallback and line-breaking machinery read it. Called on every
+ *  render because a payload can arrive with a language the author just switched. */
+function applyTreeLang(): void {
+    document.documentElement.lang = treeLangTag();
+}
+
+/**
+ * The toolbar language control: what codoc AUTHORS in, and a menu to change it.
+ *
+ * It is a switch and not a toggle because there is no natural pair to flip between,
+ * and it is labelled with the language's own endonym (简体中文, not "ZH") because that
+ * is what a reader of the language recognizes without translating a label first.
+ *
+ * The wording is deliberate about scope. "Switch" sounds like it changes the
+ * document, and it does not: the tree is not retranslated, and a later amend to an
+ * existing node still comes out in that node's own language. So the menu says what
+ * actually happens — new prose follows the new setting, existing prose does not
+ * move — because an author who expects a translation and gets a mixed tree will
+ * conclude the feature is broken.
+ */
+function renderLangSwitch(): HTMLElement | null {
+    const current = treeLangTag();
+    // The HOST decides whether switching is on offer. On the deployed hub it is not:
+    // a remote contributor suggesting edits has no business changing the language a
+    // maintainer's repo is authored in, so the hub sends no choices and this renders
+    // as a plain label. Gating on the payload rather than on `isVsCodeHost()` keeps
+    // that a host policy instead of a fact the webview asserts about itself.
+    const offered = payload.docLanguageChoices ?? [];
+    const wrap = el('div', 'tb-lang');
+
+    if (!offered.length) {
+        // An English tree with no switch has nothing to say, so say nothing rather
+        // than spend toolbar space announcing the default.
+        if (current === 'en') return null;
+        const label = el('span', 'tb-lang-label', shortLanguageLabel(current));
+        label.lang = current;
+        label.title = `This tree is authored in ${languageName(current)}.`;
+        wrap.append(label);
+        return wrap;
+    }
+
+    const btn = el('button', 'toggle lang', shortLanguageLabel(current));
+    btn.lang = current;
+    btn.title = `Authoring language: ${languageName(current)}. codoc writes new `
+        + 'titles and descriptions in it. Existing prose is left alone — an amend '
+        + 'keeps the language the node is already written in, so a bilingual tree '
+        + 'stays bilingual.';
+    btn.setAttribute('aria-haspopup', 'true');
+    wrap.append(btn);
+
+    const menu = el('div', 'tb-lang-menu');
+    // A language set from the CLI that has no built-in profile still has to appear,
+    // or the menu would silently misreport what the tree is authored in.
+    const choices = offered.some(c => c.code === current)
+        ? offered
+        : [{ code: current, name: languageName(current) }, ...offered];
+    for (const choice of choices) {
+        const item = el('button', 'tb-lang-item' + (choice.code === current ? ' active' : ''));
+        item.lang = choice.code;
+        item.append(el('span', 'tb-lang-check', choice.code === current ? '✓' : ''));
+        item.append(el('span', 'tb-lang-name', choice.name));
+        item.onclick = ev => {
+            ev.stopPropagation();
+            menu.classList.remove('open');
+            if (choice.code === current) return;
+            vscode.postMessage({ kind: 'set-doc-language', code: choice.code });
+        };
+        menu.append(item);
+    }
+    const note = el('div', 'tb-lang-note',
+        'Applies to new and re-generated prose. Existing nodes keep their own language.');
+    menu.append(note);
+    wrap.append(menu);
+
+    btn.onclick = ev => {
+        ev.stopPropagation();
+        const open = menu.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open));
+        if (open) {
+            // One dismissal path for click-away and Escape — a menu that can only be
+            // closed by picking something is a trap when the reader only wanted to see
+            // which language the tree is in.
+            const close = () => {
+                menu.classList.remove('open');
+                btn.setAttribute('aria-expanded', 'false');
+                document.removeEventListener('click', close);
+                document.removeEventListener('keydown', onKey);
+            };
+            const onKey = (k: KeyboardEvent) => { if (k.key === 'Escape') close(); };
+            setTimeout(() => {
+                document.addEventListener('click', close);
+                document.addEventListener('keydown', onKey);
+            }, 0);
+        }
+    };
+    return wrap;
 }
 
 // ─── Toolbar ─────────────────────────────────────────────────────────────────
@@ -844,6 +966,9 @@ function renderToolbar(): HTMLElement {
     blame.setAttribute('aria-pressed', String(!!prefs.blame));
     blame.onclick = () => { setPref('blame', !prefs.blame); applyBlame(); rerenderToolbar(); };
     actions.append(blame);
+
+    const langSwitch = renderLangSwitch();
+    if (langSwitch) actions.append(langSwitch);
 
     // ── catch-up: descriptions the loop rewrote while you were elsewhere ──────
     // The only automatic op that changes what the document says, and nobody was
@@ -943,6 +1068,7 @@ function renderTree(): HTMLElement {
 function appendGhostRow(parent: HTMLElement, n: UINode): void {
     const op = n.proposalOp || 'add';
     const row = el('div', 'row proposal ' + op);
+    applyNodeLang(row, n);
     row.dataset.id = n.id;
     row.style.setProperty('--depth', String(n.depth));
     if (selectedId === n.id) row.classList.add('selected');
@@ -969,6 +1095,7 @@ function appendRow(parent: HTMLElement, id: string): void {
 
     const row = el('div', 'row');
     row.dataset.id = id;
+    applyNodeLang(row, n);
     if (selectedId === id) row.classList.add('selected');
     if (n.retired) row.classList.add('retired');
     if (!n.realized) row.classList.add('unrealized');

@@ -260,7 +260,7 @@ class TestGather:
         codoc_dir.mkdir()
         seen: dict = {}
 
-        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None):
+        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
             seen.update(changes)
             return []
 
@@ -281,7 +281,7 @@ class TestGather:
         codoc_dir.mkdir()
         seen: dict = {}
 
-        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None):
+        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
             seen.update(changes)
             return []
 

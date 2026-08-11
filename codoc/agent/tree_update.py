@@ -17,6 +17,7 @@ from codoc.agent.base import (
     titles_outline,
 )
 from codoc.config import LLMConfig, fast_llm_config
+from codoc.doclang import DocLanguage
 from codoc.model.event import NodeOp, NodeOpKind
 
 
@@ -40,6 +41,7 @@ def propose_tree_update(
     *,
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
+    doc_language: DocLanguage | None = None,
 ) -> list[NodeOp]:
     """Run the single tree-update LLM call and return its ops (possibly empty).
 
@@ -48,14 +50,18 @@ def propose_tree_update(
     between tree mutations), and the per-call change set last — so consecutive
     passes pay cache-read prices for everything but the change itself. This is
     a structured-extraction call, so it defaults to the fast model tier.
+
+    ``doc_language`` is the tree's authoring language (None ⇒ English). It rides
+    in the frozen prefix, so switching it costs one cache miss and nothing after.
     """
     # Split the raw template FIRST, then substitute per segment — substituted
     # values are repo-derived and may contain a literal marker.
-    prefix_tpls, volatile_tpl = split_prompt(load_prompt("tree_update"))
+    prefix_tpls, volatile_tpl = split_prompt(
+        load_prompt("tree_update", doc_language=doc_language))
     kwargs = dict(
         repo_name=repo_name,
-        changes=json.dumps(changes, indent=2, sort_keys=True),
-        subtree=json.dumps(subtree, indent=2, sort_keys=True),
+        changes=json.dumps(changes, indent=2, sort_keys=True, ensure_ascii=False),
+        subtree=json.dumps(subtree, indent=2, sort_keys=True, ensure_ascii=False),
         all_titles=titles_outline(all_titles),
     )
     prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]

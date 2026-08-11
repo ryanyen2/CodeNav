@@ -46,7 +46,7 @@ class TestBatching:
         _feature(store, "Known")
         seen: list[int] = []
 
-        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None):
+        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
             seen.append(len(changes["added"]))
             return []
 
@@ -58,7 +58,7 @@ class TestBatching:
         _feature(store, "Known")
         seen: list[int] = []
 
-        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None):
+        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
             seen.append(len(changes["added"]))
             return []
 
@@ -71,7 +71,7 @@ class TestBatching:
         fid = _feature(store, "Known")
         calls = []
 
-        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None):
+        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
             calls.append(changes)
             return []
 
@@ -92,7 +92,7 @@ class TestBatching:
         _feature(store, "Known")
         titles_seen: list[list[str]] = []
 
-        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None):
+        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
             titles_seen.append([t["title"] for t in all_titles])
             return [NodeOp(kind=NodeOpKind.ADD_NODE, title="Freshly proposed",
                            description="d.",

@@ -86,8 +86,17 @@
        theme fonts stay the fallback (so a missing binary degrades to the old look, never to
        nothing). The doc-typography call sites below reach for --font-doc; code-ref / binding
        / mono surfaces reach for --font-mono. */
-    --font-doc:  'Inter', var(--vscode-font-family, system-ui);
-    --font-mono: 'JetBrains Mono', var(--vscode-editor-font-family, monospace);
+    /* CJK fallbacks come BEFORE the theme font, after the bundled Latin faces.
+       Inter and JetBrains Mono carry no Han, kana, or Hangul, so without these the
+       browser falls back per character to whatever it finds first — which varies by
+       machine and mixes two unrelated designs inside one sentence. Naming the system
+       CJK faces makes the pairing deterministic on each OS instead of accidental. */
+    --font-cjk: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC",
+                "Source Han Sans SC", "Microsoft YaHei", "Malgun Gothic", sans-serif;
+    --font-cjk-mono: "Sarasa Mono SC", "Noto Sans Mono CJK SC", "PingFang SC",
+                     "Microsoft YaHei", monospace;
+    --font-doc:  'Inter', var(--font-cjk), var(--vscode-font-family, system-ui);
+    --font-mono: 'JetBrains Mono', var(--font-cjk-mono), var(--vscode-editor-font-family, monospace);
 
     /* remaining non-grammar accents: refs = code-ref chips + status default; amend =
        highlight / comment marks; add / retire = the accept/reject action affordances.
@@ -1899,4 +1908,92 @@ body.ce-dragging-feature .ProseMirror p { opacity: 0.55; transition: opacity 120
     border-bottom: 1px solid color-mix(in srgb, var(--accent, #5aa6e0) 45%, transparent);
     color: color-mix(in srgb, var(--vscode-foreground) 78%, var(--accent, #5aa6e0));
     cursor: help;
+}
+
+
+/* ── Authoring language (doclang) ─────────────────────────────────────────────
+   The tree's language sits on <html lang>, and any node written in a different one
+   carries its own `lang` (see webview/doc-lang.ts). These rules exist because the
+   Latin typography above is tuned for Inter — negative tracking, tight leading —
+   and both settings actively hurt CJK: the tracking collides glyphs that are
+   already full-width, and 1.25–1.5 leading crowds characters that use their whole
+   em box. Selecting on :lang() rather than a class means one bilingual document
+   gets both treatments in the right places, which is the whole point of tagging
+   nodes individually. */
+
+:is(:lang(zh), :lang(ja), :lang(ko)) {
+    /* Han and kana are designed on a square em with no side bearings to reclaim, so
+       any negative tracking reads as a rendering fault rather than as tightening. */
+    letter-spacing: 0;
+}
+
+:is(:lang(zh), :lang(ja)) :is(p, .row-title, .ce-surface, .ProseMirror) {
+    /* CJK text needs more leading than Latin at the same size — the glyphs fill
+       their box, so descender space is not doing the work it does in Latin. */
+    line-height: 1.85;
+}
+
+:is(:lang(zh), :lang(ja), :lang(ko)) .ProseMirror p,
+:is(:lang(zh), :lang(ja), :lang(ko)) .row-title {
+    /* CJK may break between any two characters, so the default is already right —
+       but a long Latin identifier inside CJK prose is one unbreakable token that
+       would otherwise overflow its column. `anywhere` lets it break; `normal`
+       word-break keeps Latin words whole when they DO fit, which `break-all` would
+       not (it would shred every English term in a Chinese sentence). */
+    word-break: normal;
+    overflow-wrap: anywhere;
+    /* Never hyphenate: there is no CJK hyphenation, and for the embedded Latin a
+       hyphen inserted mid-identifier is indistinguishable from part of the name. */
+    hyphens: none;
+}
+
+/* A tree row whose language differs from the tree's is tagged individually, and its
+   title is the one place the difference is worth seeing — it explains why one row
+   reads in another language instead of leaving it looking like a mistake. */
+.row[lang] > .row-title { font-family: var(--font-doc); }
+
+/* ── The language switcher ────────────────────────────────────────────────────
+   A switch, not a toggle — there is no natural pair to flip between — labelled with
+   the language's own endonym so a reader of it needs no translation to find it. */
+.tb-lang { position: relative; display: inline-flex; align-items: center; }
+/* The hub's read-only form: the tree's language, stated, with no switch behind it. */
+.tb-lang-label {
+    font: 11.5px var(--font-doc); color: var(--fg-muted);
+    padding: 3px 4px; white-space: nowrap;
+}
+.toolbar button.toggle.lang { font-family: var(--font-doc); }
+
+.tb-lang-menu {
+    display: none;
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+    min-width: 210px; padding: 4px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px color-mix(in srgb, black 22%, transparent);
+}
+.tb-lang-menu.open { display: block; }
+
+.tb-lang-item {
+    display: flex; align-items: center; gap: 7px; width: 100%;
+    padding: 5px 8px; border: 0; border-radius: 5px;
+    background: transparent; cursor: pointer; text-align: left;
+    font: 12px var(--font-doc);
+    color: var(--vscode-foreground);
+}
+.tb-lang-item:hover { background: var(--hover-bg); }
+.tb-lang-item.active { color: var(--vscode-foreground); }
+.tb-lang-check {
+    width: 11px; flex: 0 0 11px; color: var(--fg-muted); font-size: 10px;
+}
+.tb-lang-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The note is not decoration: an author who reads "switch language" and expects the
+   tree to be translated will read a half-Chinese tree as a bug. Say the scope here,
+   where the decision is made. */
+.tb-lang-note {
+    padding: 6px 8px 4px; margin-top: 2px;
+    border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+    font: 10.5px/1.45 var(--vscode-font-family);
+    color: var(--fg-faint, var(--fg-muted));
 }

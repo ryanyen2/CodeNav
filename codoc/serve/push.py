@@ -31,7 +31,7 @@ class PayloadStream:
 
     def next_if_changed(self) -> dict | None:
         payload = build_browser_payload(self._codoc_dir)
-        serialized = json.dumps(payload, sort_keys=True)
+        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         if serialized == self._last:
             return None
         self._last = serialized
@@ -53,7 +53,8 @@ async def event_source(codoc_dir: str | Path, *, is_disconnected=None, viewer=No
     from watchfiles import awatch
 
     def _emit(payload: dict) -> str:
-        return json.dumps({**payload, "viewer": viewer} if viewer else payload)
+        return json.dumps({**payload, "viewer": viewer} if viewer else payload,
+                          ensure_ascii=False)
 
     stream = PayloadStream(codoc_dir)
     first = stream.next_if_changed()

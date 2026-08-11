@@ -29,6 +29,8 @@ import {
     CommentThread, commentNoteText, reconcileComments,
 } from '../state/comment-model';
 import { directedEdges, heldFeatures, heldDetail, divergentFeatures, blocksForFeature, mintedByLocalId } from '../state/bindings-model';
+import { DOC_LANGUAGE_CHOICES, writeDocLanguage } from '../state/doc-language';
+import { readDocLanguage } from '../state/codoc-config';
 import {
     EditsFile, parseEditsFile, emptyEditsFile, CommandEntry,
 } from '../state/edits-channel';
@@ -288,6 +290,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     // No payload repost needed — the webview already applied it
                     // optimistically; persistence is all the host owes here.
                     return;
+                case 'set-doc-language':
+                    await this.setDocLanguage(document, msg.code);
+                    post();
+                    return;
                 case 'bridge-open':
                     // P2 doc→code (§A.1): open the edited feature's bound code Beside + light it.
                     await this.bridge.open(msg.fid);
@@ -321,6 +327,32 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const cur = all[key] ?? { glance: false };
         all[key] = { ...cur, [pref]: value };
         await this.context.workspaceState.update(PREFS_KEY, all);
+    }
+
+    /**
+     * Change the language the tree is AUTHORED in (`.codoc/config.json`).
+     *
+     * The daemon re-reads that file on its next pass — there is no cache and no
+     * restart — so the switch takes effect on the next node codoc writes. It does
+     * NOT retranslate the tree: existing prose is the author's, and an amend to it
+     * follows the node's own language, so switching mid-project leaves a bilingual
+     * tree bilingual rather than rewriting half of it.
+     */
+    private async setDocLanguage(
+        document: vscode.TextDocument,
+        code: string,
+    ): Promise<void> {
+        // The editor's own document, NOT `window.activeTextEditor` — this runs while a
+        // CUSTOM editor holds focus, and a custom editor is not a text editor, so
+        // `activeTextEditor` is undefined exactly when this handler fires.
+        try {
+            await writeDocLanguage(vscode.Uri.joinPath(document.uri, '..'), code);
+        } catch (err) {
+            // Reported, never swallowed: a silent failure here means the author
+            // believes they switched language and every later node disagrees.
+            void vscode.window.showErrorMessage(
+                `codoc: could not write .codoc/config.json — ${err instanceof Error ? err.message : String(err)}`);
+        }
     }
 
     // ── unasked loop rewrites: which ones the reader has caught up on (v6) ──────
@@ -526,6 +558,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 depth,
                 children: [],
                 activeMode: activeModes.get(f.id) ?? null,
+                // Present only when this node is the exception to the tree's language
+                // (the sidecar omits it otherwise), so a monolingual tree carries no
+                // per-row tags and a bilingual one tags exactly the rows that differ.
+                ...(meta?.lang ? { lang: meta.lang } : {}),
             };
 
             if (f.parent_id) {
@@ -575,6 +611,12 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         ];
 
         const rootName = (this.state.rootDir ?? '').split('/').filter(Boolean).pop() ?? 'workspace';
+
+        // Straight from .codoc/config.json (see readDocLanguage for why not the
+        // sidecar), so a switch shows up on the very next repaint instead of waiting
+        // for a daemon render pass.
+        const docLanguage = readDocLanguage(
+            path.join(document.uri.fsPath, '..'), sidecar.doc_language?.code);
 
         // The tree pane mirrors the EDITOR's order exactly — both are the parsed
         // tree.codoc (store) order — so the two line up 1:1 and scroll-spy selects
@@ -692,6 +734,8 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             status: { state: status.state, pending: status.pending },
             sync,
             rootName,
+            docLanguage: docLanguage,
+            docLanguageChoices: DOC_LANGUAGE_CHOICES,
             pendingEventIds,
             baselineId,
             doc: docForPayload,

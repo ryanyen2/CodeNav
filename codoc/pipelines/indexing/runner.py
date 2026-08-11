@@ -55,7 +55,7 @@ def _reconcile_embed_flag(codoc_path: Path) -> bool:
     have: bool | None = None
     if meta_file.exists():
         try:
-            have = bool(json.loads(meta_file.read_text()).get("embed_chunks"))
+            have = bool(json.loads(meta_file.read_text(encoding="utf-8")).get("embed_chunks"))
         except (OSError, ValueError):
             have = None
     requested = embed_chunks_requested()
@@ -77,7 +77,7 @@ def _reconcile_embed_flag(codoc_path: Path) -> bool:
         wiped = True
     if have != want:
         try:
-            meta_file.write_text(json.dumps({"embed_chunks": want}))
+            meta_file.write_text(json.dumps({"embed_chunks": want}), encoding="utf-8")
         except OSError:
             import logging
 

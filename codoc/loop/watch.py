@@ -162,7 +162,7 @@ def write_pidfile(codoc_dir: str) -> None:
         "owner": os.environ.get("CODOC_WATCH_OWNER", ""),
         "started_at": time.time(),
     }
-    _pidfile(codoc_dir).write_text(json.dumps(payload))
+    _pidfile(codoc_dir).write_text(json.dumps(payload), encoding="utf-8")
 
 
 def read_pid(codoc_dir: str) -> int | None:
@@ -173,7 +173,7 @@ def read_pid(codoc_dir: str) -> int | None:
     import json
 
     try:
-        raw = _pidfile(codoc_dir).read_text().strip()
+        raw = _pidfile(codoc_dir).read_text(encoding="utf-8").strip()
     except OSError:
         return None
     if not raw:

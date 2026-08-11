@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 
+from codoc.doclang import clause_chars
 from codoc.loop.diff import ChangeSet
 from codoc.model.binding import Binding
 from codoc.model.event import (
@@ -33,7 +34,16 @@ PRESERVE_RATIO_MACHINE = 0.50
 # matches are just the vocabulary any two descriptions of the same code share
 # ("the", "returns the", "when the file") — counting those would score a total
 # rewrite as faithful.
-_MIN_PRESERVED_RUN = 24
+#
+# The floor is a CLAUSE, and a clause is a number of words — which is 24
+# characters of English and about 8 of Chinese. Hard-coding the character count
+# made this gate script-dependent in a way nobody chose: against a Chinese
+# description almost no run reaches 24 characters (that is a whole sentence), so
+# `preserved_ratio` scored ~0 for every real amend, no human-written prose could
+# ever clear PRESERVE_RATIO_HUMAN, and every repair queued as a full rewrite for
+# review. `doclang.clause_chars` computes it per script and returns the same 24
+# for Latin text — this is a port of the constant's meaning, not a retune of its
+# value.
 
 
 def derive_auto_ops(cs: ChangeSet, store: Store) -> list[NodeOp]:
@@ -74,9 +84,11 @@ def preserved_ratio(old: str, new: str) -> float:
     """
     if not old:
         return 1.0
+    # Measured against ``old``: it is the prose being protected, so its script is
+    # the one that decides how long a preserved clause is.
+    floor = clause_chars(old)
     matcher = SequenceMatcher(None, old, new, autojunk=False)
-    kept = sum(b.size for b in matcher.get_matching_blocks()
-               if b.size >= _MIN_PRESERVED_RUN)
+    kept = sum(b.size for b in matcher.get_matching_blocks() if b.size >= floor)
     return min(1.0, kept / len(old))
 
 

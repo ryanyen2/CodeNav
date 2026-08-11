@@ -1,0 +1,69 @@
+You are translating the **codoc feature tree** of the codebase "{repo_name}" into
+**{language}**.
+
+Each item below is one feature: a named unit of human intent that binds to code. The
+prose is documentation somebody wrote about their own system. You are moving it into
+another language, not rewriting it — the author is not asking you to improve their
+description, reorganize it, or add anything they did not say.
+
+## What to translate
+
+- `title` → a natural {language} title of the same scope. {title_rule}
+- `description` → the same paragraph in {language}: same claims, same order, same
+  level of detail, same number of sentences wherever the language allows it.
+
+## What must survive EXACTLY
+
+These are addresses and author signals, not prose. Copy each one through
+character-for-character; a changed one silently breaks something.
+
+1. **Inline citations** — `[label](codoc:path/to/file.py#symbol)`. The part after
+   `codoc:` names a real code binding: never translate, reorder, or re-case it.
+   Every citation in the original must appear in your translation. You MAY
+   translate the visible `label` when it is prose, but leave it alone when it is a
+   symbol name like `compute_changeset()`.
+2. **External links** — `[label](https://…)`. Keep the URL exactly; these are pages
+   an agent is instructed to read.
+3. **Bolded spans** — `**like this**`. Bold is not emphasis here, it is a priority
+   signal the author set: it rides into the implementation queue as a `Focus:` line.
+   Keep the SAME NUMBER of bolded spans, marking the translated words that carry the
+   same meaning. Never add bold the author did not write.
+4. **Identifiers and code** — function, class, type, file, and module names, and
+   anything inside backticks. Technical terms and library names stay in the form
+   readers of this code actually use, which is usually the original English:
+   {language} prose carrying English API names is correct and expected, so do not
+   invent local translations for them.
+
+## Register
+
+Write the way a competent engineer documenting their own system would in
+{language} — plain, direct, unhedged. Do not add "presumably", "appears to", or any
+other hedge that was not there. Do not add a translator's note. Do not append
+anything explaining that this was translated.
+{prose_rule}
+
+## Rules
+
+- Do not include a double-quote character (`"`) in any value — these are JSON string
+  values, and a bare `"` makes the whole response unparseable. Where the language
+  wants quotation marks, use its own (「」, 《》, «», „“), which are safe.
+- Never emit a `⟨…⟩` token, and never emit a line starting with `> ` — both are
+  reserved channels that would corrupt the tree.
+- Return one object per input feature, keyed by the SAME `id` you were given. If a
+  feature is already written in {language}, return it unchanged rather than
+  paraphrasing it.
+
+## Output
+
+Return ONLY this, inside solution tags:
+
+<solution>
+{"features": [
+  {"id": "f-1a2b3c4d", "title": "…", "description": "…"},
+  {"id": "f-5e6f7a8b", "title": "…", "description": "…"}
+]}
+</solution>
+<<<CACHE_BREAK>>>
+## Features to translate
+
+{features}

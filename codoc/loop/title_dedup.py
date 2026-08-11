@@ -38,15 +38,28 @@ def semantic_dedup_enabled() -> bool:
     return os.environ.get(ENABLE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def make_loop_embedder() -> EmbedFn | None:
+def make_loop_embedder(codoc_dir: str | None = None) -> EmbedFn | None:
     """The production ``embed_fn`` for the loop: a warm sentence-transformer (one
     model load per pass). Returns None — semantic dedup stays off — when the
     embedder package isn't installed or its config can't be built, so a missing
-    optional dependency never breaks a loop pass."""
-    try:
-        from codoc.config import make_embedder
+    optional dependency never breaks a loop pass.
 
-        return make_embedder()
+    ``codoc_dir`` selects a model that can read this repo's titles. The default
+    (``all-MiniLM-L6-v2``) is English-only, so on a Chinese tree it maps every
+    title to near-noise and the gate silently folds nothing or, worse, folds two
+    unrelated titles — a paraphrase gate that cannot read the language it is
+    gating is not a conservative gate, it is a random one. An explicit
+    ``CODOC_EMBEDDER_MODEL`` still wins; this only changes the default.
+    """
+    try:
+        from codoc.config import get_embedder_config, make_embedder
+
+        cfg = get_embedder_config()
+        if not os.environ.get("CODOC_EMBEDDER_MODEL"):
+            from codoc.doclang import embedder_model_for
+
+            cfg = cfg.model_copy(update={"model": embedder_model_for(codoc_dir)})
+        return make_embedder(cfg)
     except Exception:  # noqa: BLE001 — any embedder setup failure ⇒ feature off
         return None
 

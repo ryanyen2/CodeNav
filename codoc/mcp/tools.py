@@ -18,6 +18,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codoc.doclang import (
+    detect_prose_language, language_tag_for, prose_letters, workspace_doc_language,
+)
 from codoc.loop.activity import PHASE_DONE, PHASE_EDITING, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
 from codoc.loop.classify import suppressed_by_hold
@@ -145,6 +148,7 @@ def read_tree(
             selected.extend(f for f in all_feats if f.id not in seen)
 
         grouped = store.bindings_by_feature()  # one bulk read, not per-feature
+        default = workspace_doc_language(codoc_dir)
         feats = []
         for f in selected:
             binds = grouped.get(f.id, [])
@@ -157,6 +161,12 @@ def read_tree(
                 "drift": drift.get(f.id),
                 "binding_count": len(binds),
                 "files": sorted({b.file for b in binds}),
+                # Present only when this node reads as a DIFFERENT language than the
+                # tree's — the absence means "the tree's language", the same
+                # presence-keyed convention the sidecar uses. It is what tells an
+                # agent that amending this particular node means writing English in
+                # an otherwise-Chinese tree, which is the author's choice to keep.
+                **_lang_field(f.description or f.title, default),
             }
             if include_bindings:
                 row["bindings"] = [b.symbol_path for b in binds]
@@ -168,7 +178,8 @@ def read_tree(
             for e in store.pending_events()
         ]
         return {"ok": True, "features": feats, "proposals": proposals,
-                "truncated_to_depth": depth if depth > 0 else None}
+                "truncated_to_depth": depth if depth > 0 else None,
+                "doc_language": doc_language_block(codoc_dir)}
 
 
 def read_context(
@@ -203,6 +214,10 @@ def read_context(
         if not file_set and not extra_symbols:
             return _err("pass files=[...] and/or feature_id")
         subtree, all_titles, context = select_context(store, file_set, extra_symbols)
+        default = workspace_doc_language(codoc_dir)
+        for row in subtree:
+            row.update(_lang_field(row.get("description") or row.get("title") or "",
+                                   default))
         if not include_bindings:
             for row in subtree:
                 row["binding_count"] = len(row.pop("bindings", []))
@@ -211,7 +226,94 @@ def read_context(
             "subtree": subtree,
             "titles_outline": titles_outline(all_titles),
             "graph": context,
+            "doc_language": doc_language_block(codoc_dir),
         }
+
+
+def doc_language_block(codoc_dir: str) -> dict:
+    """The tree's authoring language, as an agent-readable block.
+
+    Rides on every read an agent makes before it writes, because the agent is the
+    one writer codoc cannot put a prompt in front of: Loop A's own LLM call gets
+    the directive injected into its template, but a coding agent calling
+    ``codoc_reflect`` has only what these tools told it. Without this, the
+    considerate thing for the model to do — write documentation in English,
+    because that is what documentation is usually in — silently mixes languages
+    into somebody's Chinese tree.
+
+    ``instruction`` is present only for a non-English tree, so the common case
+    costs one short field rather than a paragraph.
+    """
+    lang = workspace_doc_language(codoc_dir)
+    block = {"code": lang.code, "name": lang.name}
+    if not lang.is_default:
+        block["instruction"] = (
+            f"Write prose you ORIGINATE in {lang.name} — a new node's title "
+            f"(a title is {lang.title_rule}), description, and rationale. When you "
+            f"AMEND an existing description, keep the language it is already "
+            f"written in: a feature row carrying its own `lang` differs from the "
+            f"tree's, and rewriting it into {lang.name} would translate the "
+            f"author's words without being asked. Technical terms, library names, "
+            f"and API names stay in the form readers use — {lang.name} prose with "
+            f"English terms in it is correct, not something to clean up. Never "
+            f"translate identifiers, symbol paths, file paths, or codoc: link "
+            f"targets. Source code you write keeps the language its neighbours use."
+        )
+    return block
+
+
+# Enough prose to support a claim about its language. Below this a "description"
+# is a fragment or a bare identifier, and any verdict on it is noise.
+_MIN_PROSE_LETTERS = 12
+
+
+def _lang_field(text: str, default) -> dict:
+    """``{"lang": tag}`` when ``text`` reads as a different language than the tree's,
+    else ``{}`` — so the field's presence is itself the signal and an all-one-language
+    tree pays nothing for the feature."""
+    tag = language_tag_for(text, default)
+    return {} if tag == default.code else {"lang": tag}
+
+
+def _language_advice(store: Store, op: NodeOp, default) -> str | None:
+    """A warning when submitted prose is in the wrong language for its target.
+
+    "Wrong" is decided per NODE, not per repo, because the tree is allowed to be
+    bilingual: an author describing intent in Chinese may still have written one
+    node in English, and an amend that translates it back is an unrequested rewrite
+    of their words. So an AMEND is judged against the description it is replacing,
+    and only an ADD — prose with nothing behind it — against the workspace default.
+
+    Chinese prose carrying English technical terms is *correct* and never flagged;
+    that falls out of :func:`codoc.doclang.detect_prose_language` weighting an
+    unspaced script far more heavily than its character share.
+
+    Deliberately advisory. Rejecting would throw away work the agent has already
+    done and leave the tree describing code that has already changed — worse than
+    one node in the wrong language, which the next amend can fix.
+    """
+    submitted = op.description or op.title or ""
+    if prose_letters(submitted) < _MIN_PROSE_LETTERS:
+        return None
+
+    expected = default
+    if op.kind is NodeOpKind.AMEND and op.feature_id:
+        existing = store.get_feature(op.feature_id)
+        prior = (existing.description if existing else "") or ""
+        if prose_letters(prior) >= _MIN_PROSE_LETTERS:
+            expected = detect_prose_language(prior, default)
+
+    got = detect_prose_language(submitted, expected)
+    if got.code == expected.code:
+        return None
+    if op.kind is NodeOpKind.AMEND:
+        return (f"the description you replaced was written in {expected.name}, but "
+                f"the new one reads as {got.name} — an amend should keep the "
+                f"author's language unless they asked for the switch (identifiers "
+                f"and paths stay as they are either way)")
+    return (f"this tree is authored in {expected.name} but this prose reads as "
+            f"{got.name} — amend it to {expected.name}. Technical terms may stay in "
+            f"their original form; identifiers and paths always do")
 
 
 def _dead_refs(codoc_dir: str) -> list[dict]:
@@ -248,7 +350,7 @@ def read_status(codoc_dir: str) -> dict:
         unrealized = [f.id for f in feats if not f.realized]
         try:
             st = refresh_status(codoc_dir, store)
-            state = json.loads(st.read_text()).get("state", "in_sync")
+            state = json.loads(st.read_text(encoding="utf-8")).get("state", "in_sync")
         except Exception:
             state = "in_sync"
         dead = _dead_refs(codoc_dir)
@@ -266,6 +368,7 @@ def read_status(codoc_dir: str) -> dict:
             # refs doesn't flood the agent's context through a status call.
             "dead_refs": len(dead), "dead_ref_list": dead[:20],
             "recent_intent": intent,
+            "doc_language": doc_language_block(codoc_dir),
         }
 
 
@@ -365,8 +468,12 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
                       caused_by=caused_by, actor=actor)
         wrote = safe_write_tree(store, codoc_dir)
         _mark_reflected(codoc_dir, [op])
-        return {"ok": True, "event_id": ev.id, "applied": applied,
-                "rendered": wrote, "summary": _op_summary(op, store)}
+        out = {"ok": True, "event_id": ev.id, "applied": applied,
+               "rendered": wrote, "summary": _op_summary(op, store)}
+        warning = _language_advice(store, op, workspace_doc_language(codoc_dir))
+        if warning:
+            out["warning"] = warning
+        return out
 
 
 def propose_add(codoc_dir: str, *, title: str, description: str = "",
@@ -445,7 +552,8 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
     """
     results: list[dict] = []
     applied_ops: list[NodeOp] = []
-    applied_n = proposed_n = 0
+    applied_n = proposed_n = mismatches = 0
+    lang = workspace_doc_language(codoc_dir)
     # Serialize the whole reflection (mutation + render) against the loops (loop/locks.py).
     with loop_lock(codoc_dir), open_store(codoc_dir) as store:
         held, own_holds = _hold_context(codoc_dir, caused_by)
@@ -492,12 +600,20 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
             applied_ops.append(op)
             applied_n += int(applied)
             proposed_n += int(not applied)
-            results.append({"ok": True, "event_id": ev.id, "applied": applied,
-                            "summary": _op_summary(op, store)})
+            row = {"ok": True, "event_id": ev.id, "applied": applied,
+                   "summary": _op_summary(op, store)}
+            warning = _language_advice(store, op, lang)
+            if warning:
+                row["warning"] = warning
+                mismatches += 1
+            results.append(row)
         wrote = safe_write_tree(store, codoc_dir)
         _mark_reflected(codoc_dir, applied_ops)
-        return {"ok": True, "applied": applied_n, "proposed": proposed_n,
-                "rendered": wrote, "results": results}
+        out = {"ok": True, "applied": applied_n, "proposed": proposed_n,
+               "rendered": wrote, "results": results}
+        if mismatches:
+            out["doc_language"] = doc_language_block(codoc_dir)
+        return out
 
 
 # ─── realize progress ────────────────────────────────────────────────────────

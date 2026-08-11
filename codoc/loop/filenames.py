@@ -15,3 +15,7 @@ DRIFT_FILENAME = "drift.json"               # loop-computed per-feature drift/tr
 INTENT_FILENAME = "intent.jsonl"            # captured author prompts (UserPromptSubmit hook → Loop A context)
 REALIZED_LOG_FILENAME = "realized.jsonl"    # durable directive outcomes (queue drained → what happened)
 RESOLUTION_FILENAME = "resolution.json"     # loop-computed realize-divergence per target feature (U5)
+CONFIG_FILENAME = "config.json"             # authored workspace settings (doc_language) — TRACKED in git,
+                                            # unlike every other file here: the authoring language must
+                                            # travel with the repo or a contributor's daemon writes English
+                                            # prose into a Chinese tree. Schema + resolution: codoc.doclang.

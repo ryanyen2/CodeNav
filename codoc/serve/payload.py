@@ -211,6 +211,11 @@ def _nodes_from_sidecar(sidecar: dict) -> tuple[dict, list[str]]:
             "depth": 0,
             "children": [],
             "activeMode": None,
+            # Present only when this node reads as a different language than the
+            # tree's (the sidecar omits it otherwise) — the hub renders a bilingual
+            # tree from the same per-node tags the extension does, since a browser
+            # needs `lang` for font fallback and line-breaking just as much.
+            **({"lang": meta["lang"]} if meta.get("lang") else {}),
         }
 
     children: dict[str, list[str]] = {}
@@ -418,6 +423,11 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
             "steps": _steps_from_activity(activity, sidecar, alive=epoch_alive(codoc_dir)),
         },
         "rootName": codoc_dir.parent.name,
+        # The tree's authoring language, straight from the sidecar (no re-derivation
+        # — the hub is a file-channel client). No `docLanguageChoices`: a remote
+        # contributor may not set the language a maintainer's repo is authored in,
+        # so the browser gets the label and not the switch.
+        "docLanguage": sidecar.get("doc_language") or {"code": "en", "name": "English"},
         "pendingEventIds": [],
         "doc": _doc(codoc_dir),
         "threads": _threads_from_sidecar(sidecar),

@@ -50,7 +50,7 @@ def _pid_alive(pid: int) -> bool:
 
 def _read_owner(codoc_dir: str) -> dict | None:
     try:
-        return json.loads(_lock_path(codoc_dir).read_text())
+        return json.loads(_lock_path(codoc_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 

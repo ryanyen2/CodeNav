@@ -43,6 +43,7 @@ from codoc.codoc_file.diff import CodocDiff
 from codoc.codoc_file.doc_render import build_doc_from_store
 from codoc.codoc_file.parse import extract_bold, extract_links, normalize_description
 from codoc.codoc_file.render import write_tree
+from codoc.doclang import norm_key, workspace_doc_language
 from codoc.loop import edits as edits_channel
 from codoc.loop import inbox, status
 from codoc.loop.apply import apply_op
@@ -228,8 +229,11 @@ def _resolve_content(
 def _norm_title(t: str | None) -> str:
     """Normalize a title for the soft ``(normalized_title, parent_id)`` uniqueness
     key — mirrors ``loop_a._norm_title`` so the command-apply dedup (U3 / KTD3)
-    folds duplicates the same way the Loop-A LLM-apply fold does."""
-    return re.sub(r"\s+", " ", (t or "").strip().lower())
+    folds duplicates the same way the Loop-A LLM-apply fold does. Both delegate to
+    :func:`codoc.doclang.norm_key`, which is the *only* place the fold is defined:
+    the two must agree or a title deduped by one loop is minted twice by the other,
+    and an IME-typed title is exactly where they would have diverged."""
+    return norm_key(t)
 
 
 def _command_to_op(cmd: "edits_channel.Command") -> NodeOp | None:
@@ -501,17 +505,26 @@ def _bound_code(feature_id: str | None, store: Store) -> tuple[str, list[str]]:
 
 
 def build_realize_prompt(directives: list[str], root_dir: str,
-                         directive_ids: list[str] | None = None) -> str:
+                         directive_ids: list[str] | None = None,
+                         *, codoc_dir: str | os.PathLike | None = None) -> str:
     """Number the directives into the realize prompt. Each heading carries its
     ``⟨d-id⟩`` (when minted) so the implementing agent can cite it back as
     ``caused_by`` when reflecting — the causality chain that lets the IDE group
-    the surfaced-back changes under the doc edit that triggered them."""
+    the surfaced-back changes under the doc edit that triggered them.
+
+    ``codoc_dir`` supplies the authoring language. The realizing agent is the one
+    reader of a codoc prompt that writes *code*, so its directive says the tree is
+    in that language while the source files are not — see
+    :func:`codoc.doclang.prompt_directive`'s ``for_code_agent``.
+    """
     ids = directive_ids or []
     body = "\n\n".join(
         f"### {i + 1}. {f'⟨{ids[i]}⟩ ' if i < len(ids) and ids[i] else ''}{d}"
         for i, d in enumerate(directives)
     )
-    return format_prompt(load_prompt("realize"), root_dir=root_dir, directives=body)
+    template = load_prompt("realize", for_code_agent=True,
+                           doc_language=workspace_doc_language(codoc_dir))
+    return format_prompt(template, root_dir=root_dir, directives=body)
 
 
 def realize_path(codoc_dir: str | os.PathLike) -> Path:
@@ -563,7 +576,8 @@ def _rewrite_queue(root_dir: str, codoc_dir: str, survivors: list) -> None:
     handed = [d for d in survivors if d.text and d.handed_off]
     if handed:
         _write_realize(codoc_dir, build_realize_prompt(
-            [d.text for d in handed], root_dir, [d.id for d in handed]))
+            [d.text for d in handed], root_dir, [d.id for d in handed],
+            codoc_dir=codoc_dir))
     else:
         try:
             realize_path(codoc_dir).unlink()
@@ -716,7 +730,7 @@ def _in_flight_directive_ids(codoc_dir: str) -> frozenset[str]:
     hand-off becomes a new held draft rather than clobbering the in-flight one.
     """
     try:
-        text = realize_path(codoc_dir).read_text()
+        text = realize_path(codoc_dir).read_text(encoding="utf-8")
         return frozenset(m.group(1) for m in _DIRECTIVE_ID_RE.finditer(text))
     except OSError:
         return frozenset()
@@ -1424,7 +1438,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     handed = [d for d in all_directives if d.handed_off and d.text]
     if handed:
         _write_realize(codoc_dir, build_realize_prompt(
-            [d.text for d in handed], root_dir, [d.id for d in handed]))
+            [d.text for d in handed], root_dir, [d.id for d in handed],
+            codoc_dir=codoc_dir))
         res.queued = True
         res.queued_total = len(handed)
     else:

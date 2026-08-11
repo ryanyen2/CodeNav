@@ -44,6 +44,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from codoc.doclang import char_budget
+
 # ─── budgets ────────────────────────────────────────────────────────────────
 # Sized so a full evidence block stays around a thousand tokens even on a busy
 # repo. The scan window is the one number worth understanding: rationale from
@@ -55,6 +57,12 @@ _LOG_MAX_CHARS = 4_000_000  # hard stop on a pathological log payload
 _LOG_TTL_S = 120.0          # a watch tick every few seconds must not re-shell out
 _PER_FILE_COMMITS = 3       # per touched file — the newest few explain the shape
 _MAX_COMMITS = 8            # …and this many across the whole block
+# Every _CHARS cap below is written for Latin prose and applied through
+# `doclang.char_budget`, which rescales it for the script actually in hand. The
+# caps exist to bound what this block COSTS, and cost is tokens: 400 characters of
+# English is ~100 tokens while 400 characters of Chinese is several times that, so
+# a fixed character cap quietly multiplies the prompt on a CJK repo. Rescaling
+# holds the information budget — and the bill — roughly constant across scripts.
 _SUBJECT_CHARS = 140
 _BODY_CHARS = 320
 _MAX_DIRECTIVES = 3
@@ -180,7 +188,7 @@ def _body_gist(body: str) -> str:
             continue
         kept.append(line)
     gist = " ".join(kept).strip()
-    return gist[:_BODY_CHARS].rstrip()
+    return gist[:char_budget(_BODY_CHARS, gist)].rstrip()
 
 
 def _is_noise(subject: str) -> bool:
@@ -223,7 +231,8 @@ def commit_rationales(
             continue
         for f in hits:
             budget[f] -= 1
-        entry: dict = {"files": sorted(hits), "subject": subject[:_SUBJECT_CHARS]}
+        entry: dict = {"files": sorted(hits),
+                       "subject": subject[:char_budget(_SUBJECT_CHARS, subject)]}
         gist = _body_gist(body)
         if gist:
             entry["why"] = gist
@@ -252,7 +261,8 @@ def _directive_gist(text: str) -> str:
             value = m.group(2).strip().strip('"')
             if value and value != "(none)":
                 kept.append(f"{m.group(1)}: {value}")
-    return " · ".join(kept)[:_DIRECTIVE_CHARS]
+    gist = " · ".join(kept)
+    return gist[:char_budget(_DIRECTIVE_CHARS, gist)]
 
 
 def directive_rationales(
@@ -315,7 +325,7 @@ def prior_rationales(store, feature_ids: set[str] | list[str]) -> list[dict]:
             if not text or text in seen:
                 continue
             seen.add(text)
-            notes.append(text[:_PRIOR_CHARS])
+            notes.append(text[:char_budget(_PRIOR_CHARS, text)])
             if len(notes) >= _PRIOR_PER_FEATURE:
                 break
         if notes:
@@ -335,11 +345,22 @@ def _fits(block: dict) -> dict:
     """
     import json
 
-    while len(json.dumps(block)) > _TOTAL_CHARS and block.get("commits"):
+    def size(b: dict) -> str:
+        # ensure_ascii=False or the measurement is wrong for the payload it is
+        # measuring: escaped as \uXXXX, one CJK character counts as six, so a
+        # Chinese evidence block measured ~6x its real weight and was trimmed to
+        # nothing — the loop dropping the very rationale it went to git to find.
+        return json.dumps(b, ensure_ascii=False)
+
+    def over(b: dict) -> bool:
+        text = size(b)
+        return len(text) > char_budget(_TOTAL_CHARS, text)
+
+    while over(block) and block.get("commits"):
         block["commits"] = block["commits"][:-1]
         if not block["commits"]:
             block.pop("commits")
-    while len(json.dumps(block)) > _TOTAL_CHARS and block.get("prior"):
+    while over(block) and block.get("prior"):
         block["prior"] = block["prior"][:-1]
         if not block["prior"]:
             block.pop("prior")

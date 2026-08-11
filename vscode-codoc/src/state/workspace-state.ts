@@ -102,6 +102,8 @@ export class WorkspaceState {
             '**/.codoc/activity.json',
             '**/.codoc/realize.md',
             '**/.codoc/realized.jsonl',  // directive outcomes → completion notifications
+            '**/.codoc/config.json',     // authoring language — changed by `codoc lang` too,
+                                        // so a switch made in the terminal repaints the view
         ]) {
             const w = vscode.workspace.createFileSystemWatcher(glob);
             this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));

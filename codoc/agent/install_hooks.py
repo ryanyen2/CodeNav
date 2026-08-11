@@ -40,7 +40,7 @@ def _plugin_dir() -> Path:
 def _load_plugin_hooks() -> dict:
     hooks_path = _plugin_dir() / "hooks" / "hooks.json"
     try:
-        return json.loads(hooks_path.read_text())
+        return json.loads(hooks_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -70,7 +70,7 @@ def _read_settings(settings_path: Path) -> dict:
     if not settings_path.exists():
         return {}
     try:
-        return json.loads(settings_path.read_text())
+        return json.loads(settings_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -100,7 +100,7 @@ def _merge_hooks(existing: dict, new_hooks: dict) -> dict:
 def _write_settings(settings_path: Path, data: dict) -> None:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = settings_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, settings_path)
 
 
@@ -126,7 +126,7 @@ def install_mcp(root_dir: str) -> None:
     data: dict = {}
     if mcp_path.exists():
         try:
-            data = json.loads(mcp_path.read_text())
+            data = json.loads(mcp_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
     servers = data.get("mcpServers")
@@ -136,7 +136,7 @@ def install_mcp(root_dir: str) -> None:
     data["mcpServers"] = servers
 
     tmp = mcp_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, mcp_path)
 
 
@@ -164,7 +164,7 @@ def install_hooks(root_dir: str) -> None:
     skill_dest = Path(root_dir) / ".claude" / "skills" / "codoc-intent" / "SKILL.md"
     if skill_src.exists():
         skill_dest.parent.mkdir(parents=True, exist_ok=True)
-        skill_dest.write_text(skill_src.read_text())
+        skill_dest.write_text(skill_src.read_text(encoding="utf-8"), encoding="utf-8")
 
     # 3. Copy plugin commands into the local commands dir, preserving subdirs so
     #    `.claude/commands/codoc/plan.md` becomes the namespaced `/codoc:plan`.
@@ -174,7 +174,7 @@ def install_hooks(root_dir: str) -> None:
         for cmd in cmd_src_dir.rglob("*.md"):
             dest = cmd_dest_dir / cmd.relative_to(cmd_src_dir)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(cmd.read_text())
+            dest.write_text(cmd.read_text(encoding="utf-8"), encoding="utf-8")
         # Drop previously-installed codoc commands the plugin no longer ships
         # (e.g. the old /codoc:realize, folded into /codoc:sync).
         dest_ns = cmd_dest_dir / "codoc"

@@ -127,7 +127,7 @@ def parse_doc_file(codoc_dir: str | Path) -> ParsedTree | None:
     or a bare ProseMirror doc, matching ``suggestion-model.parseDocFile``."""
     path = doc_path(codoc_dir)
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict):

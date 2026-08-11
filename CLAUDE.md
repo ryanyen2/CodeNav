@@ -37,7 +37,9 @@ codoc reflect               # recovery-grade state reconciliation (used by the S
 codoc propose <kind>        # author a plan proposal from the shell (humans/tests)
 codoc install-hooks         # (re)install the CC hooks + MCP registration
 codoc realize               # implement the realize queue NOW, foreground (SDK or CLI engine)
-codoc migrate               # one-time idempotent workspace heal (migrate tree.doc.json comments into the store + converge duplicate features); also runs on daemon startup
+codoc migrate               # one-time idempotent workspace heal (migrate tree.doc.json comments into the store + converge duplicate features + track config.json); also runs on daemon startup
+codoc lang [<bcp47>]        # show / set the language the TREE is authored in (en, zh-Hans, ja, …) — see "Authoring language" below
+codoc translate             # rewrite an EXISTING tree's prose into that language (--dry-run, --limit N)
 codoc serve                 # the deployed hub: serve the tree to remote users (docs/serve-deployment.md)
 
 # watch flags: --dry (apply tree edits, don't queue realization), --no-realize
@@ -68,6 +70,53 @@ comment surface, which writes them to `edits.json` (`drain_steers`). Typing a
 `> …` line into a description does NOT create one: the webview stopped writing
 `tree.codoc` in U6, and U7 retired the text-ingest path that used to read `> ` lines
 out of it (see `loop_b` step 2.7), so a `> ` line is now ordinary prose.
+
+## Authoring language
+
+The tree can be authored in any language; `codoc/doclang.py` owns that (NOT
+`codoc/lang/`, which is *programming* languages — the two are orthogonal, a Python
+repo can have a Mandarin tree). The setting lives in **`.codoc/config.json`**
+(`{"doc_language": "zh-Hans"}`), the one non-export file in `.codoc/` that is
+**tracked in git** — it has to travel with the repo, or a contributor's daemon
+writes English prose into somebody's Chinese tree. `CODOC_DOC_LANGUAGE` overrides it
+per-process; `codoc init --doc-language` sets it before bootstrap so the first tree
+is already in the language.
+
+Prose is translated; **addresses are not** — identifiers, symbol paths, and
+`codoc:` link targets stay verbatim, and the code an agent writes keeps the
+language its neighbours use. Four prompts carry the directive via a `{{doclang}}`
+marker (expanded into the cached prefix; empty for English, so English prompts are
+unchanged), and the MCP reads return a `doc_language` block because a coding agent
+is the one writer with no prompt in front of it.
+
+**The tree may be bilingual, and that is not a defect.** The setting says what codoc
+*originates* prose in; what the tree contains is observed per node
+(`doclang.detect_prose_language`). Originating → the workspace language. Editing
+existing prose → the language that prose is already in, because an author who wrote
+one node in English inside a Chinese tree meant to. Chinese prose carrying English
+library and API terms is correct writing and nothing flags it. The sidecar and the
+MCP feature rows carry a `lang` tag only for nodes that differ from the tree's
+language; the webview stamps those on the DOM so the browser gets fonts and
+line-breaking right per element, and the toolbar switcher (read-only on the hub)
+writes `.codoc/config.json`. `codoc lang` reports what the tree actually contains,
+not just what is set.
+
+Switching the language does not retranslate anything, so a tree already built in
+English is migrated with **`codoc translate`** (`loop/translate.py`): one LLM pass per
+batch of features, rewriting titles and descriptions while copying every `codoc:`
+citation, external link, and `**bold**` focus span through unchanged. It REFUSES a
+node whose translation dropped one of those, or whose title would collide with a
+sibling's, and it preserves each node's `feature_writers` role so a translated
+human-authored node keeps the strict amend gate. Previous wording stays in the change
+ledger (`codoc history <feature>`). Idempotent — selection is by detected language,
+so an interrupted run is safe to re-run.
+
+Setting it also changes what the lexical heuristics do, because every one of them
+was written for a spaced Latin script — see the table in `docs/architecture.md`
+("Doc language"). The short version: `norm_key` NFKC-folds titles so an IME can't
+mint a duplicate node, `terms`/`tokens` segment per script instead of dropping every
+non-ASCII character, and `clause_chars` ports the amend gate's 24-character
+"preserved clause" into whatever a clause costs in the script at hand.
 
 ## Architecture
 
@@ -123,9 +172,15 @@ mcp/         # codoc MCP server (FastMCP, stdio): tools.py + server.py (codoc-mc
 serve/       # the deployed hub (codoc serve) — see docs/architecture.md + serve-deployment.md
 codoc_file/  # render.py (store → tree.codoc + sidecar), parse.py, diff.py (→ user ops)
 lang/        # tree-sitter adapters: python.py + typescript.py  [KEPT]
+             #   (PROGRAMMING languages — not doclang.py, see below)
+doclang.py   # the AUTHORING language of the tree: profiles + the prompt directive,
+             #   the .codoc/config.json setting, and the script-aware text helpers
+             #   (norm_key / terms / tokens / clause_chars / char_budget) that the
+             #   loop's lexical heuristics use instead of Latin-only regexes
 core/        # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT substrate]
 pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEPT]
 prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.txt
+             #   (each carries a {{doclang}} marker, expanded into the cached prefix)
 cli/main.py  # Typer app; config.py — LLM config
 ```
 

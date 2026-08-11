@@ -321,7 +321,7 @@ def parse_tree_file(codoc_dir: str | Path) -> ParsedTree:
 
     path = tree_path(codoc_dir)
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return ParsedTree()
     except OSError as exc:

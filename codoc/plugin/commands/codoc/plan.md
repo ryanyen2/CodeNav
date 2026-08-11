@@ -15,6 +15,10 @@ any code until the user accepts the plan.**
   know them) for the relevant features + a whole-tree title outline; fall back
   to `codoc_tree` (optionally `root_id`/`depth`-scoped) when the task is
   tree-wide. Check `codoc_status` for the current state.
+- Both reads return `doc_language`. If its `code` is not `en`, write every
+  planned title, description, and rationale in that language — a plan the user
+  cannot read in the language they authored is not a plan they can accept.
+  Identifiers, paths, and `codoc:` targets are never translated.
 - Decide what the task implies, feature by feature. For each one ask **"does a
   feature for this intent already exist?"** — because most tasks change what an
   existing feature does rather than introducing a new unit of intent.
@@ -41,7 +45,8 @@ is an amend, not an add.
   position they will occupy — once accepted.
   - Choose `parent_id` from the titles outline / subtree you read so each node
     sits under the right parent.
-  - Keep titles short (3–6 words) and give a 1–2 sentence description of intent.
+  - Keep titles short (3–6 words in English, or the equivalent — about 4–12
+    characters in Chinese/Japanese) and give a 1–2 sentence description of intent.
   - You may pre-bind a node to the code you intend to write via `binds`
     (`"file.py::symbol"`); the binding will mark it realized once that code exists.
 

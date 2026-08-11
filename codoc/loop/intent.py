@@ -14,11 +14,11 @@ never reach version control.
 from __future__ import annotations
 
 import json
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from codoc.doclang import terms as _doclang_terms
 from codoc.loop.filenames import INTENT_FILENAME
 
 _MAX_PROMPT_CHARS = 2000   # a prompt is context, not a transcript — cap it
@@ -104,26 +104,21 @@ def recent_intent(
     return prompts
 
 
-# Words too common to signal that a prompt is about a particular change.
-_STOP = frozenset("""
-the a an and or but if then this that these those with without for from into
-you your we our it its is are was were be been being do does did done make
-made add adds added fix fixes fixed use uses used can could should would will
-please just also now new old code file files test tests run running why what
-how when where which who all any some more most other another
-""".split())
-
-
 def _terms(text: str) -> set[str]:
     """Content words of a prompt or symbol path, camelCase and snake_case split.
 
     Symbols are the bridge between a prompt and a change: a user who wrote
     "make the ollama client retry" and a diff that touched
     ``OllamaClient.complete`` share ``ollama`` and ``client`` once both sides
-    are broken into words. Matching on raw identifiers would miss it."""
-    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text or "")
-    words = re.split(r"[^A-Za-z0-9]+", spaced.lower())
-    return {w for w in words if len(w) > 2 and w not in _STOP}
+    are broken into words. Matching on raw identifiers would miss it.
+
+    Delegates to :func:`codoc.doclang.terms`, which segments each script the way
+    that script needs. This used to split on ``[^A-Za-z0-9]+``, which discarded
+    every non-ASCII character — so a prompt typed in Chinese produced an EMPTY
+    term set, scored zero against every symbol, and :func:`relevant_intent` fell
+    back to plain recency. The author's actual "why" was on disk and unusable.
+    """
+    return _doclang_terms(text)
 
 
 def relevant_intent(

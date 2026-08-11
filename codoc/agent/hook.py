@@ -465,7 +465,8 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     if not realize.exists():
         return
     try:
-        n = sum(1 for line in realize.read_text().splitlines() if line.lstrip().startswith("### "))
+        n = sum(1 for line in realize.read_text(encoding="utf-8").splitlines()
+                if line.lstrip().startswith("### "))
     except OSError:
         n = 0
     count = f"{n} change(s)" if n else "changes"
@@ -476,7 +477,7 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
         "codoc_reflect to bind the code, then delete .codoc/realize.md."
     )
     out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}
-    print(json.dumps(out))
+    print(json.dumps(out, ensure_ascii=False))
 
 
 def _drain_inbox_fallback(codoc_dir: str) -> None:

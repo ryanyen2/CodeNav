@@ -80,6 +80,8 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
   {"id": "n2", "kind": "add_node", "parent_id": "n1", "title": "Connection pool configuration", "description": "Keeps one connection pool per (host, proxy) target, cached so repeated requests to the same host skip the TCP and TLS setup cost.", "bindings": [["adapters.py", "adapters.py::HTTPAdapter.get_connection"]], "rationale": "separable pooling concern"}
 ]}
 </solution>
+
+{{doclang}}
 <<<CACHE_BREAK>>>
 ## Features already created from other files (for naming consistency only — do NOT bind to them)
 

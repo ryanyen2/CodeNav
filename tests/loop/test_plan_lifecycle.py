@@ -23,7 +23,7 @@ def codoc_dir(tmp_path):
 
 
 def _propose(ops):
-    def p(changes, subtree, all_titles, *, repo_name="codebase", config=None):
+    def p(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
         return list(ops)
     return p
 

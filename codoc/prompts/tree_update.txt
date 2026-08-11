@@ -110,6 +110,8 @@ Return ONLY this, inside solution tags:
   {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Keeps each tree-update LLM call small by sending only the features whose bindings share files with the change, not the whole tree — so context cost stays flat as the tree grows.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
 ]}
 </solution>
+
+{{doclang}}
 <<<CACHE_BREAK>>>
 ## Every feature title in the tree (for de-duplication)
 

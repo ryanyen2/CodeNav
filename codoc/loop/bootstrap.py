@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from codoc.doclang import resolve, workspace_doc_language, write_config
+from codoc.loop.filenames import CONFIG_FILENAME
 from codoc.store.db import open_store
 
 
@@ -45,6 +47,10 @@ def run_bootstrap(
     organize: bool = True,
     printer=None,
 ) -> BootstrapResult:
+    """Index, propose, render. The authoring language is read from the workspace
+    config (already written by :func:`run_init` when the caller chose one), so
+    bootstrap prose comes out in the tree's language from the very first node —
+    there is no English tree to translate afterwards."""
     from codoc.codoc_file.render import write_tree
     from codoc.pipelines.indexing.reader import read_all_chunks
     from codoc.pipelines.indexing.runner import update_index
@@ -91,6 +97,7 @@ def run_bootstrap(
             res = bootstrap_hier_from_chunks(
                 rows, store, repo_name=repo_name or os.path.basename(os.path.abspath(root_dir)),
                 config=config, organize=organize, printer=say, root_dir=root_dir,
+                doc_language=workspace_doc_language(codoc_dir),
             )
         write_tree(store, codoc_dir)
         # Seed the doc projection too. The webview's document pane renders
@@ -107,20 +114,36 @@ def run_bootstrap(
         return res
 
 
-def run_init(root_dir: str, codoc_dir: str | None = None, **kwargs) -> BootstrapResult:
-    """Create ``.codoc/`` (if needed), bootstrap, and render ``tree.codoc``."""
+def run_init(root_dir: str, codoc_dir: str | None = None, *,
+             doc_language: str | None = None, **kwargs) -> BootstrapResult:
+    """Create ``.codoc/`` (if needed), bootstrap, and render ``tree.codoc``.
+
+    ``doc_language`` is persisted BEFORE bootstrapping, not after: the bootstrap
+    prompts read it from the workspace config, so setting it here is what makes
+    the initial tree come out in the author's language instead of arriving in
+    English and needing a rewrite of every node.
+    """
     from pathlib import Path
 
     cd = codoc_dir or str(Path(root_dir) / ".codoc")
     Path(cd).mkdir(parents=True, exist_ok=True)
     _write_codoc_gitignore(cd)
+    if doc_language:
+        write_config(cd, doc_language=resolve(doc_language).code)
     return run_bootstrap(root_dir, cd, **kwargs)
+
+
+# The tracked exceptions inside the otherwise-ignored `.codoc/`. Named here rather
+# than inlined so `migrate` can heal a workspace whose .gitignore predates an
+# addition to this list (see `migrate._heal_gitignore`).
+TRACKED_IN_CODOC = (".gitignore", "tree.codoc", "tree.doc.json", CONFIG_FILENAME)
 
 
 def _write_codoc_gitignore(codoc_dir: str) -> None:
     """Drop a ``.codoc/.gitignore`` so the derived index (LanceDB blobs, the SQLite
     store, embeddings) doesn't show up as untracked binary the user might commit.
-    Only the human-facing exports (``tree.codoc``/``tree.doc.json``) are left tracked.
+    Only the human-facing exports (``tree.codoc``/``tree.doc.json``) and the
+    authored settings (``config.json``) are left tracked.
     Written once, never overwritten (a user may have customized it)."""
     from pathlib import Path
 
@@ -129,9 +152,9 @@ def _write_codoc_gitignore(codoc_dir: str) -> None:
         return
     gi.write_text(
         "# codoc-managed derived state — not for version control.\n"
-        "# The feature tree lives in tree.codoc / tree.doc.json (kept tracked below).\n"
+        "# The feature tree lives in tree.codoc / tree.doc.json, and the authoring\n"
+        "# settings in config.json (all kept tracked below).\n"
         "*\n"
-        "!.gitignore\n"
-        "!tree.codoc\n"
-        "!tree.doc.json\n"
+        + "".join(f"!{name}\n" for name in TRACKED_IN_CODOC),
+        encoding="utf-8",
     )

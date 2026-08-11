@@ -102,6 +102,11 @@ export interface UINode {
     children: string[];
     /** live agent activity on this feature (drives the pulsing dot) */
     activeMode?: 'write' | 'read' | null;
+    /** This node's own BCP-47 tag, present only when it differs from the tree's
+     *  `docLanguage` (a deliberately bilingual tree). Becomes a `lang` attribute on
+     *  the row and its prose, so the browser picks fonts and line-breaking per
+     *  element rather than from one document tag half the content contradicts. */
+    lang?: string;
 }
 
 /** One line in a feature's live agent-action ribbon (e.g. "editing agent.py",
@@ -142,6 +147,15 @@ export interface DocPayload {
     nodes: Record<string, UINode>;
     roots: string[];
     status: { state: string; pending: number };
+    /** The language the TREE is authored in (sidecar `doc_language`). Stamped on the
+     *  document root as `lang`, shown in the toolbar switcher, and used as the
+     *  fallback for any node with no `lang` of its own. Absent on a legacy payload,
+     *  which is indistinguishable from an English tree — the correct fallback. */
+    docLanguage?: { code: string; name: string; script?: string };
+    /** The language tags a viewer may switch the tree to (built-in profiles). The
+     *  host supplies the list so the webview never hard-codes a language table that
+     *  could drift from `codoc/doclang.py`. */
+    docLanguageChoices?: { code: string; name: string }[];
     sync: SyncState;
     rootName: string;
     pendingEventIds: string[];
@@ -326,6 +340,11 @@ export type WebviewMessage =
     /** Persist a webview pref (glance toggle) into the host's per-workspace
      *  `workspaceState`. Decoration-only — never touches tree.doc.json. */
     | { kind: 'set-pref'; pref: 'glance' | 'blame'; value: boolean }
+      /** Change the language the tree is AUTHORED in. The host writes
+       *  `.codoc/config.json` (authored settings, not derived state), which the
+       *  daemon re-reads on its next pass — so this changes what NEW and AMENDED
+       *  prose comes out in, and never rewrites what is already there. */
+    | { kind: 'set-doc-language'; code: string }
     /** Live cross-surface bridge (P2 / §A.1): the user is editing feature `fid`'s prose —
      *  open its primary binding file Beside (non-focus-stealing) and light the implicated
      *  decl lines green. The host resolves file/symbols/lines from the sidecar bindings, so

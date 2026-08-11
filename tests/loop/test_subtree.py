@@ -223,7 +223,7 @@ def test_may_impact_surfaces_caller_feature(store):
 
     received_changes: list[dict] = []
 
-    def propose(changes, subtree, all_titles, *, repo_name="x", config=None):
+    def propose(changes, subtree, all_titles, *, repo_name="x", config=None, **_kw):
         received_changes.append(changes)
         return []
 

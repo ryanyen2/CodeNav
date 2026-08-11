@@ -16,24 +16,57 @@ from collections import OrderedDict
 from pathlib import Path
 
 from codoc.config import LLMConfig, complete, get_llm_config
+from codoc.doclang import DocLanguage, prompt_directive, resolve
 
 
 CACHE_BREAK = "<<<CACHE_BREAK>>>"
 
 
-def load_prompt(name: str) -> str:
+def load_prompt(name: str, *, doc_language: DocLanguage | None = None,
+                for_code_agent: bool = False) -> str:
+    """The prompt template with ``{{include:X}}`` and ``{{doclang}}`` expanded.
+
+    ``{{doclang}}`` expands to the authoring-language directive for
+    ``doc_language`` (empty for English, so an English repo's prompt text is
+    unchanged). It is expanded HERE, at load time, for the same reason includes
+    are: expansion must happen before :func:`split_prompt`, so the directive
+    lands inside the cached prefix and cannot be displaced by a marker-shaped
+    value substituted later. Omitting the argument yields English — a call site
+    that forgets gets the old behavior, never a broken prompt.
+    """
     prompts_dir = Path(__file__).parent.parent / "prompts"
-    text = (prompts_dir / f"{name}.txt").read_text()
+    text = (prompts_dir / f"{name}.txt").read_text(encoding="utf-8")
 
     def _expand(m: re.Match) -> str:
         inc_name = m.group(1).strip()
         inc_path = prompts_dir / f"{inc_name}.txt"
         try:
-            return inc_path.read_text()
+            return inc_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return f"[missing include: {inc_name}]"
 
-    return re.sub(r"\{\{include:(.*?)\}\}", _expand, text)
+    text = re.sub(r"\{\{include:(.*?)\}\}", _expand, text)
+    return expand_doclang(text, doc_language, for_code_agent=for_code_agent)
+
+
+def expand_doclang(text: str, doc_language: DocLanguage | None, *,
+                   for_code_agent: bool = False) -> str:
+    """Replace the ``{{doclang}}`` marker with its directive block.
+
+    For English the directive is empty, and the marker collapses together with the
+    blank lines around it into a single paragraph break — so an English prompt
+    reads exactly as it did before this feature existed, with no gap where a
+    section would have been.
+    """
+    lang = doc_language or resolve(None)
+    block = prompt_directive(lang, for_code_agent=for_code_agent)
+    if block:
+        return text.replace("{{doclang}}", block)
+    # Two cases, because "one paragraph break" is not what a marker at the very end
+    # of a template should leave behind: interior markers collapse to a blank line,
+    # a trailing one to the file's own single newline.
+    text = re.sub(r"\n*[ \t]*\{\{doclang\}\}[ \t]*\n*\Z", "\n", text)
+    return re.sub(r"\n*[ \t]*\{\{doclang\}\}[ \t]*\n*", "\n\n", text)
 
 
 def split_prompt(template: str) -> tuple[list[str], str]:

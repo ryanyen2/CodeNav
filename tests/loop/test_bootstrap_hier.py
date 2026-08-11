@@ -139,7 +139,7 @@ def test_one_file_call_per_file_with_scoped_chunks(store):
 
     seen: list[tuple[str, set]] = []
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None, **_kw):
         seen.append((file, {c["symbol_path"] for c in chunks}))
         return [_add("n1", f"Feature {file}", [(file, c["symbol_path"]) for c in chunks])]
 
@@ -157,10 +157,10 @@ def test_org_pass_groups_top_level_features(store):
     rows = [FakeRow("a.py", "a.py::af"), FakeRow("b.py", "b.py::bf")]
     build_graph(store, rows)
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None, **_kw):
         return [_add("n1", f"Feat {file}", [(file, c["symbol_path"]) for c in chunks])]
 
-    def propose_org(features, edges, *, repo_name, config, flows=None):
+    def propose_org(features, edges, *, repo_name, config, flows=None, **_kw):
         ops = [_add("t1", "Theme", [])]
         for f in features:
             ops.append(NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=f["id"], parent_id="t1"))
@@ -178,10 +178,10 @@ def test_org_skipped_for_single_top_level_feature(store):
     build_graph(store, rows)
     called = []
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None, **_kw):
         return [_add("n1", "Only", [(file, c["symbol_path"]) for c in chunks])]
 
-    def propose_org(features, edges, *, repo_name, config, flows=None):
+    def propose_org(features, edges, *, repo_name, config, flows=None, **_kw):
         called.append(True)
         return []
 
@@ -224,7 +224,7 @@ def test_every_chunk_bound_after_bootstrap(store):
     ]
     build_graph(store, rows)
 
-    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None):
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None, **_kw):
         # Cover only the first chunk; coverage net must catch the rest.
         first = chunks[0]
         return [_add("n1", f"F {file}", [(file, first["symbol_path"])])]
@@ -254,7 +254,7 @@ class TestPerFileTolerance:
                       ("c.py", "c.py::three")])
 
         def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
-                         why=None):
+                         why=None, **_kw):
             if file == "b.py":
                 raise ValueError("Expecting ',' delimiter: line 3 column 3")
             return [_add("n1", f"Feature for {file}",
@@ -273,7 +273,7 @@ class TestPerFileTolerance:
         rows = _rows([("a.py", "a.py::one"), ("b.py", "b.py::two")])
 
         def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
-                         why=None):
+                         why=None, **_kw):
             if file == "b.py":
                 raise ValueError("bad json")
             return [_add("n1", "A feature", [("a.py", "a.py::one")])]
@@ -288,7 +288,7 @@ class TestPerFileTolerance:
         rows = _rows([("a.py", "a.py::one"), ("b.py", "b.py::two")])
 
         def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
-                         why=None):
+                         why=None, **_kw):
             raise RuntimeError("no LLM configured")
 
         with pytest.raises(RuntimeError, match="every bootstrap call failed"):

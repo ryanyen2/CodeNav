@@ -33,6 +33,8 @@ conflict with the new intent. Prefer small, surgical edits over large rewrites.
   in their own words. It is the ground-truth goal — implement THAT; where the
   reconstructed intent text and the author's ask differ, the author's ask wins.
 
+{{doclang}}
+
 ## Changes to apply
 
 {directives}

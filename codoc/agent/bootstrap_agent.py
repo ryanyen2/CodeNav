@@ -24,6 +24,7 @@ import json
 
 from codoc.agent.base import format_prompt, load_prompt, run_agent, split_prompt
 from codoc.config import LLMConfig, fast_llm_config
+from codoc.doclang import DocLanguage
 from codoc.model.event import NodeOp, NodeOpKind
 
 
@@ -65,6 +66,7 @@ def propose_file_features(
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
     why: list[dict] | None = None,
+    doc_language: DocLanguage | None = None,
 ) -> list[NodeOp]:
     """One LLM call: propose a small coherent feature set for a single file.
 
@@ -83,14 +85,15 @@ def propose_file_features(
     """
     # Split the raw template FIRST, then substitute per segment — substituted
     # values are repo-derived and may contain a literal marker.
-    prefix_tpls, volatile_tpl = split_prompt(load_prompt("bootstrap_file"))
+    prefix_tpls, volatile_tpl = split_prompt(
+        load_prompt("bootstrap_file", doc_language=doc_language))
     kwargs = dict(
         repo_name=repo_name,
         file=file,
-        chunks=json.dumps(chunks, indent=2, sort_keys=True),
-        edges=json.dumps(edges, indent=2, sort_keys=True),
+        chunks=json.dumps(chunks, indent=2, sort_keys=True, ensure_ascii=False),
+        edges=json.dumps(edges, indent=2, sort_keys=True, ensure_ascii=False),
         existing_titles="\n".join(f"- {t}" for t in existing_titles) or "(none yet)",
-        why=(json.dumps(why, indent=2, sort_keys=True) if why
+        why=(json.dumps(why, indent=2, sort_keys=True, ensure_ascii=False) if why
              else "(no commit history recorded for this file)"),
     )
     prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
@@ -106,6 +109,7 @@ def propose_organization(
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
     flows: list[str] | None = None,
+    doc_language: DocLanguage | None = None,
 ) -> list[NodeOp]:
     """One LLM call: group file-level features under broad theme parents.
 
@@ -115,12 +119,12 @@ def propose_organization(
     paths say which features participate in one operation and in what order,
     which is what lets a theme be a stage of the work instead of a bucket.
     """
-    template = load_prompt("bootstrap_org")
+    template = load_prompt("bootstrap_org", doc_language=doc_language)
     prompt = format_prompt(
         template,
         repo_name=repo_name,
-        features=json.dumps(features, indent=2),
-        edges=json.dumps(edges, indent=2),
+        features=json.dumps(features, indent=2, ensure_ascii=False),
+        edges=json.dumps(edges, indent=2, ensure_ascii=False),
         flows="\n".join(f"- {f}" for f in flows) if flows
               else "(no call paths could be derived)",
     )

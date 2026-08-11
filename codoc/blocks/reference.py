@@ -86,14 +86,14 @@ class UrlPlugin(BlockPlugin):
         now = time.time()
         if raw is None:
             new_envelope = {"url": url, "status": "blocked_or_unreachable", "attempted_at": now}
-            return LiftResult.refresh(json.dumps(new_envelope))
+            return LiftResult.refresh(json.dumps(new_envelope, ensure_ascii=False))
 
         title, excerpt = _extract_article(raw)
         new_envelope = {
             "url": url, "title": title, "excerpt": _truncate(excerpt),
             "status": "ok", "fetched_at": now, "attempted_at": now,
         }
-        return LiftResult.refresh(json.dumps(new_envelope))
+        return LiftResult.refresh(json.dumps(new_envelope, ensure_ascii=False))
 
     def consult(self, block: Block) -> str:
         envelope = _parse_envelope(block.content)
@@ -149,7 +149,7 @@ class PdfPlugin(BlockPlugin):
             "ref": ref, "pages": pages, "excerpt": _truncate(text),
             "status": "ok" if text else "error", "fetched_at": now, "attempted_at": now,
         }
-        return LiftResult.refresh(json.dumps(new_envelope))
+        return LiftResult.refresh(json.dumps(new_envelope, ensure_ascii=False))
 
     def consult(self, block: Block) -> str:
         envelope = _parse_envelope(block.content)

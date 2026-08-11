@@ -640,7 +640,7 @@ def append_host_op(codoc_dir: str | Path, fn: str, arg) -> Path:
     dest = host_ops_path(codoc_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"fn": fn, "arg": arg}) + "\n")
+        f.write(json.dumps({"fn": fn, "arg": arg}, ensure_ascii=False) + "\n")
     return dest
 
 

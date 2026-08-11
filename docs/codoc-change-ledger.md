@@ -185,3 +185,23 @@ The reaction cost of a change is bounded by the change, not the repo:
 - State-based reconciliation (`reconcile_drift`) is the authority and is
   idempotent: a missed cycle is recovered by re-deriving divergence from
   current state, never by replaying history.
+
+## Authoring language (2026-08)
+
+The ledger is language-agnostic by construction — `actor` / `mode` / `caused_by`
+are enums and ids — but two of its readers were not, and both failed silently
+rather than loudly:
+
+- **`phase.intent_gloss`** is the one sentence codoc generates *about* the author's
+  own edit (`hold_detail.intent`, the pending-rail hover). It now has a per-language
+  table: a Chinese tree that answers "what will this do?" in English has broken the
+  recognition the line exists to provide.
+- **`.codoc/*.json` are written with `ensure_ascii=False`.** The ledger views ride
+  in `tree.bindings.json` alongside titles and descriptions; escaped, one CJK
+  character costs six ASCII ones, so the file grew several-fold and its diff — the
+  thing a reviewer reads to audit a change — became unreadable.
+
+`hold_detail.intent` follows each FEATURE's own language rather than the workspace
+setting — the gloss renders beside that node's prose, so a Chinese default captioning
+an English node reads as a rendering bug. The extension still frames it in English
+text (`hold-decorations.ts`); interface localization is separate work.

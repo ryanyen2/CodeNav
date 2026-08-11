@@ -35,6 +35,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from codoc.codoc_file.tree_order import children_map
+from codoc.doclang import language_tag_for, workspace_doc_language
 from codoc.model.event import (
     LOOP_A_AGENT_SOURCE, MODE_AUTO, PLAN_SOURCE, Event, NodeOpKind,
 )
@@ -668,12 +669,24 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     # Grouped/sorted to match bindings_for_feature so the sidecar is byte-identical.
     grouped = store.bindings_by_feature()
 
+    # The tree's authoring language, and per-node deviations from it. A tree is
+    # allowed to be bilingual (an author who describes intent in Chinese may have
+    # written one node in English and meant to), so the view cannot render from a
+    # single document-level language: fonts, line-breaking, and quotation
+    # conventions are all per-element decisions the host makes from `lang`.
+    doc_lang = workspace_doc_language(codoc_dir)
+
     for f in features:
         bindings = grouped.get(f.id, [])
         by_feature[f.id] = [{"file": b.file, "symbol": b.symbol_path} for b in bindings]
+        node_lang = language_tag_for(f.description or f.title, doc_lang)
         feats_meta[f.id] = {
             "title": f.title,
             "parent_id": f.parent_id,
+            # v6: present ONLY when this node reads as a different language than the
+            # tree's, so an all-one-language tree pays nothing and the field's
+            # presence is itself the "this node is the exception" signal.
+            **({"lang": node_lang} if node_lang != doc_lang.code else {}),
             # A1: the authoritative named state; `realized` kept for back-compat.
             "lifecycle": f.lifecycle.value,
             "realized": f.realized,
@@ -716,6 +729,11 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # reader and the hub key on field presence, so a v5 sidecar (no `blocks`)
         # still parses and a host that predates blocks ignores the slice.
         "version": 6,
+        # v6: the tree's authoring language (`codoc/doclang.py`). The host stamps it
+        # on the document root so CJK prose gets CJK fonts and line-breaking, and
+        # offers the switch that writes `.codoc/config.json`.
+        "doc_language": {"code": doc_lang.code, "name": doc_lang.name,
+                         "script": doc_lang.script.name},
         "by_feature": by_feature,
         "by_file": by_file,
         "features": feats_meta,
@@ -804,8 +822,8 @@ def write_tree(store: Store, codoc_dir: str | Path, *, sidecar: bool = True) -> 
     # and is refreshed below unless the caller just wrote it itself
     # (safe_write_tree passes sidecar=False — the compute is O(F+B+E) and was
     # being done twice per tick).
-    if not (path.exists() and path.read_text() == rendered):
-        path.write_text(rendered)
+    if not (path.exists() and path.read_text(encoding="utf-8") == rendered):
+        path.write_text(rendered, encoding="utf-8")
     if sidecar:
         write_sidecar(store, codoc_dir)
     return path

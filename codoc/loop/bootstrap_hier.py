@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections import Counter
 
 from codoc.agent.bootstrap_agent import propose_file_features, propose_organization
+from codoc.doclang import DocLanguage
 from codoc.loop.apply import apply_op
 from codoc.loop.bootstrap import BootstrapResult, _title_from_file
 from codoc.loop.surface import flow_lines
@@ -187,6 +188,7 @@ def bootstrap_hier_from_chunks(
     organize: bool = True,
     printer=None,
     root_dir: str | None = None,
+    doc_language: DocLanguage | None = None,
 ) -> BootstrapResult:
     """Two-phase bootstrap: per-file features, then top-level organization.
 
@@ -284,7 +286,8 @@ def bootstrap_hier_from_chunks(
                 for _attempt in (1, 2):
                     try:
                         return propose_file(file, chunks, edges, titles_snapshot,
-                                            repo_name=repo_name, config=config, why=why)
+                                            repo_name=repo_name, config=config, why=why,
+                                            doc_language=doc_language)
                     except Exception as exc:  # noqa: BLE001 — per-file tolerance
                         last = exc
                 failures.append((file, last))
@@ -342,7 +345,7 @@ def bootstrap_hier_from_chunks(
         ]
         coupling = _feature_coupling(store)
         ops = propose_org(features, coupling, repo_name=repo_name, config=config,
-                          flows=flow_lines(store))
+                          flows=flow_lines(store), doc_language=doc_language)
         _apply_ops_with_local_ids(ops, store, {}, source="bootstrap")
         calls += 1
     elif organize and len(top_level) > _ORG_FEATURE_CAP:

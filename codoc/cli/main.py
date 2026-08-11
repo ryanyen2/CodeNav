@@ -20,6 +20,7 @@ watch/sync react.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import typer
@@ -56,7 +57,7 @@ def _read_state(status_path) -> str:
     """The status file's ``state``, tolerant of a truncated/corrupt ``status.json`` so a
     damaged control file can never turn ``status``/``sync`` into a traceback."""
     try:
-        return json.loads(Path(status_path).read_text()).get("state", "in_sync")
+        return json.loads(Path(status_path).read_text(encoding="utf-8")).get("state", "in_sync")
     except (OSError, ValueError):
         return "in_sync"
 
@@ -95,6 +96,12 @@ def init(
         True,
         "--hooks/--no-hooks",
         help="Install codoc Claude Code hooks into .claude/settings.json.",
+    ),
+    doc_language: str = typer.Option(
+        "", "--doc-language", "--lang",
+        help="Language to AUTHOR the feature tree in (BCP-47: en, zh-Hans, zh-Hant, "
+             "ja, ko, fr, …). Persisted to .codoc/config.json and committed, so every "
+             "contributor's daemon writes the same language. Default: en.",
     ),
 ):
     """Index the repo, propose an initial feature tree, render tree.codoc."""
@@ -137,7 +144,8 @@ def init(
 
     typer.echo(f"Indexing {root} and bootstrapping the feature tree…")
     try:
-        res = run_init(root, printer=typer.echo)
+        res = run_init(root, printer=typer.echo,
+                       doc_language=doc_language or None)
     except typer.Exit:
         raise
     except KeyboardInterrupt:
@@ -154,6 +162,11 @@ def init(
         )
         raise typer.Exit(code=1) from exc
     typer.echo(f"✓ {res.summary()}")
+    if doc_language:
+        from codoc.doclang import resolve
+
+        typer.echo(f"  ✓ authoring language: {resolve(doc_language).name} "
+                   f"(committed in .codoc/config.json — change it with `codoc lang`)")
     typer.echo(f"  Open {_codoc_dir(root)}/tree.codoc in VS Code, then run `codoc watch`.")
 
     if hooks:
@@ -384,7 +397,17 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
 
         st = refresh_status(_codoc_dir(root), store)
         state = _read_state(st)
-        typer.echo(f"codoc · {len(feats)} features · {len(pending)} pending · state: {state}")
+        from codoc.doclang import workspace_doc_language
+
+        lang = workspace_doc_language(_codoc_dir(root))
+        line = f"codoc · {len(feats)} features · {len(pending)} pending · state: {state}"
+        # Only shown when it is NOT English: on an English repo it is noise, but on a
+        # tree authored in another language it is the setting most likely to be wrong
+        # (a stale env override, an unmigrated .gitignore) and least likely to be
+        # noticed — the symptom is prose quietly arriving in the wrong language.
+        if not lang.is_default:
+            line += f" · language: {lang.code}"
+        typer.echo(line)
 
         # Coverage invariant: every indexed chunk should be attributed to a
         # feature. A gap means code is silently unbound (a Loop A drop) — surface
@@ -423,14 +446,19 @@ def history(
     _require_workspace(root)
     from datetime import datetime
 
+    from codoc.doclang import norm_key
     from codoc.store.db import open_store
 
     with open_store(_codoc_dir(root)) as store:
         fid = feature.strip("⟨⟩")
         f = store.get_feature(fid)
         if f is None:
-            needle = feature.lower()
-            matches = [x for x in store.list_features() if needle in x.title.lower()]
+            # norm_key, not .lower(): a title fragment typed on a CJK keyboard
+            # arrives with full-width punctuation (（ ， ）) that is a different
+            # codepoint from its ASCII twin, so a plain lowercase compare failed to
+            # match a title the user could see on screen and had just copied.
+            needle = norm_key(feature)
+            matches = [x for x in store.list_features() if needle in norm_key(x.title)]
             if not matches:
                 typer.echo(f"no feature matches {feature!r}")
                 raise typer.Exit(1)
@@ -627,6 +655,171 @@ def migrate(root: str = typer.Option(".", "--root", help="Repository root.")):
     typer.echo(f"▸ migrate  {res.summary()}")
     for note in res.notes:
         typer.echo(f"  ⚠ {note}")
+
+
+@app.command()
+def lang(
+    code: str = typer.Argument(
+        "", help="BCP-47 tag to author the tree in (en, zh-Hans, zh-Hant, ja, ko, "
+                 "fr, …). Omit to show the current setting."),
+    root: str = typer.Option(".", "--root", help="Repository root."),
+):
+    """Show or set the language codoc AUTHORS the feature tree in.
+
+    This is the tree's language, not the code's: identifiers, paths, and citations
+    are never translated. Setting it changes what NEW and AMENDED prose comes out
+    in; it does not retranslate the tree, so switching an established tree leaves
+    the old nodes as they were until each is next amended.
+    """
+    _require_workspace(root)
+    from codoc.doclang import (
+        ENV_VAR, known_codes, read_config, resolve, workspace_doc_language,
+        write_config,
+    )
+
+    cd = _codoc_dir(root)
+    if not code:
+        current = workspace_doc_language(cd)
+        typer.echo(f"authoring language: {current.name}  ({current.code})")
+        stored = read_config(cd).get("doc_language")
+        override = os.environ.get(ENV_VAR, "").strip()
+        # Naming the override matters: the committed value is what the team sees in
+        # review, so a shell export silently winning is exactly the confusion this
+        # line prevents.
+        if override and stored and resolve(override).code != resolve(stored).code:
+            typer.echo(f"  ⚠ {ENV_VAR}={override} is overriding the committed "
+                       f"setting ({stored}) for this shell only")
+        elif not stored:
+            typer.echo("  (default — nothing set in .codoc/config.json)")
+        typer.echo(f"  built-in profiles: {', '.join(known_codes())} "
+                   "(any other BCP-47 tag also works)")
+        _echo_language_mix(cd, current)
+        return
+
+    lang_profile = resolve(code)
+    write_config(cd, doc_language=lang_profile.code)
+    typer.echo(f"✓ authoring language: {lang_profile.name}  ({lang_profile.code})")
+    typer.echo("  Written to .codoc/config.json — commit it so every contributor's "
+               "daemon authors the same language.")
+    if lang_profile.code.casefold() != code.strip().casefold():
+        typer.echo(f"  (resolved {code!r} → {lang_profile.code})")
+    typer.echo("  Existing nodes are unchanged; new and amended prose follows the "
+               "new setting.")
+
+
+@app.command()
+def translate(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    to: str = typer.Option(
+        "", "--to",
+        help="Target language (BCP-47). Defaults to the workspace setting, so the "
+             "usual flow is `codoc lang zh-Hans` then `codoc translate`."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Show what would change — which nodes, and what would be refused — "
+             "without writing anything."),
+    limit: int = typer.Option(
+        0, "--limit",
+        help="Translate at most this many nodes. Useful for a paid-key trial run: "
+             "the command is resumable, so re-running picks up the rest."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+):
+    """Rewrite the existing tree's prose into the authoring language.
+
+    Switching the language (`codoc lang`) only changes what codoc writes from then
+    on — it never touches prose already on the page, because that prose is the
+    author's. This is the explicit conversion for a tree that was built in another
+    language: one LLM pass per batch of features, rewriting titles and descriptions
+    while copying every code citation, external link, and bolded focus span through
+    unchanged.
+
+    Safe to re-run: it selects nodes by their *detected* language, so an interrupted
+    run resumes and an already-translated node is skipped. Every node's previous
+    wording stays in the change ledger — `codoc history <feature>` shows it.
+    """
+    _require_workspace(root)
+    from codoc.doclang import resolve, workspace_doc_language
+    from codoc.loop.translate import translate_tree
+
+    cd = _codoc_dir(root)
+    lang = resolve(to) if to else workspace_doc_language(cd)
+    # No "the target is English so there is nothing to do" guard here. English is a
+    # target like any other: switching a Chinese tree back to `en` and translating it
+    # is the same operation in the other direction, and refusing it made the language
+    # a one-way door. Whether there is anything to do is decided by what the nodes
+    # actually say, which `translate_tree` reports as `already`.
+    if not dry_run and not yes:
+        # An explicit confirmation, because this is the one command that rewrites
+        # every description in the tree — and the count is the part worth seeing
+        # before agreeing to it.
+        typer.echo(f"This rewrites the prose of every node not already in "
+                   f"{lang.name}, in place.")
+        typer.echo("  Previous wording is kept in the change ledger "
+                   "(`codoc history <feature>`), and tree.codoc is tracked in git.")
+        typer.echo("  Run with --dry-run first to see the list.")
+        typer.confirm(f"Translate this tree into {lang.name}?", abort=True)
+
+    if not to:
+        typer.echo(f"Translating into {lang.name} (the workspace setting)…")
+    else:
+        typer.echo(f"Translating into {lang.name}…")
+    try:
+        res = translate_tree(cd, language=lang, dry_run=dry_run, limit=limit,
+                            repo_name=Path(root).resolve().name, printer=typer.echo)
+    except KeyboardInterrupt:
+        typer.echo("\n✗ interrupted — nodes translated so far are saved; re-run to "
+                   "continue where it stopped.", err=True)
+        raise typer.Exit(code=130)
+
+    if not res.translated and not res.skipped:
+        typer.echo(f"Nothing to translate — all {res.already} node(s) already read as "
+                   f"{lang.name}.")
+        return
+    typer.echo(("(dry run) " if dry_run else "✓ ") + res.summary())
+    for before, after in res.preview:
+        typer.echo(f"    {before}  →  {after}")
+    if res.skipped:
+        typer.echo(f"\n{len(res.skipped)} node(s) left in their original language:")
+        for s in res.skipped[:15]:
+            typer.echo(f"  · {s.title or s.feature_id}: {s.reason}")
+        if len(res.skipped) > 15:
+            typer.echo(f"  … and {len(res.skipped) - 15} more")
+        typer.echo("  Re-run to retry them, or edit those nodes by hand.")
+    if dry_run and res.translated:
+        typer.echo("\nNothing was written. Re-run without --dry-run to apply.")
+
+
+def _echo_language_mix(codoc_dir: str, current) -> None:
+    """Report which languages the tree is ACTUALLY written in, next to the setting.
+
+    The setting says what codoc authors in; it does not say what is on the page. A
+    tree can be deliberately bilingual, and it can also be accidentally bilingual —
+    someone ran a few passes before setting the language, or a stale env override
+    was in play for a session. Those look identical in `config.json` and completely
+    different in the tree, so the only useful answer to "what language is this repo
+    in" counts the nodes.
+    """
+    from collections import Counter
+
+    from codoc.doclang import language_tag_for
+    from codoc.store.db import open_store
+
+    try:
+        with open_store(codoc_dir) as store:
+            tags = Counter(language_tag_for(f.description or f.title, current)
+                           for f in store.list_features())
+    except Exception:  # noqa: BLE001 — advisory; never break `codoc lang`
+        return
+    if not tags:
+        return
+    total = sum(tags.values())
+    parts = [f"{tag} {n}" for tag, n in tags.most_common()]
+    typer.echo(f"  nodes by language: {', '.join(parts)}  ({total} total)")
+    off = total - tags.get(current.code, 0)
+    if off:
+        typer.echo(f"  {off} node(s) are not in {current.code}. That is fine if you "
+                   "meant it — an amend keeps each node's own language, so nothing "
+                   "will rewrite them.")
 
 
 @app.command(name="install-hooks")

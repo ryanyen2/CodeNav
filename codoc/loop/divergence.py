@@ -27,9 +27,10 @@ Two signals, in priority order:
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from enum import Enum
+
+from codoc.doclang import tokens
 
 
 class Divergence(str, Enum):
@@ -54,7 +55,16 @@ class Realization:
 
 
 def _tokens(s: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
+    """Comparable units of a prose string, segmented per script.
+
+    Was ``[a-z0-9]+``, which matches nothing at all in a non-Latin script — and
+    since two empty token sets compare as *identical* below, a Chinese intent and
+    a Chinese realization always scored 1.0. This signal exists to catch an agent
+    that did something other than what was asked, and on any non-Latin tree it was
+    silently answering "perfect match" to every question it was given: the one
+    direction a divergence check must not fail in.
+    """
+    return tokens(s)
 
 
 def text_overlap(a: str | None, b: str | None) -> float:
@@ -62,7 +72,12 @@ def text_overlap(a: str | None, b: str | None) -> float:
     sets, 0 == disjoint). A cheap, dependency-free similarity for the INTENT signal;
     deliberately lenient about word order / morphology so an imperative→descriptive
     rewrite of the SAME intent ("Add validation" → "Validates input") still scores
-    high and is NOT flagged divergent."""
+    high and is NOT flagged divergent.
+
+    Unspaced scripts contribute overlapping character n-grams, which is what keeps
+    that leniency in a script whose "words" are unmarked: 添加输入验证 vs 验证输入
+    shares 输入 and 验证 and scores well clear of disjoint.
+    """
     ta, tb = _tokens(a), _tokens(b)
     if not ta and not tb:
         return 1.0

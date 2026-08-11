@@ -30,6 +30,14 @@ Two heals run together via :func:`migrate_workspace`, both safe to rerun:
    After this runs, a subsequent ``run_loop_b`` mints nothing new because the
    ``(_norm_title, parent_id)`` collision is gone.
 
+3. **Tracked-exception heal** — ``.codoc/.gitignore`` ignores everything but a
+   short allow-list, and is written once and never overwritten (a user may have
+   customized it). So a workspace created before ``config.json`` joined that list
+   would keep the authoring language *untracked*: the maintainer sets the tree to
+   Chinese, commits, and the contributor who clones gets an English default and a
+   daemon that writes English prose into a Chinese tree. Appending the missing
+   exceptions is the whole fix, and it leaves any customization in place.
+
 Wiring: the ``codoc migrate`` CLI subcommand and the watch-daemon startup both
 call :func:`migrate_workspace` so existing workspaces self-heal on the next run.
 """
@@ -57,19 +65,24 @@ class MigrationResult:
     comments_repointed: int = 0
     blocks_repointed: int = 0
     children_reparented: int = 0
+    gitignore_healed: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
-        return (
+        base = (
             f"{self.comments_migrated} comments migrated "
             f"({self.comments_skipped} already present), "
             f"{self.duplicate_groups} duplicate groups converged "
             f"({self.features_retired} husks retired)"
         )
+        if self.gitignore_healed:
+            base += f", .gitignore now tracks {', '.join(self.gitignore_healed)}"
+        return base
 
     def changed(self) -> bool:
         return bool(
             self.comments_migrated or self.duplicate_groups or self.features_retired
+            or self.gitignore_healed
         )
 
 
@@ -81,7 +94,7 @@ def _read_doc_comments(codoc_dir: str | Path) -> list[dict]:
     or a daemon-rebuilt file with no ``comments`` key all yield ``[]``."""
     path = doc_path(codoc_dir)
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     if not isinstance(data, dict):
@@ -230,15 +243,47 @@ def dedup_features(store: Store, result: MigrationResult) -> None:
 
 # -- entry point ----------------------------------------------------------
 
+def heal_gitignore(codoc_dir: str | Path, result: MigrationResult) -> None:
+    """Append any missing tracked-file exception to ``.codoc/.gitignore``.
+
+    Only ever adds ``!name`` lines, and only for names not already mentioned
+    anywhere in the file — so a user who deliberately commented one out, or wrote
+    their own pattern that covers it, is left alone. A missing file is not created
+    here: that is ``bootstrap._write_codoc_gitignore``'s job, and a workspace with
+    no ``.gitignore`` at all is one where the user removed it on purpose.
+    """
+    from codoc.loop.bootstrap import TRACKED_IN_CODOC
+
+    gi = Path(codoc_dir) / ".gitignore"
+    if not gi.exists():
+        return
+    try:
+        text = gi.read_text(encoding="utf-8")
+    except OSError:
+        return
+    missing = [n for n in TRACKED_IN_CODOC if n not in text]
+    if not missing:
+        return
+    suffix = "" if text.endswith("\n") else "\n"
+    try:
+        gi.write_text(text + suffix + "".join(f"!{n}\n" for n in missing),
+                      encoding="utf-8")
+    except OSError:
+        return
+    result.gitignore_healed = missing
+
+
 def migrate_workspace(codoc_dir: str | Path) -> MigrationResult:
-    """Run both one-time heals against a ``.codoc`` dir. Idempotent and safe to
+    """Run the one-time heals against a ``.codoc`` dir. Idempotent and safe to
     rerun: a clean (already-converged, no stale comments) workspace is a no-op.
 
     Order matters: comment migration reads the *pre-existing* ``tree.doc.json``
     (it must run before the daemon rebuilds that file from the store in U4), and
-    dedup re-points comments, so comments land first."""
+    dedup re-points comments, so comments land first. The ``.gitignore`` heal is
+    independent of the store, so it runs outside the store context."""
     result = MigrationResult()
     with open_store(codoc_dir) as store:
         migrate_comments(store, codoc_dir, result)
         dedup_features(store, result)
+    heal_gitignore(codoc_dir, result)
     return result

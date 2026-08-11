@@ -48,8 +48,15 @@ def atomic_write_text(dest: str | Path, content: str) -> None:
 
 
 def atomic_write_json(dest: str | Path, payload: Any, *, indent: int = 2) -> None:
-    """Serialize *payload* as JSON and write it atomically."""
-    atomic_write_text(dest, json.dumps(payload, indent=indent) + "\n")
+    """Serialize *payload* as JSON and write it atomically.
+
+    ``ensure_ascii=False`` because these files carry authored prose. Escaped, one
+    CJK character becomes six ASCII ones (``\\u7d22``) — so a Chinese tree's
+    ``tree.doc.json`` grows several-fold, every diff of it becomes unreviewable, and
+    any length-based budget measured on the serialized form reads ~6x high. The
+    bytes are UTF-8 either way (``atomic_write_text`` writes UTF-8) and JSON parsers
+    accept both forms, so this changes only what a human and a token budget see."""
+    atomic_write_text(dest, json.dumps(payload, indent=indent, ensure_ascii=False) + "\n")
 
 
 def read_json(path: str | Path, default: Any = None) -> Any:

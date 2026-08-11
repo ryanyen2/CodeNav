@@ -15,6 +15,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from codoc.agent.tree_update import propose_tree_update
+from codoc.doclang import (
+    DocLanguage, has_cjk, norm_key, terms, workspace_doc_language,
+)
 from codoc.loop import edits as edits_channel
 from codoc.loop.apply import apply_op, derive_auto_ops, should_auto_apply
 from codoc.loop.edits import (
@@ -170,7 +173,11 @@ def _pending_coverage(store: Store) -> tuple[set[tuple[str, str]], set[str]]:
 
 
 def _norm_title(t: str | None) -> str:
-    return re.sub(r"\s+", " ", (t or "").strip().lower())
+    """The soft feature-identity key. NFKC + casefold + collapsed whitespace, so
+    two titles a reader cannot tell apart get one node — see
+    :func:`codoc.doclang.norm_key` for why the Unicode fold is load-bearing.
+    ``loop_b._norm_title`` MUST stay the same function."""
+    return norm_key(t)
 
 
 def _live_title_parent_keys(feats) -> set[tuple[str, str | None]]:
@@ -215,16 +222,48 @@ def _placeholder_owner(placeholders: list, symbol_path: str, *, sole_ok: bool) -
     """
     if not placeholders:
         return None
-    leaf = symbol_path.split("::", 1)[-1].split(".")[-1].lower()
+    leaf = symbol_path.split("::", 1)[-1].split(".")[-1].casefold()
     leaf_compact = leaf.replace("_", "")
+    # Substring first: the cheap, exact case where the author literally wrote the
+    # symbol name (or a citation to it) into the node they were planning.
     for f in placeholders:
-        hay = f"{f.title} {f.description or ''}".lower()
+        hay = f"{f.title} {f.description or ''}".casefold()
         hay_compact = re.sub(r"[\s_]+", "", hay)
         if leaf and (leaf in hay or (leaf_compact and leaf_compact in hay_compact)):
             return f.id
+    # Then per-word overlap, but only when it identifies ONE candidate. A
+    # substring test fires only when the prose contains the identifier as written,
+    # which a description in a language other than the code's usually doesn't: a
+    # Chinese placeholder for `compute_changeset` says 变更集, matches nothing, and
+    # falls through to the sole-candidate fallback below — so a duplicate node
+    # gets minted beside the plan node that was waiting for exactly this symbol.
+    # Splitting the identifier into words recovers the match, because identifiers
+    # stay untranslated even when the prose around them doesn't.
+    #
+    # Requiring a UNIQUE match is what keeps this from being a looser rule than the
+    # substring test it backs up. Adopting the wrong placeholder is worse than
+    # minting a duplicate — it binds new code to a feature the author planned for
+    # something else and silently marks that plan realized — so an ambiguous
+    # signal must decline rather than guess.
+    hits = [f.id for f in placeholders
+            if _discriminating(symbol_path) & terms(f"{f.title} {f.description or ''}")]
+    if len(hits) == 1:
+        return hits[0]
     if sole_ok and len(placeholders) == 1:
         return placeholders[0].id
     return None
+
+
+def _discriminating(symbol_path: str) -> set[str]:
+    """The terms of a symbol's leaf name specific enough to identify a feature.
+
+    Short Latin words are dropped: ``get``, ``run``, ``set`` recur across every
+    subsystem, so matching on one would bind code to whichever plan node happened
+    to mention it. n-grams from an unspaced script are kept at their natural
+    length — they are short by construction, not by being generic.
+    """
+    return {t for t in terms(symbol_path.split("::", 1)[-1])
+            if len(t) >= 4 or has_cjk(t)}
 
 
 def _gc_superseded_proposals(
@@ -460,9 +499,15 @@ def apply_changeset(
     # warm embedder iff CODOC_SEMANTIC_DEDUP is set. Tests inject a deterministic fake.
     embed_fn=None,
     semantic_threshold: float = DEFAULT_THRESHOLD,
+    # The tree's authoring language, for the one LLM call this pass may make.
+    # None ⇒ read it from the workspace config (env var still overrides), so the
+    # daemon needs no plumbing and a bare unit-test caller gets English.
+    doc_language: DocLanguage | None = None,
 ) -> LoopAResult:
     held = held or set()
     caused_by_map = caused_by_map or {}
+    if doc_language is None:
+        doc_language = workspace_doc_language(codoc_dir)
 
     def _cause(op: NodeOp) -> str:
         if op.feature_id and op.feature_id in caused_by_map:
@@ -757,7 +802,8 @@ def apply_changeset(
     for batch in batches:
         changes["added"] = batch
         fresh = propose(changes, subtree, titles_for_call,
-                        repo_name=repo_name, config=config)
+                        repo_name=repo_name, config=config,
+                        doc_language=doc_language)
         ops.extend(fresh)
         # Later batches must see what earlier ones just proposed, or two calls
         # mint near-duplicate nodes for the same concern in different files. The
@@ -1004,7 +1050,7 @@ def run_loop_a(
         # Only pay the (heavy) embedder model load when there are ADDITIONS that could
         # need semantic dedup — a pure modify/remove/refresh pass never mints an
         # ADD_NODE, so it never consults the matcher (the common watch-save case).
-        embed_fn = (make_loop_embedder()
+        embed_fn = (make_loop_embedder(codoc_dir)
                     if cs.added and semantic_dedup_enabled() else None)
         with open_store(codoc_dir) as store:
             update_graph(store, cs.rows, cs.touched_files())
@@ -1282,7 +1328,7 @@ def reconcile_drift(
             cs = _state_changeset(rows, store, file_scope, bindings)
             # Only pay the embedder model load when there are additions to dedup
             # (built after the changeset, so a pure-drift pass skips it entirely).
-            embed_fn = (make_loop_embedder()
+            embed_fn = (make_loop_embedder(codoc_dir)
                         if cs.added and semantic_dedup_enabled() else None)
             # Graph maintenance is scoped to what actually changed. An EMPTY
             # changeset previously fell back to ALL files — a full tree-sitter
