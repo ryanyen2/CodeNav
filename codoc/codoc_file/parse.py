@@ -83,6 +83,13 @@ class ParsedNode:
     refs: list[Ref] = field(default_factory=list)
     # Steering comments (`> …` runs) — notes to the agent, not part of the prose.
     comments: list[str] = field(default_factory=list)
+    # The per-feature HLC stamp the doc channel carries (tree.doc.json heading
+    # `version` attr — the store revision the projection was rendered from). ""
+    # for the text channel and legacy docs. Lets a reader tell a doc that is
+    # AHEAD of the store (authored edit pending: version == store revision, text
+    # differs) from one that is BEHIND it (the store advanced out-of-band:
+    # version < store revision) — the difference between intent and staleness.
+    doc_version: str = ""
 
 
 @dataclass

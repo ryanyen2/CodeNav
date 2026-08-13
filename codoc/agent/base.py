@@ -100,13 +100,22 @@ def titles_outline(all_titles: list[dict]) -> str:
         sibs.sort(key=lambda t: str(t.get("id")))
     lines: list[str] = []
 
+    def _line(t: dict, depth: int) -> str:
+        # The planned marker is the outline's one annotation: an accepted plan
+        # placeholder is invisible to file-seeded context (it has no bindings),
+        # so this line is the only place a reader — the tree-update LLM or an
+        # agent reading codoc_context — learns the node exists and is waiting
+        # for exactly this code rather than needing a fresh node.
+        mark = "  (planned — attach its code, don't duplicate)" if t.get("planned") else ""
+        return f"{'  ' * depth}- [{t.get('id')}] {t.get('title', '')}{mark}"
+
     def _emit(parent: str | None, depth: int, seen: set[str]) -> None:
         for t in children.get(parent, []):
             tid = str(t.get("id"))
             if tid in seen:  # defensive: a parent-cycle must not hang the render
                 continue
             seen.add(tid)
-            lines.append(f"{'  ' * depth}- [{tid}] {t.get('title', '')}")
+            lines.append(_line(t, depth))
             _emit(tid, depth + 1, seen)
 
     emitted: set[str] = set()
@@ -118,7 +127,7 @@ def titles_outline(all_titles: list[dict]) -> str:
     # a broken state.
     for t in all_titles:
         if str(t.get("id")) not in emitted:
-            lines.append(f"- [{t.get('id')}] {t.get('title', '')}")
+            lines.append(_line(t, 0))
     return "\n".join(lines) if lines else "(the tree is empty)"
 
 

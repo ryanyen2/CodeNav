@@ -233,11 +233,13 @@ def codoc_await_verdicts(event_ids: list[str], timeout: float = 86400.0) -> dict
     """BLOCK until the user Accepts/Rejects the given proposals in the codoc IDE.
 
     The realization trigger for /codoc:plan: after proposing plan nodes, call this
-    with their event_ids instead of ending the turn. It waits (polling the IDE's
-    inbox) and applies each verdict as it lands — accept makes the placeholder live,
-    reject discards it — then returns {accepted:[{event_id,feature_id,title}],
-    rejected, pending, timed_out}. Continue the SAME turn to implement the accepted
-    nodes and bind code via codoc_attach/codoc_reflect."""
+    with their event_ids instead of ending the turn. It waits until every proposal
+    resolves — verdicts already applied before it started are recovered from the
+    event ledger, so an accept that landed early is still reported — then returns
+    {accepted:[{event_id,feature_id,title}], rejected, pending, timed_out}.
+    Continue the SAME turn to implement the accepted nodes and bind code via
+    codoc_attach/codoc_reflect — binding also closes each node's queued realize
+    directive."""
     cd, err = _need_dir()
     return err or tools.await_verdicts(cd, event_ids=event_ids, timeout=timeout)
 
@@ -245,7 +247,12 @@ def codoc_await_verdicts(event_ids: list[str], timeout: float = 86400.0) -> dict
 @mcp.tool
 def codoc_plan_status() -> dict:
     """Report which plan placeholders are still unrealized vs realized — the
-    plan-satisfaction check after implementing."""
+    plan-satisfaction check after implementing — plus `queued_directives`, the
+    realize-queue entries still outstanding. Binding a planned node closes its
+    queue entry automatically; anything left in `queued_directives` is work that
+    arrived from outside the plan (e.g. the user edited a description mid-flight).
+    Implement those from .codoc/realize.md with caused_by=<their ⟨d-…⟩ id>, or
+    tell the user they remain queued for /codoc:sync."""
     cd, err = _need_dir()
     return err or tools.plan_status(cd)
 

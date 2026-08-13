@@ -546,3 +546,19 @@ def test_gc_preserves_retire_driven_by_in_flight_removal(store):
     assert res.auto.get("gc") is None                 # not GC'd
     assert len(store.pending_events()) == 1            # the retire is still pending
     assert not res.llm_called                          # dedup path suppressed a duplicate
+
+
+def test_llm_add_titled_after_a_pseudo_symbol_is_retitled_from_the_file(store):
+    """34513d1 guarded the deterministic coverage net against `__module__` titles;
+    this is the same guard at the LLM door — a model handed `x.py::__module__`
+    happily names the node after the symbol, and every Python file has one."""
+    cs = ChangeSet(added=[ChunkRef("livehub/github.py",
+                                   "livehub/github.py::__module__", "fp", "import base64")])
+    op = NodeOp(kind=NodeOpKind.ADD_NODE, title="__module__", description="module-level code",
+                bindings=[("livehub/github.py", "livehub/github.py::__module__")])
+
+    res = apply_changeset(cs, store, propose=_propose([op]))
+
+    titles = {e.op.title for e in store.pending_events()} | {f.title for f in store.list_features()}
+    assert "__module__" not in titles
+    assert res.llm_called

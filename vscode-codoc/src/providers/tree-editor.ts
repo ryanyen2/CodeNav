@@ -13,15 +13,17 @@
  */
 
 import * as vscode from 'vscode';
+import * as cp from 'node:child_process';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import { cachedExecutables } from '../setup/provision';
 import { WorkspaceState } from '../state/workspace-state';
 import { parseTreeCodoc, extractLinks } from '../state/tree-model';
 import { activeFeatureModes, featurePhases, featureSteps } from '../state/activity-model';
 import { editKey, pruneSeen } from '../state/auto-edits';
 import { PMNode } from '../state/pm-doc';
-import { DocFile, parseDocFile, buildSuggestions, Suggestion } from '../state/suggestion-model';
+import { DocFile, parseDocFile, buildSuggestions, insertAtAnchor, Suggestion } from '../state/suggestion-model';
 import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
 import { moveCommand, featureUnits } from '../state/commands-from-doc';
 import { EditProvenance } from '../state/edit-provenance';
@@ -49,6 +51,14 @@ const DOC_FILENAME = 'tree.doc.json';
 const PREFS_KEY = 'codoc.webviewPrefs';
 /** workspaceState key for acknowledged loop rewrites (`fid@at`) — see unseenAutoEdits. */
 const AUTO_SEEN_KEY = 'codoc.seenAutoEdits';
+
+/** A "codoc"-named OutputChannel for the translate run's streamed output — the same
+ *  lazy-singleton-per-module idiom extension.ts and credentials.ts use. */
+let _channel: vscode.OutputChannel | undefined;
+function treeEditorChannel(): vscode.OutputChannel {
+    if (!_channel) _channel = vscode.window.createOutputChannel('codoc');
+    return _channel;
+}
 
 export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'codoc.tree-editor';
@@ -256,9 +266,25 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     const ids: string[] = Array.isArray(msg.eventIds)
                         ? msg.eventIds
                         : (msg.eventId ? [msg.eventId] : []);
-                    if (ids.length) this.state.writeVerdict(ids, !!msg.accept);
+                    // `edits` — the author amended an editable ghost before accepting;
+                    // the daemon applies the proposal with the edited text.
+                    if (ids.length) this.state.writeVerdict(ids, !!msg.accept, msg.edits);
                     return;
                 }
+                case 'auto-edit-verdict':
+                    // The reader's verdict on an unasked loop rewrite. Keep = the ack
+                    // the dwell used to give. Revert = restore the previous wording as
+                    // an ordinary authored edit (the daemon classifies it; since the
+                    // code already moved, that can queue reconciliation work).
+                    await this.resolveAutoEdit(document, msg.fid, msg.at, !!msg.keep, msg.prev ?? '');
+                    post();
+                    return;
+                case 'translate-tree':
+                    // Stage 2 of the language switch: the workspace setting is already
+                    // switched (stage 1); this runs the explicit conversion. Progress
+                    // arrives via .codoc/translate.json (watched → payload.translation).
+                    await this.startTranslate(document, String(msg.code ?? ''));
+                    return;
                 case 'comment-create':
                     await this.createComment(document, msg.doc, msg.thread, msg.mediaData, msg.mediaMime);
                     post();  // U2b: no tree.codoc write → repost so the marker/threads refresh
@@ -353,6 +379,86 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             void vscode.window.showErrorMessage(
                 `codoc: could not write .codoc/config.json — ${err instanceof Error ? err.message : String(err)}`);
         }
+    }
+
+    // ── stage 2 of the language switch: `codoc translate` (two-stage UX) ────────
+    //    Stage 1 (set-doc-language) only changes what NEW prose comes out in; the
+    //    tree itself is converted by this explicit second gesture. The CLI writes
+    //    per-batch progress to .codoc/translate.json (watched → payload.translation),
+    //    which is what drives the per-node skeletons and their incremental reveal.
+
+    /** The live `codoc translate` child, if any — one run at a time (the CLI's loop
+     *  lock would serialize a second one anyway, in the worst possible way: silently
+     *  queued behind the first). */
+    private translateChild: cp.ChildProcess | null = null;
+
+    private async startTranslate(document: vscode.TextDocument, code: string): Promise<void> {
+        if (!code) return;
+        if (this.translateChild && this.translateChild.exitCode === null) return; // already running
+        if (!vscode.workspace.isTrusted) return; // same gate as every other spawn (KTD6/R5)
+        const rootDir = this.state.rootDir
+            ?? path.join(document.uri.fsPath, '..', '..');
+        const execs = cachedExecutables(this.context);
+        if (!execs) {
+            void vscode.window.showErrorMessage(
+                'codoc: the CLI is not provisioned yet — run "codoc: Set Up" first, then retry the translation.');
+            return;
+        }
+        const channel = treeEditorChannel();
+        const args = ['translate', '--root', rootDir, '--to', code, '--yes'];
+        channel.appendLine(`$ ${execs.codoc} ${args.join(' ')}`);
+        // Argv-only (shell:false); `code` is a BCP-47 tag from the host-supplied menu.
+        const child = cp.spawn(execs.codoc, args, { cwd: rootDir, env: { ...process.env }, shell: false });
+        this.translateChild = child;
+        child.stdout?.on('data', (b: Buffer) => channel.append(b.toString()));
+        child.stderr?.on('data', (b: Buffer) => channel.append(b.toString()));
+        child.on('error', err => {
+            this.translateChild = null;
+            void vscode.window.showErrorMessage(`codoc translate could not start: ${err.message}`);
+        });
+        child.on('close', exit => {
+            this.translateChild = null;
+            // The progress file's `finally` write already cleared the skeletons; this
+            // is only the human-facing outcome line.
+            if (exit !== 0) {
+                void vscode.window.showErrorMessage(
+                    `codoc translate exited with ${exit} — see the codoc output channel. ` +
+                    'Already-translated nodes are saved; running it again resumes.');
+            }
+        });
+    }
+
+    /**
+     * The reader's verdict on an unasked loop rewrite (the in-situ auto-edit diff).
+     *
+     * Either verdict IS the acknowledgement (the mark clears and never returns for
+     * this `fid@at`). A revert additionally restores the previous wording through the
+     * ordinary authored-command channel — the SAME path a human retyping it would
+     * take — so the daemon's classifier decides honestly whether restoring the old
+     * claim implies code work now that the code has moved on.
+     */
+    private async resolveAutoEdit(
+        document: vscode.TextDocument, fid: string, at: string, keep: boolean, prev: string,
+    ): Promise<void> {
+        await this.markAutoEditSeen(fid, at);
+        if (keep || !fid || !prev.trim()) return;
+        // base_text = the loop's rewrite — the value this command replaces — so the
+        // daemon's three-way merge sees a clean edit, not a conflict with itself.
+        const { features } = parseTreeCodoc(document.getText());
+        const current = features.find(f => f.id === fid)?.description ?? '';
+        await this.emitCommands(document, [{
+            id: `c-set_description-${fid}-${this.settleToken()}`,
+            kind: 'set_description',
+            feature_id: fid,
+            base_text: current,
+            session: this.sessionTag,
+            payload: { description: prev },
+        }]);
+        this.savedPending(document).set(fid, Date.now());
+        // Same held-draft gate as a settle-authored description edit: if the daemon
+        // classifies the restore as code-implying, the directive stays held until the
+        // author hands it off — reverting words must not silently dispatch an agent.
+        await this.markDrafts(document, [fid]);
     }
 
     // ── unasked loop rewrites: which ones the reader has caught up on (v6) ──────
@@ -598,9 +704,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 activeMode: null,
             };
             if (parentId && nodes[parentId]) {
-                (childrenOf[parentId] ??= []).push(eventId);
+                insertAtAnchor(childrenOf[parentId] ??= [], eventId, p.after_id, p.before_id);
             } else {
-                roots.push(eventId);
+                insertAtAnchor(roots, eventId, p.after_id, p.before_id);
             }
         }
 
@@ -760,6 +866,10 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             mintedByLocalId: mintedByLocalId(sidecar),
             prefs: this.prefsFor(document),
             history: sidecar.feature_history ?? {},
+            // `codoc translate` progress (lease-guarded) — per-node skeletons + the
+            // toolbar line. Works whether the run was started from the menu or a
+            // terminal: the file is the channel, not the child process.
+            ...(this.state.translation ? { translation: this.state.translation } : {}),
             rev: ++this.rev,
         };
     }

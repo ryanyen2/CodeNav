@@ -41,6 +41,74 @@ def test_inbox_tolerates_garbage(codoc_dir):
     assert inbox.read_verdicts(codoc_dir) == []
 
 
+# -- the IDE's verdict append-log (inbox.host.jsonl) ----------------------
+# The extension host holds no cross-process lock, so its old read-modify-write of
+# inbox.json could land inside drop_verdicts' locked window and erase a click.
+# It now APPENDS one JSON line per click; every reader merges the log first.
+
+def _host_click(codoc_dir, event_id, accept=True):
+    with inbox.host_verdicts_path(codoc_dir).open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"event_id": event_id, "accept": accept}) + "\n")
+
+
+def test_host_log_merges_on_read_and_is_consumed(codoc_dir):
+    _host_click(codoc_dir, "e-1", True)
+    _host_click(codoc_dir, "e-2", False)
+
+    verdicts = inbox.read_verdicts(codoc_dir)
+
+    assert {(v.event_id, v.accept) for v in verdicts} == {("e-1", True), ("e-2", False)}
+    assert not inbox.host_verdicts_path(codoc_dir).exists()
+    # …and the merged verdicts persisted into inbox.json (a second read agrees).
+    assert len(inbox.read_verdicts(codoc_dir)) == 2
+
+
+def test_host_log_last_click_wins_per_event(codoc_dir):
+    """A double-click (or a change of mind) dedups exactly as the old direct
+    writer did: one verdict per event id, the newest one."""
+    _host_click(codoc_dir, "e-1", True)
+    _host_click(codoc_dir, "e-1", False)
+
+    verdicts = inbox.read_verdicts(codoc_dir)
+
+    assert [(v.event_id, v.accept) for v in verdicts] == [("e-1", False)]
+
+
+def test_host_log_merges_with_existing_inbox_verdicts(codoc_dir):
+    inbox.append_verdict(codoc_dir, "e-old", accept=True)
+    _host_click(codoc_dir, "e-new", False)
+
+    verdicts = {v.event_id: v.accept for v in inbox.read_verdicts(codoc_dir)}
+
+    assert verdicts == {"e-old": True, "e-new": False}
+
+
+def test_host_log_torn_final_line_is_skipped_not_fatal(codoc_dir):
+    """A crashed host can leave a half-written last line — everything parseable
+    still merges, and the log is consumed rather than wedging every reader."""
+    _host_click(codoc_dir, "e-1", True)
+    with inbox.host_verdicts_path(codoc_dir).open("a", encoding="utf-8") as f:
+        f.write('{"event_id": "e-2", "acc')  # torn append
+
+    verdicts = inbox.read_verdicts(codoc_dir)
+
+    assert [(v.event_id, v.accept) for v in verdicts] == [("e-1", True)]
+    assert not inbox.host_verdicts_path(codoc_dir).exists()
+
+
+def test_click_during_drop_window_survives(codoc_dir):
+    """THE lost-click scenario: the daemon's drop_verdicts is mid-flight when a new
+    click lands. As an append it cannot be erased by drop's write-back — drop's
+    locked read merges it in and only removes the ids it processed."""
+    inbox.append_verdict(codoc_dir, "e-processed", accept=True)
+    _host_click(codoc_dir, "e-fresh-click", True)
+
+    inbox.drop_verdicts(codoc_dir, {"e-processed"})
+
+    verdicts = inbox.read_verdicts(codoc_dir)
+    assert [(v.event_id, v.accept) for v in verdicts] == [("e-fresh-click", True)]
+
+
 # -- status ---------------------------------------------------------------
 def _state(codoc_dir):
     return json.loads(status.status_path(codoc_dir).read_text())["state"]

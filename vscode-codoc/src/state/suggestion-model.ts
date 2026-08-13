@@ -54,6 +54,11 @@ export interface Suggestion {
     /** A verdict is already recorded for this proposal and has not drained yet, so
      *  the surface must say "waiting" rather than offer the click again. */
     verdictPending?: boolean;
+    /** Sibling anchors for add/move — apply honours them on accept
+     *  (store.rank_between), so the ghost must be drawn where the node will
+     *  actually land instead of defaulting to "last child" and jumping on accept. */
+    afterId?: string | null;
+    beforeId?: string | null;
 }
 
 /** The tree.doc.json wrapper: settled doc + persisted doc-ahead suggestions +
@@ -122,16 +127,36 @@ export function codeAheadSuggestions(
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 titleNew: p.title ?? '', descNew: p.description ?? '',
                 writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
+                afterId: p.after_id ?? null, beforeId: p.before_id ?? null,
             });
         } else if (p.op === 'move') {
             out.push({
                 id: eventId, eventId, direction: 'code-ahead', kind: 'move', featureId: p.feature_id ?? null, parentId: p.parent_id ?? null,
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
+                afterId: p.after_id ?? null, beforeId: p.before_id ?? null,
             });
         }
     }
     return out;
+}
+
+/** Insert a ghost row's id into a sibling list at its proposal's anchored slot.
+ *  apply honours after_id/before_id on accept (rank_between), so drawing the
+ *  ghost anywhere else means the accepted node "jumps" to a different position
+ *  than the placeholder the user judged. Unresolvable anchors fall back to
+ *  append — the same resolution apply itself uses for a vanished sibling. */
+export function insertAtAnchor(list: string[], id: string,
+                               afterId?: string | null, beforeId?: string | null): void {
+    if (afterId) {
+        const i = list.indexOf(afterId);
+        if (i >= 0) { list.splice(i + 1, 0, id); return; }
+    }
+    if (beforeId) {
+        const i = list.indexOf(beforeId);
+        if (i >= 0) { list.splice(i, 0, id); return; }
+    }
+    list.push(id);
 }
 
 /** Map a proposal tag to an authorship role for tinting (best effort). */

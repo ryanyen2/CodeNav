@@ -109,3 +109,32 @@ def test_mixed_proposals_roundtrip_noop(store):
     text = render_tree(store)
     diff = diff_codoc(parse_text(text), store)
     assert diff.is_empty(), f"mixed proposals leaked: {diff}"
+
+
+# ── Sibling anchors ride into the sidecar ─────────────────────────────────────
+# apply honours after_id/before_id on accept (rank_between), but the IDE never
+# received them — so a ghost drawn "last child" jumped elsewhere the moment the
+# user accepted it. The proposals map now carries the anchors.
+
+def test_add_proposal_carries_its_sibling_anchors(store):
+    e = _add_proposal(store, source=PLAN_SOURCE, after_id="f-left", before_id="f-right")
+    m = _proposals_map(store)
+    entry = m["by_event"][e.id]
+    assert entry["after_id"] == "f-left"
+    assert entry["before_id"] == "f-right"
+
+
+def test_move_proposal_carries_its_sibling_anchors(store):
+    e = _add_proposal(store, source=PLAN_SOURCE, kind=NodeOpKind.MOVE_NODE,
+                      feature_id="f-moved", after_id="f-left")
+    m = _proposals_map(store)
+    entry = m["by_event"][e.id]
+    assert entry["after_id"] == "f-left"
+    assert entry["before_id"] is None
+
+
+def test_anchorless_add_ships_null_anchors(store):
+    e = _add_proposal(store, source=PLAN_SOURCE)
+    m = _proposals_map(store)
+    entry = m["by_event"][e.id]
+    assert entry["after_id"] is None and entry["before_id"] is None

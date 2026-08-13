@@ -935,6 +935,20 @@ class Store:
         ).fetchall()
         return [_row_to_event(r) for r in rows]
 
+    def applied_event_for_cause(self, cause_id: str) -> Event | None:
+        """The applied event that cites ``cause_id`` as its ``caused_by`` — the durable
+        trace of a verdict. Accepting a proposal applies a NEW event (fresh id) stamped
+        ``caused_by=<proposal id>``, and the proposal row itself is deleted on drain —
+        so this lookup is the only way left to recover the outcome, and the feature id
+        an accepted ADD minted (the applied event's op carries it). ``None`` means no
+        applied event cites the proposal: it was rejected, withdrawn, or superseded —
+        either way it will never be applied."""
+        row = self.conn.execute(
+            "SELECT * FROM events WHERE applied=1 AND caused_by=? ORDER BY at LIMIT 1",
+            (cause_id,),
+        ).fetchone()
+        return _row_to_event(row) if row else None
+
     def recent_events(self, limit: int = 20) -> list[Event]:
         rows = self.conn.execute(
             "SELECT * FROM events ORDER BY at DESC LIMIT ?", (limit,)

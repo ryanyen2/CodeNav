@@ -258,3 +258,38 @@ def test_may_impact_empty_when_no_dependents(store):
     cs = _make_changeset(modified=[ChunkRef("a.py", "a.py::fn", "h2", "def fn(): return 1")])
     result = apply_changeset(cs, store, source="test", propose=lambda *a, **k: [])
     assert result.impacted == []
+
+
+# ---------------------------------------------------------------------------
+# Planned placeholders: always in scope, and marked
+# ---------------------------------------------------------------------------
+
+def test_unbound_planned_placeholder_rides_in_every_subtree(store):
+    """An accepted plan placeholder owns no bindings, so no file seed can pull it
+    in — which is exactly how a fresh test file got a duplicate node minted beside
+    its accepted placeholder. Planned nodes therefore always ride along, marked."""
+    planned = Feature(title="GitHub link behavior", description="Seeds and publishes.",
+                      realized=False)
+    store.upsert_feature(planned)
+
+    cs = _make_changeset(added=[ChunkRef("tests/test_github.py",
+                                         "tests/test_github.py::test_seed", "fp", "")])
+    subtree, all_titles, _ = select_relevant_subtree(cs, store)
+
+    entry = next(e for e in subtree if e["id"] == planned.id)
+    assert entry["planned"] is True
+    row = next(t for t in all_titles if t["id"] == planned.id)
+    assert row.get("planned") is True
+
+
+def test_realized_features_carry_no_planned_marker(store):
+    feat = Feature(title="Transport", description="moves ops")
+    store.upsert_feature(feat)
+    store.upsert_binding(Binding(feature_id=feat.id, file="bus.py",
+                                 symbol_path="bus.py::publish", fingerprint="h"))
+
+    cs = _make_changeset(modified=[ChunkRef("bus.py", "bus.py::publish", "h2", "")])
+    subtree, all_titles, _ = select_relevant_subtree(cs, store)
+
+    assert "planned" not in next(e for e in subtree if e["id"] == feat.id)
+    assert "planned" not in next(t for t in all_titles if t["id"] == feat.id)

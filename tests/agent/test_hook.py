@@ -676,3 +676,151 @@ def test_session_start_honors_codoc_agent_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CODOC_AGENT", "codex")
     handle_session_start({"session_id": "s1"}, cd)
     assert read_activity(cd)["epoch"]["agent"] == {"id": "codex"}
+
+
+# ── turn rising edge: tool activity / user prompt re-opens the epoch ──────────
+# SessionStart opens the epoch; Stop closes it at the end of EVERY turn. Without a
+# re-opener, every turn after the first ran with the epoch closed, so the watch
+# daemon LLM-processed the agent's own half-written saves mid-implementation.
+
+def _write_payload(root, file="src/app.py"):
+    return _payload(str(root), tool_name="Write",
+                    tool_input={"file_path": str(root / file)})
+
+
+def test_pre_tool_reopens_own_closed_epoch(repo):
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_stop(_payload(str(root)), str(codoc_dir))          # end of turn 1
+
+    handle_pre_tool(_write_payload(root), str(codoc_dir))     # turn 2 begins
+
+    data = read_activity(str(codoc_dir))
+    assert data["epoch"]["open"] is True
+    assert data["epoch"]["id"] == "ep-sess-1"                 # same session, same epoch
+    assert data["epoch"]["ended_at"] is None
+
+
+def test_pre_tool_reopen_starts_a_fresh_per_turn_write_set(repo):
+    """Stop's two consumers (falling-edge reconcile, no-daemon reflect) are per-turn,
+    so each re-open must start the next turn's write set — turn 1's files were
+    already reconciled when its Stop fired."""
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_pre_tool(_write_payload(root, "turn1.py"), str(codoc_dir))
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    handle_pre_tool(_write_payload(root, "turn2.py"), str(codoc_dir))
+
+    data = read_activity(str(codoc_dir))
+    assert list(data["touched"].keys()) == ["turn2.py"]
+
+
+def test_pre_tool_never_touches_a_concurrent_sessions_open_epoch(repo):
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))   # sess-1 owns it, open
+
+    other = _write_payload(root); other["session_id"] = "sess-2"
+    handle_pre_tool(other, str(codoc_dir))
+
+    data = read_activity(str(codoc_dir))
+    assert data["epoch"]["id"] == "ep-sess-1" and data["epoch"]["open"] is True
+    assert "src/app.py" in data["touched"]    # the touch itself still records
+
+
+def test_pre_tool_claims_a_dead_sessions_closed_epoch(repo):
+    """A missed SessionStart: the slot holds another session's CLOSED epoch — claim
+    it fresh rather than resurrecting the dead session's identity."""
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    other = _write_payload(root); other["session_id"] = "sess-2"
+    handle_pre_tool(other, str(codoc_dir))
+
+    data = read_activity(str(codoc_dir))
+    assert data["epoch"]["id"] == "ep-sess-2" and data["epoch"]["open"] is True
+
+
+def test_user_prompt_reopens_epoch(repo):
+    from codoc.agent.hook import handle_user_prompt
+
+    root, codoc_dir = repo
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    handle_user_prompt(_payload(str(root), prompt="keep going"), str(codoc_dir))
+
+    data = read_activity(str(codoc_dir))
+    assert data["epoch"]["open"] is True and data["epoch"]["id"] == "ep-sess-1"
+
+
+def test_post_tool_does_not_reopen(repo):
+    """Only the PRE phase re-opens: PreToolUse fires before the tool writes the
+    file, which is what guarantees the daemon sees the rising edge no later than
+    the code change it must suppress. (Every tool has a pre, so post adds nothing.)"""
+    root, codoc_dir = repo
+    from codoc.agent.hook import handle_post_tool
+    handle_session_start(_payload(str(root)), str(codoc_dir))
+    handle_stop(_payload(str(root)), str(codoc_dir))
+
+    handle_post_tool(_write_payload(root), str(codoc_dir))
+
+    assert read_activity(str(codoc_dir))["epoch"]["open"] is False
+
+
+# ── mid-turn realize-queue nudge (PostToolUse additionalContext) ──────────────
+# The UserPromptSubmit nudge only fires when the human types — a working agent
+# had no way to learn the queue grew (observed live: "codoc: 3 to implement" in
+# the status bar while the session worked on, oblivious).
+
+def _post_tool(root, codoc_dir, capsys):
+    handle_post_tool = __import__("codoc.agent.hook", fromlist=["handle_post_tool"]).handle_post_tool
+    handle_post_tool(_payload(str(root), tool_name="Bash",
+                              tool_input={"command": "ls"}), str(codoc_dir))
+    return capsys.readouterr().out
+
+
+def _write_queue(codoc_dir, n):
+    from codoc.loop.filenames import REALIZE_FILENAME
+    body = "".join(f"### {i}. ⟨d-{i:07x}⟩ UPDATE FEATURE\n" for i in range(1, n + 1))
+    (codoc_dir / REALIZE_FILENAME).write_text(body)
+
+
+def test_post_tool_nudges_when_queue_appears(repo, capsys):
+    root, codoc_dir = repo
+    _write_queue(codoc_dir, 3)
+
+    out = _post_tool(root, codoc_dir, capsys)
+
+    assert "realize queue grew" in out and '"PostToolUse"' in out
+    assert "3 change(s)" in out
+
+
+def test_post_tool_nudges_once_per_size(repo, capsys):
+    root, codoc_dir = repo
+    _write_queue(codoc_dir, 2)
+    assert "realize queue grew" in _post_tool(root, codoc_dir, capsys)
+    assert _post_tool(root, codoc_dir, capsys) == ""       # unchanged → silent
+    _write_queue(codoc_dir, 3)                              # grew → nudges again
+    assert "3 change(s)" in _post_tool(root, codoc_dir, capsys)
+
+
+def test_post_tool_stays_silent_while_agent_drains(repo, capsys):
+    root, codoc_dir = repo
+    _write_queue(codoc_dir, 3)
+    _post_tool(root, codoc_dir, capsys)
+    _write_queue(codoc_dir, 1)                              # falling → agent at work
+    assert _post_tool(root, codoc_dir, capsys) == ""
+
+
+def test_post_tool_reseeds_after_the_queue_closes(repo, capsys):
+    from codoc.loop.filenames import REALIZE_FILENAME
+
+    root, codoc_dir = repo
+    _write_queue(codoc_dir, 2)
+    _post_tool(root, codoc_dir, capsys)
+    (codoc_dir / REALIZE_FILENAME).unlink()                 # queue closed
+    assert _post_tool(root, codoc_dir, capsys) == ""        # reset pass, silent
+    _write_queue(codoc_dir, 1)                              # a NEW queue later
+    assert "1 change(s)" in _post_tool(root, codoc_dir, capsys)

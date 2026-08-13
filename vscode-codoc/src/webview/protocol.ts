@@ -125,6 +125,26 @@ export interface AutoEditInfo {
     rationale: string;
 }
 
+/** A `codoc translate` run's live progress (`.codoc/translate.json`, written per
+ *  batch by `loop/translate.py`). `pending` is the skeleton set — exactly the fids
+ *  still awaiting their batch; each leaves the list the moment its fate is decided
+ *  (translated or skipped), and the per-batch re-render replaces its skeleton with
+ *  the translated prose. `running` is lease-guarded host-side (a crashed run's
+ *  stale `true` is reported as not running). Absent when no run has ever
+ *  happened / the last one is long done. */
+export interface TranslationProgress {
+    running: boolean;
+    /** BCP-47 target ("zh-Hans") + its display name. */
+    target: string;
+    targetName: string;
+    total: number;
+    translated: number;
+    /** Nodes this run refused (dropped citation, sibling collision, …). */
+    skipped: { feature_id: string; title: string; reason: string }[];
+    /** Fids still awaiting their batch — the webview's skeleton set. */
+    pending: string[];
+}
+
 export interface SyncState {
     state: string;
     pending: number;
@@ -239,6 +259,10 @@ export interface DocPayload {
      *  feature id. Only features changed within the daemon's scan window appear.
      *  Consumed by the History stance + the heading hover timeline. */
     history?: Record<string, HistoryEntry[]>;
+    /** A live (or just-finished) `codoc translate` run — drives the per-node
+     *  skeleton shimmer, the read-only guard on still-pending nodes, and the
+     *  toolbar progress line. Absent when no run is in play. */
+    translation?: TranslationProgress;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }
@@ -325,7 +349,20 @@ export type WebviewMessage =
     | { kind: 'open-binding'; file: string; symbol: string }
     /** Open an external Consult link (a description's `https://` link) in the browser. */
     | { kind: 'open-link'; url: string }
-    | { kind: 'verdict'; eventIds: string[]; accept: boolean }
+    /** Accept/Reject a proposal. `edits` (accept only) carries the author's
+     *  amendments to an EDITABLE ghost — the daemon applies the proposal with the
+     *  edited title/description in place of the proposed text. */
+    | { kind: 'verdict'; eventIds: string[]; accept: boolean;
+        edits?: { title?: string; description?: string } }
+    /** The reader's verdict on an unasked loop rewrite (the in-situ auto-edit
+     *  diff). Keep = acknowledge (the mark clears, prose stays). Revert = restore
+     *  `prev` via a set_description command — a DOC edit the daemon classifies,
+     *  which (since the code already changed) can queue reconciliation work. */
+    | { kind: 'auto-edit-verdict'; fid: string; at: string; keep: boolean; prev: string }
+    /** Stage 2 of the language switch: run `codoc translate` toward `code` (the
+     *  workspace setting was already switched by stage 1's `set-doc-language`).
+     *  The host spawns the CLI; progress arrives via `.codoc/translate.json`. */
+    | { kind: 'translate-tree'; code: string }
     /** Create an inline comment: persist the thread + the doc (carrying its new
      *  `comment` mark) and queue the note as a `> …` steering line for the agent.
      *  `mediaData` (base64) + `mediaMime` carry an optional TRANSIENT screenshot

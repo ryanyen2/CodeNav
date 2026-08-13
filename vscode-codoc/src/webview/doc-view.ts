@@ -30,7 +30,8 @@ import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
 import { acquireHostApi, isVsCodeHost, type Delivery } from './host-bridge';
 import { mountViewerStatus } from './viewer-status';
-import { langAttrFor, languageName, shortLanguageLabel } from './doc-lang';
+import { langAttrFor, languageName, shortLanguageLabel, pendingForTarget } from './doc-lang';
+import type { BusyInfo } from './tiptap/busy-decorations';
 import { createCommandEmitter, commandMessage, type CommandEmitter } from './command-emitter';
 import { moveCommand } from '../state/commands-from-doc';
 import type { CommandEntry } from '../state/edits-channel';
@@ -75,6 +76,18 @@ let draftSet = new Set<string>();
 // feature you edited; flagged "review what the AI did" alongside the surfaced
 // proposal. fid → reason ("scope").
 let divergent: Record<string, string> = {};
+// Sections being rewritten under the reader RIGHT NOW — translation batches pending
+// + the agent applying (reflecting). Drives the skeleton shimmer in BOTH panes and
+// the per-section edit guard in the editor. Recomputed per payload (busyFromPayload).
+let busyByFid: Record<string, BusyInfo> = {};
+// Two-stage language switch (stage 2): the pending "Translate N nodes?" offer. Held
+// module-level because the toolbar re-renders on every payload — the offer must
+// survive the repost that stage 1 (set-doc-language) itself triggers. Cleared on
+// action, dismissal, or the language moving under it.
+let translateOffer: { code: string; name: string; count: number } | null = null;
+// Clicked "Translate now" but the CLI's first progress write hasn't landed yet —
+// the button shows a spinner instead of pretending nothing is happening.
+let translateStarting = false;
 // Focus mode (the dependency spotlight, redesigned 2026-06): DEFAULT-ON and caret-driven.
 // As the caret / scroll-spy moves to a feature, the tree gently dims every row outside that
 // feature's dependency neighbourhood (its reads + used-by, plus the ancestor path so the
@@ -286,8 +299,63 @@ function statusLabel(s: string, n: number): string {
     return s;
 }
 
-function postVerdict(eventIds: string[], accept: boolean): void {
-    vscode.postMessage({ kind: 'verdict', eventIds, accept });
+function postVerdict(
+    eventIds: string[], accept: boolean,
+    edits?: { title?: string; description?: string },
+): void {
+    vscode.postMessage({ kind: 'verdict', eventIds, accept, ...(edits ? { edits } : {}) });
+}
+
+/**
+ * The busy set for this payload: which sections are being REWRITTEN right now.
+ *
+ *   • translating — a `codoc translate` run lists the fid as pending; its prose is
+ *     replaced batch by batch, and the skeleton clears per node as batches land.
+ *   • applying — the agent is reflecting work back into this feature's entry
+ *     (activity phase `reflecting`): its description is the write target of an
+ *     in-flight store AMEND.
+ *
+ * `editing` (the agent in the feature's CODE) is deliberately NOT busy: the doc
+ * text is not being rewritten then, and locking prose because code moves would
+ * teach people the lock means nothing.
+ */
+// One notice per finished run (keyed by target + counts) — a payload repost must
+// not re-toast the same summary.
+let lastSkipNoticeKey = '';
+function maybeNoticeSkips(tr: DocPayload['translation']): void {
+    if (!tr || tr.running || !tr.skipped.length) return;
+    const key = `${tr.target}:${tr.translated}:${tr.skipped.length}`;
+    if (key === lastSkipNoticeKey) return;
+    lastSkipNoticeKey = key;
+    const first = tr.skipped[0];
+    showTransientNotice(
+        `Translation done — ${tr.translated} translated, ${tr.skipped.length} left as-is `
+        + `(e.g. “${first.title || first.feature_id}”: ${first.reason}). `
+        + 'Re-running retries them; details are in the codoc output.');
+}
+
+function busyFromPayload(p: DocPayload): Record<string, BusyInfo> {
+    const out: Record<string, BusyInfo> = {};
+    const tr = p.translation;
+    if (tr?.running) {
+        for (const fid of tr.pending) {
+            out[fid] = {
+                kind: 'translating',
+                label: `Translating into ${tr.targetName} (${tr.translated}/${tr.total} done). `
+                    + 'This section updates itself when its batch lands — editing resumes then.',
+            };
+        }
+    }
+    for (const [fid, phase] of Object.entries(p.sync.phase ?? {})) {
+        if (phase === 'reflecting' && !out[fid]) {
+            out[fid] = {
+                kind: 'applying',
+                label: 'The agent is updating this entry right now — it lands in a moment. '
+                    + 'Editing resumes when it does.',
+            };
+        }
+    }
+    return out;
 }
 
 // ── webview prefs (B-U2: overview dismiss + glance; W2: blame) ────────────────
@@ -452,6 +520,22 @@ function consequenceForEvent(eventId: string): Consequence {
         if (n.proposal?.eventId === eventId) return nodeConsequence(n.proposal);
     }
     return 'record';
+}
+
+/** Per-origin counts for the bulk tooltip ("4 from agent plan, 2 from code drift").
+ *  A plan the user asked for and drift proposals codoc's background pass raised
+ *  look identical as rows, and Accept-all resolves both — the breakdown is how the
+ *  user learns what the batch actually contains before committing it. */
+function originBreakdown(ids: string[]): string {
+    const counts = new Map<string, number>();
+    for (const id of ids) {
+        let tag = 'code drift';
+        for (const n of Object.values(payload.nodes)) {
+            if (n.proposal?.eventId === id) { tag = n.proposal.tag || tag; break; }
+        }
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([t, n]) => `${n} from ${t}`).join(', ');
 }
 
 /** §C.3 accept: a brief (1px-flash-grade) green row flash ("this is now yours") — held for
@@ -758,6 +842,7 @@ function reconcile(): void {
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setSteps(payload.sync.steps ?? {});
         wholeEditor.setAutoEdits(payload.autoEdits ?? {});
+        wholeEditor.setBusy(busyByFid);   // skeleton shimmer + per-section edit guard
         wholeEditor.setSessionLive(payload.sync.sessionLive ?? false);
         wholeEditor.setHistory(payload.history ?? {});   // W2 blame data (refresh each pass)
         // Lifecycle split (U3/U4): drafts = recorded-but-not-sent → "captured"; held minus
@@ -825,6 +910,13 @@ function applyTreeLang(): void {
  * move — because an author who expects a translation and gets a mixed tree will
  * conclude the feature is broken.
  */
+/** The nodes not yet reading as `target` (the webview's honest preview of what
+ *  `codoc translate` would pick up — Python's detection stays the authority). */
+function nodesNotIn(target: string): string[] {
+    const rows = Object.values(payload.nodes).filter(n => !n.isProposal && !n.retired);
+    return pendingForTarget(rows, treeLangTag(), target);
+}
+
 function renderLangSwitch(): HTMLElement | null {
     const current = treeLangTag();
     // The HOST decides whether switching is on offer. On the deployed hub it is not:
@@ -834,6 +926,7 @@ function renderLangSwitch(): HTMLElement | null {
     // that a host policy instead of a fact the webview asserts about itself.
     const offered = payload.docLanguageChoices ?? [];
     const wrap = el('div', 'tb-lang');
+    const translation = payload.translation;
 
     if (!offered.length) {
         // An English tree with no switch has nothing to say, so say nothing rather
@@ -843,6 +936,25 @@ function renderLangSwitch(): HTMLElement | null {
         label.lang = current;
         label.title = `This tree is authored in ${languageName(current)}.`;
         wrap.append(label);
+        return wrap;
+    }
+
+    // ── a run in flight: the switcher becomes the progress line ────────────────
+    // The count is the honest one (translated / total); the per-node skeletons in
+    // both panes show WHICH nodes are still coming. No switch actions mid-run — a
+    // second language change while the tree is half-rewritten helps nobody.
+    if (translation?.running || translateStarting) {
+        const btn = el('button', 'toggle lang translating');
+        btn.append(el('span', 'tb-lang-spin'));
+        btn.append(document.createTextNode(translation?.running
+            ? ` translating ${translation.translated}/${translation.total} → ${shortLanguageLabel(translation.target)}`
+            : ' starting translation…'));
+        btn.disabled = true;
+        btn.title = translation?.running
+            ? `codoc translate is rewriting the tree into ${translation.targetName}. `
+              + 'Each shimmering section fills in as its batch lands; everything else stays editable.'
+            : 'Starting codoc translate — the first batch is on its way.';
+        wrap.append(btn);
         return wrap;
     }
 
@@ -856,6 +968,79 @@ function renderLangSwitch(): HTMLElement | null {
     wrap.append(btn);
 
     const menu = el('div', 'tb-lang-menu');
+
+    const closeMenu = (): void => {
+        menu.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+    };
+
+    /** Post stage 2 (run `codoc translate`) and flip the switcher into its
+     *  starting state until the CLI's first progress write lands. If nothing ever
+     *  lands (spawn failed, missing credentials), the spinner must not spin
+     *  forever — time out honestly and point at the output channel. */
+    const startTranslate = (code: string): void => {
+        translateOffer = null;
+        translateStarting = true;
+        vscode.postMessage({ kind: 'translate-tree', code });
+        rerenderToolbar();
+        window.setTimeout(() => {
+            if (!translateStarting) return;   // progress arrived (or the run ended)
+            translateStarting = false;
+            rerenderToolbar();
+            showTransientNotice('Translation did not start — see the codoc output channel '
+                + '(or run `codoc translate` in a terminal).');
+        }, 30_000);
+    };
+
+    // ── stage 2: the standing offer after a switch ("Translate N nodes?") ──────
+    // Held in module state so it survives the toolbar re-render that stage 1's own
+    // repost triggers; rendered OPEN so the question is on screen, not behind a
+    // click on the very menu that just closed.
+    if (translateOffer) {
+        const offer = translateOffer;
+        menu.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+        const stage = el('div', 'tb-lang-confirm');
+        stage.append(el('div', 'tb-lang-confirm-head',
+            `✓ New prose now comes out in ${offer.name}.`));
+        stage.append(el('div', 'tb-lang-confirm-body',
+            offer.count === 1
+                ? '1 existing node is still in another language.'
+                : `${offer.count} existing nodes are still in another language.`));
+        const row = el('div', 'tb-lang-confirm-actions');
+        const go = el('button', 'tb-lang-go',
+            offer.count === 1 ? 'Translate it now' : `Translate ${offer.count} nodes now`);
+        go.title = 'Runs `codoc translate`: one LLM pass per batch, citations and links '
+            + 'kept verbatim. Sections fill in as batches land; previous wording stays '
+            + 'in the change ledger (codoc history).';
+        go.onclick = ev => { ev.stopPropagation(); startTranslate(offer.code); };
+        const later = el('button', 'tb-lang-later', 'Keep them as they are');
+        later.title = 'A bilingual tree is fine — you can translate any time from this menu.';
+        later.onclick = ev => { ev.stopPropagation(); translateOffer = null; closeMenu(); rerenderToolbar(); };
+        row.append(later, go);
+        stage.append(row);
+        menu.append(stage);
+        wrap.append(menu);
+        // Click-away / Escape dismisses the offer (it stays reachable as the
+        // standing "Translate N nodes" row below). The toolbar re-renders on every
+        // payload while the offer stands, so a listener from a REPLACED toolbar may
+        // still be attached — it must detach itself without touching the live offer
+        // (the current toolbar's own listener handles that).
+        const dismiss = (): void => {
+            document.removeEventListener('click', dismiss);
+            document.removeEventListener('keydown', onKey);
+            if (!menu.isConnected) return; // a stale toolbar's listener — not ours to act on
+            translateOffer = null;
+            closeMenu();
+        };
+        const onKey = (k: KeyboardEvent): void => { if (k.key === 'Escape') dismiss(); };
+        setTimeout(() => {
+            document.addEventListener('click', dismiss);
+            document.addEventListener('keydown', onKey);
+        }, 0);
+        return wrap;
+    }
+
     // A language set from the CLI that has no built-in profile still has to appear,
     // or the menu would silently misreport what the tree is authored in.
     const choices = offered.some(c => c.code === current)
@@ -870,8 +1055,31 @@ function renderLangSwitch(): HTMLElement | null {
             ev.stopPropagation();
             menu.classList.remove('open');
             if (choice.code === current) return;
+            // Stage 1: switch what codoc AUTHORS in (instant, config.json). Stage 2
+            // is offered, never assumed: translating every description is the one
+            // bulk rewrite in codoc, so it waits for its own explicit yes.
+            const count = nodesNotIn(choice.code).length;
+            translateOffer = count > 0
+                ? { code: choice.code, name: choice.name, count }
+                : null;
             vscode.postMessage({ kind: 'set-doc-language', code: choice.code });
+            if (translateOffer) rerenderToolbar(); // show stage 2 immediately, pre-repost
         };
+        menu.append(item);
+    }
+    // The standing conversion row: a tree with nodes not in its own language can be
+    // translated any time — not only in the breath right after a switch.
+    const behind = nodesNotIn(current).length;
+    if (behind > 0) {
+        const item = el('button', 'tb-lang-item translate');
+        item.append(el('span', 'tb-lang-check', '⇢'));
+        item.append(el('span', 'tb-lang-name',
+            behind === 1
+                ? `Translate 1 node into ${shortLanguageLabel(current)}`
+                : `Translate ${behind} nodes into ${shortLanguageLabel(current)}`));
+        item.title = 'Runs `codoc translate` toward the current authoring language. '
+            + 'Citations, links and focus spans are kept verbatim; refused nodes are reported.';
+        item.onclick = ev => { ev.stopPropagation(); closeMenu(); startTranslate(current); };
         menu.append(item);
     }
     const note = el('div', 'tb-lang-note',
@@ -982,7 +1190,8 @@ function renderToolbar(): HTMLElement {
         const pill = el('button', 'toggle autoedits');
         pill.append(icon('arrows-clockwise'), document.createTextNode(' ' + catchUpLabel(unseen)));
         pill.title = 'codoc changed these descriptions itself, to match the code. '
-            + 'Click to read them one at a time — each clears once you have.';
+            + 'Click to step through them — each shows the change in place with '
+            + 'Keep / Restore, and clears when you decide.';
         pill.onclick = () => {
             // Walk to the next one PAST the current selection so repeated clicks
             // advance rather than bouncing on the first.
@@ -1005,10 +1214,12 @@ function renderToolbar(): HTMLElement {
         accAll.append(document.createTextNode(sending.length
             ? ` Accept all (${ids.length}, ${sending.length} to build)`
             : `✓ Accept all (${ids.length})`));
-        accAll.title = sending.length
+        const origins = originBreakdown(ids);
+        accAll.title = (sending.length
             ? `${ids.length} pending — ${sending.length} of them ask the agent to write or `
               + 'delete code. The rest only update the tree\'s wording.'
-            : `${ids.length} pending — all of them only update the tree's wording. No code changes.`;
+            : `${ids.length} pending — all of them only update the tree's wording. No code changes.`)
+            + (origins ? ` (${origins}.)` : '');
         accAll.onclick = () => { beginApplying(null); postVerdict(ids.slice(), true); };
         const rejAll = el('button', 'toggle bulk', `✗ Reject all (${ids.length})`);
         rejAll.title = 'Discard every pending proposal. Nothing is written.';
@@ -1099,6 +1310,9 @@ function appendRow(parent: HTMLElement, id: string): void {
     if (selectedId === id) row.classList.add('selected');
     if (n.retired) row.classList.add('retired');
     if (!n.realized) row.classList.add('unrealized');
+    // Being rewritten right now (translation batch pending / agent applying) — the
+    // same skeleton read the doc pane wears, so both panes tell one story.
+    if (busyByFid[id]) { row.classList.add('busy'); row.title = busyByFid[id].label; }
     if (n.proposal?.op === 'amend') row.classList.add('has-amend');
     if (n.proposal?.op === 'retire') row.classList.add('has-retire');
     markFocusRow(row, id); // dependency spotlight (WS5) — survives reconciles
@@ -1243,7 +1457,9 @@ function renderDocHost(): HTMLElement {
             postCommands(commands.settle(doc, baselineId));
             if (payload.viewer?.canHandOff) vscode.postMessage({ kind: 'hand-off' });
         },
-        onAccept: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true); } },
+        // `edits` — the author reshaped an editable ghost before accepting; the
+        // daemon applies the proposal with the edited title/description.
+        onAccept: (s, edits) => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], true, edits); } },
         onReject: s => { if (s.eventId) { beginApplying(null); postVerdict([s.eventId], false); } },
         onWithdrawRealization: featureId => vscode.postMessage({ kind: 'withdraw-realization', featureId }),
         onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
@@ -1251,7 +1467,12 @@ function renderDocHost(): HTMLElement {
         onCommentCreate: (doc, thread, media) => vscode.postMessage({ kind: 'comment-create', doc, thread, mediaData: media?.data, mediaMime: media?.mime }),
         onCommentEdit: (id, body) => vscode.postMessage({ kind: 'comment-edit', id, body }),
         onCommentResolve: (doc, id) => vscode.postMessage({ kind: 'comment-resolve', doc, id }),
-        onAutoEditSeen: (fid, at) => vscode.postMessage({ kind: 'auto-edit-seen', fid, at }),
+        // Keep/Restore on an unasked loop rewrite. Either way the host records the
+        // acknowledgement; a Restore additionally re-authors the previous wording
+        // through the ordinary command channel (a real edit — held until hand-off
+        // if the daemon classifies it code-implying).
+        onAutoEditVerdict: (fid, at, keep, prev) =>
+            vscode.postMessage({ kind: 'auto-edit-verdict', fid, at, keep, prev }),
         onActiveFeature: (fid, source) => {
             if (!fid) { onBridgeCaretLeave(); return; }
             // Caret moved to a different feature without an intervening edit → clear the
@@ -1273,6 +1494,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setSteps(payload.sync.steps ?? {});
     wholeEditor.setAutoEdits(payload.autoEdits ?? {});
+    wholeEditor.setBusy(busyByFid);   // skeleton shimmer + per-section edit guard
     wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
     wholeEditor.setDrafts(payload.drafts ?? []);
     wholeEditor.setBlocks(payload.blocks ?? {});
@@ -1551,6 +1773,19 @@ window.addEventListener('message', ev => {
     awaitingAI = new Set(payload.awaitingAI ?? []);
     draftSet = new Set(payload.drafts ?? []);
     divergent = payload.divergent ?? {};
+    busyByFid = busyFromPayload(payload);
+    // The CLI's first progress write landed (or the run already ended) — the
+    // "starting…" spinner has done its job either way.
+    if (payload.translation) translateStarting = false;
+    // A finished run with refusals owes the author one honest line (the full
+    // reasons are in the codoc output channel / `codoc translate` output).
+    maybeNoticeSkips(payload.translation);
+    // The offer's moment has passed if a run is now underway, or the workspace
+    // language moved to something other than what the offer targeted.
+    if (translateOffer && (payload.translation?.running
+        || (payload.docLanguage?.code && payload.docLanguage.code !== translateOffer.code))) {
+        translateOffer = null;
+    }
     // endApplying MUST stay after the stale-rev guard — a stale (dropped) post must
     // not clear the optimistic applying state for a verdict still in flight.
     endApplying();

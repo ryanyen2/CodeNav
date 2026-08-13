@@ -56,14 +56,17 @@ directive *i* of *N*:
   the queued directives, include `add_node` ops in the same `codoc_reflect` call
   (same `caused_by`) so it surfaces as a proposal grouped under that edit.
 - After reflecting each directive, **re-read `.codoc/realize.md`** — the queue
-  can GROW while you work (the user steers mid-flight by adding `> …` comments
-  in the doc). Implement any newly appended items before clearing the queue.
+  can GROW while you work (the user edits the tree mid-flight). Implement any
+  newly appended items too.
 - After the last directive, call `codoc_realize_progress(done=N, total=N)`.
 
-**Clear the queue.** Delete `.codoc/realize.md` AND `.codoc/realize.json` (the
-directive manifest — leaving it behind keeps the implemented features on
-doc-wins hold). If a directive could not be satisfied, leave its entry in
-`.codoc/realize.md`, explain why, and tell the user.
+**Never delete `.codoc/realize.md` or `.codoc/realize.json`.** The queue closes
+ITSELF: every `codoc_reflect` that cites a directive's `caused_by=<d-id>` marks
+that item done, and codoc removes both files once every item has evidence.
+(Deleting them by hand once destroyed a directive the user appended while an
+agent was finishing — the ask vanished with no trace.) If a directive could not
+be satisfied, leave it queued, explain why, and tell the user — an item left in
+the queue is the honest state, not a failure to clean up.
 
 ### `tree_dirty` — codoc → code (tree edited, not yet queued)
 `tree.codoc` has intent edits the loop hasn't turned into directives yet. Run

@@ -113,3 +113,81 @@ def test_safe_write_always_refreshes_sidecar(codoc):
         assert sidecar["by_feature"][f.id] == [{"file": "auth.py", "symbol": "auth.py::login"}]
     finally:
         s.close()
+
+
+# ── direction-aware doc yield: intent vs. staleness ───────────────────────────
+# safe_write_tree yields to tree.doc.json only when the doc is AHEAD of the store
+# (authored edit pending). A doc merely BEHIND it — the store advanced through an
+# MCP reflect / CLI accept / seeding script since the projection was written — is
+# staleness, and yielding to it wedged BOTH renders (phantom "edits" that would
+# have reverted the store) until some mutating Loop B pass rewrote the doc.
+
+def _amend(codoc, fid, text):
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    with open_store(codoc) as s:
+        apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=text),
+                 s, source="user", applied=True, actor="human")
+
+
+def test_stale_doc_projection_does_not_block_render(codoc):
+    from codoc.loop.loop_b import write_tree_doc
+
+    with open_store(codoc) as s:
+        f = Feature(title="Cache", description="Old prose.")
+        s.upsert_feature(f)
+        write_tree_doc(s, codoc)          # doc stamped with the current revision
+    _amend(codoc, f.id, "New prose the doc has not seen.")   # store moves ahead
+
+    with open_store(codoc) as s:
+        assert safe_write_tree(s, codoc) is True             # render, don't wedge
+    assert "New prose the doc has not seen." in tree_path(codoc).read_text()
+
+
+def test_authored_doc_edit_still_yields(codoc):
+    import json
+
+    from codoc.codoc_file.doc_parse import doc_path
+    from codoc.loop.loop_b import write_tree_doc
+
+    with open_store(codoc) as s:
+        f = Feature(title="Cache", description="Old prose.")
+        s.upsert_feature(f)
+        write_tree_doc(s, codoc)
+    # The webview settles new text against the CURRENT projection: text changes,
+    # version stamp stays equal to the store revision → genuine pending intent.
+    data = json.loads(doc_path(codoc).read_text())
+    for block in data["content"] if data.get("type") == "doc" else data["doc"]["content"]:
+        if block.get("type") == "paragraph":
+            block["content"] = [{"type": "text", "text": "Authored replacement."}]
+    doc_path(codoc).write_text(json.dumps(data))
+
+    with open_store(codoc) as s:
+        assert safe_write_tree(s, codoc) is False            # yield to the author
+    tp = tree_path(codoc)
+    assert not tp.exists() or "Authored replacement." not in tp.read_text()
+
+
+def test_legacy_doc_without_stamps_stays_conservative(codoc):
+    import json
+
+    from codoc.codoc_file.doc_parse import doc_path
+    from codoc.loop.loop_b import write_tree_doc
+
+    with open_store(codoc) as s:
+        f = Feature(title="Cache", description="Old prose.")
+        s.upsert_feature(f)
+        write_tree_doc(s, codoc)
+    _amend(codoc, f.id, "Newer store prose.")
+    # Strip the version stamps (a legacy doc) — direction is unprovable, so the
+    # old conservative behaviour must hold: treat the difference as intent.
+    data = json.loads(doc_path(codoc).read_text())
+    blocks = data["content"] if data.get("type") == "doc" else data["doc"]["content"]
+    for block in blocks:
+        if block.get("type") == "featureHeading":
+            block.get("attrs", {}).pop("version", None)
+    doc_path(codoc).write_text(json.dumps(data))
+
+    with open_store(codoc) as s:
+        assert safe_write_tree(s, codoc) is False

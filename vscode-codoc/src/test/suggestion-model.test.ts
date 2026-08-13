@@ -105,3 +105,29 @@ describe('R2: tree.doc.json wrapper parsing', () => {
         expect(emptyDocFile(doc)).toMatchObject({ version: 1, suggestions: [], comments: [] });
     });
 });
+
+describe('sibling anchors ride from the sidecar into the suggestion', () => {
+    it('add carries after_id/before_id so the ghost draws where the node will land', () => {
+        const sc = sidecarWith({
+            by_feature: {},
+            by_event: {
+                'e-9': {
+                    op: 'add', tag: 'agent plan', parent_id: 'f-a', title: 'Rate limiting',
+                    after_id: 'f-x', before_id: null,
+                },
+            },
+        });
+        const [s] = codeAheadSuggestions(sc, curTitle, curDesc);
+        expect(s).toMatchObject({ kind: 'add', afterId: 'f-x', beforeId: null });
+    });
+
+    it('anchors default to null on an older sidecar without the fields', () => {
+        const sc = sidecarWith({
+            by_feature: {},
+            by_event: { 'e-8': { op: 'add', tag: 'agent plan', parent_id: 'f-a', title: 'X' } },
+        });
+        const [s] = codeAheadSuggestions(sc, curTitle, curDesc);
+        expect(s.afterId ?? null).toBeNull();
+        expect(s.beforeId ?? null).toBeNull();
+    });
+});

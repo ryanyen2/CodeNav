@@ -25,6 +25,8 @@ import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines, 
 import { parseRealize, pendingCodeByFile, PendingChange, parseRealizedLog, newOutcomes, RealizedOutcome } from './realize-model';
 import { statusBarView } from './status-presentation';
 import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS } from './status-model';
+import { parseTranslateProgress } from './translate-model';
+import type { TranslationProgress } from '../webview/protocol';
 
 export { ParsedFeature, SidecarData };
 
@@ -50,6 +52,8 @@ export class WorkspaceState {
     // (see status-model.ts). Undefined when the file is unreadable.
     private _statusMtimeMs: number | undefined;
     private _pendingCode: Map<string, PendingChange[]> = new Map();
+    // `codoc translate` progress (lease-guarded; null when no run is in play).
+    private _translation: TranslationProgress | null = null;
     private _provisioning = false;
     // One-shot timer that re-derives state when a TTL lease (realizing / agent
     // epoch) expires with no file event to trigger a reload — see
@@ -104,6 +108,7 @@ export class WorkspaceState {
             '**/.codoc/realized.jsonl',  // directive outcomes → completion notifications
             '**/.codoc/config.json',     // authoring language — changed by `codoc lang` too,
                                         // so a switch made in the terminal repaints the view
+            '**/.codoc/translate.json',  // `codoc translate` progress — per-batch skeleton updates
         ]) {
             const w = vscode.workspace.createFileSystemWatcher(glob);
             this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));
@@ -199,6 +204,16 @@ export class WorkspaceState {
             this._activityMtimeMs = fs.statSync(activityPath).mtimeMs;
         } catch { /* file absent → no active agent */ }
         this._activity = parseActivity(activityText);
+
+        // `codoc translate` progress — the per-node skeleton set + toolbar line.
+        // Read fresh each reload (the CLI rewrites it per batch); lease-guarded so a
+        // crashed run's stale `running: true` never skeleton-locks the editor.
+        this._translation = null;
+        try {
+            const tp = this._codocPath('translate.json');
+            this._translation = parseTranslateProgress(
+                fs.readFileSync(tp, 'utf-8'), fs.statSync(tp).mtimeMs, Date.now());
+        } catch { /* no run in play */ }
 
         this._updateStatusBar();
         this._onDidChange.fire();
@@ -296,20 +311,34 @@ export class WorkspaceState {
         bar.show();
     }
 
-    /** Append an Accept/Reject verdict to .codoc/inbox.json; the daemon applies it.
-     *  Dedups by event id (last write wins) so a double-click — common when no daemon
-     *  is draining and the card still shows — can't pile up duplicate verdicts. */
-    writeVerdict(eventIds: string[], accept: boolean): void {
+    /** Record an Accept/Reject verdict by APPENDING to .codoc/inbox.host.jsonl —
+     *  one JSON line per click; the daemon folds the log into inbox.json under the
+     *  inbox lock (inbox.merge_host_verdicts) and applies it.
+     *
+     *  Appending is the whole point: this host holds no cross-process lock, so the
+     *  old read-modify-write of inbox.json could land inside the daemon's locked
+     *  drop_verdicts window and erase a verdict it was about to write back — a
+     *  click silently lost, indistinguishable from never clicking. An append can't
+     *  erase anything, and the merge dedups by event id (last line wins), which
+     *  keeps the double-click behaviour the old writer had. Same pattern as
+     *  edits.host.jsonl → edits.json. */
+    writeVerdict(
+        eventIds: string[], accept: boolean,
+        edits?: { title?: string; description?: string },
+    ): void {
         if (!this._rootDir || eventIds.length === 0) return;
-        const inboxPath = this._codocPath('inbox.json');
-        const byEvent = new Map<string, boolean>();
-        try {
-            const existing: Array<{ event_id: string; accept: boolean }> = JSON.parse(fs.readFileSync(inboxPath, 'utf-8')).verdicts ?? [];
-            for (const v of existing) byEvent.set(v.event_id, v.accept);
-        } catch { /* no inbox yet */ }
-        for (const id of eventIds) byEvent.set(id, accept);
-        const verdicts = [...byEvent].map(([event_id, a]) => ({ event_id, accept: a }));
-        fs.writeFileSync(inboxPath, JSON.stringify({ version: 1, verdicts }, null, 2));
+        // Accept-time edits (an editable ghost amended before acceptance) ride the
+        // verdict line only when present and only on an accept — a reject discards
+        // the proposal, edits and all, and a plain verdict's line shape is unchanged.
+        const extra = accept && edits
+            ? {
+                ...(edits.title?.trim() ? { title: edits.title } : {}),
+                ...(edits.description?.trim() ? { description: edits.description } : {}),
+            }
+            : {};
+        const lines = eventIds.map(id =>
+            JSON.stringify({ event_id: id, accept, ...extra }) + '\n').join('');
+        fs.appendFileSync(this._codocPath('inbox.host.jsonl'), lines);
     }
 
     get rootDir(): string | null { return this._rootDir; }
@@ -319,6 +348,8 @@ export class WorkspaceState {
     get registry(): RegistryData | null { return this._registry; }
     get status(): CodocStatus { return this._status; }
     get activity(): ActivityData { return this._activity; }
+    /** `codoc translate` progress (lease-guarded), or null when no run is in play. */
+    get translation(): TranslationProgress | null { return this._translation; }
     /** activity.json's last-modified time — the epoch lease's `last_seen`. */
     get activityMtimeMs(): number | undefined { return this._activityMtimeMs; }
     get agentActive(): boolean { return isAgentActive(this._activity, this._activityMtimeMs); }

@@ -105,6 +105,75 @@ def test_plan_add_creates_unrealized_placeholder_on_accept(codoc_dir):
     assert any(p["title"] == "Dark mode" for p in st["unrealized"])
 
 
+def _queue_directive(codoc_dir, did, fid, *, kind, text="do the thing"):
+    """Hand-craft the queue exactly as Loop B leaves it after an accept: a handed-off
+    manifest entry plus the realize.md trigger carrying the ⟨d-…⟩ id marker."""
+    from codoc.loop import edits as edits_channel
+    from codoc.loop.loop_b import realize_path
+
+    existing = edits_channel.read_manifest(codoc_dir)
+    entries = existing + [edits_channel.Directive(
+        id=did, feature_id=fid, kind=kind, caused_by="e-cause",
+        text=text, handed_off=True, ts=1)]
+    realize_path(codoc_dir).write_text("".join(
+        f"### {i}. ⟨{d.id}⟩ {d.text}\n" for i, d in enumerate(entries, 1)))
+    edits_channel.write_manifest(codoc_dir, entries)
+
+
+def test_attach_closes_a_satisfied_plan_directive_in_the_same_call(codoc_dir):
+    """The /codoc:plan wedge: a plan session binds accepted nodes without ever reading
+    realize.md, and no Loop B pass runs for it (the daemon suppresses batches during
+    the epoch and runs Loop A only at close). So the bind itself must close the queue
+    entry — same call, no daemon required — and status must stop saying awaiting_impl."""
+    from codoc.loop import edits as edits_channel
+    from codoc.loop.loop_b import realize_path
+    from codoc.loop.status import AWAITING_IMPL, status_path
+
+    f = _seed(codoc_dir, title="Planned thing", realized=False)
+    _queue_directive(codoc_dir, "d-plan01", f.id, kind="add_node")
+
+    res = tools.attach(codoc_dir, feature_id=f.id, binds=["mod.py::thing"])
+
+    assert res["ok"] and res["applied"] is True
+    assert edits_channel.read_manifest(codoc_dir) == []
+    assert not realize_path(codoc_dir).exists()
+    state = json.loads(status_path(codoc_dir).read_text())["state"]
+    assert state != AWAITING_IMPL
+
+
+def test_reflect_closes_a_satisfied_plan_directive_in_the_same_call(codoc_dir):
+    from codoc.loop import edits as edits_channel
+
+    f = _seed(codoc_dir, title="Planned thing", realized=False)
+    _queue_directive(codoc_dir, "d-plan02", f.id, kind="add_node")
+
+    res = tools.reflect(codoc_dir, ops=[{"kind": "attach", "feature_id": f.id,
+                                         "binds": ["mod.py::thing"]}])
+
+    assert res["ok"] and res["applied"] == 1
+    assert edits_channel.read_manifest(codoc_dir) == []
+
+
+def test_plan_status_reports_and_prunes_the_realize_queue(codoc_dir):
+    """plan_status must answer from BOTH ledgers: the lifecycle bit (all_realized) and
+    the realize queue (queued_directives) — an amend the user queued mid-flight stays
+    visible instead of the session honestly-but-misleadingly reporting all done."""
+    from codoc.loop.loop_b import realize_path
+
+    done = _seed(codoc_dir, title="Done node", realized=False)
+    other = _seed(codoc_dir, title="Amend me", description="prose")
+    _queue_directive(codoc_dir, "d-plandone", done.id, kind="add_node")
+    _queue_directive(codoc_dir, "d-amend1", other.id, kind="amend")
+    tools.attach(codoc_dir, feature_id=done.id, binds=["mod.py::x"])
+
+    st = tools.plan_status(codoc_dir)
+
+    assert st["all_realized"] is True
+    assert [q["id"] for q in st["queued_directives"]] == ["d-amend1"]
+    assert "note" in st
+    assert realize_path(codoc_dir).exists()  # the un-implemented amend keeps its trigger
+
+
 def test_server_guard_surfaces_structured_error_without_codoc_dir(monkeypatch):
     from codoc.mcp import server
 
@@ -144,10 +213,13 @@ def test_await_verdicts_accept_makes_placeholder_live(codoc_dir):
         s.close()
     # inbox was cleared of the consumed verdict
     assert inbox.read_verdicts(codoc_dir) == []
-    # the accepted node is flagged "editing" so the IDE shimmers it as in-progress
+    # Accepting is NOT implementing: no phase stamp lands on the placeholder —
+    # bulk-graying every accepted node's prose the instant the user clicked was
+    # the "why is everything dimmed for two minutes" bug. "editing" comes from
+    # the tool hook when a bound file is actually written.
     from codoc.loop.activity import read_activity
     feats = read_activity(codoc_dir).get("features", {})
-    assert feats.get(acc["feature_id"], {}).get("phase") == "editing"
+    assert acc["feature_id"] not in feats
 
 
 def test_await_verdicts_reject_discards(codoc_dir):
@@ -167,18 +239,83 @@ def test_await_verdicts_reject_discards(codoc_dir):
         s.close()
 
 
-def test_await_verdicts_drains_only_its_own(codoc_dir):
-    """A verdict for an unrelated event is left in the inbox for the daemon."""
+def test_await_verdicts_daemonless_drain_is_the_one_loop_b_path(codoc_dir):
+    """With no daemon, the fallback drain is a FULL Loop B pass — the same single
+    verdict-applier the daemon runs, so accept semantics never depend on who wins.
+    A verdict for another proposal is applied too (there is no daemon to leave it
+    for), and an orphan verdict is consumed harmlessly instead of re-reading
+    forever."""
     from codoc.loop import inbox
 
     mine = tools.plan_add(codoc_dir, title="Mine")["event_id"]
+    other = tools.plan_add(codoc_dir, title="Someone elses")["event_id"]
     inbox.append_verdict(codoc_dir, mine, accept=True)
-    inbox.append_verdict(codoc_dir, "e-someone-else", accept=True)
+    inbox.append_verdict(codoc_dir, other, accept=True)
+    inbox.append_verdict(codoc_dir, "e-orphan", accept=True)
 
     out = tools.await_verdicts(codoc_dir, event_ids=[mine], timeout=5, poll_interval=0.01)
+
     assert [a["event_id"] for a in out["accepted"]] == [mine]
-    leftover = inbox.read_verdicts(codoc_dir)
-    assert [v.event_id for v in leftover] == ["e-someone-else"]
+    assert inbox.read_verdicts(codoc_dir) == []
+    s = open_store(codoc_dir)
+    try:
+        titles = {f.title for f in s.list_features()}
+        assert {"Mine", "Someone elses"} <= titles   # both accepts applied, one path
+    finally:
+        s.close()
+
+
+def test_await_verdicts_daemonless_accept_mints_the_directive(codoc_dir):
+    """Unified semantics: however the accept lands (daemon or the daemonless drain
+    here), a plan ADD queues its realize directive. It then closes automatically
+    when the session binds the placeholder (see the plan/realize bridge)."""
+    from codoc.loop import inbox
+    from codoc.loop.edits import read_manifest
+    from codoc.loop.loop_b import realize_path
+
+    eid = tools.plan_add(codoc_dir, title="Queued build")["event_id"]
+    inbox.append_verdict(codoc_dir, eid, accept=True)
+
+    out = tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=5, poll_interval=0.01)
+
+    fid = out["accepted"][0]["feature_id"]
+    queued = [d for d in read_manifest(codoc_dir) if d.feature_id == fid]
+    assert len(queued) == 1 and queued[0].kind == "add_node" and queued[0].handed_off
+    assert realize_path(codoc_dir).exists()
+
+    # …and binding the placeholder closes the queue again, same session, no daemon.
+    tools.attach(codoc_dir, feature_id=fid, binds=["mod.py::thing"])
+    assert read_manifest(codoc_dir) == []
+    assert not realize_path(codoc_dir).exists()
+
+
+def test_await_verdicts_reports_verdicts_the_daemon_already_drained(codoc_dir):
+    """THE live-race regression: every verdict accepted and drained by the daemon's
+    Loop B BEFORE await_verdicts first polls. The old code marked them resolved
+    with a comment promising inference and returned empty lists ('no verdicts,
+    nothing pending, no timeout'); the ledger citation now recovers each outcome."""
+    from pathlib import Path
+
+    from codoc.loop import inbox
+    from codoc.loop.loop_b import run_loop_b
+
+    a = tools.plan_add(codoc_dir, title="Node A")["event_id"]
+    b = tools.plan_add(codoc_dir, title="Node B")["event_id"]
+    r = tools.plan_add(codoc_dir, title="Node R")["event_id"]
+    inbox.append_verdict(codoc_dir, a, accept=True)
+    inbox.append_verdict(codoc_dir, b, accept=True)
+    inbox.append_verdict(codoc_dir, r, accept=False)
+    run_loop_b(str(Path(codoc_dir).parent), codoc_dir)   # the daemon wins the race
+    assert inbox.read_verdicts(codoc_dir) == []
+
+    out = tools.await_verdicts(codoc_dir, event_ids=[a, b, r],
+                               timeout=5, poll_interval=0.01)
+
+    assert {x["event_id"] for x in out["accepted"]} == {a, b}
+    assert all(x["feature_id"] for x in out["accepted"])
+    assert {x["title"] for x in out["accepted"]} == {"Node A", "Node B"}
+    assert out["rejected"] == [r]
+    assert out["pending"] == [] and out["timed_out"] is False
 
 
 def test_await_verdicts_times_out_when_no_verdict(codoc_dir):

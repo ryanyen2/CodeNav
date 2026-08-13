@@ -111,6 +111,9 @@ def parse_doc(doc: dict) -> ParsedTree:
             # A heading the webview's "plan" toggle marked unbuilt carries realized=False
             # — an explicit build request. Read it so a NEW plan node mints a directive.
             realized=attrs.get("realized") if "realized" in attrs else None,
+            # The store revision this heading was projected from — the direction
+            # signal that separates an authored edit from a stale projection.
+            doc_version=str(attrs.get("version") or ""),
         )
         node.refs = extract_refs(description)
         tree.nodes.append(node)

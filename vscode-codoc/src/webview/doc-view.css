@@ -1034,14 +1034,8 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
 .ce-autoedit.mine .ce-autoedit-add {
     text-decoration-color: color-mix(in srgb, var(--ce-del) 70%, transparent);
 }
-/* the heading mark: hover carries the WHY (the loop's own recorded rationale) */
-.ce-autoedit-chip {
-    display: inline-flex; align-items: center;
-    margin-left: 10px; vertical-align: middle; user-select: none;
-    color: color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
-}
-.ce-autoedit-chip .ce-icon { width: 11px; height: 11px; }
-.ce-autoedit-chip.mine { color: color-mix(in srgb, var(--ce-del) 80%, transparent); }
+/* (the v6 heading chip is gone — the WHY now rides the Keep/Restore strip's origin
+   label, `.ce-verdict.autoedit .ce-tc-dir`, see the v7 block at the end) */
 /* Arrival only, and only if you are looking at it: the rail draws down. There is no
    catch-up animation for marks that were already there when you scrolled to them —
    replaying changes you missed reads as the UI talking to itself. */
@@ -1056,7 +1050,7 @@ body.vscode-high-contrast .ce-autoedit-add { text-decoration-color: var(--vscode
 .toolbar .toggle.autoedits { color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent); }
 .toolbar .toggle.autoedits .ce-icon { width: 11px; height: 11px; vertical-align: -1px; }
 /* glance mode hides prose, so the in-prose marks go with it; the toolbar line stays */
-body.glance .ce-whole-surface .ce-autoedit-chip { display: none; }
+body.glance .ce-whole-surface .ce-verdict.autoedit { display: none; }
 
 /* In-situ captured DIFF (the user's own live edit, vs the last-committed baseline):
    ADDED words get a solid accent underline; DELETED text — which has no glyph left to
@@ -1997,3 +1991,194 @@ body.ce-dragging-feature .ProseMirror p { opacity: 0.55; transition: opacity 120
     font: 10.5px/1.45 var(--vscode-font-family);
     color: var(--fg-faint, var(--fg-muted));
 }
+
+/* ═══ v7: skeleton/busy sections, minimap states, auto-edit review, editable ghosts,
+   two-stage language switch ══════════════════════════════════════════════════ */
+
+/* ── busy sections (busy-decorations.ts): being rewritten under the reader ─────
+   A translation batch or an in-flight agent AMEND is about to replace this text
+   wholesale, so the section reads as a skeleton being produced — a soft shimmer
+   sweep — and user edits inside it are dropped by the plugin's filterTransaction.
+   The shimmer is the explanation; the title attr carries the words. */
+.ce-busy {
+    position: relative; cursor: progress;
+    color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+}
+.ce-busy::after {
+    content: ''; position: absolute; inset: -1px -6px; border-radius: 6px;
+    pointer-events: none;
+    background: linear-gradient(100deg,
+        transparent 20%,
+        color-mix(in srgb, var(--vscode-foreground) 7%, transparent) 40%,
+        color-mix(in srgb, var(--vscode-foreground) 12%, transparent) 50%,
+        color-mix(in srgb, var(--vscode-foreground) 7%, transparent) 60%,
+        transparent 80%);
+    background-size: 220% 100%;
+    animation: ce-busy-sweep 1.6s linear infinite;
+}
+@keyframes ce-busy-sweep { from { background-position: 130% 0; } to { background-position: -90% 0; } }
+/* translating reads slightly cooler; applying carries the agent-work blue the
+   editing phase already uses — same fact, same hue family. */
+.ce-busy-translating::after { opacity: 0.9; }
+.ce-busy-applying::after {
+    background: linear-gradient(100deg,
+        transparent 20%,
+        color-mix(in srgb, var(--ce-editing) 8%, transparent) 40%,
+        color-mix(in srgb, var(--ce-editing) 14%, transparent) 50%,
+        color-mix(in srgb, var(--ce-editing) 8%, transparent) 60%,
+        transparent 80%);
+    background-size: 220% 100%;
+}
+/* Reduced motion / SR: a static veil instead of a sweep — the state still reads. */
+@media (prefers-reduced-motion: reduce) {
+    .ce-busy::after { animation: none; background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent); }
+}
+body.vscode-reduce-motion .ce-busy::after,
+body.vscode-using-screen-reader .ce-busy::after {
+    animation: none; background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+}
+body.vscode-high-contrast .ce-busy { outline: 1px dashed var(--vscode-contrastBorder, var(--vscode-foreground)); }
+body.vscode-high-contrast .ce-busy::after { content: none; }
+
+/* the tree pane wears the same skeleton so both panes tell one story */
+.row.busy { cursor: progress; }
+.row.busy .title {
+    color: transparent; border-radius: 4px;
+    background: linear-gradient(100deg,
+        color-mix(in srgb, var(--vscode-foreground) 14%, transparent) 30%,
+        color-mix(in srgb, var(--vscode-foreground) 24%, transparent) 50%,
+        color-mix(in srgb, var(--vscode-foreground) 14%, transparent) 70%);
+    background-size: 220% 100%;
+    animation: ce-busy-sweep 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .row.busy .title { animation: none; } }
+body.vscode-reduce-motion .row.busy .title,
+body.vscode-using-screen-reader .row.busy .title { animation: none; }
+body.vscode-high-contrast .row.busy .title {
+    color: var(--vscode-foreground); background: none;
+    outline: 1px dashed var(--vscode-contrastBorder, var(--vscode-foreground));
+}
+
+/* ── minimap states (ce-toc-rail): the rail IS the status strip ────────────────
+   Same encodings as the in-document decorations — review-blue for "awaiting your
+   verdict", amber for "codoc rewrote, review it", sage for "sent", the captured
+   blue for "yours, staged", hollow-dashed for planned (already the unrealized
+   tick), a pulse for live agent work, a shimmer for busy. The tick's title names
+   the state in words (RAIL_STATE_LABEL), so no reading rests on hue alone. */
+.ce-tick.st-proposed { background: var(--dir-review); }
+.ce-tick.st-rewritten { background: var(--ce-del); }
+.ce-tick.st-sent { background: var(--ce-staged); }
+.ce-tick.st-staged {
+    background: transparent;
+    outline: 1px dashed color-mix(in srgb, var(--ce-editing) 80%, transparent);
+}
+.ce-tick.st-working { background: var(--ce-editing); animation: ce-tick-pulse 1.4s ease-in-out infinite; }
+.ce-tick.st-busy {
+    background: linear-gradient(90deg,
+        color-mix(in srgb, var(--vscode-foreground) 25%, transparent),
+        color-mix(in srgb, var(--vscode-foreground) 55%, transparent),
+        color-mix(in srgb, var(--vscode-foreground) 25%, transparent));
+    background-size: 220% 100%;
+    animation: ce-busy-sweep 1.6s linear infinite;
+}
+@keyframes ce-tick-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+    .ce-tick.st-working, .ce-tick.st-busy { animation: none; }
+}
+body.vscode-reduce-motion .ce-tick.st-working, body.vscode-reduce-motion .ce-tick.st-busy,
+body.vscode-using-screen-reader .ce-tick.st-working, body.vscode-using-screen-reader .ce-tick.st-busy { animation: none; }
+/* the viewport band: the contiguous lit run says WHERE YOU ARE. A soft halo, not a
+   recolour, so a tick's state hue stays legible inside the band. */
+.ce-tick.in-view { box-shadow: -3px 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+/* the legend: pinned under the ticks, hover carries the glossary (title attr) */
+.ce-rail-legend {
+    flex: 0 0 auto; margin-top: 8px; width: 14px; height: 14px; padding: 0;
+    border: 1px solid color-mix(in srgb, var(--vscode-foreground) 25%, transparent);
+    border-radius: 50%; background: transparent; cursor: help;
+    color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+    font: 9px/12px var(--vscode-font-family); text-align: center;
+}
+.ce-rail-legend:hover { color: var(--vscode-foreground); border-color: var(--vscode-foreground); }
+body.vscode-high-contrast .ce-tick.st-proposed,
+body.vscode-high-contrast .ce-tick.st-rewritten,
+body.vscode-high-contrast .ce-tick.st-sent,
+body.vscode-high-contrast .ce-tick.st-working,
+body.vscode-high-contrast .ce-tick.st-busy { background: var(--vscode-foreground); animation: none; }
+
+/* ── the loop's rewrite as a REVIEW surface (v7, auto-edit-decorations) ────────
+   The other half of the diff: the displaced words, struck through where they
+   stood. Amber (--ce-del) is already the "something was taken away" hue. */
+.ce-autoedit-del {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--ce-del) 80%, transparent);
+    text-decoration-thickness: 1.5px;
+    color: color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
+    user-select: none; padding: 0 1px;
+}
+.ce-autoedit-del.mine { color: color-mix(in srgb, var(--ce-del) 70%, var(--vscode-foreground) 30%); }
+/* An unresolved rewrite is a decision owed, not an ornament: its strip stays
+   readable WITHOUT hover (same standing the code-writing verdicts earn), and full
+   strength when it displaced the reader's own words. */
+.ce-verdict.autoedit { opacity: 0.75; }
+.ce-verdict.autoedit.mine { opacity: 1; }
+.ce-verdict.autoedit .ce-tc-dir { color: color-mix(in srgb, var(--ce-del) 60%, var(--fg-muted)); }
+body.vscode-high-contrast .ce-autoedit-del { color: var(--vscode-foreground); }
+
+/* ── editable ghosts (suggestion-decorations): a proposal is a draft, not a
+   take-it-or-leave-it block ──────────────────────────────────────────────────── */
+.ce-ghost-feature .ce-ghost-title[contenteditable],
+.ce-ghost-feature .ce-ghost-desc[contenteditable] {
+    cursor: text; border-radius: 4px; outline: none;
+    transition: background var(--dur-fast) var(--ease);
+}
+.ce-ghost-feature .ce-ghost-title[contenteditable]:hover,
+.ce-ghost-feature .ce-ghost-desc[contenteditable]:hover {
+    background: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
+}
+.ce-ghost-feature .ce-ghost-title[contenteditable]:focus,
+.ce-ghost-feature .ce-ghost-desc[contenteditable]:focus {
+    background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* an empty editable description invites, quietly */
+.ce-ghost-feature .ce-ghost-desc[contenteditable]:empty::before {
+    content: attr(data-placeholder);
+    color: color-mix(in srgb, var(--vscode-foreground) 35%, transparent);
+    font-style: italic;
+}
+/* the author reshaped the proposal — say so where the verdict lives */
+.ce-ghost-feature.edited .ce-ghost-title::after {
+    content: 'edited'; margin-left: 8px; vertical-align: middle;
+    font: 9px var(--vscode-font-family); letter-spacing: 0.04em;
+    color: var(--ce-editing);
+    border: 1px solid color-mix(in srgb, var(--ce-editing) 45%, transparent);
+    border-radius: 6px; padding: 0 5px;
+}
+
+/* ── two-stage language switch (renderLangSwitch) ─────────────────────────────── */
+.toggle.lang.translating { opacity: 0.9; cursor: progress; }
+.tb-lang-spin {
+    display: inline-block; width: 10px; height: 10px; margin-right: 2px;
+    border: 1.5px solid color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
+    border-top-color: var(--vscode-foreground); border-radius: 50%;
+    vertical-align: -1px; animation: ce-lang-spin 0.9s linear infinite;
+}
+@keyframes ce-lang-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .tb-lang-spin { animation-duration: 2.4s; } }
+.tb-lang-confirm { padding: 10px 12px; max-width: 280px; }
+.tb-lang-confirm-head { font-weight: 600; margin-bottom: 4px; color: var(--vscode-foreground); }
+.tb-lang-confirm-body { color: var(--fg-muted); margin-bottom: 10px; }
+.tb-lang-confirm-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.tb-lang-go {
+    font: 11px var(--vscode-font-family); padding: 3px 10px; border-radius: 5px; cursor: pointer;
+    border: 1px solid transparent; font-weight: 600;
+    color: var(--vscode-button-foreground, #fff);
+    background: var(--vscode-button-background, var(--accent));
+}
+.tb-lang-go:hover { background: var(--vscode-button-hoverBackground, color-mix(in srgb, var(--accent) 85%, #fff)); }
+.tb-lang-later {
+    font: 11px var(--vscode-font-family); padding: 3px 8px; border-radius: 5px; cursor: pointer;
+    border: 1px solid transparent; background: transparent; color: var(--fg-muted);
+}
+.tb-lang-later:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
+.tb-lang-item.translate .tb-lang-check { color: var(--dir-await); }

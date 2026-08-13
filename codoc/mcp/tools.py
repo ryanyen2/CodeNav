@@ -21,11 +21,10 @@ from pathlib import Path
 from codoc.doclang import (
     detect_prose_language, language_tag_for, prose_letters, workspace_doc_language,
 )
-from codoc.loop.activity import PHASE_DONE, PHASE_EDITING, mark_feature_phase
+from codoc.loop.activity import PHASE_DONE, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
 from codoc.loop.classify import suppressed_by_hold
 from codoc.loop.edits import hold_set, read_manifest
-from codoc.loop.inbox import drop_verdicts as _inbox_drop
 from codoc.loop.inbox import read_verdicts as inbox_read
 from codoc.loop.locks import loop_lock
 from codoc.loop.reconcile import safe_write_tree
@@ -446,6 +445,30 @@ def _hold_context(codoc_dir: str, caused_by: str) -> tuple[set[str], set[str]]:
     return held, own
 
 
+def _close_satisfied_queue(codoc_dir: str, store: Store) -> bool:
+    """After a mutation that may have satisfied a queued directive (a bind flipping a
+    plan placeholder realized, a reflect citing a ⟨d-…⟩ id), prune the realize queue
+    and re-derive status so the IDE stops asking for work that is demonstrably done.
+
+    Loop B does this once per pass, but a /codoc:plan session may never cause a Loop B
+    pass at all — the daemon suppresses doc/inbox batches while an agent epoch is open
+    and runs only Loop A at epoch close — so the MCP write path closes the queue on
+    its own evidence. Runs BEFORE the caller's re-render, so the sidecar holds the
+    render emits already reflect the closed entries (the "sent" badge clears in the
+    same projection that shows the new binding). Best-effort: queue hygiene must never
+    fail the op that triggered it."""
+    from codoc.loop.loop_b import prune_satisfied_directives
+    from codoc.loop.status import refresh_status
+    try:
+        root_dir = str(Path(codoc_dir).resolve().parent)
+        if prune_satisfied_directives(store, root_dir, codoc_dir):
+            refresh_status(codoc_dir, store)
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
                   caused_by: str = "", actor: str = "") -> dict:
     # Hold the shared codoc-loop lock across the agent's mutation + re-render so an MCP
@@ -466,6 +489,7 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
             codoc_dir, op, held, own_holds)
         ev = apply_op(op, store, source=source, applied=applied,
                       caused_by=caused_by, actor=actor)
+        _close_satisfied_queue(codoc_dir, store)
         wrote = safe_write_tree(store, codoc_dir)
         _mark_reflected(codoc_dir, [op])
         out = {"ok": True, "event_id": ev.id, "applied": applied,
@@ -607,6 +631,7 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
                 row["warning"] = warning
                 mismatches += 1
             results.append(row)
+        _close_satisfied_queue(codoc_dir, store)
         wrote = safe_write_tree(store, codoc_dir)
         _mark_reflected(codoc_dir, applied_ops)
         out = {"ok": True, "applied": applied_n, "proposed": proposed_n,
@@ -656,76 +681,78 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
 
     This is the in-session realization trigger (modeled on plannotator's blocking
     review hook): instead of ending the turn at "stop here", ``/codoc:plan`` calls
-    this after proposing nodes. It polls ``.codoc/inbox.json`` — the same verdict
-    channel Loop B drains — applying each verdict as it arrives (accept → ``apply_op``
-    + delete event; reject → delete event), and returns once every ``event_ids``
-    proposal is resolved (or the timeout elapses). The same turn then continues to
-    implement the accepted nodes, so there is no idle gap and no daemon dependency.
+    this after proposing nodes, waits for every ``event_ids`` proposal to resolve
+    (or the timeout), and the same turn continues to implement what was accepted.
 
-    Returns ``{accepted:[{event_id, feature_id, title}], rejected:[event_id], pending:[event_id], timed_out}``.
-    ``feature_id`` is the now-live node (ADD mints a fresh id on accept, recovered
-    by diffing the feature set) so the caller can bind code to it.
+    Loop B is the SOLE applier of verdicts. With a live ``codoc watch`` daemon
+    this tool only OBSERVES — racing the daemon (the old behaviour) made accept
+    semantics depend on who won: an await-applied accept minted no realize
+    directive, a daemon-applied one did. With no daemon, an in-process Loop B
+    pass drains the inbox here, so the semantics are identical either way
+    (directives minted, tree rendered, status stamped).
+
+    Outcomes are recovered from the event LEDGER, not from the inbox: accepting a
+    proposal applies a new event stamped ``caused_by=<proposal id>`` and deletes
+    the proposal row, so a proposal that is gone resolves to **accepted** (an
+    applied event cites it — its op carries the feature id an ADD minted) or
+    **rejected** (nothing cites it; rejection, withdrawal, and supersede all mean
+    "will never be applied", which is what the caller must know so it doesn't
+    implement it). This is the lookup the old ``ev is None`` branch promised in a
+    comment and never performed — verdicts that landed before the first poll came
+    back as empty lists with no error.
+
+    Returns ``{accepted:[{event_id, feature_id, title}], rejected:[event_id],
+    pending:[event_id], timed_out}``.
     """
     import time as _time
+
+    from codoc.loop.watch import daemon_running
 
     targets = list(dict.fromkeys(event_ids))  # de-dupe, preserve order
     accepted: list[dict] = []
     rejected: list[str] = []
     resolved: set[str] = set()
     deadline = _time.monotonic() + max(0.0, timeout)
+    root_dir = str(Path(codoc_dir).resolve().parent)
 
-    def _resolve_once() -> None:
-        verdicts = {v.event_id: v.accept for v in inbox_read(codoc_dir)}
-        consumed: set[str] = set()
-        # Serialize verdict application + render against the loops (loop/locks.py).
+    def _drain_if_daemonless() -> None:
+        wanted = {v.event_id for v in inbox_read(codoc_dir)} & set(targets)
+        if not wanted or daemon_running(codoc_dir):
+            return  # nothing for us yet, or the daemon owns the drain
+        from codoc.loop.loop_b import run_loop_b
+        try:
+            run_loop_b(root_dir, codoc_dir)
+        except Exception:  # noqa: BLE001 — the next poll retries; observation still runs
+            pass
+
+    def _observe() -> None:
         with loop_lock(codoc_dir), open_store(codoc_dir) as store:
             for eid in targets:
-                if eid in resolved:
-                    continue
-                ev = store.get_event(eid)
-                if eid in verdicts:
-                    accept = verdicts[eid]
-                    consumed.add(eid)
-                    if ev is None:        # already drained elsewhere — treat as done
-                        resolved.add(eid)
-                        continue
-                    if accept:
-                        before = {f.id for f in store.list_features()}
-                        apply_op(ev.op, store, source="user", applied=True)
-                        after = {f.id for f in store.list_features()}
-                        new = after - before
-                        fid = ev.op.feature_id or (next(iter(new)) if new else None)
-                        feat = store.get_feature(fid) if fid else None
-                        store.delete_event(eid)
-                        accepted.append({"event_id": eid, "feature_id": fid,
-                                         "title": (feat.title if feat else ev.op.title) or ""})
-                    else:
-                        store.delete_event(eid)
-                        rejected.append(eid)
-                    resolved.add(eid)
-                elif ev is None:
-                    # No verdict for us, yet the event is gone → the watch daemon
-                    # drained it. Infer the outcome from whether the node went live.
-                    resolved.add(eid)
-            if consumed:
-                _inbox_drop(codoc_dir, consumed)
-            if resolved >= set(targets):
-                safe_write_tree(store, codoc_dir)
-                from codoc.loop.status import refresh_status
-                refresh_status(codoc_dir, store)
+                if eid in resolved or store.get_event(eid) is not None:
+                    continue  # already answered / still awaiting its verdict
+                done = store.applied_event_for_cause(eid)
+                if done is not None:
+                    fid = done.op.feature_id
+                    feat = store.get_feature(fid) if fid else None
+                    accepted.append({"event_id": eid, "feature_id": fid,
+                                     "title": (feat.title if feat else done.op.title) or ""})
+                else:
+                    rejected.append(eid)
+                resolved.add(eid)
 
     while True:
-        _resolve_once()
+        _drain_if_daemonless()
+        _observe()
         if resolved >= set(targets) or _time.monotonic() >= deadline:
             break
         _time.sleep(poll_interval)
 
-    # Mark accepted (unrealized) placeholders as "editing" now so the IDE doc view
-    # shimmers them as being-implemented immediately — each resolves to realized
-    # content when §4's codoc_reflect/attach marks it PHASE_DONE.
-    fids = [a["feature_id"] for a in accepted if a.get("feature_id")]
-    if fids:
-        mark_feature_phase(codoc_dir, fids, PHASE_EDITING)
+    # Deliberately NO phase stamp here. Accepting is not implementing: bulk-marking
+    # every accepted placeholder "editing" grayed all of their prose the instant the
+    # user clicked — for up to the phase TTL (120 s) on nodes the session had not
+    # reached yet, since it implements one at a time. The truthful signals are the
+    # ones tied to actual work: the tool hook stamps "editing" per feature when a
+    # bound file is really written, and codoc_realize_progress narrates the pass.
 
     pending = [e for e in targets if e not in resolved]
     return {"ok": True, "accepted": accepted, "rejected": rejected,
@@ -733,9 +760,28 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
 
 
 def plan_status(codoc_dir: str) -> dict:
-    """Which plan placeholders are still unrealized vs realized."""
-    with open_store(codoc_dir) as store:
+    """Which plan placeholders are still unrealized vs realized — AND what the
+    realize queue still holds.
+
+    These are two different ledgers (the store's lifecycle bit vs the queued
+    directives in ``.codoc/realize.json``), and reporting only the first is how a
+    session could honestly say "all realized" while the IDE status bar kept counting
+    directives "to implement". The queue is pruned against current evidence first,
+    so what remains in ``queued_directives`` is genuinely outstanding work — e.g. a
+    tree edit the user made while the plan was being implemented."""
+    with loop_lock(codoc_dir), open_store(codoc_dir) as store:
+        _close_satisfied_queue(codoc_dir, store)
         unrealized = [{"id": f.id, "title": f.title}
                       for f in store.list_features() if not f.realized]
-        return {"ok": True, "unrealized": unrealized,
-                "all_realized": len(unrealized) == 0}
+        queued = [{"id": d.id, "feature_id": d.feature_id, "kind": d.kind}
+                  for d in read_manifest(codoc_dir) if d.handed_off]
+        out = {"ok": True, "unrealized": unrealized,
+               "all_realized": len(unrealized) == 0,
+               "queued_directives": queued}
+        if queued:
+            out["note"] = (
+                "Directives remain queued in .codoc/realize.md (edits made outside "
+                "this plan — e.g. the user changed a description while you worked). "
+                "Read that file and implement them, reflecting each with "
+                "caused_by=<its ⟨d-…⟩ id> — or tell the user to run /codoc:sync.")
+        return out

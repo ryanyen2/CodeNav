@@ -260,7 +260,11 @@ export function activate(context: vscode.ExtensionContext): void {
                 await vscode.window.showInformationMessage('No codoc tree found — run `codoc init` in the terminal first.');
                 return;
             }
-            await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(treePath)));
+            // openWith the custom editor explicitly: showTextDocument opens the RAW
+            // text buffer, which is what the status bar surfaced to a user who
+            // clicked "3 to implement" and got an unrendered control file.
+            await vscode.commands.executeCommand(
+                'vscode.openWith', vscode.Uri.file(treePath), 'codoc.tree-editor');
         }),
     );
 
@@ -347,8 +351,21 @@ export function activate(context: vscode.ExtensionContext): void {
     const bulkVerdict = async (ids: string[], accept: boolean): Promise<void> => {
         if (!ids || ids.length === 0) return;
         const label = accept ? 'Accept all' : 'Reject all';
+        // Say what the batch actually IS before the click commits it: proposals from
+        // an agent's plan and proposals codoc's own background pass raised look
+        // identical in the tree, and "Accept all (6)" silently mixed them — the modal
+        // is the one place with room to break the count down by origin.
+        const props = state.sidecar.proposals;
+        const tagOf = (id: string): string => {
+            const bf = Object.values(props?.by_feature ?? {}).find(p => p.event_id === id);
+            if (bf) return bf.tag || 'code drift';
+            return props?.by_event?.[id]?.tag || 'code drift';
+        };
+        const counts = new Map<string, number>();
+        for (const id of ids) counts.set(tagOf(id), (counts.get(tagOf(id)) ?? 0) + 1);
+        const breakdown = [...counts.entries()].map(([t, n]) => `${n} from ${t}`).join(', ');
         const choice = await vscode.window.showWarningMessage(
-            `${label} ${ids.length} proposed change${ids.length === 1 ? '' : 's'}?`,
+            `${label} ${ids.length} proposed change${ids.length === 1 ? '' : 's'}? (${breakdown})`,
             { modal: true }, label);
         if (choice !== label) return;
         await verdict(ids, accept);

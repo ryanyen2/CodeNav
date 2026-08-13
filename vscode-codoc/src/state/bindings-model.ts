@@ -156,6 +156,10 @@ export interface EventProposal {
     writes_code?: 'build' | 'remove' | null;
     /** v6 — see FeatureProposal.verdict_pending. */
     verdict_pending?: boolean;
+    /** Sibling anchors (add/move) — where the node will land on accept
+     *  (apply resolves them via rank_between). Absent on older sidecars. */
+    after_id?: string | null;
+    before_id?: string | null;
 }
 
 /** One entry of the v4 `changes` feed — a recent APPLIED event with provenance,

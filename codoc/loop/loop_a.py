@@ -846,6 +846,17 @@ def apply_changeset(
             result.held_back += 1
             continue
         if op.kind is NodeOpKind.ADD_NODE and op.bindings:
+            # The LLM door has to sanitize titles the same way the deterministic
+            # coverage net does (34513d1): handed a chunk whose symbol ends in
+            # `__module__`, a model will happily name the node after the symbol —
+            # and every Python file has one, so the outline fills with
+            # indistinguishable `__module__` rows while the filename that would
+            # tell them apart is discarded. Retitle from the file, BEFORE dedup,
+            # so the sanitized name participates in the same-title fold.
+            _t = (op.title or "").strip()
+            if _t.startswith("__") and _t.endswith("__"):
+                from codoc.loop.bootstrap import _title_from_file
+                op.title = _title_from_file(op.bindings[0][0])
             existing = unbound_titles.get(_norm_title(op.title))
             rationale = "dedup: bound to existing same-title node"
             if not existing and matcher is not None:
@@ -1347,5 +1358,12 @@ def reconcile_drift(
                                      caused_by_map=cb_map, default_caused_by=default_cb,
                                      codoc_dir=codoc_dir, root_dir=root_dir,
                                      file_scope=file_scope, embed_fn=embed_fn)
+            # Close realize-queue entries the reconciled state proves finished (a
+            # plan placeholder now bound, a directive whose ⟨d-…⟩ id the ledger
+            # carries). The daemon runs THIS pass — not Loop B — at epoch close and
+            # from the Stop hook, so without it a queue whose implementing session
+            # never runs /codoc:sync stays awaiting_impl forever.
+            from codoc.loop.loop_b import prune_satisfied_directives
+            prune_satisfied_directives(store, root_dir, codoc_dir)
             refresh_status(codoc_dir, store)
             return result

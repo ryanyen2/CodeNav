@@ -413,9 +413,48 @@ def _intent_line(author_intent: list[str] | None) -> str:
     return f'\n  Author asked: "{asked}"'
 
 
+def _changed_line(baseline: str | None, new: str) -> str:
+    """One line naming the author's actual delta, so the realizing agent weights
+    the edit itself rather than re-deriving it from two full snapshots (the tree
+    already carries the snapshot — the directive's job is the change). Empty when
+    there is no baseline (a first description) or nothing differs.
+
+    Character-level opcodes, not word-split, so non-spaced scripts (Chinese,
+    Japanese) diff correctly; runs are quoted verbatim and capped."""
+    if not baseline or baseline == new:
+        return ""
+    import difflib
+
+    sm = difflib.SequenceMatcher(None, baseline, new, autojunk=False)
+    added: list[str] = []
+    removed: list[str] = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag in ("insert", "replace") and j2 > j1:
+            added.append(new[j1:j2])
+        if tag in ("delete", "replace") and i2 > i1:
+            removed.append(baseline[i1:i2])
+
+    def _fmt(runs: list[str]) -> str:
+        runs = [r.strip() for r in runs if r.strip()]
+        if not runs:
+            return ""
+        shown = "; ".join(f'"{r[:160]}"' for r in runs[:3])
+        return shown + ("; …" if len(runs) > 3 else "")
+
+    parts = []
+    if (a := _fmt(added)):
+        parts.append(f"added {a}")
+    if (r := _fmt(removed)):
+        parts.append(f"removed {r}")
+    if not parts:
+        return ""
+    return ("  Changed (the author's edit this pass — weight it over the "
+            "unchanged prose): " + "; ".join(parts) + "\n")
+
+
 def build_directive(
     op: NodeOp, store: Store, *, emphasis: list[str] | None = None,
-    author_intent: list[str] | None = None,
+    author_intent: list[str] | None = None, baseline: str | None = None,
 ) -> str:
     intent = _intent_line(author_intent)
     if op.kind is NodeOpKind.ADD_NODE:
@@ -428,7 +467,14 @@ def build_directive(
         loc, files = _bound_code(op.feature_id, store) if f else ("", [])
         loc = loc or "(no bound code yet)"
         scope = ", ".join(files) if files else "(none yet — create where it fits)"
-        return (f'UPDATE FEATURE: "{title}"\n  New intent: {op.description}\n'
+        # A directive must never state "New intent: None". Title-only amends no
+        # longer mint (classify.edit_mints_directive), but any other caller falls
+        # back to the feature's stored description rather than stringifying None.
+        new_text = op.description if op.description is not None else (
+            (f.description if f else "") or "(no description recorded)")
+        return (f'UPDATE FEATURE: "{title}"\n'
+                + _changed_line(baseline, new_text)
+                + f'  New intent: {new_text}\n'
                 f'  Bound code: {loc}\n  Edit only: {scope}\n  Align the bound code with the new intent.'
                 + intent + _signal_lines(op.description, emphasis=emphasis))
     if op.kind is NodeOpKind.RETIRE_NODE:
@@ -709,10 +755,44 @@ def _prune_implemented_directives(store: Store, root_dir: str, codoc_dir: str) -
     if not handed_off:
         return 0
     done = store.implemented_directive_ids(handed_off)
+    # A plan ADD has a second, structural form of evidence the citation form can't
+    # capture: its whole ask is "make this placeholder real", and the placeholder
+    # becoming REALIZED — code attributed to that exact feature id, the guarded
+    # planned→active transition in apply._mutate — is that ask carried out, whoever
+    # bound it and whether or not they knew a directive id existed. A /codoc:plan
+    # session implements and binds without ever reading realize.md, so requiring
+    # the d-id citation left its queue wedged at awaiting_impl forever. This is not
+    # the "nearby work" the AMEND rule refuses: any number of unrelated edits touch
+    # an amended feature, but a planned feature realizing can only mean the code
+    # this directive asked for arrived.
+    for d in queued:
+        if not d.handed_off or not d.id or d.id in done:
+            continue
+        if d.kind != NodeOpKind.ADD_NODE.value or not d.feature_id:
+            continue
+        feature = store.get_feature(d.feature_id)
+        if feature is not None and not feature.retired and feature.realized:
+            done.add(d.id)
     if not done:
         return 0
     edits_channel.log_realized(codoc_dir, [d for d in queued if d.id in done])
     return _keep_directives(root_dir, codoc_dir, lambda d: d.id not in done)
+
+
+def prune_satisfied_directives(store: Store, root_dir: str, codoc_dir: str) -> int:
+    """Close realize-queue entries that current state proves are finished — dead
+    features, directives the ledger shows implemented, plan placeholders now bound.
+    Returns the count dropped.
+
+    Loop B runs these prunes once per pass, but a /codoc:plan session may never
+    trigger a Loop B pass at all: the daemon suppresses doc/inbox batches while an
+    agent epoch is open and runs only Loop A at epoch close. Exporting the pair lets
+    the other actors that DO run after the work lands (the MCP reflect/attach path,
+    Loop A's reconcile) close the queue on the same evidence, instead of the queue
+    having exactly one closer that never executes."""
+    removed = _prune_dead_directives(store, root_dir, codoc_dir)
+    removed += _prune_implemented_directives(store, root_dir, codoc_dir)
+    return removed
 
 
 def _in_flight_directive_ids(codoc_dir: str) -> frozenset[str]:
@@ -847,6 +927,21 @@ def _accept_implies_realize(op: NodeOp) -> bool:
             or (op.kind is NodeOpKind.ADD_NODE and op.realized is False))
 
 
+def _amended_verdict_op(op: NodeOp, verdict) -> NodeOp:
+    """The op an ACCEPT actually applies: the proposal, with the author's accept-time
+    edits folded in (ghost proposals are editable before acceptance — the IDE sends
+    the edited title/description on the verdict). Only ADD/AMEND carry prose, so only
+    they can be amended; a plain verdict returns the op unchanged."""
+    if op.kind not in (NodeOpKind.ADD_NODE, NodeOpKind.AMEND):
+        return op
+    update: dict = {}
+    if getattr(verdict, "title", None):
+        update["title"] = verdict.title
+    if getattr(verdict, "description", None):
+        update["description"] = verdict.description
+    return op.model_copy(update=update) if update else op
+
+
 def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBResult:
     res = LoopBResult()
     # (op, feature_id-or-"", caused_by) per code-implying edit — feature_id feeds
@@ -888,15 +983,22 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # `soft_retired` / `unretired` result fields stay (default 0) so existing callers
     # and the summary line are undisturbed.
 
-    def _accept_with_fid(op: NodeOp) -> str:
+    def _accept_with_fid(op: NodeOp, caused_by: str = "") -> str:
         """Apply an accepted op, recovering a freshly-minted ADD feature id by
-        set-diff (the op itself carries none until applied)."""
+        set-diff (the op itself carries none until applied).
+
+        ``caused_by`` — the accepted PROPOSAL's event id — stamps the applied
+        event so the verdict leaves a durable trace: the proposal row is deleted
+        on drain, and without this citation the e-id→outcome/f-id mapping was
+        unrecoverable the instant the drain finished (which is why
+        ``codoc_await_verdicts`` used to return empty when the daemon won the
+        race). See ``Store.applied_event_for_cause``."""
         if op.kind is NodeOpKind.ADD_NODE and not op.feature_id:
             before = {f.id for f in store.list_features()}
-            apply_op(op, store, source="user", applied=True)
+            apply_op(op, store, source="user", applied=True, caused_by=caused_by)
             new = {f.id for f in store.list_features()} - before
             return next(iter(new)) if new else ""
-        apply_op(op, store, source="user", applied=True)
+        apply_op(op, store, source="user", applied=True, caused_by=caused_by)
         return op.feature_id or ""
 
     # 0.5 Identity-keyed authored commands (U3 / KTD3). The webview emits an
@@ -1130,6 +1232,10 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             continue
         seen_verdict_ids.add(v.event_id)
         if v.accept:
+            # The op an accept applies may carry the author's accept-time edits (an
+            # editable ghost's title/description) — folded in HERE so both the apply
+            # and any directive minted below speak the edited text, not the proposed.
+            accepted_op = _amended_verdict_op(e.op, v)
             # Atomic: apply the accept AND delete its event as one unit. Without this a
             # kill -9 between the two (the verdict is drained only at pass end) re-reads
             # the still-present verdict next pass and re-accepts — and an ADD, whose op
@@ -1138,7 +1244,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             # is gone (next pass sees a vanished event → consumes harmlessly), or neither
             # happened (re-applied exactly once). Mirrors the command channel's ledger.
             with store.transaction():
-                fid = _accept_with_fid(e.op)
+                fid = _accept_with_fid(accepted_op, caused_by=e.id)
                 store.delete_event(e.id)
             res.accepted += 1
             # RETIRE accepted from the inbox is detach-only by default: mark retired
@@ -1154,13 +1260,13 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             #   for a human `~` edit) keeps its bindings and queues a removal directive,
             #   exactly like the human text path (step 2). The code is removed by the
             #   agent and reconcile detaches then.
-            if e.op.kind is NodeOpKind.RETIRE_NODE:
-                if e.op.delete_code and edit_mints_directive(e.op, store):
-                    directive_ops.append((e.op, fid, e.id))
+            if accepted_op.kind is NodeOpKind.RETIRE_NODE:
+                if accepted_op.delete_code and edit_mints_directive(accepted_op, store):
+                    directive_ops.append((accepted_op, fid, e.id))
                 else:
-                    for b in store.bindings_for_feature(e.op.feature_id):
+                    for b in store.bindings_for_feature(accepted_op.feature_id):
                         store.delete_binding(b.file, b.symbol_path)
-            elif e.op.kind is NodeOpKind.ADD_NODE and e.op.realized is False:
+            elif accepted_op.kind is NodeOpKind.ADD_NODE and accepted_op.realized is False:
                 # An accepted PLAN placeholder (realized=False) is a build request →
                 # mint a directive. Every other accepted proposal (a descriptive AMEND
                 # reflecting code that already changed, an ADD binding existing code, a
@@ -1169,7 +1275,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
                 # description derived from that very code). This deliberately does NOT
                 # route through edit_mints_directive, whose AMEND→always-True is for the
                 # doc-AUTHORING path, not for reconciling-to-code accepts.
-                directive_ops.append((e.op, fid, e.id))
+                directive_ops.append((accepted_op, fid, e.id))
         else:
             store.delete_event(e.id)
             res.rejected += 1
@@ -1319,7 +1425,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
         author_intent = []
     rendered = [
         (build_directive(op, store, emphasis=diff.emphasis.get(fid),
-                         author_intent=author_intent), fid, cause, op.kind.value)
+                         author_intent=author_intent, baseline=baselines.get(fid)),
+         fid, cause, op.kind.value)
         for op, fid, cause in directive_ops
     ]
     rendered += [(text, fid, cause, "steer") for text, fid, cause in steered]
@@ -1366,10 +1473,10 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     #    The session implements via /codoc:sync; the Stop-hook reflection / epoch-close
     #    Loop A closes the loop. Drafts surface via the in-situ diff + pending dots
     #    (hold_set reads the manifest), no realize.md needed.
-    _prune_dead_directives(store, root_dir, codoc_dir)
-    # …and directives the ledger shows were already carried out, so the queue
-    # closes on evidence of the work rather than on someone deleting realize.md.
-    _prune_implemented_directives(store, root_dir, codoc_dir)
+    # Dead features, ledger-cited implementations, and realized plan placeholders:
+    # close the queue on evidence of the work rather than on someone deleting
+    # realize.md.
+    prune_satisfied_directives(store, root_dir, codoc_dir)
     existing = edits_channel.read_manifest(codoc_dir)
     if not existing and not res.directives:
         status.refresh_status(codoc_dir, store)

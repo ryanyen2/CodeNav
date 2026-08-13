@@ -340,6 +340,14 @@ that rewrites every description at once, so its design is about being safe to ru
   ask an agent to reimplement the whole codebase.
 - Resumable and idempotent: selection is by *detected* language, batches are applied
   as they land, and a failed batch is reported rather than rolling back the good ones.
+- **Live progress channel** (`.codoc/translate.json`, v7): written at start, per
+  batch, and (in a `finally`) at the end. Carries `running/target/total/translated/
+  skipped` plus `pending` — the fids still awaiting their batch, which is exactly the
+  IDE's per-node **skeleton set**. Each batch also re-renders the derived artifacts
+  (`tree.codoc`/`tree.doc.json`/status) so the editor replaces each skeleton with its
+  translated prose as batches land instead of snapping over at the end. Readers are
+  lease-guarded (`TRANSLATE_LEASE_S`): a crashed run's stale `running: true` reads as
+  dead, so no skeleton outlives the run that drew it.
 - **Bidirectional.** English is a target like any other. An early guard refused to run
   whenever the target was English, on the reasoning that English is the default and so
   means "unset" — which made the language a one-way door: switching a translated tree
@@ -439,8 +447,23 @@ state** and is re-emitted on every pass even when the text render is held back
   dead-ref flagging + hover; `refs[].resolved` is leaf-tolerant.
 - **`drift.json`** — `{fid: "questioned" | "binding-lost"}`, re-emitted as the
   sidecar `feature_drift` slice (excludes held + unrealized).
-- **`inbox.json`** — `{verdicts:[{event_id, accept}]}`, written by the IDE/hub,
-  drained by Loop B, then cleared. Read-modify-write is `filelock`-guarded.
+- **`inbox.json`** — `{verdicts:[{event_id, accept}]}`, written by the hub/CLI
+  (`inbox.append_verdict`, lock-held), drained by Loop B — the SOLE verdict
+  applier; `codoc_await_verdicts` only observes outcomes from the event ledger
+  (accepts are stamped `caused_by=<proposal e-id>`) and, with no daemon alive,
+  drains by running the same Loop B pass. Read-modify-write is `filelock`-guarded.
+  A verdict may carry optional `title`/`description` **accept-time edits** (v7):
+  ghost proposals are editable in the IDE before acceptance, and Loop B applies
+  the proposal with the edited text (`_amended_verdict_op`) — the plan directive
+  minted from an edited plan ADD speaks the edited text too. Absent fields mean
+  "as proposed", so old writers/readers are unchanged.
+- **`inbox.host.jsonl`** — the IDE's **verdict append-log** (one
+  `{event_id, accept}` JSON line per Accept/Reject click). The extension host
+  holds no cross-process lock, so its old read-modify-write of `inbox.json`
+  could land inside `drop_verdicts`' locked window and erase a click; appends
+  can't erase anything. Folded into `inbox.json` under the inbox lock on first
+  read (`inbox.merge_host_verdicts` — every `read_verdicts` merges first; last
+  line wins per event id). Same pattern as `edits.host.jsonl` below.
 - **`edits.json`** — the authored-edit + provenance channel: `commands` (the
   identity-keyed add/set_title/set_description/move/retire Loop B applies), `edits`
   (authorship annotations), `intents`/`drafts` (live doc-ahead suggestions + held pending
@@ -532,9 +555,47 @@ workspaces that predate the refactor: it lifts pre-existing `tree.doc.json`
 comment threads into the store and converges re-minted duplicate features onto the
 binding-owner.
 
+**Workflow-legibility surfaces (v7).** Four surfaces make the messy, non-linear
+workflow readable in place:
+
+- **Busy skeletons** (`webview/tiptap/busy-decorations.ts`): a section being
+  rewritten under the reader — a `codoc translate` batch pending
+  (`payload.translation.pending`) or the agent applying (activity phase
+  `reflecting`) — wears a shimmer skeleton in BOTH panes and drops user
+  transactions inside its span (`filterTransaction`; REFLECT-tagged programmatic
+  updates pass, or the rewrite could never land). Per-section, never
+  whole-document: the skeleton set shrinks as batches land. `editing` (agent in
+  the feature's CODE) is deliberately not busy — the doc text isn't moving then.
+- **Two-stage language switch** (`doc-view.renderLangSwitch`): picking a language
+  is stage 1 (config.json only — new prose); a standing "Translate N nodes?"
+  offer is stage 2, spawning `codoc translate` from the host
+  (`tree-editor.startTranslate`) with progress via `.codoc/translate.json` →
+  per-node skeletons → incremental reveal. The offer's count comes from the pure
+  `doc-lang.pendingForTarget`.
+- **The minimap rail as a status strip** (`whole-doc-editor.rebuildRail` +
+  `feature-state.railState`): one tick per feature in the SAME ordered projection
+  the row badge uses (busy > working > proposed > rewritten > sent > staged >
+  planned), same hues as the in-document decorations, a contiguous `in-view` band
+  as the viewport indicator, and a legend pinned under the ticks. Tick titles name
+  the state in words (`RAIL_STATE_LABEL`) so nothing rests on hue alone.
+- **Loop rewrites as a review surface** (`webview/tiptap/auto-edit-decorations.ts`):
+  an unasked Loop-A AMEND renders as an in-situ tracked-change diff (old words
+  struck where they stood via `reviewDiffSpans`, new words underlined) with an
+  explicit **Keep / Restore** verdict — the v6 dwell-to-clear model is retired
+  (a record that evaporates when looked at cannot be disagreed with). Keep
+  acknowledges; Restore re-authors the previous wording through the ordinary
+  command channel (`tree-editor.resolveAutoEdit` → `set_description`), where the
+  daemon classifies it and, if code-implying, HOLDS it for hand-off like any
+  other edit. Decorations only, never engine marks: the rewrite is already
+  applied, and marked prose would serialize back to the previous text (a phantom
+  revert on the next settle). Ghost ADD proposals are additionally **editable in
+  place** (`suggestion-decorations.editableGhostField`; drafts survive rebuilds in
+  a module store) — the edited text rides the verdict as accept-time edits.
+
 Key source files: `state/workspace-state.ts` (root/reload/status, `writeVerdict`),
 `state/tree-model.ts` (TS port of `parse.py`, parity-tested), `state/bindings-model.ts`,
 `state/edits-channel.ts` (edits.json contract), `state/agent-proposals.ts`,
+`state/translate-model.ts` (lease-guarded translate.json reader),
 `providers/{decoration,inlay,completion,doc-links,code-lens,code-actions}.ts`,
 `providers/tree-editor.ts` (+ inline-comment lifecycle), `webview/host-bridge.ts`
 (the VS Code/network transport seam), `webview/tiptap/*`, `daemon/{lockfile,daemon-manager}.ts`,

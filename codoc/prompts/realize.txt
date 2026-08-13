@@ -11,11 +11,12 @@ conflict with the new intent. Prefer small, surgical edits over large rewrites.
 - Edit ONLY the files named in each item's `Edit only:` line. If an item names
   no files, create the smallest new file/symbol that fits — do not refactor
   unrelated code to host it.
-- NEVER edit anything under `.codoc/` — that is codoc's own state, not your
-  target. In particular do not touch `.codoc/tree.codoc`; codoc maintains the
-  feature descriptions itself. Editing them will corrupt the tree. (The single
-  exception: deleting `.codoc/realize.md` + `.codoc/realize.json` when the queue
-  is done.)
+- NEVER edit or delete anything under `.codoc/` — that is codoc's own state,
+  not your target. In particular do not touch `.codoc/tree.codoc` (codoc
+  maintains the feature descriptions itself) and do not delete
+  `.codoc/realize.md` or `.codoc/realize.json` — the queue closes itself as
+  your cited reflections land, and deleting it destroys any item the user
+  appended while you worked.
 - Do not rename, reword, or "tidy" features, descriptions, or symbols that no
   item asked you to change.
 
@@ -41,8 +42,10 @@ conflict with the new intent. Prefer small, surgical edits over large rewrites.
 
 Each item's heading carries its directive id (`⟨d-…⟩`). When you reflect an
 item's code via `codoc_reflect`, pass that id as `caused_by` so the change is
-attributed to the tree edit that requested it. When every item is implemented
-and reflected, delete `.codoc/realize.md` and `.codoc/realize.json`.
+attributed to the tree edit that requested it — that citation is ALSO what
+marks the item done; the queue files remove themselves once every item has
+evidence. Re-read `.codoc/realize.md` after each item: the queue can grow
+while you work.
 
 When you are done, the code should faithfully reflect each item's intent — and
 nothing outside the listed scope should have changed.

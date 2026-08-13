@@ -39,14 +39,25 @@ def store(tmp_path):
     "Rewrite the parser; it should reject tabs.",  # was "imperative" — now no special case
     "Add retry logic.",                          # sentence-initial verb — no special case
     "",
-    None,
 ])
-def test_amend_always_mints_a_directive(store, description):
-    """Every AMEND mints a directive (held as a draft by default) — the SYSTEM never
-    guesses from prose whether the edit 'requests code'. No more false positives on
-    descriptive prose that opens with a verb, no more typo-fix re-fires."""
+def test_amend_with_a_description_mints_a_directive(store, description):
+    """Every description-carrying AMEND mints a directive (held as a draft by
+    default) — the SYSTEM never guesses from prose whether the edit 'requests
+    code'. No more false positives on descriptive prose that opens with a verb,
+    no more typo-fix re-fires."""
     op = NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1", description=description)
     assert edit_mints_directive(op, store) is True
+
+
+def test_title_only_amend_mints_nothing(store):
+    """Naming a node is doc curation, not code work. A title-only amend
+    (description None) used to mint a directive whose body rendered as
+    'New intent: None' — observed live: a user typing a new node's title settled
+    as set_title commands, and two of the three items handed to their agent were
+    this garbage."""
+    op = NodeOp(kind=NodeOpKind.AMEND, feature_id="f-1", title="Draft Builder",
+                description=None)
+    assert edit_mints_directive(op, store) is False
 
 
 def test_plan_placeholder_add_mints_directive(store):

@@ -117,3 +117,52 @@ export function stateBadge(state: FeatureState, s: FeatureSignals = {}): StateBa
 /** Hover text for a planned (accepted, not yet built) feature — it has no glyph, so
  *  the explanation rides on the title itself. */
 export const PLANNED_TITLE = 'Planned. No code has been written for this yet.';
+
+// ── the minimap rail's per-tick state ─────────────────────────────────────────
+//
+// The rail (the strip of ticks on the doc's right edge) shows the WHOLE document's
+// status at a glance, one tick per feature, in the same encoding the rows already
+// use — so it is the same ordered projection as `featureState`, extended with the
+// two facts the rail must show that the row badge does not rank: a section being
+// rewritten under the reader right now (busy — translating / the agent applying),
+// and an unresolved loop rewrite awaiting its Keep/Restore verdict (rewritten).
+
+export type RailState =
+    | 'busy' | 'working' | 'proposed' | 'rewritten'
+    | 'sent' | 'staged' | 'planned' | 'retired' | 'settled';
+
+export interface RailSignals extends FeatureSignals {
+    /** The section is being rewritten right now (translation batch pending /
+     *  agent applying) — outranks everything: it explains why the rest moves. */
+    busy?: boolean;
+    /** An unasked loop rewrite awaits its Keep/Restore verdict. */
+    autoEdit?: boolean;
+    retired?: boolean;
+}
+
+/** First match wins — same discipline as `featureState`, and the two agree on the
+ *  shared states so a row badge and its rail tick can never tell different stories. */
+export function railState(s: RailSignals): RailState {
+    if (s.busy) return 'busy';
+    if (s.activeMode) return 'working';
+    if (s.proposalOp) return 'proposed';
+    if (s.autoEdit) return 'rewritten';
+    if (s.sent) return 'sent';
+    if (s.staged) return 'staged';
+    if (s.realized === false) return 'planned';
+    if (s.retired) return 'retired';
+    return 'settled';
+}
+
+/** One glossary line per rail state — the legend popover + each tick's hover. */
+export const RAIL_STATE_LABEL: Record<RailState, string> = {
+    busy: 'being rewritten right now (hands off — it updates itself)',
+    working: 'the agent is in this feature\'s code',
+    proposed: 'an agent change awaits your verdict',
+    rewritten: 'codoc rewrote this — review Keep / Restore',
+    sent: 'sent to the agent — being realized',
+    staged: 'your edit, recorded but not sent (⌘S sends)',
+    planned: 'planned — no code behind it yet',
+    retired: 'retired',
+    settled: 'settled',
+};

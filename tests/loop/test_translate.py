@@ -303,3 +303,102 @@ def test_limit_bounds_a_trial_run(codoc_dir):
 
     translate_tree(codoc_dir, language=ZH, limit=2, propose=spy)
     assert len(sent) == 2
+
+
+# ── the progress channel (`.codoc/translate.json`) ───────────────────────────
+#
+# The IDE draws a per-node skeleton for every fid still in `pending` and replaces
+# each skeleton as its batch's re-render lands — so the channel's honesty (fids
+# leave `pending` exactly when their fate is decided, `running` never survives the
+# run) is what the whole two-stage language switch UX rests on.
+
+def _progress(codoc_dir):
+    from codoc.loop.translate import read_translate_progress
+    return read_translate_progress(codoc_dir)
+
+
+def test_progress_finalizes_not_running_with_empty_pending(codoc_dir):
+    en_id, _ = _seed(codoc_dir)
+    translate_tree(codoc_dir, language=ZH,
+                   propose=_translator({en_id: ("索引快照差异", CITED_ZH)}))
+    p = _progress(codoc_dir)
+    assert p["running"] is False
+    assert p["pending"] == []
+    assert p["translated"] == 1
+    assert p["total"] == 1
+    assert p["target"] == "zh-Hans"
+
+
+def test_progress_pending_shrinks_per_batch_and_render_is_incremental(codoc_dir):
+    """Each batch must (a) drop its fids from `pending` and (b) re-render the
+    derived artifacts, so the IDE reveals translations batch by batch instead of
+    all at the end."""
+    import codoc.loop.translate as tr
+    with open_store(codoc_dir) as s:
+        f1 = Feature(title="First feature", description="Does the first English thing.")
+        f2 = Feature(title="Second feature", description="Does the second English thing.")
+        s.upsert_feature(f1)
+        s.upsert_feature(f2)
+        ids = [f1.id, f2.id]
+
+    observed: list[dict] = []
+    rendered_mid: list[str] = []
+    zh_out = {ids[0]: ("第一个特性", "做第一件事的中文描述内容。"),
+              ids[1]: ("第二个特性", "做第二件事的中文描述内容。")}
+
+    def one_at_a_time(features, language, **_kw):
+        # Snapshot the progress file AND the render AS THE RUN GOES (each propose
+        # call happens after the previous batch's progress write + re-render).
+        observed.append(_progress(codoc_dir))
+        tree = codoc_dir / "tree.codoc"
+        rendered_mid.append(tree.read_text(encoding="utf-8") if tree.exists() else "")
+        return {f["id"]: zh_out[f["id"]] for f in features}
+
+    old_batch = tr.BATCH
+    tr.BATCH = 1
+    try:
+        translate_tree(codoc_dir, language=ZH, propose=one_at_a_time)
+    finally:
+        tr.BATCH = old_batch
+
+    # First call: both pending. Second call: the first batch's fid is gone AND its
+    # translation is already visible in the re-rendered tree.codoc — mid-run, before
+    # the second batch has even been proposed.
+    assert set(observed[0]["pending"]) == set(ids)
+    assert observed[0]["running"] is True
+    assert observed[1]["pending"] == [ids[1]]
+    assert "第一个特性" in rendered_mid[1]
+    final = _progress(codoc_dir)
+    assert final["running"] is False and final["pending"] == []
+    assert (codoc_dir / "tree.doc.json").exists()
+
+
+def test_progress_reports_skips_and_still_finalizes(codoc_dir):
+    en_id, _ = _seed(codoc_dir)
+    bad = CITED_ZH.replace("compute_changeset", "计算变更集")
+    translate_tree(codoc_dir, language=ZH,
+                   propose=_translator({en_id: ("索引快照差异", bad)}))
+    p = _progress(codoc_dir)
+    assert p["running"] is False and p["pending"] == []
+    assert p["skipped"] and "citation" in p["skipped"][0]["reason"]
+
+
+def test_progress_finalizes_even_when_the_run_dies(codoc_dir):
+    """A raised error mid-run must not leave `running: true` behind — the IDE would
+    skeleton-lock nodes for a run that no longer exists."""
+    _seed(codoc_dir)
+
+    def boom(features, language, **_kw):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        translate_tree(codoc_dir, language=ZH, propose=boom)
+    assert _progress(codoc_dir)["running"] is False
+
+
+def test_dry_run_writes_no_progress(codoc_dir):
+    en_id, _ = _seed(codoc_dir)
+    translate_tree(codoc_dir, language=ZH, dry_run=True,
+                   propose=_translator({en_id: ("索引快照差异", CITED_ZH)}))
+    from codoc.loop.translate import translate_progress_path
+    assert not translate_progress_path(codoc_dir).exists()

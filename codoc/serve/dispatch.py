@@ -114,8 +114,18 @@ def _verdict(message: dict, codoc_dir: str) -> dict:
 
     accept = bool(message.get("accept"))
     ids = [e for e in (message.get("eventIds") or []) if isinstance(e, str) and e]
+    # Accept-time edits (v7): the browser's editable ghost sends the author's
+    # amended title/description with the accept — same contract as the IDE's
+    # inbox.host.jsonl line. Only strings ride; a reject ignores them.
+    edits = message.get("edits") if accept else None
+    title = edits.get("title") if isinstance(edits, dict) else None
+    description = edits.get("description") if isinstance(edits, dict) else None
     for eid in ids:
-        inbox.append_verdict(codoc_dir, eid, accept=accept)
+        inbox.append_verdict(
+            codoc_dir, eid, accept=accept,
+            title=title if isinstance(title, str) else None,
+            description=description if isinstance(description, str) else None,
+        )
     return {"ok": True, "verdicts": len(ids)}
 
 

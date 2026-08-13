@@ -68,10 +68,15 @@ def edit_mints_directive(op: NodeOp, store: Store) -> bool:
     inspects prose. (Whether the minted directive is realized NOW or held as a draft
     is a separate decision: the held-draft hand-off model in Loop B's finalize.)
 
-      - AMEND: ALWAYS mints a directive (born held; realized only on an explicit
-        hand-off). A description edit is documentation by default, never surprise code,
-        but it carries a draft the user can choose to realize — no prose-guessing about
-        whether "this sentence sounds imperative".
+      - AMEND with a description: mints a directive (born held; realized only on an
+        explicit hand-off). A description edit is documentation by default, never
+        surprise code, but it carries a draft the user can choose to realize — no
+        prose-guessing about whether "this sentence sounds imperative".
+      - AMEND that only renames (``description`` is None): mints NOTHING. Naming a
+        node is doc curation; a directive built from it has no intent to state — it
+        rendered as "New intent: None" and handed the agent a nonsense ask (observed
+        live: a user typing a new node's title settled as set_title commands, and
+        two of the three items in their realize queue were these).
       - ADD_NODE: mints iff it is an explicit plan placeholder (``realized`` is False).
         A descriptive / title-only hand-added node is a node, not a build request, and
         an authored "plan" toggle is the explicit way to request one.
@@ -80,7 +85,7 @@ def edit_mints_directive(op: NodeOp, store: Store) -> bool:
     """
     k = op.kind
     if k is NodeOpKind.AMEND:
-        return True
+        return op.description is not None
     if k is NodeOpKind.ADD_NODE:
         return op.realized is False
     if k is NodeOpKind.RETIRE_NODE:

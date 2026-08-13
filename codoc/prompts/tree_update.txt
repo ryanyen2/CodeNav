@@ -32,10 +32,17 @@ feature's history — write it for them, not as a log line.
 2. Strongly prefer `attach` to an existing feature over `add_node`. Only add a
    node when no feature in the subtree plausibly covers the new chunk. (When the
    tree is empty — the subtree and the title list are empty — group the added
-   chunks into a small number of cohesive `add_node`s.)
+   chunks into a small number of cohesive `add_node`s.) A feature marked
+   `planned` is an accepted plan placeholder whose code has not landed yet: when
+   an added chunk fulfils its stated intent, `attach` the chunk to that
+   placeholder — NEVER mint a new node beside it for the same intent, even if
+   the placeholder currently binds nothing.
 3. NEVER create a node whose `title` duplicates or paraphrases any title in the
    tree (see the full title list below). If two added chunks belong together,
-   cover them with ONE node, not two.
+   cover them with ONE node, not two. Bind module-level chunks
+   (`file::__module__`) to the file's primary feature, never a node of their
+   own — and never use a bare symbol name (`__module__`, `__init__`, `main`) as
+   a title; a title names intent, not a symbol.
 4. Choose `parent_id` from the subtree/titles so the new node sits under the most
    related parent. Keep the tree shallow and balanced (aim for 3–7 children per
    parent); top-level nodes are broad themes.
@@ -116,6 +123,8 @@ Return ONLY this, inside solution tags:
 ## Every feature title in the tree (for de-duplication)
 
 One line per feature, `- [feature_id] Title`, children indented under parents.
+A `(planned — …)` suffix marks an accepted plan placeholder awaiting its code
+(Rule 2: attach matching chunks to it, never duplicate it).
 
 {all_titles}
 <<<CACHE_BREAK>>>

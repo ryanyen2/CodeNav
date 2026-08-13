@@ -39,20 +39,63 @@ def has_pending_user_edits(codoc_dir: str) -> bool:
         return not pending_user_edits(store, codoc_dir).is_empty()
 
 
+def doc_edits_ahead(doc_parsed, store: Store) -> bool:
+    """True when ``tree.doc.json`` holds AUTHORED edits the store hasn't absorbed.
+
+    ``diff_codoc(doc, store)`` alone cannot tell direction: a doc that differs from
+    the store is either AHEAD (the webview settled text the loop hasn't applied —
+    intent, must be yielded to) or BEHIND (the store advanced past the projection —
+    an MCP reflect, a CLI accept, a seeding script — and the doc's text difference
+    is staleness, not intent). Treating BEHIND as pending is a wedge: every render
+    yields to a phantom edit that would actually *revert* the store, so tree.codoc
+    and tree.doc.json stay stale until some mutating Loop B pass happens to rewrite
+    the doc — with Loop B suppressed during agent epochs, potentially a whole
+    session.
+
+    Direction comes from the heading's ``version`` attr (the store revision the
+    projection was rendered from, stamped by ``write_tree_doc``): a differing op
+    whose doc node carries a version OLDER than the store feature's ``updated_at``
+    is a stale projection and is ignored; equal-or-missing versions are yielded to
+    (an authored edit is typed against the projection it displays, so its stamp
+    equals the store revision until the edit is applied — and a legacy doc without
+    stamps keeps the conservative old behaviour)."""
+    from codoc.model.hlc import HLC
+
+    d = diff_codoc(doc_parsed, store, has_local_ids=True)
+    if d.is_empty():
+        return False
+    doc_nodes = {n.id: n for n in doc_parsed.nodes if n.id}
+    for op in d.user_ops:
+        fid = op.feature_id
+        if not fid:
+            return True  # a genuinely new authored node — always intent
+        node = doc_nodes.get(fid)
+        feature = store.get_feature(fid)
+        if node is None or feature is None or not node.doc_version:
+            return True  # can't prove staleness — conservative: treat as intent
+        try:
+            if HLC.from_str(node.doc_version) < feature.updated_at:
+                continue  # store advanced past this projection — staleness, skip
+        except Exception:  # noqa: BLE001 — unparseable stamp → conservative
+            return True
+        return True  # same-or-newer stamp with differing text = authored edit
+    return False
+
+
 def has_pending_doc_edits(codoc_dir: str) -> bool:
     """True if ``tree.doc.json`` (the webview's authored doc, U2b) holds feature
     edits the store hasn't absorbed yet — the doc-side analogue of
     :func:`has_pending_user_edits`. The daemon uses it to skip a Loop B pass for a
     non-edit doc.json write (a comment-reconcile / suggestion-rebase persist), so a
     payload-driven write never ping-pongs the loop. (Inline-comment steers ride
-    ``edits.json`` and are caught by the daemon's separate ``edits_touched`` signal.)"""
-    if parse_doc_file(codoc_dir) is None:
+    ``edits.json`` and are caught by the daemon's separate ``edits_touched`` signal.)
+    Direction-aware: a doc merely BEHIND the store is not "pending" (see
+    :func:`doc_edits_ahead`)."""
+    doc_parsed = parse_doc_file(codoc_dir)
+    if doc_parsed is None:
         return False
     with open_store(codoc_dir) as store:
-        # Doc channel → has_local_ids=True so a TipTap-undo'd node (fid reset to null,
-        # local_id intact) is recognized as the existing feature, not a false-positive
-        # pending ADD that would wake Loop B on a no-op.
-        return not diff_codoc(parse_doc_file(codoc_dir), store, has_local_ids=True).is_empty()
+        return doc_edits_ahead(doc_parsed, store)
 
 
 def safe_write_tree(store: Store, codoc_dir: str) -> bool:
@@ -81,7 +124,7 @@ def safe_write_tree(store: Store, codoc_dir: str) -> bool:
         # reverting the settle — or clobber the un-migrated comments. Loop B applies
         # the edit / migrate absorbs the comments; the next pass renders normally.
         doc_parsed = parse_doc_file(codoc_dir)
-        if doc_parsed is not None and not diff_codoc(doc_parsed, store, has_local_ids=True).is_empty():
+        if doc_parsed is not None and doc_edits_ahead(doc_parsed, store):
             return False
         # tree.codoc is a READ-ONLY derived export: the text-ingest channel is retired
         # (loop_b._merge_channels returns empty), so a divergent on-disk tree.codoc — a

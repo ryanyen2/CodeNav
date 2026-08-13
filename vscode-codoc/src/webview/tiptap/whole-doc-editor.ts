@@ -36,7 +36,8 @@ import {
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { AutoEditDecorations, AUTO_EDITS_UPDATED } from './auto-edit-decorations';
-import { dwellFor } from '../../state/auto-edits';
+import { BusyDecorations, BUSY_UPDATED, type BusyInfo } from './busy-decorations';
+import { railState, RAIL_STATE_LABEL, type RailSignals } from '../../state/feature-state';
 import type { AutoEditInfo } from '../protocol';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { BlameDecorations, BLAME_UPDATED } from './blame-decorations';
@@ -80,7 +81,9 @@ export interface WholeDocEditorOptions {
      *  Flushes the latest edit and hands the staged code-implying edits to the agent.
      *  Cites the adopted baseline for the same reason `onSettle` does. */
     onCommit?: (doc: PMNode, baselineId?: number) => void;
-    onAccept: (s: Suggestion) => void;
+    /** `edits` — the author amended an editable ghost before accepting (see
+     *  suggestion-decorations.SuggestionHandlers). */
+    onAccept: (s: Suggestion, edits?: { title?: string; description?: string }) => void;
     onReject: (s: Suggestion) => void;
     /** Withdraw a queued realization for a feature (U6) — the ✕ on its "realizing"
      *  badge. Cancels the directive, keeps the prose. */
@@ -100,9 +103,12 @@ export interface WholeDocEditorOptions {
      *  `source==='scroll'`) the eased tree re-center. `'selection'` fires on every caret move,
      *  so re-centering on it would animate the tree on every keystroke (KTD2). */
     onActiveFeature?: (fid: string | null, source: 'scroll' | 'selection') => void;
-    /** v6: the reader has now read a feature whose description the loop rewrote —
-     *  the acknowledgement is the dwell, not a click (state/auto-edits.ts). */
-    onAutoEditSeen?: (fid: string, at: string) => void;
+    /** v6→v7: the reader's explicit verdict on an unasked loop rewrite. Keep =
+     *  acknowledge (the mark clears for good). Revert = restore `prev` through the
+     *  authored-command channel (a real edit the daemon classifies — it can queue
+     *  reconcile work now that the code has moved). Replaces the dwell-to-clear
+     *  model, whose marks evaporated the moment the reader looked at them. */
+    onAutoEditVerdict?: (fid: string, at: string, keep: boolean, prev: string) => void;
     /** Pointer hovering a depends-on / used-by link — drives a transient tree-pane
      *  highlight + scroll-to (preview navigation). null on leave. */
     onHoverFeature?: (fid: string | null) => void;
@@ -134,6 +140,10 @@ export interface WholeDocEditorHandle {
     setSteps: (steps: Record<string, AgentStep[]>) => void;
     /** v6: the unasked loop rewrites still owed attention (already seen-filtered). */
     setAutoEdits: (edits: Record<string, AutoEditInfo>) => void;
+    /** Sections being rewritten under the reader RIGHT NOW (translation batches
+     *  pending / the agent applying) — draws the skeleton shimmer and blocks user
+     *  edits inside those sections until they land (busy-decorations.ts). */
+    setBusy: (busy: Record<string, BusyInfo>) => void;
     setSessionLive: (live: boolean) => void;
     setHistory: (history: Record<string, HistoryEntry[]>) => void;
     setBlame: (on: boolean) => void;
@@ -264,6 +274,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
 
     let dirty = false;
     let settleTimer = 0;
+    let lastTypedAt = 0;                 // last USER keystroke (see activelyEditing)
     let suppressUpdate = false;          // true while we programmatically setContent
     let currentSuggestions: Suggestion[] = [];   // agent code-ahead proposals (sidecar)
     // Signature of the agent code-ahead AMENDs last LOADED into the doc as engine
@@ -274,10 +285,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentThreads: Record<string, ThreadsData> = {};
     let currentPhases: Record<string, FeaturePhase> = {};
     let currentSteps: Record<string, AgentStep[]> = {};   // P2b agent-action ribbon
-    // v6: unasked loop rewrites the reader has not caught up on yet. Cleared by
-    // READING — see the dwell timer below, and state/auto-edits.ts for why there is
-    // no dismiss button.
+    // v6→v7: unasked loop rewrites the reader has not RESOLVED yet. Cleared by an
+    // explicit Keep/Restore verdict (auto-edit-decorations.ts) — never by merely
+    // looking, which is how the record of an AI edit used to evaporate unreviewed.
     let currentAutoEdits: Record<string, AutoEditInfo> = {};
+    // Sections being rewritten right now (translating / agent applying) — skeleton
+    // shimmer + the per-section edit guard (busy-decorations.ts).
+    let currentBusy = new Map<string, BusyInfo>();
     let currentRole = 'claude';   // the ribbon's "who" — matches the presence avatar's role
     let currentHeld = new Set<string>();   // handed-off features (staged & sent) → pending badge
     let currentSessionLive = false;        // W3: live agent session → "lands next turn" wording
@@ -339,7 +353,26 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // Accept look like a formality that costs them nothing.
                 getLocallyEdited: () => new Set([...currentDrafts, ...currentHeld]),
             }),
-            AutoEditDecorations.configure({ getUnseen: () => currentAutoEdits }),
+            AutoEditDecorations.configure({
+                getUnseen: () => currentAutoEdits,
+                // The explicit verdict pair (Keep / Restore). Optimistically clear the
+                // local entry so the strip can't double-fire while the host round-trips.
+                handlers: {
+                    keep: (fid, at) => {
+                        delete currentAutoEdits[fid];
+                        editor.view.dispatch(editor.state.tr.setMeta(AUTO_EDITS_UPDATED, true));
+                        scheduleRail();
+                        opts.onAutoEditVerdict?.(fid, at, true, '');
+                    },
+                    revert: (fid, at, prev) => {
+                        delete currentAutoEdits[fid];
+                        editor.view.dispatch(editor.state.tr.setMeta(AUTO_EDITS_UPDATED, true));
+                        scheduleRail();
+                        opts.onAutoEditVerdict?.(fid, at, false, prev);
+                    },
+                },
+            }),
+            BusyDecorations.configure({ getBusy: () => currentBusy }),
             DependencyDecorations.configure({
                 getThreads: () => currentThreads,
                 onNavigate: fid => scrollToFeatureInternal(fid, true),
@@ -386,6 +419,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         onUpdate: () => {
             if (suppressUpdate) return;
             dirty = true;
+            lastTypedAt = Date.now();
             scheduleSettle();
             scheduleRail();
             if (currentComments.length || composer) scheduleCommentReflow(); // anchors shift as you type
@@ -482,7 +516,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         markSaving('saving…');
     }
 
-    function settleNow(): void {
+    /** True when the caret sits inside a feature heading — a title mid-authorship. */
+    function caretInHeading(): boolean {
+        try {
+            return editor.state.selection.$head.parent.type.name === 'featureHeading';
+        } catch {
+            return false;
+        }
+    }
+
+    function settleNow(force = false): void {
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = 0; }
         if (!dirty) return;
         // Never ship a half-composed word. The trailing debounce (or a
@@ -493,6 +536,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         // re-enters the ordinary debounce path. The incoming direction already
         // defers the same way (DeferConditions.imeComposing).
         if (editor.view.composing) { scheduleSettle(); return; }
+        // Never ship a half-typed TITLE either. A pause mid-title used to settle
+        // whatever fragment existed — observed live as set_title commands "D" →
+        // "Dra" → "Draf" and an "Untitled" add for a bare `## ` — junk the daemon
+        // then applied, re-projected, and (before the adopt gate) yanked the
+        // caret with. The title settles when the caret LEAVES the heading (the
+        // pending debounce re-fires and passes this guard), or immediately on
+        // blur/commit/adopt (`force`), where the author is genuinely done.
+        if (!force && editor.view.hasFocus() && caretInHeading()) {
+            scheduleSettle();
+            return;
+        }
         dirty = false;
         // Anything now back to the text it last adopted has nothing left to protect,
         // so it stops being pending. Without this an undo leaves the feature pending
@@ -666,6 +720,25 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             muteTimer = window.setTimeout(() => { muteSpy = false; }, 350);
         }
     }
+    /** The rail tick's state for a feature — the SAME ordered projection the row
+     *  badge uses (feature-state.railState), fed from this editor's live signal
+     *  maps, so the minimap and the row can never tell different stories. */
+    function railSignalsFor(fid: string, attrs: Record<string, unknown>): RailSignals {
+        const phase = currentPhases[fid];
+        const hasProposal = currentSuggestions.some(s =>
+            s.featureId === fid && (s.kind === 'amend' || s.kind === 'retire' || s.kind === 'move'));
+        return {
+            busy: currentBusy.has(fid),
+            activeMode: phase === 'editing' ? 'write' : phase === 'reflecting' ? 'read' : null,
+            proposalOp: hasProposal ? 'amend' : null,
+            autoEdit: !!currentAutoEdits[fid],
+            sent: currentHeld.has(fid),
+            staged: currentDrafts.has(fid),
+            realized: attrs.realized === false ? false : true,
+            retired: !!attrs.retired,
+        };
+    }
+
     function rebuildRail(): void {
         rail.replaceChildren();
         tickByFid.clear();
@@ -676,16 +749,36 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             const fid = node.attrs.fid as string | null;
             if (!fid) return;
             const tick = document.createElement('div');
-            tick.className = 'ce-tick';
+            const st = railState(railSignalsFor(fid, node.attrs as Record<string, unknown>));
+            // One class per state — the minimap IS the status strip, in the same
+            // colour encoding the in-document decorations already use (CSS keys the
+            // hue off `st-*`; `settled` draws the quiet neutral tick).
+            tick.className = 'ce-tick st-' + st;
             tick.style.setProperty('--d', String(Math.min(Number(node.attrs.level) || 0, 4)));
             if (node.attrs.retired) tick.classList.add('retired');
             if (node.attrs.realized === false) tick.classList.add('unrealized');
-            tick.title = node.textContent || '(untitled)';
+            const name = node.textContent || '(untitled)';
+            tick.title = st === 'settled' ? name : `${name} — ${RAIL_STATE_LABEL[st]}`;
             tick.addEventListener('click', () => scrollToFeatureInternal(fid, true));
             tickByFid.set(fid, tick);
             tickList.push(tick);
             rail.append(tick);
         });
+        // The legend: pinned under the ticks, only when any tick carries a state —
+        // a legend over an all-quiet rail would be noise explaining nothing.
+        const states = new Set(tickList.map(t => (t.className.match(/st-([a-z]+)/) ?? [])[1]));
+        states.delete('settled');
+        if (states.size) {
+            const legend = document.createElement('button');
+            legend.type = 'button';
+            legend.className = 'ce-rail-legend';
+            legend.textContent = '?';
+            legend.title = [...states]
+                .map(s => `● ${s}: ${RAIL_STATE_LABEL[s as keyof typeof RAIL_STATE_LABEL]}`)
+                .join('\n');
+            legend.setAttribute('aria-label', 'Minimap legend');
+            rail.append(legend);
+        }
         updateSpy();
     }
     // Wave hover (U4): sweeping the cursor down the rail ripples a horizontal scaleX out from
@@ -714,14 +807,28 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         spyRaf = requestAnimationFrame(() => {
             spyRaf = 0;
             if (muteSpy) return; // a programmatic scroll is in flight — don't fight it
-            const threshold = surface.getBoundingClientRect().top + 72;
+            const surfRect = surface.getBoundingClientRect();
+            const threshold = surfRect.top + 72;
             let current: string | null = null;
+            // Viewport band: a tick lights while ANY of its section [its heading →
+            // the next heading] is on screen. The contiguous lit run IS the viewport
+            // indicator — the minimap says where you are, not just what each section
+            // is doing. Two passes: collect heading tops, then mark intersections.
+            const tops: { fid: string; top: number }[] = [];
             editor.state.doc.forEach((node, pos) => {
                 if (node.type.name !== 'featureHeading') return;
                 const fid = node.attrs.fid as string | null;
                 if (!fid) return;
                 const dom = headingDom(pos);
-                if (dom && dom.getBoundingClientRect().top <= threshold) current = fid;
+                if (!dom) return;
+                const top = dom.getBoundingClientRect().top;
+                if (top <= threshold) current = fid;
+                tops.push({ fid, top });
+            });
+            tops.forEach((h, i) => {
+                const sectionEnd = tops[i + 1]?.top ?? Number.POSITIVE_INFINITY;
+                const inView = h.top <= surfRect.bottom && sectionEnd >= surfRect.top;
+                tickByFid.get(h.fid)?.classList.toggle('in-view', inView);
             });
             markCurrent(current);
             // Only notify on an actual section change — scroll-spy runs every RAF frame,
@@ -730,33 +837,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             if (current && current !== lastSpyFid) {
                 lastSpyFid = current;
                 opts.onActiveFeature?.(current, 'scroll');
-                armDwell();
             }
         });
     }
 
-    // ── dwell-to-acknowledge (v6) ────────────────────────────────────────────
-    // A loop rewrite clears when the reader has actually been on that section, not
-    // when they press a button: the notification already knows when it is finished,
-    // so asking for a gesture would only add a chore. A section CHANGE re-arms the
-    // timer, so scrolling past at speed acknowledges nothing — and prose the loop
-    // took from the reader is held to a longer dwell (state/auto-edits.dwellFor), so
-    // the case that matters survives a fast scan of the document.
-    let dwellTimer = 0;
-    function armDwell(): void {
-        if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = 0; }
-        const fid = lastSpyFid;
-        if (!fid) return;
-        const edit = currentAutoEdits[fid];
-        if (!edit) return;
-        dwellTimer = window.setTimeout(() => {
-            dwellTimer = 0;
-            // Still here? Then it has been read. (Re-check: the reader may have moved
-            // on, and a stale timer must not acknowledge a section they left.)
-            if (lastSpyFid !== fid || !currentAutoEdits[fid]) return;
-            opts.onAutoEditSeen?.(fid, edit.at);
-        }, dwellFor(edit));
-    }
+    // (The v6 dwell-to-acknowledge timer is retired: an unasked rewrite now clears
+    // only on an explicit Keep/Restore verdict — auto-edit-decorations.ts — because
+    // a record that evaporates the moment you look at it cannot be disagreed with.)
     let railTimer = 0;
     function scheduleRail(): void {
         if (railTimer) clearTimeout(railTimer);
@@ -909,17 +996,40 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // Carries its baselineId with it: a deferred projection must not be adopted under a
     // citation that has since moved on (the id and the doc are one fact, not two).
     let pendingProjection: { doc: PMNode; baselineId?: number } | null = null;
+    // How long after the last keystroke the author still counts as mid-thought.
+    // Just above the settle debounce, so "typing with natural pauses" never adopts.
+    const RECENT_TYPING_MS = 1500;
     const isComposing = (): boolean => shouldDeferProjection({
         composerOpen: !!composer,
         bubbleOpen: bubble.style.display !== 'none',
         imeComposing: !!editor.view?.composing,
+        activelyEditing: !!editor.view?.hasFocus()
+            && (dirty || Date.now() - lastTypedAt < RECENT_TYPING_MS),
     });
+    let projectionFlushTimer = 0;
+    function scheduleProjectionFlush(): void {
+        if (projectionFlushTimer) clearTimeout(projectionFlushTimer);
+        projectionFlushTimer = window.setTimeout(() => {
+            projectionFlushTimer = 0;
+            flushPendingProjection();
+        }, RECENT_TYPING_MS + 200);
+    }
     function flushPendingProjection(): void {
-        if (!pendingProjection || isComposing()) return;
+        if (!pendingProjection) return;
+        // Still blocked (typing resumed, composer reopened, IME) → keep the LATEST
+        // projection parked and try again shortly; the doc must never sit stale
+        // forever waiting on a flush nobody schedules.
+        if (isComposing()) { scheduleProjectionFlush(); return; }
         const p = pendingProjection;
         pendingProjection = null;
         handle.setDoc(p.doc, p.baselineId);
     }
+    // Leaving the editor is the natural adoption point: the author is done
+    // mid-thought, so settle whatever is unsent and let the parked projection in.
+    surface.addEventListener('focusout', () => setTimeout(() => {
+        if (dirty) settleNow(true);
+        flushPendingProjection();
+    }, 0));
     // ProseMirror finishes its own composition bookkeeping after this event, so the
     // deferred projection lands on the next tick — applying it inline would replace
     // the document while the view is still resolving the composition.
@@ -1279,8 +1389,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // sent anywhere. Every way out of this editor therefore flushes first — the
     // panel closing, the window hiding, the tab going away. `settleNow` is a no-op
     // when nothing is dirty, so this costs nothing in the common case.
-    const flushOnHide = (): void => { if (document.visibilityState === 'hidden') settleNow(); };
-    window.addEventListener('pagehide', settleNow);
+    const flushOnHide = (): void => { if (document.visibilityState === 'hidden') settleNow(true); };
+    const settleOnPagehide = (): void => settleNow(true);
+    window.addEventListener('pagehide', settleOnPagehide);
     document.addEventListener('visibilitychange', flushOnHide);
 
     const handle: WholeDocEditorHandle = {
@@ -1292,7 +1403,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // DEFER the WHOLE update (keeping only the latest) and re-apply it the
             // moment the composer/bubble closes — so the doc never sits stale waiting
             // on an unrelated next write (W5 composer-drop fix).
-            if (isComposing()) { pendingProjection = { doc: incoming, baselineId }; return; }
+            // Deferral now also covers active typing (activelyEditing): adopting
+            // mid-thought both yanked the caret (absolute-position restore into a
+            // reshaped doc) and force-settled the half-typed fragment below — which
+            // round-tripped into ANOTHER projection, the feedback loop that shipped
+            // a title as "D" → "Dra" → "Draf". The parked projection re-applies via
+            // the retry flush once typing stops, or on blur/commit.
+            if (isComposing()) {
+                pendingProjection = { doc: incoming, baselineId };
+                scheduleProjectionFlush();
+                return;
+            }
             // Flush before anything can replace the document. The version gate below
             // resolves a same-feature disagreement by swapping a whole slice, and when
             // the projection wins, whatever the user had typed since the last settle
@@ -1301,8 +1422,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // it applies, merges with whoever else wrote, or is kept for review. Every
             // path ends with it existing somewhere — which is the point, because the
             // gate's own resolution is a slice swap that ends with it existing nowhere.
-            // `settleNow` is a no-op unless the user actually typed.
-            settleNow();
+            // `settleNow` is a no-op unless the user actually typed. Forced: reaching
+            // here means the author is NOT mid-thought (the defer above), so a caret
+            // parked in a heading must not hold the settle hostage.
+            settleNow(true);
             // U5 per-feature HLC version gate (R14 / KTD4) — replaces the whole-doc
             // `if (dirty) return`. Merge the incoming projection with the live doc PER
             // FEATURE: a feature with no pending local edit adopts the projection; a
@@ -1403,6 +1526,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         setSuggestions: (list: Suggestion[]) => {
             currentSuggestions = list;  // agent code-ahead proposals (the host's sidecar)
             editor.view.dispatch(editor.state.tr.setMeta(SUGGESTIONS_UPDATED, true));
+            scheduleRail();   // the minimap shows `proposed`
         },
         setThreads: (threadsMap: Record<string, ThreadsData>) => {
             currentThreads = threadsMap;
@@ -1422,6 +1546,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // One transaction carries both metas: the heading dot (PHASES_UPDATED) and the
             // body ghost→reveal (REVEAL_UPDATED) read the same phase map.
             editor.view.dispatch(editor.state.tr.setMeta(PHASES_UPDATED, true).setMeta(REVEAL_UPDATED, true));
+            scheduleRail();   // the minimap shows `working`
         },
         setSteps: (steps: Record<string, AgentStep[]>) => {
             currentSteps = steps;
@@ -1430,7 +1555,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         setAutoEdits: (edits: Record<string, AutoEditInfo>) => {
             currentAutoEdits = edits;
             editor.view.dispatch(editor.state.tr.setMeta(AUTO_EDITS_UPDATED, true));
-            armDwell();   // the reader may already be sitting on one of them
+            scheduleRail();   // the minimap shows `rewritten`
+        },
+        setBusy: (busy: Record<string, BusyInfo>) => {
+            currentBusy = new Map(Object.entries(busy));
+            editor.view.dispatch(editor.state.tr.setMeta(BUSY_UPDATED, true));
+            scheduleRail();   // the minimap shows `busy`
         },
         setRole: (role: string) => {
             currentRole = role;
@@ -1443,6 +1573,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // recompute both families in one transaction.
             editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true)
                 .setMeta(CAPTURED_UPDATED, true).setMeta(SUGGESTIONS_UPDATED, true));
+            scheduleRail();   // the minimap shows `sent`
         },
         setSessionLive: (live: boolean) => {
             if (currentSessionLive === live) return;
@@ -1464,6 +1595,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // contest note, so a new draft on a proposed feature must repaint the strip.
             editor.view.dispatch(editor.state.tr
                 .setMeta(CAPTURED_UPDATED, true).setMeta(SUGGESTIONS_UPDATED, true));
+            scheduleRail();   // the minimap shows `staged`
         },
         setBlocks: (blocks: Record<string, UIBlock[]>) => {
             currentBlocks = blocks;
@@ -1522,7 +1654,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // Never discard an unsent edit on the way out — but never let a failed
             // send abort teardown either, or the listeners and timers below outlive
             // the editor they belong to.
-            try { settleNow(); } catch { /* best effort: teardown must still finish */ }
+            try { settleNow(true); } catch { /* best effort: teardown must still finish */ }
             if (settleTimer) clearTimeout(settleTimer);
             if (railTimer) clearTimeout(railTimer);
             if (muteTimer) clearTimeout(muteTimer);
@@ -1531,7 +1663,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             for (const t of touchTimers.values()) clearTimeout(t); // P2 code→doc spark timers
             for (const t of tickTimers.values()) clearTimeout(t);   // P2 fix 2 tick-lifetime timers
             window.removeEventListener('resize', repositionFloatingSurfaces);
-            window.removeEventListener('pagehide', settleNow);
+            window.removeEventListener('pagehide', settleOnPagehide);
             document.removeEventListener('visibilitychange', flushOnHide);
             if (spyRaf) cancelAnimationFrame(spyRaf); // else the RAF fires onActiveFeature on a destroyed editor
             closeComposer();

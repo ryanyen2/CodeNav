@@ -37,7 +37,10 @@ import type { ThreadsData } from '../protocol';
 import { THREADS_COLLAPSE_AT } from '../protocol';
 
 export interface SuggestionHandlers {
-    accept: (s: Suggestion) => void;
+    /** `edits` — the author amended an EDITABLE ghost before accepting: the verdict
+     *  carries the edited title/description and the daemon applies the proposal
+     *  with them in place of the proposed text. Absent = accept as proposed. */
+    accept: (s: Suggestion, edits?: { title?: string; description?: string }) => void;
     reject: (s: Suggestion) => void;
 }
 
@@ -78,6 +81,43 @@ function isPlanned(s: Suggestion): boolean {
     return s.direction === 'code-ahead' && consequenceOf(s.writesCode, s.tag) === 'build';
 }
 
+// ── ghost drafts: the author's in-place edits to a not-yet-accepted proposal ──
+// Keyed by suggestion id, module-level so they survive decoration rebuilds (every
+// payload dispatches SUGGESTIONS_UPDATED) and position moves. Pruned on build to
+// the suggestions still alive, so a resolved ghost's draft can't leak onto a
+// future proposal that reuses nothing but memory.
+const ghostDrafts = new Map<string, { title?: string; description?: string }>();
+
+function pruneGhostDrafts(alive: ReadonlySet<string>): void {
+    for (const id of [...ghostDrafts.keys()]) if (!alive.has(id)) ghostDrafts.delete(id);
+}
+
+/** The accept-time edits for a ghost: only fields that actually differ from the
+ *  proposal ride the verdict, so an untouched ghost accepts exactly as proposed. */
+export function ghostEditsFor(s: Suggestion): { title?: string; description?: string } | undefined {
+    const d = ghostDrafts.get(s.id);
+    if (!d) return undefined;
+    const out: { title?: string; description?: string } = {};
+    const t = d.title?.trim();
+    const b = d.description?.trim();
+    if (t && t !== (s.titleNew ?? '').trim()) out.title = t;
+    if (b !== undefined && b !== (s.descNew ?? '').trim()) out.description = b;
+    return out.title || out.description !== undefined ? out : undefined;
+}
+
+/** (tests) reset the module-level draft store. */
+export function resetGhostDrafts(): void { ghostDrafts.clear(); }
+
+/** Record an in-place ghost edit. The DOM field handler calls this on input;
+ *  exported so the accept-payload rule is testable without a DOM. */
+export function setGhostDraft(
+    id: string, field: 'title' | 'description', value: string,
+): void {
+    const d = ghostDrafts.get(id) ?? {};
+    d[field] = value;
+    ghostDrafts.set(id, d);
+}
+
 /**
  * The verdict: a quiet Reject/Accept pair, hidden until the feature is hovered.
  *
@@ -87,6 +127,7 @@ function isPlanned(s: Suggestion): boolean {
  */
 function verdictStrip(
     s: Suggestion, handlers: SuggestionHandlers, locallyEdited = false,
+    getEdits?: () => { title?: string; description?: string } | undefined,
 ): HTMLElement {
     const cq = consequenceOf(s.writesCode, s.tag);
     const row = elc('span', 'ce-verdict ' + s.direction + ' cq-' + cq
@@ -157,7 +198,11 @@ function verdictStrip(
     // words; "Accept & build" / "Accept & delete code" when the click reaches code.
     const primary = s.direction === 'code-ahead'
         ? consequenceVerb(cq) : directionActions(s.direction)[1];
-    const acceptBtn = actionButton(primary, 'accept', once(handlers.accept, leavesForAgent(cq)));
+    // An accept from an editable ghost carries whatever the author amended in place
+    // (ghostEditsFor) — read at CLICK time, so edits typed after the strip rendered
+    // still ride the verdict.
+    const acceptBtn = actionButton(primary, 'accept',
+        once(sug => handlers.accept(sug, getEdits?.()), leavesForAgent(cq)));
     acceptBtn.title = consequenceNote(cq);
     if (leavesForAgent(cq)) acceptBtn.prepend(icon('paper-plane-tilt'));
     const rejectBtn = actionButton(secondary, 'reject', once(handlers.reject, false));
@@ -169,11 +214,41 @@ function verdictStrip(
     return row;
 }
 
+/** Make a ghost field editable-in-place: plaintext editing wired into the module
+ *  draft store, so what the author types survives decoration rebuilds and rides the
+ *  eventual Accept. Editable ghosts are the point (a proposal is a starting draft,
+ *  not a take-it-or-leave-it block); the widget wrapper is contentEditable=false, so
+ *  each field opts back IN. */
+function editableGhostField(
+    el2: HTMLElement, s: Suggestion, field: 'title' | 'description',
+): void {
+    // plaintext-only keeps paste from smuggling markup into a plain string; the
+    // fallback is fine — the value is read back via textContent either way.
+    try { el2.contentEditable = 'plaintext-only'; } catch { el2.contentEditable = 'true'; }
+    el2.spellcheck = true;
+    const saved = ghostDrafts.get(s.id)?.[field];
+    if (saved !== undefined) el2.textContent = saved;
+    el2.addEventListener('input', () => {
+        setGhostDraft(s.id, field, el2.textContent ?? '');
+        // The author is shaping the proposal — say so where the eye already is.
+        el2.closest('.ce-ghost-feature')?.classList.add('edited');
+    });
+    // Keystrokes inside the field belong to the field — not to the surrounding
+    // ProseMirror editor, whose keymap would otherwise swallow Enter/Backspace.
+    el2.addEventListener('keydown', ev => ev.stopPropagation());
+    el2.addEventListener('mousedown', ev => ev.stopPropagation());
+}
+
 /**
  * A proposed node, drawn where it will live: a dimmed title at the child level plus
  * its description, reading exactly like the accepted-but-unbuilt feature it becomes.
  * A MOVE shows the same way at its destination (the live node keeps its place until
  * the verdict lands, so the two ends of the move are both visible).
+ *
+ * An ADD ghost is EDITABLE in place: the title and description are live fields, and
+ * whatever the author reshapes rides the Accept as accept-time edits (the daemon
+ * applies the proposal with the edited text). A move ghost stays inert — its text
+ * lives on the real node.
  */
 function ghostFeatureDom(
     s: Suggestion, level: number, label: string, handlers: SuggestionHandlers,
@@ -182,16 +257,30 @@ function ghostFeatureDom(
     wrap.contentEditable = 'false';
     wrap.dataset.level = String(level);
     wrap.setAttribute('data-suggestion', s.id);
+    if (ghostDrafts.has(s.id)) wrap.classList.add('edited');
+    const editable = s.kind === 'add';
     const title = elc('div', 'ce-ghost-title', label || '(untitled)');
     title.title = s.kind === 'move'
         ? 'The agent proposes moving this feature here. Nothing has moved yet.'
-        : 'The agent proposes this feature. ' + consequenceNote(consequenceOf(s.writesCode, s.tag));
+        : 'The agent proposes this feature. ' + consequenceNote(consequenceOf(s.writesCode, s.tag))
+          + ' You can edit the title and description before accepting — the edited version is what gets applied.';
     wrap.append(title);
     // A move's description is already on screen at the node's current home — repeating
     // it here would read as a second copy of the feature rather than as its destination.
     const desc = s.kind === 'move' ? '' : (s.descNew ?? '').trim();
-    if (desc) wrap.append(elc('div', 'ce-ghost-desc', desc));
-    wrap.append(verdictStrip(s, handlers));
+    let descEl: HTMLElement | null = null;
+    if (desc || editable) {
+        descEl = elc('div', 'ce-ghost-desc', desc);
+        wrap.append(descEl);
+    }
+    if (editable && !s.verdictPending) {
+        editableGhostField(title, s, 'title');
+        if (descEl) {
+            editableGhostField(descEl, s, 'description');
+            descEl.dataset.placeholder = 'Describe the intent — edit freely before accepting…';
+        }
+    }
+    wrap.append(verdictStrip(s, handlers, false, editable ? () => ghostEditsFor(s) : undefined));
     return wrap;
 }
 
@@ -246,6 +335,7 @@ function buildDecorations(
     doc: PMModelNode, suggestions: Suggestion[], handlers: SuggestionHandlers,
     locallyEdited: ReadonlySet<string> = new Set(),
 ): DecorationSet {
+    pruneGhostDrafts(new Set(suggestions.map(s => s.id))); // resolved ghosts drop their drafts
     const loc = locateFeatures(doc);
     const docEnd = doc.content.size;
     const decos: Decoration[] = [];
@@ -256,8 +346,17 @@ function buildDecorations(
             // right under the parent's heading (the old behaviour) put it between the
             // parent's title and the parent's own prose, where it read as an edit to it.
             const parent = s.parentId ? loc.get(s.parentId) : null;
-            const at = parent ? parent.subtreeEnd : docEnd;
-            const level = parent ? Math.min(parent.level + 1, MAX_HEADING_LEVEL - 1) : 0;
+            let at = parent ? parent.subtreeEnd : docEnd;
+            let level = parent ? Math.min(parent.level + 1, MAX_HEADING_LEVEL - 1) : 0;
+            let side: -1 | 1 = 1;
+            // Sibling anchors: apply honours after_id/before_id on accept
+            // (rank_between), so when the proposal names them the ghost draws in
+            // that exact slot — otherwise it appeared "last child" and the real
+            // node jumped elsewhere the moment the user accepted it.
+            const after = s.afterId ? loc.get(s.afterId) : null;
+            const before = !after && s.beforeId ? loc.get(s.beforeId) : null;
+            if (after) { at = after.subtreeEnd; level = after.level; }
+            else if (before) { at = before.headingPos; level = before.level; side = -1; }
             let label = s.titleNew ?? '';
             if (s.kind === 'move' && s.featureId) {
                 const src = loc.get(s.featureId);
@@ -268,7 +367,7 @@ function buildDecorations(
                 }
             }
             decos.push(Decoration.widget(at, () => ghostFeatureDom(s, level, label, handlers),
-                                         { side: 1, key: 'sug-' + s.id }));
+                                         { side, key: 'sug-' + s.id }));
             continue;
         }
         const l = s.featureId ? loc.get(s.featureId) : null;

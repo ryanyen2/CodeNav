@@ -65,6 +65,17 @@ export interface DeferConditions {
      * somewhere downstream.
      */
     imeComposing: boolean;
+    /**
+     * The author is mid-thought: the editor is focused AND there is unsettled text
+     * or a keystroke within the last ~1.5 s. Adopting a projection here replaces
+     * the document under the caret — the absolute-position restore lands the caret
+     * on the next node's title, and worse, the adopt path force-settles whatever
+     * half-typed fragment exists, which round-trips into ANOTHER projection: the
+     * observed feedback loop that shipped a title as "D" → "Dra" → "Draf" and
+     * yanked the caret between every word. Deferral is bounded — the flush retries
+     * once typing stops, and blur/commit flush immediately.
+     */
+    activelyEditing?: boolean;
 }
 
 /**
@@ -75,7 +86,8 @@ export interface DeferConditions {
  * Pure so the defer/keep-latest contract is testable without the editor.
  */
 export function shouldDeferProjection(conditions: DeferConditions): boolean {
-    return conditions.composerOpen || conditions.bubbleOpen || conditions.imeComposing;
+    return conditions.composerOpen || conditions.bubbleOpen || conditions.imeComposing
+        || !!conditions.activelyEditing;
 }
 
 /** A feature's slice of the flat doc: its heading + the body blocks that follow it

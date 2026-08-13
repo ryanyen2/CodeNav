@@ -788,7 +788,7 @@ def read_manifest(codoc_dir: str | Path) -> list[Directive]:
         # "what happened to my edit?" stays answerable (join realized.jsonl
         # against events.caused_by for the code changes it produced).
         if done:
-            _log_realized(codoc_dir, done)
+            _log_realized(codoc_dir, done, closed_by="queue-file-deleted")
         if drafts:
             if done:
                 write_manifest(codoc_dir, drafts)  # drop completed entries once
@@ -807,14 +807,16 @@ def clear_manifest(codoc_dir: str | Path) -> None:
 _REALIZED_LOG_MAX = 200  # bounded tail — old outcomes stop mattering
 
 
-def log_realized(codoc_dir: str | Path, directives: list[Directive]) -> None:
+def log_realized(codoc_dir: str | Path, directives: list[Directive],
+                 closed_by: str = "evidence") -> None:
     """Public alias — the ledger-driven queue close (loop_b._prune_implemented_directives)
     records outcomes through the same path the stale-drain does, so a directive completed
     either way leaves the same trail in ``realized.jsonl``."""
-    _log_realized(codoc_dir, directives)
+    _log_realized(codoc_dir, directives, closed_by=closed_by)
 
 
-def _log_realized(codoc_dir: str | Path, directives: list[Directive]) -> None:
+def _log_realized(codoc_dir: str | Path, directives: list[Directive],
+                  closed_by: str = "evidence") -> None:
     """Append completed directives to ``realized.jsonl`` (idempotent by id).
 
     Best-effort: the log is a feedback surface, not a correctness channel, so
@@ -842,6 +844,11 @@ def _log_realized(codoc_dir: str | Path, directives: list[Directive]) -> None:
                     "id": d.id, "feature_id": d.feature_id, "kind": d.kind,
                     "caused_by": d.caused_by, "text": d.text,
                     "completed_at": now_iso, "ts": now_ts,
+                    # "evidence" = a cited reflect closed it (real completion);
+                    # "queue-file-deleted" = realize.md vanished out-of-band and
+                    # the drain INFERRED completion — an unimplemented item closed
+                    # this way is exactly the silent loss to look for in analysis.
+                    "closed_by": closed_by,
                 }, ensure_ascii=False) + "\n")
         lines = path.read_text(encoding="utf-8").splitlines()
         if len(lines) > _REALIZED_LOG_MAX:

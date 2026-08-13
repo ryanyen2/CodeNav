@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-    displacedHuman, dwellFor, editKey, unseenEdits, pruneSeen, catchUpLabel,
-    DWELL_HUMAN_MS, DWELL_LOOP_MS,
+    displacedHuman, editKey, unseenEdits, pruneSeen, catchUpLabel,
 } from '../state/auto-edits';
 import type { AutoEdit } from '../state/bindings-model';
 
@@ -10,14 +9,12 @@ const edit = (over: Partial<AutoEdit> = {}): AutoEdit => ({
 });
 
 describe('weighting — whose words were displaced', () => {
-    it('the loop revising its own bootstrap prose clears on a glance', () => {
+    it('the loop revising its own bootstrap prose reads as housekeeping', () => {
         expect(displacedHuman(edit({ written_by: 'loop' }))).toBe(false);
-        expect(dwellFor(edit({ written_by: 'loop' }))).toBe(DWELL_LOOP_MS);
     });
 
-    it("a rewrite of the reader's own words is held to a longer dwell", () => {
+    it("a rewrite of the reader's own words is named as theirs", () => {
         expect(displacedHuman(edit({ written_by: 'human' }))).toBe(true);
-        expect(dwellFor(edit({ written_by: 'human' }))).toBe(DWELL_HUMAN_MS);
     });
 
     it('an agent counts as not-the-reader — it is not the person being surprised', () => {

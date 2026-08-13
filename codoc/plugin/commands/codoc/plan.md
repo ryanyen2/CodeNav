@@ -76,7 +76,18 @@ once:
   `codoc_reflect` so it surfaces as a new proposal for the user.
 - After the last one, call `codoc_realize_progress(done=N, total=N)`.
 
-## 5. Verify the plan was satisfied
+## 5. Verify the plan was satisfied — including the realize queue
 - Call `codoc_plan_status`. If any nodes are still unrealized, either implement
   the missing code and re-bind, or tell the user which planned features remain
   unrealized and why.
+- The same call returns `queued_directives`. Accepting your plan queued a
+  directive per node in `.codoc/realize.md`; **binding each node closes its
+  directive automatically**, so after step 4 the queue should hold only work that
+  arrived from OUTSIDE your plan — most often a description the user edited while
+  you were implementing. If `queued_directives` is non-empty:
+  - Read `.codoc/realize.md` and implement each remaining item now, reflecting it
+    with `caused_by="<its ⟨d-…⟩ id>"` (that citation is what closes it) — this is
+    the same contract `/codoc:sync` follows.
+  - If an item is out of scope for this session, say so explicitly and tell the
+    user it stays queued for `/codoc:sync` — never report the plan "done" while
+    hiding that the tree is still asking for work.

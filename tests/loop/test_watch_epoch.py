@@ -332,3 +332,40 @@ def test_activity_churn_alone_is_noop(dirs):
 
     assert out is None
     assert "called" not in a.seen and "called" not in b.seen
+
+
+# ── turns 2+: the hook's re-opened epoch registers as a rising edge ────────────
+
+def test_hook_reopened_epoch_suppresses_the_next_turns_saves(dirs):
+    """The full turn-2 cycle through the REAL hook writers: SessionStart opens,
+    Stop closes (falling edge, scoped reconcile), a turn-2 tool call re-opens —
+    and the daemon must treat that re-open as a rising edge and suppress the
+    agent's subsequent saves instead of LLM-processing half-written code."""
+    from codoc.agent.hook import handle_pre_tool, handle_session_start, handle_stop
+
+    root, codoc_dir, tp = dirs
+    payload = {"session_id": "sess-9", "cwd": root}
+    state = WatchState(last_tree_hash=_hash(tp))
+    ap = str(activity_path(codoc_dir))
+
+    # Turn 1: open + close through the daemon.
+    handle_session_start(payload, codoc_dir)
+    process_batch([ap], root, codoc_dir, state,
+                  loop_a=_spy(LoopAResult()), loop_b=_spy(LoopBResult()), render=_noop_render)
+    assert state.epoch_open is True
+    handle_stop(payload, codoc_dir)
+    process_batch([ap], root, codoc_dir, state,
+                  loop_a=_spy(LoopAResult()), loop_b=_spy(LoopBResult()), render=_noop_render)
+    assert state.epoch_open is False
+
+    # Turn 2 begins: a PreToolUse re-opens the epoch (before the Write lands).
+    handle_pre_tool({**payload, "tool_name": "Write",
+                     "tool_input": {"file_path": root + "/src/mod.py"}}, codoc_dir)
+    a = _spy(LoopAResult())
+    out = process_batch([ap, root + "/src/mod.py"], root, codoc_dir, state,
+                        loop_a=a, loop_b=_spy(LoopBResult()), render=_noop_render)
+
+    assert out is None
+    assert state.epoch_open is True
+    assert "called" not in a.seen                # no mid-turn LLM pass
+    assert "src/mod.py" in state.suppressed_files

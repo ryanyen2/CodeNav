@@ -181,6 +181,11 @@ def _proposals_map(store: Store, voted: set[str] | None = None) -> dict[str, dic
                 "op": "add", "parent_id": op.parent_id, "tag": tag, "rationale": op.rationale,
                 "title": op.title, "description": op.description,
                 "writes_code": "build" if op.realized is False else None,
+                # Sibling anchors, so the IDE can draw the ghost WHERE the node
+                # will actually land. apply honours these on accept
+                # (store.rank_between); omitting them from the payload is why a
+                # ghost drawn "last child" used to jump on accept.
+                "after_id": op.after_id or None, "before_id": op.before_id or None,
                 **prov,
             }
             by_parent.setdefault(op.parent_id or "", []).append(e.id)
@@ -191,6 +196,7 @@ def _proposals_map(store: Store, voted: set[str] | None = None) -> dict[str, dic
                 "op": "move", "feature_id": op.feature_id, "parent_id": op.parent_id,
                 "tag": tag, "rationale": op.rationale,
                 "writes_code": None,   # reorganizing the tree is never code work
+                "after_id": op.after_id or None, "before_id": op.before_id or None,
                 **prov,
             }
             by_parent.setdefault(op.parent_id or "", []).append(e.id)

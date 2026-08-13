@@ -384,6 +384,33 @@ def realize(
     raise typer.Exit(subprocess.call([claude, "-p", "/codoc:sync"], cwd=root))
 
 
+@app.command(name="export-markdown")
+def export_markdown_cmd(
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    out: str = typer.Option("", "--out", help="Write to this file instead of stdout."),
+    title: str = typer.Option("Codebase feature guide", "--title",
+                              help="Top-level heading for the exported document."),
+):
+    """Export the live feature tree as plain markdown (no ids, no proposals).
+
+    For workflows without the codoc extension — e.g. generating a CLAUDE.md that
+    carries the same features, prose, and recorded rationale, with code cited as
+    file.py::symbol paths instead of live bindings.
+    """
+    _require_workspace(root)
+    from codoc.codoc_file.export import export_markdown
+    from codoc.store.db import open_store
+
+    with open_store(_codoc_dir(root)) as store:
+        text = export_markdown(store, title=title)
+    if out:
+        from pathlib import Path as _P
+        _P(out).write_text(text, encoding="utf-8")
+        typer.echo(f"wrote {out} ({len(text.splitlines())} lines)")
+    else:
+        typer.echo(text, nl=False)
+
+
 @app.command()
 def status(root: str = typer.Option(".", "--root", help="Repository root.")):
     """Show feature count, pending proposals, and recent activity."""

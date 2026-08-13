@@ -243,6 +243,50 @@ def handle_session_start(payload: dict[str, Any], codoc_dir: str) -> None:
     _write_activity(codoc_dir, data)
 
 
+def _reopen_epoch_if_needed(payload: dict[str, Any], codoc_dir: str) -> None:
+    """Re-open the agent epoch when a turn starts — the rising edge for turns 2+.
+
+    ``SessionStart`` opens the epoch and ``Stop`` closes it at the end of EVERY
+    turn, so without a re-opener every turn after the first ran with the epoch
+    closed: the watch daemon treated the agent's own saves as ordinary edits and
+    ran full LLM drift passes against half-written code mid-implementation
+    (duplicate nodes for code whose reflect hadn't landed, ``__module__``
+    leftovers, re-amends of prose the agent had just written). Tool activity and
+    the user's prompt are the turn's rising edge, so they re-open it.
+
+    Called from the PRE phase on purpose: PreToolUse fires before the tool writes
+    the file, so the daemon always observes the rising edge no later than the
+    code change it must suppress.
+
+    Ownership mirrors :func:`handle_stop`: this session re-opens only its OWN
+    closed epoch (turn 2+ of the same session), or claims the slot fresh when the
+    closed epoch belongs to a session that is gone (a missed SessionStart). An
+    OPEN epoch — ours or a concurrent session's — is never touched.
+
+    ``touched`` resets on re-open: Stop closes each turn and both of its
+    consumers (the falling-edge scoped reconcile, the no-daemon Stop reflect) are
+    per-turn, so each turn starts its own write set. ``recent`` (the ribbon's
+    narration history) survives — it is display state, not a write set."""
+    data = _read_activity(codoc_dir)
+    ep = data.get("epoch") or {}
+    if ep.get("open", False):
+        return
+    sid = payload.get("session_id")
+    epoch_id = f"ep-{sid}" if sid else ""
+    if ep.get("id") and epoch_id and ep["id"] != epoch_id:
+        handle_session_start(payload, codoc_dir)
+        return
+    ep["open"] = True
+    ep["ended_at"] = None
+    ep["id"] = ep.get("id") or epoch_id
+    ep.setdefault("started_at", _now_iso())
+    ep.setdefault("origin", os.environ.get("CODOC_EPOCH_ORIGIN", "interactive"))
+    ep.setdefault("agent", {"id": os.environ.get("CODOC_AGENT") or "claude-code"})
+    data["epoch"] = ep
+    data["touched"] = {}
+    _write_activity(codoc_dir, data)
+
+
 def handle_stop(payload: dict[str, Any], codoc_dir: str, *, event: str = "stop") -> None:
     """Close the epoch; keep ``touched`` so the reconciler can read it. Then, for
     an interactive session with no running daemon, spawn a detached reflection so
@@ -350,6 +394,10 @@ def _handle_tool(
     phase: str,   # "pre" | "post"
 ) -> None:
     """Record a tool-call touch event in activity.json."""
+    if phase == "pre":
+        # Turn rising edge (see _reopen_epoch_if_needed) — before the touch is
+        # recorded, so the file lands in the freshly-reset per-turn write set.
+        _reopen_epoch_if_needed(payload, codoc_dir)
     tool_name = payload.get("tool_name", "")
     tool_input: dict = payload.get("tool_input") or {}
     if tool_name == "Bash":
@@ -433,8 +481,57 @@ def handle_pre_tool(payload: dict[str, Any], codoc_dir: str) -> None:
     _handle_tool(payload, codoc_dir, phase="pre")
 
 
+def _queue_size(codoc_dir: str) -> int:
+    """Count of `### ` items in realize.md; 0 when absent/unreadable."""
+    try:
+        text = (Path(codoc_dir) / REALIZE_FILENAME).read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if line.lstrip().startswith("### "))
+
+
+def _nudge_if_queue_grew(codoc_dir: str) -> None:
+    """Tell the WORKING session, mid-turn, that the realize queue appeared or grew.
+
+    The UserPromptSubmit nudge only fires when the human types their next
+    message — so a user who accepted tree edits and then watched the agent keep
+    working saw "N to implement" in the status bar while the agent literally had
+    no way to learn it (observed live in the first pilot). PostToolUse fires on
+    every tool call, and its ``additionalContext`` reaches the model within one
+    tool round-trip. Emits ONLY when the count exceeds the last count this hook
+    announced (tracked in activity.json), so a static queue nudges once, not on
+    every tool call — and a queue the agent is draining (count falling) stays
+    silent."""
+    n = _queue_size(codoc_dir)
+    data = _read_activity(codoc_dir)
+    seen = int(data.get("realize_seen") or 0)
+    if n == 0:
+        if seen:  # queue drained/closed — reset so the NEXT queue nudges again
+            data["realize_seen"] = 0
+            _write_activity(codoc_dir, data)
+        return
+    if n <= seen:
+        return
+    data["realize_seen"] = n
+    _write_activity(codoc_dir, data)
+    msg = (
+        f"codoc: the realize queue grew — {n} change(s) now queued in "
+        ".codoc/realize.md (the user accepted or added tree edits while you "
+        "work). Read the file and implement each item, then codoc_reflect with "
+        "caused_by=<its d-id>; the citation marks it done. Never delete the "
+        "queue files."
+    )
+    out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                  "additionalContext": msg}}
+    print(json.dumps(out, ensure_ascii=False))
+
+
 def handle_post_tool(payload: dict[str, Any], codoc_dir: str) -> None:
     _handle_tool(payload, codoc_dir, phase="post")
+    try:
+        _nudge_if_queue_grew(codoc_dir)
+    except Exception:  # noqa: BLE001 — a nudge must never break the turn
+        pass
 
 
 def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
@@ -451,6 +548,13 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     Loop B here first so the acceptance is applied and ``realize.md`` is queued —
     making "accept a plan, then keep working in Claude" close the loop with no
     daemon. When a daemon *is* running we defer to it (it owns the drain)."""
+    try:
+        # The user's prompt is the earliest rising edge a turn has — re-open the
+        # epoch here so the daemon suppresses this turn's saves even before the
+        # first tool call (see _reopen_epoch_if_needed).
+        _reopen_epoch_if_needed(payload, codoc_dir)
+    except Exception:  # noqa: BLE001 — epoch upkeep must never break the turn
+        pass
     try:
         # Capture the prompt itself — the author's stated intent — so the
         # reflection that follows this session's writes can attribute the WHY
@@ -473,8 +577,9 @@ def handle_user_prompt(payload: dict[str, Any], codoc_dir: str) -> None:
     msg = (
         f"codoc: {count} from accepted tree edits are queued in .codoc/realize.md. "
         "Run /codoc:sync to implement them — read the file, apply each directive "
-        "(respecting its `Edit only:` scope and never touching .codoc/), call "
-        "codoc_reflect to bind the code, then delete .codoc/realize.md."
+        "(respecting its `Edit only:` scope and never touching .codoc/), and call "
+        "codoc_reflect with caused_by=<the item's d-id> to bind the code. That "
+        "citation marks the item done; never delete the queue files yourself."
     )
     out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}
     print(json.dumps(out, ensure_ascii=False))

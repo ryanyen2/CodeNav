@@ -84,6 +84,16 @@ def select_context(
         for child in store.children(fid):
             ids.add(child.id)
 
+    feats = features if features is not None else store.list_features()
+
+    # Accepted-but-unimplemented plan placeholders are ALWAYS in scope: they own
+    # no bindings yet, so no file seed can ever pull them in — which is exactly
+    # how a fresh test file got a duplicate node minted BESIDE its accepted
+    # placeholder (the model never saw the placeholder's description to match
+    # against). They are few and transient (the first bind flips them realized),
+    # so including every one is bounded.
+    ids.update(f.id for f in feats if not f.realized and not f.retired)
+
     # --- subtree -------------------------------------------------------------
     subtree: list[dict] = []
     for fid in sorted(ids):
@@ -97,6 +107,10 @@ def select_context(
             "parent_id": f.parent_id,
             "bindings": [b.symbol_path for b in store.bindings_for_feature(fid)],
         }
+        if not f.realized:
+            # An accepted plan placeholder awaiting its code — the model must
+            # attach matching chunks here, never mint a duplicate beside it.
+            entry["planned"] = True
         # Who last wrote this prose. Without it a describing model treats every
         # description as equally rewritable, and a person's wording is laundered
         # into house style one amend at a time — a loss nothing else detects,
@@ -107,8 +121,9 @@ def select_context(
         subtree.append(entry)
 
     all_titles = [
-        {"id": f.id, "title": f.title, "parent_id": f.parent_id}
-        for f in (features if features is not None else store.list_features())
+        {"id": f.id, "title": f.title, "parent_id": f.parent_id,
+         **({"planned": True} if not f.realized else {})}
+        for f in feats
     ]
 
     # Edge sketches anchor on the changed symbols when there are any (Loop A),

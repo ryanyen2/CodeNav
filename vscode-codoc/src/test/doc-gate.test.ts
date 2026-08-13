@@ -215,3 +215,22 @@ describe('shouldDeferProjection — W5 composer-drop fix', () => {
         expect(shouldDeferProjection({ ...idle, imeComposing: true })).toBe(true);
     });
 });
+
+describe('shouldDeferProjection — adopt-while-typing (pilot bug C)', () => {
+    const idle = { composerOpen: false, bubbleOpen: false, imeComposing: false };
+
+    it('defers while the author is actively editing', () => {
+        // Adopting mid-thought yanked the caret into the next node's title AND
+        // force-settled the half-typed fragment — the feedback loop that shipped
+        // a title as "D" → "Dra" → "Draf" in the first pilot session.
+        expect(shouldDeferProjection({ ...idle, activelyEditing: true })).toBe(true);
+    });
+
+    it('applies once the author is done (blur / idle past the typing window)', () => {
+        expect(shouldDeferProjection({ ...idle, activelyEditing: false })).toBe(false);
+    });
+
+    it('absent flag keeps the pre-existing behaviour (host callers unchanged)', () => {
+        expect(shouldDeferProjection(idle)).toBe(false);
+    });
+});

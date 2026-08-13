@@ -384,3 +384,136 @@ def test_accept_all_over_a_mixed_batch_leaves_no_proposal_behind(dirs):
     assert "Session QUERY helper" not in doc_titles
     assert "Session QUERY helper" not in render_tree(s2)
     s2.close()
+
+
+# ── directive text quality: the Changed line + never "None" ──────────────────
+
+def _amend_directive_text(store, fid, new_desc, baseline=None, title=None):
+    from codoc.loop.loop_b import build_directive
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    op = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, title=title,
+                description=new_desc)
+    return build_directive(op, store, baseline=baseline)
+
+
+def test_amend_directive_carries_the_authors_delta(tmp_path):
+    """The directive names the CHANGE, not just the latest snapshot — the agent
+    can read the snapshot in the tree already; what it needs emphasized is what
+    the author actually edited this pass."""
+    with open_store(tmp_path) as s:
+        f = Feature(title="Content discovery",
+                    description="Finds every usable file under the content directory.")
+        s.upsert_feature(f)
+        old = f.description
+        new = old + " It also skips the test folder."
+        text = _amend_directive_text(s, f.id, new, baseline=old)
+    assert "Changed (the author's edit" in text
+    assert '"It also skips the test folder."' in text
+    assert "New intent: Finds every usable file" in text
+
+
+def test_amend_directive_without_baseline_has_no_changed_line(tmp_path):
+    with open_store(tmp_path) as s:
+        f = Feature(title="Discovery", description="Old.")
+        s.upsert_feature(f)
+        text = _amend_directive_text(s, f.id, "New description.", baseline=None)
+    assert "Changed (" not in text
+
+
+def test_amend_directive_never_says_intent_none(tmp_path):
+    """Defense for any caller that still builds a title-only amend: fall back to
+    the stored description instead of stringifying None."""
+    with open_store(tmp_path) as s:
+        f = Feature(title="Watcher", description="Polls files and rebuilds.")
+        s.upsert_feature(f)
+        text = _amend_directive_text(s, f.id, None, title="Renamed Watcher")
+    assert "New intent: None" not in text
+    assert "Polls files and rebuilds." in text
+
+
+# -----------------------------------------------------------------------
+# Accept-time edits: ghost proposals are editable before acceptance, so a verdict
+# may carry the author's amended title/description. Loop B (the sole applier)
+# must apply — and, for a plan, hand off — the EDITED text, not the proposed.
+
+def test_accept_with_edits_applies_the_edited_text(dirs):
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Theme system", realized=False,
+                        description="A light/dark theme switcher.", rationale="planned"))
+    s.append_event(e)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    inbox.append_verdict(codoc_dir, e.id, accept=True,
+                         title="Theme + contrast system",
+                         description="A light/dark/high-contrast switcher.")
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.accepted == 1
+    s2 = open_store(codoc_dir)
+    f = next(f for f in s2.list_features() if "Theme" in f.title)
+    assert f.title == "Theme + contrast system"
+    assert f.description == "A light/dark/high-contrast switcher."
+    s2.close()
+    # The build directive speaks the edited text — the agent implements what the
+    # author accepted, not what was originally proposed.
+    assert any("Theme + contrast system" in d for d in res.directives)
+    assert not any("A light/dark theme switcher." in d for d in res.directives)
+
+
+def test_accept_amend_with_edited_description(dirs):
+    """The author can counter-edit an AMEND proposal's new text before accepting."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    f = Feature(title="Parser", description="Old words.")
+    s.upsert_feature(f)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id, title="Parser",
+                        description="The loop's suggested words.", rationale="drift"))
+    s.append_event(e)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    inbox.append_verdict(codoc_dir, e.id, accept=True,
+                         description="The author's own final words.")
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.accepted == 1
+    s2 = open_store(codoc_dir)
+    assert s2.get_feature(f.id).description == "The author's own final words."
+    s2.close()
+
+
+def test_reject_ignores_accept_time_edits(dirs):
+    """Edits ride only an accept; a reject discards the proposal, edits and all."""
+    root, codoc_dir = dirs
+    s = open_store(codoc_dir)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Doomed", description="x"))
+    s.append_event(e)
+    write_tree(s, codoc_dir)
+    s.close()
+
+    inbox.append_verdict(codoc_dir, e.id, accept=False, title="Edited anyway")
+    res = run_loop_b(root, codoc_dir, dry_run=True)
+
+    assert res.rejected == 1
+    s2 = open_store(codoc_dir)
+    assert s2.list_features() == []
+    s2.close()
+
+
+def test_verdict_edits_survive_the_host_append_log(dirs):
+    """The IDE writes verdicts as inbox.host.jsonl lines; the merge must carry the
+    accept-time edits through to inbox.json, not flatten them to a plain verdict."""
+    _root, codoc_dir = dirs
+    line = json.dumps({"event_id": "e-xyz", "accept": True,
+                       "title": "Edited title", "description": "Edited body."})
+    (Path(codoc_dir) / "inbox.host.jsonl").write_text(line + "\n", encoding="utf-8")
+    got = inbox.read_verdicts(codoc_dir)
+    assert len(got) == 1
+    v = got[0]
+    assert v.accept and v.title == "Edited title" and v.description == "Edited body."

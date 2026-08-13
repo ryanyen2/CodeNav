@@ -27,7 +27,7 @@ from codoc.loop import status
 from codoc.loop.activity import activity_path, close_epoch, epoch_touched_files
 from codoc.loop.edits import edits_path, host_ops_path
 from codoc.loop.fsio import read_json
-from codoc.loop.inbox import inbox_path
+from codoc.loop.inbox import host_verdicts_path, inbox_path
 from codoc.loop.loop_a import reconcile_drift
 from codoc.loop.loop_b import run_loop_b
 from codoc.store.db import open_store
@@ -64,6 +64,9 @@ class WatchState:
     # re-route into a no-op Loop B. Record its post-pass hash ("" once consumed) so the
     # daemon's own consumption isn't mistaken for a fresh IDE append.
     last_host_hash: str = ""
+    # Same guard for the IDE's verdict append-log (inbox.host.jsonl): the merge on
+    # read consumes it, and that unlink must not re-route into a no-op Loop B.
+    last_inbox_host_hash: str = ""
     # Agent epoch state — managed by the process_batch epoch-transition logic.
     epoch_open: bool = False
     epoch_origin: str = ""       # "interactive" | "loop_b"
@@ -102,6 +105,7 @@ def _classify(
     tp = tree_path(codoc_dir).resolve()
     dp = doc_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
+    ivp = host_verdicts_path(codoc_dir).resolve()
     ep = edits_path(codoc_dir).resolve()
     hp = host_ops_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
@@ -120,7 +124,9 @@ def _classify(
         if rp == dp:
             doc_touched = True
             continue
-        if rp == ip:
+        if rp == ip or rp == ivp:
+            # inbox.json OR the IDE's verdict append-log (inbox.host.jsonl): both are
+            # verdicts for Loop B (the log is merged into inbox.json on first read).
             inbox_touched = True
             continue
         if rp == ep or rp == hp:
@@ -292,13 +298,14 @@ def watch_filter(codoc_dir: str):
     tp = tree_path(codoc_dir).resolve()
     dp = doc_path(codoc_dir).resolve()
     ip = inbox_path(codoc_dir).resolve()
+    ivp = host_verdicts_path(codoc_dir).resolve()
     ep = edits_path(codoc_dir).resolve()
     hp = host_ops_path(codoc_dir).resolve()
     ap = activity_path(codoc_dir).resolve()
 
     def _f(_change, path: str) -> bool:
         rp = Path(path).resolve()
-        if rp in (tp, dp, ip, ep, hp, ap):
+        if rp in (tp, dp, ip, ivp, ep, hp, ap):
             return True
         if any(part in _SKIP_DIRS for part in rp.parts):
             return False
@@ -474,7 +481,8 @@ def process_batch(
     if edits_touched and (_hash(edits_path(codoc_dir)) == state.last_edits_hash
                           and _hash(host_ops_path(codoc_dir)) == state.last_host_hash):
         edits_touched = False
-    if inbox_touched and _hash(inbox_path(codoc_dir)) == state.last_inbox_hash:
+    if inbox_touched and (_hash(inbox_path(codoc_dir)) == state.last_inbox_hash
+                          and _hash(host_verdicts_path(codoc_dir)) == state.last_inbox_host_hash):
         inbox_touched = False
 
     # ── Step 3: While an epoch is open, suppress independent Loop A AND Loop B. ──
@@ -516,6 +524,7 @@ def process_batch(
         state.last_edits_hash = _hash(edits_path(codoc_dir))
         state.last_inbox_hash = _hash(inbox_path(codoc_dir))
         state.last_host_hash = _hash(host_ops_path(codoc_dir))
+        state.last_inbox_host_hash = _hash(host_verdicts_path(codoc_dir))
         outs.append(("codoc→code", res.summary()))
     if code_files and not state.epoch_open:
         res_a = loop_a(root_dir, codoc_dir, file_scope=code_files)
@@ -669,6 +678,7 @@ def run_watch(
         last_edits_hash=_hash(edits_path(codoc_dir)),
         last_inbox_hash=_hash(inbox_path(codoc_dir)),
         last_host_hash=_hash(host_ops_path(codoc_dir)),
+        last_inbox_host_hash=_hash(host_verdicts_path(codoc_dir)),
     )
 
     # Startup drift reconcile: catch any code↔tree divergence that accumulated

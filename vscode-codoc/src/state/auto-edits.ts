@@ -10,35 +10,25 @@
  * amends.
  *
  * The model here is deliberately NOT a log. A log is a place you have to remember to
- * visit, and nobody visits it. Instead each rewrite is UNSEEN until the reader has
- * actually been on that section, at which point it clears itself and never returns.
- * The acknowledgement is reading, not dismissing.
+ * visit, and nobody visits it. Each rewrite is UNSEEN until the reader RESOLVES it
+ * with an explicit Keep/Restore verdict on the in-situ diff (v7 — this replaced the
+ * v6 dwell-to-clear model, whose marks evaporated the moment the reader looked at
+ * them: a record of an AI edit that cannot be disagreed with is not a review
+ * surface). Once resolved it never returns.
  *
- * WEIGHTING is the whole reason this stays calm. `is_small_amend` already holds the
- * two authorships to different bars — a person's own prose must survive ≥85% intact
- * to be auto-applied at all, while the loop may freely revise its own bootstrap text.
- * So the loop editing its own words is housekeeping and clears on a glance, whereas
- * the loop editing YOURS is a real event and is held to a longer dwell. Same channel,
- * two intensities; no second surface, no counter that only grows.
+ * WEIGHTING still matters: `is_small_amend` holds the two authorships to different
+ * bars — a person's own prose must survive ≥85% intact to be auto-applied at all,
+ * while the loop may freely revise its own bootstrap text. So the loop editing YOURS
+ * is named as such ("codoc edited your wording") and drawn heavier; the housekeeping
+ * case stays visually quiet. Same channel, two intensities.
  *
- * Pure — the timing/DOM side lives in the webview.
+ * Pure — the DOM side lives in the webview (tiptap/auto-edit-decorations.ts).
  */
 import type { AutoEdit } from './bindings-model';
-
-/** How long a feature must be the reader's current section before its rewrite counts
- *  as seen. Loop-authored prose clears on a glance; a rewrite of the reader's OWN
- *  words waits until they have genuinely settled there, so it survives a fast scroll
- *  down the document. */
-export const DWELL_LOOP_MS = 900;
-export const DWELL_HUMAN_MS = 2200;
 
 /** The rewrite displaced words a person wrote (rather than the loop's own prose). */
 export function displacedHuman(e: AutoEdit): boolean {
     return e.written_by === 'human';
-}
-
-export function dwellFor(e: AutoEdit): number {
-    return displacedHuman(e) ? DWELL_HUMAN_MS : DWELL_LOOP_MS;
 }
 
 /**

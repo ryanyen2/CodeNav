@@ -33,12 +33,15 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import time
+
 from codoc.agent.translate import propose_translations
 from codoc.codoc_file.parse import extract_bold, extract_links, extract_refs
 from codoc.doclang import (
     DocLanguage, detect_prose_language, norm_key, prose_letters,
     workspace_doc_language,
 )
+from codoc.loop.fsio import atomic_write_json, read_json
 from codoc.model.event import ACTOR_LOOP, MODE_AUTO, NodeOp, NodeOpKind
 from codoc.store.db import Store, open_store
 
@@ -50,6 +53,19 @@ TRANSLATE_SOURCE = "translate"
 #: progress lands incrementally, large enough that the model sees sibling nodes and
 #: keeps terminology consistent across them.
 BATCH = 12
+
+#: `.codoc/translate.json` — the run's live progress channel. The IDE reads it to
+#: draw a per-node skeleton while a translation is in flight (the `pending` fids are
+#: exactly the nodes still awaiting their batch), and to replace each skeleton as the
+#: per-batch re-render below lands the translated prose in tree.doc.json. A run that
+#: dies without finalizing leaves `running: true` behind, so consumers must treat a
+#: file older than :data:`TRANSLATE_LEASE_S` as a dead run, not a live one.
+TRANSLATE_STATUS_FILENAME = "translate.json"
+
+#: How stale (seconds since the last batch write) a `running: true` progress file may
+#: be before readers must assume the run crashed. A batch is one LLM call over ≤12
+#: nodes; five minutes is far beyond any healthy batch.
+TRANSLATE_LEASE_S = 300
 
 
 @dataclass
@@ -182,6 +198,43 @@ def _apply_one(store: Store, feature, title: str, description: str,
         store.set_feature_writer(feature.id, prior_writer, prior_role)
 
 
+def translate_progress_path(codoc_dir: str | Path) -> Path:
+    return Path(codoc_dir) / TRANSLATE_STATUS_FILENAME
+
+
+def read_translate_progress(codoc_dir: str | Path) -> dict:
+    """The last written progress payload, or `{}`. Tolerant like every other
+    control-file reader — a torn or hand-mangled file degrades to "no run"."""
+    data = read_json(translate_progress_path(codoc_dir), default={})
+    return data if isinstance(data, dict) else {}
+
+
+def _write_progress(codoc_dir: str | Path, payload: dict) -> None:
+    """Best-effort: progress is a UI courtesy, and a full disk or read-only
+    checkout must fail the translation loudly, not the progress file quietly."""
+    try:
+        atomic_write_json(translate_progress_path(codoc_dir), payload)
+    except OSError:  # pragma: no cover — environment-dependent
+        _log.warning("codoc translate: could not write %s", TRANSLATE_STATUS_FILENAME)
+
+
+def _render_derived(store: Store, codoc_dir: Path) -> None:
+    """Re-render every derived artifact (tree.codoc + tree.doc.json + status).
+
+    Called after EACH batch that applied translations — not once at the end — so
+    the IDE's projection consumer repaints incrementally and each node's skeleton
+    is replaced by its translated prose the moment its batch lands, instead of the
+    whole document snapping over at the end of a long run.
+    """
+    from codoc.codoc_file.render import write_tree
+    from codoc.loop.loop_b import write_tree_doc
+    from codoc.loop.status import refresh_status
+
+    write_tree(store, codoc_dir)
+    write_tree_doc(store, codoc_dir)
+    refresh_status(codoc_dir, store)
+
+
 def translate_tree(
     codoc_dir: str | Path,
     *,
@@ -225,57 +278,88 @@ def translate_tree(
         for f in features:
             taken.setdefault(f.parent_id, set()).add(norm_key(f.title))
 
-        for start in range(0, len(pending), BATCH):
-            batch = pending[start:start + BATCH]
-            payload = [
-                {"id": f.id, "title": f.title or "", "description": f.description or ""}
-                for f in batch
-            ]
-            try:
-                got = propose(payload, lang, repo_name=repo_name, config=config)
-                res.calls += 1
-            except Exception as exc:  # noqa: BLE001 — one bad batch must not sink the run
-                _log.warning("codoc translate: batch failed (%s)", exc)
-                for f in batch:
-                    res.skipped.append(Skipped(f.id, f.title or "", f"batch failed: {exc}"))
-                continue
+        # The progress channel (skipped on a dry run — a preview involves no UI).
+        # `pending_fids` is the skeleton set: exactly the nodes still awaiting their
+        # batch, shrunk as each batch resolves (translated OR skipped — either way
+        # the node's fate this run is decided and its skeleton must clear).
+        pending_fids = [f.id for f in pending]
+        total = len(pending)
 
-            for f in batch:
-                pair = got.get(f.id)
-                if pair is None:
-                    res.skipped.append(Skipped(f.id, f.title or "", "no translation returned"))
-                    continue
-                new_title, new_description = pair
-                siblings = taken.setdefault(f.parent_id, set())
-                why = check_translation(
-                    f.title or "", f.description or "", new_title, new_description,
-                    lang,
-                    # This node's own current title is not a collision with itself.
-                    taken_titles=frozenset(siblings - {norm_key(f.title)}),
-                )
-                if why:
-                    res.skipped.append(Skipped(f.id, f.title or "", why))
-                    continue
-                siblings.discard(norm_key(f.title))
-                siblings.add(norm_key(new_title))
-                if len(res.preview) < 8:
-                    res.preview.append((f.title or "", new_title))
-                if not dry_run:
-                    _apply_one(store, f, new_title, new_description, lang)
-                res.translated += 1
-            say(f"  … {res.translated}/{len(pending)}")
+        def progress(running: bool) -> None:
+            if dry_run:
+                return
+            _write_progress(codoc_dir, {
+                "version": 1,
+                "running": running,
+                "target": lang.code,
+                "target_name": lang.name,
+                "total": total,
+                "translated": res.translated,
+                "skipped": [
+                    {"feature_id": s.feature_id, "title": s.title, "reason": s.reason}
+                    for s in res.skipped
+                ],
+                "pending": pending_fids,
+                "at": time.time(),
+            })
 
-        if dry_run:
-            return res
+        progress(running=bool(pending))
+        try:
+            for start in range(0, len(pending), BATCH):
+                batch = pending[start:start + BATCH]
+                payload = [
+                    {"id": f.id, "title": f.title or "", "description": f.description or ""}
+                    for f in batch
+                ]
+                applied_in_batch = 0
+                try:
+                    got = propose(payload, lang, repo_name=repo_name, config=config)
+                    res.calls += 1
+                except Exception as exc:  # noqa: BLE001 — one bad batch must not sink the run
+                    _log.warning("codoc translate: batch failed (%s)", exc)
+                    for f in batch:
+                        res.skipped.append(Skipped(f.id, f.title or "", f"batch failed: {exc}"))
+                    got = {}
 
-        # Re-render every derived artifact once, at the end: the whole tree moved, so
-        # per-node renders would be pure waste, and the webview repaints from these.
-        if res.translated:
-            from codoc.codoc_file.render import write_tree
-            from codoc.loop.loop_b import write_tree_doc
-            from codoc.loop.status import refresh_status
+                if got:
+                    for f in batch:
+                        pair = got.get(f.id)
+                        if pair is None:
+                            res.skipped.append(Skipped(f.id, f.title or "", "no translation returned"))
+                            continue
+                        new_title, new_description = pair
+                        siblings = taken.setdefault(f.parent_id, set())
+                        why = check_translation(
+                            f.title or "", f.description or "", new_title, new_description,
+                            lang,
+                            # This node's own current title is not a collision with itself.
+                            taken_titles=frozenset(siblings - {norm_key(f.title)}),
+                        )
+                        if why:
+                            res.skipped.append(Skipped(f.id, f.title or "", why))
+                            continue
+                        siblings.discard(norm_key(f.title))
+                        siblings.add(norm_key(new_title))
+                        if len(res.preview) < 8:
+                            res.preview.append((f.title or "", new_title))
+                        if not dry_run:
+                            _apply_one(store, f, new_title, new_description, lang)
+                            applied_in_batch += 1
+                        res.translated += 1
 
-            write_tree(store, codoc_dir)
-            write_tree_doc(store, codoc_dir)
-            refresh_status(codoc_dir, store)
+                # The batch decided every node in it — clear their skeletons and, when
+                # anything applied, re-render the derived artifacts NOW so the IDE
+                # replaces those skeletons with the translated prose this batch, not at
+                # the end of the run. (We already hold the loop lock for the whole run,
+                # so a daemon pass can't interleave with the partial state.)
+                done_ids = {f.id for f in batch}
+                pending_fids[:] = [fid for fid in pending_fids if fid not in done_ids]
+                if applied_in_batch:
+                    _render_derived(store, codoc_dir)
+                progress(running=start + BATCH < len(pending))
+                say(f"  … {res.translated}/{len(pending)}")
+        finally:
+            # However the run ends — completion, a raised error, Ctrl-C — the channel
+            # must not report a live run that no longer exists.
+            progress(running=False)
     return res

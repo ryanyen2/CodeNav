@@ -52,3 +52,23 @@ export function langAttrFor(nodeLang: string | undefined, treeLang: string): str
     if (!tag || tag === treeLang) return null;
     return tag;
 }
+
+/**
+ * The nodes NOT already reading as `target` — stage 2 of the language switch
+ * ("Translate N nodes?") counts and names these.
+ *
+ * A node's effective language is its own tag when it has one (the sidecar tags only
+ * the exceptions) and the tree's otherwise, so this is exact right after a daemon
+ * render and — the case that matters — exact AT CLICK TIME, when `treeLang` is still
+ * the pre-switch language and every untagged node correctly counts as "not yet in
+ * the target". The definitive per-node selection stays Python's
+ * (`detect_prose_language`); this is the menu's honest preview of it, not a second
+ * authority.
+ */
+export function pendingForTarget(
+    nodes: { id: string; lang?: string }[], treeLang: string, target: string,
+): string[] {
+    return nodes
+        .filter(n => ((n.lang ?? '').trim() || treeLang) !== target)
+        .map(n => n.id);
+}

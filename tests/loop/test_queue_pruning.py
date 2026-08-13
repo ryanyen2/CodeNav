@@ -214,3 +214,88 @@ def test_a_held_draft_is_never_closed_by_the_ledger(repo):
     run_loop_b(root, codoc_dir, dry_run=False)
 
     assert [d.id for d in edits_channel.read_manifest(codoc_dir)] == [did]
+
+
+# ── a plan ADD closes on its placeholder realizing, citation or no citation ──────
+# /codoc:plan sessions implement accepted nodes and bind them via codoc_attach /
+# codoc_reflect without ever reading realize.md — they never learn the ⟨d-…⟩ ids the
+# daemon minted when the user clicked Accept. Requiring the citation therefore wedged
+# every plan session's queue at awaiting_impl forever. The placeholder's guarded
+# planned→active transition names the directive's own feature and can only mean the
+# code it asked for arrived, so it is accepted as evidence in its own right.
+
+def _bind(codoc_dir, fid, *, caused_by=""):
+    """A post-implementation attach — what a plan session does after writing code.
+    Deliberately cites nothing by default: the session never saw the queue."""
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+
+    with open_store(codoc_dir) as s:
+        apply_op(NodeOp(kind=NodeOpKind.ATTACH, feature_id=fid,
+                        bindings=[("mod.py", "mod.py::thing")]),
+                 s, source="loop_a_agent", applied=True, caused_by=caused_by)
+
+
+def test_a_realized_plan_placeholder_closes_its_directive_without_a_citation(repo):
+    import json
+
+    root, codoc_dir = repo
+    f = _seed(codoc_dir, realized=False)
+    did = _queue(codoc_dir, f.id, kind="add_node", handed_off=True)
+    _trigger(codoc_dir, did)
+    _bind(codoc_dir, f.id)               # implement + attach, no caused_by
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert edits_channel.read_manifest(codoc_dir) == []
+    assert not realize_path(codoc_dir).exists()
+    state = json.loads(status_path(codoc_dir).read_text())["state"]
+    assert state != AWAITING_IMPL
+
+
+def test_an_unimplemented_plan_placeholder_keeps_its_directive(repo):
+    """Accepting a plan is not implementing it: until code is bound, the node stays
+    planned and the queue keeps asking."""
+    root, codoc_dir = repo
+    f = _seed(codoc_dir, realized=False)
+    did = _queue(codoc_dir, f.id, kind="add_node", handed_off=True)
+    _trigger(codoc_dir, did)
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert [d.id for d in edits_channel.read_manifest(codoc_dir)] == [did]
+    assert realize_path(codoc_dir).exists()
+
+
+def test_pre_declared_binds_do_not_close_a_plan_directive(repo):
+    """plan_add may pre-bind the symbols the agent INTENDS to write. Those rows ride
+    in on the accepted ADD itself and leave the placeholder planned (apply keeps
+    realized=False), so the directive stays queued until a real post-implementation
+    attach performs the lifecycle transition."""
+    from codoc.model.binding import Binding
+
+    root, codoc_dir = repo
+    f = _seed(codoc_dir, realized=False)
+    with open_store(codoc_dir) as s:
+        s.upsert_binding(Binding(feature_id=f.id, file="mod.py",
+                                 symbol_path="mod.py::thing", fingerprint=""))
+    did = _queue(codoc_dir, f.id, kind="add_node", handed_off=True)
+    _trigger(codoc_dir, did)
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert [d.id for d in edits_channel.read_manifest(codoc_dir)] == [did]
+
+
+def test_a_realized_placeholder_does_not_close_an_amend_directive(repo):
+    """The structural evidence is scoped to ADDs. An amend's ask is a specific prose→
+    code alignment; the feature merely being realized says nothing about it."""
+    root, codoc_dir = repo
+    f = _seed(codoc_dir, realized=False)
+    did = _queue(codoc_dir, f.id, kind="amend", handed_off=True)
+    _trigger(codoc_dir, did)
+    _bind(codoc_dir, f.id)
+
+    run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert [d.id for d in edits_channel.read_manifest(codoc_dir)] == [did]
