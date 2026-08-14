@@ -39,6 +39,7 @@ echo "Built $(basename "$VSIX")"
 echo "Building the study logger."
 run node "$MAT/logger/test-classify.js"
 run node "$MAT/logger/test-extension.js"
+run node --test "$MAT/logger/test-composition.js"
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
     --allow-missing-repository --skip-license --out "$OUT/" )
 LOGGER="$(ls -t "$OUT"/codoc-study-logger-*.vsix | head -1)"
@@ -63,6 +64,8 @@ for base in hearth-baseline ember-baseline; do
   rm -rf "$TMP"
 done
 
+mkdir -p "$STAGE/logger"
+cp "$MAT"/logger/install-prompt-hook.py "$MAT"/logger/prompt-hook.py "$STAGE/logger/"
 cp "$MAT"/scripts/setup.sh "$STAGE/"
 cp "$MAT"/scripts/session-log.sh "$STAGE/"
 cp "$MAT"/scripts/collect.sh "$STAGE/"

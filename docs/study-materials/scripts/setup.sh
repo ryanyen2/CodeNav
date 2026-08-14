@@ -134,6 +134,30 @@ for name in hearth hearth-baseline ember ember-baseline; do
 done
 
 # ------------------------------------------------- wire codoc into the workspace
+step "Recording prompts in all four workspaces"
+# The study owns this hook and installs it everywhere. codoc has a prompt hook of
+# its own, but only in its own condition, and a measure that exists on one side
+# and not the other is not a comparison. It merges into whatever is already
+# there rather than replacing it.
+# Copy the hook out of the bundle first. Installing it from where it was unzipped
+# would leave every project pointing at a folder the participant is free to
+# delete, and prompts would stop being recorded with nothing to show it.
+if [ -d "$HERE/logger" ]; then
+  mkdir -p "$WORK/logger"
+  cp "$HERE"/logger/*.py "$WORK/logger/" 2>/dev/null || true
+fi
+HOOK="$WORK/logger/install-prompt-hook.py"
+if [ -f "$HOOK" ]; then
+  for name in hearth hearth-baseline ember ember-baseline; do
+    python3 "$HOOK" "$WORK/$name" >/dev/null 2>&1 \
+      && ok "$name: prompts will be recorded" \
+      || { bad "could not install the prompt hook in $name"; FAILED=1; }
+  done
+else
+  warn "no prompt hook in this bundle, so prompts will not be recorded"
+  TODO=1
+fi
+
 step "Connecting codoc to the two codoc workspaces"
 # This rewrites .claude/settings.json and .mcp.json with the paths on YOUR machine.
 # The archive ships without them on purpose, because they hold absolute paths.

@@ -121,11 +121,16 @@ test('running the tests and building are told apart, and nothing else maps', () 
     assert.equal(mapEvent({ ev: 'agent', t: 1, cmd: 'git' }), null);
 });
 
-test('a prompt carries its length and how many steps it took to write', () => {
-    const a = mapEvent({ ev: 'prompt', t: 1, chars: 140, steps: 3 });
+test('a prompt carries its shape but never its words', () => {
+    // How a prompt was drafted cannot be seen: it is typed into a terminal.
+    // What the hook can record is when it was sent and how big it was, and the
+    // words themselves stay in the Claude Code transcript rather than going to a
+    // database we promised would hold no content.
+    const a = mapEvent({ ev: 'prompt', t: 1, chars: 140, words: 24, lines: 3 });
     assert.equal(a.a, 'PROMPT');
     assert.equal(a.chars, 140);
-    assert.equal(a.steps, 3);
+    assert.equal(a.words, 24);
+    assert.ok(!('text' in a) && !('prompt' in a), 'the words are not carried');
 });
 
 // ── events to a sequence ─────────────────────────────────────────────────────

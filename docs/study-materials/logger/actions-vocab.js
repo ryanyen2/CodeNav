@@ -102,7 +102,10 @@ export function mapEvent(raw) {
         // Instructing the agent. From the study's own prompt hook, which is
         // installed in both conditions.
         case 'prompt':
-            return { t: raw.t, a: 'PROMPT', chars: raw.chars || 0, steps: raw.steps || 1 };
+            return {
+                t: raw.t, a: 'PROMPT',
+                chars: raw.chars || 0, words: raw.words || 0, lines: raw.lines || 0,
+            };
 
         // From codoc's change ledger. In the codoc condition the description is
         // edited through a custom editor, so no text edit ever reaches the logger
