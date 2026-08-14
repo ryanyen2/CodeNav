@@ -69,6 +69,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
     bad "the codoc command does not run from $WORK/codoc"; FAILED=1
   fi
   if code --list-extensions 2>/dev/null | grep -qi '^codoc\.codoc$'; then ok "the codoc VS Code extension is installed"; else bad "the codoc VS Code extension is not installed"; FAILED=1; fi
+  if code --list-extensions 2>/dev/null | grep -qi '^codoc\.codoc-study-logger$'; then ok "the study logger is installed"; else bad "the study logger is not installed"; FAILED=1; fi
   step "Result"
   [ "$FAILED" = 0 ] && [ "$TODO" = 0 ] && echo "  Everything is ready." || echo "  Some things are not ready. See the lines marked fail or todo above."
   exit "$FAILED"
@@ -144,15 +145,20 @@ done
 
 # ------------------------------------------------------------------- extension
 step "Installing the VS Code extension"
-VSIX="$(ls "$HERE"/codoc-*.vsix 2>/dev/null | head -1)"
-if [ -z "$VSIX" ]; then
-  bad "no .vsix found next to this script"
+VSIX="$(ls "$HERE"/codoc-[0-9]*.vsix 2>/dev/null | head -1)"
+LOGGER="$(ls "$HERE"/codoc-study-logger-*.vsix 2>/dev/null | head -1)"
+if [ -z "$VSIX" ] || [ -z "$LOGGER" ]; then
+  bad "a .vsix is missing from the bundle"
   FAILED=1
 elif command -v code >/dev/null 2>&1; then
   code --install-extension "$VSIX" --force >/dev/null 2>&1 \
     && ok "installed $(basename "$VSIX")" || { bad "could not install the extension"; FAILED=1; }
+  # The logger goes on for BOTH conditions. It records which files are opened and
+  # for how long, never their contents. Read it: it is one short file.
+  code --install-extension "$LOGGER" --force >/dev/null 2>&1 \
+    && ok "installed $(basename "$LOGGER")" || { bad "could not install the study logger"; FAILED=1; }
 else
-  warn "install $(basename "$VSIX") by hand: open VS Code, go to Extensions,"
+  warn "install both .vsix files by hand: open VS Code, go to Extensions,"
   echo  "          click the ... menu at the top, and choose Install from VSIX"
   TODO=1
 fi

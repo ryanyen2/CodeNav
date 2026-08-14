@@ -685,16 +685,35 @@ transcripts (`~/.claude/projects/...jsonl`) · git auto-snapshot (commit to a sh
 branch every 60 s, both conditions) · the `.codoc/` state stream (events ledger,
 `edits.json` history, `realized.jsonl`, `status.json` transitions) · final artifacts.
 
-**Extension work needed (tracked separately):**
-1. **Study telemetry log** — append-only JSONL of UI events with timestamps: verdict
-   clicks (per event id), Accept-all uses, document edits (feature id + length
-   delta), feature navigation, panel focus changes. Most exists in the events
-   ledger; the UI-action layer does not.
-2. **Baseline-parity logger** — a tiny VS Code extension (or `code --log`-based
-   watcher) recording file-open/focus events in the baseline too, so navigation
-   measures aren't CoDoc-only.
-3. Export command: `codoc export-markdown` for generating the baseline CLAUDE.md
-   from the seeded tree (must exist for §4.4's parity check).
+**Extension work — DONE 2026-08-14.** Items 1 and 2 were merged into one
+deliverable, which is the correct shape: a **single logger extension installed in
+BOTH conditions** (`docs/study-materials/logger/`), writing one JSONL schema.
+Building the UI-action layer inside the codoc extension and a separate watcher for
+the baseline would have made every navigation measure a property of the tool
+rather than of the person; one extension in both arms makes parity structural
+instead of asserted.
+
+It records per event: the active surface (document / code / test / other) and file,
+the line range that was on screen and for how long, character counts added and
+removed with flags for whether the window was focused and whether that editor was
+active (which is how human typing is separated from an agent rewriting a file
+underneath), saves, and window focus. It records no file, prompt, or description
+text. Verdict timing comes from the events ledger, which already carries wall
+clock; terminal focus is not observable to a VS Code extension, so agent turns are
+timed from the Claude Code transcript instead (stated as a limitation in
+`analysis-plan.md`).
+
+Five measures come from this log and nowhere else: origin-of-change, review
+coverage, warranted trust, time-to-first-edit, and doc↔code switches plus
+files-opened-before-correct-one. `scoring/check-session-complete.py` walks the
+whole measure list against a collected session and names exactly those five when
+the log is absent.
+
+3. Export command: `codoc export-markdown` — **DONE**, and used to produce both
+   baseline `CLAUDE.md` files.
+
+**The full measure-to-source mapping is `docs/study-materials/analysis-plan.md`**,
+including the three things it states plainly we cannot measure and will not claim.
 
 ## 11. Piloting
 

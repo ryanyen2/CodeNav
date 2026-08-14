@@ -1,0 +1,35 @@
+{
+  "name": "codoc-study-logger",
+  "displayName": "codoc study logger",
+  "description": "Records which files a study participant opens, looks at, and edits. Runs in both conditions.",
+  "version": "1.0.0",
+  "publisher": "codoc",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "codoc study logger",
+      "properties": {
+        "codocStudyLogger.file": {
+          "type": "string",
+          "default": "",
+          "description": "Where to append the log. Defaults to ~/codoc-study/session-logs/interaction-<workspace>.jsonl"
+        },
+        "codocStudyLogger.participant": {
+          "type": "string",
+          "default": "",
+          "description": "Participant code, written into every line."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "codocStudyLogger.showLog",
+        "title": "Study logger: show what is being recorded"
+      }
+    ]
+  }
+}

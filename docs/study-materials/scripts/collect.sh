@@ -30,6 +30,9 @@ done
 
 if [ -d "$WORK/session-logs" ]; then
   rsync -a "$WORK/session-logs" "$DEST/" 2>/dev/null && echo "  session logs"
+  n=$(ls "$WORK/session-logs"/interaction-*.jsonl 2>/dev/null | wc -l | tr -d ' ')
+  echo "  interaction logs: $n"
+  [ "$n" = "0" ] && echo "    WARNING: none found. Tell the experimenter before you close the call."
 fi
 
 mkdir -p "$DEST/claude-transcripts"

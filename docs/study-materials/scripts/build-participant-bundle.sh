@@ -33,8 +33,19 @@ run() { "$@" >>"$LOG" 2>&1 || { echo "failed: $*"; echo "see $LOG"; tail -20 "$L
 VSIX="$(ls -t "$OUT"/codoc-*.vsix | head -1)"
 echo "Built $(basename "$VSIX")"
 
+# The study logger. A separate extension on purpose: it installs in BOTH
+# conditions, so navigation is measured the same way in each. Its tests run here
+# because a file sorted into the wrong surface changes a reported number.
+echo "Building the study logger."
+run node "$MAT/logger/test-classify.js"
+run node "$MAT/logger/test-extension.js"
+( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
+    --allow-missing-repository --skip-license --out "$OUT/" )
+LOGGER="$(ls -t "$OUT"/codoc-study-logger-*.vsix | head -1)"
+echo "Built $(basename "$LOGGER")"
+
 rm -rf "$STAGE"; mkdir -p "$STAGE"
-cp "$VSIX" "$STAGE/"
+cp "$VSIX" "$LOGGER" "$STAGE/"
 cp "$EXT"/bundled/codoc-*.whl "$STAGE/"
 cp "$MAT"/workspaces/hearth-codoc.tar.gz "$STAGE/"
 cp "$MAT"/workspaces/ember-codoc.tar.gz "$STAGE/"

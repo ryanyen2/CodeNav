@@ -19,6 +19,7 @@ them each way, so most files come as a pair.
 | File | What it is |
 | --- | --- |
 | `experimenter-guide.md` | Setup, the shape of the session, what to say, what to record |
+| `analysis-plan.md` | Every measure, and the data it is computed from. Read once before the first session. |
 | `questions-hearth.md` | The ten questions for a hearth session, with how to score each answer |
 | `questions-ember.md` | The same ten questions for ember |
 
@@ -38,7 +39,8 @@ them each way, so most files come as a pair.
 | --- | --- |
 | `workspaces/` | The four project copies, packed as archives, with notes on what is in them |
 | `scripts/` | Four scripts, described below |
-| `scoring/` | Three scripts, described below |
+| `scoring/` | Four scripts, described below |
+| `logger/` | The study logger extension, installed in both conditions |
 | `baseline/doc-maintenance/SKILL.md` | The instructions given to the agent in the condition without codoc. Nobody reads this during a session. Edit it here and the bundle picks it up. |
 
 ## The scripts
@@ -74,6 +76,20 @@ rather than recording a false result. Part 8 of the guide has the details.
 `scoring/check-descriptions-match.py` confirms both conditions still carry the
 same words. Run it before every session, and after any change to either description.
 Both projects pass today.
+
+`scoring/check-session-complete.py` takes a finished session and says, measure by
+measure, whether the data to compute it arrived. Run it while the participant is
+still on the call.
+
+## The logger
+
+`logger/` is a small VS Code extension that records which file is on screen, which
+lines, for how long, and how much text changed. It never records the text itself.
+
+It installs in **both** conditions. That is the point of it being separate from
+codoc: if only one condition logged navigation, every navigation result would
+describe the tool rather than the person. Five measures come from this log and
+nowhere else, and `check-session-complete.py` names them when it is missing.
 
 ## Before you run anyone
 

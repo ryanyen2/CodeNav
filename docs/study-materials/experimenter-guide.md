@@ -118,6 +118,17 @@ replayed afterwards. It prints the line that stops it, so have them keep that
 terminal open and stop it at the end of the condition. It does not record the
 screen or the voice. You record those from the call.
 
+Alongside it, the study logger extension records which files are on screen, for
+how long, and how much text changed. It starts on its own when VS Code opens and
+needs nothing from you. It runs in both conditions, which is the only reason
+navigation can be compared between them at all.
+
+Check it is alive before the task starts. Ask them to run
+"Study logger: show what is being recorded" from Cmd+Shift+P. It prints the file
+it is writing to. If that file does not exist or is empty after they have clicked
+around for a few seconds, stop and fix it, because five of the measures come from
+nowhere else. `analysis-plan.md` says which five.
+
 ## Part 4. The shape of the session
 
 About 105 minutes. The middle block runs twice, once for each condition.
@@ -269,9 +280,20 @@ using the code you gave them:
 ./collect.sh p04
 ```
 
-It packs the projects, the recordings of the session state, and the Claude Code
-transcripts into one zip on their Desktop and prints where it is. Have them send it
-while you are still on the call, so you can check it arrived and is not empty.
+It packs the projects, the recordings of the session state, the interaction logs
+and the Claude Code transcripts into one zip on their Desktop and prints where it
+is. Have them send it while you are still on the call.
+
+Then, before they leave, unpack it and run:
+
+```
+python3 docs/study-materials/scoring/check-session-complete.py <the unpacked folder>
+```
+
+It goes through every measure in `analysis-plan.md` and says whether the data to
+compute it arrived. Anything it prints as MISSING is recoverable in the next
+thirty seconds and gone forever once the call ends. It cannot see your notes or
+the questionnaires and says so.
 
 Keep these yourself:
 
@@ -365,14 +387,24 @@ Delete it and run `./setup.sh` again.
 
 ## Part 10. Before you run anyone
 
-Both projects are built, their descriptions written, and their scoring checked.
+The materials are finished. Both projects are built and their descriptions
+written, the scoring is checked against right and wrong versions of both tasks,
+and everything the analysis needs is recorded in both conditions.
+
 What is left is not work on the materials.
 
-- Pre-register the design and the scoring. The two question sheets and the scoring
-  tables are fixed from that point on.
-- Run the three pilot sessions, with the full protocol.
-- Build the two missing logs described in section 10 of the design doc, so that
-  what people open and click is recorded in both conditions and not only in codoc.
+- Pre-register the design and the scoring. The two question sheets, their scoring
+  tables, and the measure list in `analysis-plan.md` are fixed from that point on.
+- Run the three pilot sessions with the full protocol, and run
+  `check-session-complete.py` on each one. The pilots are what tell you whether
+  105 minutes is enough and whether the questions land, and they are also the only
+  way to find out that a log is empty before it matters.
+- Decide who does the blind rating, and make sure they never see which condition
+  a project came from.
+
+Read `analysis-plan.md` once before the first session. It lists every measure
+against the data that produces it, including the three things we decided not to
+claim because nothing measures them.
 
 One thing to expect, because the calibration runs already showed it. The agent
 solves both tasks correctly whatever it is asked, so almost everyone will finish
