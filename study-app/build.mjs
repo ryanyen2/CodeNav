@@ -12,6 +12,10 @@ const watch = process.argv.includes('--watch');
 
 mkdirSync('dist', { recursive: true });
 
+// A landing page, so the bare domain explains itself rather than showing
+// Firebase's "page not found", which reads like the study is broken.
+copyFileSync('index.html', join('dist', 'index.html'));
+
 for (const page of pages) {
     let entries;
     try {
