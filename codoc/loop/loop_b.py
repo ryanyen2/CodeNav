@@ -983,6 +983,39 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # `soft_retired` / `unretired` result fields stay (default 0) so existing callers
     # and the summary line are undisturbed.
 
+    # An accepted proposal's bindings were written by the model when the proposal
+    # was raised, and nothing downstream re-checks them. A flask sansio-split
+    # proposal bound `sansio/app.py::App._make_timedelta` and
+    # `sansio/app.py::create_jinja_environment`: both correctly shaped, neither a
+    # symbol that exists. Loop A never sees such a binding again (the temporal
+    # diff only reasons about chunks the index knows), so it dangles until a
+    # recovery-grade `reconcile_drift` happens to run. Reading the index key set
+    # once per drain lets `apply_op` drop them at the point of acceptance. Lazy
+    # and cached: a drain with no accepted bindings must not pay for an index read.
+    _UNREAD = object()  # distinct from "read it, and it was empty"
+    _keys_cache: list = [_UNREAD]
+
+    def _index_keys() -> set[tuple[str, str]] | None:
+        if _keys_cache[0] is _UNREAD:
+            from codoc.pipelines.indexing.reader import read_all_chunks
+            try:
+                keys = {
+                    (r.file, r.symbol_path)
+                    for r in read_all_chunks(
+                        codoc_dir, with_embeddings=False, with_source=False,
+                    )
+                }
+            except Exception:  # noqa: BLE001 — no index is not a reason to refuse a verdict
+                keys = None
+            # An unreadable index and an empty one both mean "no view of the
+            # index", and both must yield None. An empty SET says the index
+            # contains nothing, so membership drops every binding — the exact
+            # opposite of not refusing a verdict, and it silently lands accepted
+            # features owning no code. `apply_op` falls back to the shape rule
+            # when this is None.
+            _keys_cache[0] = keys or None
+        return _keys_cache[0]
+
     def _accept_with_fid(op: NodeOp, caused_by: str = "") -> str:
         """Apply an accepted op, recovering a freshly-minted ADD feature id by
         set-diff (the op itself carries none until applied).
@@ -993,12 +1026,15 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
         unrecoverable the instant the drain finished (which is why
         ``codoc_await_verdicts`` used to return empty when the daemon won the
         race). See ``Store.applied_event_for_cause``."""
+        keys = _index_keys() if op.bindings else None
         if op.kind is NodeOpKind.ADD_NODE and not op.feature_id:
             before = {f.id for f in store.list_features()}
-            apply_op(op, store, source="user", applied=True, caused_by=caused_by)
+            apply_op(op, store, source="user", applied=True, caused_by=caused_by,
+                     index_keys=keys)
             new = {f.id for f in store.list_features()} - before
             return next(iter(new)) if new else ""
-        apply_op(op, store, source="user", applied=True, caused_by=caused_by)
+        apply_op(op, store, source="user", applied=True, caused_by=caused_by,
+                 index_keys=keys)
         return op.feature_id or ""
 
     # 0.5 Identity-keyed authored commands (U3 / KTD3). The webview emits an

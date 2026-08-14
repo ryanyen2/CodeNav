@@ -66,16 +66,33 @@ def propose_tree_update(
     )
     prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
     volatile = format_prompt(volatile_tpl, **kwargs)
-    raw = run_agent(volatile, config or fast_llm_config(),
-                    prefix_parts=prefix_parts)
+    import logging
+
+    # Whole-response tolerance, the outer half of the per-op tolerance below.
+    # Per-op dropping only helps once the response has parsed; a reply that is
+    # not valid JSON at all raises out of `parse_solution` and takes the entire
+    # Loop A pass with it — including the deterministic refresh/relocate/detach
+    # work that had already succeeded, which then gets re-derived and re-issued
+    # on the next state-based reconcile. One truncated reply on a 158-commit
+    # altair replay did exactly that (`Expecting ',' delimiter` at char 3751 of
+    # a large `altair.datasets` changeset).
+    #
+    # Returning no ops is the right degradation: the safe ops stand, the added
+    # chunks stay unbound, and the next pass sees them as still-unattributed and
+    # asks again. A crash loses both.
+    try:
+        raw = run_agent(volatile, config or fast_llm_config(),
+                        prefix_parts=prefix_parts)
+    except Exception as exc:  # noqa: BLE001 — a bad reply must not sink the pass
+        logging.getLogger(__name__).warning(
+            "codoc: unparseable LLM tree-update response (%s); no ops this pass", exc)
+        return []
     ops_raw = raw.get("ops", []) if isinstance(raw, dict) else raw
     # Per-op tolerance (dead-letter): one malformed op (a bad/absent kind, a missing key,
     # a pydantic validation failure) must NOT sink the whole response. Before this, a
     # single bad op raised out of the comprehension, the pass errored, and the state-based
     # reconcile re-issued every subsequent save — an unbounded retry/cost loop. Now a bad
     # op is dropped with a warning and the good ops still apply.
-    import logging
-
     ops: list[NodeOp] = []
     for o in ops_raw:
         try:

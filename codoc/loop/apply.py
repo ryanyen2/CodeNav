@@ -12,6 +12,7 @@ those are not the same thing to overwrite (see :func:`preserved_ratio`).
 """
 from __future__ import annotations
 
+import sys
 from difflib import SequenceMatcher
 
 from codoc.doclang import clause_chars
@@ -136,6 +137,7 @@ def apply_op(
     applied: bool,
     fp_lookup: dict[tuple[str, str], str] | None = None,
     th_lookup: dict[tuple[str, str], str] | None = None,
+    index_keys: set[tuple[str, str]] | None = None,
     actor: str = "",
     mode: str = "",
     caused_by: str = "",
@@ -200,7 +202,7 @@ def apply_op(
                   actor=actor or d_actor, mode=mode or d_mode, caused_by=caused_by)
     store.append_event(event)
     if applied:
-        _mutate(op, store, fp_lookup or {}, th_lookup or {})
+        _mutate(op, store, fp_lookup or {}, th_lookup or {}, index_keys)
         if op.feature_id and (op.title is not None or op.description is not None):
             # The event's actor doubles as the writer's ROLE. It is already
             # resolved here (explicit provenance, else derived from source), so
@@ -237,11 +239,61 @@ def _live_parent_id(store: Store, parent_id: str | None) -> str | None:
     return None
 
 
+def _addressable(file: str, symbol: str) -> bool:
+    """Whether ``(file, symbol)`` could name a real chunk.
+
+    Every chunk the indexer emits is addressed ``<file>::<qualified>`` (see
+    ``lang/python.py`` and ``lang/typescript.py``), so a symbol_path that does
+    not carry its own file as a prefix cannot match anything, ever. It becomes a
+    binding that points at nothing: invisible to the temporal diff, which only
+    reasons about chunks the index knows, and therefore never repaired.
+
+    The pairs come from a model — bootstrap and Loop A both let it supply the
+    two elements independently — and a model occasionally drops the basename out
+    of the middle of the path. One such binding survived a real bootstrap of
+    psf/requests (764 of 765 satisfied this invariant; the one that did not was
+    unreachable from the moment it was written). Checking the shape costs
+    nothing and needs no index handle, so it can guard every writer.
+    """
+    return symbol.startswith(file + "::")
+
+
+def _bindable(
+    op: NodeOp, index_keys: set[tuple[str, str]] | None = None,
+) -> list[tuple[str, str]]:
+    """``op.bindings`` minus any pair that cannot address a chunk.
+
+    Shape alone catches a mangled path but not a well-formed guess. A proposal
+    accepted on flask's sansio split bound ``sansio/app.py::App._make_timedelta``
+    and ``sansio/app.py::create_jinja_environment`` — both correctly shaped, and
+    neither a symbol that exists (the first is not a method of ``App``, the
+    second is not module-level). When the caller can supply the index's key set,
+    membership is the real check; ``index_keys=None`` means the caller has no
+    view of the index and only the shape rule applies.
+    """
+    good, bad = [], []
+    for file, symbol in op.bindings:
+        ok = _addressable(file, symbol) and (
+            index_keys is None or (file, symbol) in index_keys
+        )
+        (good if ok else bad).append((file, symbol))
+    if bad:
+        # Loud, because the alternative is a permanently dangling binding and a
+        # feature that looks attributed while owning nothing.
+        print(
+            f"[codoc] dropped {len(bad)} unaddressable binding(s) on "
+            f"{op.kind.value}: {bad[:3]}",
+            file=sys.stderr,
+        )
+    return good
+
+
 def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
-            th: dict[tuple[str, str], str]) -> None:
+            th: dict[tuple[str, str], str],
+            index_keys: set[tuple[str, str]] | None = None) -> None:
     k = op.kind
     if k in (NodeOpKind.ATTACH, NodeOpKind.REFRESH):
-        for file, symbol in op.bindings:
+        for file, symbol in _bindable(op, index_keys):
             store.upsert_binding(Binding(feature_id=op.feature_id, file=file,
                                          symbol_path=symbol, fingerprint=fp.get((file, symbol), ""),
                                          types_hash=th.get((file, symbol), "")))
@@ -289,7 +341,7 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
         if op.feature_id:
             f.id = op.feature_id
         store.upsert_feature(f)
-        for file, symbol in op.bindings:
+        for file, symbol in _bindable(op, index_keys):
             store.upsert_binding(Binding(feature_id=f.id, file=file, symbol_path=symbol,
                                          fingerprint=fp.get((file, symbol), ""),
                                          types_hash=th.get((file, symbol), "")))

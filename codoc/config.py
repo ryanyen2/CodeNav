@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+from dataclasses import asdict, dataclass
 
 from pydantic import BaseModel
 from dotenv import dotenv_values, find_dotenv
@@ -192,6 +194,97 @@ def get_llm_config() -> LLMConfig:
     )
 
 
+# ---------------------------------------------------------------------------
+# Usage accounting
+# ---------------------------------------------------------------------------
+#
+# Every provider hands back a token count and we used to drop it on the floor —
+# `complete()` returns a bare string, so cost was unmeasurable after the fact.
+# Rather than change that return type (and every call site with it), providers
+# record into a process-global accumulator that a caller snapshots around the
+# work it cares about. The evaluation harness needs per-commit cost; the daemon
+# can surface a running total. Recording NEVER raises: a provider that changes
+# its usage shape must not break completions.
+
+
+@dataclass
+class Usage:
+    """Token counts accumulated since the last reset."""
+
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0    # billed ~0.1× — tracked separately or cost lies
+    cache_write_tokens: int = 0
+    cost_usd: float = 0.0         # only providers that report it (claude CLI)
+
+    def __sub__(self, other: Usage) -> Usage:
+        """Delta between two snapshots, for scoping a measurement to one pass."""
+        return Usage(
+            calls=self.calls - other.calls,
+            input_tokens=self.input_tokens - other.input_tokens,
+            output_tokens=self.output_tokens - other.output_tokens,
+            cache_read_tokens=self.cache_read_tokens - other.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens - other.cache_write_tokens,
+            cost_usd=self.cost_usd - other.cost_usd,
+        )
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+_USAGE = Usage()
+_USAGE_LOCK = threading.Lock()
+
+
+def usage_snapshot() -> Usage:
+    """A copy of the running totals. Subtract two snapshots to scope a measurement."""
+    with _USAGE_LOCK:
+        return Usage(**asdict(_USAGE))
+
+
+def reset_usage() -> None:
+    global _USAGE
+    with _USAGE_LOCK:
+        _USAGE = Usage()
+
+
+def _record_usage(
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cost_usd: float = 0.0,
+) -> None:
+    with _USAGE_LOCK:
+        _USAGE.calls += 1
+        _USAGE.input_tokens += int(input_tokens or 0)
+        _USAGE.output_tokens += int(output_tokens or 0)
+        _USAGE.cache_read_tokens += int(cache_read_tokens or 0)
+        _USAGE.cache_write_tokens += int(cache_write_tokens or 0)
+        _USAGE.cost_usd += float(cost_usd or 0.0)
+
+
+def _record_from(obj, mapping: dict[str, str]) -> None:
+    """Record usage pulled off a provider response, tolerating a missing field.
+
+    ``mapping`` is {our field: dotted path on the provider object}. A call that
+    yields nothing still bumps ``calls``, so call counts stay honest even when a
+    provider stops reporting tokens.
+    """
+    kwargs: dict = {}
+    for ours, path in mapping.items():
+        cur = obj
+        for attr in path.split("."):
+            if cur is None:
+                break
+            cur = cur.get(attr) if isinstance(cur, dict) else getattr(cur, attr, None)
+        if isinstance(cur, (int, float)):
+            kwargs[ours] = cur
+    _record_usage(**kwargs)
+
+
 def complete(
     prompt: str,
     config: LLMConfig | None = None,
@@ -287,6 +380,13 @@ def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
             max_completion_tokens=budget,
             extra_body=extra or None,
         )
+        # Record per ATTEMPT, not per call: a truncation retry really did spend
+        # the first attempt's tokens, and a cost figure that hides them is wrong.
+        _record_from(response, {
+            "input_tokens": "usage.prompt_tokens",
+            "output_tokens": "usage.completion_tokens",
+            "cache_read_tokens": "usage.prompt_tokens_details.cached_tokens",
+        })
         choice = response.choices[0]
         content = choice.message.content or ""
         if choice.finish_reason != "length" or attempt == 1:
@@ -306,6 +406,10 @@ def _complete_ollama(prompt: str, config: LLMConfig, parts: list[str]) -> str:
         messages=[{"role": "user", "content": _joined(parts, prompt)}],
         options={"temperature": config.temperature, "num_predict": config.max_tokens},
     )
+    _record_from(response, {
+        "input_tokens": "prompt_eval_count",
+        "output_tokens": "eval_count",
+    })
     return response["message"]["content"]
 
 
@@ -347,6 +451,12 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
             for part in parts[:2]
         ] + [{"type": "text", "text": part} for part in parts[2:]]
     message = client.messages.create(**create_kwargs)
+    _record_from(message, {
+        "input_tokens": "usage.input_tokens",
+        "output_tokens": "usage.output_tokens",
+        "cache_read_tokens": "usage.cache_read_input_tokens",
+        "cache_write_tokens": "usage.cache_creation_input_tokens",
+    })
     # Concatenate the text blocks of the response (tool/thinking blocks, if any,
     # carry no .text and are skipped) — the same raw-text contract as the others.
     return "".join(
@@ -469,6 +579,15 @@ def _complete_claude(prompt: str, config: LLMConfig, parts: list[str]) -> str:
             f"`claude -p` did not succeed (subtype={payload.get('subtype')!r}): "
             f"{str(payload.get('result') or '')[:300]}"
         )
+    # The headless envelope reports both tokens and a dollar figure. This is the
+    # only provider that prices its own call, so cost_usd is populated here alone.
+    _record_from(payload, {
+        "input_tokens": "usage.input_tokens",
+        "output_tokens": "usage.output_tokens",
+        "cache_read_tokens": "usage.cache_read_input_tokens",
+        "cache_write_tokens": "usage.cache_creation_input_tokens",
+        "cost_usd": "total_cost_usd",
+    })
     return str(payload.get("result", ""))
 
 

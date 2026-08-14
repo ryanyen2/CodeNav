@@ -144,3 +144,87 @@ def test_a_no_op_amend_records_nothing(store):
     e = apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id, description="Same prose."),
                  store, source="loop_a", applied=True)
     assert e.op.prev_description is None
+
+
+# --- unaddressable bindings ------------------------------------------------
+#
+# Every chunk the indexer emits is addressed "<file>::<qualified>", so a
+# symbol_path lacking that prefix can never match a chunk. Such a binding is
+# invisible to the temporal diff (which only reasons about chunks the index
+# knows) and so is never repaired — it dangles for the life of the workspace.
+# One reached a real store during a psf/requests bootstrap when the model
+# dropped the basename out of the middle of the path.
+
+
+def test_add_node_drops_a_binding_that_cannot_address_a_chunk(store):
+    op = NodeOp(
+        kind=NodeOpKind.ADD_NODE,
+        title="Help metadata tests",
+        bindings=[
+            ("tests/test_help.py", "tests/test_help.py::test_system_ssl"),
+            ("tests/test_help.py", "tests/test_idna_without_version_attribute"),
+        ],
+    )
+    apply_op(op, store, source="bootstrap", applied=True)
+
+    feature = next(f for f in store.list_features() if f.title == "Help metadata tests")
+    kept = store.bindings_for_feature(feature.id)
+    assert [b.symbol_path for b in kept] == ["tests/test_help.py::test_system_ssl"]
+
+
+def test_attach_drops_a_binding_that_cannot_address_a_chunk(store):
+    f = Feature(title="Utils")
+    store.upsert_feature(f)
+    apply_op(
+        NodeOp(
+            kind=NodeOpKind.ATTACH,
+            feature_id=f.id,
+            bindings=[
+                ("codoc/utils.py", "codoc/utils.py::parse"),
+                ("codoc/utils.py", "codoc/utils.py"),   # names the file, not a chunk
+            ],
+        ),
+        store,
+        source="loop_a_agent",
+        applied=True,
+    )
+    assert [b.symbol_path for b in store.bindings_for_feature(f.id)] == [
+        "codoc/utils.py::parse"
+    ]
+
+
+def test_index_keys_reject_a_well_formed_binding_that_names_nothing(store):
+    # Shape is not enough. A proposal accepted on flask's sansio split bound
+    # `sansio/app.py::App._make_timedelta` — correctly shaped, and not a symbol
+    # that exists. Only membership in the index catches that.
+    f = Feature(title="App")
+    store.upsert_feature(f)
+    apply_op(
+        NodeOp(
+            kind=NodeOpKind.ATTACH,
+            feature_id=f.id,
+            bindings=[
+                ("sansio/app.py", "sansio/app.py::App.__init__"),
+                ("sansio/app.py", "sansio/app.py::App._make_timedelta"),
+            ],
+        ),
+        store,
+        source="user",
+        applied=True,
+        index_keys={("sansio/app.py", "sansio/app.py::App.__init__")},
+    )
+    assert [b.symbol_path for b in store.bindings_for_feature(f.id)] == [
+        "sansio/app.py::App.__init__"
+    ]
+
+
+def test_without_index_keys_a_well_formed_binding_is_kept(store):
+    # Callers with no view of the index must not have their bindings dropped.
+    f = Feature(title="App")
+    store.upsert_feature(f)
+    apply_op(
+        NodeOp(kind=NodeOpKind.ATTACH, feature_id=f.id,
+               bindings=[("a.py", "a.py::thing")]),
+        store, source="loop_a", applied=True,
+    )
+    assert len(store.bindings_for_feature(f.id)) == 1

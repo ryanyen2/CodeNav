@@ -428,7 +428,8 @@ class LoopAResult:
     applied_structural: list[NodeOp] = field(default_factory=list)
     proposed: list[NodeOp] = field(default_factory=list)      # pending review hunks
     llm_called: bool = False
-    llm_calls: int = 0   # >1 when a large added set was batched across calls
+    llm_calls: int = 0   # 0 when the deterministic path handled everything; >1 when
+                         # a large added set was batched across calls
     impacted: list[str] = field(default_factory=list)         # feature IDs of upstream dependents
     held_back: int = 0  # intent ops suppressed by a doc-wins hold (classify row 13)
     # U5: realize-divergence outcome for this pass — {receiving feature_id → reason}
@@ -596,6 +597,19 @@ def apply_changeset(
 
     fp = cs.fingerprints()
     th = cs.types_hashes()
+    # The whole index, which `cs.rows` already carries for the graph rebuild —
+    # so validating a model-proposed binding against it costs one set build and
+    # no I/O. Needed because `fp` is CHANGESET-scoped: a binding onto an
+    # untouched chunk legitimately misses it, so an empty fingerprint cannot by
+    # itself mean "this names nothing".
+    #
+    # Without this the model's invented bindings land and stay. A 158-commit
+    # altair replay accumulated 28 of them, every one with an empty fingerprint
+    # and a symbol that does not exist (`tools/schemapi/utils.py::T1`,
+    # `altair/typing.py::__module__`), concentrated in the files it was asked
+    # about most. They are unreachable by the temporal diff, which only reasons
+    # about chunks the index knows, so nothing ever repaired them.
+    index_keys = {(r.file, r.symbol_path) for r in cs.rows} or None
 
     # ONE feature-table read per pass — every helper below works off this list
     # (plus one-query bound-id sets) instead of re-scanning the store.
@@ -612,7 +626,7 @@ def apply_changeset(
     #    chunks DETACH here, freeing their (file, symbol) so a relocation can rebind.
     auto_ops = derive_auto_ops(cs, store)
     for op in auto_ops:
-        apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+        apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th, index_keys=index_keys,
                  caused_by=_cause(op))
     result = LoopAResult(auto=dict(Counter(op.kind.value for op in auto_ops)))
     if gc:
@@ -631,7 +645,7 @@ def apply_changeset(
             bindings=[(added_ref.file, added_ref.symbol_path)],
             rationale=f"{_kind}: {removed_ref.symbol_path} → {added_ref.symbol_path}",
         )
-        apply_op(reloc, store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+        apply_op(reloc, store, source=source, applied=True, fp_lookup=fp, th_lookup=th, index_keys=index_keys,
                  caused_by=_cause(reloc))
         relocated_added.add((added_ref.file, added_ref.symbol_path))
     if relocations:
@@ -681,7 +695,7 @@ def apply_changeset(
                            bindings=[(a.file, a.symbol_path)],
                            rationale="adopt: bound to the plan placeholder it implements")
             apply_op(adopt, store, source=source, applied=True, fp_lookup=fp,
-                     th_lookup=th, caused_by=_cause(adopt))
+                     th_lookup=th, index_keys=index_keys, caused_by=_cause(adopt))
             result.auto["adopt"] = result.auto.get("adopt", 0) + 1
         else:
             still_unbound.append(a)
@@ -812,8 +826,7 @@ def apply_changeset(
             {"id": "(proposed this pass)", "title": op.title, "parent_id": op.parent_id}
             for op in fresh if op.kind is NodeOpKind.ADD_NODE and op.title
         ]
-    if len(batches) > 1:
-        result.llm_calls = len(batches)
+    result.llm_calls = len(batches)
 
     # 4. Apply: safe → now; structural → pending proposal. An ADD_NODE whose
     #    (title) already names a live, still-unbound feature is the SAME concept
@@ -868,7 +881,7 @@ def apply_changeset(
                 dedup = NodeOp(kind=NodeOpKind.ATTACH, feature_id=existing,
                                bindings=op.bindings, rationale=rationale)
                 apply_op(dedup, store, source=source, applied=True, fp_lookup=fp,
-                         th_lookup=th, caused_by=_cause(dedup))
+                         th_lookup=th, index_keys=index_keys, caused_by=_cause(dedup))
                 result.auto["attach"] = result.auto.get("attach", 0) + 1
                 continue
         # D2 — feature-identity guard for binding-LESS ADDs: a new theme parent /
@@ -888,7 +901,7 @@ def apply_changeset(
             amended.add(op.feature_id)
         applied = should_auto_apply(op, store)
         cause = _cause(op)
-        apply_op(op, store, source=source, applied=applied, fp_lookup=fp, th_lookup=th,
+        apply_op(op, store, source=source, applied=applied, fp_lookup=fp, th_lookup=th, index_keys=index_keys,
                  caused_by=cause)
         if not applied:
             result.proposed.append(op)
@@ -984,6 +997,10 @@ def _cover_uncovered_adds(
 
     absorbed: dict[str, int] = {}   # feature_id → chunks taken by the net this pass
     leftover_by_file: dict[str, list] = {}
+    # No `index_keys` validation below, deliberately: every binding this net
+    # writes is built from a real `ChunkRef` out of the changeset, so it names a
+    # chunk by construction. The check exists for pairs a MODEL supplied, where
+    # the two elements are independent guesses.
     for a in added_unbound:
         if (a.file, a.symbol_path) in covered_by_ops:
             continue  # placed by an LLM op (applied or pending proposal)

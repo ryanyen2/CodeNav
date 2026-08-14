@@ -58,14 +58,18 @@ def _parse_binds(binds: list[str] | None) -> list[tuple[str, str]]:
     emits (``codoc/lang/python.py`` builds ``f"{file}::{qualified}"``), so the
     binding matches a real chunk and Loop A can resolve / dedup against it. The
     ``file`` is the prefix before the first ``::``.
+
+    A bind with no ``::`` names a file rather than a chunk. It used to be stored
+    as ``(b, b)``, which produced a binding whose symbol_path could never match
+    any indexed chunk — permanently dangling, and invisible to the temporal diff
+    that would otherwise repair it. Dropping it is the honest outcome: the
+    caller asked to bind something that is not addressable.
     """
     out: list[tuple[str, str]] = []
     for b in binds or []:
         if "::" in b:
             file = b.split("::", 1)[0]
             out.append((file, b))  # symbol_path keeps the full "file::symbol"
-        else:
-            out.append((b, b))
     return out
 
 

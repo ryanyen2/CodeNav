@@ -119,8 +119,21 @@ def _ensure_file_coverage(ops: list[NodeOp], file_rows: list, file: str) -> list
     Uncovered chunks are folded into the file's primary (largest) new node — same
     file, so no cross-file junk drawer. If the model emitted nothing at all, mint
     a single node for the whole file (empty description; the user renames/fills).
+
+    This is also where a model-invented binding is caught. ``added_keys`` is the
+    exact set of chunks this file has, so any pair outside it names nothing —
+    the prompt shows the model a bare ``symbol_path`` list and asks it to
+    reconstruct ``[file, symbol_path]`` from a header, and it sometimes drops the
+    basename out of the middle of the path. Filtering here fixes the coverage
+    accounting too: an invented pair used to satisfy ``covered`` for a chunk it
+    did not actually name, so the real chunk was bound only by accident of also
+    being uncovered.
     """
     added_keys = {(r.file, r.symbol_path) for r in file_rows}
+    for op in ops:
+        kept = [b for b in op.bindings if tuple(b) in added_keys]
+        if len(kept) != len(op.bindings):
+            op.bindings = kept
     covered = {b for op in ops for b in op.bindings}
     uncovered = sorted(added_keys - covered)
     if not uncovered:

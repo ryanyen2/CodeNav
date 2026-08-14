@@ -562,3 +562,24 @@ def test_llm_add_titled_after_a_pseudo_symbol_is_retitled_from_the_file(store):
     titles = {e.op.title for e in store.pending_events()} | {f.title for f in store.list_features()}
     assert "__module__" not in titles
     assert res.llm_called
+
+
+def test_an_unparseable_llm_reply_does_not_sink_the_pass(monkeypatch):
+    """A reply that is not valid JSON must degrade to "no ops", not raise.
+
+    Per-op tolerance only helps after the response has parsed. A truncated reply
+    raises out of parse_solution and takes the whole pass with it, discarding
+    deterministic refresh/relocate/detach work that had already succeeded — seen
+    once on a 158-commit altair replay.
+    """
+    from codoc.agent import tree_update
+
+    def boom(*a, **k):
+        raise ValueError("Expecting ',' delimiter: line 1 column 3752")
+
+    monkeypatch.setattr(tree_update, "run_agent", boom)
+    ops = tree_update.propose_tree_update(
+        changes={"added": [], "removed": [], "modified": []},
+        subtree=[], all_titles=[], repo_name="x",
+    )
+    assert ops == []

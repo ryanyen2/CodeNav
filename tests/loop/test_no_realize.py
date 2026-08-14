@@ -127,3 +127,36 @@ def test_no_realize_defers_code_implying_plan_accept(dirs):
     s = open_store(codoc_dir)
     assert any(f.title == "Theme" for f in s.list_features())
     s.close()
+
+
+# ── accepting a proposal without a readable index must keep its bindings ─────
+def test_accepted_proposal_keeps_bindings_when_the_index_is_unreadable(dirs):
+    """An unreadable or empty index means "no view", NOT "the index is empty".
+
+    Loop B validates an accepted proposal's bindings against the index key set,
+    because a model-proposed binding can name a symbol that does not exist. The
+    first version of that check cached an empty set when the index could not be
+    read, and an empty set fails every membership test — so accepting a proposal
+    in a workspace whose index was missing landed the feature owning nothing,
+    silently. There is no index in this fixture, which is exactly that case.
+    """
+    root, codoc_dir = dirs
+    app = Feature(title="App")
+    _seed(codoc_dir, app)
+
+    s = open_store(codoc_dir)
+    e = Event(source="loop_a", applied=False,
+              op=NodeOp(kind=NodeOpKind.ADD_NODE, title="Alpha", parent_id=app.id,
+                        bindings=[("a.py", "a.py::alpha")]))
+    s.append_event(e)
+    s.close()
+    inbox.append_verdict(codoc_dir, e.id, accept=True)
+
+    res = run_loop_b(root, codoc_dir, dry_run=False, realize=False)
+
+    assert res.accepted == 1
+    s = open_store(codoc_dir)
+    alpha = next(f for f in s.list_features() if f.title == "Alpha")
+    owned = [(b.file, b.symbol_path) for b in s.bindings_for_feature(alpha.id)]
+    s.close()
+    assert owned == [("a.py", "a.py::alpha")], "the accepted proposal's binding was dropped"
