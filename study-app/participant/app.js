@@ -17,6 +17,7 @@ import {
     SCENARIOS, TASK_CARDS, buildSteps, answerDoc,
 } from './steps.js';
 import { drawCard } from './card.js';
+import { esc } from '../shared/html.js';
 
 const firebaseConfig = {
     apiKey: 'AIzaSyCeIFBc8HhCmtw9-pXjUm1qT3CUyo5GbkY',
@@ -183,9 +184,6 @@ function complete(step) {
 function updateNext(step) {
     $('#next').disabled = !complete(step);
 }
-
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const VIEWS = {
     welcome: () => `

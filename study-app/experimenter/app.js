@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import { timeline, legend, ribbon, patterns } from './charts.js';
 import { newParticipantCode } from '../shared/schema.js';
+import { esc } from '../shared/html.js';
 import { toLetters } from '../shared/actions.js';
 import { comparableEpisodes, letters } from '../analysis/sequences.js';
 import { score } from '../analysis/ngrams.js';
