@@ -267,9 +267,17 @@ The questions and how to score them are in `questions-hearth.md` and
 say how to ask them, and the short version is: ask each one twice, first with
 everything closed and then with the description open, and record both answers.
 
-After the questions, hand over the questionnaires. Then at the very end, once both
-conditions are done, ask which way of working they would pick for each of the
-situations listed in the design doc, and run the interview.
+Score as you go, in the dashboard. Each question has its scoring table beside it,
+and the closed book and open book answers are kept apart, because the change
+between them is the result.
+
+The questionnaires appear on the participant's own page at the right moment, so
+there is nothing to hand over. At the very end, once both conditions are done,
+their page asks which way of working they would pick for each situation, and then
+you run the interview.
+
+The dashboard shows what is still missing for the condition you are on. Clear that
+list before moving on, because a sign-off is not recoverable after the call.
 
 ## Part 7. Collecting the data
 
@@ -284,9 +292,11 @@ It packs the projects, the recordings of the session state, the interaction logs
 and the Claude Code transcripts into one zip on their Desktop and prints where it
 is. Have them send it while you are still on the call.
 
-Then, before they leave, unpack it and run:
+Then, before they leave, unpack it, pull down the live copy, and check the two
+against each other:
 
 ```
+node study-app/scripts/export-session.mjs <their code> --out <the unpacked folder>
 python3 docs/study-materials/scoring/check-session-complete.py <the unpacked folder>
 ```
 

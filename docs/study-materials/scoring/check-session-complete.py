@@ -209,6 +209,77 @@ def main() -> int:
                "the interaction log with the screen recording")
     rep.show("How they worked")
 
+    # ── the live copy, against the local one ─────────────────────────────────
+    rep.rows.clear()
+    exports = find(root, "firestore-*.json")
+    if not exports:
+        rep.manual("the live copy agrees with the local one",
+                   "no Firestore export here. Run scripts/export-session.mjs and put the "
+                   "file beside this folder, or skip it if the mirror was not used.")
+    else:
+        live = {}
+        try:
+            live = json.loads(exports[0].read_text())
+        except json.JSONDecodeError:
+            rep.gap("the live copy agrees with the local one",
+                    f"{exports[0].name} is not readable JSON")
+
+        if live:
+            local_counts = Counter()
+            for e in events:
+                if e.get("ev") in ("edit", "view", "prompt", "agent"):
+                    local_counts[e["ev"]] += 1
+            live_actions = sum(len(s.get("actions") or [])
+                               for s in (live.get("sessions") or {}).values())
+
+            if not live_actions and events:
+                rep.gap("the live copy agrees with the local one",
+                        "the local log has events and the live copy has none, so the "
+                        "mirror never sent anything. The local file is the source of "
+                        "truth, so nothing is lost, but say so in the notes.")
+            elif live_actions:
+                # The mirror maps several raw events into one action and drops
+                # what does not map, so these two numbers are not meant to match.
+                # What matters is whether a stretch went missing entirely.
+                gaps = []
+                for condition, s in (live.get("sessions") or {}).items():
+                    covered = [c for c in (s.get("covered") or []) if c and c[0] is not None]
+                    covered.sort()
+                    for (a_from, a_to), (b_from, _) in zip(covered, covered[1:]):
+                        if b_from > a_to:
+                            gaps.append(f"{condition}: {b_from - a_to} bytes never sent")
+                if gaps:
+                    rep.gap("the live copy agrees with the local one",
+                            "; ".join(gaps) + ". The local log still has it all.")
+                else:
+                    rep.ok("the live copy agrees with the local one",
+                           f"{live_actions} actions arrived, with no gap between batches")
+
+            answers = live.get("answers") or []
+            if answers:
+                rep.ok("the questionnaires", f"{len(answers)} answer set(s) from the participant page")
+            else:
+                rep.manual("the questionnaires",
+                           "none in the export; if they were filled in on paper, file them yourself")
+
+            assessments = live.get("assessments") or []
+            if assessments:
+                rep.ok("your notes and scores", f"{len(assessments)} condition(s) recorded")
+            else:
+                rep.gap("your notes and scores",
+                        "no assessment was saved. The sign-off and the question scores are "
+                        "not recoverable after the call.")
+
+            blob = json.dumps(live)
+            for field in ("\"name\"", "\"email\"", "\"phone\""):
+                if field in blob:
+                    rep.gap("nothing identifying was stored",
+                            f"the export contains {field}, which the rules should have refused")
+                    break
+            else:
+                rep.ok("nothing identifying was stored", "only a code")
+    rep.show("The live copy")
+
     # ── replayability ────────────────────────────────────────────────────────
     rep.rows.clear()
     for proj in projects:

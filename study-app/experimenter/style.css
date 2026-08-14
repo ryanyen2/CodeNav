@@ -225,3 +225,69 @@ svg { display: block; width: 100%; overflow: visible; }
     font-size: 12.5px; color: var(--accent); cursor: help;
 }
 .pat-note { color: var(--ink-faint); font-size: 12px; margin-top: 12px; }
+
+/* ── the forms ───────────────────────────────────────────────────────────── */
+
+.form-block { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.form-block:last-of-type { border-bottom: none; }
+.form-block h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.form-block h5 { margin: 14px 0 8px; font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+
+.quote {
+    margin: 0 0 12px; padding-left: 12px;
+    border-left: 2px solid var(--line);
+    color: var(--ink-soft); font-size: 13.5px;
+}
+
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.row-label { font-size: 12.5px; color: var(--ink-faint); min-width: 6.5em; }
+.row-label.wide { min-width: 22em; color: var(--ink-soft); }
+
+.choices { display: flex; gap: 5px; flex-wrap: wrap; }
+.choices button {
+    min-width: 30px; padding: 4px 10px; font-size: 12.5px;
+    border-radius: 5px;
+}
+.choices button[aria-pressed="true"] {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+}
+
+textarea {
+    font: inherit; font-size: 13.5px; color: inherit; background: var(--bg);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 9px 11px; width: 100%; resize: vertical;
+    transition: border-color 140ms var(--ease);
+}
+textarea:focus { outline: none; border-color: var(--accent); }
+
+/* One question per row, collapsed, with its two scores always visible so the
+   gaps are obvious without opening anything. */
+.q-item { border-bottom: 1px solid var(--line); }
+.q-item:last-child { border-bottom: none; }
+.q-item summary {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 2px; cursor: pointer; list-style: none;
+}
+.q-item summary::-webkit-details-marker { display: none; }
+.q-title { flex: 1; font-size: 13.5px; }
+.q-scores { display: flex; gap: 4px; }
+.q-scores b {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 4px;
+    background: var(--bg); border: 1px solid var(--line);
+    font-size: 12px; font-weight: 500; color: var(--ink-faint);
+}
+.q-scores b.set { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.q-item[open] summary { border-bottom: 1px dashed var(--line); }
+.q-item > *:not(summary) { margin-left: 2px; }
+
+table.key { border-collapse: collapse; margin: 10px 0 14px; font-size: 12.5px; }
+table.key th {
+    width: 26px; text-align: center; vertical-align: top;
+    color: var(--accent); font-weight: 600; padding: 4px 8px 4px 0;
+}
+table.key td { color: var(--ink-soft); padding: 4px 0; line-height: 1.5; }
+
+.gaps { font-size: 12.5px; margin: 14px 0 0; }
+.gaps.open { color: var(--warn); }
+.gaps.done { color: var(--ink-faint); }
