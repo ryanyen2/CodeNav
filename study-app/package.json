@@ -1,0 +1,23 @@
+{
+  "name": "codoc-study-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Participant and experimenter pages for the codoc user study.",
+  "scripts": {
+    "test:rules": "firebase emulators:exec --project codoc-study-rules-test --only firestore \"node --test test/rules.test.js\"",
+    "test:unit": "node --test test/actions.test.js test/ngrams.test.js",
+    "test": "npm run test:unit && npm run test:rules",
+    "build": "node build.mjs",
+    "deploy:rules": "firebase deploy --only firestore:rules --project codoc-11b10"
+  },
+  "dependencies": {
+    "firebase": "^11.0.0",
+    "d3": "^7.9.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "esbuild": "^0.24.0",
+    "firebase-tools": "^13.0.0"
+  }
+}
