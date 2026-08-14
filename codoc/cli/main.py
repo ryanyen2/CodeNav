@@ -441,12 +441,21 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
         # it so it can't hide behind an "in_sync" status.
         try:
             from codoc.pipelines.indexing.reader import read_all_chunks
-            n_chunks = len(read_all_chunks(_codoc_dir(root), with_embeddings=False,
-                                           with_source=False))
-            n_bound = len(store.all_bindings())
-            gap = n_chunks - n_bound
+            # Count DISTINCT chunks, not rows. The index can hold the same
+            # (file, symbol_path) more than once — re-indexing a workspace on a
+            # different machine leaves 134 duplicate rows out of 575 on a real
+            # ember checkout — and a binding is unique per key, so comparing row
+            # count against binding count reports a gap that does not exist.
+            # Every downstream reader keys by (file, symbol_path), so the
+            # duplicates are harmless; only this arithmetic was wrong, and it
+            # told a fully-bound workspace to run `codoc reflect`.
+            keys = {(c.file, c.symbol_path)
+                    for c in read_all_chunks(_codoc_dir(root), with_embeddings=False,
+                                             with_source=False)}
+            bound = {(b.file, b.symbol_path) for b in store.all_bindings()}
+            n_chunks, gap = len(keys), len(keys - bound)
             if n_chunks and gap / n_chunks > 0.05:
-                typer.echo(f"  ⚠ coverage: {n_bound}/{n_chunks} chunks bound "
+                typer.echo(f"  ⚠ coverage: {n_chunks - gap}/{n_chunks} chunks bound "
                            f"({gap} unattributed) — run `codoc reflect`")
         except Exception:
             pass  # index not built yet / unreadable — coverage check is best-effort

@@ -2,7 +2,7 @@
   "name": "codoc",
   "displayName": "codoc",
   "description": "Feature-tree navigator and transaction queue for codoc",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "codoc",
   "license": "MIT",
   "repository": {
@@ -134,11 +134,11 @@
       },
       {
         "command": "codoc.serve.start",
-        "title": "codoc: Share — start the deployed hub (browser editor)"
+        "title": "codoc: Share \u2014 start the deployed hub (browser editor)"
       },
       {
         "command": "codoc.serve.startTunnel",
-        "title": "codoc: Share remotely — start the hub over a tunnel"
+        "title": "codoc: Share remotely \u2014 start the hub over a tunnel"
       },
       {
         "command": "codoc.serve.stop",
@@ -316,12 +316,12 @@
       {
         "id": "codocSetup",
         "title": "Get started with codoc",
-        "description": "Provision codoc and open your codebase as a navigable feature tree — in one click.",
+        "description": "Provision codoc and open your codebase as a navigable feature tree \u2014 in one click.",
         "steps": [
           {
             "id": "setup",
             "title": "Set up codoc",
-            "description": "Install the Python core, index your repo, and start the managed daemon — no terminal, no manual pip.\n[Set up codoc](command:codoc.setup)",
+            "description": "Install the Python core, index your repo, and start the managed daemon \u2014 no terminal, no manual pip.\n[Set up codoc](command:codoc.setup)",
             "media": {
               "markdown": "media/walkthrough/setup.md"
             },
@@ -332,7 +332,7 @@
           {
             "id": "open-tree",
             "title": "Open your feature tree",
-            "description": "Navigate your codebase as a tree of intent — jump to code, author titles/descriptions, steer the agent.\n[Open your feature tree](command:codoc.open)",
+            "description": "Navigate your codebase as a tree of intent \u2014 jump to code, author titles/descriptions, steer the agent.\n[Open your feature tree](command:codoc.open)",
             "media": {
               "markdown": "media/walkthrough/open-tree.md"
             },
