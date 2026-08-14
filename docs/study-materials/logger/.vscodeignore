@@ -1,0 +1,5 @@
+# The participant is told they can read this extension before running it, so ship
+# only what actually runs. The tests live in the repo.
+test-*.js
+**/*.map
+.vscode/**

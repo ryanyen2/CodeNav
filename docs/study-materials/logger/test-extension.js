@@ -142,4 +142,14 @@ assert.ok(!blob.includes('x'.repeat(20)), 'the text of an edit is never written'
 assert.ok(rows.some(r => r.ev === 'save'), 'saves are recorded');
 assert.ok(rows.some(r => r.ev === 'window' && r.focused === false), 'losing focus is recorded');
 
-console.log(`study logger: ${rows.length} events, all ${13} assertions pass`);
+// The mirror is an ES module and this file is loaded as CommonJS, which is what
+// the extension host does. Loading it the wrong way fails quietly and the session
+// looks healthy while nothing is sent, so assert that it really loads.
+(async () => {
+    const m = await ext.activation.mirrorReady;
+    assert.ok(m, 'the mirror module loaded and a mirror was constructed');
+    assert.equal(m.code, 'p04');
+    assert.equal(m.condition, 'codoc', 'the condition is read from the workspace name');
+    await m.stop();
+    console.log(`study logger: ${rows.length} events, all 16 assertions pass`);
+})().catch((err) => { console.error(err); process.exit(1); });

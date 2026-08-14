@@ -5,9 +5,15 @@
   "version": "1.0.0",
   "publisher": "codoc",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./extension.js",
   "contributes": {
     "configuration": {
@@ -22,6 +28,16 @@
           "type": "string",
           "default": "",
           "description": "Participant code, written into every line."
+        },
+        "codocStudyLogger.condition": {
+          "type": "string",
+          "enum": [
+            "codoc",
+            "baseline",
+            ""
+          ],
+          "default": "",
+          "description": "Which condition this project is. Left empty, it is guessed from the folder name."
         }
       }
     },

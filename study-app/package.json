@@ -6,10 +6,11 @@
   "description": "Participant and experimenter pages for the codoc user study.",
   "scripts": {
     "test:rules": "firebase emulators:exec --project codoc-study-rules-test --only firestore \"node --test test/rules.test.js\"",
-    "test:unit": "node --test test/actions.test.js test/ngrams.test.js",
-    "test": "npm run test:unit && npm run test:rules",
+    "test:unit": "node --test test/actions.test.js",
+    "test": "npm run test:unit && npm run test:rules && npm run test:mirror",
     "build": "node build.mjs",
-    "deploy:rules": "firebase deploy --only firestore:rules --project codoc-11b10"
+    "deploy:rules": "firebase deploy --only firestore:rules --project codoc-11b10",
+    "test:mirror": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/mirror-integration.test.js\""
   },
   "dependencies": {
     "firebase": "^11.0.0",

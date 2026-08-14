@@ -114,6 +114,11 @@ function activate(context) {
 
     const sub = context.subscriptions;
 
+    // Send a copy upward while the session runs, if a code was configured. The
+    // local file is the source of truth and does not depend on any of this
+    // working, so every failure here is reported and then ignored.
+    activation.mirrorReady = startMirror(cfg, sub);
+
     // The active editor. Covers ordinary files.
     sub.push(vscode.window.onDidChangeActiveTextEditor(ed => {
         if (!ed) { closeCurrent(Date.now()); return; }
@@ -190,9 +195,45 @@ function activate(context) {
     sub.push({ dispose: () => { closeCurrent(Date.now()); write('session', { start: false }); } });
 }
 
+let mirror = null;
+const activation = { mirrorReady: null };
+
+/**
+ * Load the mirror and set it going. Returns a promise so a test can wait for it.
+ *
+ * The mirror and everything it uses are ES modules, because the web apps import
+ * them too. This file is CommonJS, because that is what a VS Code extension host
+ * loads. `require` of an ES module works on new Node and throws on the older one
+ * VS Code actually bundles, so it is loaded with a dynamic import, which works on
+ * both. Getting this wrong fails quietly: the mirror simply never starts, and the
+ * session looks fine right up until nothing arrives.
+ */
+async function startMirror(cfg, sub) {
+    const code = cfg.get('participant') || process.env.CODOC_STUDY_PARTICIPANT || '';
+    if (!code) { channel.appendLine('no participant code set, so not mirroring'); return null; }
+    let mod;
+    try {
+        mod = await import('./mirror.js');
+    } catch (err) {
+        channel.appendLine(`mirror could not be loaded: ${err && err.message}`);
+        return null;
+    }
+    const condition = cfg.get('condition')
+        || (workspaceName.includes('baseline') ? 'baseline' : 'codoc');
+    mirror = new mod.Mirror({
+        logPath: out, code, condition,
+        config: mod.FIREBASE_CONFIG,
+        onError: (m) => channel.appendLine(m),
+    });
+    sub.push({ dispose: () => { if (mirror) void mirror.stop(); } });
+    const ok = await mirror.start();
+    channel.appendLine(ok ? `mirroring ${code} (${condition})` : 'not mirroring yet, will keep trying');
+    return mirror;
+}
+
 function deactivate() {
     closeCurrent(Date.now());
     write('session', { start: false });
 }
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, activation };
