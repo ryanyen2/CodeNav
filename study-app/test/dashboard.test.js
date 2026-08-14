@@ -114,7 +114,7 @@ test('what came back is in the closed vocabulary and nothing else', async () => 
 test('it draws, with one mark per action', () => {
     const el = document.getElementById('chart');
     Object.defineProperty(el, 'clientWidth', { value: 900, configurable: true });
-    timeline(el, actions);
+    timeline(el, actions, { animate: false });
 
     const svg = el.querySelector('svg');
     assert.ok(svg, 'an svg is produced');
@@ -122,6 +122,24 @@ test('it draws, with one mark per action', () => {
     assert.equal(marks.length, actions.length, 'every action is drawn');
     assert.ok(svg.querySelectorAll('.lane-label').length >= 4, 'the lanes are labelled');
     assert.ok(svg.querySelector('.x-axis'), 'time is on an axis');
+});
+
+test('every mark is actually visible', () => {
+    // The lanes, the axis and the legend can all render correctly while the data
+    // itself is invisible, which is exactly what happened: marks began at zero
+    // opacity and depended on a transition to appear. A chart that is empty for
+    // any reason must fail here rather than look fine.
+    const el = document.getElementById('chart');
+    timeline(el, actions, { animate: false });
+    const rects = [...el.querySelectorAll('g.mark rect')];
+    assert.ok(rects.length > 0);
+    for (const r of rects) {
+        const g = r.parentElement;
+        assert.notEqual(g.style.opacity, '0', 'a mark is fully transparent');
+        assert.ok(Number(r.getAttribute('width')) > 0, 'a mark has no width');
+        assert.ok(Number(r.getAttribute('height')) > 0, 'a mark has no height');
+        assert.ok(Number(r.getAttribute('opacity')) > 0.3, 'a mark is nearly invisible');
+    }
 });
 
 test('a break is drawn as a gap rather than closed up', () => {
@@ -140,7 +158,7 @@ test('redrawing with more data adds marks instead of starting over', () => {
     const el = document.getElementById('chart');
     const before = el.querySelector('svg');
     const more = [...actions, { t: actions[actions.length - 1].t + 60_000, a: 'RUN_TEST' }];
-    timeline(el, more);
+    timeline(el, more, { animate: false });
     assert.equal(el.querySelector('svg'), before, 'the same svg is updated, not replaced');
     assert.equal(el.querySelectorAll('g.mark rect').length, more.length);
 });
@@ -156,7 +174,7 @@ test('the sequence renders as readable words', () => {
 
 test('an empty session draws nothing rather than throwing', () => {
     const el = document.getElementById('chart');
-    timeline(el, []);
+    timeline(el, [], { animate: false });
     assert.equal(el.querySelectorAll('g.mark rect').length, 0);
 });
 

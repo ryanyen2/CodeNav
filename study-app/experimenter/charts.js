@@ -43,7 +43,7 @@ const hideTip = () => tooltip().classed('on', false);
  * rather than clearing and redrawing. Marks that were already on screen stay
  * still; only what changed moves.
  */
-export function timeline(el, actions, { height = 230 } = {}) {
+export function timeline(el, actions, { height = 230, animate = true } = {}) {
     const node = d3.select(el);
     const width = el.clientWidth || 800;
     const margin = { top: 10, right: 14, bottom: 26, left: 86 };
@@ -93,10 +93,15 @@ export function timeline(el, actions, { height = 230 } = {}) {
     const marks = svg.select('.marks').selectAll('g.mark')
         .data(placed, (d) => `${d.t}-${d.a}-${d.i}`);
 
-    marks.exit().transition().duration(180).style('opacity', 0).remove();
+    marks.exit().remove();
 
-    const enter = marks.enter().append('g').attr('class', 'mark').style('opacity', 0);
-    enter.append('rect');
+    // Entering marks are visible immediately. They used to fade in from zero,
+    // which meant a mark was invisible until a transition finished and stayed
+    // invisible if anything interrupted it: a resize, a new batch arriving
+    // mid-fade, or a backgrounded tab stalling d3's timer. Nothing that carries
+    // the data should depend on an animation having run.
+    const enter = marks.enter().append('g').attr('class', 'mark');
+    enter.append('rect').attr('width', 0);
     enter.merge(marks)
         .on('mousemove', (event, d) => {
             const secs = Math.round((d.spanMs || d.ms || 0) / 100) / 10;
@@ -110,15 +115,19 @@ export function timeline(el, actions, { height = 230 } = {}) {
         .attr('x', (d) => x(minutes(d.t)))
         .attr('y', (d) => (d.a === 'IDLE' ? margin.top : laneY(d.lane.key) - 7))
         .attr('height', (d) => (d.a === 'IDLE' ? inner : 14))
-        .attr('width', (d) => {
-            const span = d.spanMs || d.ms || 0;
-            const w = x(minutes(d.t + span)) - x(minutes(d.t));
-            return Math.max(w, d.a === 'IDLE' ? 1 : 2.5);
-        })
         .attr('fill', (d) => (d.a === 'IDLE' ? 'var(--idle)' : COLOR[d.lane.key]))
-        .attr('opacity', (d) => (d.a === 'IDLE' ? 0.5 : d.a.startsWith('AGENT') ? 0.55 : 0.92));
-
-    enter.transition().duration(260).style('opacity', 1);
+        .attr('opacity', (d) => (d.a === 'IDLE' ? 0.5 : d.a.startsWith('AGENT') ? 0.55 : 0.92))
+        .call((sel) => {
+            const w = (d) => {
+                const span = d.spanMs || d.ms || 0;
+                const px = x(minutes(d.t + span)) - x(minutes(d.t));
+                return Math.max(px, d.a === 'IDLE' ? 1 : 2.5);
+            };
+            // Growing from the left reads as time passing and, unlike a fade,
+            // leaves the mark on screen whatever happens to the transition.
+            if (animate) sel.transition().duration(240).attr('width', w);
+            else sel.attr('width', w);
+        });
 
     // The axis is redrawn rather than transitioned. Sliding tick labels while
     // reading them is worse than not, and animating an axis is the one part of
@@ -142,14 +151,11 @@ export function legend(el) {
  */
 export function ribbon(el, actions, { limit = 160 } = {}) {
     const shown = actions.slice(-limit);
+    // No fade-in here either, for the same reason as the marks: a word that is
+    // invisible until an animation finishes is a word that can stay invisible.
     d3.select(el).selectAll('span')
         .data(shown, (d, i) => `${d.t}-${i}`)
-        .join(
-            (e) => e.append('span').style('opacity', 0)
-                .call((s) => s.transition().duration(200).style('opacity', 1)),
-            (u) => u,
-            (x) => x.remove(),
-        )
+        .join('span')
         .attr('class', (d) => (d.a === 'IDLE' ? 'idle' : null))
         .text((d) => (d.a === 'IDLE' ? '·' : d.a.toLowerCase().replace('_', ' ')));
 }
