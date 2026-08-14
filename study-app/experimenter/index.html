@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>codoc study</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>codoc study</h1>
+  <span class="who" id="who"></span>
+</header>
+
+<main>
+  <aside id="roster">
+    <div class="roster-head">
+      <h2>Participants</h2>
+      <button id="new-participant" title="Create a participant and get a code">New</button>
+    </div>
+    <div id="roster-list"></div>
+  </aside>
+
+  <section id="detail">
+    <div class="empty" id="signed-out">
+      <strong>Sign in to continue</strong>
+      Only the addresses on the allowlist can read study data. Everyone else sees
+      nothing, which is enforced by the database and not by this page.
+      <p><button class="primary" id="sign-in">Sign in with Google</button></p>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

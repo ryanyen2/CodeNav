@@ -7,18 +7,20 @@
   "scripts": {
     "test:rules": "firebase emulators:exec --project codoc-study-rules-test --only firestore \"node --test test/rules.test.js\"",
     "test:unit": "node --test test/actions.test.js",
-    "test": "npm run test:unit && npm run test:rules && npm run test:mirror",
+    "test": "npm run test:unit && npm run test:rules && npm run test:mirror && npm run test:dashboard",
     "build": "node build.mjs",
     "deploy:rules": "firebase deploy --only firestore:rules --project codoc-11b10",
-    "test:mirror": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/mirror-integration.test.js\""
+    "test:mirror": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/mirror-integration.test.js\"",
+    "test:dashboard": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/dashboard.test.js\""
   },
   "dependencies": {
-    "firebase": "^11.0.0",
-    "d3": "^7.9.0"
+    "d3": "^7.9.0",
+    "firebase": "^11.0.0"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
     "esbuild": "^0.24.0",
-    "firebase-tools": "^13.0.0"
+    "firebase-tools": "^13.0.0",
+    "jsdom": "^29.1.1"
   }
 }
