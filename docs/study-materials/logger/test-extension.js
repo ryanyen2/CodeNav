@@ -28,8 +28,12 @@ let activeEditor = null;
 let activeTab = null;
 
 const vscode = {
+    Uri: { parse: (u) => ({ href: u }) },
+    env: { openExternal(uri) { opened.push(uri.href); return Promise.resolve(true); } },
     window: {
         createOutputChannel: () => ({ appendLine() {}, show() {} }),
+        showInformationMessage: (...args) => { offers.push(args[0]); return Promise.resolve(undefined); },
+        showWarningMessage: () => Promise.resolve(undefined),
         onDidChangeActiveTextEditor: on('editor'),
         onDidChangeTextEditorVisibleRanges: on('ranges'),
         onDidChangeWindowState: on('window'),
@@ -47,8 +51,15 @@ const vscode = {
         onDidChangeTextDocument: on('change'),
         onDidSaveTextDocument: on('save'),
     },
-    commands: { registerCommand: () => ({ dispose() {} }) },
+    commands: {
+        registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
+    },
 };
+
+const opened = [];
+const offers = [];
+const commands = new Map();
+const globalState = new Map();
 
 const realLoad = Module._load;
 Module._load = function (request, parent, isMain) {
@@ -71,7 +82,10 @@ function sleep(ms) {
 }
 
 // ── drive a session ─────────────────────────────────────────────────────────
-ext.activate({ subscriptions: [] });
+ext.activate({
+    subscriptions: [],
+    globalState: { get: (k) => globalState.get(k), update: (k, v) => { globalState.set(k, v); } },
+});
 
 // Open a source file and scroll down it.
 activeEditor = editorFor('ember/digest.py');
@@ -145,11 +159,21 @@ assert.ok(rows.some(r => r.ev === 'window' && r.focused === false), 'losing focu
 // The mirror is an ES module and this file is loaded as CommonJS, which is what
 // the extension host does. Loading it the wrong way fails quietly and the session
 // looks healthy while nothing is sent, so assert that it really loads.
+// Opening the study page. The workspace here is 'ember', which is a study
+// project, and a code is configured, so the offer should have fired exactly once.
+assert.equal(offers.length, 1, 'the page is offered');
+assert.match(offers[0], /study page/i);
+assert.ok(commands.has('codocStudyLogger.openStudyPage'), 'and there is a command to reopen it');
+
+commands.get('codocStudyLogger.openStudyPage')();
+assert.equal(opened.length, 1, 'the command opens it');
+assert.match(opened[0], /[?&]code=p04\b/, 'carrying the participant code');
+
 (async () => {
     const m = await ext.activation.mirrorReady;
     assert.ok(m, 'the mirror module loaded and a mirror was constructed');
     assert.equal(m.code, 'p04');
     assert.equal(m.condition, 'codoc', 'the condition is read from the workspace name');
     await m.stop();
-    console.log(`study logger: ${rows.length} events, all 16 assertions pass`);
+    console.log(`study logger: ${rows.length} events, all 20 assertions pass`);
 })().catch((err) => { console.error(err); process.exit(1); });

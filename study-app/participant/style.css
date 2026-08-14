@@ -1,0 +1,181 @@
+/* One thing on screen at a time, generous space around it, and nothing that
+   moves unless the person moved it. Somebody reads this while a researcher waits
+   on a call, so every screen has one obvious next action and no decoration. */
+
+:root {
+    --bg: #fbfbfa;
+    --panel: #ffffff;
+    --line: #e6e4e0;
+    --ink: #1a1a18;
+    --ink-soft: #57544f;
+    --ink-faint: #8b8781;
+    --accent: #2f6f4e;
+    --accent-soft: #e8f1ec;
+    --radius: 8px;
+    --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #16171a; --panel: #1d1f23; --line: #2c2f35;
+        --ink: #ecebe8; --ink-soft: #b6b3ae; --ink-faint: #7a7873;
+        --accent: #7fbf9a; --accent-soft: #1e2a24;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* How far through, without a number that invites clock watching. */
+.rail { height: 2px; background: var(--line); }
+.rail-fill {
+    height: 100%; width: 0; background: var(--accent);
+    transition: width 420ms var(--ease);
+}
+
+main { flex: 1; display: flex; justify-content: center; padding: 56px 24px 32px; }
+
+.step {
+    width: 100%;
+    max-width: 640px;
+    animation: rise 260ms var(--ease);
+}
+@keyframes rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+
+h1 {
+    font-size: 26px; font-weight: 600; letter-spacing: -0.02em;
+    margin: 0 0 10px;
+}
+h2 { font-size: 17px; font-weight: 600; margin: 30px 0 10px; }
+p { margin: 0 0 16px; color: var(--ink-soft); }
+p.lead { color: var(--ink); font-size: 17px; }
+code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em; background: var(--accent-soft);
+    padding: 2px 5px; border-radius: 4px;
+}
+
+.loading { color: var(--ink-faint); }
+
+.note {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 14px 16px; border-radius: 0 var(--radius) var(--radius) 0;
+    margin-bottom: 20px; color: var(--ink-soft); font-size: 15px;
+}
+
+/* ── questions ───────────────────────────────────────────────────────────── */
+
+.q { padding: 20px 0; border-bottom: 1px solid var(--line); }
+.q:last-of-type { border-bottom: none; }
+.q .label { display: block; margin-bottom: 12px; color: var(--ink); }
+
+input[type="text"], input[type="number"] {
+    font: inherit; color: inherit; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 9px 12px; width: 100%; max-width: 22em;
+    transition: border-color 140ms var(--ease);
+}
+input:focus { outline: none; border-color: var(--accent); }
+
+.choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.choices button {
+    font: inherit; color: inherit; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 20px;
+    padding: 7px 14px; cursor: pointer;
+    transition: background 140ms var(--ease), border-color 140ms var(--ease);
+}
+.choices button:hover { border-color: var(--accent); }
+.choices button[aria-pressed="true"] {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+}
+
+/* The seven point scale. Numbers are equally sized and equally spaced so the
+   middle does not look like the safe answer. */
+.scale { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.scale .end { font-size: 13px; color: var(--ink-faint); min-width: 8em; }
+.scale .end.high { text-align: right; }
+.scale .dots { display: flex; gap: 6px; }
+.scale button {
+    width: 40px; height: 40px; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--panel);
+    font: inherit; color: var(--ink-soft); cursor: pointer;
+    transition: background 140ms var(--ease), border-color 140ms var(--ease),
+                color 140ms var(--ease), transform 140ms var(--ease);
+}
+.scale button:hover { border-color: var(--accent); transform: translateY(-1px); }
+.scale button[aria-pressed="true"] {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+}
+
+/* ── the task card ───────────────────────────────────────────────────────── */
+
+.card-wrap {
+    margin: 26px 0;
+    /* Belt and braces with the canvas: nothing here is selectable anyway, but a
+       stray element must not become copyable by accident. */
+    user-select: none; -webkit-user-select: none;
+}
+.card-wrap canvas { display: block; margin: 0 auto; }
+
+iframe {
+    width: 100%; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel);
+}
+
+/* ── footer ──────────────────────────────────────────────────────────────── */
+
+footer {
+    position: sticky; bottom: 0;
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+}
+footer .spacer { flex: 1; }
+footer .saved { color: var(--ink-faint); font-size: 13px; transition: opacity 200ms var(--ease); }
+
+button.primary, footer button {
+    font: inherit; border-radius: var(--radius); padding: 10px 18px;
+    border: 1px solid var(--line); background: var(--panel); color: inherit;
+    cursor: pointer; transition: background 140ms var(--ease), opacity 140ms var(--ease);
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { filter: brightness(1.08); }
+button:disabled { opacity: 0.45; cursor: default; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.warn {
+    border: 1px solid var(--line); border-left: 3px solid #a8541f;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 14px 16px; margin-bottom: 20px; color: var(--ink-soft); font-size: 15px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Only ever seen if the browser cannot give a drawing surface. Visible beats
+   uncopyable when the choice is forced. */
+.card-fallback {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel); padding: 28px 32px;
+    user-select: none; -webkit-user-select: none;
+}
+.card-fallback strong { display: block; font-size: 20px; margin-bottom: 14px; }
+.card-fallback p { margin: 0 0 6px; min-height: 1em; }
+.card-fallback em { color: var(--ink-faint); font-size: 14px; font-style: normal; }

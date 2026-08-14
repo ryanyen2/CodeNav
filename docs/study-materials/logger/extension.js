@@ -185,6 +185,15 @@ function activate(context) {
         }));
     }
 
+    // Offer the study page once, when a study project is opened for the first
+    // time. Nobody has to be sent a link, and nobody has to find one in an email
+    // while a researcher waits.
+    offerStudyPage(context, cfg);
+
+    sub.push(vscode.commands.registerCommand('codocStudyLogger.openStudyPage', () => {
+        void openStudyPage(cfg, true);
+    }));
+
     sub.push(vscode.commands.registerCommand('codocStudyLogger.showLog', () => {
         channel.appendLine(`log file: ${out}`);
         channel.appendLine('Recorded: file paths, line numbers on screen, how long,');
@@ -197,6 +206,56 @@ function activate(context) {
 
 let mirror = null;
 const activation = { mirrorReady: null };
+
+const STUDY_PROJECTS = ['hearth', 'hearth-baseline', 'ember', 'ember-baseline'];
+
+/** Whether this folder is one of the study's, so nothing is offered elsewhere. */
+function isStudyProject(name) {
+    return STUDY_PROJECTS.includes(name);
+}
+
+function studyPageUrl(cfg) {
+    const base = cfg.get('studyPage') || 'https://codoc-11b10.web.app/participant/';
+    const code = cfg.get('participant') || process.env.CODOC_STUDY_PARTICIPANT || '';
+    if (!code) return null;
+    const order = cfg.get('order') || '';
+    const q = new URLSearchParams({ code });
+    if (order) q.set('order', order);
+    return `${base}?${q.toString()}`;
+}
+
+async function openStudyPage(cfg, explicit) {
+    const url = studyPageUrl(cfg);
+    if (!url) {
+        const msg = 'No participant code is set, so there is no study page to open.';
+        if (explicit) void vscode.window.showWarningMessage(msg);
+        channel.appendLine(msg);
+        return false;
+    }
+    await vscode.env.openExternal(vscode.Uri.parse(url));
+    return true;
+}
+
+/**
+ * Ask once per project, and remember the answer.
+ *
+ * Once, because a prompt that returns every time a window reopens is a prompt
+ * people learn to dismiss without reading, and this one appears while somebody
+ * is being watched on a call.
+ */
+function offerStudyPage(context, cfg) {
+    if (!isStudyProject(workspaceName)) return;
+    if (!studyPageUrl(cfg)) return;
+    const key = `codocStudyLogger.offered:${workspaceName}`;
+    if (context.globalState.get(key)) return;
+    void context.globalState.update(key, true);
+    void vscode.window.showInformationMessage(
+        'Open your study page to carry on with the session.',
+        'Open', 'Not now',
+    ).then((pick) => {
+        if (pick === 'Open') void openStudyPage(cfg, true);
+    });
+}
 
 /**
  * Load the mirror and set it going. Returns a promise so a test can wait for it.
