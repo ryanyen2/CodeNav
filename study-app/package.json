@@ -13,7 +13,9 @@
     "test:mirror": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/mirror-integration.test.js\"",
     "test:dashboard": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/dashboard.test.js\"",
     "test:export": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/export.test.js\"",
-    "questions": "node scripts/extract-questions.mjs"
+    "questions": "node scripts/extract-questions.mjs",
+    "deploy:hosting": "npm run build && firebase deploy --only hosting --project codoc-11b10",
+    "deploy": "npm run build && firebase deploy --only firestore:rules,hosting --project codoc-11b10"
   },
   "dependencies": {
     "d3": "^7.9.0",
