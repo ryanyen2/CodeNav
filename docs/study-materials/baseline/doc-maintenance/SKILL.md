@@ -1,15 +1,3 @@
-# Baseline condition — the document-maintenance skill
-
-This is the skill installed in the BASELINE workspace (`.claude/skills/doc-maintenance/SKILL.md`).
-It must be strong: the comparison is only meaningful if the baseline agent genuinely
-tries to keep the document alive. Pilot this before anything else (design doc §3.2).
-
-Deployment note: the baseline workspace gets this skill + the exported CLAUDE.md and
-NOTHING else codoc-related (no MCP server, no hooks, no /codoc commands).
-
----
-
-```markdown
 ---
 name: doc-maintenance
 description: Keep CLAUDE.md — the feature-level description of this codebase — current
@@ -54,16 +42,3 @@ Your job is to keep it TRUE after every change you make.
   session ends.
 - Do all of this in the SAME turn as the code change. Do not batch it for later; do
   not ask permission to update the document.
-```
-
----
-
-## Pilot checks for this skill (before participant 1)
-
-1. Run the C2 calibration (design doc §6) and diff CLAUDE.md before/after: does the
-   agent actually update sections, or only append? Does rationale survive?
-2. Deliberately make a change that stales a *distant* section — does rule 5 fire?
-3. Token/turn overhead: count agent turns spent on doc maintenance per task; report
-   alongside CoDoc's overhead (design doc §2.1 confound).
-4. If the skill fails silently in ≥2 of 5 runs, strengthen the trigger (e.g. add a
-   post-change checklist prompt) BEFORE concluding anything about the baseline.

@@ -1,130 +1,162 @@
-# Probe item bank — hearth (Task A)
+# Questions for the hearth session
 
-Design doc §8.3. Each item: type, grounding, closed-book first (record answer +
-confidence 1–5), then open-book re-ask (document allowed, code stays closed), record
-delta. Interviewer reads verbatim; one "can you say more?" probe max. Scoring 0–2
-against the keys below; keys frozen at pre-registration.
+Ten questions in two rounds. Round one comes after the participant has explored
+the project and before they start the task. Round two comes after the task.
 
-## Probe 1 — after the comprehension stage, before the task (pick 5 + anchors)
+## How to ask them
 
-**F1 (function; Pennington domain model) — ANCHOR, repeats in Probe 2**
-> You run `hearth build`, change nothing, and run it again. What does the second run do?
+Ask each question twice. First with the code and the written description both
+closed, and write down the answer along with how confident they feel, from 1 to 5.
+Then ask the same question again with the description open and the code still
+closed, and write down what changed. What changed between the two answers is the
+result we are after, so record both even when the second answer is the same.
 
-Key: 2 = both levels: per-page rebuilds skipped via content hashes AND index/tag/feed
-pages skipped via a signature over the post list; 1 = "it caches / skips unchanged
-pages" without the aggregate level; 0 = full rebuild / don't know.
+Read each question exactly as written. If an answer stops short you may say "can
+you say more?" once. Say nothing else. Do not hint, agree, correct, or fill a
+silence.
 
-**S1 (structure; Pennington program model) — ANCHOR**
+Score each answer 0, 1, or 2 using the table under it. Two of the questions are
+asked again in round two, so ask those in the same words both times.
+
+The tables are fixed before the first session and do not change once the study has
+started. The codes in brackets are for the analysis and are not read out.
+
+## Round one, after they explore
+
+### 1. What a second build does  [F1]
+
+Asked again in round two.
+
+> You run `hearth build`, change nothing, and run it again. What does the second
+> run do?
+
+| Score | The answer says |
+| --- | --- |
+| 2 | Both halves. Pages whose content has not changed are skipped, and the home, tag and feed pages are skipped as well, because a signature taken over the list of posts has not changed. |
+| 1 | It skips work it has already done, without the second half about the listing pages. |
+| 0 | It builds everything again, or they do not know. |
+
+### 2. The path one post takes  [S1]
+
+Asked again in round two.
+
 > Walk me through the stages a single post passes through, from a file on disk to
 > HTML in `_site`.
 
-Key: 2 = discovery → frontmatter → markdown render → page/URL derivation → template
-render → write, with aggregates as a separate pass; 1 = ≥4 stages in order, aggregate
-pass missing; 0 = fewer/wrong order.
+| Score | The answer says |
+| --- | --- |
+| 2 | Finding the file, reading its settings block, turning the markdown into HTML, working out its title and address, filling in the template, writing it out. It also says the listing pages are built in a separate pass. |
+| 1 | Four or more of those stages in the right order, but the separate pass for the listing pages is missing. |
+| 0 | Fewer stages than that, or in the wrong order. |
 
-**R1 (rationale, inherited; planted #4)**
+### 3. Why the dev server works the way it does  [R1]
+
+This one is answerable only from the written description, not from the code.
+
 > Why does the dev server serve files from the build output instead of rendering
 > pages on request? What alternative was rejected?
 
-Key: 2 = per-request rendering rejected so dev and prod can never disagree; 1 = a
-plausible why without the recorded one ("simpler", "faster") and no alternative;
-0 = none/wrong.
+| Score | The answer says |
+| --- | --- |
+| 2 | Rendering each page as it is requested was rejected, so that the preview and the published site can never disagree. |
+| 1 | A plausible reason of their own, such as "it is simpler" or "it is faster", with no rejected alternative. |
+| 0 | Nothing, or something wrong. |
 
-**R2 (rationale, inherited; planted #1 — the H1 backstory)**
+### 4. When the listing pages are rebuilt  [R2]
+
+Also answerable only from the written description. This is the same rule the task
+will trip over, so the answer here is worth comparing with question 7 later.
+
 > Index and tag pages are not rebuilt on every build. How does hearth decide when
 > they must be, and why was it designed that way?
 
-Key: 2 = signature over the collection's visible fields, chosen over a per-output
-dependency graph (recorded: the graph was always subtly wrong after deletes);
-1 = signature mechanism without the rejected alternative; 0 = mtime/guess.
+| Score | The answer says |
+| --- | --- |
+| 2 | A signature taken over the fields of the assembled list of posts, chosen instead of tracking which output depends on which input, because that kept going subtly wrong after a post was deleted. |
+| 1 | The signature, with no mention of what was rejected. |
+| 0 | File timestamps, or a guess. |
 
-**E1 (extension; LaToza & Myers reachability)**
-> To add a second output format — say a JSON file per post — which modules would
+### 5. Adding a second output format  [E1]
+
+> To add a second output format, say a JSON file per post, which modules would
 > change, and which would you leave alone?
 
-Key: 2 = touch build (emit pass) + maybe pages; leave discovery/frontmatter/markdown/
-templates alone; mentions the cache/outputs map implication; 1 = right modules, no
-cache implication; 0 = scattered.
+| Score | The answer says |
+| --- | --- |
+| 2 | The build step that writes output, and possibly page assembly. Finding files, reading settings, rendering markdown and filling templates are all left alone. It also mentions that the record of what each build wrote has to know about the new file. |
+| 1 | The right modules, without that last point. |
+| 0 | Changes scattered across unrelated parts. |
 
-**D1 (defense)**
+### 6. The hand-written markdown renderer  [D1]
+
+We are scoring whether they take a position and ground it. Agreeing with the
+original decision is a full-marks answer if they say why.
+
 > The markdown renderer is written by hand instead of using a library. Would you
 > have made the same call? Why or why not?
 
-Key (judgment, not agreement): 2 = a position grounded in a tradeoff (dependency
-surface vs. compatibility bugs, the recorded one-file-deploy story counts);
-1 = position without grounding; 0 = no position.
+| Score | The answer says |
+| --- | --- |
+| 2 | A position with a tradeoff behind it, such as the cost of a dependency against the cost of writing and fixing it yourself. The recorded reason, that hearth is meant to deploy as one file, counts. |
+| 1 | A position with nothing behind it. |
+| 0 | No position either way. |
 
-## Probe 2 — after the task (changed region + transfer; F1 + S1 anchors re-asked)
+## Round two, after the task
 
-**F2 (function; targets H1 comprehension)**
-> After your change: someone flips a published post to draft and runs an incremental
-> build. Walk me through exactly what rebuilds and why.
+Ask questions 1 and 2 again first, in the same words, then these four.
 
-Key: 2 = the flip reaches the collection/signature so aggregates rebuild (or: names
-their own implementation's actual behaviour *including* its staleness if broken —
-accurate self-knowledge of a broken build scores 2 here; correctness is scored in
-Layer 1, not in the probe); 1 = page-level only; 0 = wrong model.
+### 7. What their own change rebuilds  [F2]
 
-**R3 (rationale, made-during-task; H2 articulation)**
+> After your change: someone flips a published post to draft and runs an
+> incremental build. Walk me through exactly what rebuilds and why.
+
+| Score | The answer says |
+| --- | --- |
+| 2 | The change reaches the assembled list, so the signature moves and the listing pages are rebuilt. An accurate description of their own build scores 2 here even when that build is broken, including saying that the listing pages go stale. Whether the code is right is scored separately. |
+| 1 | Only the post's own page. |
+| 0 | A description that does not match what their build does. |
+
+### 8. Drafts and the feed  [R3]
+
+The task card says nothing about the feed or the sitemap, so this is where we find
+out whether they made a decision or inherited one.
+
 > Drafts and the RSS feed: what does your build do now, and why that way?
 
-Key: 2 = states behaviour + a reason referencing a consideration (subscribers,
-preview parity, spec silence — any deliberate ground); 1 = states behaviour, reason
-is "the agent did it that way"; 0 = doesn't know what their own build does.
+| Score | The answer says |
+| --- | --- |
+| 2 | What it does, plus a reason of their own, such as what a subscriber would expect or that the card did not say. Any real ground counts, whichever way they went. |
+| 1 | What it does, with "the agent did it that way" as the reason. |
+| 0 | They do not know what their own build does. |
 
-**E2 (transfer)**
-> Next month the team wants scheduled posts — `publish_at` with a future date stays
-> hidden until the date passes. Given what you built today, what changes and where?
+### 9. Scheduled posts  [E2]
 
-Key: 2 = extends their selection mechanism (a second predicate where visibility is
-decided) + names the cache consequence (time-based selection means the signature
-changes without an edit — the build must be re-run / the signature must include the
-date gate); 1 = right place, no cache consequence; 0 = a new scattered filter.
+> Next month the team wants scheduled posts, where a future date keeps a post
+> hidden until that date passes. Given what you built today, what changes and where?
 
-**D2 (defense)**
-> You put the draft decision where you did. Argue for the opposite placement — what
+| Score | The answer says |
+| --- | --- |
+| 2 | They extend whatever they built for drafts, adding a second condition in the same place, and they notice the catch: a date-based rule changes the right answer without anyone editing a file, so the build has to be run again and the date has to reach the signature. |
+| 1 | The right place, without the catch. |
+| 0 | A new filter somewhere else. |
+
+### 10. Arguing the other side  [D2]
+
+> You put the draft decision where you did. Argue for the opposite placement. What
 > would break, and would anything get better?
 
-Key: 2 = names the real tension (early placement: cache-safe but dev preview needs a
-mode; late placement: preview-trivial but invisible to the signature); 1 = one side
-only; 0 = no engagement.
+| Score | The answer says |
+| --- | --- |
+| 2 | Both sides of the real tension. Deciding early keeps the listing pages correct but means the dev server needs a way to ask for drafts. Deciding late makes the preview trivial but the signature never sees it. |
+| 1 | One side only. |
+| 0 | They do not engage with it. |
 
-## Notes
+## Notes for whoever analyses this
 
-- Provenance split (design doc §8.3): R1/R2 inherited; R3/D2 made-during-task.
-- The ember (Task B) bank mirrors item-for-item once ember exists: F = incremental
-  digest; R-inherited = digest signature + store-normalization rationales; E2 =
-  "snoozed feeds" transfer.
-- Never ask two participants different items: fixed set, fixed order, both conditions
-  (codebase differs, item shape matched).
-
-## Pilot-0 findings (2026-08-11, mechanics verification)
-
-- **H1 verified live**: naive late filter (in `build_indexes`) + draft flip →
-  `12 pages, 1 rebuilt` (aggregates skipped), home page still lists the draft.
-  Only manifests on INCREMENTAL builds — `--force` hides it. Exactly the
-  hard-to-verify property the task needs.
-- **Correct arm verified**: selection at `assemble` → `aggregates rebuilt`, index
-  clean.
-- **Bonus depth found**: the minimal correct implementation leaves the drafted
-  post's OWN output page on disk (`/posts/<slug>/index.html` still served in prod
-  — an information leak). Output removal for excluded sources is a third
-  gradation: add to Layer-3 scoring notes and to the acceptance test
-  (prod build must not contain the draft's HTML file at all).
-
-## ember (Task B) — mechanics verified (2026-08-12)
-
-Matched trap confirmed empirically, mirror of hearth's:
-- **Naive arm**: mute filtered in `render_digest` (downstream of `digest_signature`)
-  → "nothing new to announce", digest page untouched, muted feed still shown. FIRES.
-- **Correct arm**: filter where `assemble_digest` gathers items (upstream of the
-  signature) → digest regenerated without the feed. CLEAN.
-- **H3-equivalent**: archive + search.json retain the muted feed's items (their own
-  signature over ALL items, separate from the digest's). HOLDS.
-- **Subtlety**: a `feeds.toml` edit does NOT invalidate the digest (fetch config
-  only) — so a mute flag added there and consumed by a renderer-level filter stays
-  trapped. HOLDS.
-Snapshot: ~/repos/test-workspace/snapshots/ember-bare.tar.gz (2,275 src LOC,
-171 tests, 12 commits). Still needed before use: codoc bootstrap + seeding pass
-(planted digest-signature rationale + gap), baseline CLAUDE.md export, ember
-probe items (mirror the hearth bank), and the ember card calibration runs.
+- Questions 3 and 4 ask about decisions the participant inherited from the written
+  description. Questions 8 and 10 ask about decisions they made themselves. Keep
+  the two kinds apart when reporting.
+- Every participant gets the same questions in the same order, in both conditions.
+  The ember session asks the matching set in `questions-ember.md`.
+- Evidence that the task actually trips people up in the way these questions assume
+  is in the design doc, section 6.2, not here.

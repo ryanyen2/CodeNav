@@ -153,11 +153,32 @@ Matched shape: fetch → parse (RSS/Atom) → normalize → dedupe → store (sq
 digest renderer (daily HTML digest) → notifier → CLI. Same size targets, same
 bespoke-hazard principle. The H1-equivalent: the digest is built incrementally,
 gated on a **digest signature** over the items selected for inclusion; the H2
-scope call: whether "muted" feeds still appear in search/archive; the H3 tension:
-mute at fetch time (breaks archive requirement) vs at render time (breaks the
-signature). Build only after `hearth` pilots clean — every lesson transfers.
-**[decide: build ember vs. adapt an existing candidate — recommend build, same
-reasons as §4.2]**
+scope call: whether muted items still reach the notification log and the status
+counts; the H3 requirement: the archive and `search.json` must RETAIN the muted
+feed's items. **[decided: built.]**
+
+**Status — COMPLETE (2026-08-13).** 2,275 LOC stdlib-only Python, 15 modules,
+171 tests green, 12 authored commits. Both conditions are built and shipped as
+`docs/study-materials/workspaces/ember-codoc.tar.gz` and `ember-baseline.tar.gz`:
+
+* **Feature document bootstrapped and seeded** — 54 features converged to **25**,
+  matching hearth's count and shape (5 groups, one node holding the whole test
+  suite). 441/441 chunks bound, `state: in_sync`, 0 pending.
+* **Four planted design decisions**, mirroring §4.4(a) item for item: the digest
+  signature (rejected: per-day dependency tracking, "always subtly wrong once an
+  item's date moved"); config resolved once at startup (rejected: ambient global);
+  the hand-written template engine (rejected: a dependency that pulled in a
+  compiled extension); and the archive's own signature (rejected: one shared
+  signature, because each would rebuild for the other's reasons).
+* **The H1 invariant**, recorded only in the document: *anything that affects
+  which items a digest shows must be visible where the selection is assembled. A
+  filter applied later, inside the renderer, is invisible to the signature.*
+* **Baseline `CLAUDE.md` exported** and verified content-identical to the seeded
+  document by `scoring/check-descriptions-match.py` (which both codebases now pass).
+* **Question sheet written** (`questions-ember.md`), matched to hearth's item for
+  item, same types and same order.
+* **Task card written** (`participant-task-ember.md`) and calibrated (§6.4).
+* **Scorer built and validated** (`scoring/check-ember.py`).
 
 ### 4.4 Planted material (seeded into the document post-bootstrap, pre-session)
 
@@ -257,14 +278,30 @@ hard. H2 measures agency, not correctness.
 
 ### 5.3 Task B — Muted feeds (`ember`), matched
 
-> Add mute support to ember. Items from a muted feed must not appear in the daily
-> digest or trigger notifications, but must still be fetched, stored, and visible in
-> search and the archive. Muting and unmuting must be fully reflected in the next
-> digest.
+**The card (verbatim; shown as an image, never as copyable text):**
 
-Same three-hazard structure: H1 = digest signature (planted), H2 = whether muted
-items count toward the unread badge / statistics (judgment), H3 = archive/search
-retention (test-visible). Finalize when ember exists. **[decide]**
+> Add mute support to ember. Items from a muted feed must not appear in the daily
+> digest. They must still be fetched, stored, and visible in the archive and the
+> search file. Decide anything this card doesn't specify, and be ready to explain
+> your decisions.
+
+Two clauses were CUT from the draft above, for the same reason §5.2 cut the
+full-spec hearth card. "or trigger notifications" hands the participant the H2
+decision, which is the one the rubric credits them for making themselves. "Muting
+and unmuting must be fully reflected in the next digest" hands them H1 outright,
+which is the whole point of the task. Both stay out.
+
+Same three-hazard structure. **H1** = the digest signature (planted, document-only).
+**H2** = whether muted items still reach the notification log and the `ember status`
+counts (judgment; the card is silent, and either answer scores if it was decided on
+purpose). **H3** = the archive and `search.json` must retain the muted feed's items
+(test-visible; stated on the card).
+
+**Open decisions the card leaves for the participant**, matched to §5.2's four:
+where a mute is configured (a per-feed flag in `feeds.toml` vs. a list in
+`ember.toml`); whether the notification log and status counts still see muted items
+(the H2 bait); whether a day whose only items were muted still gets an empty page;
+and whether muting affects `latest.html` the same way it affects a dated page.
 
 ## 6. Task calibration with Sonnet 5 — protocol, not vibes
 
@@ -362,6 +399,99 @@ argued vs inherited. Run-to-run variance lives entirely in the H2 class.
    working directory — a first attempt ran inside a completed workspace and the
    model described the existing implementation instead of its prior.
 
+### 6.2 Hazard mechanics — verified in the shipped workspaces
+
+*(Moved here from the question sheets, which are the instrument and stay frozen.)*
+
+**hearth (2026-08-11, pilot 0).** H1 fires: a naive late filter in
+`build_indexes` plus a draft flip gives `12 pages, 1 rebuilt` with aggregates
+skipped, and the home page still lists the draft. It only manifests on
+INCREMENTAL builds — `--force` hides it, which is exactly the hard-to-verify
+property the task needs. The correct arm is clean: selection at `assemble` →
+`aggregates rebuilt`, index correct. A third gradation was found — the minimal
+correct implementation leaves the drafted post's OWN output page on disk
+(`/posts/<slug>/index.html` still served in prod, an information leak). Added to
+the Layer-3 scoring notes and to the acceptance test (a prod build must not
+contain the draft's HTML file at all).
+
+**ember (2026-08-12).** Matched trap confirmed, a mirror of hearth's. Naive arm:
+mute filtered in `render_digest`, downstream of `digest_signature` → "nothing new
+to announce", digest page untouched, muted feed still shown. FIRES. Correct arm:
+filter where `assemble_digest` gathers items, upstream of the signature → digest
+regenerated without the feed. CLEAN. H3-equivalent: archive + `search.json`
+retain the muted feed's items via their own signature over ALL items, separate
+from the digest's. HOLDS. Subtlety: a `feeds.toml` edit does NOT invalidate the
+digest (fetch config only), so a mute flag added there and consumed by a
+renderer-level filter stays trapped. HOLDS.
+
+### 6.3 Materials audit (2026-08-13) — two defects found and fixed
+
+Both found by cold-extracting the snapshots onto a clean machine and running
+them, which is now the standing check before any snapshot is shipped.
+
+1. **The seeded codoc workspace shipped a warm incremental-build cache
+   (`.hearth/cache.json`) but no `_site/`.** On a participant's first
+   `hearth build` the cache said "aggregates unchanged, skip", so `index.html`,
+   `feed.xml`, `sitemap.xml`, `archive/`, `tags/` and `page/` were never written.
+   The baseline workspace, which shipped no cache, produced all of them. Three
+   consequences: the conditions were not matched at t=0; a CoDoc participant
+   running `hearth serve` would have hit a missing home page and chased a phantom
+   bug; and worst, the H1 hazard's own symptom (stale/absent aggregates) was
+   already present before the participant touched anything, which would have
+   confounded H1 scoring in an unknown direction. Fixed by shipping both
+   workspaces with a cold cache and no build output. Both now print
+   `12 pages, 12 rebuilt, aggregates rebuilt` and `233 passed` on first run.
+2. **The baseline workspace had its git history squashed to one commit** ("baseline
+   study workspace") while the codoc workspace carried the 12 authored development
+   commits. §4.2 relies on that history as a real evidence channel (it feeds
+   `why.py`, and in the baseline a participant or agent can read it with
+   `git log`), so the conditions were asymmetric in the evidence available. Fixed
+   by transplanting the same 12 commits into the baseline and adding one further
+   commit that introduces `CLAUDE.md` and the maintenance skill.
+
+Also confirmed in the same pass: source trees are byte-identical between the two
+workspaces apart from the intended manipulation; the seeded tree carries 25
+features with all four planted rationales and the H1 invariant intact; the
+incremental machinery behaves as specified (no change → `0 rebuilt` with
+aggregates skipped, a title edit → `aggregates rebuilt`); and the tree survives a
+first daemon start byte-for-byte, despite the startup reconcile reporting
+"auto: 1 amend, 1 attach".
+
+### 6.4 ember calibration (2026-08-13) — matches hearth
+
+Three runs, Sonnet 5, scored with `scoring/check-ember.py`.
+
+| Run | Setup | H1 | latest.html | H3 archive/search | Tests |
+|---|---|---|---|---|---|
+| C1′ run 1 | bare repo, minimal card | PASS | PASS | PASS | 180 ✓ |
+| C1′ run 2 | bare repo, minimal card | PASS | PASS | PASS | 182 ✓ |
+| C2 run 1 | CLAUDE.md + skill, minimal card | PASS | PASS | PASS | 181 ✓ |
+
+**The result replicates hearth's exactly: Sonnet 5 is 3-for-3 on every hazard from
+any prompt.** Both bare runs put the filter at `assemble_digest`, upstream of the
+signature, unprompted. Run-to-run variance is again entirely H2-class: where the
+mute is configured (run 1 and 2 chose a per-feed `muted` flag in `feeds.toml`, C2
+chose a `muted_feeds` list in `ember.toml`), whether `ember status` tags muted
+feeds, and whether a day with only muted items still gets an empty page. One run
+argued the notification behaviour explicitly and called it out as a decision;
+another let it fall out of the wiring without comment.
+
+So §6.1's design consequence holds for both codebases, and the two are matched in
+difficulty: the completion layers sit near ceiling, and the study discriminates at
+the human layer. Say so in the prereg.
+
+**A scoring lesson that changed the instrument.** C2's first score reported an H1
+FAILURE that was not real. The adapter said "mute by adding `muted = true` to the
+feed in `feeds.toml`", but C2 had built a config-level `muted_feeds` list, so the
+marker muted nothing and the unchanged digest looked exactly like the hazard
+firing. Both scorers now distinguish the two: when the item is still present after
+the incremental run, they discard the state, build from scratch, and require the
+marker to take effect there. If it does not, or the project stops running, or the
+build writes nothing, they report a mis-specified adapter and state plainly that
+**H1 was not measured**, then skip the dependent checks rather than reporting
+numbers that describe the experimenter's mistake. Write the adapter by reading the
+participant's code first, and keep it with the score.
+
 ## 7. Procedure
 
 Two stages per condition: comprehend → probe → modify → probe.
@@ -445,7 +575,14 @@ say more?" once.
 
 Layer 1 execution (pre-written acceptance tests + repo suite + **the H1 constraint
 test**: build → flip draft → incremental build → assert aggregates updated; and the
-H3 test: dev build shows the draft, prod hides it). Layer 2 localization 0–3.
+H3 test: dev build shows the draft, prod hides it). **Built and validated
+2026-08-13** as `docs/study-materials/scoring/check-hearth.py`: it runs the H1,
+H3, output-cleanup and regression assertions, and was checked against both arms
+(collection-level filter → all pass; renderer-level filter → H1 and output
+cleanup fail, everything else passes). Because the card leaves the interface open,
+the *assertions* are frozen but the *driving* comes from a per-participant adapter
+file (draft marker + dev-build command), which is archived with the score. Layer 2
+localization 0–3.
 Layer 3 requirement rubric, reweighted to the hazards:
 
 | Requirement | Weight |
@@ -566,7 +703,14 @@ protocol). Checks, in priority order:
 1. C1–C4 calibration results say the task discriminates (§6).
 2. H1 findable-but-not-obvious: pilot participants must split on it.
 3. The baseline skill genuinely maintains the document under load — if yes, the
-   paper's framing shifts *now*, not in the results section.
+   paper's framing shifts *now*, not in the results section. C2 (§6.1 finding 3)
+   settled the main question: the skill works at the agent tier. Two sub-checks
+   from the skill's own pilot list are still unrun — (a) make a change that
+   stales a *distant* section and confirm rule 5 (`> STALE?`) actually fires, and
+   (b) count the agent turns spent on doc maintenance per task, which §2.1
+   commits to reporting alongside CoDoc's overhead. The skill text is now at
+   `docs/study-materials/baseline/doc-maintenance/SKILL.md` and is the single
+   source the bundle installs.
 4. Outline skimmable in 6 min; task wrappable at 17+3.
 5. The 105-minute estimate holds.
 
