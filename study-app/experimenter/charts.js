@@ -159,3 +159,46 @@ export function ribbon(el, actions, { limit = 160 } = {}) {
         .attr('class', (d) => (d.a === 'IDLE' ? 'idle' : null))
         .text((d) => (d.a === 'IDLE' ? '·' : d.a.toLowerCase().replace('_', ' ')));
 }
+
+/**
+ * The patterns that recur, ranked by how much more often they happen than their
+ * parts would predict.
+ *
+ * Two numbers per row on purpose. The bar is how often it happened, because a
+ * pattern seen three times is not a finding however striking its score. The
+ * number beside it is how much more often than chance, because the longest bar
+ * will otherwise always be whichever two actions are individually commonest.
+ */
+export function patterns(el, rows, { limit = 8 } = {}) {
+    const data = rows.slice(0, limit);
+    const node = d3.select(el);
+
+    let table = node.select('div.pat');
+    if (table.empty()) table = node.append('div').attr('class', 'pat');
+
+    const max = d3.max(data, (d) => d.count) || 1;
+    table.selectAll('div.pat-row').data(data, (d) => d.gram).join(
+        (enter) => {
+            const row = enter.append('div').attr('class', 'pat-row');
+            row.append('span').attr('class', 'pat-label');
+            row.append('span').attr('class', 'pat-bar').append('i');
+            row.append('span').attr('class', 'pat-n');
+            row.append('span').attr('class', 'pat-lift');
+            return row;
+        },
+        (update) => update,
+        (exit) => exit.remove(),
+    ).call((row) => {
+        row.select('.pat-label').text((d) => label(d.gram));
+        row.select('.pat-bar i').style('width', (d) => `${(d.count / max) * 100}%`);
+        row.select('.pat-n').text((d) => d.count);
+        row.select('.pat-lift')
+            .text((d) => `${d.lift > 0 ? '+' : ''}${d.lift.toFixed(1)}`)
+            .attr('title', (d) => `expected about ${d.expected.toFixed(1)} by chance`);
+    });
+}
+
+/** A pattern written the way it is read aloud. Kept here so charts stay standalone. */
+function label(gram) {
+    return gram.split(' ').map((a) => a.toLowerCase().replace(/_/g, ' ')).join(' → ');
+}

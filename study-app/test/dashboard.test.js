@@ -68,7 +68,7 @@ async function seed() {
 }
 
 let actions = [];
-let timeline; let ribbon; let legend;
+let timeline; let ribbon; let legend; let patterns;
 
 before(async () => {
     // d3 reads document at import time, so the DOM has to exist first.
@@ -81,7 +81,7 @@ before(async () => {
     Object.defineProperty(global, 'navigator', {
         value: dom.window.navigator, configurable: true, writable: true,
     });
-    ({ timeline, ribbon, legend } = await import('../experimenter/charts.js'));
+    ({ timeline, ribbon, legend, patterns } = await import('../experimenter/charts.js'));
 
     await seed();
     const url = `${hosts.firestore}/projects/${PROJECT}/databases/(default)/documents/`
@@ -176,6 +176,28 @@ test('an empty session draws nothing rather than throwing', () => {
     const el = document.getElementById('chart');
     timeline(el, [], { animate: false });
     assert.equal(el.querySelectorAll('g.mark rect').length, 0);
+});
+
+test('the patterns view shows both how often and how much more than chance', () => {
+    // Two numbers per row on purpose. Without the count, a striking score on
+    // three occurrences looks like a finding. Without the score, the longest bar
+    // is always whichever action is commonest, twice.
+    const el = document.createElement('div');
+    document.body.append(el);
+    patterns(el, [
+        { gram: 'PROMPT AGENT_EDIT', count: 21, expected: 3.3, lift: 2.67 },
+        { gram: 'READ_CODE READ_CODE', count: 40, expected: 38.0, lift: 0.07 },
+    ]);
+    const rows = [...el.querySelectorAll('.pat-row')];
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].querySelector('.pat-label').textContent, 'prompt → agent edit');
+    assert.equal(rows[0].querySelector('.pat-n').textContent, '21');
+    assert.equal(rows[0].querySelector('.pat-lift').textContent, '+2.7');
+    assert.match(rows[0].querySelector('.pat-lift').getAttribute('title'), /expected about 3\.3/);
+    // The commoner pair still draws the longer bar, which is why the score sits
+    // next to it rather than replacing it.
+    const w = (r) => parseFloat(r.querySelector('.pat-bar i').style.width);
+    assert.ok(w(rows[1]) > w(rows[0]));
 });
 
 test('the legend names every lane', () => {

@@ -15,9 +15,11 @@ import {
     getFirestore, collection, doc, setDoc, onSnapshot, query, orderBy,
     connectFirestoreEmulator,
 } from 'firebase/firestore';
-import { timeline, legend, ribbon } from './charts.js';
+import { timeline, legend, ribbon, patterns } from './charts.js';
 import { newParticipantCode } from '../shared/schema.js';
 import { toLetters } from '../shared/actions.js';
+import { comparableEpisodes, letters } from '../analysis/sequences.js';
+import { score } from '../analysis/ngrams.js';
 
 const firebaseConfig = {
     apiKey: 'AIzaSyCeIFBc8HhCmtw9-pXjUm1qT3CUyo5GbkY',
@@ -175,6 +177,12 @@ function renderDetail() {
         <h3>As a sequence</h3>
         <p class="hint">The same session in the vocabulary the patterns are counted in.</p>
         <div class="ribbon" id="ribbon"></div>
+      </div>
+      <div class="card">
+        <h3>What recurs</h3>
+        <p class="hint">Ranked by how much more often each happens than its parts alone would predict, so the longest bar is not simply the commonest action twice.</p>
+        <div id="patterns"></div>
+        <p class="pat-note" id="patterns-note"></p>
       </div>`;
 
     const tabs = $('#tabs');
@@ -216,6 +224,32 @@ function renderSession() {
     if (chart.querySelector('.empty')) chart.innerHTML = '';
     timeline(chart, state.actions);
     ribbon($('#ribbon'), state.actions);
+    renderPatterns();
+}
+
+function renderPatterns() {
+    const el = $('#patterns');
+    const note = $('#patterns-note');
+    if (!el) return;
+
+    // One session is never enough to call something a pattern, so say that
+    // rather than plotting six bars from twenty actions.
+    const { episodes, droppedActions } = comparableEpisodes(state.actions);
+    const seqs = episodes.map(letters);
+    const enough = seqs.reduce((n, s) => n + Math.max(s.length - 1, 0), 0) >= 20;
+    if (!enough) {
+        el.innerHTML = '';
+        note.textContent = 'Too little of this session so far to say what recurs.';
+        return;
+    }
+
+    const s = score(seqs, { n: 2, minCount: 2 });
+    patterns(el, s.rows);
+    note.textContent = `${s.total} pairs across ${seqs.length} stretches of work. `
+        + `${s.trimmed} seen once were left out, which is `
+        + `${(s.trimmedShare * 100).toFixed(1)}% of them. `
+        + (droppedActions ? `${droppedActions} actions sat in stretches too short to show an order. ` : '')
+        + 'One session is a description, not a finding.';
 }
 
 let resizeTimer;

@@ -201,3 +201,27 @@ svg { display: block; width: 100%; overflow: visible; }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ── patterns ────────────────────────────────────────────────────────────── */
+
+.pat { display: flex; flex-direction: column; gap: 7px; }
+.pat-row {
+    display: grid;
+    grid-template-columns: 15em 1fr 3em 3em;
+    align-items: center; gap: 12px;
+}
+.pat-label { font-size: 13px; color: var(--ink); }
+.pat-bar { background: var(--line); border-radius: 3px; height: 8px; overflow: hidden; }
+.pat-bar i {
+    display: block; height: 100%; background: var(--accent);
+    transition: width 320ms var(--ease);
+}
+.pat-n {
+    text-align: right; font-variant-numeric: tabular-nums;
+    font-size: 12.5px; color: var(--ink-soft);
+}
+.pat-lift {
+    text-align: right; font-variant-numeric: tabular-nums;
+    font-size: 12.5px; color: var(--accent); cursor: help;
+}
+.pat-note { color: var(--ink-faint); font-size: 12px; margin-top: 12px; }
