@@ -58,6 +58,31 @@ The code is what ties all of it together. It is not secret and it identifies
 nobody. Everything they do is filed against it, and a machine without it records
 nothing, which is the one failure that cannot be repaired afterwards.
 
+## Who pays for the model
+
+Nobody sends anyone an API key. Both halves of the session run on the
+participant's own Claude Code login: the agent they talk to, and codoc's own
+calls, which shell out to the same `claude` command rather than to an API.
+
+Two things follow, and both belong in your recruiting message.
+
+They need a Claude plan that can actually run Claude Code, so Pro, Max, or API
+credits. A free account fails at setup, not during the session, which is why the
+setup script now asks Claude Code one small question rather than only checking
+that the command exists.
+
+They spend their own quota, for about two hours of agent-heavy work. Ask whether
+they are close to a limit. Someone who runs out partway through gives you a
+session that ends for a reason nothing in the study is about, and if it happens
+during the codoc half it looks like codoc failing.
+
+Left alone, codoc picks its model from the environment, so an `OPENAI_API_KEY`
+sitting in a participant's shell profile would move it onto that key: their
+money, unasked, and a stale key breaking codoc in the middle of the condition
+being measured. Setup now writes `CODOC_PROVIDER=claude` into both codoc
+workspaces so nothing is inferred. You do not have to do anything about it, but
+if you ever rebuild those workspaces by hand, put the line back.
+
 ## Part 1. Set up your own machine, once
 
 You need node, npm, uv and zip. Then, from the repo root:

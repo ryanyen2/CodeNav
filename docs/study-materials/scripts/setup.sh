@@ -36,6 +36,27 @@ step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 FAILED=0
 TODO=0
 
+# Run a command, give up after N seconds, print whatever it managed to say.
+# Written out rather than using `timeout`, which macOS does not ship: calling it
+# there fails as "command not found", which reads exactly like the command under
+# test failing, and would have flagged every Mac participant.
+with_deadline() {
+  local secs="$1"; shift
+  local out; out="$(mktemp)"
+  "$@" >"$out" 2>/dev/null &
+  local pid=$!
+  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  local killer=$!
+  # Forget the timer, so killing it does not print "Killed: 9" over the setup
+  # output. A participant reading that reasonably thinks something went wrong.
+  disown "$killer" 2>/dev/null || true
+  wait "$pid" 2>/dev/null
+  local rc=$?
+  kill -9 "$killer" 2>/dev/null
+  cat "$out"; rm -f "$out"
+  return "$rc"
+}
+
 # ------------------------------------------------------------- who you are here
 # Asked first, so a typo costs a second rather than a whole install. The code is
 # not secret and identifies nobody. It is how your work is filed.
@@ -65,6 +86,23 @@ command -v tar  >/dev/null 2>&1 && ok "tar is installed"  || { bad "tar is missi
 
 if command -v claude >/dev/null 2>&1; then
   ok "Claude Code is installed, version $(claude --version 2>/dev/null | head -1)"
+  # Installed is not signed in, and the version string cannot tell the two apart.
+  # Both halves of the session are an agent doing the work, so an unsigned-in
+  # machine has nothing to run. One tiny question is the only honest check.
+  REPLY_OK="$(cd "$HERE" && with_deadline 90 claude -p 'Reply with the single word: ready' | tr -d '[:space:]')"
+  case "$REPLY_OK" in
+    *ready*|*Ready*) ok "and you are signed in" ;;
+    *ogged*in*|*login*|*Login*)
+        warn "Claude Code is installed but not signed in. Run:"
+        echo  "          claude    (sign in when it asks, then type /exit)"
+        TODO=1 ;;
+    "") warn "Claude Code did not answer within 90 seconds. Run 'claude' once by"
+        echo  "          hand and see what it says."
+        TODO=1 ;;
+    *)  warn "Claude Code answered something unexpected: $REPLY_OK"
+        echo  "          Run 'claude' once by hand and check it works."
+        TODO=1 ;;
+  esac
 else
   warn "Claude Code is not installed. Install it, then sign in:"
   echo  "          curl -fsSL https://claude.ai/install.sh | bash"
@@ -199,6 +237,28 @@ with open(path, 'w') as f: json.dump(settings, f, indent=2); f.write('\n')
 PY
   [ $? = 0 ] && ok "$name is filed under $CODE" \
     || { bad "could not write $d/settings.json"; FAILED=1; }
+done
+
+# ------------------------------------------------------------ which model runs
+step "Pinning codoc to your own Claude login"
+# Nobody needs an API key for this study: codoc's default is to shell out to the
+# `claude` command and reuse the login you already have.
+#
+# It only defaults there, though. Left to itself it reads the environment, and an
+# OPENAI_API_KEY or ANTHROPIC_API_KEY sitting in your shell profile would quietly
+# switch it onto that key instead. That would spend your money without asking,
+# and a key that is stale or out of quota would break codoc partway through the
+# session, which is the one condition the study is trying to measure. So the
+# choice is written down rather than inferred.
+for name in hearth ember; do
+  ENVFILE="$WORK/$name/.env"
+  if grep -q '^CODOC_PROVIDER=' "$ENVFILE" 2>/dev/null; then
+    ok "$name already pins the provider"
+  else
+    printf 'CODOC_PROVIDER=claude\n' >> "$ENVFILE" \
+      && ok "$name will use your Claude login, whatever else is in your shell" \
+      || { bad "could not write $ENVFILE"; FAILED=1; }
+  fi
 done
 
 # ------------------------------------------------- wire codoc into the workspace

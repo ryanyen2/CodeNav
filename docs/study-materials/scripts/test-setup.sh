@@ -84,6 +84,48 @@ fi
 rm -rf "$TMP"
 
 echo
+echo "codoc is pinned to the participant's own Claude login"
+pin_block() {
+  local work="$1"
+  local body
+  body="$(awk '/^step "Pinning codoc to your own Claude login"/,/^# ------.* wire codoc/' "$SETUP" | sed '$d')"
+  [ -n "$body" ] || { echo "could not find the pinning block in setup.sh"; return 99; }
+  WORK="$work" bash -c "
+    set -uo pipefail
+    ok() { :; }; bad() { echo \"bad: \$1\" >&2; }; step() { :; }
+    FAILED=0
+    $body
+    exit \$FAILED"
+}
+TMP="$(mktemp -d)"
+for w in hearth ember hearth-baseline ember-baseline; do mkdir -p "$TMP/$w"; done
+if pin_block "$TMP"; then
+  grep -q '^CODOC_PROVIDER=claude$' "$TMP/hearth/.env" && ok "hearth is pinned" || bad "hearth is not pinned"
+  grep -q '^CODOC_PROVIDER=claude$' "$TMP/ember/.env"  && ok "ember is pinned"  || bad "ember is not pinned"
+  # Without this, an OPENAI_API_KEY left in a participant's shell profile moves
+  # codoc onto their key: it spends their money unasked, and a stale one breaks
+  # codoc partway through the very condition the study is measuring.
+  out="$(cd "$TMP/hearth" && python3 -c "
+import os,sys
+for k in ('CODOC_PROVIDER','OPENAI_API_KEY','ANTHROPIC_API_KEY'): os.environ.pop(k,None)
+os.environ['OPENAI_API_KEY']='sk-left-in-their-shell'
+from codoc.config import get_llm_config
+print(get_llm_config().provider)" 2>/dev/null)"
+  case "$out" in
+    claude) ok "a stray OPENAI_API_KEY no longer moves it off Claude" ;;
+    "")     ok "(codoc not importable here, so the live check was skipped)" ;;
+    *)      bad "a stray OPENAI_API_KEY still moved it to $out" ;;
+  esac
+  # Running setup twice must not stack the line up.
+  pin_block "$TMP" >/dev/null
+  [ "$(grep -c '^CODOC_PROVIDER=' "$TMP/hearth/.env")" = "1" ] \
+    && ok "running setup again does not repeat the line" || bad "the line was added twice"
+else
+  bad "the pinning block did not run"
+fi
+rm -rf "$TMP"
+
+echo
 echo "A bad code is refused before anything is installed"
 # The whole point of asking first. </dev/null makes the prompt fail immediately,
 # which is what a non-interactive run does.

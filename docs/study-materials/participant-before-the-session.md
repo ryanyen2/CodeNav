@@ -37,14 +37,22 @@ WSL, so install WSL first if you do not have it.
 You also need two programs that ask you to sign in, so please install them
 yourself:
 
-- Claude Code. Install it with `curl -fsSL https://claude.ai/install.sh | bash`,
-  then run `claude` once and sign in. Type `/exit` to leave.
+- Claude Code, with an account that can actually run it, which means a Claude
+  Pro or Max subscription or API credits. Install it with
+  `curl -fsSL https://claude.ai/install.sh | bash`, then run `claude` once and
+  sign in. Type `/exit` to leave. Tell us if you do not have a plan that works,
+  because we can sort that out beforehand.
 - Visual Studio Code, from https://code.visualstudio.com. Open it once, press
   Cmd+Shift+P (Ctrl+Shift+P on Linux), and run the command
   "Shell Command: Install 'code' command in PATH".
 
-You do not need Python, and you do not need any API key. The setup script
-installs everything else.
+You do not need Python, and you do not need an API key. The session uses the
+Claude account you just signed in to, for both the agent you talk to and the
+tool we are studying. The setup script installs everything else.
+
+If you happen to have an `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in your shell,
+you can leave it. Setup writes down which model to use, so nothing in the session
+will reach for your key or spend your credit.
 
 ## Setting up
 
