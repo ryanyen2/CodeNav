@@ -583,3 +583,32 @@ def test_an_unparseable_llm_reply_does_not_sink_the_pass(monkeypatch):
         subtree=[], all_titles=[], repo_name="x",
     )
     assert ops == []
+
+
+def test_model_may_not_reattribute_code_the_change_never_touched(store):
+    """An ATTACH is a SAFE op, so it applies without review — which means a model
+    reply could silently move any binding in the tree to another feature. Seen on
+    altair: a pass about one reorganization also re-attributed two functions in a
+    file the commit never opened.
+    """
+    from codoc.model.binding import Binding
+
+    owner, thief = Feature(title="Owner"), Feature(title="Thief")
+    store.upsert_feature(owner)
+    store.upsert_feature(thief)
+    store.upsert_binding(Binding(feature_id=owner.id, file="quiet.py",
+                                 symbol_path="quiet.py::stays", fingerprint="h0"))
+    cs = ChangeSet(added=[ChunkRef("loud.py", "loud.py::fresh", "h", "def fresh(): ...")])
+
+    def propose(*a, **kwargs):
+        # Answers about the touched file, and also grabs the untouched one.
+        return [NodeOp(kind=NodeOpKind.ATTACH, feature_id=thief.id,
+                       bindings=[("loud.py", "loud.py::fresh"),
+                                 ("quiet.py", "quiet.py::stays")])]
+
+    apply_changeset(cs, store, propose=propose)
+
+    still = store.binding_at("quiet.py", "quiet.py::stays")
+    assert still is not None and still.feature_id == owner.id
+    moved = store.binding_at("loud.py", "loud.py::fresh")
+    assert moved is not None and moved.feature_id == thief.id

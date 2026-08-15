@@ -364,6 +364,10 @@ for name in hearth ember; do
       printf 'CODOC_PROVIDER=openai\n'
       printf 'OPENAI_API_KEY=%s\n' "$STUDY_OPENAI_KEY"
       printf 'CODOC_MODEL=%s\n' "${STUDY_CODOC_MODEL:-gpt-5.6-luna}"
+      # Empty on purpose: this model accepts only its own default temperature and
+      # answers 400 to every value, including that one. Saying so here means the
+      # session never spends a refused call discovering it.
+      printf 'CODOC_TEMPERATURE=\n'
       printf 'CODOC_REASONING_EFFORT=medium\n'
       printf 'CODOC_VERBOSITY=medium\n'
     } >> "$ENVFILE" \

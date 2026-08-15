@@ -150,6 +150,39 @@ def test_effort_and_verbosity_ride_along_only_when_set(monkeypatch):
     assert calls[0]["verbosity"] == "medium"
 
 
+def test_an_empty_temperature_means_send_none(monkeypatch):
+    """The study sets it empty for luna, so no call is ever spent discovering
+    the refusal. Unset must keep the old default, or every existing workspace
+    silently changes what it asks for."""
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.delenv("CODOC_TEMPERATURE", raising=False)
+    assert config.get_llm_config().temperature == 0.2
+
+    monkeypatch.setenv("CODOC_TEMPERATURE", "")
+    assert config.get_llm_config().temperature is None
+
+    monkeypatch.setenv("CODOC_TEMPERATURE", "0.7")
+    assert config.get_llm_config().temperature == 0.7
+
+    # Nonsense falls back rather than crashing a daemon on a typo.
+    monkeypatch.setenv("CODOC_TEMPERATURE", "warm")
+    assert config.get_llm_config().temperature == 0.2
+
+
+def test_none_means_the_field_is_absent_not_null(monkeypatch):
+    """Sending temperature=None is not the same as omitting it: every client
+    rejects the null, so this is the difference between working and 400."""
+    mod, calls = _fake_openai(refuses_temperature=True)
+    cfg = config.LLMConfig(
+        provider="openai", model="gpt-5.6-luna", api_key="k", temperature=None
+    )
+
+    assert _run(monkeypatch, mod, cfg) == "ok"
+
+    assert len(calls) == 1, "nothing to learn, because nothing was sent"
+    assert "temperature" not in calls[0]
+
+
 def test_the_environment_is_what_sets_them(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "k")
     monkeypatch.setenv("CODOC_PROVIDER", "openai")

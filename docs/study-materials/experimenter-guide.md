@@ -80,6 +80,25 @@ catching before the day. A key that works but landed in the wrong file fails a
 session exactly like a bad key, and only a check against the written
 configuration tells them apart.
 
+### It does not disturb their own Claude Code
+
+Tested on a machine signed in to a Claude subscription, with a real study key.
+
+- Inside the study workspace, Claude Code answered on the study's key.
+- With that key deliberately broken, the same folder failed with a 401 while a
+  plain folder beside it still answered on the machine's own login. So the key is
+  genuinely what the workspace uses, and genuinely only that workspace.
+- `~/.claude/settings.json` and `~/.claude/.credentials.json` came back
+  byte-identical. No key appeared in any file under the home directory, and no
+  approval was recorded. The subscription login stayed exactly as it was.
+
+The only global file that changed was `~/.claude.json`, which records which
+directories have been opened. It held no key.
+
+Nothing here is written to a shell profile, and that is the point rather than
+tidiness. A key exported in a profile would follow the participant into their own
+projects for as long as the line stayed there.
+
 Codoc would otherwise pick its provider from the environment, so a key in a
 participant's own shell profile could move it onto their account. The two codoc
 workspaces name the provider outright so nothing is inferred.

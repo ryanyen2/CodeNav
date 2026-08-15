@@ -139,6 +139,11 @@ if keys_block "$TMP"; then
   grep -q '^OPENAI_API_KEY=sk-openai-test$' "$TMP/ember/.env" && ok "ember carries the OpenAI key" || bad "ember does not"
   grep -q '^CODOC_MODEL=gpt-5.6-luna$' "$TMP/hearth/.env" && ok "the codoc model is luna" || bad "the codoc model is wrong"
   grep -q '^CODOC_REASONING_EFFORT=medium$' "$TMP/hearth/.env" && ok "reasoning effort is medium" || bad "reasoning effort is unset"
+  # Empty, not absent. Absent means the old default, which luna answers 400 to on
+  # every single call.
+  grep -q '^CODOC_TEMPERATURE=$' "$TMP/hearth/.env" \
+    && ok "no temperature is sent, which is what luna requires" \
+    || bad "a temperature would be sent, and luna refuses every value"
   [ -f "$TMP/hearth-baseline/.env" ] && bad "the baseline got a codoc key it has no use for" \
     || ok "the baseline workspaces get no OpenAI key"
   [ "$(stat -f '%Lp' "$TMP/hearth/.env" 2>/dev/null || stat -c '%a' "$TMP/hearth/.env")" = "600" ] \
@@ -166,6 +171,36 @@ else
   bad "the keys block did not run"
 fi
 rm -rf "$TMP"
+
+echo
+echo "Nothing of the participant's own is touched"
+# The whole design rests on this. Verified against the real CLI too: with the key
+# in a workspace, `claude` there 401s on a broken one while a plain folder next to
+# it still answers on the machine's own login, and ~/.claude/settings.json and
+# ~/.claude/.credentials.json come back byte-identical.
+FAKE_HOME="$(mktemp -d)"
+mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/codoc-study"/{hearth,ember,hearth-baseline,ember-baseline}
+echo '{"model":"their-own-model","env":{}}' > "$FAKE_HOME/.claude/settings.json"
+printf 'export PATH=/theirs\n' > "$FAKE_HOME/.zshrc"
+cp "$FAKE_HOME/.claude/settings.json" "$FAKE_HOME/.settings-before"
+cp "$FAKE_HOME/.zshrc" "$FAKE_HOME/.zshrc-before"
+
+HOME="$FAKE_HOME" keys_block "$FAKE_HOME/codoc-study" >/dev/null 2>&1
+
+cmp -s "$FAKE_HOME/.claude/settings.json" "$FAKE_HOME/.settings-before" \
+  && ok "their global Claude settings are untouched" \
+  || bad "their global Claude settings were modified"
+cmp -s "$FAKE_HOME/.zshrc" "$FAKE_HOME/.zshrc-before" \
+  && ok "their shell profile is untouched" || bad "their shell profile was modified"
+# A key in a shell profile would follow them into their own projects long after
+# the session, which is the failure this whole approach exists to avoid.
+grep -rqF "sk-ant-test" "$FAKE_HOME/.claude" "$FAKE_HOME/.zshrc" 2>/dev/null \
+  && bad "the Anthropic key leaked outside the workspaces" \
+  || ok "neither key leaks outside the four workspaces"
+grep -qF "sk-ant-test" "$FAKE_HOME/codoc-study/hearth/.claude/settings.json" 2>/dev/null \
+  && ok "and it is present where it is supposed to be" \
+  || bad "the key is not in the workspace either, so nothing was written"
+rm -rf "$FAKE_HOME"
 
 echo
 echo "A bad code is refused before anything is installed"

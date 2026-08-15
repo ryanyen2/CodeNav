@@ -828,6 +828,33 @@ def apply_changeset(
         ]
     result.llm_calls = len(batches)
 
+    # 3.5 The model answers about a change set, so it may only re-attribute code
+    #     that change set touched. It does not always stay inside it: asked about
+    #     a 60-binding reorganization in altair, one pass also returned ATTACHes
+    #     for `altair/utils/data.py::to_csv` and `::to_json`, in a file the commit
+    #     never opened, moving both to a different feature. ATTACH is a SAFE op,
+    #     so that applied silently — which means a model reply can quietly
+    #     reshuffle any part of the tree, and a reader's section changes owners
+    #     with nothing in the change to explain it.
+    #
+    #     Dropping the out-of-scope bindings (rather than the whole op) keeps the
+    #     model's real answer about the code that did change. Deterministic
+    #     relocation is unaffected: it never comes through here, and every
+    #     address it produces is in the change set by construction.
+    touched_keys = cs.fingerprints().keys() | {
+        (r.file, r.symbol_path) for r in cs.removed
+    }
+    for op in ops:
+        if op.kind is not NodeOpKind.ATTACH or not op.bindings:
+            continue
+        inside = [b for b in op.bindings if tuple(b) in touched_keys]
+        if len(inside) != len(op.bindings):
+            outside = len(op.bindings) - len(inside)
+            import logging
+            logging.getLogger(__name__).warning(
+                "codoc: dropping %d ATTACH binding(s) outside the change set", outside)
+            op.bindings = inside
+
     # 4. Apply: safe → now; structural → pending proposal. An ADD_NODE whose
     #    (title) already names a live, still-unbound feature is the SAME concept
     #    (e.g. a hand-added empty node the model re-proposed) — rewrite it to an

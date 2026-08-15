@@ -24,8 +24,13 @@ Environment variables:
     OPENAI_API_KEY          API key for OpenAI (required when provider=openai)
     ANTHROPIC_API_KEY       API key for Anthropic (required when provider=anthropic)
     CODOC_BASE_URL          Override base URL (e.g. for local OpenAI-compatible servers)
-    CODOC_TEMPERATURE       Float  (default 0.2)
+    CODOC_TEMPERATURE       Float  (default 0.2). Set it EMPTY to send no
+                            temperature at all, which newer reasoning models
+                            (gpt-5.6-luna) require: they accept only their own
+                            default and answer 400 to every value, including it.
     CODOC_MAX_TOKENS        Int    (default 16000)
+    CODOC_REASONING_EFFORT  "low" | "medium" | "high"  (sent only when set)
+    CODOC_VERBOSITY         "low" | "medium" | "high"  (sent only when set)
     CODOC_LOG_PROMPTS       Set to "1" to log prompt+response to stderr
 
     CODOC_EMBEDDER_PROVIDER Embedder provider: "openai" | "sentence-transformers"  (default "sentence-transformers")
@@ -78,7 +83,9 @@ class LLMConfig(BaseModel):
     model: str
     api_key: str | None = None
     base_url: str | None = None
-    temperature: float = 0.2
+    # None means "send no temperature at all", which is what newer reasoning
+    # models want: they accept only their own default and 400 on anything else.
+    temperature: float | None = 0.2
     # Reasoning models spend completion budget on hidden reasoning, so the
     # budget must comfortably exceed the visible JSON we want back.
     max_tokens: int = 16000
@@ -149,6 +156,24 @@ def _model_fits_provider(provider: str, model: str) -> bool:
     return True  # ollama / unknown: trust the user's explicit model
 
 
+def _temperature_from_env() -> float | None:
+    """The temperature to send, or None to send none.
+
+    ``CODOC_TEMPERATURE=`` (set but empty) means none. Unset keeps the old
+    default, so nothing changes for anyone who has not asked for this.
+    """
+    raw = os.environ.get("CODOC_TEMPERATURE")
+    if raw is None:
+        return 0.2
+    raw = raw.strip()
+    if raw == "" or raw.lower() in ("none", "off", "default"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.2
+
+
 def _resolve_provider() -> str:
     """Pick the LLM provider, honoring an explicit choice and otherwise inferring
     one from which key is present — keyless Claude Code is the final fallback.
@@ -193,7 +218,9 @@ def get_llm_config() -> LLMConfig:
         model=model,
         api_key=api_key,
         base_url=os.environ.get("CODOC_BASE_URL"),
-        temperature=float(os.environ.get("CODOC_TEMPERATURE", "0.2")),
+        # An empty CODOC_TEMPERATURE means "send none", which is how a caller
+        # says so for a model that refuses every value including the one it uses.
+        temperature=_temperature_from_env(),
         max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "16000")),
         reasoning_effort=os.environ.get("CODOC_REASONING_EFFORT") or None,
         verbosity=os.environ.get("CODOC_VERBOSITY") or None,
@@ -386,7 +413,7 @@ def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
             "max_completion_tokens": budget,
             "extra_body": extra or None,
         }
-        if config.model not in _REFUSES_TEMPERATURE:
+        if config.temperature is not None and config.model not in _REFUSES_TEMPERATURE:
             kwargs["temperature"] = config.temperature
         if config.reasoning_effort:
             kwargs["reasoning_effort"] = config.reasoning_effort
@@ -435,7 +462,8 @@ def _complete_ollama(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     response = ollama.chat(
         model=config.model,
         messages=[{"role": "user", "content": _joined(parts, prompt)}],
-        options={"temperature": config.temperature, "num_predict": config.max_tokens},
+        options=({"num_predict": config.max_tokens}
+                 | ({} if config.temperature is None else {"temperature": config.temperature})),
     )
     _record_from(response, {
         "input_tokens": "prompt_eval_count",
@@ -473,9 +501,12 @@ def _complete_anthropic(prompt: str, config: LLMConfig, parts: list[str]) -> str
     create_kwargs: dict = {
         "model": config.model,
         "max_tokens": config.max_tokens,
-        "temperature": config.temperature,
         "messages": [{"role": "user", "content": prompt}],
     }
+    # Omitted rather than sent as None, which every client rejects. A caller asks
+    # for the model's own default by setting CODOC_TEMPERATURE empty.
+    if config.temperature is not None:
+        create_kwargs["temperature"] = config.temperature
     if parts:
         create_kwargs["system"] = [
             {"type": "text", "text": part, "cache_control": {"type": "ephemeral"}}
