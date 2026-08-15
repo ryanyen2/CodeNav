@@ -24,6 +24,40 @@ Within a project, the two copies hold identical source and tests and the same 12
 commits, so reading the history tells you the same things either way. The only
 differences are the ones above.
 
+## The two pages, and how a session runs
+
+There are two web pages and one zip. You use one page, the participant uses the
+other, and the zip is what they install.
+
+- Your dashboard is <https://codoc-11b10.web.app/experimenter/>. You sign in with
+  your MIT address. You create participants here, you get the link to send them
+  here, and you type the sign-off, the who-settled-what record and the question
+  scores here during the session.
+- Their page is <https://codoc-11b10.web.app/participant/>, reached only through
+  the link you send. It walks them through consent, the questionnaires, the task
+  cards and the break, one step at a time, and saves as they go.
+- The zip is `dist/codoc-study-bundle.zip`. It holds the extension, the four
+  projects and a setup script.
+
+A whole session, in order:
+
+1. You press New in the dashboard. It gives you a code, e.g. `p-abcdefghjkmn`,
+   and picks the order for you so the four combinations fill evenly.
+2. You send them the link and the zip. Both are on the dashboard, ready to copy.
+3. They open the link, give consent, answer the background questions, and run the
+   setup script with their code. Days ahead, not on the day.
+4. You watch the dashboard. Two marks turn green: one when they open the link,
+   one when their editor first reports. Until the second one is green, nothing
+   they do in the editor will reach you.
+5. On the day, they share their screen and you record. They work through their
+   page and you fill in your dashboard beside them.
+6. Afterwards they run `collect.sh` and send you one file. You export their
+   records with `scripts/export-session.mjs` and check the pair is complete.
+
+The code is what ties all of it together. It is not secret and it identifies
+nobody. Everything they do is filed against it, and a machine without it records
+nothing, which is the one failure that cannot be repaired afterwards.
+
 ## Part 1. Set up your own machine, once
 
 You need node, npm, uv and zip. Then, from the repo root:
@@ -42,21 +76,33 @@ know what their setup will feel like.
 
 ## Part 2. Before the session
 
-Send the participant three things, at least three days ahead.
+At least three days ahead, open the dashboard and press New. You get a code and
+an order. Then send the participant two things, both from the card at the top of
+that participant's page in the dashboard.
 
-1. `dist/codoc-study-bundle.zip`.
-2. `participant-before-the-session.md`. It is also inside the zip as `README.md`.
-3. The questionnaire that asks about their background, how often they use coding
-   agents, and how often they read a diff before accepting it. Do not run anyone
-   who answers "never" to that last one.
+1. Their link, which looks like
+   `https://codoc-11b10.web.app/participant/?code=p-abcdefghjkmn&order=codoc-first`.
+   Ask them to open it and work through it until it tells them to stop. That
+   covers consent and the background questions.
+2. `dist/codoc-study-bundle.zip`. Their page tells them to unzip it and run the
+   setup command, which is the second thing on that card. It has their code and
+   order already in it, so it can be pasted as it stands.
+
+You do not need to decide the order yourself. The dashboard picks whichever of
+the two is behind, so the combinations fill evenly without you keeping a tally.
+
+Then watch the same card. It has two marks on it. The first turns green when they
+open their link. The second turns green when their editor first reports, which
+only happens once the setup script has run with their code. Both green means the
+handoff worked. If the second one is still not green, ask them to run
+`./setup.sh --check`, which says in plain words whether the code is set.
 
 Ask them to send back the last few lines the setup script printed. If it does not
-say "Everything is ready", sort it out before the session rather than during it.
-The common problems and their fixes are at the end of the file you sent them.
+say "Everything is ready", sort it out now rather than during the session. The
+common problems and their fixes are at the end of the file inside the zip.
 
-Then decide which way round this participant goes. Vary both the order of the two
-ways of working and which project goes with which, so all four combinations come
-up about equally often across participants.
+Do not run anyone who says they never read a diff before accepting it. That is
+one of the background questions, and you can see their answers in the dashboard.
 
 ## Part 3. On the day
 
@@ -67,7 +113,11 @@ unzipped, run this, and read you the result:
 ./setup.sh --check
 ```
 
-Then have them share their whole screen and start recording.
+The line to listen for is the one naming their code. Everything else it checks
+can be fixed afterwards; a session that ran without a code recorded nothing.
+
+Then have them share their whole screen and start recording. Open their page in
+the dashboard and keep it beside the call for the rest of the session.
 
 ### Starting a codoc condition
 

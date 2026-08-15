@@ -114,6 +114,47 @@ test('creating a participant does not throw', async () => {
     assert.match(document.body.textContent, /The questions/);
 });
 
+test('the dashboard hands over a link and a command, both carrying the code', async () => {
+    // The session cannot start without these two, and before this existed the
+    // dashboard showed a code and no way to use it.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'baseline-first' }) }],
+    });
+
+    const shown = [...document.querySelectorAll('.give-row code')].map((c) => c.textContent);
+    assert.equal(shown.length, 2, 'a link and a command');
+    assert.match(shown[0], /\/participant\/\?code=p-abcdefghjkmn&order=baseline-first$/);
+    // The order has to ride in the link: a participant cannot read their own
+    // record, so a bare link would silently run them in the wrong order.
+    assert.equal(shown[1], './setup.sh p-abcdefghjkmn baseline-first');
+});
+
+test('it says which half of the handoff has not landed', async () => {
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+
+    const devices = (window.__snaps || [])
+        .find((s) => s.ref.path === 'participants/p-abcdefghjkmn/devices');
+    assert.ok(devices, 'the dashboard watches the device slots');
+
+    devices.cb({ docs: [{ id: 'browser' }] });
+    const text = document.querySelector('#handoff').textContent;
+    assert.match(text, /They have opened it/);
+    assert.match(text, /editor has not reported/,
+        'the expensive failure is the one named');
+
+    devices.cb({ docs: [{ id: 'browser' }, { id: 'mirror' }] });
+    const settled = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
+    assert.match(settled, /page open and their editor is reporting/);
+    assert.ok(document.querySelector('#handoff').classList.contains('settled'),
+        'it gets out of the way once both have landed');
+});
+
 test('the forms show the questions for the right project', async () => {
     const { document, window } = await loadPage('experimenter');
     window.__authCb?.({ email: 'someone@example.com' });

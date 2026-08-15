@@ -113,12 +113,40 @@ main { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh -
 .p-item .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 .p-item .meta { color: var(--ink-faint); font-size: 11.5px; margin-top: 2px; }
 
-.live-dot {
-    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-    background: var(--accent); margin-right: 5px; vertical-align: 1px;
-    animation: pulse 2s var(--ease) infinite;
+/* ── handing the session over ─────────────────────────────────────────────── */
+
+/* Loud until both halves have checked in, one line afterwards. It is the first
+   thing on the page during setup and nearly absent during the session. */
+.handoff { border-left: 3px solid var(--accent); }
+.handoff.settled {
+    border-left-color: var(--line); padding: 11px 14px;
+    color: var(--ink-soft); font-size: 13px;
 }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.handoff .hs { display: flex; align-items: center; gap: 7px; }
+
+.give { margin-top: 14px; }
+.give label {
+    display: block; font-size: 11.5px; color: var(--ink-faint);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 5px;
+}
+.give-row {
+    display: flex; align-items: stretch; gap: 8px;
+}
+.give-row code {
+    flex: 1; min-width: 0; font-size: 12.5px; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+    overflow-x: auto; white-space: nowrap; user-select: all;
+}
+.give-row button { padding: 0 13px; font-size: 12.5px; white-space: nowrap; }
+.give-note { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-soft); }
+
+.tick { color: var(--accent); }
+.tick.off { color: var(--warn); }
+.link-btn {
+    border: none; background: none; padding: 0; font-size: 13px;
+    color: var(--ink-faint); text-decoration: underline; cursor: pointer;
+}
+.link-btn:hover { color: var(--ink); }
 
 /* ── detail ──────────────────────────────────────────────────────────────── */
 

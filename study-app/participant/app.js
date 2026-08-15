@@ -209,10 +209,16 @@ const VIEWS = {
         ${BACKGROUND.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
 
     setup: () => `
-        <h1>Before we start</h1>
-        <p>Run this in the folder you unzipped, and read the result to the
-        researcher.</p>
-        <p><code>./setup.sh --check</code></p>
+        <h1>Set up your machine</h1>
+        <p>Unzip the bundle we sent you, open a terminal in that folder, and run
+        this. It has your code in it already.</p>
+        <p><code class="pick">./setup.sh ${esc(state.code)} ${esc(state.order)}</code></p>
+        <p>It takes about ten minutes. Do this a few days before the session, not
+        on the day.</p>
+
+        <h2>On the day</h2>
+        <p>Run this in the same folder and read the result to the researcher.</p>
+        <p><code class="pick">./setup.sh --check</code></p>
         <div class="note">If anything says <strong>fail</strong> or <strong>todo</strong>,
         say so now. It takes a minute to fix here and cannot be fixed afterwards.</div>`,
 

@@ -4,8 +4,12 @@
 # This script ships inside the participant bundle, next to the .vsix, the wheel,
 # and the four workspace archives. It is safe to run more than once.
 #
-#   ./setup.sh          install everything
-#   ./setup.sh --check   only check what is already installed
+#   ./setup.sh p-abcdefghjkmn codoc-first   install everything
+#   ./setup.sh --check                      only check what is already installed
+#
+# The researcher gives you the code and the order. Both are on the link they
+# send you, and both are needed here: the code is what your session is filed
+# against, and without it nothing you do reaches the researcher.
 #
 # It installs uv, installs the codoc command, unpacks the four workspaces, and
 # builds a Python environment for each one. It does not install Claude Code or
@@ -17,6 +21,13 @@ WORK="$HOME/codoc-study"
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
+# The participant code, taken before anything is installed. Getting it wrong is
+# cheap to fix here and expensive to notice later: a session that ran with no
+# code looks normal on the screen and arrives nowhere.
+CODE="${1:-${CODOC_STUDY_PARTICIPANT:-}}"
+ORDER="${2:-${CODOC_STUDY_ORDER:-}}"
+[ "$CHECK_ONLY" = 1 ] && { CODE=""; ORDER=""; }
+
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$1"; }
 warn() { printf '  \033[33mtodo\033[0m  %s\n' "$1"; }
 bad()  { printf '  \033[31mfail\033[0m  %s\n' "$1"; }
@@ -24,6 +35,22 @@ step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 FAILED=0
 TODO=0
+
+# ------------------------------------------------------------- who you are here
+# Asked first, so a typo costs a second rather than a whole install. The code is
+# not secret and identifies nobody. It is how your work is filed.
+if [ "$CHECK_ONLY" = 0 ]; then
+  while ! printf '%s' "$CODE" | grep -Eq '^p-[a-z0-9]+$'; do
+    [ -n "$CODE" ] && echo "  That does not look like a code. They look like p-abcdefghjkmn."
+    printf 'Participant code from the researcher: '
+    read -r CODE || { echo; echo "No code given, so there is nothing to set up."; exit 1; }
+  done
+  while [ "$ORDER" != "codoc-first" ] && [ "$ORDER" != "baseline-first" ]; do
+    [ -n "$ORDER" ] && echo "  Type codoc-first or baseline-first."
+    printf 'Order (codoc-first or baseline-first): '
+    read -r ORDER || { echo; echo "No order given."; exit 1; }
+  done
+fi
 
 # ---------------------------------------------------------------- prerequisites
 step "Checking what you already have"
@@ -70,6 +97,19 @@ if [ "$CHECK_ONLY" = 1 ]; then
   fi
   if code --list-extensions 2>/dev/null | grep -qi '^codoc\.codoc$'; then ok "the codoc VS Code extension is installed"; else bad "the codoc VS Code extension is not installed"; FAILED=1; fi
   if code --list-extensions 2>/dev/null | grep -qi '^codoc\.codoc-study-logger$'; then ok "the study logger is installed"; else bad "the study logger is not installed"; FAILED=1; fi
+  # Checked last and reported loudest. Everything above can be fixed after the
+  # session; a session that ran without a code recorded nothing and cannot.
+  SEEN="$(python3 -c "
+import json,sys
+try: print(json.load(open(sys.argv[1])).get('codocStudyLogger.participant',''))
+except Exception: print('')" "$WORK/hearth/.vscode/settings.json" 2>/dev/null)"
+  if [ -n "$SEEN" ]; then
+    ok "this machine is filed under $SEEN"
+  else
+    bad "no participant code is set, so nothing would reach the researcher."
+    echo  "          Run: ./setup.sh <your code> <your order>"
+    FAILED=1
+  fi
   step "Result"
   [ "$FAILED" = 0 ] && [ "$TODO" = 0 ] && echo "  Everything is ready." || echo "  Some things are not ready. See the lines marked fail or todo above."
   exit "$FAILED"
@@ -131,6 +171,34 @@ for name in hearth hearth-baseline ember ember-baseline; do
     && uv venv --python 3.11 --quiet .venv >/dev/null 2>&1 \
     && VIRTUAL_ENV="$d/.venv" uv pip install --quiet -e '.[dev]' >/dev/null 2>&1 ) \
     && ok "built $name" || { bad "could not build $name"; exit 1; }
+done
+
+# -------------------------------------------------------------- the study code
+step "Filing this machine under $CODE"
+# Written per workspace rather than into your own VS Code settings, so nothing
+# outside these four folders is touched and you can delete them and be rid of it.
+# The condition is set here rather than guessed from the folder name, because a
+# folder someone renames would otherwise be counted as the wrong condition.
+for name in hearth hearth-baseline ember ember-baseline; do
+  d="$WORK/$name/.vscode"
+  mkdir -p "$d"
+  case "$name" in *-baseline) cond=baseline ;; *) cond=codoc ;; esac
+  CODE="$CODE" ORDER="$ORDER" COND="$cond" python3 - "$d/settings.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path) as f: settings = json.load(f)
+except Exception:
+    settings = {}            # absent, or edited into something unreadable
+settings.update({
+    'codocStudyLogger.participant': os.environ['CODE'],
+    'codocStudyLogger.order': os.environ['ORDER'],
+    'codocStudyLogger.condition': os.environ['COND'],
+})
+with open(path, 'w') as f: json.dump(settings, f, indent=2); f.write('\n')
+PY
+  [ $? = 0 ] && ok "$name is filed under $CODE" \
+    || { bad "could not write $d/settings.json"; FAILED=1; }
 done
 
 # ------------------------------------------------- wire codoc into the workspace
@@ -228,6 +296,11 @@ step "Result"
 if [ "$FAILED" = 0 ] && [ "$TODO" = 0 ]; then
   cat <<EOF
   Everything is ready. Nothing else to do before the session.
+
+  This machine is filed under $CODE ($ORDER).
+
+  Go back to your study page and carry on from where you left it:
+    https://codoc-11b10.web.app/participant/?code=$CODE&order=$ORDER
 
   Your four workspaces are:
     $WORK/hearth            $WORK/hearth-baseline

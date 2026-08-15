@@ -3,6 +3,11 @@
 Thank you for taking part. Please read this page and set up your machine before
 we meet. Setup takes about 15 minutes, and most of it runs on its own.
 
+Start from the link the researcher sent you, not from this page. The link opens
+a page that walks you through everything in order, including the consent form,
+and it tells you when to come back here. If you have lost the link, ask for it
+again. It carries your participant code, and nothing here works without it.
+
 ## What the session is
 
 You will do two short programming tasks, one after the other, on two small
@@ -43,11 +48,16 @@ installs everything else.
 
 ## Setting up
 
-Unzip the bundle we sent you, open a terminal in the unzipped folder, and run:
+Unzip the bundle we sent you and open a terminal in the unzipped folder. Then run
+the command from your study page. It looks like this, with your own code in it:
 
 ```
-./setup.sh
+./setup.sh p-abcdefghjkmn codoc-first
 ```
+
+Copy it from the page rather than typing it. The code is how your work is filed,
+and a machine without it records nothing. If you run `./setup.sh` with nothing
+after it, it will ask you for the code before it starts.
 
 It prints a line for each thing it does, and it takes about 10 minutes. When it
 finishes it either says "Everything is ready" or lists what is still missing. If

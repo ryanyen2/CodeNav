@@ -36,6 +36,11 @@ echo "Built $(basename "$VSIX")"
 # The study logger. A separate extension on purpose: it installs in BOTH
 # conditions, so navigation is measured the same way in each. Its tests run here
 # because a file sorted into the wrong surface changes a reported number.
+echo "Checking that setup.sh files a machine under its code."
+# The one step whose failure is invisible: a session that ran without a code
+# looks normal on the participant's screen and arrives nowhere.
+run bash "$MAT/scripts/test-setup.sh"
+
 echo "Building the study logger."
 run node "$MAT/logger/test-classify.js"
 run node "$MAT/logger/test-extension.js"

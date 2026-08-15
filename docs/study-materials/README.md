@@ -7,7 +7,13 @@ the day.
 ## Start here
 
 Read `experimenter-guide.md`. It takes you from a machine with nothing installed to
-a folder of collected data, and it points at everything else listed below.
+a folder of collected data, and it points at everything else listed below. The
+section called "The two pages, and how a session runs" is the short version.
+
+There are two web pages as well as these files. Your dashboard is at
+<https://codoc-11b10.web.app/experimenter/> and the participant's page is at
+<https://codoc-11b10.web.app/participant/>, reached only through a link you send
+them. Their source is in `../../study-app/`.
 
 ## What is here
 
@@ -50,8 +56,16 @@ send to a participant. Run it again whenever codoc changes, so the extension and
 the codoc command inside stay the same version.
 
 `scripts/setup.sh` runs on the participant's machine, from inside the unzipped
-bundle. It installs everything and sets up all four project copies, then checks
-they work. `./setup.sh --check` runs only the checks.
+bundle. It takes their code and their order, e.g.
+`./setup.sh p-abcdefghjkmn codoc-first`, and asks for them if they are left out.
+It installs everything, sets up all four project copies, files each one under the
+code, then checks they work. `./setup.sh --check` runs only the checks, and says
+whether the code is set.
+
+`scripts/test-setup.sh` runs on your machine and tests the part of `setup.sh`
+that files a machine under a code. Only that part, because the rest takes minutes
+and needs the network. It is the step that decides whether a session records
+anything at all, so it is the one worth a test.
 
 `scripts/session-log.sh` saves a copy of the project every 20 seconds during a
 session, so it can be replayed afterwards. It runs on the participant's machine,

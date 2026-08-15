@@ -68,6 +68,13 @@ code {
     padding: 2px 5px; border-radius: 4px;
 }
 
+/* A command to be copied, so one click takes the whole line. Typing a code by
+   hand is how a session ends up filed under nothing. */
+code.pick {
+    display: inline-block; user-select: all; padding: 9px 12px;
+    font-size: 15px; max-width: 100%; overflow-x: auto; white-space: nowrap;
+}
+
 .loading { color: var(--ink-faint); }
 
 .note {

@@ -55,9 +55,17 @@ const state = {
     actions: [],
     unsubBatches: null,
     unsubAssessment: null,
+    unsubDevices: null,
+    devices: [],
     assessment: null,
     project: 'hearth',
 };
+
+// Where the participant's own page lives. The order rides in the link because
+// the participant cannot read their own record, by design.
+const PARTICIPANT_PAGE = `${location.origin}/participant/`;
+const linkFor = (p) => `${PARTICIPANT_PAGE}?code=${p.code}&order=${p.order || 'codoc-first'}`;
+const setupFor = (p) => `./setup.sh ${p.code} ${p.order || 'codoc-first'}`;
 
 // ── signing in ───────────────────────────────────────────────────────────────
 
@@ -109,9 +117,8 @@ function renderRoster() {
         const b = document.createElement('button');
         b.className = 'p-item';
         b.setAttribute('aria-current', String(p.code === state.selected));
-        const live = p.lastSeen && Date.now() - p.lastSeen < 90_000;
-        b.innerHTML = `<div class="code">${live ? '<i class="live-dot"></i>' : ''}${p.code}</div>
-            <div class="meta">${p.order || 'order not set'}</div>`;
+        b.innerHTML = `<div class="code">${esc(p.code)}</div>
+            <div class="meta">${esc(p.order || 'order not set')}</div>`;
         b.onclick = () => select(p.code);
         list.append(b);
     }
@@ -137,9 +144,27 @@ $('#new-participant').addEventListener('click', async () => {
 function select(code) {
     state.selected = code;
     state.actions = [];
+    state.devices = [];
     renderRoster();
     renderDetail();
     watchBatches();
+    watchDevices();
+}
+
+// Which of the participant's two machines-worth of software has checked in.
+//
+// The browser slot is claimed when they open their link; the mirror slot when
+// their editor starts with a code set. Between them they answer the only
+// question worth asking before a session starts, which is whether the handoff
+// worked. Nothing else reports it: a participant who never typed their code
+// looks exactly like one who has not started yet.
+function watchDevices() {
+    if (state.unsubDevices) state.unsubDevices();
+    state.unsubDevices = onSnapshot(
+        collection(db, `participants/${state.selected}/devices`),
+        (snap) => { state.devices = snap.docs.map((d) => d.id); renderHandoff(); },
+        () => { state.devices = []; renderHandoff(); },
+    );
 }
 
 function watchBatches() {
@@ -159,8 +184,8 @@ function watchBatches() {
 function renderEmpty() {
     $('#detail').innerHTML = `<div class="empty">
         <strong>No participants yet</strong>
-        Create one to get a code. Give that code to the participant during setup,
-        and everything they do arrives here against it.
+        Press New. You get a code and a link to send them, and everything they do
+        arrives here against that code.
     </div>`;
 }
 
@@ -172,6 +197,7 @@ function renderDetail() {
         <h2>${p.code}</h2>
         <span class="sub">${p.order || 'order not set'}</span>
       </div>
+      <div class="card handoff" id="handoff"></div>
       <div class="tabs" id="tabs"></div>
       <div class="stats" id="stats"></div>
       <div class="card">
@@ -202,9 +228,88 @@ function renderDetail() {
         tabs.append(b);
     }
     legend($('#legend'));
+    renderHandoff();
     renderForms();
     renderSession();
     watchAssessment();
+}
+
+// ── handing the session over ─────────────────────────────────────────────────
+
+/**
+ * The two things to send, and whether they landed.
+ *
+ * This is the first card on the page until both have checked in, and one quiet
+ * line afterwards. A code that never reaches the participant's editor costs the
+ * whole session and is invisible on their shared screen, so it is worth the room
+ * it takes early and not worth any of it later.
+ */
+function renderHandoff() {
+    const el = $('#handoff');
+    if (!el) return;
+    const p = state.participants.find((x) => x.code === state.selected);
+    if (!p) return;
+
+    const browser = state.devices.includes('browser');
+    const mirror = state.devices.includes('mirror');
+    el.classList.toggle('settled', browser && mirror);
+
+    if (browser && mirror) {
+        el.innerHTML = `<div class="hs">
+            <span class="tick">●</span> They have the page open and their editor is
+            reporting. <button class="link-btn" id="handoff-more">show the link again</button>
+        </div>`;
+        $('#handoff-more').onclick = () => { el.classList.remove('settled'); renderOpenHandoff(el, p, browser, mirror); };
+        return;
+    }
+    renderOpenHandoff(el, p, browser, mirror);
+}
+
+function renderOpenHandoff(el, p, browser, mirror) {
+    const dot = (on) => `<span class="tick ${on ? 'on' : 'off'}">${on ? '●' : '○'}</span>`;
+    el.innerHTML = `
+      <h3>Send these two things</h3>
+      <p class="hint">Both carry the code. Everything they do is filed against it.</p>
+
+      <div class="give">
+        <label>Their link</label>
+        <div class="give-row">
+          <code>${esc(linkFor(p))}</code>
+          <button data-copy="${esc(linkFor(p))}">Copy</button>
+        </div>
+        <p class="give-note">${dot(browser)} ${browser
+            ? 'They have opened it.'
+            : 'Not opened yet. Send it now, before anything else.'}</p>
+      </div>
+
+      <div class="give">
+        <label>What they run in the folder they unzipped</label>
+        <div class="give-row">
+          <code>${esc(setupFor(p))}</code>
+          <button data-copy="${esc(setupFor(p))}">Copy</button>
+        </div>
+        <p class="give-note">${dot(mirror)} ${mirror
+            ? 'Their editor is reporting.'
+            : 'Their editor has not reported. Until it does, nothing they do in it arrives here.'}</p>
+      </div>`;
+
+    for (const b of el.querySelectorAll('[data-copy]')) {
+        b.onclick = async () => {
+            try {
+                await navigator.clipboard.writeText(b.dataset.copy);
+                b.textContent = 'Copied';
+            } catch {
+                // Clipboard access can be refused. Select it instead, so the
+                // keyboard still works and the button never lies about copying.
+                b.textContent = 'Select it';
+                const r = document.createRange();
+                r.selectNodeContents(b.previousElementSibling);
+                getSelection().removeAllRanges();
+                getSelection().addRange(r);
+            }
+            setTimeout(() => { b.textContent = 'Copy'; }, 1600);
+        };
+    }
 }
 
 // ── the forms ────────────────────────────────────────────────────────────────
