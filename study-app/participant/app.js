@@ -13,8 +13,9 @@ import {
     getFirestore, doc, getDoc, setDoc, connectFirestoreEmulator, serverTimestamp,
 } from 'firebase/firestore';
 import {
-    CONSENT_FORM, BACKGROUND, AFTER_CONDITION, SCALE, MANIPULATION_CHECK,
-    SCENARIOS, TASK_CARDS, buildSteps, answerDoc,
+    CONSENT_FORM, PRESTUDY_FORM, SCREENING, AFTER_CONDITION, CONSTRUCTS,
+    scaleFor, MANIPULATION_CHECK, SCENARIOS, DEBRIEF, TASK_CARDS,
+    PROJECTS, RESPONSIBILITY, HOW_TO_START, buildSteps, answerDoc,
 } from './steps.js';
 import { drawCard } from './card.js';
 import { esc } from '../shared/html.js';
@@ -151,9 +152,11 @@ function render() {
     window.scrollTo({ top: 0, behavior: 'instant' });
 
     if (step.kind === 'task') {
-        drawCard(section.querySelector('.card-wrap'), TASK_CARDS[step.project], {
-            dark: matchMedia('(prefers-color-scheme: dark)').matches,
-        });
+        // Light, like the rest of the page, rather than following the machine.
+        // The card is a picture that goes into the screen recording, and a card
+        // that is dark for one participant and light for the next is one more
+        // thing that differs between sessions for no reason.
+        drawCard(section.querySelector('.card-wrap'), TASK_CARDS[step.project], { dark: false });
     }
     wire(section, step);
 
@@ -165,19 +168,16 @@ function render() {
 
 /** Whether this step has been answered enough to move on. */
 function complete(step) {
-    if (step.kind === 'background') {
-        return BACKGROUND.every((q) => answersFor(step)[q.id] !== undefined
-            && String(answersFor(step)[q.id]).trim() !== '');
-    }
+    const a = answersFor(step);
+    const given = (id) => a[id] !== undefined && String(a[id]).trim() !== '';
+    if (step.kind === 'screening') return SCREENING.every((q) => given(q.id));
     if (step.kind === 'questionnaire') {
-        const a = answersFor(step);
+        // The free-text answer is optional. Blocking on it would buy blank
+        // characters typed to get past the button, which is worse than no answer.
         return AFTER_CONDITION.every((q) => a[q.id] !== undefined)
-            && MANIPULATION_CHECK.every((q) => a[q.id] !== undefined);
+            && MANIPULATION_CHECK.filter((q) => q.type !== 'longtext').every((q) => given(q.id));
     }
-    if (step.kind === 'scenarios') {
-        const a = answersFor(step);
-        return SCENARIOS.every((s) => a[s.id] !== undefined);
-    }
+    if (step.kind === 'scenarios') return SCENARIOS.every((s) => given(s.id));
     return true;
 }
 
@@ -203,10 +203,18 @@ const VIEWS = {
         <iframe src="${CONSENT_FORM}" height="900" title="Consent form"></iframe>
         <p>When you have submitted it, continue.</p>`,
 
-    background: (step) => `
+    prestudy: () => `
         <h1>A few questions about you</h1>
-        <p>So we can describe who took part. There are no right answers.</p>
-        ${BACKGROUND.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
+        <p>So we can describe who took part. There are no right answers, and the
+        first field asks for your code, which is at the top of this page.</p>
+        <iframe src="${PRESTUDY_FORM}" height="2536" title="Pre-study questionnaire"></iframe>
+        <p>When you have submitted it, continue.</p>`,
+
+    screening: (step) => `
+        <h1>One more</h1>
+        <p>This one is here rather than in the form above because the researcher
+        needs to see it before the session.</p>
+        ${SCREENING.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
 
     setup: () => `
         <h1>Set up your machine</h1>
@@ -229,25 +237,59 @@ const VIEWS = {
         <div class="note">If anything says <strong>fail</strong> or <strong>todo</strong>,
         say so now. It takes a minute to fix here and cannot be fixed afterwards.</div>`,
 
-    intro: (step) => `
+    intro: (step) => {
+        const how = HOW_TO_START[step.condition];
+        return `
         <h1>${step.n === 1 ? 'The first way of working' : 'The second way of working'}</h1>
-        <p class="lead">Open <code>~/codoc-study/${folderFor(step)}</code> in VS Code.</p>
-        ${step.condition === 'codoc' ? `
-        <p>Then open a terminal inside VS Code and run:</p>
-        <p><code>~/codoc-study/codoc watch</code></p>
-        <p>Leave it running. Open the written description with Cmd+Shift+P and the
-        command <code>codoc: Open</code>.</p>` : `
-        <p>Start Claude Code in a terminal. The written description is
-        <code>CLAUDE.md</code> in the project, and Claude Code reads it on its own.</p>`}
-        <p>You will also want a terminal for running the project.</p>`,
+        <p class="lead">${esc(how.title)}.</p>
+        <ol class="do">
+          ${how.steps.map(([text, cmd]) => `<li>${esc(text)}
+            ${cmd ? `<code class="pick">${esc(cmd.replace('~/codoc-study/hearth', how.folder(step.project)))}</code>` : ''}
+          </li>`).join('')}
+        </ol>
+        <p class="lead">The folder is <code class="pick">${esc(how.folder(step.project))}</code></p>
+        <h2>What the written description is here</h2>
+        ${how.about.map((t) => `<p>${esc(t)}</p>`).join('')}`;
+    },
 
-    about: (step) => `
-        <h1>About ${step.project}</h1>
-        <p>The researcher will show you a short page about this project and give
-        you a couple of minutes to look around.</p>
-        <div class="note">You are responsible for the result being correct, not
-        only for the tests passing. Afterwards we will ask you to explain the
-        code.</div>`,
+    // Everything on this page used to be a file the researcher shared on the
+    // call. Reading it here means nobody leaves the page while forming their
+    // first picture of the codebase, and every participant gets the same words.
+    about: (step) => {
+        const p = PROJECTS[step.project];
+        return `
+        <h1>About ${esc(p.name)}</h1>
+        ${p.what.map((t) => `<p class="lead">${esc(t)}</p>`).join('')}
+
+        <h2>${esc(p.flow.caption)}</h2>
+        <table class="flow"><tbody>${p.flow.lines.map(([from, to, note]) => `
+          <tr><td class="mono">${esc(from)}</td>
+              <td class="arrow">${from && to ? '→' : ''}</td>
+              <td class="mono">${esc(to)}</td>
+              <td class="note-cell">${esc(note)}</td></tr>`).join('')}
+        </tbody></table>
+
+        <p>${esc(p.sample.caption)}</p>
+        <pre class="sample">${esc(p.sample.code)}</pre>
+
+        <h2>The commands you will use</h2>
+        <table class="cmds"><tbody>${p.commands.map(([c, w]) => `
+          <tr><td class="mono">${esc(c)}</td><td>${esc(w)}</td></tr>`).join('')}
+        </tbody></table>
+        <p class="fine">${esc(p.commandNote)}</p>
+
+        <h2>Where things live</h2>
+        <table class="cmds"><tbody>${p.layout.map(([c, w]) => `
+          <tr><td class="mono">${esc(c)}</td><td>${esc(w)}</td></tr>`).join('')}
+        </tbody></table>
+
+        <h2>Two words in the task</h2>
+        <dl class="words">${p.words.map(([w, d]) => `
+          <dt>${esc(w)}</dt><dd>${esc(d)}</dd>`).join('')}
+        </dl>
+
+        <div class="note">${RESPONSIBILITY.map((t) => `<p>${esc(t)}</p>`).join('')}</div>`;
+    },
 
     task: () => `
         <h1>Your task</h1>
@@ -255,12 +297,33 @@ const VIEWS = {
         <p>Anything the card does not say is yours to decide, and we will ask you
         about those decisions, so make them on purpose.</p>`,
 
-    questionnaire: (step) => `
+    // Grouped by what each block measures, with the groups named. An unbroken
+    // column of twenty-five identical rows is answered by pattern rather than by
+    // reading, and the headings are the cheapest thing that stops that.
+    questionnaire: (step) => {
+        const a = answersFor(step);
+        return `
         <h1>How that felt</h1>
-        <p>About the way of working you just used. Answer quickly; your first
-        reaction is the useful one.</p>
-        ${AFTER_CONDITION.map((q) => scaleRow(q, answersFor(step)[q.id])).join('')}
-        ${MANIPULATION_CHECK.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
+        <p class="lead">About the way of working you just used. Answer quickly;
+        your first reaction is the useful one.</p>
+        ${CONSTRUCTS.map((c) => {
+            const items = AFTER_CONDITION.filter((q) => q.c === c.id);
+            if (!items.length) return '';
+            return `<section class="block">
+              <h2>${esc(c.title)}</h2>
+              ${items.map((q) => scaleRow(q, a[q.id])).join('')}
+            </section>`;
+        }).join('')}
+        <section class="block">
+          <h2>In your own words</h2>
+          ${MANIPULATION_CHECK.map((q) => field(q, a[q.id])).join('')}
+        </section>`;
+    },
+
+    debrief: (step) => `
+        <h1>Last two</h1>
+        <p>Now that both are done. Say as much or as little as you like.</p>
+        ${DEBRIEF.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
 
     break: () => `
         <h1>Take a couple of minutes</h1>
@@ -294,6 +357,13 @@ function field(q, value) {
                     aria-pressed="${String(value === o)}">${esc(o)}</button>`).join('')}</div>
         </div>`;
     }
+    if (q.type === 'longtext') {
+        return `<div class="q" data-q="${q.id}">
+            <label class="label" for="f-${q.id}">${esc(q.label)}</label>
+            <textarea id="f-${q.id}" rows="3"
+                placeholder="${esc(q.placeholder || '')}">${esc(value ?? '')}</textarea>
+        </div>`;
+    }
     return `<div class="q" data-q="${q.id}">
         <label class="label" for="f-${q.id}">${esc(q.label)}</label>
         <input id="f-${q.id}" type="${q.type}" ${q.min !== undefined ? `min="${q.min}"` : ''}
@@ -303,17 +373,20 @@ function field(q, value) {
 }
 
 function scaleRow(q, value) {
+    // Per item, because the workload block runs low-to-high rather than
+    // disagree-to-agree. One shared scale would have relabelled six items.
+    const s = scaleFor(q);
     const dots = [];
-    for (let i = SCALE.min; i <= SCALE.max; i += 1) {
+    for (let i = s.min; i <= s.max; i += 1) {
         dots.push(`<button type="button" data-value="${i}"
             aria-label="${i}" aria-pressed="${String(value === i)}">${i}</button>`);
     }
     return `<div class="q" data-q="${q.id}">
         <span class="label">${esc(q.text)}</span>
         <div class="scale">
-            <span class="end">${SCALE.lowLabel}</span>
+            <span class="end">${esc(s.lowLabel)}</span>
             <div class="dots">${dots.join('')}</div>
-            <span class="end high">${SCALE.highLabel}</span>
+            <span class="end high">${esc(s.highLabel)}</span>
         </div>
     </div>`;
 }
@@ -346,7 +419,7 @@ function wire(section, step) {
                 updateNext(step);
             });
         }
-        const input = q.querySelector('input');
+        const input = q.querySelector('input, textarea');
         if (input) {
             input.addEventListener('input', () => {
                 answersFor(step)[id] = input.value;

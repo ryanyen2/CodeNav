@@ -6,7 +6,7 @@
   "description": "Participant and experimenter pages for the codoc user study.",
   "scripts": {
     "test:rules": "firebase emulators:exec --project codoc-study-rules-test --only firestore \"node --test test/rules.test.js\"",
-    "test:unit": "node --test test/actions.test.js test/ngrams.test.js test/participant.test.js test/forms.test.js test/pages.test.js",
+    "test:unit": "node --test test/actions.test.js test/ngrams.test.js test/participant.test.js test/forms.test.js test/pages.test.js test/figures.test.js",
     "test": "npm run questions && npm run test:unit && npm run test:rules && npm run test:mirror && npm run test:dashboard && npm run test:export",
     "build": "node build.mjs",
     "deploy:rules": "firebase deploy --only firestore:rules --project codoc-11b10",
@@ -15,7 +15,8 @@
     "test:export": "firebase emulators:exec --project codoc-study-rules-test --only firestore,auth \"node --test test/export.test.js\"",
     "questions": "node scripts/extract-questions.mjs",
     "deploy:hosting": "npm run build && firebase deploy --only hosting --project codoc-11b10",
-    "deploy": "npm run build && firebase deploy --only firestore:rules,hosting --project codoc-11b10"
+    "deploy": "npm run build && firebase deploy --only firestore:rules,hosting --project codoc-11b10",
+    "figures": "FIGURE_OUT=./figures/out node --test test/figures.test.js"
   },
   "dependencies": {
     "d3": "^7.9.0",

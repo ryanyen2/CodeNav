@@ -5,8 +5,9 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import {
-    BACKGROUND, AFTER_CONDITION, SCALE, SCENARIOS, TASK_CARDS,
-    buildSteps, answerDoc, shouldExclude, CONSENT_FORM,
+    SCREENING, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, scaleFor, keyed,
+    SCENARIOS, TASK_CARDS, PROJECTS, HOW_TO_START,
+    buildSteps, answerDoc, shouldExclude, CONSENT_FORM, PRESTUDY_FORM,
 } from '../participant/steps.js';
 
 let drawCard;
@@ -63,37 +64,95 @@ test('each condition stores its answers separately', () => {
 
 // ── the questionnaire ────────────────────────────────────────────────────────
 
-test('the reverse keyed items are exactly the five the design marks', () => {
-    // The design marks five items (R), of which four are called the honesty
-    // valves. Those are different lists and conflating them changes the
-    // instrument.
+test('every reverse keyed item is one where agreeing is the bad direction', () => {
+    // Getting this list wrong flips a result rather than breaking a test, so it
+    // is written out rather than counted.
     const reversed = AFTER_CONDITION.filter((q) => q.reverse).map((q) => q.id);
-    assert.deepEqual(reversed, ['q3', 'q5', 'q7', 'q9', 'q11']);
-    const valves = ['q3', 'q5', 'q9', 'q11'];
-    assert.ok(valves.every((v) => reversed.includes(v)),
-        'the valves are among the reverse keyed items');
+    assert.deepEqual(reversed, ['tlxSuccess', 'ctl4', 'ctl5', 'doc2', 'rev3']);
 });
 
 test('a reverse keyed item is stored as answered, not flipped on the way in', () => {
     // Flipping here would mean the stored number no longer matches what the
     // person saw, and nobody could check the coding afterwards.
     const q = AFTER_CONDITION.find((x) => x.reverse);
-    assert.ok(q, 'there is at least one');
     assert.ok(!('flip' in q) && !('score' in q),
         'the item carries only a marker; the flip happens once, during analysis');
+    // And the flip, when it happens, is around the midpoint of that item's own
+    // scale rather than a hardcoded 8.
+    assert.equal(keyed({ ...q, reverse: true }, 1), 7);
+    assert.equal(keyed({ ...q, reverse: true }, 4), 4);
+    assert.equal(keyed({ ...q, reverse: false }, 1), 1);
+    assert.equal(keyed(q, null), null, 'unanswered stays unanswered');
 });
 
-test('the scale has a midpoint and both ends are labelled', () => {
-    assert.equal(SCALE.min, 1);
-    assert.equal(SCALE.max, 7);
-    assert.equal((SCALE.max - SCALE.min) % 2, 0, 'an odd number of points, so there is a middle');
-    assert.ok(SCALE.lowLabel && SCALE.highLabel);
+test('both scales have a midpoint and labelled ends', () => {
+    for (const s of [AGREE, AMOUNT]) {
+        assert.equal((s.max - s.min) % 2, 0, 'an odd number of points, so there is a middle');
+        assert.ok(s.lowLabel && s.highLabel);
+    }
+    assert.notEqual(AGREE.lowLabel, AMOUNT.lowLabel,
+        'workload is not answered on an agreement scale, and must not be labelled like one');
 });
 
-test('the twelve items are asked in a fixed order with no duplicates', () => {
-    assert.equal(AFTER_CONDITION.length, 12);
-    assert.equal(new Set(AFTER_CONDITION.map((q) => q.id)).size, 12);
-    assert.equal(new Set(AFTER_CONDITION.map((q) => q.text)).size, 12);
+test('the workload block runs low to high, and the rest disagree to agree', () => {
+    for (const q of AFTER_CONDITION) {
+        assert.equal(scaleFor(q), q.c === 'load' ? AMOUNT : AGREE, q.id);
+    }
+});
+
+test('the items are asked in a fixed order with no duplicates', () => {
+    assert.equal(new Set(AFTER_CONDITION.map((q) => q.id)).size, AFTER_CONDITION.length);
+    assert.equal(new Set(AFTER_CONDITION.map((q) => q.text)).size, AFTER_CONDITION.length,
+        'two items with the same wording would be averaged as if they were two measurements');
+});
+
+test('every item belongs to a named construct, and every construct has items', () => {
+    // An item in no construct is an item nobody decided the purpose of, and it
+    // would be silently dropped from every figure.
+    const ids = new Set(CONSTRUCTS.map((c) => c.id));
+    for (const q of AFTER_CONDITION) assert.ok(ids.has(q.c), `${q.id} is in no construct`);
+    for (const c of CONSTRUCTS) {
+        assert.ok(AFTER_CONDITION.some((q) => q.c === c.id), `${c.id} has no items`);
+    }
+});
+
+test('the published instruments are reproduced whole', () => {
+    // Their value is that a reviewer already knows what the numbers mean, and a
+    // shortened one forfeits that. UMUX-Lite is two items; raw TLX is six.
+    assert.equal(AFTER_CONDITION.filter((q) => q.c === 'umux').length, 2);
+    assert.equal(AFTER_CONDITION.filter((q) => q.c === 'load').length, 6);
+});
+
+test('each research question has items that can answer it', () => {
+    for (const rq of ['RQ1', 'RQ2', 'RQ3']) {
+        const cs = CONSTRUCTS.filter((c) => c.rq === rq).map((c) => c.id);
+        assert.ok(cs.length, `nothing measures ${rq}`);
+        assert.ok(AFTER_CONDITION.some((q) => cs.includes(q.c)), `no items for ${rq}`);
+    }
+});
+
+// ── the briefing that used to be read off a call ─────────────────────────────
+
+test('each project explains itself on the page', () => {
+    for (const name of ['hearth', 'ember']) {
+        const p = PROJECTS[name];
+        assert.ok(p.what.length && p.commands.length && p.layout.length && p.words.length,
+            `${name} is missing part of its briefing`);
+        // The two words the task turns on. Without them the task card is a
+        // vocabulary test rather than a programming one.
+        assert.equal(p.words.length, 2);
+    }
+});
+
+test('both conditions are started from written steps, not from memory', () => {
+    for (const c of ['codoc', 'baseline']) {
+        const how = HOW_TO_START[c];
+        assert.ok(how.steps.length && how.about.length);
+        assert.match(how.folder('hearth'), /codoc-study/);
+    }
+    // The difference between them IS the manipulation, so it must not be
+    // improvised differently for each participant.
+    assert.notDeepEqual(HOW_TO_START.codoc.about, HOW_TO_START.baseline.about);
 });
 
 // ── screening ────────────────────────────────────────────────────────────────
@@ -105,7 +164,7 @@ test('somebody who never reads a diff is flagged for exclusion', () => {
 });
 
 test('the screening question does not tell them which answer excludes', () => {
-    const q = BACKGROUND.find((x) => x.id === 'readsDiff');
+    const q = SCREENING.find((x) => x.id === 'readsDiff');
     assert.ok(!/exclud|disqualif|must/i.test(q.label),
         'saying so would stop the answer being honest');
 });
@@ -169,10 +228,30 @@ test('consent points at the Google form and not at our own database', () => {
 test('no question anywhere asks for a name or an email', () => {
     // Those live in the consent form. The rules would refuse them anyway, but a
     // question that cannot be saved is a worse failure than one never asked.
-    const all = [...BACKGROUND, ...SCENARIOS.map((s) => ({ label: s.text })),
+    const all = [...SCREENING, ...SCENARIOS.map((s) => ({ label: s.text })),
         ...AFTER_CONDITION.map((q) => ({ label: q.text }))];
     for (const q of all) {
         assert.ok(!/\b(name|e-?mail|address|phone)\b/i.test(q.label || ''),
             `"${q.label}" asks for something identifying`);
+    }
+});
+
+test('demographics go to Google, and only the screening answer is stored here', () => {
+    // Gender and age belong with consent, not beside a session log in the study
+    // database. The cost is that those answers are joined by hand, keyed on the
+    // code typed into the form, and that trade is deliberate.
+    assert.match(PRESTUDY_FORM, /^https:\/\/docs\.google\.com\/forms\//);
+    assert.match(CONSENT_FORM, /^https:\/\/docs\.google\.com\/forms\//);
+    assert.notEqual(PRESTUDY_FORM, CONSENT_FORM);
+    assert.equal(SCREENING.length, 1,
+        'anything more asked here is something the Google form already asks');
+});
+
+test('the session leaves nowhere for the researcher to improvise', () => {
+    // Every step either shows something written down or collects something. A
+    // step whose content lives on the call is a step that differs per session.
+    const kinds = new Set(buildSteps('codoc-first').map((s) => s.kind));
+    for (const needed of ['intro', 'about', 'task', 'questionnaire', 'debrief']) {
+        assert.ok(kinds.has(needed), `no ${needed} step`);
     }
 });
