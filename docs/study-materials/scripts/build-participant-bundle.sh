@@ -85,4 +85,5 @@ echo "Bundle: $OUT/codoc-study-bundle.zip"
 echo "Contents:"
 unzip -l "$OUT/codoc-study-bundle.zip" | sed -n '4,20p'
 echo
-echo "Send this zip to the participant along with the pre-session questionnaire."
+echo "Send this zip with the participant's link, which is on their page in the"
+echo "dashboard. The consent form and the questionnaires are on that link."
