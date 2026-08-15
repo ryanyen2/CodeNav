@@ -268,8 +268,8 @@ function renderHandoff() {
 function renderOpenHandoff(el, p, browser, mirror) {
     const dot = (on) => `<span class="tick ${on ? 'on' : 'off'}">${on ? '●' : '○'}</span>`;
     el.innerHTML = `
-      <h3>Send these two things</h3>
-      <p class="hint">Both carry the code. Everything they do is filed against it.</p>
+      <h3>Send these</h3>
+      <p class="hint">The first two carry the code. Everything they do is filed against it.</p>
 
       <div class="give">
         <label>Their link</label>
@@ -291,6 +291,17 @@ function renderOpenHandoff(el, p, browser, mirror) {
         <p class="give-note">${dot(mirror)} ${mirror
             ? 'Their editor is reporting.'
             : 'Their editor has not reported. Until it does, nothing they do in it arrives here.'}</p>
+      </div>
+
+      <div class="give">
+        <label>The two keys, by hand</label>
+        <p class="give-note">Setup asks for an Anthropic key and an OpenAI key.
+        Read them down the call, or send a <code>keys.env</code> separately. They
+        are deliberately not held here, and not in the bundle: this page is a
+        website, and the bundle is built once and goes to everybody.</p>
+        <p class="give-note">Setup checks both against the model before it
+        finishes, so ask them to read you the last few lines rather than watching
+        for it here. Nothing about a key reaches this page.</p>
       </div>`;
 
     for (const b of el.querySelectorAll('[data-copy]')) {

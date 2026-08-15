@@ -213,8 +213,15 @@ const VIEWS = {
         <p>Unzip the bundle we sent you, open a terminal in that folder, and run
         this. It has your code in it already.</p>
         <p><code class="pick">./setup.sh ${esc(state.code)} ${esc(state.order)}</code></p>
+        <p>It will ask you for two keys. The researcher sends those separately,
+        not through this page. Paste each one and press enter. They are not shown
+        as you type, so they will not appear on screen later when you share it.</p>
         <p>It takes about ten minutes. Do this a few days before the session, not
         on the day.</p>
+        <div class="note">The keys are ours and we pay for them, so nothing in
+        this study costs you anything and you do not need a Claude plan. They are
+        written only into the four project folders, so deleting those folders
+        removes them, and your own projects keep using your own account.</div>
 
         <h2>On the day</h2>
         <p>Run this in the same folder and read the result to the researcher.</p>

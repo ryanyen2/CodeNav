@@ -47,7 +47,7 @@ export const onSnapshot = (ref, cb) => {
 };
 `;
 
-async function loadPage(page) {
+async function loadPage(page, storage) {
     const dir = mkdtempSync(join(tmpdir(), 'page-'));
     const stub = join(dir, 'firebase-stub.js');
     writeFileSync(stub, STUB);
@@ -65,6 +65,10 @@ async function loadPage(page) {
         url: 'https://example.test/?code=p-abcdefghjkmn&order=codoc-first',
         pretendToBeVisual: true, runScripts: 'outside-only',
     });
+    // Seeded before the bundle runs, because the page reads where it got to on
+    // start. This is how a test lands on a step other than the first.
+    for (const [k, v] of Object.entries(storage || {})) dom.window.localStorage.setItem(k, v);
+
     const errors = [];
     dom.window.addEventListener('error', (e) => errors.push(e.message));
     dom.window.alert = (m) => errors.push(`alert: ${m}`);
@@ -153,6 +157,47 @@ test('it says which half of the handoff has not landed', async () => {
     assert.match(settled, /page open and their editor is reporting/);
     assert.ok(document.querySelector('#handoff').classList.contains('settled'),
         'it gets out of the way once both have landed');
+});
+
+test('the handoff card does not carry a key, and says so', async () => {
+    // A website is the wrong place for an API key, and a dashboard field that
+    // looked ready to paste one into would invite exactly that.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+
+    const card = document.querySelector('#handoff');
+    assert.match(card.textContent.replace(/\s+/g, ' '), /two keys, by hand/i);
+    // Only the link and the command are copyable. A third copy field would mean
+    // somebody had put a key in the page.
+    assert.equal(card.querySelectorAll('[data-copy]').length, 2);
+    assert.ok(!/sk-ant-|sk-proj-|OPENAI_API_KEY=\S/.test(card.innerHTML),
+        'no key or key-shaped value anywhere in the card');
+});
+
+test('the participant page warns that setup will ask for the keys', async () => {
+    // They run setup alone, days ahead. Being surprised by a prompt for a
+    // credential is how somebody pastes the wrong thing or gives up and waits
+    // for the call, which costs the session's first twenty minutes.
+    const { buildSteps } = await import('../participant/steps.js');
+    const at = buildSteps('codoc-first').findIndex((s) => s.kind === 'setup');
+    assert.ok(at > 0, 'there is a setup step to land on');
+
+    const { document, errors } = await loadPage('participant', {
+        'codoc-study:p-abcdefghjkmn': JSON.stringify({ at, answers: {} }),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.deepEqual(errors, [], errors.join('; '));
+    const text = document.body.textContent.replace(/\s+/g, ' ');
+    assert.match(text, /Set up your machine/, 'we are on the setup step');
+    assert.match(text, /ask you for two keys/);
+    assert.match(text, /not shown as you type/, 'so they do not share a key on screen');
+    assert.match(text, /we pay for them/, 'nobody should think this costs them');
+    // The command itself must still carry their own code, not the example.
+    assert.match(text, /\.\/setup\.sh p-abcdefghjkmn codoc-first/);
 });
 
 test('the forms show the questions for the right project', async () => {
