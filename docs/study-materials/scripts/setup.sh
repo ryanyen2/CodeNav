@@ -28,6 +28,14 @@ CODE="${1:-${CODOC_STUDY_PARTICIPANT:-}}"
 ORDER="${2:-${CODOC_STUDY_ORDER:-}}"
 [ "$CHECK_ONLY" = 1 ] && { CODE=""; ORDER=""; }
 
+# The two keys the study pays for. The researcher sends them separately from the
+# bundle, so they are asked for here rather than shipped inside it. A keys file
+# placed next to this script is honoured too, for a researcher who would rather
+# hand over a file than read a key down a call.
+[ -f "$HERE/keys.env" ] && . "$HERE/keys.env"
+STUDY_ANTHROPIC_KEY="${STUDY_ANTHROPIC_KEY:-}"
+STUDY_OPENAI_KEY="${STUDY_OPENAI_KEY:-}"
+
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$1"; }
 warn() { printf '  \033[33mtodo\033[0m  %s\n' "$1"; }
 bad()  { printf '  \033[31mfail\033[0m  %s\n' "$1"; }
@@ -71,6 +79,24 @@ if [ "$CHECK_ONLY" = 0 ]; then
     printf 'Order (codoc-first or baseline-first): '
     read -r ORDER || { echo; echo "No order given."; exit 1; }
   done
+
+  # Not echoed, so the keys stay off the shared screen and out of the scrollback
+  # of a call that is being recorded.
+  echo
+  echo "The researcher will give you two keys. The study pays for these, so"
+  echo "nothing in the session is billed to you. They are not shown as you type."
+  while ! printf '%s' "$STUDY_ANTHROPIC_KEY" | grep -q '^sk-ant-'; do
+    [ -n "$STUDY_ANTHROPIC_KEY" ] && echo "  That is not an Anthropic key. They start with sk-ant-."
+    printf 'Anthropic key (for Claude Code): '
+    read -rs STUDY_ANTHROPIC_KEY || { echo; echo "No key given."; exit 1; }
+    echo
+  done
+  while ! printf '%s' "$STUDY_OPENAI_KEY" | grep -q '^sk-'; do
+    [ -n "$STUDY_OPENAI_KEY" ] && echo "  That is not an OpenAI key. They start with sk-."
+    printf 'OpenAI key (for the tool being studied): '
+    read -rs STUDY_OPENAI_KEY || { echo; echo "No key given."; exit 1; }
+    echo
+  done
 fi
 
 # ---------------------------------------------------------------- prerequisites
@@ -86,27 +112,14 @@ command -v tar  >/dev/null 2>&1 && ok "tar is installed"  || { bad "tar is missi
 
 if command -v claude >/dev/null 2>&1; then
   ok "Claude Code is installed, version $(claude --version 2>/dev/null | head -1)"
-  # Installed is not signed in, and the version string cannot tell the two apart.
-  # Both halves of the session are an agent doing the work, so an unsigned-in
-  # machine has nothing to run. One tiny question is the only honest check.
-  REPLY_OK="$(cd "$HERE" && with_deadline 90 claude -p 'Reply with the single word: ready' | tr -d '[:space:]')"
-  case "$REPLY_OK" in
-    *ready*|*Ready*) ok "and you are signed in" ;;
-    *ogged*in*|*login*|*Login*)
-        warn "Claude Code is installed but not signed in. Run:"
-        echo  "          claude    (sign in when it asks, then type /exit)"
-        TODO=1 ;;
-    "") warn "Claude Code did not answer within 90 seconds. Run 'claude' once by"
-        echo  "          hand and see what it says."
-        TODO=1 ;;
-    *)  warn "Claude Code answered something unexpected: $REPLY_OK"
-        echo  "          Run 'claude' once by hand and check it works."
-        TODO=1 ;;
-  esac
+  # Installed is all that is needed. The study supplies the account, and the key
+  # written into each workspace takes precedence over any claude.ai login, so
+  # there is nothing to sign in to and nothing of the participant's to spend.
+  # Whether it actually works is checked later, against the key we wrote.
 else
-  warn "Claude Code is not installed. Install it, then sign in:"
+  warn "Claude Code is not installed. Install it with:"
   echo  "          curl -fsSL https://claude.ai/install.sh | bash"
-  echo  "          claude    (sign in when it asks, then type /exit)"
+  echo  "          You do not need to sign in or buy a plan. The study provides the account."
   TODO=1
 fi
 
@@ -148,6 +161,21 @@ except Exception: print('')" "$WORK/hearth/.vscode/settings.json" 2>/dev/null)"
     echo  "          Run: ./setup.sh <your code> <your order>"
     FAILED=1
   fi
+  # The keys, by presence only. Whether they still work is a question for the
+  # researcher's console, and checking would spend the study's money every time
+  # somebody re-runs this.
+  for w in hearth hearth-baseline ember ember-baseline; do
+    python3 -c "
+import json,sys
+try: sys.exit(0 if json.load(open(sys.argv[1]))['env']['ANTHROPIC_API_KEY'] else 1)
+except Exception: sys.exit(1)" "$WORK/$w/.claude/settings.json" 2>/dev/null \
+      || { bad "$w has no Anthropic key, so the agent there has no account"; FAILED=1; }
+  done
+  for w in hearth ember; do
+    grep -q '^OPENAI_API_KEY=..' "$WORK/$w/.env" 2>/dev/null \
+      || { bad "$w has no OpenAI key, so codoc there has no account"; FAILED=1; }
+  done
+  [ "$FAILED" = 0 ] && ok "both keys are in place in all four workspaces"
   step "Result"
   [ "$FAILED" = 0 ] && [ "$TODO" = 0 ] && echo "  Everything is ready." || echo "  Some things are not ready. See the lines marked fail or todo above."
   exit "$FAILED"
@@ -239,28 +267,6 @@ PY
     || { bad "could not write $d/settings.json"; FAILED=1; }
 done
 
-# ------------------------------------------------------------ which model runs
-step "Pinning codoc to your own Claude login"
-# Nobody needs an API key for this study: codoc's default is to shell out to the
-# `claude` command and reuse the login you already have.
-#
-# It only defaults there, though. Left to itself it reads the environment, and an
-# OPENAI_API_KEY or ANTHROPIC_API_KEY sitting in your shell profile would quietly
-# switch it onto that key instead. That would spend your money without asking,
-# and a key that is stale or out of quota would break codoc partway through the
-# session, which is the one condition the study is trying to measure. So the
-# choice is written down rather than inferred.
-for name in hearth ember; do
-  ENVFILE="$WORK/$name/.env"
-  if grep -q '^CODOC_PROVIDER=' "$ENVFILE" 2>/dev/null; then
-    ok "$name already pins the provider"
-  else
-    printf 'CODOC_PROVIDER=claude\n' >> "$ENVFILE" \
-      && ok "$name will use your Claude login, whatever else is in your shell" \
-      || { bad "could not write $ENVFILE"; FAILED=1; }
-  fi
-done
-
 # ------------------------------------------------- wire codoc into the workspace
 step "Recording prompts in all four workspaces"
 # The study owns this hook and installs it everywhere. codoc has a prompt hook of
@@ -294,6 +300,108 @@ for name in hearth ember; do
     && ok "$name: wrote .claude/settings.json and .mcp.json" \
     || { bad "codoc install-hooks failed in $WORK/$name. Run it there to see why."; FAILED=1; }
 done
+
+# ------------------------------------------------------------ which model runs
+step "Putting the study's keys in place"
+# The study pays for the models, so neither the agent nor codoc touches the
+# participant's own account or quota.
+#
+# Everything is written per workspace rather than into a shell profile. Two
+# reasons. Deleting the four folders is then enough to be rid of the keys. And a
+# key in a shell profile leaks in the other direction too: it would follow the
+# participant into their own projects long after the session.
+#
+# Both files hold a secret, so both are readable only by their owner, and both
+# are kept out of git so a participant's own commit cannot carry a key into the
+# archive they send back.
+for name in hearth hearth-baseline ember ember-baseline; do
+  d="$WORK/$name"
+
+  # Claude Code. An API key takes precedence over a claude.ai login, which is
+  # what makes this work at all: a participant already signed in to their own
+  # account still runs the session on ours. Checked against the real CLI, which
+  # says so and then 401s on a bad key rather than quietly falling back.
+  #
+  # Merged into whatever `codoc install-hooks` wrote, and written after it, so
+  # the hooks and the MCP registration survive.
+  mkdir -p "$d/.claude"
+  KEY="$STUDY_ANTHROPIC_KEY" python3 - "$d/.claude/settings.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path) as f: settings = json.load(f)
+except Exception:
+    settings = {}
+settings.setdefault('env', {})['ANTHROPIC_API_KEY'] = os.environ['KEY']
+settings['model'] = 'claude-sonnet-5'
+settings['effortLevel'] = 'medium'
+with open(path, 'w') as f: json.dump(settings, f, indent=2); f.write('\n')
+PY
+  if [ $? = 0 ]; then chmod 600 "$d/.claude/settings.json"; ok "$name: Claude Code runs on the study's account"
+  else bad "could not write $d/.claude/settings.json"; FAILED=1; fi
+
+  # Keep both files out of git. .gitignore is the project's own tracked file, so
+  # this goes in the private exclude list instead and changes nothing the
+  # participant would see in a diff.
+  if [ -d "$d/.git" ]; then
+    for pat in '.env' '.claude/settings.json'; do
+      grep -qxF "$pat" "$d/.git/info/exclude" 2>/dev/null \
+        || printf '%s\n' "$pat" >> "$d/.git/info/exclude"
+    done
+  fi
+done
+
+# codoc, in the two workspaces that have it. Written down rather than inferred:
+# left alone codoc reads the environment, and a key in the participant's own
+# shell would silently move it onto their account, which is both their money and
+# a way for codoc to break partway through the condition being measured.
+for name in hearth ember; do
+  ENVFILE="$WORK/$name/.env"
+  if grep -q '^CODOC_PROVIDER=' "$ENVFILE" 2>/dev/null; then
+    ok "$name: codoc is already configured"
+  else
+    {
+      printf 'CODOC_PROVIDER=openai\n'
+      printf 'OPENAI_API_KEY=%s\n' "$STUDY_OPENAI_KEY"
+      printf 'CODOC_MODEL=%s\n' "${STUDY_CODOC_MODEL:-gpt-5.6-luna}"
+      printf 'CODOC_REASONING_EFFORT=medium\n'
+      printf 'CODOC_VERBOSITY=medium\n'
+    } >> "$ENVFILE" \
+      && { chmod 600 "$ENVFILE"; ok "$name: codoc runs on the study's account"; } \
+      || { bad "could not write $ENVFILE"; FAILED=1; }
+  fi
+done
+
+step "Checking that both keys work"
+# Against the configuration just written, not against the keys as typed. A key
+# that is fine but landed in the wrong file fails the session exactly as a bad
+# key would, and only this can tell them apart.
+if command -v claude >/dev/null 2>&1; then
+  SAID="$(cd "$WORK/hearth" && with_deadline 120 claude -p 'Reply with the single word: ready' | tr -d '[:space:]')"
+  case "$SAID" in
+    *ready*|*Ready*) ok "Claude Code answers on the study's account" ;;
+    *401*|*invalid*|*Invalid*)
+      bad "the Anthropic key was refused. Ask the researcher for a new one."; FAILED=1 ;;
+    "") bad "Claude Code did not answer within two minutes. Tell the researcher."; FAILED=1 ;;
+    *)  bad "Claude Code said: $SAID"; FAILED=1 ;;
+  esac
+fi
+
+# One HTTPS call rather than a Python client, so this needs nothing installed.
+# Asking for the model by name rather than just listing them also catches the
+# case where the key is valid but this model is not enabled on the account,
+# which would otherwise surface as codoc failing mid-session.
+MODEL_WANTED="${STUDY_CODOC_MODEL:-gpt-5.6-luna}"
+HTTP="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+  -H "authorization: Bearer $STUDY_OPENAI_KEY" \
+  "https://api.openai.com/v1/models/$MODEL_WANTED" 2>/dev/null)"
+case "$HTTP" in
+  200) ok "the OpenAI key works and $MODEL_WANTED is available" ;;
+  401|403) bad "the OpenAI key was refused. Ask the researcher for a new one."; FAILED=1 ;;
+  404) bad "$MODEL_WANTED is not available on that OpenAI account. Tell the researcher."; FAILED=1 ;;
+  000|"") warn "could not reach OpenAI to check the key. Try again on a better connection."; TODO=1 ;;
+  *)   bad "OpenAI answered $HTTP when checking the key. Tell the researcher."; FAILED=1 ;;
+esac
 
 # ------------------------------------------------------------------- extension
 step "Installing the VS Code extension"

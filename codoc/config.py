@@ -82,6 +82,10 @@ class LLMConfig(BaseModel):
     # Reasoning models spend completion budget on hidden reasoning, so the
     # budget must comfortably exceed the visible JSON we want back.
     max_tokens: int = 16000
+    # How hard a reasoning model thinks, and how much prose it returns. Sent only
+    # when set, because a model that does not know the field rejects the call.
+    reasoning_effort: str | None = None
+    verbosity: str | None = None
 
 
 # Per-provider default model when CODOC_MODEL is unset. The OpenAI default makes
@@ -191,6 +195,8 @@ def get_llm_config() -> LLMConfig:
         base_url=os.environ.get("CODOC_BASE_URL"),
         temperature=float(os.environ.get("CODOC_TEMPERATURE", "0.2")),
         max_tokens=int(os.environ.get("CODOC_MAX_TOKENS", "16000")),
+        reasoning_effort=os.environ.get("CODOC_REASONING_EFFORT") or None,
+        verbosity=os.environ.get("CODOC_VERBOSITY") or None,
     )
 
 
@@ -338,6 +344,11 @@ _LLM_TIMEOUT_S = float(os.environ.get("CODOC_LLM_TIMEOUT", "300"))
 _LLM_RETRIES = 2
 
 
+# Models that turned out to accept only their default temperature. Filled in as
+# the API says so; see the retry in _complete_openai.
+_REFUSES_TEMPERATURE: set[str] = set()
+
+
 def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
     try:
         import openai
@@ -368,18 +379,38 @@ def _complete_openai(prompt: str, config: LLMConfig, parts: list[str]) -> str:
             ).hexdigest()[:16]
         except Exception:  # noqa: BLE001 — cache hint only
             pass
+    def _send(budget: int):
+        kwargs = {
+            "model": config.model,
+            "messages": [{"role": "user", "content": _joined(parts, prompt)}],
+            "max_completion_tokens": budget,
+            "extra_body": extra or None,
+        }
+        if config.model not in _REFUSES_TEMPERATURE:
+            kwargs["temperature"] = config.temperature
+        if config.reasoning_effort:
+            kwargs["reasoning_effort"] = config.reasoning_effort
+        if config.verbosity:
+            kwargs["verbosity"] = config.verbosity
+        try:
+            return client.chat.completions.create(**kwargs)
+        except openai.BadRequestError as exc:
+            # Some reasoning models accept only the default temperature and 400
+            # on any other. Learn it from the API rather than from a list of
+            # model names, which goes stale the week after it is written, and
+            # remember it so this costs one refused call per model per process.
+            if "temperature" not in str(exc) or "temperature" not in kwargs:
+                raise
+            _REFUSES_TEMPERATURE.add(config.model)
+            kwargs.pop("temperature")
+            return client.chat.completions.create(**kwargs)
+
     # Reasoning models (GPT-5 family) spend completion budget on hidden reasoning;
     # if the visible answer gets truncated (finish_reason == "length"), retry once
     # with a larger budget so we don't return half a JSON object.
     budget = config.max_tokens
     for attempt in range(2):
-        response = client.chat.completions.create(
-            model=config.model,
-            messages=[{"role": "user", "content": _joined(parts, prompt)}],
-            temperature=config.temperature,
-            max_completion_tokens=budget,
-            extra_body=extra or None,
-        )
+        response = _send(budget)
         # Record per ATTEMPT, not per call: a truncation retry really did spend
         # the first attempt's tokens, and a cost figure that hides them is wrong.
         _record_from(response, {

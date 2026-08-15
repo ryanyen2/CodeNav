@@ -60,28 +60,43 @@ nothing, which is the one failure that cannot be repaired afterwards.
 
 ## Who pays for the model
 
-Nobody sends anyone an API key. Both halves of the session run on the
-participant's own Claude Code login: the agent they talk to, and codoc's own
-calls, which shell out to the same `claude` command rather than to an API.
+You do. The study supplies two keys, so a participant never spends their own
+money and never needs a Claude plan.
 
-Two things follow, and both belong in your recruiting message.
+- An **Anthropic key** runs Claude Code, in all four workspaces, on
+  `claude-sonnet-5` with thinking set to medium.
+- An **OpenAI key** runs codoc, in its two workspaces, on `gpt-5.6-luna` with
+  reasoning and verbosity both medium.
 
-They need a Claude plan that can actually run Claude Code, so Pro, Max, or API
-credits. A free account fails at setup, not during the session, which is why the
-setup script now asks Claude Code one small question rather than only checking
-that the command exists.
+Setup asks for both and writes them into the four project folders. Nothing goes
+into the participant's shell, so deleting the folders removes the keys and their
+own projects are untouched.
 
-They spend their own quota, for about two hours of agent-heavy work. Ask whether
-they are close to a limit. Someone who runs out partway through gives you a
-session that ends for a reason nothing in the study is about, and if it happens
-during the codoc half it looks like codoc failing.
+An API key beats a claude.ai login, which is what makes this work: a participant
+already signed in to their own account still runs the session on ours. Setup then
+proves it by asking Claude Code one question through the key it just wrote, and
+by asking OpenAI whether that key can see `gpt-5.6-luna`. Both failures are worth
+catching before the day. A key that works but landed in the wrong file fails a
+session exactly like a bad key, and only a check against the written
+configuration tells them apart.
 
-Left alone, codoc picks its model from the environment, so an `OPENAI_API_KEY`
-sitting in a participant's shell profile would move it onto that key: their
-money, unasked, and a stale key breaking codoc in the middle of the condition
-being measured. Setup now writes `CODOC_PROVIDER=claude` into both codoc
-workspaces so nothing is inferred. You do not have to do anything about it, but
-if you ever rebuild those workspaces by hand, put the line back.
+Codoc would otherwise pick its provider from the environment, so a key in a
+participant's own shell profile could move it onto their account. The two codoc
+workspaces name the provider outright so nothing is inferred.
+
+### Before you hand keys out
+
+Use keys made for this study, not your own working ones. Put a spend limit on
+both. Turn them off when the study ends, and sooner if a participant tells you a
+key went somewhere it should not have.
+
+Once a key is on somebody else's machine you cannot get it back, so the limit and
+the expiry are the whole of your protection. Neither is set by anything here.
+
+You can read the keys down the call, which is what the prompts are written for,
+or put a `keys.env` next to `setup.sh` holding `STUDY_ANTHROPIC_KEY=…` and
+`STUDY_OPENAI_KEY=…` and send that separately. Do not put it inside the bundle
+zip: the zip is built once and goes to everybody.
 
 ## Part 1. Set up your own machine, once
 

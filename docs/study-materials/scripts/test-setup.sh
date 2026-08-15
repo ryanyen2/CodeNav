@@ -84,44 +84,86 @@ fi
 rm -rf "$TMP"
 
 echo
-echo "codoc is pinned to the participant's own Claude login"
-pin_block() {
+echo "The study's keys, not the participant's account"
+keys_block() {
   local work="$1"
   local body
-  body="$(awk '/^step "Pinning codoc to your own Claude login"/,/^# ------.* wire codoc/' "$SETUP" | sed '$d')"
-  [ -n "$body" ] || { echo "could not find the pinning block in setup.sh"; return 99; }
-  WORK="$work" bash -c "
+  body="$(awk '/^step "Putting the study.s keys in place"/,/^step "Checking that both keys work"/' "$SETUP" | sed '$d')"
+  [ -n "$body" ] || { echo "could not find the keys block in setup.sh"; return 99; }
+  WORK="$work" STUDY_ANTHROPIC_KEY="sk-ant-test" STUDY_OPENAI_KEY="sk-openai-test" \
+  bash -c "
     set -uo pipefail
     ok() { :; }; bad() { echo \"bad: \$1\" >&2; }; step() { :; }
     FAILED=0
     $body
     exit \$FAILED"
 }
+read_json() {
+  python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+for k in sys.argv[2].split('.'): d=d[k]
+print(d)" "$1" "$2" 2>/dev/null
+}
+
 TMP="$(mktemp -d)"
 for w in hearth ember hearth-baseline ember-baseline; do mkdir -p "$TMP/$w"; done
-if pin_block "$TMP"; then
-  grep -q '^CODOC_PROVIDER=claude$' "$TMP/hearth/.env" && ok "hearth is pinned" || bad "hearth is not pinned"
-  grep -q '^CODOC_PROVIDER=claude$' "$TMP/ember/.env"  && ok "ember is pinned"  || bad "ember is not pinned"
-  # Without this, an OPENAI_API_KEY left in a participant's shell profile moves
-  # codoc onto their key: it spends their money unasked, and a stale one breaks
-  # codoc partway through the very condition the study is measuring.
+# What install-hooks leaves behind, which this must merge into rather than erase.
+mkdir -p "$TMP/hearth/.claude"
+echo '{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"codoc-hook"}]}]}}' \
+  > "$TMP/hearth/.claude/settings.json"
+
+if keys_block "$TMP"; then
+  # All four, because the agent does the work in both conditions. A key in only
+  # the codoc pair would bill the participant for half the study.
+  n=0
+  for w in hearth hearth-baseline ember ember-baseline; do
+    [ "$(read_json "$TMP/$w/.claude/settings.json" env.ANTHROPIC_API_KEY)" = "sk-ant-test" ] && n=$((n+1))
+  done
+  [ "$n" = 4 ] && ok "all four workspaces carry the Anthropic key" \
+    || bad "only $n of 4 workspaces carry the Anthropic key"
+
+  [ "$(read_json "$TMP/hearth/.claude/settings.json" model)" = "claude-sonnet-5" ] \
+    && ok "the model is pinned to sonnet-5" || bad "the model is not pinned"
+  [ "$(read_json "$TMP/hearth/.claude/settings.json" effortLevel)" = "medium" ] \
+    && ok "thinking is set to medium" || bad "thinking is not set"
+  # Erasing these would silently unhook codoc from Claude Code in the very
+  # condition the study is about.
+  [ -n "$(read_json "$TMP/hearth/.claude/settings.json" hooks.Stop)" ] \
+    && ok "codoc's own hooks survive the merge" || bad "the hooks were erased"
+  [ "$(stat -f '%Lp' "$TMP/hearth/.claude/settings.json" 2>/dev/null || stat -c '%a' "$TMP/hearth/.claude/settings.json")" = "600" ] \
+    && ok "and the file holding it is private" || bad "the settings file is world-readable"
+
+  # codoc, in its two workspaces only.
+  grep -q '^CODOC_PROVIDER=openai$' "$TMP/hearth/.env" && ok "hearth sends codoc to OpenAI" || bad "hearth does not"
+  grep -q '^OPENAI_API_KEY=sk-openai-test$' "$TMP/ember/.env" && ok "ember carries the OpenAI key" || bad "ember does not"
+  grep -q '^CODOC_MODEL=gpt-5.6-luna$' "$TMP/hearth/.env" && ok "the codoc model is luna" || bad "the codoc model is wrong"
+  grep -q '^CODOC_REASONING_EFFORT=medium$' "$TMP/hearth/.env" && ok "reasoning effort is medium" || bad "reasoning effort is unset"
+  [ -f "$TMP/hearth-baseline/.env" ] && bad "the baseline got a codoc key it has no use for" \
+    || ok "the baseline workspaces get no OpenAI key"
+  [ "$(stat -f '%Lp' "$TMP/hearth/.env" 2>/dev/null || stat -c '%a' "$TMP/hearth/.env")" = "600" ] \
+    && ok "and the .env is private too" || bad "the .env is world-readable"
+
+  # Without this, codoc reads the environment and a key in the participant's own
+  # shell would move it onto their account: their money, and a stale key breaking
+  # codoc partway through the condition being measured.
   out="$(cd "$TMP/hearth" && python3 -c "
 import os,sys
-for k in ('CODOC_PROVIDER','OPENAI_API_KEY','ANTHROPIC_API_KEY'): os.environ.pop(k,None)
-os.environ['OPENAI_API_KEY']='sk-left-in-their-shell'
+for k in ('CODOC_PROVIDER','OPENAI_API_KEY','ANTHROPIC_API_KEY','CODOC_MODEL'): os.environ.pop(k,None)
+os.environ['ANTHROPIC_API_KEY']='sk-ant-left-in-their-shell'
 from codoc.config import get_llm_config
-print(get_llm_config().provider)" 2>/dev/null)"
+c=get_llm_config(); print(f'{c.provider}|{c.model}|{c.reasoning_effort}')" 2>/dev/null)"
   case "$out" in
-    claude) ok "a stray OPENAI_API_KEY no longer moves it off Claude" ;;
-    "")     ok "(codoc not importable here, so the live check was skipped)" ;;
-    *)      bad "a stray OPENAI_API_KEY still moved it to $out" ;;
+    "openai|gpt-5.6-luna|medium") ok "a key in their shell does not move codoc off the study's account" ;;
+    "")  ok "(codoc not importable here, so the live check was skipped)" ;;
+    *)   bad "codoc resolved to $out instead" ;;
   esac
-  # Running setup twice must not stack the line up.
-  pin_block "$TMP" >/dev/null
+
+  keys_block "$TMP" >/dev/null
   [ "$(grep -c '^CODOC_PROVIDER=' "$TMP/hearth/.env")" = "1" ] \
-    && ok "running setup again does not repeat the line" || bad "the line was added twice"
+    && ok "running setup again does not stack the settings up" || bad "the settings were written twice"
 else
-  bad "the pinning block did not run"
+  bad "the keys block did not run"
 fi
 rm -rf "$TMP"
 

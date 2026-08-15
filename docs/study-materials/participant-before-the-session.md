@@ -37,22 +37,32 @@ WSL, so install WSL first if you do not have it.
 You also need two programs that ask you to sign in, so please install them
 yourself:
 
-- Claude Code, with an account that can actually run it, which means a Claude
-  Pro or Max subscription or API credits. Install it with
-  `curl -fsSL https://claude.ai/install.sh | bash`, then run `claude` once and
-  sign in. Type `/exit` to leave. Tell us if you do not have a plan that works,
-  because we can sort that out beforehand.
+- Claude Code. Install it with `curl -fsSL https://claude.ai/install.sh | bash`.
+  You do not need to sign in, and you do not need to buy a plan. We provide the
+  account.
 - Visual Studio Code, from https://code.visualstudio.com. Open it once, press
   Cmd+Shift+P (Ctrl+Shift+P on Linux), and run the command
   "Shell Command: Install 'code' command in PATH".
 
-You do not need Python, and you do not need an API key. The session uses the
-Claude account you just signed in to, for both the agent you talk to and the
-tool we are studying. The setup script installs everything else.
+You do not need Python. The setup script installs everything else.
 
-If you happen to have an `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in your shell,
-you can leave it. Setup writes down which model to use, so nothing in the session
-will reach for your key or spend your credit.
+## About the two keys
+
+We pay for the models, so nothing in the session costs you anything. We will
+give you two keys, separately from this bundle, and the setup script asks for
+them. They are not shown as you type, so they will not appear on screen while
+you are sharing it.
+
+They are written only into the four project folders, so deleting those folders
+removes them. Nothing is added to your shell, and nothing changes for your own
+projects.
+
+If you already use Claude Code with your own account, that keeps working
+everywhere except these four folders. Inside them the study's account is used
+instead, so your own plan is never spent on this.
+
+Please do not use these keys for anything else, and tell us if you think one has
+ended up somewhere it should not have. We turn them off after the study.
 
 ## Setting up
 
