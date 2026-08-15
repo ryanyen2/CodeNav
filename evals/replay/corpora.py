@@ -97,8 +97,27 @@ REPORTING: tuple[ReplayCorpus, ...] = (
 )
 
 
+# Candidates for the drift experiment, which needs the opposite of a stable
+# repository: the frozen document only decays where code actually moves, and on
+# a quiet project all three arms score the same (flask showed nothing). Screened
+# on the `sym` column — symbol-level movement in files codoc would index — not
+# on file renames, which counted a directory of test fixtures as churn once and
+# cost a frozen run its relocation arm.
+CANDIDATES: tuple[ReplayCorpus, ...] = (
+    ReplayCorpus(Corpus(name="litestar", source="https://github.com/litestar-org/litestar",
+                        subdir="litestar"), depth=250,
+                 note="Renamed from starlite and restructured repeatedly."),
+    ReplayCorpus(Corpus(name="hypothesis", source="https://github.com/HypothesisWorks/hypothesis",
+                        subdir="hypothesis-python/src"), depth=250),
+    ReplayCorpus(Corpus(name="pytest", source="https://github.com/pytest-dev/pytest",
+                        subdir="src/_pytest"), depth=250),
+    ReplayCorpus(Corpus(name="mypy", source="https://github.com/python/mypy",
+                        subdir="mypy"), depth=250),
+)
+
+
 def by_name(name: str) -> ReplayCorpus:
-    for c in DEV + REPORTING:
+    for c in DEV + REPORTING + CANDIDATES:
         if c.name == name:
             return c
     raise KeyError(

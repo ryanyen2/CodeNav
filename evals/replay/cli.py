@@ -69,13 +69,41 @@ def cmd_prepare(args) -> int:
             import shutil
             shutil.rmtree(codoc_dir)
         print("bootstrapping (codoc init) — this costs money and takes a while …")
+        # NOT cwd=repo. `python -m` puts the working directory on the import
+        # path, so bootstrapping a checkout of one of codoc's own dependencies
+        # makes that checkout shadow the installed copy: against pydantic,
+        # `import pydantic` resolved to the repo under test and died on a
+        # version check before codoc ran at all. Running from codoc's own root
+        # keeps the import path stable and `--root` still points the work at the
+        # target. (The same shadowing would hit a real user who runs `codoc init`
+        # inside such a repository — noted in the design doc as its own finding.)
         proc = subprocess.run(
             [sys.executable, "-m", "codoc.cli.main", "init", "--root", str(repo)],
-            cwd=str(repo), text=True,
+            cwd=str(Path(__file__).resolve().parents[2]), text=True,
         )
         if proc.returncode != 0:
+            # Clear the partial workspace. A failed init still leaves `.codoc`
+            # (the index is built before the tree), and the "already
+            # bootstrapped" branch above then takes a retry straight past the
+            # bootstrap. starlette went through the whole frozen run that way:
+            # baseline snapshotted at zero features, 168 commits replayed
+            # against an empty tree, and every rate came back perfect because
+            # there was nothing in it to break.
+            import shutil
+            shutil.rmtree(codoc_dir, ignore_errors=True)
             print("codoc init failed", file=sys.stderr)
             return 1
+
+    # Refuse to proceed on an empty tree, whatever the exit code said. A
+    # workspace with no features cannot exercise anything, and its results look
+    # flawless rather than absent.
+    from codoc.store.db import open_store
+    with open_store(str(codoc_dir)) as _store:
+        n_features = len(_store.list_features())
+    if n_features == 0:
+        print(f"bootstrap produced 0 features in {codoc_dir} — refusing to "
+              f"snapshot an empty baseline; re-run with --fresh", file=sys.stderr)
+        return 1
 
     # Snapshot the freshly bootstrapped tree. The replay mutates .codoc forward
     # through history, so this is the only way back to T0 — and getting back to
@@ -104,10 +132,19 @@ def cmd_screen(args) -> int:
     two of the four mechanical classes, and a run over it would report those as
     "no data" while looking like a full result. Screening is a clone plus a git
     log, so it costs nothing next to a bootstrap.
+
+    **Counting git renames is not enough, and reading this table as if it were
+    cost us the relocation arm of a frozen run.** pydantic screened at 231
+    renames and was chosen for exactly that; in the run, 149 of its 155 detected
+    moves came from renaming a directory of mypy fixture outputs that codoc does
+    not index at all, leaving 5 testable relocations. The `sym` column is the one
+    to select on: it counts movement of definitions in files codoc would index,
+    which is the population the relocation claim is about. `ren` is kept because
+    a project with neither is worth skipping outright.
     """
     names = [args.corpus] if args.corpus else [c.name for c in DEV]
     print(f"{'corpus':<12} {'commits':>8} {'indexed':>8} {'add':>6} {'del':>6} "
-          f"{'ren':>6} {'mod':>7}")
+          f"{'ren':>6} {'mod':>7} {'sym':>6}")
     for name in names:
         rc = by_name(name)
         depth = args.depth or rc.depth
@@ -119,7 +156,8 @@ def cmd_screen(args) -> int:
         except Exception as exc:  # noqa: BLE001 — screening must not abort the sweep
             print(f"{name:<12} failed: {str(exc)[:60]}")
             continue
-        a = d = r = m = touched_commits = 0
+        from evals.replay.symbols import symbol_facts
+        a = d = r = m = sym = touched_commits = 0
         for sha in shas:
             f = commit_facts(repo, sha, subdir=rc.scope)
             if f.is_empty:
@@ -127,7 +165,10 @@ def cmd_screen(args) -> int:
             touched_commits += 1
             a += len(f.added); d += len(f.deleted)
             r += len(f.renamed); m += len(f.modified)
-        print(f"{name:<12} {len(shas):>8} {touched_commits:>8} {a:>6} {d:>6} {r:>6} {m:>7}")
+            sym += symbol_facts(repo, f.parent, sha, f.touched,
+                                renamed=f.renamed).move_count
+        print(f"{name:<12} {len(shas):>8} {touched_commits:>8} {a:>6} {d:>6} "
+              f"{r:>6} {m:>7} {sym:>6}")
     return 0
 
 

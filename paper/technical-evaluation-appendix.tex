@@ -1,0 +1,94 @@
+\section{Technical Evaluation}
+\label{app:attachment}
+
+\subsection{Protocol}
+
+The projects were split before anything was run. Five were used to build and debug the harness and are never reported. Five were held out and left untouched until the system was frozen, and only those produce the figures in the paper. Reporting on the projects the harness was developed against would make the numbers a product of tuning. A defect found on a held-out project after the freeze is reported as found rather than fixed and re-run.
+
+Each project is rewound 250 commits from its tip, the document is built there once, and every commit touching an indexed source file is applied in order. Commits touching no source file are skipped, since they produce no change for the document to follow. Merge commits are followed along their first parent only, so no change is applied twice.
+
+\subsection{Ground truth}
+\label{app:attachment-truth}
+
+\sys{} detects that code has moved by comparing a normalized token stream, and that it has been renamed by comparing a sequence of syntax-node types with every identifier erased. Ground truth must not use either signal, or the evaluation measures its own consistency. We recover movement by name instead. For each commit we parse the touched files at both the parent and the child with the standard library parser, an implementation independent of the grammars \sys{} indexes with, and take a definition that leaves exactly one file and enters exactly one other to have moved between them. Ambiguous cases are dropped rather than guessed.
+
+Two corrections to this construction changed what the numbers mean. File-level rename detection is not sufficient on its own. Across 1200 commits of five projects we found 29 renamed files against 2069 modified ones, because files are rarely renamed while definitions move between files that both continue to exist, which a diff reports as two unrelated modifications. The unit of analysis also has to match what \sys{} attaches to, which includes module-level assignments and one entry standing for the module itself. Before we modelled those, a single renamed file produced 13 apparent failures that were entities our own parser declined to represent. Aligning what counts as a unit is not the same as aligning how units are tracked, and only the second would compromise independence.
+
+\subsection{Results by project}
+\label{app:attachment-results}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+ & click & typer & pydantic & starlette & pyright & total \\
+\midrule
+Commits replayed & 136 & 34 & 172 & 130 & 143 & 615 \\
+Attached regions at end & 1398 & 2922 & 2423 & 1475 & 18032 & 26250 \\
+\midrule
+Definitions moved & 39 & 29 & 5 & 0 & 1 & 74 \\
+\quad lost their section & 0 & 1 & 0 & 0 & 0 & 1 \\
+Deletions released & 1/1 & 8/8 & 11/11 & 0/0 & 105/105 & 125/125 \\
+Untouched-file checks (K) & 189 & 74 & 342 & 191 & 2497 & 3293 \\
+\quad moved anyway & 0 & 0 & 0 & 0 & 0 & 0 \\
+Pointing at absent code & 0 & 0 & 0 & 0 & 0 & 0 \\
+\midrule
+Commits with no model call & 35\% & 53\% & 78\% & 55\% & 34\% & \\
+\bottomrule
+\end{tabular}
+\caption{Held-out projects. \texttt{pyright} is TypeScript and the rest are Python. The share of commits needing no model call varies widely by project, so the paper reports it as a range.}
+\label{tab:attachment-per-project}
+\end{table}
+
+The whole run cost 22.8 million tokens and 65 minutes. The count of moved definitions is much smaller than in the development projects, where the same measurement covered 1482 moves and lost 2. We selected the held-out projects for churn using file-level rename counts, and that measure proved a poor proxy. The project chosen for having 231 renames contributed only five testable moves, because 149 of its detected moves came from renaming a directory of test fixtures that \sys{} does not index. A future round should select on movement of code the document actually attaches to.
+
+\subsection{Review arms}
+\label{app:attachment-arms}
+
+A section naming code the document does not yet describe is proposed rather than created, because creating one is an editorial act and the document is authored. A replay has nobody to review those proposals, so they accumulate and the share of code carried by some section falls, reaching 0.87 with 41 proposals waiting on the most active project. That is the absence of a reader rather than a broken attachment. The two are separated by running the same history twice, once with nobody reviewing and once accepting every proposal through the path the editor uses. The arms agree on every attachment figure. The reviewed arm ends with every region described and nothing waiting.
+
+\subsection{Defects found during development}
+\label{app:attachment-defects}
+
+The harness was run first as an instrument and only then as a measurement. The development projects surfaced six defects. Four were the same mistake at four different entry points, where a section could be tied to a region of code that does not exist because nothing checked a proposed tie against the index at the point it was written. Such a tie is unreachable by the ordinary update path, which reasons only about regions the index knows, so it never repairs. The fifth was a truncated model reply aborting an entire update and discarding mechanical work that had already succeeded. The sixth allowed a model reply to reassign code that the commit under consideration had not touched.
+
+Three of the five development projects reported a clean sweep on the first defect while it was present throughout, and only the project chosen for its churn disagreed. A project with heavy refactoring belongs in any held-out set for this reason.
+
+One held-out project was re-prepared before its reported run. Its first build failed on an unrelated packaging problem and left a partial workspace, which a retry mistook for a completed one, so the run proceeded against an empty document and returned a flawless score on every axis for want of anything to break. An absent test and a passing test are indistinguishable from their results alone, which is the failure mode the rest of the protocol is designed around.
+
+\subsection{The whole-repository rename defect}
+\label{app:rename}
+
+The failure reported in the paper occurred on a project that renamed its top-level directory in one commit, moving 440 files and 6556 definitions with byte-identical contents. Every one should have been re-attached by the deterministic path, since identical content is the strongest signal available and needs no model. Instead the pass produced no relocations at all, 6275 of 7209 sections lost their code, and the share of code carried by some section fell from 1.00 to 0.04.
+
+We isolated part of the cause. Holding the file count fixed and varying only the number of definitions moving, a pass over 300 definitions takes 18 seconds and a pass over 2000 takes 392, a scaling exponent near 1.6. Timing the stages of the larger pass attributes 521 of its 523 seconds to the third-party incremental indexer, with reads and table maintenance accounting for the remainder. In both of those runs the change reported to the rest of the system was still correct. The production failure reported an incomplete change, 73 removals where roughly 7000 were due, which is a different fault and is not yet reproduced synthetically.
+
+One contributing factor was fixed. Table maintenance retained superseded versions for thirty minutes, measured against wall clock while passes arrive seconds apart, so nothing was ever reclaimed. Retention is now sixty seconds, which remains four orders of magnitude above the read it protects. Debris per pass fell from 9.4\,MB to 3.8\,MB, though the table still grows across passes and the per-pass time is unchanged, since that time lies in the indexer rather than in our code.
+
+\subsection{Drift experiment}
+\label{app:drift}
+
+The document is restored to its state at the starting commit and replayed forward to a point 60 commits short of the tip, which yields one copy frozen at the start and one carried through 200 commits of change. Tasks are drawn from the held-out 60 commits, so neither copy has seen them. Each task is the subject line of a merged commit with paths and symbol names removed, and the correct answer is the set of files that commit touched. Commits touching more than four files are skipped, since a sweeping change has a diffuse answer. Task wording is kept minimal, because a published benchmark found file-level accuracy moving from 0.20 to 0.81 on prompt detail alone~\cite{timeconsistent2026}.
+
+The agent is a four-tool search loop over grep, directory listing, file reading, and a final answer, run at temperature zero with a twelve-step ceiling. The document reaches it as a list of sections with their prose and the code each one attaches to, which is the form an agent receives through the tool interface rather than the form a person reads.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+ & steps & recall & files found & tokens \\
+\midrule
+No document & 4 & 0.293 & 0.44 & 8.8K \\
+Frozen at start & 3 & 0.328 & 0.45 & 233K \\
+Maintained & 2 & 0.400 & 0.53 & 174K \\
+\bottomrule
+\end{tabular}
+\caption{Drift experiment on the project with the heaviest movement, 25 tasks and 3 repeats per condition, 225 runs with no failures.}
+\label{tab:drift}
+\end{table}
+
+Paired by task, the maintained copy beats the frozen copy on recall 10 times against 3 with 62 ties, a one-sided sign test at $p = 0.046$, and beats no document 16 times against 3 with 56 ties at $p = 0.002$. Precision-weighted F1 does not separate the conditions. The frozen copy carried 137 references to files that no longer existed and the maintained copy carried none.
+
+The same experiment on a project whose code rarely moves produced no separation on any measure. Its frozen copy had decayed by only 36 references, so the manipulation had little strength there. This is the reason the paper states the effect as conditional on movement rather than as a general property.

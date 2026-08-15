@@ -179,6 +179,218 @@ Two warnings worth knowing before spending money here:
   found file-level F1 moving 0.20 to 0.81 purely on prompt granularity). Keep
   prompts minimal and fixed, or the ceiling erases any effect.
 
+## 6.4 Drift experiment: first result (flask)
+
+Built and run. `evals/localize/` holds it: `setup` restores the document to the
+starting commit and replays forward to 60 commits short of the tip, leaving a
+frozen copy and a maintained copy of the same prose plus a block of history
+neither has seen; `tasks` derives requests from those held-out commits with
+paths and symbol names stripped; `eval` runs three arms through an instrumented
+four-tool search loop at temperature 0.
+
+Two errors in my own setup had to be found first, and both would have produced a
+confident null:
+
+* **The replay never re-rendered the export.** `run_loop_a` updates the store;
+  in production the daemon is `tree.codoc`'s sole writer, and the harness has no
+  daemon. The "maintained" document came out byte-identical to the frozen one.
+* **The export is the wrong artifact anyway.** `tree.codoc` is written for a
+  person and carries almost no inline citations — one, in flask's case — because
+  the addresses reach an agent through the MCP reads. Handing it over compared
+  prose against prose. The aid is now built from the store, mirroring
+  `codoc_tree(include_bindings=True)`.
+
+With that corrected the manipulation has real strength: the frozen document
+carries 36 addresses pointing at files that no longer exist, the maintained one
+carries 0.
+
+| arm | median steps | F1 | recall | found any | exact | tokens |
+|---|---|---|---|---|---|---|
+| no document | 4.0 | 0.576 | 0.775 | 0.867 | 0.20 | 5.2K |
+| frozen at start | 2.0 | 0.544 | 0.725 | 0.867 | 0.167 | 23.2K |
+| maintained | 2.0 | 0.548 | 0.767 | 0.867 | 0.20 | 35.0K |
+
+**Read honestly: a document halves the number of looks and improves nothing
+about what is found, at four to seven times the tokens.** The steps result
+replicates RPG and Intent.lisp. The accuracy result replicates the AGENTS.md
+null (2602.11988), including its cost finding, only larger. Maintained beats
+frozen on recall by 0.042, but paired per task it is 7 better, 5 worse, 18 tied
+— a coin flip at n=30.
+
+**Why flask cannot answer this.** Its frozen document is barely stale: 36 dead
+file references out of 456 addresses, because flask does not move code much. For
+the maintained copy to beat the frozen one, the frozen one has to have rotted,
+and here it mostly has not. The experiment is now correctly built and was run on
+the wrong repository.
+
+### 6.4.1 altair — the effect exists, and only where code actually moves
+
+Same experiment on the highest-churn corpus. 25 tasks, 3 arms, 3 repeats, 225
+runs, 0 errors after a retry was added (a burst of connection failures had cost
+46 of the first 123, evenly across arms).
+
+| arm | median steps | F1 | recall | found any | tokens |
+|---|---|---|---|---|---|
+| no document | 4 | 0.247 | 0.293 | 0.440 | 8.8K |
+| frozen at start | 3 | 0.257 | 0.328 | 0.453 | 233K |
+| **maintained** | **2** | **0.292** | **0.400** | **0.533** | 174K |
+
+Paired per task, on recall: maintained beats frozen 10–3 (62 tied, mean +0.072,
+sign test p=0.046) and beats no document 16–3 (56 tied, mean +0.107, p=0.002).
+F1 is much noisier and does not separate (14–15 against frozen).
+
+**The maintained document also costs 25% FEWER tokens than the frozen one**
+(174K vs 233K) while doing better. A stale document does not merely fail to
+help — it sends the agent to files that no longer exist, and it pays for the
+detour.
+
+The contrast with flask is the finding. flask showed nothing on any measure,
+and flask barely moves code: 36 dead addresses in its frozen copy against
+altair's 137, in a document a quarter the size. **The benefit of maintenance
+appears only in repositories where code actually moves, which are exactly the
+repositories where documentation rots.** A single-corpus evaluation on a stable
+project would have concluded there is no effect.
+
+Honest limits: one corpus, 25 tasks, and recall is the only metric that
+separates. The steps result (halved) replicates prior work and is present for
+the frozen arm too, so it is about *having* a document. Recall is the one that
+distinguishes *maintaining* it.
+
+**Superseded decision.** One more attempt on the highest-drift corpus available —
+altair (2112 symbol moves) or pydantic (231 file renames) — with more tasks, and
+if that is null too, report the null and stop. The case for one more run is that
+the manipulation there is an order of magnitude stronger; the case against is
+that the steps effect is already identical for frozen and maintained, which says
+the benefit is *having* a document rather than *maintaining* one, and more drift
+may not change that. Either outcome is publishable and neither threatens the
+paper, since this was always the optional upside and the robustness section
+stands on its own.
+
+## 6.45 A repository-wide rename defeats attribution entirely (hypothesis)
+
+Found while setting up the second drift corpus, after the freeze, on a project
+in neither the development nor the reporting set. **It is the most important
+result in this document and it is a failure.**
+
+hypothesis commit `99452c93` renames the `hypothesis-python/` directory to
+`hypothesis/`: 440 files, 6556 definitions moving, contents byte-identical.
+Every one should relocate by the deterministic path — identical `tokens_hash`,
+pass 1, no model needed. What Loop A actually did:
+
+| | |
+|---|---|
+| relocations | **0** |
+| auto ops | `detach: 73, attach: 2` |
+| bindings lost | **6275 of 7209** |
+| unresolvable after | **6875** |
+| coverage | 1.00 → **0.039** |
+| model calls | 2 (52K tokens), 290s |
+
+The document did not degrade, it collapsed. Afterwards 95% of its addresses
+point at paths that no longer exist, and the "maintained" copy is no better than
+the frozen one — which is why the hypothesis drift experiment cannot run: there
+is no maintained arm left.
+
+**Why nothing caught it earlier.** Every corpus so far renamed files in tens.
+altair's largest was 24 renames in the v5→v6 bump, and that commit relocated
+1341 chunks correctly. 440 renames does not. There is a scale threshold between
+them, and every project in the dev and reporting sets sits below it.
+
+**Root-cause progress (not finished).** The changeset reaching Loop A was nearly
+empty — 73 removals where ~7000 were due — so relocation never had candidates to
+match. Ruled out and confirmed so far, via a synthetic reproduction that renames
+a directory of N identical-content files
+(`scratchpad/repro_rename.py`, one N per process):
+
+* **Scoped index reads are fine.** Reading 800 scoped files returns every
+  expected chunk, so the `files=` push-down is not truncating.
+* **`compute_changeset` is correct at N = 5, 50 and 200.** Each returns
+  `added == removed == all chunks`, every one fingerprint-matched between the
+  two sides, and the index ends with zero old-path rows. A relocation pass
+  handed this would re-attach everything. Each run finishes in seconds.
+* **At N = 440 it does not complete.** The index grew to 118 MB (for ~1300
+  chunks) and the process sat at 0% CPU for over 20 minutes without printing
+  its first line. For comparison, the whole real hypothesis workspace is 70 MB.
+  So the failure is in the indexing layer at scale, not in the diff logic
+  above it, and the production symptom fits: that pass took 290 seconds and
+  emerged with a changeset describing only the 11 ordinary modifications.
+
+**The pathology, isolated.** Holding the file count fixed at 50 and varying only
+the number of definitions per file — so only the CHUNK volume changes:
+
+| chunks moved | rename pass | index size |
+|---|---|---|
+| 300 | 18.2s | 4 MB |
+| 2000 | **392.2s** | 24 MB |
+
+6.7× the chunks costs **21.5× the time**: a scaling exponent of ~1.6, badly
+superlinear. Extrapolated to production's ~7000 chunks that is **roughly 50
+minutes** for a single rename commit. The first repro's stall at 440 files was
+this same curve, not a separate problem.
+
+Note what this does NOT explain. In both runs above the changeset was
+*correct* — `added == removed == every chunk`, all fingerprint-matched, no stale
+rows left. Slow but right. Production was **wrong**: 73 removals where ~7000
+were due, in a pass that finished in 290 seconds when the curve predicts ~50
+minutes. A pass that returns early AND incomplete is a different failure from
+one that is merely slow, and the two are probably related — something appears to
+be giving up partway — but that link is not yet demonstrated.
+
+**Fix applied to (1), and it is partial — say so.** Timing the stages of a
+2000-chunk rename pass: reads 0.1s, LanceDB optimize 1.7s, **cocoindex's own
+`update_blocking` 520.9s of the 523s total**. The time is inside the third-party
+indexer and codoc does not control it.
+
+What codoc did control was the debris. `optimize` was reclaiming nothing,
+because its 30-minute retention window is measured in wall clock while passes
+arrive seconds apart, so every version it would drop was too young. Retention is
+now 60 seconds (`CODOC_INDEX_RETENTION_S`), which is still four orders of
+magnitude more than the millisecond read it exists to protect. Measured on
+consecutive rename passes of 1000 chunks:
+
+| retention | pass 1 | pass 2 | pass 3 | pass 4 |
+|---|---|---|---|---|
+| 30 minutes (before) | 9.4 MB | — | — | — |
+| 60 seconds (after) | **3.8 MB** | 5.7 MB | 6.4 MB | 7.9 MB |
+
+Read this carefully, because it is less of a fix than it first looks. Per-pass
+debris drops about 2.5× (9.4 → 3.8 MB after one pass), but the table **still
+grows across passes** — 1.6 MB at rest, 7.9 MB after four — so reclamation is
+partial, not complete. The honest statement is that the index accumulates more
+slowly, not that it stops.
+
+What did NOT compound is time: 162s, 137s, 174s, 142s across the four passes,
+flat within noise. So the superlinearity measured earlier is in the size of a
+single change, not in debris left by earlier ones — which also means the
+retention change was never going to fix the time, and it does not.
+
+**The per-pass time is unresolved.** It is cocoindex's `update_blocking`, and
+addressing it means batching the work before handing it over, or taking it up
+with that library.
+
+So there are two defects here, and only one is characterized:
+
+1. **Re-indexing is superlinear in chunks moved** (measured, reproducible,
+   `scratchpad/repro2.py`). On its own this makes a large refactor take an hour.
+2. **A large rename yields an incomplete changeset** (observed once, in
+   production, not yet reproduced synthetically). This is the one that destroys
+   attribution, and it is the one still open.
+
+Next: reproduce (2) directly by replaying hypothesis commits 100→101 against the
+step-100 store, with the changeset dumped, rather than inferring it from the
+synthetic curve. The step-100 state is reachable — `.codoc.baseline` plus the
+recorded step list — but the replay to get there costs an hour, so it is worth
+doing once and keeping the result.
+
+**What it means for the paper.** Phase 2's numbers stand: they measure what they
+measured, on the projects they were run on, and none of those projects contains
+a change of this shape. But the claim has to be qualified honestly, because a
+directory rename is not exotic — it is one of the most common large refactors
+there is, and it is exactly when a reader most needs the document to still work.
+The two-paragraph section should say that attribution survives ordinary change
+and that a repository-wide restructure currently defeats it, with this number.
+Reporting the good result and omitting this one would be indefensible.
+
 ## 6.5 Phase 1 log
 
 Running record of what the shakeout found. Numbers here are from the DEV set and
@@ -410,6 +622,76 @@ The shape to confirm or refute on the held-out set: **no binding is lost**,
 deletions and the untouched invariant are near-exact, no address goes dead, and
 the residual is re-attribution rather than rot.
 
+15. **A repository can shadow codoc's own dependencies and stop it starting.**
+    Bootstrapping pydantic and starlette failed outright. `codoc init` runs with
+    the working directory set to the repository, `python -m` puts that directory
+    on the import path, and a checkout of pydantic then shadows the pydantic
+    codoc itself imports — dying on a version check before any codoc code ran.
+    The harness now runs the CLI from codoc's own root and points at the target
+    with `--root`.
+
+    Worth carrying into the product, not just the harness: a real user runs
+    `codoc init` from inside their repository, which is exactly the shadowing
+    condition. Any project sharing a top-level package name with one of codoc's
+    dependencies is affected. Not fixed here — it is a packaging/invocation
+    question, it arrived after the freeze, and changing how the CLI resolves
+    imports is not a change to make between Phase 1 and Phase 2.
+
+16. **The churn screen over-promised, and the held-out set is thin on
+    relocation.** pydantic was chosen for the reporting set on the strength of
+    231 file renames — the high-churn case that the dev phase proved was
+    necessary. In the frozen run it detected 155 symbol moves and only **5** of
+    them were bound. 149 came from one commit renaming
+    `tests/mypy/outputs/1.10.1/…` to `tests/mypy/outputs/…`, a versioned
+    directory of mypy plugin fixtures, and **zero of those files are in the
+    index at all** — codoc excludes them, so they can never carry a binding.
+
+    Two things to correct, neither of them in codoc:
+
+    * The screen counts git renames without asking whether the moved files are
+      indexed. It should count movement only in files codoc actually binds,
+      which is the population the relocation claim is about.
+    * `symbol_facts` filters `facts.touched` by extension and subdirectory but
+      not by codoc's own exclusions, so `symbol_moves_seen` overstates what was
+      testable. This did NOT corrupt any rate: every rate is computed from
+      `move_bound_n`, which was always the honest denominator, and both numbers
+      are reported side by side.
+
+    **This is not fixed by re-picking the corpus.** Choosing a different
+    held-out project after seeing the numbers is precisely the tuning the freeze
+    exists to prevent. The reporting run stands as it is; the relocation class
+    is reported at whatever strength the held-out set gives it, the development
+    set's 1482 bound relocations are reported separately and labelled as such,
+    and the screening defect is stated as a limitation. The lesson for a next
+    round is to screen on bound movement, not on git renames.
+
+### FREEZE — 2026-08-14
+
+Phase 1 is closed. altair, the hardest development project, verifies clean on
+every axis that was failing: harness errors 1 → 0, untouched-file violations
+13 → 2 → 0, unresolvable bindings 28 → 0, and unrequested re-attribution halved
+(38 → 19) as a side effect of the change-set guard. Deletions stay exact and no
+address is dead anywhere.
+
+Six defects fixed, five in codoc and one in the harness's own understanding of
+what it was scoring. The residual we keep and can name is 2 lost relocations in
+1364, both cases where a move also rewrote the code and the shape was not
+distinctive, inside a bulk refactor of over a thousand simultaneous changes.
+
+Two improvements follow directly and are deliberately NOT implemented before the
+frozen run, because adding capability after seeing the number is how tuning gets
+mistaken for measurement:
+
+1. Match a relocation by qualified name when content and shape both fail. The
+   evaluation's own ground truth does exactly this and found all 1482 moves.
+2. Nothing further on re-attribution; the guard shipped and the remaining 19 are
+   the tree reorganizing with the code, which is intended.
+
+The five held-out projects were screened before the freeze and need no swap:
+pydantic carries 231 file renames, so the high-churn case that exposed the worst
+defect is represented. typer is thin (34 commits touch code) and is kept as the
+small case rather than replaced.
+
 ### Remaining Phase 1 work before the freeze
 
 1. **Still unexplained, and small enough to be worth explaining**: altair's 2
@@ -428,6 +710,57 @@ the residual is re-attribution rather than rot.
    clean sweep and be wrong. pydantic is the closest match already in the set —
    screen it before the freeze and swap if its window is quiet.
 4. Only then: freeze, and run REPORTING with `--i-am-freezing`.
+
+## 6.9 PHASE 2 RESULT — held-out projects, frozen system (2026-08-14)
+
+Five projects, 615 commits, 26,250 bound regions, **0 harness errors**.
+
+| | click | typer | pydantic | starlette | pyright-ts | total |
+|---|---|---|---|---|---|---|
+| commits | 136 | 34 | 172 | 130 | 143 | 615 |
+| bound regions at end | 1398 | 2922 | 2423 | 1475 | 18032 | 26250 |
+| relocations owned | 39 | 29 | 5 | 0 | 1 | 74 |
+| **lost** | 0 | 1 | 0 | 0 | 0 | **1** |
+| deletions released | 1/1 | 8/8 | 11/11 | 0/0 | 105/105 | **125/125** |
+| untouched-file checks | 189K | 74K | 342K | 191K | 2497K | 3293K |
+| **violations** | 0 | 0 | 0 | 0 | 0 | **0** |
+| **pointing at absent code** | 0 | 0 | 0 | 0 | 0 | **0** |
+| commits with no model call | 35% | 53% | 78% | 55% | 34% | 34–78% |
+
+22.8M tokens, 65 minutes. `pyright-ts` is TypeScript, so the deletion and
+untouched-file results are not Python-only.
+
+**What is strong:** nothing became unreachable anywhere; every deletion
+released; zero violations in 3.3M checks.
+
+**What is weak, and must be said in the paper:** the relocation arm rests on 74
+cases. The held-out set moves code far less than the development set, where the
+same measurement covered 1482 relocations and lost 2. Reported as such, with the
+development figure given separately and labelled.
+
+**Cost is a range, not a mean.** 34% to 78% is too wide to average honestly.
+
+### Incident: an empty document scores perfectly
+
+starlette's first bootstrap failed on the dependency-shadowing problem (#15) and
+left a partial `.codoc`. `prepare` saw the directory, printed "already
+bootstrapped", skipped the bootstrap, and snapshotted a baseline with **0
+features**. The frozen run then replayed 130 commits against an empty document
+and returned a flawless score on every axis, because there was nothing in it to
+break.
+
+Caught only by noticing 23 bindings where a framework should have thousands.
+Two guards added: a failed bootstrap now clears its partial workspace, and
+`prepare` refuses to snapshot a baseline with zero features whatever the exit
+code said. starlette was re-prepared (109 features, 1370 bindings) and re-run;
+that is the row above.
+
+Re-preparing a held-out project after a *setup* failure is not corpus shopping —
+there was no result to be influenced by, only an artifact that was never built.
+Re-picking a project because its numbers were disappointing would be, and is not
+what happened. Stated in the paper's limitations either way, because "an absent
+test and a passing test look identical from their results" is the reason the
+whole protocol exists.
 
 ## 7. The target: draft the two paragraphs now
 
