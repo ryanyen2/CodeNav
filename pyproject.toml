@@ -1,6 +1,6 @@
 [project]
 name = "codoc"
-version = "0.2.0"
+version = "0.2.1"
 description = "codoc: a feature-tree system that maintains a human-intent-level view of a codebase, synchronized to the underlying code."
 license = { text = "MIT" }
 readme = "README.md"
