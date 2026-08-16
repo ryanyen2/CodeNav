@@ -11,30 +11,29 @@ export {
     MANIPULATION_CHECK, SCENARIOS, DEBRIEF,
 } from './instrument.js';
 export { PROJECTS, RESPONSIBILITY, HOW_TO_START } from './content.js';
+export { QUIZZES } from './quiz.js';
 
 /** The task cards. Drawn as pictures, never as text anyone can copy. */
 export const TASK_CARDS = Object.freeze({
-    hearth: {
-        title: 'Add draft support to hearth',
+    scribe: {
+        title: 'Support block quotes',
         lines: [
-            'A post marked as a draft must not appear anywhere in a',
-            'production build.',
-            '',
-            'When someone runs the dev server, drafts must appear so',
-            'they can be previewed.',
+            'Some of the sample documents quote another document.',
+            'Those passages should come out as Markdown block',
+            'quotes.',
             '',
             'Decide anything this card does not specify, and be ready',
             'to explain your decisions.',
         ],
     },
-    ember: {
-        title: 'Add mute support to ember',
+    tally: {
+        title: 'Support split transactions',
         lines: [
-            'Items from a muted feed must not appear in the daily',
-            'digest.',
+            'One purchase sometimes belongs in two categories: a',
+            'supermarket trip that was half groceries and half a',
+            'birthday present.',
             '',
-            'They must still be fetched, stored, and visible in the',
-            'archive and the search file.',
+            'Let a transaction be split.',
             '',
             'Decide anything this card does not specify, and be ready',
             'to explain your decisions.',
@@ -55,13 +54,19 @@ export const TASK_CARDS = Object.freeze({
  */
 export function buildSteps(order = 'codoc-first') {
     const codocFirst = order === 'codoc-first';
-    const first = { condition: codocFirst ? 'codoc' : 'baseline', project: 'hearth' };
-    const second = { condition: codocFirst ? 'baseline' : 'codoc', project: 'ember' };
+    const first = { condition: codocFirst ? 'codoc' : 'baseline', project: 'scribe' };
+    const second = { condition: codocFirst ? 'baseline' : 'codoc', project: 'tally' };
 
+    // The quiz is asked twice, either side of the task, and it is the same
+    // twelve questions both times. Neither answer says much on its own —
+    // somebody may know the domain, or guess well — and the CHANGE between them
+    // is what the session did to their understanding.
     const forCondition = (c, n) => [
         { id: `intro-${n}`, kind: 'intro', ...c, n },
         { id: `about-${n}`, kind: 'about', ...c, n },
+        { id: `quiz-before-${n}`, kind: 'quiz', sitting: 'before', ...c, n },
         { id: `task-${n}`, kind: 'task', ...c, n },
+        { id: `quiz-after-${n}`, kind: 'quiz', sitting: 'after', ...c, n },
         { id: `after-${n}`, kind: 'questionnaire', ...c, n },
     ];
 
@@ -83,6 +88,7 @@ export function buildSteps(order = 'codoc-first') {
 /** Where a set of answers gets stored, so the page and the dashboard agree. */
 export function answerDoc(step) {
     if (step.kind === 'screening') return 'screening';
+    if (step.kind === 'quiz') return `quiz-${step.project}-${step.sitting}`;
     if (step.kind === 'questionnaire') return `after-${step.condition}`;
     if (step.kind === 'scenarios') return 'scenarios';
     if (step.kind === 'debrief') return 'debrief';

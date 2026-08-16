@@ -7,11 +7,17 @@ why each question has the answer it has.
 
 > **Support block quotes.**
 >
-> A quote pulled out of a PDF arrives as an indented run of lines. It should come
-> out as a Markdown block quote.
+> Some of the sample documents quote another document. Those passages should come
+> out as Markdown block quotes.
 >
 > Decide anything this card does not specify, and be ready to explain your
 > decisions.
+
+`report.txt` has one that runs across a page break, and `memo.txt` has one that
+does not, so both cases are reachable from the fixtures rather than hypothetical.
+
+The card no longer says the quotes arrive indented. It used to, which answered
+the first decision before the participant reached it.
 
 The agent implements this in about a minute. Everything below is what the card
 leaves open, and the open decisions are the measurement.

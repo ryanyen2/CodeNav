@@ -134,13 +134,30 @@ test('each research question has items that can answer it', () => {
 // ── the briefing that used to be read off a call ─────────────────────────────
 
 test('each project explains itself on the page', () => {
-    for (const name of ['hearth', 'ember']) {
+    for (const name of ['scribe', 'tally']) {
         const p = PROJECTS[name];
-        assert.ok(p.what.length && p.commands.length && p.layout.length && p.words.length,
+        assert.ok(p.oneLine && p.problem.length && p.commands.length && p.layout.length,
             `${name} is missing part of its briefing`);
-        // The two words the task turns on. Without them the task card is a
-        // vocabulary test rather than a programming one.
-        assert.equal(p.words.length, 2);
+        // The before and after. The pair is the whole explanation: you can see
+        // what the program is for without reading either one closely.
+        assert.ok(p.before && p.after && p.before !== p.after);
+        // Six things it does, and what it does not do, so nobody goes looking
+        // for a feature that is not there.
+        assert.equal(p.does.length, 6);
+        assert.ok(p.notScope);
+    }
+});
+
+test('each briefing says the rules could have gone another way', () => {
+    // This is the study's premise. Without it a participant reads the code as
+    // the only possible version of itself, and the description has nothing to
+    // add that the code does not already say.
+    for (const name of ['scribe', 'tally']) {
+        const p = PROJECTS[name];
+        assert.ok(p.judgement.length >= 2, `${name} names no judgement calls`);
+        for (const [what, why] of p.judgement) {
+            assert.ok(what && why.length > 40, `${name}: "${what}" is not explained`);
+        }
     }
 });
 
@@ -148,7 +165,7 @@ test('both conditions are started from written steps, not from memory', () => {
     for (const c of ['codoc', 'baseline']) {
         const how = HOW_TO_START[c];
         assert.ok(how.steps.length && how.about.length);
-        assert.match(how.folder('hearth'), /codoc-study/);
+        assert.match(how.folder('scribe'), /codoc-study/);
     }
     // The difference between them IS the manipulation, so it must not be
     // improvised differently for each participant.
@@ -178,7 +195,7 @@ test('the card is drawn as a picture with no text to select', () => {
     // the study measures.
     const el = document.createElement('div');
     document.body.append(el);
-    drawCard(el, TASK_CARDS.hearth, { width: 700 });
+    drawCard(el, TASK_CARDS.scribe, { width: 700 });
 
     const canvas = el.querySelector('canvas');
     if (canvas) {
@@ -192,7 +209,7 @@ test('the card is drawn as a picture with no text to select', () => {
         // text rather than to nothing.
         const fallback = el.querySelector('.card-fallback');
         assert.ok(fallback, 'it falls back to something visible');
-        assert.ok(fallback.textContent.includes(TASK_CARDS.hearth.title));
+        assert.ok(fallback.textContent.includes(TASK_CARDS.scribe.title));
     }
 });
 
@@ -200,20 +217,27 @@ test('both cards leave the open decisions open', () => {
     for (const [name, card] of Object.entries(TASK_CARDS)) {
         const text = [card.title, ...card.lines].join(' ').toLowerCase();
         assert.ok(text.includes('decide anything'), `${name} invites them to decide`);
-        // The things the card must not settle, because whether the participant
-        // settles them is the measure.
-        assert.ok(!text.includes('signature'), `${name} does not give away the hidden rule`);
-        assert.ok(!text.includes('incremental'), `${name} does not mention incremental builds`);
+        // The card must not settle any of the four open decisions, because
+        // whether the participant settles them is the measure.
+        for (const giveaway of ['indent', 'hyphen', 'paragraph', 'page break',
+            'duplicate', 'transfer', 'uncategorised', 'reference']) {
+            assert.ok(!text.includes(giveaway),
+                `the ${name} card mentions "${giveaway}", which is one of its open decisions`);
+        }
     }
-    assert.ok(!TASK_CARDS.ember.lines.join(' ').toLowerCase().includes('notification'),
-        'the ember card stays silent on notifications, which is its open decision');
+    // And the card is short. A long one starts answering the questions it is
+    // supposed to leave open.
+    for (const name of ['scribe', 'tally']) {
+        assert.ok(TASK_CARDS[name].lines.filter((l) => l.trim()).length <= 8,
+            `${name}'s card is too long to have left anything open`);
+    }
 });
 
 test('drawing twice reuses the canvas rather than stacking them', () => {
     const el = document.createElement('div');
     document.body.append(el);
-    drawCard(el, TASK_CARDS.ember, { width: 700 });
-    drawCard(el, TASK_CARDS.ember, { width: 700 });
+    drawCard(el, TASK_CARDS.tally, { width: 700 });
+    drawCard(el, TASK_CARDS.tally, { width: 700 });
     assert.ok(el.querySelectorAll('canvas').length <= 1, 'no stacking');
     assert.ok(el.querySelectorAll('.card-fallback').length <= 1);
 });

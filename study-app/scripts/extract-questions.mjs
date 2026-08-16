@@ -1,102 +1,143 @@
-// Pulls the questions and their scoring tables out of the sheets.
+// Pulls the quizzes out of the projects' STUDY.md files.
 //
-// The markdown files are the instrument. They are what a researcher reads from
-// during a session and what gets frozen at pre-registration, so they stay the one
-// source of truth and this reads them rather than the dashboard keeping a second
-// copy that could drift.
+// Those files are the instrument. They are what gets frozen at pre-registration,
+// so they stay the one source of truth and this reads them rather than the
+// dashboard keeping a second copy that could drift apart from them.
 //
 //   node scripts/extract-questions.mjs
 //   → experimenter/questions.json
+//
+// The format it reads, from the "## The quiz" section onward:
+//
+//   ### Purpose — what this program is for
+//
+//   **Q1. What is scribe for?**
+//   - a) Reading PDF files
+//   - b) **Turning it into readable Markdown** ✓
+//   - c) Converting Markdown into PDF
+//   - d) Checking the text layer is complete
+//
+// A tick marks the right answer. Exactly one per question, or this refuses.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SHEETS = join(here, '..', '..', 'docs', 'study-materials');
+const PROJECTS = join(here, '..', '..', 'docs', 'study-materials', 'projects');
 
-/** `### 3. Why the dev server works the way it does  [R1]` */
-const HEADING = /^###\s+(\d+)\.\s+(.+?)\s*\[([A-Z]\d)\]\s*$/;
-/** `| 2 | The answer says … |` */
-const SCORE_ROW = /^\|\s*([012])\s*\|\s*(.+?)\s*\|\s*$/;
+const BAND = /^###\s+(.+?)(?:\s+—.*)?$/;
+const QUESTION = /^\*\*Q(\d+)\.\s*(.+?)\*\*\s*$/;
+const OPTION = /^-\s*([a-d])\)\s*(.+?)\s*$/;
+const CORRECT = /\s*✓\s*$/;
 
-export function parseSheet(markdown) {
-    const lines = markdown.split('\n');
+export function parseQuiz(markdown) {
+    const start = markdown.indexOf('## The quiz');
+    if (start < 0) return [];
+    // Stop at the next second-level heading, so anything after the quiz — the
+    // matching notes, for instance — cannot be read as a question.
+    const rest = markdown.slice(start + 1);
+    const end = rest.indexOf('\n## ');
+    const body = end < 0 ? rest : rest.slice(0, end);
+
     const questions = [];
+    let band = '';
     let current = null;
-    let round = 1;
 
     const finish = () => {
-        if (!current) return;
-        current.question = current.questionLines.join(' ').replace(/\s+/g, ' ').trim();
-        delete current.questionLines;
-        questions.push(current);
+        if (current) questions.push(current);
         current = null;
     };
 
-    for (const raw of lines) {
-        const line = raw.trimEnd();
-        if (/^##\s+Round two/i.test(line)) round = 2;
-
-        const heading = HEADING.exec(line);
-        if (heading) {
+    for (const line of body.split('\n')) {
+        const bandMatch = BAND.exec(line.trim());
+        if (bandMatch) {
+            finish();
+            band = bandMatch[1].trim();
+            continue;
+        }
+        const questionMatch = QUESTION.exec(line.trim());
+        if (questionMatch) {
             finish();
             current = {
-                number: Number(heading[1]),
-                title: heading[2],
-                code: heading[3],
-                round,
-                repeated: false,
-                questionLines: [],
-                scores: {},
+                n: Number(questionMatch[1]),
+                band,
+                question: questionMatch[2].trim(),
+                options: [],
+                answer: null,
             };
             continue;
         }
-        if (!current) continue;
-
-        if (/^>\s?/.test(line)) {
-            current.questionLines.push(line.replace(/^>\s?/, ''));
-            continue;
+        const optionMatch = OPTION.exec(line.trim());
+        if (optionMatch && current) {
+            const [, letter, raw] = optionMatch;
+            const isCorrect = CORRECT.test(raw);
+            const text = raw.replace(CORRECT, '').replace(/^\*\*(.*)\*\*$/, '$1').trim();
+            current.options.push({ letter, text });
+            if (isCorrect) current.answer = letter;
         }
-        if (/asked again in round two/i.test(line)) { current.repeated = true; continue; }
-
-        const score = SCORE_ROW.exec(line);
-        if (score) current.scores[score[1]] = score[2];
     }
     finish();
     return questions;
 }
 
-function check(questions, name) {
+function check(project, questions) {
     const problems = [];
-    if (questions.length !== 10) problems.push(`${name}: found ${questions.length} questions, expected 10`);
+    if (!questions.length) problems.push('no questions found');
     for (const q of questions) {
-        if (!q.question) problems.push(`${name} ${q.code}: no question text`);
-        for (const s of ['0', '1', '2']) {
-            if (!q.scores[s]) problems.push(`${name} ${q.code}: no rule for score ${s}`);
+        if (q.options.length !== 4) {
+            problems.push(`Q${q.n} has ${q.options.length} options, not 4`);
         }
+        if (!q.answer) {
+            problems.push(`Q${q.n} has no answer marked; put a tick on the right one`);
+        }
+        if (!q.band) problems.push(`Q${q.n} is in no band`);
     }
-    const codes = questions.map((q) => q.code);
-    if (new Set(codes).size !== codes.length) problems.push(`${name}: duplicate codes`);
+    // The bands are what RQ1 is answered in. A quiz missing one of them cannot
+    // speak to the part of the question that band covers.
+    const bands = new Set(questions.map((q) => q.band));
+    for (const needed of ['Purpose', 'Rationale', 'Change', 'Extension']) {
+        if (!bands.has(needed)) problems.push(`no questions in the ${needed} band`);
+    }
+    const numbers = questions.map((q) => q.n);
+    if (new Set(numbers).size !== numbers.length) problems.push('two questions share a number');
     return problems;
 }
 
 function main() {
     const out = {};
-    const problems = [];
-    for (const project of ['hearth', 'ember']) {
-        const md = readFileSync(join(SHEETS, `questions-${project}.md`), 'utf8');
-        const questions = parseSheet(md);
-        problems.push(...check(questions, project));
+    let failed = false;
+
+    for (const project of ['scribe', 'tally']) {
+        const path = join(PROJECTS, project, 'STUDY.md');
+        let markdown;
+        try {
+            markdown = readFileSync(path, 'utf8');
+        } catch {
+            console.error(`no STUDY.md for ${project}`);
+            failed = true;
+            continue;
+        }
+        const questions = parseQuiz(markdown);
+        const problems = check(project, questions);
+        if (problems.length) {
+            failed = true;
+            console.error(`${project}:`);
+            for (const problem of problems) console.error(`  ${problem}`);
+        } else {
+            console.log(`${project}: ${questions.length} questions, `
+                + `${new Set(questions.map((q) => q.band)).size} bands`);
+        }
         out[project] = questions;
     }
-    if (problems.length) {
-        console.error('the question sheets did not parse cleanly:');
-        for (const p of problems) console.error(`  ${p}`);
+
+    if (failed) {
+        console.error('\nnothing written. A quiz that cannot be read here cannot be '
+            + 'scored during a session either.');
         process.exit(1);
     }
-    const dest = join(here, '..', 'experimenter', 'questions.json');
-    writeFileSync(dest, `${JSON.stringify(out, null, 2)}\n`);
-    console.log(`extracted ${out.hearth.length} + ${out.ember.length} questions`);
+    writeFileSync(join(here, '..', 'experimenter', 'questions.json'),
+        `${JSON.stringify(out, null, 2)}\n`);
+    console.log('wrote experimenter/questions.json');
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();

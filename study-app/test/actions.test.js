@@ -24,7 +24,7 @@ test('every action in the list is produced by at least one input, so none is dea
         { ev: 'edit', surface: 'document', t: 1, active: false, focused: true },
         { ev: 'prompt', t: 1, chars: 40 },
         { ev: 'agent', t: 1, cmd: 'pytest' },
-        { ev: 'agent', t: 1, cmd: 'hearth' },
+        { ev: 'agent', t: 1, cmd: 'scribe' },
         { ev: 'codoc', t: 1, kind: 'verdict', accept: true },
         { ev: 'codoc', t: 1, kind: 'verdict', accept: false },
     ];
@@ -116,7 +116,7 @@ test('bookkeeping ops in the ledger are not actions', () => {
 test('running the tests and building are told apart, and nothing else maps', () => {
     assert.equal(mapEvent({ ev: 'agent', t: 1, cmd: 'pytest' }).a, 'RUN_TEST');
     assert.equal(mapEvent({ ev: 'agent', t: 1, cmd: '/usr/bin/pytest' }).a, 'RUN_TEST');
-    assert.equal(mapEvent({ ev: 'agent', t: 1, cmd: 'hearth' }).a, 'RUN_BUILD');
+    assert.equal(mapEvent({ ev: 'agent', t: 1, cmd: 'scribe' }).a, 'RUN_BUILD');
     assert.equal(mapEvent({ ev: 'agent', t: 1, cmd: 'ls' }), null);
     assert.equal(mapEvent({ ev: 'agent', t: 1, cmd: 'git' }), null);
 });
@@ -206,9 +206,9 @@ test('a comparison between conditions cannot include the codoc-only actions', ()
 test('a realistic stretch reads as something a person would recognise', () => {
     const seq = toSequence([
         { ev: 'view', surface: 'document', file: 'CLAUDE.md', t: 12_000, ms: 12_000 },
-        { ev: 'view', surface: 'code', file: 'ember/digest.py', t: 40_000, ms: 20_000 },
+        { ev: 'view', surface: 'code', file: 'tally/summary.py', t: 40_000, ms: 20_000 },
         { ev: 'prompt', t: 45_000, chars: 180 },
-        { ev: 'edit', surface: 'code', file: 'ember/digest.py', t: 60_000, active: false, focused: true, added: 400 },
+        { ev: 'edit', surface: 'code', file: 'tally/summary.py', t: 60_000, active: false, focused: true, added: 400 },
         { ev: 'agent', t: 70_000, cmd: 'pytest' },
     ]);
     assert.deepEqual(toLetters(seq),

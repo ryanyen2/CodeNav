@@ -247,3 +247,35 @@ textarea {
     resize: vertical; min-height: 76px;
 }
 textarea:focus { outline: none; border-color: var(--accent); }
+
+/* Before and after, side by side where there is room. The point of the pair is
+   that you can see the difference without reading either one closely. */
+.ba { display: grid; gap: 14px; margin-bottom: 8px; }
+@media (min-width: 720px) { .ba { grid-template-columns: 1fr 1fr; } }
+.ba-label {
+    display: block; font-size: 11.5px; color: var(--ink-faint);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 5px;
+}
+.ba pre.sample { margin: 0; font-size: 12px; white-space: pre-wrap; }
+
+/* ── the quiz ────────────────────────────────────────────────────────────── */
+
+/* Options stacked and full width, because they are sentences rather than words
+   and a row of four would wrap into something nobody can scan. */
+.opts { display: flex; flex-direction: column; gap: 6px; }
+.opts button {
+    display: flex; align-items: baseline; gap: 10px; width: 100%;
+    text-align: left; font: inherit; color: inherit; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; cursor: pointer;
+    transition: background 140ms var(--ease), border-color 140ms var(--ease);
+}
+.opts button:hover { border-color: var(--accent); }
+.opts button[aria-pressed="true"] {
+    background: var(--accent-soft); border-color: var(--accent);
+}
+.opt-letter {
+    flex: none; width: 1.3em; color: var(--ink-faint); font-size: 13px;
+}
+.opts button[aria-pressed="true"] .opt-letter { color: var(--accent); font-weight: 600; }
+.opt-text { flex: 1; }

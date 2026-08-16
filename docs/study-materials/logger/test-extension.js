@@ -17,7 +17,7 @@ const Module = require('module');
 const LOG = process.env.CODOC_STUDY_LOG_OUT ||
     path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'logger-test-')), 'out.jsonl');
 fs.mkdirSync(path.dirname(LOG), { recursive: true });
-const ROOT = '/ws/ember';
+const ROOT = '/ws/tally';
 
 // ── the stub ────────────────────────────────────────────────────────────────
 const handlers = {};
@@ -88,14 +88,14 @@ ext.activate({
 });
 
 // Open a source file and scroll down it.
-activeEditor = editorFor('ember/digest.py');
+activeEditor = editorFor('tally/digest.py');
 fire('editor', activeEditor);
 fire('ranges', { textEditor: activeEditor, visibleRanges: [range(80, 120)] });
 sleep(1100);
 
 // Type into it.
 fire('change', {
-    document: { uri: uri('ember/digest.py') },
+    document: { uri: uri('tally/digest.py') },
     contentChanges: [{ text: 'hello', rangeLength: 0 }],
 });
 
@@ -107,7 +107,7 @@ sleep(1100);
 // A file changes underneath us while a different editor is active: an agent
 // edit, and it must be distinguishable from the typing above.
 fire('change', {
-    document: { uri: uri('ember/archive.py') },
+    document: { uri: uri('tally/archive.py') },
     contentChanges: [{ text: 'x'.repeat(200), rangeLength: 12 }],
 });
 
@@ -120,19 +120,19 @@ const rows = lines();
 // ── assertions ──────────────────────────────────────────────────────────────
 const kinds = rows.map(r => r.ev);
 assert.ok(kinds.includes('session'), 'a session start is recorded');
-assert.ok(rows.every(r => r.p === 'p04' && r.ws === 'ember'),
+assert.ok(rows.every(r => r.p === 'p04' && r.ws === 'tally'),
     'every line carries the participant and the workspace');
 
 const focus = rows.filter(r => r.ev === 'focus');
 assert.deepStrictEqual(focus.map(f => f.surface), ['code', 'document'],
     'a focus event per surface change, in order');
-assert.strictEqual(focus[0].file, 'ember/digest.py', 'paths are relative to the project');
+assert.strictEqual(focus[0].file, 'tally/digest.py', 'paths are relative to the project');
 
 // The view event is what review coverage is computed from, so it must carry the
 // range that was scrolled through and a duration.
 const view = rows.find(r => r.ev === 'view');
 assert.ok(view, 'leaving a file records what was on screen');
-assert.strictEqual(view.file, 'ember/digest.py');
+assert.strictEqual(view.file, 'tally/digest.py');
 assert.ok(view.from <= 0 && view.to >= 120, `scrolled range is kept: got ${view.from}..${view.to}`);
 assert.ok(view.ms >= 1000, `duration is recorded: got ${view.ms}`);
 
@@ -140,8 +140,8 @@ assert.ok(view.ms >= 1000, `duration is recorded: got ${view.ms}`);
 // measure rests on.
 const edits = rows.filter(r => r.ev === 'edit');
 assert.strictEqual(edits.length, 2, 'both edits recorded');
-const typed = edits.find(e => e.file === 'ember/digest.py');
-const agentish = edits.find(e => e.file === 'ember/archive.py');
+const typed = edits.find(e => e.file === 'tally/digest.py');
+const agentish = edits.find(e => e.file === 'tally/archive.py');
 assert.strictEqual(typed.active, true, 'typing happens in the active editor');
 assert.strictEqual(typed.added, 5);
 assert.strictEqual(agentish.active, false, 'a file changing underneath is not the active editor');
@@ -159,7 +159,7 @@ assert.ok(rows.some(r => r.ev === 'window' && r.focused === false), 'losing focu
 // The mirror is an ES module and this file is loaded as CommonJS, which is what
 // the extension host does. Loading it the wrong way fails quietly and the session
 // looks healthy while nothing is sent, so assert that it really loads.
-// Opening the study page. The workspace here is 'ember', which is a study
+// Opening the study page. The workspace here is 'tally', which is a study
 // project, and a code is configured, so the offer should have fired exactly once.
 assert.equal(offers.length, 1, 'the page is offered');
 assert.match(offers[0], /study page/i);

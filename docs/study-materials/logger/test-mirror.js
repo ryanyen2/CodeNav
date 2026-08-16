@@ -160,7 +160,7 @@ test('a restart reuses the saved sign-in rather than taking another slot', async
     const m1 = new Mirror({ logPath, code: 'p-x', client });
     await m1.start();
     const uid = m1.state.uid;
-    assert.ok(m1.state.refreshToken, 'the sign-in is remembered');
+    assert.ok(m1.state.refreshToken, 'the sign-in is remtallyed');
 
     const m2 = new Mirror({ logPath, code: 'p-x', client });
     assert.equal(m2.state.uid, uid, 'the same account comes back');
@@ -290,7 +290,7 @@ test('a restart reclaiming its own slot is not mistaken for a conflict', async (
 test('no file contents, prompts, or paths outside the project leave', async () => {
     const dir = tmpdir();
     const logPath = writeLog(dir, [
-        edit(0, 'ember/digest.py'),
+        edit(0, 'tally/digest.py'),
         { ev: 'view', surface: 'document', file: 'CLAUDE.md', t: 30_000, ms: 5000 },
     ]);
     const client = fakeClient();
@@ -302,7 +302,7 @@ test('no file contents, prompts, or paths outside the project leave', async () =
     assert.ok(!blob.includes(os.homedir()), 'no absolute path from this machine');
     assert.ok(!/[Pp]assword|secret|token/.test(blob), 'nothing credential-shaped');
     // Relative project paths are expected and are what the measures need.
-    assert.ok(blob.includes('ember/digest.py'));
+    assert.ok(blob.includes('tally/digest.py'));
 });
 
 // ── the encoder ──────────────────────────────────────────────────────────────
@@ -346,8 +346,8 @@ test('both of a participant\'s conditions mirror from the one machine', async ()
         await m.stop();
     };
 
-    await runCondition('hearth', 'codoc');
-    await runCondition('ember-baseline', 'baseline');
+    await runCondition('scribe', 'codoc');
+    await runCondition('tally-baseline', 'baseline');
 
     assert.deepEqual(problems, [], problems.join('; '));
     assert.equal(client.signIns, 1, 'one machine signs in once, not once per workspace');
@@ -364,8 +364,8 @@ test('the identity is shared, and the read offset is not', async () => {
     // offset too would make the second workspace skip its own first events.
     const dir = tmpdir();
     const client = fakeClient();
-    const a = path.join(dir, 'interaction-hearth.jsonl');
-    const b = path.join(dir, 'interaction-ember.jsonl');
+    const a = path.join(dir, 'interaction-scribe.jsonl');
+    const b = path.join(dir, 'interaction-tally.jsonl');
     for (const p of [a, b]) {
         fs.writeFileSync(p, Array.from({ length: 40 }, (_, i) =>
             JSON.stringify(edit(i * 20_000))).join('\n') + '\n');
@@ -388,7 +388,7 @@ test('a machine set up before this change keeps the slot it already holds', asyn
     // a new uid and lose the slot, which is the very failure being fixed.
     const dir = tmpdir();
     const client = fakeClient();
-    const logPath = path.join(dir, 'interaction-hearth.jsonl');
+    const logPath = path.join(dir, 'interaction-scribe.jsonl');
     fs.writeFileSync(logPath, JSON.stringify(edit(0)) + '\n');
     fs.writeFileSync(`${logPath}.mirror.json`, JSON.stringify({
         offset: 0, seq: 3, uid: 'uid-from-before', refreshToken: 'old-refresh',

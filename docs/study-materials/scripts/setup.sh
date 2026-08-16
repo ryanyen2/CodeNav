@@ -135,7 +135,7 @@ fi
 
 if [ "$CHECK_ONLY" = 1 ]; then
   step "Checking the workspaces"
-  for w in hearth hearth-baseline ember ember-baseline; do
+  for w in scribe scribe-baseline tally tally-baseline; do
     if [ -d "$WORK/$w" ]; then ok "$WORK/$w exists"; else bad "$WORK/$w is missing"; FAILED=1; fi
     if [ -x "$WORK/$w/.venv/bin/python" ]; then ok "$w has its Python environment"; else bad "$w has no Python environment"; FAILED=1; fi
   done
@@ -153,7 +153,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
   SEEN="$(python3 -c "
 import json,sys
 try: print(json.load(open(sys.argv[1])).get('codocStudyLogger.participant',''))
-except Exception: print('')" "$WORK/hearth/.vscode/settings.json" 2>/dev/null)"
+except Exception: print('')" "$WORK/scribe/.vscode/settings.json" 2>/dev/null)"
   if [ -n "$SEEN" ]; then
     ok "this machine is filed under $SEEN"
   else
@@ -164,14 +164,14 @@ except Exception: print('')" "$WORK/hearth/.vscode/settings.json" 2>/dev/null)"
   # The keys, by presence only. Whether they still work is a question for the
   # researcher's console, and checking would spend the study's money every time
   # somebody re-runs this.
-  for w in hearth hearth-baseline ember ember-baseline; do
+  for w in scribe scribe-baseline tally tally-baseline; do
     python3 -c "
 import json,sys
 try: sys.exit(0 if json.load(open(sys.argv[1]))['env']['ANTHROPIC_API_KEY'] else 1)
 except Exception: sys.exit(1)" "$WORK/$w/.claude/settings.json" 2>/dev/null \
       || { bad "$w has no Anthropic key, so the agent there has no account"; FAILED=1; }
   done
-  for w in hearth ember; do
+  for w in scribe tally; do
     grep -q '^OPENAI_API_KEY=..' "$WORK/$w/.env" 2>/dev/null \
       || { bad "$w has no OpenAI key, so codoc there has no account"; FAILED=1; }
   done
@@ -218,7 +218,7 @@ mkdir -p "$WORK"
 # shell the participant already has open.
 ln -sf "$CODOC" "$WORK/codoc"
 ok "made a launcher at $WORK/codoc"
-for arc in hearth-codoc hearth-baseline ember-codoc ember-baseline; do
+for arc in scribe scribe-baseline tally tally-baseline; do
   src="$HERE/$arc.tar.gz"
   [ -f "$src" ] || { bad "$arc.tar.gz is missing from the bundle"; exit 1; }
   name="$(tar tzf "$src" | head -1 | cut -d/ -f1)"
@@ -230,7 +230,7 @@ for arc in hearth-codoc hearth-baseline ember-codoc ember-baseline; do
 done
 
 step "Building a Python environment for each workspace"
-for name in hearth hearth-baseline ember ember-baseline; do
+for name in scribe scribe-baseline tally tally-baseline; do
   d="$WORK/$name"
   [ -d "$d" ] || { bad "$d is missing"; exit 1; }
   ( cd "$d" \
@@ -245,7 +245,7 @@ step "Filing this machine under $CODE"
 # outside these four folders is touched and you can delete them and be rid of it.
 # The condition is set here rather than guessed from the folder name, because a
 # folder someone renames would otherwise be counted as the wrong condition.
-for name in hearth hearth-baseline ember ember-baseline; do
+for name in scribe scribe-baseline tally tally-baseline; do
   d="$WORK/$name/.vscode"
   mkdir -p "$d"
   case "$name" in *-baseline) cond=baseline ;; *) cond=codoc ;; esac
@@ -282,7 +282,7 @@ if [ -d "$HERE/logger" ]; then
 fi
 HOOK="$WORK/logger/install-prompt-hook.py"
 if [ -f "$HOOK" ]; then
-  for name in hearth hearth-baseline ember ember-baseline; do
+  for name in scribe scribe-baseline tally tally-baseline; do
     python3 "$HOOK" "$WORK/$name" >/dev/null 2>&1 \
       && ok "$name: prompts will be recorded" \
       || { bad "could not install the prompt hook in $name"; FAILED=1; }
@@ -295,7 +295,7 @@ fi
 step "Connecting codoc to the two codoc workspaces"
 # This rewrites .claude/settings.json and .mcp.json with the paths on YOUR machine.
 # The archive ships without them on purpose, because they hold absolute paths.
-for name in hearth ember; do
+for name in scribe tally; do
   ( cd "$WORK/$name" && "$CODOC" install-hooks >/dev/null 2>&1 ) \
     && ok "$name: wrote .claude/settings.json and .mcp.json" \
     || { bad "codoc install-hooks failed in $WORK/$name. Run it there to see why."; FAILED=1; }
@@ -314,7 +314,7 @@ step "Putting the study's keys in place"
 # Both files hold a secret, so both are readable only by their owner, and both
 # are kept out of git so a participant's own commit cannot carry a key into the
 # archive they send back.
-for name in hearth hearth-baseline ember ember-baseline; do
+for name in scribe scribe-baseline tally tally-baseline; do
   d="$WORK/$name"
 
   # Claude Code. An API key takes precedence over a claude.ai login, which is
@@ -355,7 +355,7 @@ done
 # left alone codoc reads the environment, and a key in the participant's own
 # shell would silently move it onto their account, which is both their money and
 # a way for codoc to break partway through the condition being measured.
-for name in hearth ember; do
+for name in scribe tally; do
   ENVFILE="$WORK/$name/.env"
   if grep -q '^CODOC_PROVIDER=' "$ENVFILE" 2>/dev/null; then
     ok "$name: codoc is already configured"
@@ -381,7 +381,7 @@ step "Checking that both keys work"
 # that is fine but landed in the wrong file fails the session exactly as a bad
 # key would, and only this can tell them apart.
 if command -v claude >/dev/null 2>&1; then
-  SAID="$(cd "$WORK/hearth" && with_deadline 120 claude -p 'Reply with the single word: ready' | tr -d '[:space:]')"
+  SAID="$(cd "$WORK/scribe" && with_deadline 120 claude -p 'Reply with the single word: ready' | tr -d '[:space:]')"
   case "$SAID" in
     *ready*|*Ready*) ok "Claude Code answers on the study's account" ;;
     *401*|*invalid*|*Invalid*)
@@ -429,37 +429,39 @@ fi
 
 # ---------------------------------------------------------------------- verify
 step "Checking that all four workspaces work"
-for name in hearth hearth-baseline; do
-  out="$(cd "$WORK/$name" && ./.venv/bin/hearth build 2>&1 | tail -1)"
+# Each project is run once and its tests once, in both arms. The expected output
+# is written out rather than "did it exit zero", because a project that quietly
+# converted nothing also exits zero.
+check_project() {
+  local name="$1" command="$2" expect_run="$3" expect_tests="$4"
+  local out n
+  out="$(cd "$WORK/$name" && eval "$command" 2>&1 | tail -1)"
   case "$out" in
-    *"aggregates rebuilt"*) ok "$name builds: $out" ;;
-    *) bad "$name did not build as expected. It printed: $out"; FAILED=1 ;;
+    *"$expect_run"*) ok "$name runs: $out" ;;
+    *) bad "$name did not run as expected. It printed: $out"; FAILED=1 ;;
   esac
   n="$(cd "$WORK/$name" && ./.venv/bin/python -m pytest tests/ -q 2>&1 | tail -1)"
   case "$n" in
-    *"233 passed"*) ok "$name passes its tests: $n" ;;
+    *"$expect_tests passed"*) ok "$name passes its tests: $n" ;;
     *) bad "$name tests did not pass. It printed: $n"; FAILED=1 ;;
   esac
-  ( cd "$WORK/$name" && rm -rf _site .hearth )
+  # Put back anything the run generated. A workspace has to look untouched when
+  # the participant opens it, or their first `git status` is somebody else's work.
+  ( cd "$WORK/$name" && git checkout -- . >/dev/null 2>&1
+    git clean -fdq -e .venv >/dev/null 2>&1 )
+}
+
+for name in scribe scribe-baseline; do
+  check_project "$name" './.venv/bin/scribe check fixtures/' "checked 3 documents" 54
 done
-for name in ember ember-baseline; do
-  out="$(cd "$WORK/$name" && ./.venv/bin/python -m ember refresh 2>&1 | tail -1)"
-  case "$out" in
-    *"36 new"*) ok "$name reads its feeds: $out" ;;
-    *) bad "$name did not read its feeds as expected. It printed: $out"; FAILED=1 ;;
-  esac
-  n="$(cd "$WORK/$name" && ./.venv/bin/python -m pytest tests/ -q 2>&1 | tail -1)"
-  case "$n" in
-    *"171 passed"*) ok "$name passes its tests: $n" ;;
-    *) bad "$name tests did not pass. It printed: $n"; FAILED=1 ;;
-  esac
-  ( cd "$WORK/$name" && rm -rf _digest .ember )
+for name in tally tally-baseline; do
+  check_project "$name" './.venv/bin/tally check fixtures/' "checked 3 statements" 43
 done
 
-for name in hearth ember; do
+for name in scribe tally; do
   feat="$("$CODOC" status --root "$WORK/$name" 2>/dev/null | head -1)"
   case "$feat" in
-    *"25 features"*) ok "$name's feature document is in place: $feat" ;;
+    *feature*) ok "$name's feature document is in place: $feat" ;;
     *) bad "$name's feature document is not what we expect. codoc status said: $feat"; FAILED=1 ;;
   esac
 done
@@ -475,13 +477,13 @@ if [ "$FAILED" = 0 ] && [ "$TODO" = 0 ]; then
     https://codoc-11b10.web.app/participant/?code=$CODE&order=$ORDER
 
   Your four workspaces are:
-    $WORK/hearth            $WORK/hearth-baseline
-    $WORK/ember             $WORK/ember-baseline
+    $WORK/scribe            $WORK/scribe-baseline
+    $WORK/tally             $WORK/tally-baseline
 
   Please do not open them or look inside them before the session.
 
   For the experimenter: start the daemon during a codoc condition with
-    cd $WORK/hearth && $WORK/codoc watch      (or $WORK/ember)
+    cd $WORK/scribe && $WORK/codoc watch      (or $WORK/tally)
 EOF
 else
   echo "  Some things still need doing. See the lines marked fail or todo above,"

@@ -1,266 +1,582 @@
 {
-  "hearth": [
+  "scribe": [
     {
-      "number": 1,
-      "title": "What a second build does",
-      "code": "F1",
-      "round": 1,
-      "repeated": true,
-      "scores": {
-        "0": "It builds everything again, or they do not know.",
-        "1": "It skips work it has already done, without the second half about the listing pages.",
-        "2": "Both halves. Pages whose content has not changed are skipped, and the home, tag and feed pages are skipped as well, because a signature taken over the list of posts has not changed."
-      },
-      "question": "You run `hearth build`, change nothing, and run it again. What does the second run do?"
+      "n": 1,
+      "band": "Purpose",
+      "question": "What is scribe for?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Reading PDF files"
+        },
+        {
+          "letter": "b",
+          "text": "Turning text already extracted from a PDF into readable Markdown"
+        },
+        {
+          "letter": "c",
+          "text": "Converting Markdown into PDF"
+        },
+        {
+          "letter": "d",
+          "text": "Checking that a PDF's text layer is complete"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 2,
-      "title": "The path one post takes",
-      "code": "S1",
-      "round": 1,
-      "repeated": true,
-      "scores": {
-        "0": "Fewer stages than that, or in the wrong order.",
-        "1": "Four or more of those stages in the right order, but the separate pass for the listing pages is missing.",
-        "2": "Finding the file, reading its settings block, turning the markdown into HTML, working out its title and address, filling in the template, writing it out. It also says the listing pages are built in a separate pass."
-      },
-      "question": "Walk me through the stages a single post passes through, from a file on disk to HTML in `_site`."
+      "n": 2,
+      "band": "Purpose",
+      "question": "What does scribe assume about its input?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It is a PDF file"
+        },
+        {
+          "letter": "b",
+          "text": "It is Markdown with some errors in it"
+        },
+        {
+          "letter": "c",
+          "text": "It is plain text with a form feed between pages"
+        },
+        {
+          "letter": "d",
+          "text": "It is HTML from a PDF viewer"
+        }
+      ],
+      "answer": "c"
     },
     {
-      "number": 3,
-      "title": "Why the dev server works the way it does",
-      "code": "R1",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "Nothing, or something wrong.",
-        "1": "A plausible reason of their own, such as \"it is simpler\" or \"it is faster\", with no rejected alternative.",
-        "2": "Rendering each page as it is requested was rejected, so that the preview and the published site can never disagree."
-      },
-      "question": "Why does the dev server serve files from the build output instead of rendering pages on request? What alternative was rejected?"
+      "n": 3,
+      "band": "Purpose",
+      "question": "Which of these is out of scope for scribe?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Removing a header repeated on every page"
+        },
+        {
+          "letter": "b",
+          "text": "Joining a word split across a line break"
+        },
+        {
+          "letter": "c",
+          "text": "Collecting footnotes at the end"
+        },
+        {
+          "letter": "d",
+          "text": "Recovering a table's column boundaries"
+        }
+      ],
+      "answer": "d"
     },
     {
-      "number": 4,
-      "title": "When the listing pages are rebuilt",
-      "code": "R2",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "File timestamps, or a guess.",
-        "1": "The signature, with no mention of what was rejected.",
-        "2": "A signature taken over the fields of the assembled list of posts, chosen instead of tracking which output depends on which input, because that kept going subtly wrong after a post was deleted."
-      },
-      "question": "Index and tag pages are not rebuilt on every build. How does hearth decide when they must be, and why was it designed that way?"
+      "n": 4,
+      "band": "Purpose",
+      "question": "Who is the output for?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "A printer"
+        },
+        {
+          "letter": "b",
+          "text": "Somebody who will grep, diff and paste it into other things"
+        },
+        {
+          "letter": "c",
+          "text": "An archive that must preserve the original exactly"
+        },
+        {
+          "letter": "d",
+          "text": "A screen reader"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 5,
-      "title": "Adding a second output format",
-      "code": "E1",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "Changes scattered across unrelated parts.",
-        "1": "The right modules, without that last point.",
-        "2": "The build step that writes output, and possibly page assembly. Finding files, reading settings, rendering markdown and filling templates are all left alone. It also mentions that the record of what each build wrote has to know about the new file."
-      },
-      "question": "To add a second output format, say a JSON file per post, which modules would change, and which would you leave alone?"
+      "n": 5,
+      "band": "Rationale",
+      "question": "Why are headings found by their numbering rather than by being short?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Numbering is faster to match"
+        },
+        {
+          "letter": "b",
+          "text": "Short-line matching promoted captions, list items and names"
+        },
+        {
+          "letter": "c",
+          "text": "Markdown requires numbered headings"
+        },
+        {
+          "letter": "d",
+          "text": "Because the fixtures all use numbering"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 6,
-      "title": "The hand-written markdown renderer",
-      "code": "D1",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "No position either way.",
-        "1": "A position with nothing behind it.",
-        "2": "A position with a tradeoff behind it, such as the cost of a dependency against the cost of writing and fixing it yourself. The recorded reason, that hearth is meant to deploy as one file, counts."
-      },
-      "question": "The markdown renderer is written by hand instead of using a library. Would you have made the same call? Why or why not?"
+      "n": 6,
+      "band": "Rationale",
+      "question": "Why does a hyphen at a line end usually disappear?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Markdown does not allow hyphens inside words"
+        },
+        {
+          "letter": "b",
+          "text": "In a justified column most of them were put there by the typesetter"
+        },
+        {
+          "letter": "c",
+          "text": "It is faster than checking a dictionary"
+        },
+        {
+          "letter": "d",
+          "text": "Because the alternative loses the word entirely"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 7,
-      "title": "What their own change rebuilds",
-      "code": "F2",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "A description that does not match what their build does.",
-        "1": "Only the post's own page.",
-        "2": "The change reaches the assembled list, so the signature moves and the listing pages are rebuilt. An accurate description of their own build scores 2 here even when that build is broken, including saying that the listing pages go stale. Whether the code is right is scored separately."
-      },
-      "question": "After your change: someone flips a published post to draft and runs an incremental build. Walk me through exactly what rebuilds and why."
+      "n": 7,
+      "band": "Rationale",
+      "question": "Why does a document under three pages have no furniture removed?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Short documents never have headers"
+        },
+        {
+          "letter": "b",
+          "text": "It would be too slow on long documents otherwise"
+        },
+        {
+          "letter": "c",
+          "text": "Under three pages there is no pattern, so a coincidence would be treated as one"
+        },
+        {
+          "letter": "d",
+          "text": "The page numbers are unreliable"
+        }
+      ],
+      "answer": "c"
     },
     {
-      "number": 8,
-      "title": "Drafts and the feed",
-      "code": "R3",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "They do not know what their own build does.",
-        "1": "What it does, with \"the agent did it that way\" as the reason.",
-        "2": "What it does, plus a reason of their own, such as what a subscriber would expect or that the card did not say. Any real ground counts, whichever way they went."
-      },
-      "question": "Drafts and the RSS feed: what does your build do now, and why that way?"
+      "n": 8,
+      "band": "Rationale",
+      "question": "Why are ligatures and curly quotes replaced?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "They are not valid Markdown"
+        },
+        {
+          "letter": "b",
+          "text": "They render badly in a browser"
+        },
+        {
+          "letter": "c",
+          "text": "The output is meant to be grepped, diffed and pasted"
+        },
+        {
+          "letter": "d",
+          "text": "They take more bytes"
+        }
+      ],
+      "answer": "c"
     },
     {
-      "number": 9,
-      "title": "Scheduled posts",
-      "code": "E2",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "A new filter somewhere else.",
-        "1": "The right place, without the catch.",
-        "2": "They extend whatever they built for drafts, adding a second condition in the same place, and they notice the catch: a date-based rule changes the right answer without anyone editing a file, so the build has to be run again and the date has to reach the signature."
-      },
-      "question": "Next month the team wants scheduled posts, where a future date keeps a post hidden until that date passes. Given what you built today, what changes and where?"
+      "n": 9,
+      "band": "Change",
+      "question": "Footnote markers used to be found after any full stop. Why did that change?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It missed markers at the end of a paragraph"
+        },
+        {
+          "letter": "b",
+          "text": "Every decimal number became a footnote reference"
+        },
+        {
+          "letter": "c",
+          "text": "Markdown changed its footnote syntax"
+        },
+        {
+          "letter": "d",
+          "text": "It was too slow on long documents"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 10,
-      "title": "Arguing the other side",
-      "code": "D2",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "They do not engage with it.",
-        "1": "One side only.",
-        "2": "Both sides of the real tension. Deciding early keeps the listing pages correct but means the dev server needs a way to ask for drafts. Deciding late makes the preview trivial but the signature never sees it."
-      },
-      "question": "You put the draft decision where you did. Argue for the opposite placement. What would break, and would anything get better?"
+      "n": 10,
+      "band": "Change",
+      "question": "Why does heading detection look at the following line?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "To get the heading's depth right"
+        },
+        {
+          "letter": "b",
+          "text": "To find the section's first paragraph"
+        },
+        {
+          "letter": "c",
+          "text": "The first line of a wrapped list item looks exactly like a heading"
+        },
+        {
+          "letter": "d",
+          "text": "To decide how much space to leave"
+        }
+      ],
+      "answer": "c"
+    },
+    {
+      "n": 11,
+      "band": "Change",
+      "question": "Why does furniture removal run before heading detection, and not after?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It is faster that way"
+        },
+        {
+          "letter": "b",
+          "text": "A running header is often the section title, so it would be promoted on every page"
+        },
+        {
+          "letter": "c",
+          "text": "Heading detection needs the page numbers gone first"
+        },
+        {
+          "letter": "d",
+          "text": "The two do not interact; the order is arbitrary"
+        }
+      ],
+      "answer": "b"
+    },
+    {
+      "n": 12,
+      "band": "Extension",
+      "question": "To keep the running header on a one-off document while still removing it from a report, what has to be decided first?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Which Markdown syntax a header should use"
+        },
+        {
+          "letter": "b",
+          "text": "Whether to read the PDF metadata"
+        },
+        {
+          "letter": "c",
+          "text": "What distinguishes the two kinds of document, since scribe sees only text"
+        },
+        {
+          "letter": "d",
+          "text": "Whether to make it a command line flag"
+        }
+      ],
+      "answer": "c"
     }
   ],
-  "ember": [
+  "tally": [
     {
-      "number": 1,
-      "title": "What a second digest run does",
-      "code": "F1",
-      "round": 1,
-      "repeated": true,
-      "scores": {
-        "0": "It writes everything again, or they do not know.",
-        "1": "It skips the days it has already written, without the second, separate signature for the archive.",
-        "2": "Both halves. Each day's page is skipped because a signature over the items that day chose has not changed, and the archive is skipped because it has a separate signature of its own over every stored item."
-      },
-      "question": "You run `ember digest`, change nothing, and run it again. What does the second run do?"
+      "n": 1,
+      "band": "Purpose",
+      "question": "What is tally for?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Connecting to a bank and downloading transactions"
+        },
+        {
+          "letter": "b",
+          "text": "Turning a CSV of transactions into a summary of what was spent, by month and category"
+        },
+        {
+          "letter": "c",
+          "text": "Checking a statement for fraud"
+        },
+        {
+          "letter": "d",
+          "text": "Preparing a tax return"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 2,
-      "title": "The path one feed entry takes",
-      "code": "S1",
-      "round": 1,
-      "repeated": true,
-      "scores": {
-        "0": "Fewer stages than that, or in the wrong order.",
-        "1": "Four or more of those stages in the right order, but the store or the separate archive pass is missing.",
-        "2": "Reading the source, parsing it, tidying it into a stored item, saving it without duplicating what is already there, choosing it for a day, filling in the template, writing the page. It also says the archive is built in a separate pass."
-      },
-      "question": "Walk me through the stages a single feed entry passes through, from XML on disk to a line on a digest page."
+      "n": 2,
+      "band": "Purpose",
+      "question": "What does tally assume about its input?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It comes from one particular bank"
+        },
+        {
+          "letter": "b",
+          "text": "It is already sorted by date"
+        },
+        {
+          "letter": "c",
+          "text": "It is a CSV whose columns may be named any of several ways"
+        },
+        {
+          "letter": "d",
+          "text": "It has been checked for errors first"
+        }
+      ],
+      "answer": "c"
     },
     {
-      "number": 3,
-      "title": "Why the archive has its own signature",
-      "code": "R1",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "Nothing, or something wrong.",
-        "1": "A plausible reason of their own, such as \"it is simpler\", with no rejected alternative.",
-        "2": "One shared signature was rejected. The archive has to be rewritten whenever the whole collection moves, and a day's page only when that day would come out different, so a shared signature made each of them rebuild for the other's reasons."
-      },
-      "question": "The archive has a signature of its own rather than sharing the digests'. Why was it built that way? What alternative was rejected?"
+      "n": 3,
+      "band": "Purpose",
+      "question": "Which of these is out of scope?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Deciding which month a transaction belongs to"
+        },
+        {
+          "letter": "b",
+          "text": "Spotting a payment that comes round every month"
+        },
+        {
+          "letter": "c",
+          "text": "Leaving out money moved between your own accounts"
+        },
+        {
+          "letter": "d",
+          "text": "Telling you whether you can afford something"
+        }
+      ],
+      "answer": "d"
     },
     {
-      "number": 4,
-      "title": "When a day's page is rewritten",
-      "code": "R2",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "File timestamps, or a guess.",
-        "1": "The signature, with no mention of what was rejected.",
-        "2": "A signature over the fields of the items that day selected, taken from the assembled selection, chosen instead of tracking what each day depends on, because that kept going subtly wrong once an item's date moved it to a different day."
-      },
-      "question": "A day's digest page is not rewritten on every run. How does ember decide when it must be, and why was it designed that way?"
+      "n": 4,
+      "band": "Purpose",
+      "question": "Who is the output for?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "An accountant reconciling against the bank"
+        },
+        {
+          "letter": "b",
+          "text": "The person whose statement it is, asking what they spent"
+        },
+        {
+          "letter": "c",
+          "text": "A budgeting app that will import it"
+        },
+        {
+          "letter": "d",
+          "text": "A tax authority"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 5,
-      "title": "Adding a second output format",
-      "code": "E1",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "Changes scattered across unrelated parts.",
-        "1": "The right modules, without that last point.",
-        "2": "The step that writes the digest, and possibly the renderer. Fetching, parsing, tidying, storing and the templates are left alone. It also mentions that the new file has to be tracked, or a skipped run will leave it missing."
-      },
-      "question": "To add a second output format, say a JSON file per day alongside the HTML page, which modules would change, and which would you leave alone?"
+      "n": 5,
+      "band": "Rationale",
+      "question": "Why does the first matching category rule win, rather than requiring exactly one?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It is faster"
+        },
+        {
+          "letter": "b",
+          "text": "Banks guarantee only one will match"
+        },
+        {
+          "letter": "c",
+          "text": "Requiring one would stop the whole summary over a single ambiguous merchant"
+        },
+        {
+          "letter": "d",
+          "text": "The rules are guaranteed not to overlap"
+        }
+      ],
+      "answer": "c"
     },
     {
-      "number": 6,
-      "title": "The hand-written template engine",
-      "code": "D1",
-      "round": 1,
-      "repeated": false,
-      "scores": {
-        "0": "No position either way.",
-        "1": "A position with nothing behind it.",
-        "2": "A position with a tradeoff behind it, such as the cost of a dependency against the cost of writing and fixing it yourself. The recorded reason, that ember is meant to run anywhere Python runs, counts."
-      },
-      "question": "The template engine is written by hand instead of using a library. Would you have made the same call? Why or why not?"
+      "n": 6,
+      "band": "Rationale",
+      "question": "Why is a transaction filed under the date it was made rather than posted?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "The posting date is often missing"
+        },
+        {
+          "letter": "b",
+          "text": "A card payment on the 31st can post on the 2nd, and the summary should match what the person remembers doing"
+        },
+        {
+          "letter": "c",
+          "text": "It is what the bank's statement does"
+        },
+        {
+          "letter": "d",
+          "text": "Posting dates are unreliable across banks"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 7,
-      "title": "What their own change rewrites",
-      "code": "F2",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "A description that does not match what their build does.",
-        "1": "\"The digest is regenerated\", with no mention of the signature.",
-        "2": "The mute reaches the point where items are chosen, so the signature moves and every day's page holding that feed is rewritten. An accurate description of their own build scores 2 here even when that build is broken, including saying the pages go stale. Whether the code is right is scored separately."
-      },
-      "question": "After your change: someone mutes a feed and runs the digest. Walk me through exactly what gets rewritten and why."
+      "n": 7,
+      "band": "Rationale",
+      "question": "Why does recurring detection need the amount to match, not just the merchant?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Merchant names change between statements"
+        },
+        {
+          "letter": "b",
+          "text": "Merchant alone calls a supermarket recurring, which is true and useless"
+        },
+        {
+          "letter": "c",
+          "text": "Amounts are easier to compare than text"
+        },
+        {
+          "letter": "d",
+          "text": "To avoid matching refunds"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 8,
-      "title": "Muted feeds and the log",
-      "code": "R3",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "They do not know what their own build does.",
-        "1": "What it does, with \"the agent did it that way\" as the reason.",
-        "2": "What it does, plus a reason of their own, such as the log being a record of what arrived rather than of what was shown, or muting being meant to silence everything. Any real ground counts, whichever way they went."
-      },
-      "question": "Muted feeds and the notification log: what does your build do now, and why that way?"
+      "n": 8,
+      "band": "Rationale",
+      "question": "Why does rounding happen at the total rather than on each row?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It is faster"
+        },
+        {
+          "letter": "b",
+          "text": "Decimals cannot be rounded twice"
+        },
+        {
+          "letter": "c",
+          "text": "A hundred small transactions would accumulate a hundred small errors"
+        },
+        {
+          "letter": "d",
+          "text": "The bank rounds that way"
+        }
+      ],
+      "answer": "c"
     },
     {
-      "number": 9,
-      "title": "Snoozed feeds",
-      "code": "E2",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "A new filter somewhere else.",
-        "1": "The right place, without the catch.",
-        "2": "They extend whatever they built for muting, adding a second condition in the same place, and they notice the catch: a date-based rule changes the right answer without anyone editing a file, so the digest has to be run again and the date has to reach the signature."
-      },
-      "question": "Next month the team wants snoozed feeds, muted until a date and then back to normal on their own. Given what you built today, what changes and where?"
+      "n": 9,
+      "band": "Change",
+      "question": "Why does `drop_duplicates` treat transfers differently?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Transfers are not real spending"
+        },
+        {
+          "letter": "b",
+          "text": "A transfer between your own accounts is two rows that look exactly like a duplicate"
+        },
+        {
+          "letter": "c",
+          "text": "Transfers have no category"
+        },
+        {
+          "letter": "d",
+          "text": "Banks export them twice by mistake"
+        }
+      ],
+      "answer": "b"
     },
     {
-      "number": 10,
-      "title": "Arguing the other side",
-      "code": "D2",
-      "round": 2,
-      "repeated": false,
-      "scores": {
-        "0": "They do not engage with it.",
-        "1": "One side only.",
-        "2": "Both sides of the real tension. Deciding where items are chosen means the signature sees it, but every caller has to know which feeds are muted. Deciding in the renderer is simpler and local, but the signature never sees it, so the pages are never rewritten."
-      },
-      "question": "You put the mute decision where you did. Argue for the opposite placement. What would break, and would anything get better?"
+      "n": 10,
+      "band": "Change",
+      "question": "Why does `sign_convention` guess rather than ask?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Asking is impossible in a command line tool"
+        },
+        {
+          "letter": "b",
+          "text": "The guess is always right"
+        },
+        {
+          "letter": "c",
+          "text": "The tool is for one person's own statements, where the convention never changes"
+        },
+        {
+          "letter": "d",
+          "text": "The bank does not say which way round it is"
+        }
+      ],
+      "answer": "c"
+    },
+    {
+      "n": 11,
+      "band": "Change",
+      "question": "Why does `COLUMNS` list \"transaction date\" before \"date\"?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It is alphabetical"
+        },
+        {
+          "letter": "b",
+          "text": "A bank exporting both would otherwise give the posting date and shift every month-end transaction"
+        },
+        {
+          "letter": "c",
+          "text": "\"date\" is a reserved word"
+        },
+        {
+          "letter": "d",
+          "text": "The order does not matter; it is arbitrary"
+        }
+      ],
+      "answer": "b"
+    },
+    {
+      "n": 12,
+      "band": "Extension",
+      "question": "To make a refund reduce the month the purchase was in, rather than the month the refund arrived, what has to be decided first?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Which category the refund belongs to"
+        },
+        {
+          "letter": "b",
+          "text": "Whether refunds should be positive or negative"
+        },
+        {
+          "letter": "c",
+          "text": "What happens when the refund arrives after that month's summary has already been read"
+        },
+        {
+          "letter": "d",
+          "text": "Whether to store the original purchase's date"
+        }
+      ],
+      "answer": "c"
     }
   ]
 }

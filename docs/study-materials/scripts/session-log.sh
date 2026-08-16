@@ -2,7 +2,7 @@
 # session-log.sh — records one study session.
 #
 #   ./session-log.sh <workspace> <label> [output-dir]
-#   ./session-log.sh ~/codoc-study/hearth p04-codoc
+#   ./session-log.sh ~/codoc-study/scribe p04-codoc
 #
 # Every 20 seconds it commits the whole workspace to a shadow git branch and
 # copies each codoc control file into a timestamped folder. The participant's own
@@ -65,5 +65,5 @@ Stop it with:
   kill \$(cat "$LOG/logger.pid")
 
 At the end of the session, also collect the Claude Code transcript:
-  cp -R ~/.claude/projects/*hearth* "$LOG/claude-transcript/"
+  cp -R ~/.claude/projects/*scribe* "$LOG/claude-transcript/"
 EOF

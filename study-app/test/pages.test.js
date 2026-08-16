@@ -218,10 +218,10 @@ test('the forms show the questions for the right project', async () => {
     (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
         docs: [{ id: 'p-x', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
     });
-    // codoc-first means the codoc condition is hearth, so the hearth decisions
-    // are the ones on screen.
-    assert.match(document.body.textContent, /What marks a post as a draft/);
-    assert.ok(!document.body.textContent.includes('Where a mute is configured'));
+    // codoc-first pairs the codoc condition with scribe, so scribe's decisions
+    // are the ones on screen and tally's are not.
+    assert.match(document.body.textContent, /What marks a quote in extracted text/);
+    assert.ok(!document.body.textContent.includes('How a split is written'));
 });
 
 // ── the participant page ─────────────────────────────────────────────────────

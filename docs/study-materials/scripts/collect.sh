@@ -18,7 +18,7 @@ mkdir -p "$DEST"
 
 echo "Collecting session ${CODE}."
 
-for w in hearth hearth-baseline ember ember-baseline; do
+for w in scribe scribe-baseline tally tally-baseline; do
   if [ -d "$WORK/$w" ]; then
     # Skip the Python environments and the built site. They are large and we can
     # rebuild both from the source we are keeping.
@@ -37,7 +37,7 @@ fi
 
 mkdir -p "$DEST/claude-transcripts"
 found=0
-for d in "$HOME"/.claude/projects/*hearth* "$HOME"/.claude/projects/*ember*; do
+for d in "$HOME"/.claude/projects/*scribe* "$HOME"/.claude/projects/*tally*; do
   [ -d "$d" ] || continue
   rsync -a "$d" "$DEST/claude-transcripts/" 2>/dev/null && found=$((found+1))
 done

@@ -12,8 +12,8 @@
 //
 // One line of JSON per event, appended:
 //
-//   {"t":1786653982848,"p":"p04","ws":"hearth","ev":"focus","surface":"code",
-//    "file":"hearth/build.py"}
+//   {"t":1786653982848,"p":"p04","ws":"scribe","ev":"focus","surface":"code",
+//    "file":"scribe/furniture.py"}
 //
 // Events:
 //   session  the log started or the window closed. Carries the workspace name.
@@ -207,7 +207,7 @@ function activate(context) {
 let mirror = null;
 const activation = { mirrorReady: null };
 
-const STUDY_PROJECTS = ['hearth', 'hearth-baseline', 'ember', 'ember-baseline'];
+const STUDY_PROJECTS = ['scribe', 'scribe-baseline', 'tally', 'tally-baseline'];
 
 /** Whether this folder is one of the study's, so nothing is offered elsewhere. */
 function isStudyProject(name) {

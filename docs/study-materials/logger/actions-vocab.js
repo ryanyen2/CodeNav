@@ -54,7 +54,7 @@ const READ_BY_SURFACE = { document: 'READ_DOC', code: 'READ_CODE', test: 'READ_T
 const EDIT_BY_SURFACE = { document: 'EDIT_DOC', code: 'EDIT_CODE', test: 'EDIT_TEST' };
 
 const TEST_COMMANDS = /^(pytest|vitest|jest)$/;
-const BUILD_COMMANDS = /^(hearth|ember|make|npm|node|python|python3)$/;
+const BUILD_COMMANDS = /^(scribe|tally|make|npm|node|python|python3)$/;
 
 /**
  * One raw event to one action, or nothing.

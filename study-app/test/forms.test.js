@@ -1,131 +1,152 @@
-// The forms the researcher fills in, and the sheets they come from.
+// The forms the researcher fills in, and the quiz the participant answers.
 //
 //   node --test test/forms.test.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseSheet } from '../scripts/extract-questions.mjs';
+import { parseQuiz } from '../scripts/extract-questions.mjs';
 import {
-    OPEN_DECISIONS, SETTLED_BY, GROUNDS, questionsFor, rounds,
+    OPEN_DECISIONS, SETTLED_BY, GROUNDS, CONSISTENCY, COUPLED_DECISION,
+    BANDS, SITTINGS, questionsFor, bandsFor, score,
     emptyAssessment, outstanding,
 } from '../experimenter/forms.js';
+import { QUIZZES } from '../participant/quiz.js';
 
-const sheet = (p) => readFileSync(
-    new URL(`../../docs/study-materials/questions-${p}.md`, import.meta.url), 'utf8');
+const study = (p) => readFileSync(
+    new URL(`../../docs/study-materials/projects/${p}/STUDY.md`, import.meta.url), 'utf8');
 
-// ── the sheets are the source ────────────────────────────────────────────────
+const PROJECTS = ['scribe', 'tally'];
 
-test('the dashboard reads the same sheets the researcher reads from', () => {
+// ── the STUDY files are the source ───────────────────────────────────────────
+
+test('the dashboard reads the same quiz the study file holds', () => {
     // One source of truth. A second copy in JavaScript would drift, and the
-    // sheets are what gets frozen at pre-registration.
-    for (const project of ['hearth', 'ember']) {
-        const parsed = parseSheet(sheet(project));
-        assert.equal(parsed.length, 10);
-        assert.deepEqual(parsed.map((q) => q.code), questionsFor(project).map((q) => q.code));
+    // STUDY files are what gets frozen at pre-registration.
+    for (const project of PROJECTS) {
+        const parsed = parseQuiz(study(project));
+        assert.equal(parsed.length, 12);
+        assert.deepEqual(parsed.map((q) => q.n), questionsFor(project).map((q) => q.n));
+        assert.deepEqual(parsed.map((q) => q.answer), questionsFor(project).map((q) => q.answer));
     }
 });
 
-test('every question has all three scoring rules', () => {
-    for (const project of ['hearth', 'ember']) {
-        for (const q of questionsFor(project)) {
-            for (const s of ['0', '1', '2']) {
-                assert.ok(q.scores[s] && q.scores[s].length > 10,
-                    `${project} ${q.code} has no rule for ${s}`);
-            }
+test('the participant copy carries no answers', () => {
+    // It ships to a browser. A participant who opened the console would find
+    // them, and the second sitting would measure their curiosity.
+    const raw = readFileSync(new URL('../participant/quiz.js', import.meta.url), 'utf8');
+    assert.ok(!/"answer"/.test(raw), 'the answer key is not in the participant bundle');
+    for (const project of PROJECTS) {
+        for (const q of QUIZZES[project]) {
+            assert.equal(q.answer, undefined, `${project} Q${q.n} carries its answer`);
         }
     }
 });
 
-test('the two anchors are asked in both rounds and nothing else is', () => {
-    // The change between the two answers is the measure, so the repeated ones
-    // have to be exactly the ones the sheet marks.
-    for (const project of ['hearth', 'ember']) {
-        const r = rounds(project);
-        const repeated = questionsFor(project).filter((q) => q.repeated).map((q) => q.code);
-        assert.deepEqual(repeated, ['F1', 'S1']);
-        assert.equal(r[1].length, 6);
-        assert.equal(r[2].length, 6, 'four new ones plus the two anchors');
-        assert.ok(r[2].slice(0, 2).every((q) => q.repeated));
+test('the participant sees the same questions in the same order', () => {
+    for (const project of PROJECTS) {
+        assert.deepEqual(
+            QUIZZES[project].map((q) => q.question),
+            questionsFor(project).map((q) => q.question));
     }
 });
 
-test('the two projects ask the same shape of question', () => {
-    const a = questionsFor('hearth').map((q) => q.code);
-    const b = questionsFor('ember').map((q) => q.code);
-    assert.deepEqual(a, b, 'matched item for item, or the conditions are not comparable');
+test('every question has four options and exactly one right one', () => {
+    for (const project of PROJECTS) {
+        for (const q of questionsFor(project)) {
+            assert.equal(q.options.length, 4, `${project} Q${q.n}`);
+            assert.ok(['a', 'b', 'c', 'd'].includes(q.answer), `${project} Q${q.n}`);
+            assert.ok(q.options.some((o) => o.letter === q.answer));
+        }
+    }
+});
+
+test('the four bands RQ1 asks in are all present', () => {
+    for (const project of PROJECTS) {
+        const bands = bandsFor(project).map((g) => g.band);
+        for (const needed of BANDS) assert.ok(bands.includes(needed), `${project} has no ${needed}`);
+    }
+});
+
+test('the two projects ask the same shape of quiz', () => {
+    const shape = (p) => bandsFor(p).map((g) => `${g.band}:${g.questions.length}`);
+    assert.deepEqual(shape('scribe'), shape('tally'),
+        'matched band for band, or the conditions are not comparable');
 });
 
 // ── what is recorded ─────────────────────────────────────────────────────────
 
-test('closed book and open book are stored separately', () => {
-    const a = emptyAssessment('hearth');
-    const keys = Object.keys(a.scores);
-    assert.ok(keys.some((k) => k.endsWith('-closed')));
-    assert.ok(keys.some((k) => k.endsWith('-open')));
-    // One overwriting the other would erase the only thing this measures.
-    for (const k of keys.filter((x) => x.endsWith('-closed'))) {
-        assert.ok(keys.includes(k.replace('-closed', '-open')));
+test('the quiz is stored twice, before and after', () => {
+    const a = emptyAssessment('scribe');
+    assert.equal(Object.keys(a.answers).length, 12 * SITTINGS.length);
+    for (const sitting of SITTINGS) assert.ok(`q1-${sitting}` in a.answers);
+});
+
+test('what they chose is stored, not whether it was right', () => {
+    // A stored right-or-wrong cannot be re-marked if a question turns out to be
+    // ambiguous, and it hides which wrong option attracted people.
+    const a = emptyAssessment('scribe');
+    a.answers['q1-before'] = 'c';
+    assert.equal(score(a, 'scribe', 'before').right, questionsFor('scribe')[0].answer === 'c' ? 1 : 0);
+    assert.equal(a.answers['q1-before'], 'c', 'the letter survives');
+});
+
+test('scoring counts only what was answered', () => {
+    const a = emptyAssessment('tally');
+    const first = questionsFor('tally')[0];
+    a.answers[`q${first.n}-after`] = first.answer;
+    const result = score(a, 'tally', 'after');
+    assert.deepEqual([result.right, result.answered, result.of], [1, 1, 12]);
+});
+
+test('every open decision has a consistency rating beside it', () => {
+    // The primary outcome. Stored apart from who settled it, because a decision
+    // somebody made themselves can still contradict the codebase.
+    for (const project of PROJECTS) {
+        const a = emptyAssessment(project);
+        assert.equal(Object.keys(a.decisions).length, 4);
+        assert.deepEqual(Object.keys(a.consistency), Object.keys(a.decisions));
     }
 });
 
-test('an anchor scored in both rounds keeps four separate numbers', () => {
-    const a = emptyAssessment('hearth');
-    for (const k of ['F1-r1-closed', 'F1-r1-open', 'F1-r2-closed', 'F1-r2-open']) {
-        assert.ok(k in a.scores, `${k} is missing`);
-    }
-});
-
-test('each task has four open decisions and three ways to settle one', () => {
-    for (const project of ['hearth', 'ember']) {
+test('the coupled decision is the last one in both projects', () => {
+    // It is where two rules meet, and it is reached by deciding rather than by
+    // tripping over it. Both task cards are built so it comes last.
+    assert.equal(COUPLED_DECISION, 3);
+    for (const project of PROJECTS) {
         assert.equal(OPEN_DECISIONS[project].length, 4);
+        assert.ok(OPEN_DECISIONS[project][COUPLED_DECISION]);
     }
+});
+
+test('consistency is rated nought to two, and says what each means', () => {
+    assert.equal(CONSISTENCY.length, 3);
+    for (const label of CONSISTENCY) assert.ok(label.length > 20, label);
+});
+
+test('the ways a decision can be settled are the three that matter', () => {
     assert.equal(SETTLED_BY.length, 3);
-    assert.ok(SETTLED_BY.some((s) => /never noticed/i.test(s)),
-        'including the one that matters most');
+    assert.match(SETTLED_BY[2], /never noticed/);
 });
 
-test('the sign-off can rest on more than one thing', () => {
-    // People run the tests and read the diff. Forcing a single answer would lose
-    // that, and what it rested on is the measure rather than the number.
-    assert.ok(GROUNDS.length >= 4);
-    const a = emptyAssessment('hearth');
-    assert.ok(Array.isArray(a.signoffGrounds));
+test('what the sign-off rested on is offered, not typed', () => {
+    assert.ok(GROUNDS.includes('Read the description'));
+    assert.ok(GROUNDS.includes('The agent said so'));
 });
 
-test('the open decisions do not give away the hidden rule', () => {
-    for (const project of ['hearth', 'ember']) {
-        const text = OPEN_DECISIONS[project].join(' ').toLowerCase();
-        assert.ok(!text.includes('signature'));
-        assert.ok(!text.includes('stale'));
-    }
+test('gaps are named while the call is still on', () => {
+    const gaps = outstanding(emptyAssessment('scribe'), 'scribe');
+    assert.ok(gaps.length, 'a blank record has gaps');
+    assert.ok(gaps.some((g) => /sign-off/.test(g)));
 });
 
-// ── what is still missing ────────────────────────────────────────────────────
-
-test('an empty record reports everything as outstanding', () => {
-    const gaps = outstanding(emptyAssessment('hearth'), 'hearth');
-    assert.ok(gaps.some((g) => /sign-off number/.test(g)));
-    assert.ok(gaps.some((g) => /open decision/.test(g)));
-    assert.ok(gaps.some((g) => /unscored/.test(g)));
-});
-
-test('a finished record reports nothing outstanding', () => {
-    const a = emptyAssessment('hearth');
+test('a filled record has no gaps', () => {
+    const a = emptyAssessment('scribe');
     a.signoffConfidence = 4;
     a.signoffGrounds = ['Ran the tests'];
-    a.signoffVerbatim = 'I think so, the tests pass and I read most of it.';
-    for (const d of OPEN_DECISIONS.hearth) a.decisions[d] = SETTLED_BY[0];
-    for (const k of Object.keys(a.scores)) if (k.endsWith('-closed')) a.scores[k] = 2;
-    assert.deepEqual(outstanding(a, 'hearth'), []);
-});
-
-test('a zero score counts as answered', () => {
-    // Zero is a real score. Treating it as missing would quietly ask for it again.
-    const a = emptyAssessment('hearth');
-    a.signoffConfidence = 1;
-    a.signoffGrounds = ['The agent said so'];
-    a.signoffVerbatim = 'no idea really';
-    for (const d of OPEN_DECISIONS.hearth) a.decisions[d] = SETTLED_BY[2];
-    for (const k of Object.keys(a.scores)) if (k.endsWith('-closed')) a.scores[k] = 0;
-    assert.deepEqual(outstanding(a, 'hearth'), []);
+    a.signoffVerbatim = 'It works and I checked the quote case.';
+    for (const d of Object.keys(a.decisions)) {
+        a.decisions[d] = 1;
+        a.consistency[d] = 2;
+    }
+    assert.deepEqual(outstanding(a, 'scribe'), []);
 });

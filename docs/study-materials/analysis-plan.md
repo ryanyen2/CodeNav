@@ -67,7 +67,7 @@ transcript, which the participant is told about.
 
 | Measure | Computed from |
 | --- | --- |
-| The three things being scored, and regressions | `scoring/check-hearth.py` or `scoring/check-ember.py`, with the settings file you wrote for that participant. |
+| The three things being scored, and regressions | `scoring/check-scribe.py` or `scoring/check-tally.py`, with the settings file you wrote for that participant. |
 | Where the change landed, rated 0 to 3 | The final diff, rated by hand. |
 | The combined score that joins working code with being able to explain it | The scorer for the code half, the questions and think-aloud for the human half. |
 

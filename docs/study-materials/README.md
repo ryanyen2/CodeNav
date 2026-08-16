@@ -19,7 +19,7 @@ them. Their source is in `../../study-app/`.
 
 ## What is here
 
-Two projects, hearth and ember, with matched tasks. Each participant does one of
+Two projects, scribe and tally, with matched tasks. Each participant does one of
 them each way, so most files come as a pair.
 
 **For you to run the session**
@@ -28,18 +28,16 @@ them each way, so most files come as a pair.
 | --- | --- |
 | `experimenter-guide.md` | Setup, the shape of the session, what to say, what to record |
 | `analysis-plan.md` | Every measure, and the data it is computed from. Read once before the first session. |
-| `questions-hearth.md` | The ten questions for a hearth session, with how to score each answer |
-| `questions-ember.md` | The same ten questions for ember |
 
 **To send or show the participant**
 
 | File | When |
 | --- | --- |
 | `participant-before-the-session.md` | Sent days ahead. What the study is and how to set up their machine. Also goes in the bundle as `README.md`. |
-| `participant-about-hearth.md` | At the start of a hearth condition. What the project is and the commands they will use. |
-| `participant-about-ember.md` | The same, for ember. |
-| `participant-task-hearth.md` | The hearth task. Show it as an image, never as text they can copy. |
-| `participant-task-ember.md` | The ember task. Same rule. |
+| `projects/scribe/ABOUT.md` | What a participant reads at the start of a scribe condition. Also on their own page. |
+| `projects/tally/ABOUT.md` | The same, for tally. |
+| `projects/<name>/STUDY.md` | **The answer key.** The task card, the four rated decisions, the twelve-question quiz. Never shown to a participant. |
+| `projects/<name>/CLAUDE.md` | The description both arms start from. The baseline gets it as a file; the codoc arm gets the same content as a feature tree. |
 
 **The projects and the tools**
 
@@ -47,7 +45,7 @@ them each way, so most files come as a pair.
 | --- | --- |
 | `workspaces/` | The four project copies, packed as archives, with notes on what is in them |
 | `scripts/` | Four scripts, described below |
-| `scoring/` | Four scripts, described below |
+| `scoring/` | Two scripts, described below |
 | `logger/` | The study logger extension, installed in both conditions |
 | `baseline/doc-maintenance/SKILL.md` | The instructions given to the agent in the condition without codoc. Nobody reads this during a session. Edit it here and the bundle picks it up. |
 
@@ -78,16 +76,14 @@ send back. Also on their machine, also in the bundle.
 
 ## The scoring scripts
 
-`scoring/check-hearth.py` and `scoring/check-ember.py` check a finished project
-against the three things the task is designed to test, and confirm the existing
-tests still pass. Each was tried against a correct and an incorrect
-version of its task, and they tell the two apart.
+There is no automatic scorer for the task any more, and that is the design rather
+than an omission. The old one checked three fixed behaviours; the outcome now is
+whether four open decisions are consistent with what the codebase already
+believes, and no script can read a diff for that. The rating guide is in each
+project's `STUDY.md` and the rating is done by hand, blind to condition.
 
-Each needs a small settings file per participant, saying how that person's code is
-driven, because the task deliberately leaves that open. Write it after reading
-their code. If you describe it wrongly, nothing happens when the script runs, and
-that looks exactly like their code failing. The scripts detect this and say so
-rather than recording a false result. Part 8 of the guide has the details.
+What is mechanical is the gate: the existing tests still pass and the project
+still runs over all three sample inputs. Two commands, in Part 8 of the guide.
 
 `scoring/check-descriptions-match.py` confirms both conditions still carry the
 same words. Run it before every session, and after any change to either description.

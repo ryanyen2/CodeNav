@@ -13,11 +13,11 @@ const cases = [
     ['.codoc/tree.codoc', 'document'],
     ['tree.codoc', 'document'],
     // Source.
-    ['hearth/build.py', 'code'],
-    ['ember/digest.py', 'code'],
+    ['scribe/build.py', 'code'],
+    ['tally/digest.py', 'code'],
     ['templates/index.html', 'code'],
     ['feeds.toml', 'code'],
-    ['hearth.toml', 'code'],
+    ['scribe.toml', 'code'],
     // Tests are their own surface: opening a test is not the same act as
     // opening the code under test.
     ['tests/test_build.py', 'test'],
@@ -43,7 +43,7 @@ assert.strictEqual(isDescription('README.md'), false);
 // Paths are recorded relative to the project so two machines produce comparable
 // logs. Anything outside the project falls back to its basename rather than
 // leaking an absolute path from someone's home directory.
-assert.strictEqual(relativeTo('/a/b', '/a/b/hearth/x.py'), 'hearth/x.py');
+assert.strictEqual(relativeTo('/a/b', '/a/b/scribe/x.py'), 'scribe/x.py');
 assert.strictEqual(relativeTo('/a/b', '/other/y.py'), 'y.py');
 assert.strictEqual(relativeTo('', '/a/b/c.py'), 'c.py');
 

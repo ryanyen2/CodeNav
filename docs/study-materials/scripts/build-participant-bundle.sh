@@ -53,13 +53,13 @@ echo "Built $(basename "$LOGGER")"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp "$VSIX" "$LOGGER" "$STAGE/"
 cp "$EXT"/bundled/codoc-*.whl "$STAGE/"
-cp "$MAT"/workspaces/hearth-codoc.tar.gz "$STAGE/"
-cp "$MAT"/workspaces/ember-codoc.tar.gz "$STAGE/"
+cp "$MAT"/workspaces/scribe.tar.gz "$STAGE/"
+cp "$MAT"/workspaces/tally.tar.gz "$STAGE/"
 
 # Repack the baseline with the skill text from this repo, so the copy under
 # docs/study-materials/baseline/ is the only place the skill is ever edited.
 echo "Installing the doc-maintenance skill into the baseline workspace."
-for base in hearth-baseline ember-baseline; do
+for base in scribe-baseline tally-baseline; do
   TMP="$(mktemp -d)"
   tar xzf "$MAT/workspaces/$base.tar.gz" -C "$TMP"
   mkdir -p "$TMP/$base/.claude/skills/doc-maintenance"

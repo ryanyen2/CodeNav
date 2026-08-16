@@ -6,114 +6,124 @@
 // forming their model of the codebase, and it made the briefing depend on
 // somebody remembering to send the right file. Everything is here now.
 //
-// Structured rather than markdown so it renders as real tables and code blocks,
-// and so the same text can be checked by a test.
+// Each one leads with the PROBLEM rather than the program, shows one worked
+// before-and-after, then names what it does in plain words. The last section is
+// the one that matters: every rule is a judgement call that could have gone the
+// other way, and the code shows what was chosen without saying why. That is the
+// study's premise, said in a way that primes without leading.
+//
+// The full versions live beside the code, in projects/<name>/ABOUT.md.
 
-const HEARTH = {
-    name: 'hearth',
-    what: [
-        'Hearth is a small static site generator. You give it a folder of markdown files and it gives you back a folder of finished HTML you could upload anywhere.',
-        'It does the same job as Jekyll or Hugo, but someone wrote it from scratch in plain Python with no libraries. One person\'s blog runs on it.',
+const SCRIBE = {
+    name: 'scribe',
+    oneLine: 'Text pulled out of a PDF, into clean Markdown.',
+    problem: [
+        'Copy text out of a PDF and paste it somewhere. It comes out broken.',
+        'Those line breaks are not in the writing. They are where the line ran out on the page. A PDF stores text with the page baked in, so taking it back out gives you the page, not the writing.',
     ],
-    flow: {
-        caption: 'What it does with your files',
-        lines: [
-            ['content/posts/*.md', '_site/posts/<name>/index.html', 'one page per post'],
-            ['content/*.md', '_site/<name>/index.html', 'about, colophon, and so on'],
-            ['', '_site/index.html', 'the home page, newest first'],
-            ['', '_site/tags/<tag>/index.html', 'one page per tag'],
-            ['', '_site/archive/index.html', 'everything by year'],
-            ['', '_site/feed.xml', 'the RSS feed'],
-        ],
-    },
-    sample: {
-        caption: 'Every markdown file starts with a block of settings between two lines of three dashes. Blogging tools call it the frontmatter.',
-        code: `---
-title: A Winter Stock
-date: 2026-01-14
-tags: [cooking, winter]
----
-
-The stockpot came out on the first cold morning…`,
-    },
+    before: `The survey covered four hundred kilometres of shoreline between March
+and September. Rates of retreat were higher than the 2019 baseline at
+every site except Ardmore, where a new revetment has held the line.`,
+    after: `The survey covered four hundred kilometres of shoreline between March and
+September. Rates of retreat were higher than the 2019 baseline at every site
+except Ardmore, where a new revetment has held the line.`,
+    afterNote: 'One paragraph, as it was written.',
+    does: [
+        ['Broken words', 'A long word split at the end of a line, like photogram- then metric, is joined back up.'],
+        ['Broken paragraphs', 'Lines inside a paragraph are joined. The gap between paragraphs is kept.'],
+        ['Repeated headers', 'A report often has the same line at the top of every page. Useful on paper, noise in the text. Page numbers too.'],
+        ['Headings', '3.1 Sites becomes a real heading, so the result has structure.'],
+        ['Footnotes', 'In a PDF the little number is stuck to a word and the note is at the bottom of the page. They are gathered at the end and linked.'],
+        ['Typesetting characters', 'Printers use one character for fi and curly quotes for straight ones. Those are replaced, so the result can be searched normally.'],
+    ],
+    notScope: 'It does not read PDF files — something else does that first and hands scribe plain text. It does not recover tables, images or columns; that information is gone before scribe sees it.',
+    judgement: [
+        ['Repeated headers', 'Dropping them is right for a hundred-page report. For a one-page letter, that line is the letterhead, and dropping it loses something.'],
+        ['Broken words', 'photogram-metric should join. But well-being split across two lines should keep its hyphen, because the hyphen is part of the word. Nothing in the text tells you which is which.'],
+    ],
     commands: [
-        ['.venv/bin/hearth build', 'Build the site into _site/'],
-        ['.venv/bin/hearth serve', 'Build, serve at localhost:8000, rebuild as you edit'],
-        ['.venv/bin/hearth clean', 'Delete _site/ and start again'],
+        ['.venv/bin/scribe convert fixtures/report.txt', 'Convert one file, write the .md beside it'],
+        ['.venv/bin/scribe convert fixtures/report.txt -', 'Convert one file, print it instead'],
+        ['.venv/bin/scribe check fixtures/', 'Convert everything, write nothing'],
         ['.venv/bin/python -m pytest tests/ -q', 'Run the tests'],
     ],
-    commandNote: 'Run these inside the project folder. The .venv/bin/ at the front matters, because it runs the project\'s own copy of Python. A build prints one line, e.g. 12 pages, 3 rebuilt, aggregates rebuilt, took 0.04s.',
+    commandNote: 'The .venv/bin/ at the front matters: it runs the project\'s own copy of Python. A run prints one line, e.g. report.txt: 3 pages, 8 headings, 8 paragraphs, 6 bullets, 2 notes, 6 lines of furniture. "Furniture" is the project\'s word for repeated headers and page numbers.',
     layout: [
-        ['hearth/', 'the source code, 13 files. This is what you will change.'],
-        ['content/', "the sample site's markdown, 10 posts and 2 pages"],
-        ['templates/', 'the HTML templates'],
-        ['tests/', 'the tests'],
-        ['_site/', 'the built site. Hearth generates it, so it is not checked in.'],
+        ['scribe/lines.py', 'splits the input into pages and lines'],
+        ['scribe/furniture.py', 'repeated headers, page numbers'],
+        ['scribe/paragraphs.py', 'joining broken words and broken lines'],
+        ['scribe/blocks.py', 'headings, bullets, blank space'],
+        ['scribe/notes.py', 'footnotes'],
+        ['scribe/text.py', 'typesetting characters'],
+        ['scribe/convert.py', 'runs the rules, in order'],
     ],
-    words: [
-        ['a draft', 'A post you have started but are not ready to publish. It sits alongside your finished posts, and the tool knows to leave it out of what gets published.'],
-        ['the dev server', 'The local preview you get from hearth serve. It is for the author looking at their own site before publishing, and nobody else sees it.'],
-    ],
+    inputs: 'Three sample documents in fixtures/: a survey report, a short memo, and a field handbook. They are different on purpose — the memo has no repeated header, so a rule that helps the report can hurt the memo.',
 };
 
-const EMBER = {
-    name: 'ember',
-    what: [
-        'Ember is a feed reader that writes a daily digest. It reads blog feeds into a local database, then builds one HTML page per day listing what arrived, plus a browsable archive and a log of new items.',
-        'Someone wrote it from scratch in plain Python with no libraries. One person runs it on their own machine to keep up with a handful of blogs.',
+const TALLY = {
+    name: 'tally',
+    oneLine: 'A bank export, into a monthly summary.',
+    problem: [
+        'Download your transactions from a bank and you get a CSV: one row per payment, hundreds of rows, in the order they happened.',
+        'That answers "what happened on the 3rd". It does not answer "what did I spend on food last month", which is the question people actually have.',
     ],
-    flow: {
-        caption: 'What it does with your feeds',
-        lines: [
-            ['feeds.toml', 'a local sqlite database of items', 'the feeds to read'],
-            ['fixtures/feeds/*.xml', '', 'the feed files themselves, RSS and Atom'],
-            ['', '_digest/2026-08-11.html', 'one page per day of arrivals'],
-            ['', '_digest/latest.html', 'a copy of the newest day'],
-            ['', '_digest/archive/index.html', 'every day and every feed'],
-            ['', '_digest/archive/search.json', 'the same items as data'],
-            ['', '_digest/notifications.log', 'a line per new item'],
-        ],
-    },
-    sample: {
-        caption: 'Network access is switched off in this build, so a feed\'s url points at a local file and everything runs offline. Each feed is listed in feeds.toml like this.',
-        code: `[[feed]]
-name = "saltbox-kitchen"
-url = "fixtures/feeds/saltbox-kitchen.xml"
-max_items = 12`,
-    },
+    before: `2026-01-03,TESCO STORES 3241,-52.40
+2026-01-04,Transfer to savings,-300.00
+2026-01-06,PRET A MANGER,-4.85
+2026-01-08,SHELL 4417,-61.20`,
+    after: `## 2026-01
+
+  housing             -950.00
+  groceries           -104.80
+  utilities            -88.00
+  fuel                 -61.20
+  eating out            -4.85
+
+  total              -1208.85`,
+    afterNote: 'What you spent, by month and category.',
+    does: [
+        ['Reads any bank\'s file', 'Every bank names its columns differently and writes dates differently. tally matches loosely against the names banks actually use.'],
+        ['Puts each payment in a category', 'By matching the merchant name against a list of patterns: anything with "tesco" is groceries, anything with "shell" is fuel.'],
+        ['Groups by month', 'So you can compare one month against another.'],
+        ['Drops repeats', 'Banks sometimes export the same payment twice. The second one is dropped.'],
+        ['Leaves out transfers', 'Moving money from your current account to your savings is not spending — it is still yours.'],
+        ['Finds what recurs', 'A payment that appears every month at the same amount is a fixed commitment. Those are listed separately.'],
+    ],
+    notScope: 'It does not connect to a bank — something else downloads the file. It does not tell you whether you can afford anything, and it has no opinion about your spending.',
+    judgement: [
+        ['Which month a payment belongs to', 'You pay for something on the 31st of January; the bank processes it on the 2nd of February. tally says January, because that is the day you remember. Your bank\'s own statement says February. Both are right, for different questions.'],
+        ['Transfers', 'Leaving them out is right if you are asking what you spent. If you are asking where your money went, you might want them in.'],
+    ],
     commands: [
-        ['.venv/bin/python -m ember refresh', 'Read every feed and store what it holds'],
-        ['.venv/bin/python -m ember digest', 'Write the digest pages, the archive, and the log'],
-        ['.venv/bin/python -m ember archive', 'Write the archive pages on their own'],
-        ['.venv/bin/python -m ember status', 'Show what has been read, and when'],
+        ['.venv/bin/tally summarise fixtures/current.csv', 'Summarise one file, write the .md beside it'],
+        ['.venv/bin/tally summarise fixtures/current.csv -', 'Summarise one file, print it instead'],
+        ['.venv/bin/tally check fixtures/', 'Summarise everything, write nothing'],
         ['.venv/bin/python -m pytest tests/ -q', 'Run the tests'],
     ],
-    commandNote: 'Run these inside the project folder. The .venv/bin/ at the front matters, because it runs the project\'s own copy of Python. A digest run prints one line, e.g. 14 days, 3 digests written, latest 2026-08-11. When there is nothing to do it says nothing to write.',
+    commandNote: 'The .venv/bin/ at the front matters: it runs the project\'s own copy of Python. A run prints one line, e.g. current.csv: 37 rows, 3 months, 1 duplicates, 4 transfers, 1 uncategorised, 3 recurring.',
     layout: [
-        ['ember/', 'the source code, 15 files. This is what you will change.'],
-        ['feeds.toml', 'the feeds to read'],
-        ['fixtures/', 'the sample feed files'],
-        ['templates/', 'the HTML templates'],
-        ['tests/', 'the tests'],
-        ['_digest/', 'the generated pages. Ember writes them, so they are not checked in.'],
+        ['tally/rows.py', 'reads the CSV, whatever the bank called its columns'],
+        ['tally/categories.py', 'merchant name to category'],
+        ['tally/dedupe.py', 'repeats, and transfers between your own accounts'],
+        ['tally/months.py', 'which month, and what a refund does'],
+        ['tally/recurring.py', 'payments that come round every month'],
+        ['tally/money.py', 'rounding, and which way round the signs are'],
+        ['tally/summary.py', 'runs the rules, in order'],
     ],
-    words: [
-        ['to mute a feed', 'To stop seeing it, without unsubscribing. You stay subscribed and the items keep arriving, you just do not want them in front of you.'],
-        ['the digest', 'The daily page ember writes, listing what arrived that day.'],
-    ],
+    inputs: 'Three sample files in fixtures/: a current account over three months, an export from a different bank with different column names, and a short file of payments made at the end of one month and processed at the start of the next.',
 };
 
-export const PROJECTS = Object.freeze({ hearth: HEARTH, ember: EMBER });
+export const PROJECTS = Object.freeze({ scribe: SCRIBE, tally: TALLY });
 
 /** Said once per condition, and identical in both, which is the point. */
 export const RESPONSIBILITY = Object.freeze([
     'Work however you normally would, and use the coding agent as much or as little as you like.',
-    'You are responsible for the result being correct, not only for the tests passing. Treat it as code you would put your name on.',
-    'Afterwards we will ask you to explain the code: what it does, why it is built that way, and what you would change to extend it.',
+    'The task card is short on purpose. Anything it does not say is yours to decide, and we will ask you about those decisions afterwards, so make them on purpose.',
+    'We will also ask you to explain the code: what it does, why it is built that way, and what you would change to extend it.',
 ]);
 
 /**
- * How each condition is started, which was also read off a script before.
+ * How each condition is started.
  *
  * The two differ, and that difference is the manipulation, so it is written down
  * once here rather than improvised on a call where one participant gets a fuller
@@ -125,12 +135,12 @@ export const HOW_TO_START = Object.freeze({
         folder: (p) => `~/codoc-study/${p}`,
         steps: [
             ['Open the folder in VS Code.', null],
-            ['Open a terminal inside VS Code and run this. Leave it running for the whole task.', '~/codoc-study/codoc watch'],
+            ['Open a terminal inside VS Code and run this. Leave it running for the whole task.', '~/codoc-study/codoc watch --root {folder}'],
             ['Open the written description: press Cmd+Shift+P and run "codoc: Open".', null],
             ['Open two more terminals, one for the coding agent and one for running the project.', null],
         ],
         about: [
-            'The written description is a tree of features. Each one names something the codebase does and points at the code that does it.',
+            'The written description is a tree of features. Each one names something the project does and points at the code that does it.',
             'It is yours to edit. When the code changes underneath it, codoc proposes a change to the description, and you accept or reject it inline.',
             'The coding agent can read it too, so anything you write there is something the agent can act on.',
         ],
@@ -144,7 +154,7 @@ export const HOW_TO_START = Object.freeze({
             ['Open a second terminal for running the project.', null],
         ],
         about: [
-            'The written description is CLAUDE.md in the project root. It holds the same text, describing the same features.',
+            'The written description is CLAUDE.md in the project root. It holds the same text, describing the same things.',
             'It is yours to edit, in the ordinary editor. The coding agent reads it on its own and has been told to keep it current after every change it makes.',
         ],
     },

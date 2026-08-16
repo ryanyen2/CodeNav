@@ -174,7 +174,7 @@ def main() -> int:
     rep.manual("the ten questions, closed book then open book", "your notes and the scoring tables")
     if projects:
         rep.ok("the three things being scored, and regressions",
-               "run check-hearth.py or check-ember.py on the collected project")
+               "run check-scribe.py or check-tally.py on the collected project")
     else:
         rep.gap("the three things being scored, and regressions", "no project was collected")
     rep.show("Question 3, and whether the work got done")

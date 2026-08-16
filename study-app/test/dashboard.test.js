@@ -42,9 +42,9 @@ async function seed() {
     const wait = (secs) => { t += secs * 1000; };
 
     view('document', 'CLAUDE.md', 95);
-    view('code', 'ember/digest.py', 70);
+    view('code', 'tally/summary.py', 70);
     prompt(180);
-    wait(25); edit('code', 'ember/digest.py', 620, false);
+    wait(25); edit('code', 'tally/summary.py', 620, false);
     run('pytest');
     wait(140);
     view('document', 'CLAUDE.md', 40);
@@ -53,8 +53,8 @@ async function seed() {
     run('pytest');
     wait(420);                       // a real break
     prompt(240);
-    wait(30); edit('code', 'ember/digest.py', 310, false);
-    run('ember');
+    wait(30); edit('code', 'tally/summary.py', 310, false);
+    run('tally');
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-'));
     const logPath = path.join(dir, 'interaction.jsonl');

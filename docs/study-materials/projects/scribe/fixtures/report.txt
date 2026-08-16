@@ -43,9 +43,18 @@ Mean retreat across the unprotected sites was 0.8 metres per year,
 against 0.5 in the 2019 baseline. The distribution is skewed: two
 sites account for most of the increase.
 
+The 2019 report was careful about this:
+
+    Retreat is not steady. A cliff can stand for a decade and
+    then lose four metres in one winter, and a mean taken over
+
 2 Provisional flights are excluded from the means in section 3.
 
 - 2 -Coastal Erosion Survey 2026            Marine Institute
+
+    too few years will read that winter as a trend.
+
+We have kept the same ten-year window for that reason.
 
 3.2 Ardmore
 

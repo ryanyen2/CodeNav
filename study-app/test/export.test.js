@@ -77,7 +77,7 @@ test('the checker sees the two halves agree', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sess-'));
     const session = path.join(dir, `codoc-study-${CODE}`);
     fs.mkdirSync(path.join(session, 'session-logs'), { recursive: true });
-    fs.copyFileSync(logPath, path.join(session, 'session-logs', 'interaction-hearth.jsonl'));
+    fs.copyFileSync(logPath, path.join(session, 'session-logs', 'interaction-scribe.jsonl'));
     execFileSync('node', ['scripts/export-session.mjs', CODE, '--project', PROJECT,
         '--emulator', '--token', 'owner', '--out', session], { encoding: 'utf8' });
 
@@ -102,7 +102,7 @@ test('the checker says so when the mirror never sent anything', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sess2-'));
     const session = path.join(dir, 'codoc-study-p99');
     fs.mkdirSync(path.join(session, 'session-logs'), { recursive: true });
-    fs.copyFileSync(logPath, path.join(session, 'session-logs', 'interaction-hearth.jsonl'));
+    fs.copyFileSync(logPath, path.join(session, 'session-logs', 'interaction-scribe.jsonl'));
     fs.writeFileSync(path.join(session, 'firestore-p99.json'), JSON.stringify({
         code: 'p99', participant: {}, answers: [], assessments: [], sessions: {},
     }));

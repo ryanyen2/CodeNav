@@ -15,7 +15,7 @@ import {
 import {
     CONSENT_FORM, PRESTUDY_FORM, SCREENING, AFTER_CONDITION, CONSTRUCTS,
     scaleFor, MANIPULATION_CHECK, SCENARIOS, DEBRIEF, TASK_CARDS,
-    PROJECTS, RESPONSIBILITY, HOW_TO_START, buildSteps, answerDoc,
+    PROJECTS, RESPONSIBILITY, HOW_TO_START, QUIZZES, buildSteps, answerDoc,
 } from './steps.js';
 import { drawCard } from './card.js';
 import { esc } from '../shared/html.js';
@@ -178,6 +178,12 @@ function complete(step) {
             && MANIPULATION_CHECK.filter((q) => q.type !== 'longtext').every((q) => given(q.id));
     }
     if (step.kind === 'scenarios') return SCENARIOS.every((s) => given(s.id));
+    if (step.kind === 'quiz') {
+        // Every one answered. A blank is indistinguishable from "I do not know",
+        // and the guess is the data: which wrong option attracted somebody is
+        // most of what a wrong answer tells us.
+        return (QUIZZES[step.project] || []).every((q) => given(`q${q.n}`));
+    }
     return true;
 }
 
@@ -244,7 +250,7 @@ const VIEWS = {
         <p class="lead">${esc(how.title)}.</p>
         <ol class="do">
           ${how.steps.map(([text, cmd]) => `<li>${esc(text)}
-            ${cmd ? `<code class="pick">${esc(cmd.replace('~/codoc-study/hearth', how.folder(step.project)))}</code>` : ''}
+            ${cmd ? `<code class="pick">${esc(cmd.replace('{folder}', how.folder(step.project)))}</code>` : ''}
           </li>`).join('')}
         </ol>
         <p class="lead">The folder is <code class="pick">${esc(how.folder(step.project))}</code></p>
@@ -259,34 +265,45 @@ const VIEWS = {
         const p = PROJECTS[step.project];
         return `
         <h1>About ${esc(p.name)}</h1>
-        ${p.what.map((t) => `<p class="lead">${esc(t)}</p>`).join('')}
+        <p class="lead">${esc(p.oneLine)}</p>
 
-        <h2>${esc(p.flow.caption)}</h2>
-        <table class="flow"><tbody>${p.flow.lines.map(([from, to, note]) => `
-          <tr><td class="mono">${esc(from)}</td>
-              <td class="arrow">${from && to ? '→' : ''}</td>
-              <td class="mono">${esc(to)}</td>
-              <td class="note-cell">${esc(note)}</td></tr>`).join('')}
-        </tbody></table>
+        <h2>The problem</h2>
+        ${p.problem.map((t) => `<p>${esc(t)}</p>`).join('')}
+        <div class="ba">
+          <div><span class="ba-label">Out of the PDF</span><pre class="sample">${esc(p.before)}</pre></div>
+          <div><span class="ba-label">After</span><pre class="sample">${esc(p.after)}</pre></div>
+        </div>
+        <p class="fine">${esc(p.afterNote)}</p>
 
-        <p>${esc(p.sample.caption)}</p>
-        <pre class="sample">${esc(p.sample.code)}</pre>
+        <h2>What it does</h2>
+        <p>You do not need to remember these. They are here so nothing in the
+        code is a surprise.</p>
+        <dl class="words">${p.does.map(([w, d]) => `
+          <dt>${esc(w)}</dt><dd>${esc(d)}</dd>`).join('')}
+        </dl>
+        <p>${esc(p.notScope)}</p>
 
-        <h2>The commands you will use</h2>
+        <h2>The one idea worth holding</h2>
+        <p class="lead">Every one of those is a judgement call, and it could have
+        gone the other way.</p>
+        <dl class="words">${p.judgement.map(([w, d]) => `
+          <dt>${esc(w)}</dt><dd>${esc(d)}</dd>`).join('')}
+        </dl>
+        <div class="note">${esc(p.name)} made a choice about each one. The code
+        shows you what it chose. It does not tell you why, or what it gave up.</div>
+
+        <h2>Running it</h2>
         <table class="cmds"><tbody>${p.commands.map(([c, w]) => `
           <tr><td class="mono">${esc(c)}</td><td>${esc(w)}</td></tr>`).join('')}
         </tbody></table>
         <p class="fine">${esc(p.commandNote)}</p>
 
-        <h2>Where things live</h2>
+        <h2>The files</h2>
+        <p>Nine, and small. You will probably touch two or three.</p>
         <table class="cmds"><tbody>${p.layout.map(([c, w]) => `
           <tr><td class="mono">${esc(c)}</td><td>${esc(w)}</td></tr>`).join('')}
         </tbody></table>
-
-        <h2>Two words in the task</h2>
-        <dl class="words">${p.words.map(([w, d]) => `
-          <dt>${esc(w)}</dt><dd>${esc(d)}</dd>`).join('')}
-        </dl>
+        <p>${esc(p.inputs)}</p>
 
         <div class="note">${RESPONSIBILITY.map((t) => `<p>${esc(t)}</p>`).join('')}</div>`;
     },
@@ -318,6 +335,31 @@ const VIEWS = {
           <h2>In your own words</h2>
           ${MANIPULATION_CHECK.map((q) => field(q, a[q.id])).join('')}
         </section>`;
+    },
+
+    // The same twelve, before and after. No feedback either time: telling
+    // somebody they were wrong before the task would teach them the answer, and
+    // the second sitting would measure the telling rather than the session.
+    quiz: (step) => {
+        const a = answersFor(step);
+        const questions = QUIZZES[step.project] || [];
+        return `
+        <h1>${step.sitting === 'before' ? 'Before you start' : 'A few questions'}</h1>
+        <p class="lead">${step.sitting === 'before'
+            ? `Twelve questions about ${esc(step.project)}. Answer from what you have just read — a guess is fine, and we expect several.`
+            : `The same twelve. Answer from what you know now.`}</p>
+        <div class="note">There is no feedback either time, on purpose. We are
+        looking at what changed between the two, not at either score.</div>
+        ${questions.map((q) => `
+          <div class="q" data-q="q${q.n}">
+            <span class="label">${q.n}. ${esc(q.question)}</span>
+            <div class="opts">${q.options.map((o) => `
+              <button type="button" data-value="${esc(o.letter)}"
+                aria-pressed="${String(a[`q${q.n}`] === o.letter)}">
+                <span class="opt-letter">${esc(o.letter)}</span>
+                <span class="opt-text">${esc(o.text)}</span>
+              </button>`).join('')}</div>
+          </div>`).join('')}`;
     },
 
     debrief: (step) => `

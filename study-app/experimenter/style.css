@@ -353,3 +353,30 @@ table.key td { color: var(--ink-soft); padding: 4px 0; line-height: 1.5; }
 .fig .fig-holder svg { max-width: 100%; height: auto; }
 .fig-actions { display: flex; gap: 6px; }
 .fig-actions button { font-size: 12px; padding: 4px 11px; }
+
+/* ── the quiz, as answered ───────────────────────────────────────────────── */
+
+.quiz-score {
+    display: flex; align-items: baseline; gap: 20px; margin: 4px 0 16px;
+    font-size: 13px; color: var(--ink-soft);
+}
+.quiz-score b { font-size: 20px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.quiz-score .delta { font-variant-numeric: tabular-nums; }
+.quiz-score .delta.up { color: var(--accent); }
+.quiz-score .delta.down { color: var(--warn); }
+
+.band { margin-bottom: 14px; }
+.band h5 {
+    margin: 0 0 6px; font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: 0.07em; color: var(--ink-faint); font-weight: 600;
+}
+.q-line { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; font-size: 13px; }
+.q-marks {
+    flex: none; display: flex; gap: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+}
+.q-marks i { font-style: normal; width: 1.1em; text-align: center; }
+.q-marks .right { color: var(--accent); }
+.q-marks .wrong { color: var(--warn); }
+.q-marks .unanswered { color: var(--ink-faint); }
+.q-line .q-title { color: var(--ink-soft); }

@@ -17,7 +17,7 @@ that description is kept.
 - Without codoc, they get a `CLAUDE.md` holding exactly the same text, and the
   agent is told to update it after every change it makes.
 
-There are two projects, hearth and ember, with matched tasks. Each participant
+There are two projects, scribe and tally, with matched tasks. Each participant
 does one project each way, so nobody solves the same problem twice.
 
 Within a project, the two copies hold identical source and tests and the same 12
@@ -180,7 +180,7 @@ the dashboard and keep it beside the call for the rest of the session.
 
 ### Starting a codoc condition
 
-They open `~/codoc-study/hearth` in VS Code, then open a terminal inside VS Code
+They open `~/codoc-study/scribe` in VS Code, then open a terminal inside VS Code
 and run:
 
 ```
@@ -204,11 +204,11 @@ They will want a second terminal for Claude Code and a third for running builds.
 Check three things before going on. The status bar says codoc is in sync, the
 description lists 25 features, and `codoc watch` has not printed an error.
 
-Ember works the same way. Open `~/codoc-study/ember` instead.
+Tally works the same way. Open `~/codoc-study/tally` instead.
 
 ### Starting a condition without codoc
 
-They open `~/codoc-study/hearth-baseline`, or `~/codoc-study/ember-baseline`, and
+They open `~/codoc-study/scribe-baseline`, or `~/codoc-study/tally-baseline`, and
 start Claude Code in a terminal. Nothing else runs. `CLAUDE.md` sits in the project
 root and Claude Code picks it up on its own.
 
@@ -219,7 +219,7 @@ to run this at the start of each condition, from the folder they unzipped, using
 the code you gave them:
 
 ```
-./session-log.sh ~/codoc-study/hearth p04-codoc
+./session-log.sh ~/codoc-study/scribe p04-codoc
 ```
 
 It saves a copy of the whole project every 20 seconds, so the session can be
@@ -291,102 +291,92 @@ and the agent.
 
 ## Part 5. The task
 
-Show `participant-task-hearth.md` or `participant-task-ember.md` as an image or on
-paper, whichever project this condition uses. Do not give them the text. If they
-paste our wording into the agent, the agent is working from our instructions
-instead of theirs, and the instructions they write are one of the things we
-measure.
+Each project has one task card, in `projects/<name>/STUDY.md`. It is on their own
+page as a picture, so there is no text to paste at the agent.
+
+- **scribe:** support block quotes.
+- **tally:** support split transactions.
+
+The agent writes either one in about a minute. That is deliberate. The task is
+easy to implement and hard to decide, and what the participant has to supply is
+judgement rather than code.
 
 ### What the card deliberately leaves out
 
-For each of these, write down who settled it and how. There are three
-possibilities: they decided before the agent acted, the agent proposed it and they
-accepted, or the agent did it and they never noticed.
+Four things per task, and they are the measurement. They are listed with their
+rating guide in the project's `STUDY.md`, which is the answer key — do not open
+it in front of anybody.
 
-With hearth:
+For scribe: what marks a quote, whether de-hyphenation applies inside one,
+whether a quote ends the paragraph before it, and what happens to a quote running
+across a page break.
 
-1. What marks a post as a draft, e.g., a setting in the post or a separate folder.
-2. Whether drafts stay out of the feed and the sitemap. The agent usually handles
-   these without being asked, so this is where it reaches past what it was told.
-   Credit is for deciding on purpose, not for a particular answer.
-3. How the preview differs from a real build, e.g., a flag, an environment
-   variable, or a setting.
-4. Whether a draft is not built at all, or built but not linked to.
+For tally: how a split is written in the CSV, whether it counts as one
+transaction or two, whether the duplicate rule sees the halves as duplicates, and
+what happens when one half matches no category rule.
 
-With ember:
+**The last one in each list is the coupled one.** It is where two rules meet, and
+it is reached by deciding rather than by tripping over it. In scribe, page
+furniture is stripped before quotes could be found, so the running header sits
+between the two halves of a quote that crosses a page. In tally, a split of forty
+pounds into two twenties is exactly the shape the duplicate rule matches.
 
-1. Where a mute is configured, e.g., against the feed or in the settings file.
-2. Whether muted items still reach the notification log and the counts that
-   `ember status` prints. Same as above, this is where the agent reaches past what
-   it was told.
-3. Whether a day whose only items were muted still gets a page, now empty.
-4. Whether the "latest" page follows the same rule as a dated page.
-
-### The three things being scored
-
-Every task has the same three, and they are the same shape in both projects. The
-codes in brackets are the ones the analysis and the scoring script use.
-
-**The hidden rule (H1).** Written down in the description and nowhere in the code.
-Both projects only redo their summary pages when a fingerprint of what those pages
-list has changed, and both work out that fingerprint at the point where the list is
-assembled. So a filter added further downstream, inside the code that renders a
-page, never reaches the fingerprint. The tool reports there was nothing to do, and
-the summary pages quietly keep showing what they showed before. In hearth those are
-the home, tag, archive, feed and sitemap pages. In ember they are the daily digest
-pages. It only shows up on a second run, because building from scratch hides it.
-
-**The open decision (H2).** The feed and sitemap question in hearth, the
-notification log question in ember. The card says nothing either way, so this
-measures whether a decision got made at all.
-
-**The stated requirement (H3).** Ordinary care. In hearth, the preview shows drafts
-and the real build hides them. In ember, the archive and the search file keep the
-muted feed's items. Most people should get this one, and if they do not, the task
-was too hard.
-
-With hearth there is a fourth thing worth noting: whether the drafted post's own
-page is removed from the output, or left sitting at its old address.
-
-Do not hint at any of this. If they ask whether they should worry about what gets
-skipped on a second run, say:
+Do not hint at any of this. If they ask whether something matters, say:
 
 > Work from what the card says and what you find in the project.
 
+### What is scored
+
+**The gate.** The change runs and the existing tests pass. Not reported as a
+result — a session that fails the gate has no decisions worth rating.
+
+**The primary outcome.** Each of the four decisions rated **0 to 2 for
+consistency with what the codebase already believes**. Consistency, not
+correctness: there is no single right answer to any of them, only answers that
+fit this codebase and answers that contradict it. The rating guide for each is in
+`STUDY.md`.
+
+A participant can produce working code that contradicts the codebase. That is the
+finding, and it is the thing a description is supposed to prevent.
+
+Rate it during the session, in the dashboard, while you can still remember what
+they said. Alongside it, record **who settled each decision**: they decided, the
+agent proposed and they accepted, or the agent did it and they never noticed.
+
 ### Timing
 
-At 15 minutes say "about two minutes left, start wrapping up". Stop at 20.
+Thirty-five minutes per task. Say so at the start. If they finish early, that is
+a result; if they are still going at forty, ask them to stop where they are.
 
 ### The sign-off
 
-Ask this the moment they stop, before anything else, and write the answer down
-word for word.
+When they say they are done, ask, and write the answer down word for word:
 
 > Is this change correct and complete? How confident are you, 1 to 5? And what is
 > that resting on?
 
-The number matters less than what it rests on. Note which of these they say: they
-ran the tests, they read the diff, they read the description, or the agent told
-them.
+The number matters less than the last part. "I ran the tests" and "the agent said
+so" are different answers.
 
 ## Part 6. The questions
 
-The questions and how to score them are in `questions-hearth.md` and
-`questions-ember.md`. Use the one for the project this condition used. Those files
-say how to ask them, and the short version is: ask each one twice, first with
-everything closed and then with the description open, and record both answers.
+Twelve multiple-choice questions per project, four options each, one right. The
+participant answers them on their own page — **you do not read them out and you do
+not mark them.** They are asked twice, once before the task and once after, and
+the change between the two is the measure.
 
-Score as you go, in the dashboard. Each question has its scoring table beside it,
-and the closed book and open book answers are kept apart, because the change
-between them is the result.
+The bands are the four parts of RQ1: what the program is for, why it is the way
+it is, why a particular change was made, and what a further change would need
+decided first.
 
-The questionnaires appear on the participant's own page at the right moment, so
-there is nothing to hand over. At the very end, once both conditions are done,
-their page asks which way of working they would pick for each situation, and then
-you run the interview.
+Both sittings appear in the dashboard as they answer, with the score and which
+option they picked when they were wrong. The wrong option is usually more
+informative than the fact that they were wrong, so it is shown rather than a
+tick.
 
-The dashboard shows what is still missing for the condition you are on. Clear that
-list before moving on, because a sign-off is not recoverable after the call.
+There is no feedback either time, on purpose. Telling somebody they were wrong
+before the task would teach them the answer, and the second sitting would measure
+the telling rather than the session.
 
 ## Part 7. Collecting the data
 
@@ -428,57 +418,26 @@ study twice.
 
 ## Part 8. Scoring the code
 
-There is one script per project. Run it against the copy from the zip they sent,
-once per condition.
+Two things, and only the second is reported.
+
+**The gate**, which is mechanical. From inside their finished project:
 
 ```
-python3 docs/study-materials/scoring/check-hearth.py       <project> --adapter p04.json
-python3 docs/study-materials/scoring/check-ember.py <project> --adapter p04-ember.json
+./.venv/bin/python -m pytest tests/ -q
+./.venv/bin/scribe check fixtures/          # or: ./.venv/bin/tally check fixtures/
 ```
 
-Each one checks the three things above and whether the existing tests still pass.
-Both were tried against a right and a wrong version of their task, and they tell
-the two apart, which is the whole reason to trust them.
+Every existing test must still pass and the project must still run over all three
+sample inputs. A change that breaks either is a session with nothing to rate.
 
-The checks themselves never change. What does change is how each participant's code
-is driven, because the card leaves that open on purpose. So you write a small
-settings file per participant after reading their code. For hearth it says how to
-mark a post as a draft and what command builds a preview:
+**The four decisions**, rated 0 to 2 against the guide in the project's
+`STUDY.md`. Do this blind: have somebody who does not know which condition a
+folder came from read the diff and rate it. The ratings you typed during the
+session are your own record of what was said, not the rated outcome, and the two
+are compared rather than merged.
 
-```json
-{
-  "draft_marker": {"kind": "frontmatter", "key": "draft", "value": "true"},
-  "prod_build":   ".venv/bin/hearth build",
-  "dev_build":    ".venv/bin/hearth build --drafts"
-}
-```
-
-Use `{"kind": "folder", "path": "content/_drafts"}` instead if they used a folder.
-Ember's file is the same shape, saying how to mute a feed. Keep the settings file
-with the results, because writing it is a judgment call and someone should be able
-to check it.
-
-**Read their code before you write it.** If you mark a draft in a way their code
-does not look at, nothing gets marked, nothing changes, and that looks exactly like
-their code failing. The scripts catch this: when the item is still there afterwards,
-they build again from scratch and check your marker takes effect at all. If it does
-not, they say so and print that the hidden rule was not measured, instead of
-recording a failure that is yours. If you see that line, fix the settings file and
-run it again.
-
-The scripts put the sample content back when they finish and never touch the
-participant's own source, so they are safe on a copy where nothing was committed.
-Work on a copy anyway.
-
-Before a session, check the two conditions still say the same thing:
-
-```
-python3 docs/study-materials/scoring/check-descriptions-match.py <codoc-copy> <other-copy>
-```
-
-The rest of the scoring is by hand, against the design doc: whether each open
-decision was settled on purpose, the answers to the questions, and what the
-sign-off rested on.
+The diff is the whole of the evidence for this. Read it against what the codebase
+already did, not against what you would have written.
 
 ## Part 9. When something goes wrong
 
@@ -499,8 +458,8 @@ login, so if they are not signed in, codoc has no model to call. Have them run
 card as an image. If it happens anyway, note it, because the instructions they
 write are one of the measures and those are now ours.
 
-**A project looks wrong before they start.** A fresh hearth prints
-`12 pages, 12 rebuilt, aggregates rebuilt` and passes 233 tests. A fresh ember
+**A project looks wrong before they start.** A fresh scribe prints
+`12 pages, 12 rebuilt, aggregates rebuilt` and passes 233 tests. A fresh tally
 reads 36 items and passes 171 tests. Anything else means the copy has been used.
 Delete it and run `./setup.sh` again.
 

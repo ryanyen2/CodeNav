@@ -24,7 +24,8 @@ import { toLetters } from '../shared/actions.js';
 import { comparableEpisodes, letters } from '../analysis/sequences.js';
 import { score } from '../analysis/ngrams.js';
 import {
-    OPEN_DECISIONS, SETTLED_BY, GROUNDS, rounds, emptyAssessment, outstanding,
+    OPEN_DECISIONS, SETTLED_BY, GROUNDS, CONSISTENCY, COUPLED_DECISION,
+    questionsFor, bandsFor, score as quizScore, emptyAssessment, outstanding,
 } from './forms.js';
 
 const firebaseConfig = {
@@ -57,10 +58,12 @@ const state = {
     actions: [],
     unsubBatches: null,
     unsubAssessment: null,
+    unsubQuiz: null,
     unsubDevices: null,
     devices: [],
     assessment: null,
-    project: 'hearth',
+    quiz: {},
+    project: 'scribe',
 };
 
 // ── the results view ─────────────────────────────────────────────────────────
@@ -346,6 +349,7 @@ function renderDetail() {
     renderForms();
     renderSession();
     watchAssessment();
+    watchQuiz();
 }
 
 // ── handing the session over ─────────────────────────────────────────────────
@@ -469,6 +473,29 @@ function renderOpenHandoff(el, p, browser, mirror) {
 
 // ── the forms ────────────────────────────────────────────────────────────────
 
+function watchQuiz() {
+    if (state.unsubQuiz) state.unsubQuiz();
+    state.quiz = {};
+    state.unsubQuiz = onSnapshot(
+        collection(db, `participants/${state.selected}/answers`),
+        (snap) => {
+            state.quiz = {};
+            for (const d of snap.docs) {
+                // quiz-scribe-before -> { scribe: { q1-before: 'b', … } }
+                const match = /^quiz-([a-z]+)-(before|after)$/.exec(d.id);
+                if (!match) continue;
+                const [, project, sitting] = match;
+                state.quiz[project] = state.quiz[project] || {};
+                for (const [key, value] of Object.entries(d.data())) {
+                    if (/^q\d+$/.test(key)) state.quiz[project][`${key}-${sitting}`] = value;
+                }
+            }
+            renderRounds();
+        },
+        () => { state.quiz = {}; renderRounds(); },
+    );
+}
+
 function watchAssessment() {
     if (state.unsubAssessment) state.unsubAssessment();
     const path = `participants/${state.selected}/assessments/${state.condition}`;
@@ -556,51 +583,61 @@ function renderForms() {
 }
 
 function projectFor(p, condition) {
-    // hearth goes with whichever condition comes first.
-    if (!p || !p.order) return condition === 'codoc' ? 'hearth' : 'ember';
+    // scribe goes with whichever condition comes first, so the pairing of
+    // project to condition alternates with the order and neither project is
+    // always the one seen fresh.
+    if (!p || !p.order) return condition === 'codoc' ? 'scribe' : 'tally';
     const codocFirst = p.order === 'codoc-first';
-    if (condition === 'codoc') return codocFirst ? 'hearth' : 'ember';
-    return codocFirst ? 'ember' : 'hearth';
+    if (condition === 'codoc') return codocFirst ? 'scribe' : 'tally';
+    return codocFirst ? 'tally' : 'scribe';
 }
 
+/**
+ * What the participant answered, and what changed between the two sittings.
+ *
+ * Read only. The quiz is multiple choice and they answer it themselves, so
+ * there is nothing to mark by hand — and a researcher marking during a session
+ * would be scoring while listening, which is how a score ends up reflecting how
+ * well somebody explained rather than what they knew.
+ */
 function renderRounds() {
     const wrap = $('#rounds');
-    const a = state.assessment;
-    const byRound = rounds(state.project);
-    wrap.innerHTML = [1, 2].map((r) => `
-      <div class="round">
-        <h5>${r === 1 ? 'Before the task' : 'After the task'}</h5>
-        ${byRound[r].map((q) => {
-        const base = `${q.code}-r${r}`;
-        return `<details class="q-item">
-            <summary>
-              <span class="q-title">${q.number}. ${esc(q.title)}</span>
-              <span class="q-scores">
-                <b class="${a.scores[`${base}-closed`] != null ? 'set' : ''}">${a.scores[`${base}-closed`] ?? '·'}</b>
-                <b class="${a.scores[`${base}-open`] != null ? 'set' : ''}">${a.scores[`${base}-open`] ?? '·'}</b>
-              </span>
-            </summary>
-            <p class="quote">${esc(q.question)}</p>
-            <table class="key">${['2', '1', '0'].map((s) => `
-              <tr><th>${s}</th><td>${esc(q.scores[s])}</td></tr>`).join('')}</table>
-            <div class="row">
-              <span class="row-label">Closed book</span>
-              <div class="choices" data-score="${base}-closed">${[0, 1, 2].map((s) => `
-                <button data-v="${s}" aria-pressed="${String(a.scores[`${base}-closed`] === s)}">${s}</button>`).join('')}</div>
-              <span class="row-label">Confidence</span>
-              <div class="choices" data-score="${base}-confidence">${[1, 2, 3, 4, 5].map((s) => `
-                <button data-v="${s}" aria-pressed="${String(a.scores[`${base}-confidence`] === s)}">${s}</button>`).join('')}</div>
-            </div>
-            <div class="row">
-              <span class="row-label">Open book</span>
-              <div class="choices" data-score="${base}-open">${[0, 1, 2].map((s) => `
-                <button data-v="${s}" aria-pressed="${String(a.scores[`${base}-open`] === s)}">${s}</button>`).join('')}</div>
-            </div>
-            <textarea rows="2" data-notes="${base}-notes"
-              placeholder="What they said">${esc(a.scores[`${base}-notes`] || '')}</textarea>
-          </details>`;
+    if (!wrap) return;
+    const project = state.project;
+    const answers = (state.quiz && state.quiz[project]) || {};
+    const before = quizScore({ answers }, project, 'before');
+    const after = quizScore({ answers }, project, 'after');
+
+    if (!before.answered && !after.answered) {
+        wrap.innerHTML = `<p class="hint">The quiz appears here once they have
+          answered it. They do it on their own page, before and after the task.</p>`;
+        return;
+    }
+
+    wrap.innerHTML = `
+      <div class="quiz-score">
+        <span><b>${before.right}</b>/${before.of} before</span>
+        <span><b>${after.right}</b>/${after.of} after</span>
+        <span class="delta ${after.right > before.right ? 'up' : after.right < before.right ? 'down' : ''}">
+          ${after.right - before.right >= 0 ? '+' : ''}${after.right - before.right}</span>
+      </div>
+      ${bandsFor(project).map((group) => `
+        <div class="band">
+          <h5>${esc(group.band)}</h5>
+          ${group.questions.map((q) => {
+        const b = answers[`q${q.n}-before`];
+        const a = answers[`q${q.n}-after`];
+        const mark = (given) => (given == null ? '<i class="unanswered">·</i>'
+            : given === q.answer ? '<i class="right">✓</i>' : `<i class="wrong">${esc(given)}</i>`);
+        return `<div class="q-line">
+              <span class="q-marks">${mark(b)}${mark(a)}</span>
+              <span class="q-title">${q.n}. ${esc(q.question)}</span>
+            </div>`;
     }).join('')}
-      </div>`).join('');
+        </div>`).join('')}
+      <p class="hint">Two marks per question: before, then after. A letter is the
+      wrong option they chose, which is usually more informative than the fact
+      that they were wrong.</p>`;
 }
 
 function renderGaps() {

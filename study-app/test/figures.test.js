@@ -49,13 +49,13 @@ function fakeSession(code, condition, seed = 1) {
     const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
     const doc = condition === 'codoc' ? '.codoc/tree.codoc' : 'CLAUDE.md';
     const pool = condition === 'codoc'
-        ? [[doc, 'document', 'view'], ['hearth/post.py', 'code', 'view'],
+        ? [[doc, 'document', 'view'], ['scribe/notes.py', 'code', 'view'],
            [doc, 'document', 'human'], [null, null, 'prompt'],
-           ['hearth/post.py', 'code', 'agent'], [doc, 'document', 'agent'],
+           ['scribe/notes.py', 'code', 'agent'], [doc, 'document', 'agent'],
            [null, null, 'pytest'], [null, null, 'accept']]
-        : [[doc, 'document', 'view'], ['hearth/post.py', 'code', 'view'],
-           ['hearth/post.py', 'code', 'human'], [null, null, 'prompt'],
-           ['hearth/post.py', 'code', 'agent'], [null, null, 'pytest']];
+        : [[doc, 'document', 'view'], ['scribe/notes.py', 'code', 'view'],
+           ['scribe/notes.py', 'code', 'human'], [null, null, 'prompt'],
+           ['scribe/notes.py', 'code', 'agent'], [null, null, 'pytest']];
     const raw = [];
     let t = 1_700_000_000_000;
     for (let i = 0; i < 120; i += 1) {

@@ -11,19 +11,42 @@ import questions from './questions.json' with { type: 'json' };
  * settled. Kept short because it is read while listening to somebody.
  */
 export const OPEN_DECISIONS = Object.freeze({
-    hearth: [
-        'What marks a post as a draft',
-        'Whether drafts stay out of the feed and the sitemap',
-        'How the preview differs from a real build',
-        'Whether a draft is not built at all, or built but unlinked',
+    scribe: [
+        'What marks a quote in extracted text',
+        'Whether de-hyphenation applies inside a quote',
+        'Whether a quote ends the paragraph before it',
+        'What happens to a quote running across a page break',
     ],
-    ember: [
-        'Where a mute is configured',
-        'Whether muted items still reach the notification log and the status counts',
-        'Whether an all-muted day still gets a page',
-        'Whether the latest page follows the same rule as a dated one',
+    tally: [
+        'How a split is written in the CSV',
+        'Whether a split counts as one transaction or two',
+        'Whether the duplicate rule sees the halves as duplicates',
+        'What happens when one half matches no category rule',
     ],
 });
+
+/**
+ * The last decision in each list is the coupled one, where two rules meet.
+ *
+ * scribe strips page furniture before it looks for quotes; tally recognises
+ * transfers before it drops duplicates. Both are reached by deciding rather than
+ * by tripping over them, and both are where somebody can produce working code
+ * that contradicts the codebase.
+ */
+export const COUPLED_DECISION = 3;
+
+/**
+ * How consistent each decision is with what the codebase already believes.
+ *
+ * Consistency rather than correctness. There is no single right answer to any of
+ * these; there are answers that fit and answers that contradict, and the rating
+ * guide for each one is in the project's STUDY.md.
+ */
+export const CONSISTENCY = Object.freeze([
+    '0 — contradicts what the codebase already does',
+    '1 — defensible, but not what this codebase would do',
+    '2 — consistent with the existing intent',
+]);
 
 export const SETTLED_BY = Object.freeze([
     'They decided, before the agent acted',
@@ -41,42 +64,68 @@ export const GROUNDS = Object.freeze([
 
 export const questionsFor = (project) => questions[project] || [];
 
+/** The four bands, in the order RQ1 asks them. */
+export const BANDS = Object.freeze(['Purpose', 'Rationale', 'Change', 'Extension']);
+
 /**
- * Which questions are asked in which round, with the two anchors appearing in
- * both. Asking them twice is the point: the change between the answers is the
- * measure, not either answer on its own.
+ * The whole quiz, asked twice: once before the task and once after.
+ *
+ * Asking the same twelve both times is the point. Neither answer on its own says
+ * much — somebody may know the domain, or may guess well — and the CHANGE
+ * between them is what a session did to their understanding. Splitting the
+ * questions across the two sittings would make the two scores incomparable.
  */
-export function rounds(project) {
+export const SITTINGS = Object.freeze(['before', 'after']);
+
+export function bandsFor(project) {
     const all = questionsFor(project);
-    return {
-        1: all.filter((q) => q.round === 1),
-        2: [...all.filter((q) => q.round === 1 && q.repeated), ...all.filter((q) => q.round === 2)],
-    };
+    return BANDS.map((band) => ({ band, questions: all.filter((q) => q.band === band) }))
+        .filter((group) => group.questions.length);
 }
 
 /** A blank record, so the shape is the same before and after anything is typed. */
 export function emptyAssessment(project) {
-    const scores = {};
-    for (const round of [1, 2]) {
-        for (const q of rounds(project)[round]) {
-            // Closed book and open book are stored separately. The difference
-            // between them is the finding, so one must never overwrite the other.
-            scores[`${q.code}-r${round}-closed`] = null;
-            scores[`${q.code}-r${round}-open`] = null;
-            scores[`${q.code}-r${round}-confidence`] = null;
-            scores[`${q.code}-r${round}-notes`] = '';
+    const answers = {};
+    for (const sitting of SITTINGS) {
+        for (const q of questionsFor(project)) {
+            // Which letter they picked, stored rather than whether it was right.
+            // A stored right-or-wrong cannot be re-marked if a question turns out
+            // to be ambiguous, and it hides which wrong answer attracted people.
+            answers[`q${q.n}-${sitting}`] = null;
         }
     }
+    // Consistency with the codebase's existing intent, per open decision. This
+    // is the primary outcome, so it is stored beside who settled it rather than
+    // folded into one number.
     const decisions = {};
-    for (const d of OPEN_DECISIONS[project] || []) decisions[d] = null;
+    const consistency = {};
+    for (const d of OPEN_DECISIONS[project] || []) {
+        decisions[d] = null;
+        consistency[d] = null;
+    }
     return {
         signoffConfidence: null,
         signoffGrounds: [],
         signoffVerbatim: '',
         decisions,
-        scores,
+        consistency,
+        answers,
         updatedAt: null,
     };
+}
+
+/** How many of the twelve were right, at one sitting. */
+export function score(assessment, project, sitting) {
+    const answers = (assessment || {}).answers || {};
+    let right = 0;
+    let answered = 0;
+    for (const q of questionsFor(project)) {
+        const given = answers[`q${q.n}-${sitting}`];
+        if (given == null) continue;
+        answered += 1;
+        if (given === q.answer) right += 1;
+    }
+    return { right, answered, of: questionsFor(project).length };
 }
 
 /** What is still missing, so the gaps are visible before the call ends. */
@@ -90,10 +139,13 @@ export function outstanding(assessment, project) {
     const undecided = Object.entries(a.decisions || {}).filter(([, v]) => !v).length;
     if (undecided) gaps.push(`${undecided} open decision${undecided > 1 ? 's' : ''} unattributed`);
 
-    const scores = a.scores || {};
-    const missing = Object.keys(emptyAssessment(project).scores)
-        .filter((k) => k.endsWith('-closed') && scores[k] == null).length;
-    if (missing) gaps.push(`${missing} question${missing > 1 ? 's' : ''} unscored`);
+    // Consistency is the primary outcome, and it is the one thing here that
+    // cannot be recovered afterwards: it depends on having watched them decide.
+    const unrated = Object.entries(a.consistency || {}).filter(([, v]) => v == null).length;
+    if (unrated) gaps.push(`${unrated} decision${unrated > 1 ? 's' : ''} unrated for consistency`);
+
+    // The quiz is not listed. The participant answers it themselves, so a gap
+    // there is theirs to close and appears on their own page, not here.
     return gaps;
 }
 
