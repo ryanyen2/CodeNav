@@ -100,6 +100,12 @@ const ITEMS = [
     { id: 'rev1', text: 'I was confident the code was correct.' },
 ];
 
+/** Per-participant ratings, which is what pairing needs. */
+const RATINGS = Array.from({ length: 8 }, (_, p) => ITEMS.flatMap((it) => [
+    { code: `p-${p}`, condition: 'codoc', item: it.id, value: 4 + (p % 4) },
+    { code: `p-${p}`, condition: 'baseline', item: it.id, value: 2 + (p % 3) },
+])).flat();
+
 function makeAll() {
     const counts = {
         codoc: tally([{ doc1: 6, doc2: 2, rev1: 5 }, { doc1: 7, doc2: 3, rev1: 6 },
@@ -112,7 +118,8 @@ function makeAll() {
         byCondition[c] = transitionLift(cohort().filter((s) => s.condition === c));
     }
     return {
-        likert: likert({ items: ITEMS, conditions: ['codoc', 'baseline'], counts, points: 7 }),
+        likert: likert({ items: ITEMS, conditions: ['codoc', 'baseline'], counts, points: 7,
+            ratings: RATINGS }),
         timeprofile: timeProfile(['codoc', 'baseline'].map((c) => ({
             condition: c,
             n: cohort().filter((s) => s.condition === c).length,

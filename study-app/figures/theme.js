@@ -29,7 +29,7 @@ export const WIDTH = { single: 3.33 * 72, double: 7.0 * 72 };
  * reading a chart during a session.
  */
 export const CONDITION_LABEL = { codoc: 'codoc', baseline: 'CLAUDE.md' };
-export const CONDITION_COLOR = { codoc: '#2b6f8c', baseline: '#8c6d31' };
+export const CONDITION_COLOR = { codoc: '#4a90d9', baseline: '#e8b93c' };
 
 /**
  * The action colours, grouped by surface rather than spread around the wheel.
@@ -73,11 +73,14 @@ export const ACTION_LABEL = {
  * inside a bar remain legible.
  */
 export function likertColors(points = 7) {
-    const low = ['#c2500f', '#e6935b', '#f5c9a8'];
-    const mid = '#e8e6e1';
-    const high = ['#a8cbe4', '#5b96c4', '#22689b'];
+    // Brown at disagree, cream at the middle, teal at agree. The ends differ
+    // enough in lightness to stay separable in greyscale, which is how a good
+    // share of reviewers will read it, and the middle is pale so a neutral
+    // answer does not draw the eye the way a coloured one would.
+    const low = ['#a8542a', '#c98a5e', '#e3c39a'];
+    const mid = '#efece3';
+    const high = ['#a8c4b0', '#5f9c8a', '#2f7d6e'];
     if (points === 7) return [...low, mid, ...high];
-    // Any other length: sample the same ends evenly.
     const all = [...low, mid, ...high];
     return Array.from({ length: points }, (_, i) =>
         all[Math.round((i / (points - 1)) * (all.length - 1))]);

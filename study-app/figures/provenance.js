@@ -7,12 +7,15 @@
 // the agent touches (the person has been written out) and a description only the
 // person touches (the agent is ignoring it, so it is a diary, not a channel).
 //
-// Drawn as one dot per participant with a median line, not as a mean with error
-// bars. At a dozen people a mean is a summary of a sample small enough to just
-// show, and a strip plot cannot hide a bimodal split the way a mean can.
+// Every observation is drawn, coloured by condition, with a black mean and its
+// interval over the top and a dashed line at each condition's own mean. At a
+// dozen people a mean is a summary of a sample small enough to just show, and
+// dots cannot hide a bimodal split, or a single person carrying a result, the
+// way a bar can.
 import {
     el, text, svg, INK, RULE, SOFT, MUTED, TYPE, CONDITION_LABEL, CONDITION_COLOR,
 } from './theme.js';
+import { mean, studentizedCI } from './stats.js';
 
 const HUMAN_DOC = ['EDIT_DOC'];
 const AGENT_DOC = ['AGENT_DOC'];
@@ -43,103 +46,124 @@ export function authorship(sessions) {
     });
 }
 
-const median = (xs) => {
-    const v = xs.filter((x) => x != null).sort((a, b) => a - b);
-    if (!v.length) return null;
-    const m = Math.floor(v.length / 2);
-    return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
-};
+export const DEFAULT_MEASURES = Object.freeze([
+    { key: 'docWrites', label: 'Writes to the description', kind: 'count' },
+    { key: 'humanShareOfDoc', label: 'Share of those by the person', kind: 'share' },
+    { key: 'humanCode', label: 'Writes to code by the person', kind: 'count' },
+    { key: 'agentCode', label: 'Writes to code by the agent', kind: 'count' },
+]);
 
 /**
- * @param rows       output of authorship()
- * @param measures   [{ key, label, max, unit }]
- * @param conditions ['codoc','baseline']
+ * @param rows output of authorship()
  */
 export function provenance(rows, opts = {}) {
     const conditions = opts.conditions || ['codoc', 'baseline'];
-    const measures = opts.measures || [
-        { key: 'docWrites', label: 'Writes to the description', kind: 'count' },
-        { key: 'humanShareOfDoc', label: 'Share of those written by the person', kind: 'share' },
-        { key: 'agentDoc', label: 'Writes to the description by the agent', kind: 'count' },
-        { key: 'humanCode', label: 'Writes to code by the person', kind: 'count' },
-        { key: 'agentCode', label: 'Writes to code by the agent', kind: 'count' },
-    ];
+    const measures = opts.measures || DEFAULT_MEASURES;
 
-    const labelW = opts.labelW || 220;
-    const plotW = opts.plotW || 230;
-    const rowH = 46;   // tall enough that a row's own axis labels stay inside it
+    const labelW = opts.labelW || 160;
+    const plotW = opts.plotW || 300;
+    const laneH = 16;
     const padL = 8;
-    const padT = 22;
-    const padB = 30;
+    const padT = 30;
+    const padB = 16;
+    const rowH = conditions.length * laneH + 22;
 
-    const width = padL + labelW + plotW + 76;
+    const width = padL + labelW + plotW + 32;
     const height = padT + measures.length * rowH + padB;
     const root = svg(width, height, opts.title || 'Who wrote what');
 
-    conditions.forEach((c, i) => {
-        root.append(el('circle', {
-            cx: padL + labelW + 8 + i * 90, cy: padT - 12, r: 3.5, fill: CONDITION_COLOR[c],
-        }));
+    // ── the key ──
+    let kx = padL + labelW;
+    for (const c of conditions) {
+        root.append(el('circle', { cx: kx + 4, cy: 10, r: 4, fill: CONDITION_COLOR[c] }));
         root.append(text(CONDITION_LABEL[c] || c, {
-            x: padL + labelW + 16 + i * 90, y: padT - 8.5,
-            'font-size': TYPE.caption, fill: INK,
+            x: kx + 13, y: 13.5, 'font-size': TYPE.caption, fill: INK,
         }));
-    });
+        kx += 76;
+    }
+    root.append(el('circle', { cx: kx + 4, cy: 10, r: 3.4, fill: INK }));
+    root.append(text('Mean & 95% CI', { x: kx + 13, y: 13.5, 'font-size': TYPE.caption, fill: INK }));
 
     measures.forEach((m, mi) => {
         const y = padT + mi * rowH;
-        if (mi % 2 === 0) {
+        if (mi % 2 === 1) {
             root.append(el('rect', {
                 x: padL, y, width: width - padL - 6, height: rowH, fill: SOFT,
             }));
         }
         root.append(text(m.label, {
-            x: padL + labelW - 10, y: y + rowH / 2 + 3.5,
+            x: padL + labelW - 12, y: y + rowH / 2 - 1,
             'text-anchor': 'end', 'font-size': TYPE.label, fill: INK,
         }));
 
-        const values = conditions.map((c) =>
-            rows.filter((r) => r.condition === c).map((r) => r[m.key]).filter((v) => v != null));
-        const hi = m.kind === 'share' ? 1 : Math.max(1, ...values.flat());
+        const valuesFor = (c) => rows.filter((r) => r.condition === c)
+            .map((r) => r[m.key]).filter((v) => v != null);
+        const hi = m.kind === 'share' ? 1 : Math.max(1, ...conditions.flatMap(valuesFor));
         const x = (v) => padL + labelW + (v / hi) * plotW;
+        const ticks = m.kind === 'share'
+            ? [0, 0.25, 0.5, 0.75, 1]
+            : [...new Set([0, hi / 4, hi / 2, (hi * 3) / 4, hi].map((t) => Math.round(t)))];
 
-        root.append(el('line', {
-            x1: padL + labelW, y1: y + rowH - 14, x2: padL + labelW + plotW, y2: y + rowH - 14,
-            stroke: RULE,
-        }));
-        for (const [frac, lab] of (m.kind === 'share'
-            ? [[0, '0'], [0.5, 'half'], [1, 'all']]
-            : [[0, '0'], [1, String(hi)]])) {
-            root.append(text(lab, {
-                x: padL + labelW + frac * plotW, y: y + rowH - 4,
-                'text-anchor': frac === 1 ? 'end' : frac === 0 ? 'start' : 'middle',
-                'font-size': TYPE.tick, fill: MUTED,
+        // Gridlines behind everything, so a value can be read off a dot.
+        for (const t of ticks) {
+            root.append(el('line', {
+                x1: x(t), y1: y + 4, x2: x(t), y2: y + rowH - 16, stroke: RULE,
             }));
         }
 
         conditions.forEach((c, ci) => {
-            const vs = values[ci];
-            const lane = y + 12 + ci * 10;
-            for (const v of vs) {
+            const vs = valuesFor(c);
+            const lane = y + 13 + ci * laneH;
+            // Jittered only across the lane, never along the value axis: moving a
+            // dot sideways would move it away from the number it stands for.
+            vs.forEach((v, i) => {
                 root.append(el('circle', {
-                    cx: x(v), cy: lane, r: 3, fill: CONDITION_COLOR[c],
-                    'fill-opacity': 0.5,
+                    cx: x(v), cy: lane + ((i % 3) - 1) * 2.3, r: 3.4,
+                    fill: CONDITION_COLOR[c], 'fill-opacity': 0.75,
                 }));
-            }
-            const md = median(vs);
-            if (md != null) {
+            });
+            // Each condition's own mean, dashed, full height of the row, so it is
+            // visible whether that condition sits above or below the other.
+            const m0 = mean(vs);
+            if (m0 != null) {
                 root.append(el('line', {
-                    x1: x(md), y1: lane - 6, x2: x(md), y2: lane + 6,
-                    stroke: CONDITION_COLOR[c], 'stroke-width': 2,
+                    x1: x(m0), y1: y + 4, x2: x(m0), y2: y + rowH - 16,
+                    stroke: CONDITION_COLOR[c], 'stroke-dasharray': '3 2', 'stroke-width': 1.4,
                 }));
             }
-            // Say how many are behind the dots. Overlapping dots at a small n
-            // otherwise read as fewer people than were actually run.
+            const est = studentizedCI(vs, { seed: 20260816 });
+            if (est && est.low != null && !est.degenerate) {
+                root.append(el('line', {
+                    x1: x(est.low), y1: lane, x2: x(est.high), y2: lane,
+                    stroke: INK, 'stroke-width': 1.2,
+                }));
+                for (const end of [est.low, est.high]) {
+                    root.append(el('line', {
+                        x1: x(end), y1: lane - 3, x2: x(end), y2: lane + 3, stroke: INK,
+                    }));
+                }
+            }
+            if (m0 != null) {
+                root.append(el('circle', { cx: x(m0), cy: lane, r: 3.2, fill: INK }));
+            }
+            // Overlapping dots at a small n read as fewer people than were run.
             root.append(text(`n=${vs.length}`, {
-                x: padL + labelW + plotW + 8, y: lane + 3.5,
+                x: padL + labelW + plotW + 5, y: lane + 3.5,
                 'font-size': TYPE.caption, fill: MUTED,
             }));
         });
+
+        // An axis per row, because the rows are on different scales.
+        const yAxis = y + rowH - 14;
+        root.append(el('line', {
+            x1: padL + labelW, y1: yAxis, x2: padL + labelW + plotW, y2: yAxis, stroke: RULE,
+        }));
+        for (const t of ticks) {
+            root.append(text(m.kind === 'share' ? `${Math.round(t * 100)}%` : t, {
+                x: x(t), y: yAxis + 10, 'text-anchor': 'middle',
+                'font-size': TYPE.tick, fill: MUTED,
+            }));
+        }
     });
 
     return root;

@@ -41,6 +41,21 @@ export function buildFigures(cohort, { includePilots = false } = {}) {
             AFTER_CONDITION);
     }
 
+    // The per-participant ratings, which the counts have lost: they no longer
+    // say which answer belonged to whom, and pairing needs exactly that.
+    const ratings = [];
+    for (const p of people) {
+        for (const c of CONDITIONS) {
+            const a = (p.answers || {})[`after-${c}`];
+            if (!a) continue;
+            for (const q of AFTER_CONDITION) {
+                if (typeof a[q.id] === 'number') {
+                    ratings.push({ code: p.code, condition: c, item: q.id, value: a[q.id] });
+                }
+            }
+        }
+    }
+
     const lift = {};
     for (const c of CONDITIONS) {
         lift[c] = transitionLift(sessions.filter((s) => s.condition === c));
@@ -61,7 +76,7 @@ export function buildFigures(cohort, { includePilots = false } = {}) {
         sessions,
         figures: {
             likert: () => likert({
-                items: AFTER_CONDITION, conditions: CONDITIONS, counts, points: 7,
+                items: AFTER_CONDITION, conditions: CONDITIONS, counts, points: 7, ratings,
             }),
             timeprofile: () => timeProfile(CONDITIONS.map((c) => {
                 const of = sessions.filter((s) => s.condition === c);
@@ -98,9 +113,9 @@ const FIGURE_TITLES = {
 };
 
 const FIGURE_NOTES = {
-    likert: 'Counts, not means. A mean of a seven point scale hides a split, and R marks an item where agreeing is the bad direction.',
+    likert: 'Counts on the left, because a mean of a seven point scale hides a split. The paired difference on the right, because reading one off two stacked bars by eye is guesswork. R marks an item where agreeing is the bad direction.',
     timeprofile: 'Each session stretched onto a common start-to-end axis, so a forty minute session and a seventy minute one can be compared. Absolute duration is gone; the median is in the panel title.',
-    provenance: 'One dot per session, with the median. The claim is that the description is written by both parties, and this shows both ways that can fail.',
+    provenance: 'One dot per session, with the mean and its interval. The claim is that the description is written by both parties, and this shows both ways that can fail: one only the agent touches, or one only the person does.',
     mediation: 'Whether a move follows another more often than the two moves’ own rates predict. Writing to a description faithfully and never consulting it would show up here and nowhere else.',
 };
 

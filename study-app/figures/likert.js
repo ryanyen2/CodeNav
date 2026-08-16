@@ -11,6 +11,7 @@ import {
     el, text, svg, INK, RULE, SOFT, MUTED, TYPE, WIDTH,
     likertColors, onColor, CONDITION_LABEL,
 } from './theme.js';
+import { pairedEstimate } from './stats.js';
 
 /**
  * @param {object} data
@@ -18,6 +19,13 @@ import {
  *   conditions: ['codoc','baseline']
  *   counts:     { [condition]: { [itemId]: number[] } }  index 0 = point 1
  *   points:     7
+ *   ratings:    [{ code, condition, item, value }]  optional; adds panel (c)
+ *
+ * With `ratings`, a third panel shows the paired mean difference and its 95%
+ * interval. The stacked panels say what people answered; only this one says
+ * whether the two conditions differ, and by how much, with the uncertainty
+ * attached. Reading a difference off two stacked bars by eye is guesswork, and
+ * at a dozen people it is guesswork that is often wrong.
  */
 export function likert(data, opts = {}) {
     const points = data.points || 7;
@@ -34,7 +42,17 @@ export function likert(data, opts = {}) {
 
     const items = data.items;
     const n = items.length;
-    const width = padL + labelW + conditions.length * (panelW + 16) + 10;
+    // Panel (c) only exists when the per-participant ratings are supplied. A
+    // difference cannot be computed from the counts alone: they have lost which
+    // answer belonged to whom, which is exactly what pairing needs.
+    const estimates = data.ratings ? items.map((it) => pairedEstimate(
+        data.ratings.filter((r) => r.item === it.id),
+        { a: conditions[0], b: conditions[1], key: 'value', seed: 20260816 },
+    )) : null;
+    const diffW = estimates ? (opts.diffW || 140) : 0;
+
+    const width = padL + labelW + conditions.length * (panelW + 16)
+        + (estimates ? diffW + 34 : 0) + 10;
     const height = padT + n * (rowH + gap) + padB;
     const root = svg(width, height, opts.title || 'Questionnaire responses');
 
@@ -111,6 +129,63 @@ export function likert(data, opts = {}) {
             });
         });
     });
+
+    // ── the difference panel ──
+    if (estimates) {
+        const x0 = padL + labelW + conditions.length * (panelW + 16) + 18;
+        const finite = estimates.flatMap((e) => [e.low, e.high, e.mean]).filter((v) => v != null);
+        const bound = Math.max(1, ...finite.map((v) => Math.abs(v)));
+        const dx = (v) => x0 + ((v + bound) / (2 * bound)) * diffW;
+
+        // Zero first, behind everything, so a bar crossing it stays readable.
+        root.append(el('line', {
+            x1: dx(0), y1: padT - 4, x2: dx(0), y2: padT + n * (rowH + gap) - gap + 2,
+            stroke: RULE,
+        }));
+
+        estimates.forEach((e, i) => {
+            const y = padT + i * (rowH + gap) + rowH / 2;
+            if (e.low != null && e.high != null && !e.degenerate) {
+                root.append(el('line', {
+                    x1: dx(e.low), y1: y, x2: dx(e.high), y2: y, stroke: INK, 'stroke-width': 1.2,
+                }));
+                for (const end of [e.low, e.high]) {
+                    root.append(el('line', {
+                        x1: dx(end), y1: y - 3, x2: dx(end), y2: y + 3, stroke: INK,
+                    }));
+                }
+            }
+            if (e.mean != null) {
+                root.append(el('circle', { cx: dx(e.mean), cy: y, r: 3, fill: INK }));
+            }
+            // Fewer than four pairs is not an interval, and saying so beats
+            // drawing a dot that looks like one.
+            if (e.n < 4) {
+                root.append(text(`n=${e.n}`, {
+                    x: x0 + diffW + 4, y: y + 3, 'font-size': TYPE.caption, fill: MUTED,
+                }));
+            }
+        });
+
+        const yAxis = padT + n * (rowH + gap) + 2;
+        root.append(el('line', { x1: x0, y1: yAxis, x2: x0 + diffW, y2: yAxis, stroke: RULE }));
+        // Always symmetric and always including zero, because zero is the value
+        // a reader looks for first: it is where "no difference" sits, and an
+        // unlabelled zero line makes every bar's position a guess.
+        const step = bound > 2 ? Math.round(bound / 2) : 1;
+        const ticks = [0];
+        for (let v = step; v <= bound; v += step) ticks.unshift(-v), ticks.push(v);
+        for (const v of ticks) {
+            root.append(text(v, {
+                x: dx(v), y: yAxis + 12, 'text-anchor': 'middle',
+                'font-size': TYPE.tick, fill: v === 0 ? INK : MUTED,
+            }));
+        }
+        root.append(text(`(${String.fromCharCode(97 + conditions.length)}) Mean difference & 95% CI`, {
+            x: x0 + diffW / 2, y: yAxis + 26,
+            'text-anchor': 'middle', 'font-size': TYPE.title, fill: INK,
+        }));
+    }
 
     // ── axes, one per panel ──
     const ticks = [0, Math.ceil(maxTotal / 2), maxTotal];
