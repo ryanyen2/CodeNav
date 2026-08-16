@@ -3,6 +3,11 @@
 Thank you for taking part. Please read this page and set up your machine before
 we meet. Setup takes about 15 minutes, and most of it runs on its own.
 
+Start from the link the researcher sent you, not from this page. The link opens
+a page that walks you through everything in order, including the consent form,
+and it tells you when to come back here. If you have lost the link, ask for it
+again. It carries your participant code, and nothing here works without it.
+
 ## What the session is
 
 You will do two short programming tasks, one after the other, on two small
@@ -32,22 +37,45 @@ WSL, so install WSL first if you do not have it.
 You also need two programs that ask you to sign in, so please install them
 yourself:
 
-- Claude Code. Install it with `curl -fsSL https://claude.ai/install.sh | bash`,
-  then run `claude` once and sign in. Type `/exit` to leave.
+- Claude Code. Install it with `curl -fsSL https://claude.ai/install.sh | bash`.
+  You do not need to sign in, and you do not need to buy a plan. We provide the
+  account.
 - Visual Studio Code, from https://code.visualstudio.com. Open it once, press
   Cmd+Shift+P (Ctrl+Shift+P on Linux), and run the command
   "Shell Command: Install 'code' command in PATH".
 
-You do not need Python, and you do not need any API key. The setup script
-installs everything else.
+You do not need Python. The setup script installs everything else.
+
+## About the two keys
+
+We pay for the models, so nothing in the session costs you anything. We will
+give you two keys, separately from this bundle, and the setup script asks for
+them. They are not shown as you type, so they will not appear on screen while
+you are sharing it.
+
+They are written only into the four project folders, so deleting those folders
+removes them. Nothing is added to your shell, and nothing changes for your own
+projects.
+
+If you already use Claude Code with your own account, that keeps working
+everywhere except these four folders. Inside them the study's account is used
+instead, so your own plan is never spent on this.
+
+Please do not use these keys for anything else, and tell us if you think one has
+ended up somewhere it should not have. We turn them off after the study.
 
 ## Setting up
 
-Unzip the bundle we sent you, open a terminal in the unzipped folder, and run:
+Unzip the bundle we sent you and open a terminal in the unzipped folder. Then run
+the command from your study page. It looks like this, with your own code in it:
 
 ```
-./setup.sh
+./setup.sh p-abcdefghjkmn codoc-first
 ```
+
+Copy it from the page rather than typing it. The code is how your work is filed,
+and a machine without it records nothing. If you run `./setup.sh` with nothing
+after it, it will ask you for the code before it starts.
 
 It prints a line for each thing it does, and it takes about 10 minutes. When it
 finishes it either says "Everything is ready" or lists what is still missing. If

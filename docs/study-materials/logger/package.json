@@ -5,9 +5,15 @@
   "version": "1.0.0",
   "publisher": "codoc",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./extension.js",
   "contributes": {
     "configuration": {
@@ -22,6 +28,31 @@
           "type": "string",
           "default": "",
           "description": "Participant code, written into every line."
+        },
+        "codocStudyLogger.condition": {
+          "type": "string",
+          "enum": [
+            "codoc",
+            "baseline",
+            ""
+          ],
+          "default": "",
+          "description": "Which condition this project is. Left empty, it is guessed from the folder name."
+        },
+        "codocStudyLogger.studyPage": {
+          "type": "string",
+          "default": "",
+          "description": "Where the participant page is served. Left empty, the deployed one is used."
+        },
+        "codocStudyLogger.order": {
+          "type": "string",
+          "enum": [
+            "codoc-first",
+            "baseline-first",
+            ""
+          ],
+          "default": "",
+          "description": "Which way round this participant goes. Set during setup."
         }
       }
     },
@@ -29,6 +60,10 @@
       {
         "command": "codocStudyLogger.showLog",
         "title": "Study logger: show what is being recorded"
+      },
+      {
+        "command": "codocStudyLogger.openStudyPage",
+        "title": "Study: open my study page"
       }
     ]
   }

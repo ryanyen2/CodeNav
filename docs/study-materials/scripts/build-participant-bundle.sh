@@ -36,9 +36,15 @@ echo "Built $(basename "$VSIX")"
 # The study logger. A separate extension on purpose: it installs in BOTH
 # conditions, so navigation is measured the same way in each. Its tests run here
 # because a file sorted into the wrong surface changes a reported number.
+echo "Checking that setup.sh files a machine under its code."
+# The one step whose failure is invisible: a session that ran without a code
+# looks normal on the participant's screen and arrives nowhere.
+run bash "$MAT/scripts/test-setup.sh"
+
 echo "Building the study logger."
 run node "$MAT/logger/test-classify.js"
 run node "$MAT/logger/test-extension.js"
+run node --test "$MAT/logger/test-composition.js"
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
     --allow-missing-repository --skip-license --out "$OUT/" )
 LOGGER="$(ls -t "$OUT"/codoc-study-logger-*.vsix | head -1)"
@@ -63,6 +69,8 @@ for base in hearth-baseline ember-baseline; do
   rm -rf "$TMP"
 done
 
+mkdir -p "$STAGE/logger"
+cp "$MAT"/logger/install-prompt-hook.py "$MAT"/logger/prompt-hook.py "$STAGE/logger/"
 cp "$MAT"/scripts/setup.sh "$STAGE/"
 cp "$MAT"/scripts/session-log.sh "$STAGE/"
 cp "$MAT"/scripts/collect.sh "$STAGE/"
@@ -77,4 +85,5 @@ echo "Bundle: $OUT/codoc-study-bundle.zip"
 echo "Contents:"
 unzip -l "$OUT/codoc-study-bundle.zip" | sed -n '4,20p'
 echo
-echo "Send this zip to the participant along with the pre-session questionnaire."
+echo "Send this zip with the participant's link, which is on their page in the"
+echo "dashboard. The consent form and the questionnaires are on that link."

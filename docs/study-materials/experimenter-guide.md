@@ -24,6 +24,99 @@ Within a project, the two copies hold identical source and tests and the same 12
 commits, so reading the history tells you the same things either way. The only
 differences are the ones above.
 
+## The two pages, and how a session runs
+
+There are two web pages and one zip. You use one page, the participant uses the
+other, and the zip is what they install.
+
+- Your dashboard is <https://codoc-11b10.web.app/experimenter/>. You sign in with
+  your MIT address. You create participants here, you get the link to send them
+  here, and you type the sign-off, the who-settled-what record and the question
+  scores here during the session.
+- Their page is <https://codoc-11b10.web.app/participant/>, reached only through
+  the link you send. It walks them through consent, the questionnaires, the task
+  cards and the break, one step at a time, and saves as they go.
+- The zip is `dist/codoc-study-bundle.zip`. It holds the extension, the four
+  projects and a setup script.
+
+A whole session, in order:
+
+1. You press New in the dashboard. It gives you a code, e.g. `p-abcdefghjkmn`,
+   and picks the order for you so the four combinations fill evenly.
+2. You send them the link and the zip. Both are on the dashboard, ready to copy.
+3. They open the link, give consent, answer the background questions, and run the
+   setup script with their code. Days ahead, not on the day.
+4. You watch the dashboard. Two marks turn green: one when they open the link,
+   one when their editor first reports. Until the second one is green, nothing
+   they do in the editor will reach you.
+5. On the day, they share their screen and you record. They work through their
+   page and you fill in your dashboard beside them.
+6. Afterwards they run `collect.sh` and send you one file. You export their
+   records with `scripts/export-session.mjs` and check the pair is complete.
+
+The code is what ties all of it together. It is not secret and it identifies
+nobody. Everything they do is filed against it, and a machine without it records
+nothing, which is the one failure that cannot be repaired afterwards.
+
+## Who pays for the model
+
+You do. The study supplies two keys, so a participant never spends their own
+money and never needs a Claude plan.
+
+- An **Anthropic key** runs Claude Code, in all four workspaces, on
+  `claude-sonnet-5` with thinking set to medium.
+- An **OpenAI key** runs codoc, in its two workspaces, on `gpt-5.6-luna` with
+  reasoning and verbosity both medium.
+
+Setup asks for both and writes them into the four project folders. Nothing goes
+into the participant's shell, so deleting the folders removes the keys and their
+own projects are untouched.
+
+An API key beats a claude.ai login, which is what makes this work: a participant
+already signed in to their own account still runs the session on ours. Setup then
+proves it by asking Claude Code one question through the key it just wrote, and
+by asking OpenAI whether that key can see `gpt-5.6-luna`. Both failures are worth
+catching before the day. A key that works but landed in the wrong file fails a
+session exactly like a bad key, and only a check against the written
+configuration tells them apart.
+
+### It does not disturb their own Claude Code
+
+Tested on a machine signed in to a Claude subscription, with a real study key.
+
+- Inside the study workspace, Claude Code answered on the study's key.
+- With that key deliberately broken, the same folder failed with a 401 while a
+  plain folder beside it still answered on the machine's own login. So the key is
+  genuinely what the workspace uses, and genuinely only that workspace.
+- `~/.claude/settings.json` and `~/.claude/.credentials.json` came back
+  byte-identical. No key appeared in any file under the home directory, and no
+  approval was recorded. The subscription login stayed exactly as it was.
+
+The only global file that changed was `~/.claude.json`, which records which
+directories have been opened. It held no key.
+
+Nothing here is written to a shell profile, and that is the point rather than
+tidiness. A key exported in a profile would follow the participant into their own
+projects for as long as the line stayed there.
+
+Codoc would otherwise pick its provider from the environment, so a key in a
+participant's own shell profile could move it onto their account. The two codoc
+workspaces name the provider outright so nothing is inferred.
+
+### Before you hand keys out
+
+Use keys made for this study, not your own working ones. Put a spend limit on
+both. Turn them off when the study ends, and sooner if a participant tells you a
+key went somewhere it should not have.
+
+Once a key is on somebody else's machine you cannot get it back, so the limit and
+the expiry are the whole of your protection. Neither is set by anything here.
+
+You can read the keys down the call, which is what the prompts are written for,
+or put a `keys.env` next to `setup.sh` holding `STUDY_ANTHROPIC_KEY=…` and
+`STUDY_OPENAI_KEY=…` and send that separately. Do not put it inside the bundle
+zip: the zip is built once and goes to everybody.
+
 ## Part 1. Set up your own machine, once
 
 You need node, npm, uv and zip. Then, from the repo root:
@@ -42,21 +135,33 @@ know what their setup will feel like.
 
 ## Part 2. Before the session
 
-Send the participant three things, at least three days ahead.
+At least three days ahead, open the dashboard and press New. You get a code and
+an order. Then send the participant two things, both from the card at the top of
+that participant's page in the dashboard.
 
-1. `dist/codoc-study-bundle.zip`.
-2. `participant-before-the-session.md`. It is also inside the zip as `README.md`.
-3. The questionnaire that asks about their background, how often they use coding
-   agents, and how often they read a diff before accepting it. Do not run anyone
-   who answers "never" to that last one.
+1. Their link, which looks like
+   `https://codoc-11b10.web.app/participant/?code=p-abcdefghjkmn&order=codoc-first`.
+   Ask them to open it and work through it until it tells them to stop. That
+   covers consent and the background questions.
+2. `dist/codoc-study-bundle.zip`. Their page tells them to unzip it and run the
+   setup command, which is the second thing on that card. It has their code and
+   order already in it, so it can be pasted as it stands.
+
+You do not need to decide the order yourself. The dashboard picks whichever of
+the two is behind, so the combinations fill evenly without you keeping a tally.
+
+Then watch the same card. It has two marks on it. The first turns green when they
+open their link. The second turns green when their editor first reports, which
+only happens once the setup script has run with their code. Both green means the
+handoff worked. If the second one is still not green, ask them to run
+`./setup.sh --check`, which says in plain words whether the code is set.
 
 Ask them to send back the last few lines the setup script printed. If it does not
-say "Everything is ready", sort it out before the session rather than during it.
-The common problems and their fixes are at the end of the file you sent them.
+say "Everything is ready", sort it out now rather than during the session. The
+common problems and their fixes are at the end of the file inside the zip.
 
-Then decide which way round this participant goes. Vary both the order of the two
-ways of working and which project goes with which, so all four combinations come
-up about equally often across participants.
+Do not run anyone who says they never read a diff before accepting it. That is
+one of the background questions, and you can see their answers in the dashboard.
 
 ## Part 3. On the day
 
@@ -67,7 +172,11 @@ unzipped, run this, and read you the result:
 ./setup.sh --check
 ```
 
-Then have them share their whole screen and start recording.
+The line to listen for is the one naming their code. Everything else it checks
+can be fixed afterwards; a session that ran without a code recorded nothing.
+
+Then have them share their whole screen and start recording. Open their page in
+the dashboard and keep it beside the call for the rest of the session.
 
 ### Starting a codoc condition
 
@@ -267,9 +376,17 @@ The questions and how to score them are in `questions-hearth.md` and
 say how to ask them, and the short version is: ask each one twice, first with
 everything closed and then with the description open, and record both answers.
 
-After the questions, hand over the questionnaires. Then at the very end, once both
-conditions are done, ask which way of working they would pick for each of the
-situations listed in the design doc, and run the interview.
+Score as you go, in the dashboard. Each question has its scoring table beside it,
+and the closed book and open book answers are kept apart, because the change
+between them is the result.
+
+The questionnaires appear on the participant's own page at the right moment, so
+there is nothing to hand over. At the very end, once both conditions are done,
+their page asks which way of working they would pick for each situation, and then
+you run the interview.
+
+The dashboard shows what is still missing for the condition you are on. Clear that
+list before moving on, because a sign-off is not recoverable after the call.
 
 ## Part 7. Collecting the data
 
@@ -284,9 +401,11 @@ It packs the projects, the recordings of the session state, the interaction logs
 and the Claude Code transcripts into one zip on their Desktop and prints where it
 is. Have them send it while you are still on the call.
 
-Then, before they leave, unpack it and run:
+Then, before they leave, unpack it, pull down the live copy, and check the two
+against each other:
 
 ```
+node study-app/scripts/export-session.mjs <their code> --out <the unpacked folder>
 python3 docs/study-materials/scoring/check-session-complete.py <the unpacked folder>
 ```
 

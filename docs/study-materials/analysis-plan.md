@@ -15,7 +15,8 @@ same list against what actually arrived.
 | Claude Code transcript | `~/.claude/projects/`, collected at the end | Every prompt the participant wrote and every action the agent took, timestamped |
 | Project snapshots | `session-log.sh`, every 20 seconds | The whole project, replayable commit by commit, plus codoc's own state files |
 | Final projects | Collected at the end | What they finished with, for scoring and for a blind rater |
-| Your notes and forms | You, during the session | Sign-off, who settled what, the answers to the questions, the questionnaires |
+| Your notes and forms | The dashboard, during the session | Sign-off, who settled what, the answers to the questions |
+| Questionnaires | The participant page | Background, both after-condition blocks, and which they would pick |
 
 The clocks are all wall clock in milliseconds, so the three machine-written
 sources merge on time without any correlation work.
@@ -80,11 +81,18 @@ transcript, which the participant is told about.
 | How long their instructions to the agent were | The transcript. |
 | How they navigated, coded into seek, relate, and collect | The interaction log with the screen recording. Hand-coded. |
 
-## Questionnaires
+## Questionnaires and notes
 
-Filled in on a form, so they never appear in the collected zip. File them under
-the participant code yourself. The session checker cannot see them and will not
-tell you they are missing.
+Both are typed on the web now and land against the participant code. The
+questionnaires come from the participant's page, and the sign-off, the
+who-settled-what record and the question scores come from your dashboard.
+
+That means the session checker CAN see them. Export the participant with
+`scripts/export-session.mjs`, put the file beside the collected folder, and the
+checker compares the two halves and reports what is missing from either.
+
+Consent is the exception. It stays in the Google form, and no part of this
+touches it.
 
 ## What we cannot measure, and are not going to claim
 

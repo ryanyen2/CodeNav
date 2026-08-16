@@ -87,15 +87,33 @@ def _reconcile_embed_flag(codoc_path: Path) -> bool:
     return wiped
 
 
+# How long a superseded table version is kept before optimize may reclaim it.
+# Not zero: a concurrent reader (the IDE's daemon, a CLI one-shot) may hold a
+# just-superseded version open (lancedb#3086). But 30 minutes was far too long,
+# because it is measured against WALL CLOCK while passes are measured against
+# EDITS — and edits arrive seconds apart.
+#
+# Measured on a rename of 2000 chunks: the table goes from 2.9 MB to 24.6 MB
+# during the pass, and optimize then reclaims none of it (24.6 -> 25.0 MB)
+# because every version it would drop is younger than the window. The next pass
+# reads and rewrites the bloated table, leaves more debris, and so on. That is
+# the compounding behind a rename pass costing 21.5x the time for 6.7x the
+# chunks, and behind an earlier "283 MB pathology" in the same code.
+#
+# A read takes milliseconds, so a minute is already orders of magnitude of
+# headroom for the reader this protects.
+_VERSION_RETENTION = timedelta(
+    seconds=int(os.environ.get("CODOC_INDEX_RETENTION_S", "60"))
+)
+
+
 def _maintain_table(codoc_path: Path) -> None:
     """Compact fragments + prune old versions after a pass (best-effort)."""
     from codoc.pipelines.indexing import reader
 
     async def _opt() -> None:
         tbl = await reader._open_table(codoc_path)
-        # Not zero retention: concurrent readers (the IDE's daemon, a CLI
-        # one-shot) may hold a just-superseded version open (lancedb#3086).
-        await tbl.optimize(cleanup_older_than=timedelta(minutes=30))
+        await tbl.optimize(cleanup_older_than=_VERSION_RETENTION)
 
     try:
         reader._run(_opt())

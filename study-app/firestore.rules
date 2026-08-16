@@ -1,0 +1,131 @@
+rules_version = '2';
+
+// Security rules for the codoc study.
+//
+// The web configuration in the apps is public by design. It identifies the
+// project and protects nothing. This file is the protection, and
+// test/rules.test.js is the proof, including the negative cases.
+//
+// The shape:
+//   - Experimenters sign in with Google and must be on the allowlist below.
+//     They can read everything and write their own assessments.
+//   - A participant has a long random code, created in advance. Two writers work
+//     under it: the page in their browser and the mirror inside their editor.
+//     Each signs in anonymously and registers itself in a named slot.
+//     Naming the slots makes the limit structural, so these rules never count.
+//   - Nothing anywhere may carry a name, an email, or anything else identifying.
+//     Consent is collected in a Google Form and those fields stay there.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Add addresses here to grant an experimenter access. Nothing else grants it.
+    function allowlist() {
+      return ['ryanyen2@mit.edu'];
+    }
+
+    // Reads the token defensively. An anonymous account has no email claim at
+    // all, and touching a missing property is an evaluation error rather than a
+    // plain false. Errors deny, so the effect is the same here, but they poison
+    // any expression this sits inside and they fill the logs with noise that
+    // hides real failures. get() with a default keeps it an ordinary false.
+    function isExperimenter() {
+      return request.auth != null
+          && request.auth.token.get('email_verified', false) == true
+          && request.auth.token.get('email', '') in allowlist();
+    }
+
+    // The two writers under a participant code. A third name is not a slot.
+    function isSlot(slot) {
+      return slot in ['browser', 'mirror'];
+    }
+
+    function participantExists(code) {
+      return exists(/databases/$(database)/documents/participants/$(code));
+    }
+
+    function participantOpen(code) {
+      return participantExists(code)
+          && get(/databases/$(database)/documents/participants/$(code)).data.released != true;
+    }
+
+    // Whether the caller holds one of this code's slots. Two reads at most.
+    function holdsSlot(code, slot) {
+      return exists(/databases/$(database)/documents/participants/$(code)/devices/$(slot))
+          && get(/databases/$(database)/documents/participants/$(code)/devices/$(slot)).data.uid
+             == request.auth.uid;
+    }
+
+    function isDevice(code) {
+      return request.auth != null
+          && (holdsSlot(code, 'browser') || holdsSlot(code, 'mirror'));
+    }
+
+    // Consent lives in the Google Form. Nothing identifying reaches this database,
+    // and that holds for experimenters too — it is about where the data lives, not
+    // about who is trusted.
+    function noIdentifyingFields() {
+      return !request.resource.data.keys().hasAny([
+        'name', 'fullName', 'firstName', 'lastName',
+        'email', 'emailAddress',
+        'phone', 'address', 'dob', 'dateOfBirth', 'ip'
+      ]);
+    }
+
+    match /participants/{code} {
+      allow get, list: if isExperimenter();
+      allow create, update: if isExperimenter() && noIdentifyingFields();
+      allow delete: if false;
+
+      // Registering a device. Anyone holding the code may take a free slot on a
+      // participant that exists and has not been released. The code is the
+      // credential, which is why it is long, random, and never shown publicly.
+      match /devices/{slot} {
+        allow get: if isExperimenter() || (request.auth != null
+                      && resource.data.uid == request.auth.uid);
+        allow list: if isExperimenter();
+        allow create: if request.auth != null
+                      && isSlot(slot)
+                      && participantOpen(code)
+                      && request.resource.data.uid == request.auth.uid
+                      && noIdentifyingFields();
+        // A slot is claimed once. Releasing is the experimenter's job, and it is
+        // how a participant who lost their browser storage gets back in.
+        allow update, delete: if isExperimenter();
+      }
+
+      match /answers/{form} {
+        allow read: if isExperimenter();
+        allow create, update: if isDevice(code) && noIdentifyingFields();
+        allow delete: if false;
+      }
+
+      match /sessions/{condition} {
+        allow read: if isExperimenter();
+        allow create, update: if isDevice(code) && noIdentifyingFields();
+        allow delete: if false;
+
+        // Append only. A batch that has been written is never edited, so a
+        // replay after a crash cannot quietly rewrite history.
+        match /batches/{batchId} {
+          allow read: if isExperimenter();
+          allow create: if isDevice(code) && noIdentifyingFields();
+          allow update, delete: if false;
+        }
+      }
+
+      // Written by the experimenter alone, kept in its own collection so that
+      // neither side can overwrite the other and these rules stay readable.
+      match /assessments/{condition} {
+        allow read: if isExperimenter();
+        allow create, update: if isExperimenter() && noIdentifyingFields();
+        allow delete: if false;
+      }
+    }
+
+    // Anything not named above is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

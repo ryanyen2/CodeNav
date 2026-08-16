@@ -1,0 +1,266 @@
+{
+  "hearth": [
+    {
+      "number": 1,
+      "title": "What a second build does",
+      "code": "F1",
+      "round": 1,
+      "repeated": true,
+      "scores": {
+        "0": "It builds everything again, or they do not know.",
+        "1": "It skips work it has already done, without the second half about the listing pages.",
+        "2": "Both halves. Pages whose content has not changed are skipped, and the home, tag and feed pages are skipped as well, because a signature taken over the list of posts has not changed."
+      },
+      "question": "You run `hearth build`, change nothing, and run it again. What does the second run do?"
+    },
+    {
+      "number": 2,
+      "title": "The path one post takes",
+      "code": "S1",
+      "round": 1,
+      "repeated": true,
+      "scores": {
+        "0": "Fewer stages than that, or in the wrong order.",
+        "1": "Four or more of those stages in the right order, but the separate pass for the listing pages is missing.",
+        "2": "Finding the file, reading its settings block, turning the markdown into HTML, working out its title and address, filling in the template, writing it out. It also says the listing pages are built in a separate pass."
+      },
+      "question": "Walk me through the stages a single post passes through, from a file on disk to HTML in `_site`."
+    },
+    {
+      "number": 3,
+      "title": "Why the dev server works the way it does",
+      "code": "R1",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "Nothing, or something wrong.",
+        "1": "A plausible reason of their own, such as \"it is simpler\" or \"it is faster\", with no rejected alternative.",
+        "2": "Rendering each page as it is requested was rejected, so that the preview and the published site can never disagree."
+      },
+      "question": "Why does the dev server serve files from the build output instead of rendering pages on request? What alternative was rejected?"
+    },
+    {
+      "number": 4,
+      "title": "When the listing pages are rebuilt",
+      "code": "R2",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "File timestamps, or a guess.",
+        "1": "The signature, with no mention of what was rejected.",
+        "2": "A signature taken over the fields of the assembled list of posts, chosen instead of tracking which output depends on which input, because that kept going subtly wrong after a post was deleted."
+      },
+      "question": "Index and tag pages are not rebuilt on every build. How does hearth decide when they must be, and why was it designed that way?"
+    },
+    {
+      "number": 5,
+      "title": "Adding a second output format",
+      "code": "E1",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "Changes scattered across unrelated parts.",
+        "1": "The right modules, without that last point.",
+        "2": "The build step that writes output, and possibly page assembly. Finding files, reading settings, rendering markdown and filling templates are all left alone. It also mentions that the record of what each build wrote has to know about the new file."
+      },
+      "question": "To add a second output format, say a JSON file per post, which modules would change, and which would you leave alone?"
+    },
+    {
+      "number": 6,
+      "title": "The hand-written markdown renderer",
+      "code": "D1",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "No position either way.",
+        "1": "A position with nothing behind it.",
+        "2": "A position with a tradeoff behind it, such as the cost of a dependency against the cost of writing and fixing it yourself. The recorded reason, that hearth is meant to deploy as one file, counts."
+      },
+      "question": "The markdown renderer is written by hand instead of using a library. Would you have made the same call? Why or why not?"
+    },
+    {
+      "number": 7,
+      "title": "What their own change rebuilds",
+      "code": "F2",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "A description that does not match what their build does.",
+        "1": "Only the post's own page.",
+        "2": "The change reaches the assembled list, so the signature moves and the listing pages are rebuilt. An accurate description of their own build scores 2 here even when that build is broken, including saying that the listing pages go stale. Whether the code is right is scored separately."
+      },
+      "question": "After your change: someone flips a published post to draft and runs an incremental build. Walk me through exactly what rebuilds and why."
+    },
+    {
+      "number": 8,
+      "title": "Drafts and the feed",
+      "code": "R3",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "They do not know what their own build does.",
+        "1": "What it does, with \"the agent did it that way\" as the reason.",
+        "2": "What it does, plus a reason of their own, such as what a subscriber would expect or that the card did not say. Any real ground counts, whichever way they went."
+      },
+      "question": "Drafts and the RSS feed: what does your build do now, and why that way?"
+    },
+    {
+      "number": 9,
+      "title": "Scheduled posts",
+      "code": "E2",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "A new filter somewhere else.",
+        "1": "The right place, without the catch.",
+        "2": "They extend whatever they built for drafts, adding a second condition in the same place, and they notice the catch: a date-based rule changes the right answer without anyone editing a file, so the build has to be run again and the date has to reach the signature."
+      },
+      "question": "Next month the team wants scheduled posts, where a future date keeps a post hidden until that date passes. Given what you built today, what changes and where?"
+    },
+    {
+      "number": 10,
+      "title": "Arguing the other side",
+      "code": "D2",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "They do not engage with it.",
+        "1": "One side only.",
+        "2": "Both sides of the real tension. Deciding early keeps the listing pages correct but means the dev server needs a way to ask for drafts. Deciding late makes the preview trivial but the signature never sees it."
+      },
+      "question": "You put the draft decision where you did. Argue for the opposite placement. What would break, and would anything get better?"
+    }
+  ],
+  "ember": [
+    {
+      "number": 1,
+      "title": "What a second digest run does",
+      "code": "F1",
+      "round": 1,
+      "repeated": true,
+      "scores": {
+        "0": "It writes everything again, or they do not know.",
+        "1": "It skips the days it has already written, without the second, separate signature for the archive.",
+        "2": "Both halves. Each day's page is skipped because a signature over the items that day chose has not changed, and the archive is skipped because it has a separate signature of its own over every stored item."
+      },
+      "question": "You run `ember digest`, change nothing, and run it again. What does the second run do?"
+    },
+    {
+      "number": 2,
+      "title": "The path one feed entry takes",
+      "code": "S1",
+      "round": 1,
+      "repeated": true,
+      "scores": {
+        "0": "Fewer stages than that, or in the wrong order.",
+        "1": "Four or more of those stages in the right order, but the store or the separate archive pass is missing.",
+        "2": "Reading the source, parsing it, tidying it into a stored item, saving it without duplicating what is already there, choosing it for a day, filling in the template, writing the page. It also says the archive is built in a separate pass."
+      },
+      "question": "Walk me through the stages a single feed entry passes through, from XML on disk to a line on a digest page."
+    },
+    {
+      "number": 3,
+      "title": "Why the archive has its own signature",
+      "code": "R1",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "Nothing, or something wrong.",
+        "1": "A plausible reason of their own, such as \"it is simpler\", with no rejected alternative.",
+        "2": "One shared signature was rejected. The archive has to be rewritten whenever the whole collection moves, and a day's page only when that day would come out different, so a shared signature made each of them rebuild for the other's reasons."
+      },
+      "question": "The archive has a signature of its own rather than sharing the digests'. Why was it built that way? What alternative was rejected?"
+    },
+    {
+      "number": 4,
+      "title": "When a day's page is rewritten",
+      "code": "R2",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "File timestamps, or a guess.",
+        "1": "The signature, with no mention of what was rejected.",
+        "2": "A signature over the fields of the items that day selected, taken from the assembled selection, chosen instead of tracking what each day depends on, because that kept going subtly wrong once an item's date moved it to a different day."
+      },
+      "question": "A day's digest page is not rewritten on every run. How does ember decide when it must be, and why was it designed that way?"
+    },
+    {
+      "number": 5,
+      "title": "Adding a second output format",
+      "code": "E1",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "Changes scattered across unrelated parts.",
+        "1": "The right modules, without that last point.",
+        "2": "The step that writes the digest, and possibly the renderer. Fetching, parsing, tidying, storing and the templates are left alone. It also mentions that the new file has to be tracked, or a skipped run will leave it missing."
+      },
+      "question": "To add a second output format, say a JSON file per day alongside the HTML page, which modules would change, and which would you leave alone?"
+    },
+    {
+      "number": 6,
+      "title": "The hand-written template engine",
+      "code": "D1",
+      "round": 1,
+      "repeated": false,
+      "scores": {
+        "0": "No position either way.",
+        "1": "A position with nothing behind it.",
+        "2": "A position with a tradeoff behind it, such as the cost of a dependency against the cost of writing and fixing it yourself. The recorded reason, that ember is meant to run anywhere Python runs, counts."
+      },
+      "question": "The template engine is written by hand instead of using a library. Would you have made the same call? Why or why not?"
+    },
+    {
+      "number": 7,
+      "title": "What their own change rewrites",
+      "code": "F2",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "A description that does not match what their build does.",
+        "1": "\"The digest is regenerated\", with no mention of the signature.",
+        "2": "The mute reaches the point where items are chosen, so the signature moves and every day's page holding that feed is rewritten. An accurate description of their own build scores 2 here even when that build is broken, including saying the pages go stale. Whether the code is right is scored separately."
+      },
+      "question": "After your change: someone mutes a feed and runs the digest. Walk me through exactly what gets rewritten and why."
+    },
+    {
+      "number": 8,
+      "title": "Muted feeds and the log",
+      "code": "R3",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "They do not know what their own build does.",
+        "1": "What it does, with \"the agent did it that way\" as the reason.",
+        "2": "What it does, plus a reason of their own, such as the log being a record of what arrived rather than of what was shown, or muting being meant to silence everything. Any real ground counts, whichever way they went."
+      },
+      "question": "Muted feeds and the notification log: what does your build do now, and why that way?"
+    },
+    {
+      "number": 9,
+      "title": "Snoozed feeds",
+      "code": "E2",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "A new filter somewhere else.",
+        "1": "The right place, without the catch.",
+        "2": "They extend whatever they built for muting, adding a second condition in the same place, and they notice the catch: a date-based rule changes the right answer without anyone editing a file, so the digest has to be run again and the date has to reach the signature."
+      },
+      "question": "Next month the team wants snoozed feeds, muted until a date and then back to normal on their own. Given what you built today, what changes and where?"
+    },
+    {
+      "number": 10,
+      "title": "Arguing the other side",
+      "code": "D2",
+      "round": 2,
+      "repeated": false,
+      "scores": {
+        "0": "They do not engage with it.",
+        "1": "One side only.",
+        "2": "Both sides of the real tension. Deciding where items are chosen means the signature sees it, but every caller has to know which feeds are muted. Deciding in the renderer is simpler and local, but the signature never sees it, so the pages are never rewritten."
+      },
+      "question": "You put the mute decision where you did. Argue for the opposite placement. What would break, and would anything get better?"
+    }
+  ]
+}
