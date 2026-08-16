@@ -138,6 +138,26 @@ function main() {
     writeFileSync(join(here, '..', 'experimenter', 'questions.json'),
         `${JSON.stringify(out, null, 2)}\n`);
     console.log('wrote experimenter/questions.json');
+
+    // The participant's copy, with the answers stripped. It ships to a browser,
+    // and a participant who opened the console would otherwise find them — which
+    // would make the second sitting a measure of their curiosity.
+    const forBrowser = {};
+    for (const [project, questions] of Object.entries(out)) {
+        forBrowser[project] = questions.map(({ n, band, question, options }) =>
+            ({ n, band, question, options }));
+    }
+    writeFileSync(join(here, '..', 'participant', 'quiz.js'),
+`// The quiz, as the participant sees it.
+//
+// Generated from the projects' STUDY.md, so there is one source of truth for the
+// wording. THE RIGHT ANSWER IS NOT HERE: this file ships to a browser. Marking
+// happens in the dashboard, against its own copy.
+//
+// Do not edit by hand. Run: npm run questions
+export const QUIZZES = Object.freeze(${JSON.stringify(forBrowser, null, 4)});
+`);
+    console.log('wrote participant/quiz.js');
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();

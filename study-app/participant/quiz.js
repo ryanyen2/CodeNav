@@ -1,9 +1,8 @@
 // The quiz, as the participant sees it.
 //
-// Generated from the projects' STUDY.md by scripts/extract-questions.mjs, so
-// there is one source of truth for the wording. The RIGHT ANSWER IS NOT HERE:
-// this file ships to a browser, and a participant who opened the console would
-// find it. Marking happens in the dashboard, against its own copy.
+// Generated from the projects' STUDY.md, so there is one source of truth for the
+// wording. THE RIGHT ANSWER IS NOT HERE: this file ships to a browser. Marking
+// happens in the dashboard, against its own copy.
 //
 // Do not edit by hand. Run: npm run questions
 export const QUIZZES = Object.freeze({
@@ -15,7 +14,7 @@ export const QUIZZES = Object.freeze({
             "options": [
                 {
                     "letter": "a",
-                    "text": "Reading PDF files"
+                    "text": "Pulling the text layer out of a PDF file"
                 },
                 {
                     "letter": "b",
@@ -23,34 +22,34 @@ export const QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "c",
-                    "text": "Converting Markdown into PDF"
+                    "text": "Converting a PDF to HTML and then to Markdown"
                 },
                 {
                     "letter": "d",
-                    "text": "Checking that a PDF's text layer is complete"
+                    "text": "Tidying up Markdown that somebody wrote by hand"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Purpose",
-            "question": "What does scribe assume about its input?",
+            "question": "What does scribe expect to be handed?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It is a PDF file"
+                    "text": "A PDF file"
                 },
                 {
                     "letter": "b",
-                    "text": "It is Markdown with some errors in it"
+                    "text": "One text file per page"
                 },
                 {
                     "letter": "c",
-                    "text": "It is plain text with a form feed between pages"
+                    "text": "One text file, with a form feed between pages"
                 },
                 {
                     "letter": "d",
-                    "text": "It is HTML from a PDF viewer"
+                    "text": "Text with each page's number on a line of its own"
                 }
             ]
         },
@@ -61,7 +60,7 @@ export const QUIZZES = Object.freeze({
             "options": [
                 {
                     "letter": "a",
-                    "text": "Removing a header repeated on every page"
+                    "text": "Dropping a header repeated on every page"
                 },
                 {
                     "letter": "b",
@@ -69,30 +68,30 @@ export const QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "c",
-                    "text": "Collecting footnotes at the end"
+                    "text": "Working out where a table's columns were"
                 },
                 {
                     "letter": "d",
-                    "text": "Recovering a table's column boundaries"
+                    "text": "Gathering footnotes at the end of the document"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Purpose",
-            "question": "Who is the output for?",
+            "question": "Who is the output written for?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "A printer"
+                    "text": "An archive that has to preserve the original exactly"
                 },
                 {
                     "letter": "b",
-                    "text": "Somebody who will grep, diff and paste it into other things"
+                    "text": "Somebody who will search it, diff it and paste it elsewhere"
                 },
                 {
                     "letter": "c",
-                    "text": "An archive that must preserve the original exactly"
+                    "text": "A typesetter laying the document out again"
                 },
                 {
                     "letter": "d",
@@ -103,184 +102,184 @@ export const QUIZZES = Object.freeze({
         {
             "n": 5,
             "band": "Rationale",
-            "question": "Why are headings found by their numbering rather than by being short?",
+            "question": "A word is split across a line break as `well-` then `being`. What comes out?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Numbering is faster to match"
+                    "text": "`wellbeing`, because the hyphen was the typesetter's"
                 },
                 {
                     "letter": "b",
-                    "text": "Short-line matching promoted captions, list items and names"
+                    "text": "`well-being`, because the hyphen is part of the word"
                 },
                 {
                     "letter": "c",
-                    "text": "Markdown requires numbered headings"
+                    "text": "`well- being`, leaving the break visible"
                 },
                 {
                     "letter": "d",
-                    "text": "Because the fixtures all use numbering"
+                    "text": "`well-being` only if the word appears elsewhere in the document unbroken"
                 }
             ]
         },
         {
             "n": 6,
             "band": "Rationale",
-            "question": "Why does a hyphen at a line end usually disappear?",
+            "question": "A word is split as `photogram-` then `metric`. What comes out?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Markdown does not allow hyphens inside words"
+                    "text": "`photogram-metric`, keeping the hyphen"
                 },
                 {
                     "letter": "b",
-                    "text": "In a justified column most of them were put there by the typesetter"
+                    "text": "`photogram metric`, as two words"
                 },
                 {
                     "letter": "c",
-                    "text": "It is faster than checking a dictionary"
+                    "text": "`photogrammetric`, joined with the hyphen dropped"
                 },
                 {
                     "letter": "d",
-                    "text": "Because the alternative loses the word entirely"
+                    "text": "It is left as it was, because the word is not in the exception list"
                 }
             ]
         },
         {
             "n": 7,
             "band": "Rationale",
-            "question": "Why does a document under three pages have no furniture removed?",
+            "question": "A three-page report has the same line at the top of two of its pages. What happens to it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Short documents never have headers"
+                    "text": "It is kept, because two pages is not a pattern"
                 },
                 {
                     "letter": "b",
-                    "text": "It would be too slow on long documents otherwise"
+                    "text": "It is dropped, because two of three is over the threshold"
                 },
                 {
                     "letter": "c",
-                    "text": "Under three pages there is no pattern, so a coincidence would be treated as one"
+                    "text": "It is kept on the first page and dropped on the second"
                 },
                 {
                     "letter": "d",
-                    "text": "The page numbers are unreliable"
+                    "text": "It is dropped only if a page number appears with it"
                 }
             ]
         },
         {
             "n": 8,
             "band": "Rationale",
-            "question": "Why are ligatures and curly quotes replaced?",
+            "question": "A line reads `3. We asked each participant to describe what they had understood.` What does scribe make of it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "They are not valid Markdown"
+                    "text": "A second-level heading, from the numbering"
                 },
                 {
                     "letter": "b",
-                    "text": "They render badly in a browser"
+                    "text": "A heading, but only if a blank line follows"
                 },
                 {
                     "letter": "c",
-                    "text": "The output is meant to be grepped, diffed and pasted"
+                    "text": "Not a heading: it is too long and it ends in a full stop"
                 },
                 {
                     "letter": "d",
-                    "text": "They take more bytes"
+                    "text": "A numbered list item, rendered as a bullet"
                 }
             ]
         },
         {
             "n": 9,
             "band": "Change",
-            "question": "Footnote markers used to be found after any full stop. Why did that change?",
+            "question": "Footnote markers used to be found after any full stop. What went wrong?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It missed markers at the end of a paragraph"
+                    "text": "A marker at the very end of a paragraph was missed"
                 },
                 {
                     "letter": "b",
-                    "text": "Every decimal number became a footnote reference"
+                    "text": "Two markers next to each other were read as one"
                 },
                 {
                     "letter": "c",
-                    "text": "Markdown changed its footnote syntax"
+                    "text": "Every decimal number in the document became a footnote reference"
                 },
                 {
                     "letter": "d",
-                    "text": "It was too slow on long documents"
+                    "text": "A page number at the foot of a page was taken for a marker"
                 }
             ]
         },
         {
             "n": 10,
             "band": "Change",
-            "question": "Why does heading detection look at the following line?",
+            "question": "Page furniture is removed before headings are found. What does that cost?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "To get the heading's depth right"
+                    "text": "Nothing: the two rules do not interact"
                 },
                 {
                     "letter": "b",
-                    "text": "To find the section's first paragraph"
+                    "text": "Page numbers can no longer be used to order the sections"
                 },
                 {
                     "letter": "c",
-                    "text": "The first line of a wrapped list item looks exactly like a heading"
+                    "text": "A real heading that happens to repeat is gone before anything can rescue it"
                 },
                 {
                     "letter": "d",
-                    "text": "To decide how much space to leave"
+                    "text": "The line count per page is wrong by the time headings are found"
                 }
             ]
         },
         {
             "n": 11,
             "band": "Change",
-            "question": "Why does furniture removal run before heading detection, and not after?",
+            "question": "A document of four lines has a repeated first line. Is it removed?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It is faster that way"
+                    "text": "Yes, repetition is repetition"
                 },
                 {
                     "letter": "b",
-                    "text": "A running header is often the section title, so it would be promoted on every page"
+                    "text": "No: the page is too short for anything to count as being in the margin"
                 },
                 {
                     "letter": "c",
-                    "text": "Heading detection needs the page numbers gone first"
+                    "text": "Yes, but only if it is also on the last page"
                 },
                 {
                     "letter": "d",
-                    "text": "The two do not interact; the order is arbitrary"
+                    "text": "No, because a four-line document has only one page"
                 }
             ]
         },
         {
             "n": 12,
             "band": "Extension",
-            "question": "To keep the running header on a one-off document while still removing it from a report, what has to be decided first?",
+            "question": "To keep the running header on a one-off document while still dropping it from a report, what has to be settled first?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Which Markdown syntax a header should use"
+                    "text": "Whether the header becomes a heading or ordinary text"
                 },
                 {
                     "letter": "b",
-                    "text": "Whether to read the PDF metadata"
+                    "text": "How to keep the page numbers while dropping the header"
                 },
                 {
                     "letter": "c",
-                    "text": "What distinguishes the two kinds of document, since scribe sees only text"
+                    "text": "What tells the two kinds of document apart, given that scribe sees only text"
                 },
                 {
                     "letter": "d",
-                    "text": "Whether to make it a command line flag"
+                    "text": "Where the setting that turns it off should live"
                 }
             ]
         }

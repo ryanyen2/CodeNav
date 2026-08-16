@@ -52,12 +52,30 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
   design answers — and what would break if someone changed it without knowing.
   Write it as flowing prose, not as labelled parts.
 
-  **Say the why as plainly as your evidence allows, and no further.** When the
-  commit history below states a reason, assert it flatly — e.g. retries only on
-  timeout, because the server can duplicate a non-idempotent post. Otherwise
-  describe what the code achieves rather than narrating a decision — e.g.
+  **Say the why as plainly as your evidence allows, and no further.** You have
+  three sources of intent and all three count:
+
+  1. **The brief below**, which is what the project says about itself.
+  2. **Comments and docstrings in the code you are shown.** These are the author
+     writing down what the code cannot say, and they are evidence in exactly the
+     way a commit message is. A comment that says a hyphen is dropped because the
+     typesetter put it there IS the reason; report it. A comment naming what a
+     choice gives up, or saying that one step must run before another, is the
+     most valuable thing in the file — those are the things a reader cannot
+     recover from the code and will otherwise break.
+  3. **The commit history**, when it states a reason.
+
+  When any of them states a reason, assert it flatly — e.g. retries only on
+  timeout, because the server can duplicate a non-idempotent post. Where none
+  does, describe what the code achieves rather than narrating a decision — e.g.
   computes the total on write, so a reader never sees a stale number, which
-  needs no warrant. Write descriptions as plain prose with NO double-quote
+  needs no warrant.
+
+  **Where the code chose between two defensible options, say which and why.**
+  Most rules in most codebases could have gone the other way, and which way this
+  one went is the single thing a reader most needs and can least infer. If the
+  source says what the alternative was, or what this choice costs, that belongs
+  in the description ahead of anything about how it is implemented. Write descriptions as plain prose with NO double-quote
   characters in them; every field here is a JSON string, and a bare `"` inside
   one makes the whole response unparseable.
   NEVER invent history, people, or rejected alternatives — no "added after users
@@ -82,6 +100,15 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
 </solution>
 
 {{doclang}}
+<<<CACHE_BREAK>>>
+## The brief — what this project is, read from its own prose
+
+Formed before any file was looked at, from the README and the opening of every
+source file. Use it to place this file inside the whole, to use the project's own
+vocabulary, and to know which of its rules were choices. Where it and the code in
+front of you disagree, the code is what is true now; say what the code does.
+
+{brief}
 <<<CACHE_BREAK>>>
 ## Features already created from other files (for naming consistency only — do NOT bind to them)
 

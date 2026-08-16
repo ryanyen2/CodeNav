@@ -1,7 +1,15 @@
-"""Bootstrap LLM passes — per-file feature proposal + top-level organization.
+"""Bootstrap LLM passes — orientation, per-file feature proposal, organization.
 
-Two scoped calls replace the old flat, attach-biased, global batching that
+Three scoped calls replace the old flat, attach-biased, global batching that
 produced cross-file junk-drawer nodes:
+
+* :func:`propose_brief` — one call before anything else, over the project's own
+  prose: README, package metadata, module docstrings and leading comments. It is
+  the only pass that reads what the project says about ITSELF rather than what
+  its code does, and it exists because the two are different. A file pass can see
+  that a hyphen is dropped; only the prose says the typesetter put it there.
+  Its output rides in every later prompt, so a file is described as part of
+  something rather than on its own terms.
 
 * :func:`propose_file_features` — one call per source file. The model only ever
   sees one file's chunks, so it cannot dump unrelated symbols from other files
@@ -57,6 +65,90 @@ def _ops_from(raw: dict | list) -> list[NodeOp]:
     return [_coerce_op(o) for o in ops_raw]
 
 
+def propose_brief(
+    readme: str,
+    headers: list[dict],
+    *,
+    repo_name: str = "codebase",
+    config: LLMConfig | None = None,
+    doc_language: DocLanguage | None = None,
+) -> dict:
+    """One LLM call: read the project's own prose and form a picture of the whole.
+
+    Runs before any file is described. Everything it produces is handed to every
+    per-file call, which is the point: without it each file is named on its own
+    terms, and a tree assembled from twelve independent readings has no account
+    of what the program is for or which of its rules were choices.
+
+    Returns a dict with purpose, audience, out_of_scope, vocabulary, decisions
+    and ordering. Every field may be empty — an honest empty brief is worth more
+    than a guessed one, and the file prompt is written to cope with either.
+    """
+    prefix_tpls, volatile_tpl = split_prompt(
+        load_prompt("bootstrap_brief", doc_language=doc_language))
+    kwargs = dict(
+        repo_name=repo_name,
+        readme=readme.strip() or "(this project has no README)",
+        headers=json.dumps(headers, indent=2, ensure_ascii=False),
+    )
+    prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
+    volatile = format_prompt(volatile_tpl, **kwargs)
+    raw = run_agent(volatile, config or fast_llm_config(), prefix_parts=prefix_parts)
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def format_brief(brief: dict | None) -> str:
+    """The brief as prose for a prompt, or a line saying there is none.
+
+    Rendered rather than passed as JSON because it is read, not parsed: the file
+    pass has to weigh it against the code in front of it, and a paragraph is
+    easier to weigh than a nested object.
+    """
+    if not brief:
+        return "(no brief — describe this file on its own terms)"
+    out: list[str] = []
+    if brief.get("purpose"):
+        out.append(f"**What this program is for.** {brief['purpose']}")
+    if brief.get("audience"):
+        out.append(f"**Who its output is for.** {brief['audience']}")
+    if brief.get("out_of_scope"):
+        items = "; ".join(str(x) for x in brief["out_of_scope"])
+        out.append(f"**Deliberately not in scope.** {items}")
+    if brief.get("vocabulary"):
+        lines = "\n".join(f"- **{v.get('term','')}** — {v.get('means','')}"
+                           for v in brief["vocabulary"] if v.get("term"))
+        if lines:
+            out.append(f"**Words this codebase uses in its own way**\n{lines}")
+    if brief.get("decisions"):
+        lines = []
+        for d in brief["decisions"]:
+            if not d.get("choice"):
+                continue
+            line = f"- {d['choice']}"
+            if d.get("because"):
+                line += f" — because {d['because']}"
+            if d.get("gave_up"):
+                line += f" (what that gives up: {d['gave_up']})"
+            lines.append(line)
+        if lines:
+            out.append("**Choices this project made where another could have chosen "
+                       "otherwise**\n" + "\n".join(lines))
+    if brief.get("ordering"):
+        lines = []
+        for o in brief["ordering"]:
+            if not o.get("before"):
+                continue
+            line = f"- {o['before']} runs before {o.get('then','')}"
+            if o.get("otherwise"):
+                line += f", or {o['otherwise']}"
+            lines.append(line)
+        if lines:
+            out.append("**Order that matters**\n" + "\n".join(lines))
+    return "\n\n".join(out) or "(no brief — describe this file on its own terms)"
+
+
 def propose_file_features(
     file: str,
     chunks: list[dict],
@@ -66,6 +158,7 @@ def propose_file_features(
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
     why: list[dict] | None = None,
+    brief: dict | None = None,
     doc_language: DocLanguage | None = None,
 ) -> list[NodeOp]:
     """One LLM call: propose a small coherent feature set for a single file.
@@ -93,6 +186,7 @@ def propose_file_features(
         chunks=json.dumps(chunks, indent=2, sort_keys=True, ensure_ascii=False),
         edges=json.dumps(edges, indent=2, sort_keys=True, ensure_ascii=False),
         existing_titles="\n".join(f"- {t}" for t in existing_titles) or "(none yet)",
+        brief=format_brief(brief),
         why=(json.dumps(why, indent=2, sort_keys=True, ensure_ascii=False) if why
              else "(no commit history recorded for this file)"),
     )
@@ -109,6 +203,7 @@ def propose_organization(
     repo_name: str = "codebase",
     config: LLMConfig | None = None,
     flows: list[str] | None = None,
+    brief: dict | None = None,
     doc_language: DocLanguage | None = None,
 ) -> list[NodeOp]:
     """One LLM call: group file-level features under broad theme parents.
@@ -127,5 +222,6 @@ def propose_organization(
         edges=json.dumps(edges, indent=2, ensure_ascii=False),
         flows="\n".join(f"- {f}" for f in flows) if flows
               else "(no call paths could be derived)",
+        brief=format_brief(brief),
     )
     return _ops_from(run_agent(prompt, config))

@@ -24,7 +24,9 @@ from __future__ import annotations
 
 from collections import Counter
 
-from codoc.agent.bootstrap_agent import propose_file_features, propose_organization
+from codoc.agent.bootstrap_agent import (
+    propose_brief, propose_file_features, propose_organization,
+)
 from codoc.doclang import DocLanguage
 from codoc.loop.apply import apply_op
 from codoc.loop.bootstrap import BootstrapResult, _title_from_file
@@ -190,12 +192,70 @@ def _feature_coupling(store: Store) -> list[str]:
 _ORG_FEATURE_CAP = 400
 
 
+# How much of the project's own prose the orientation pass reads. A README is
+# usually short; the cap is there so a repo that ships a book does not blow the
+# context on chapter one.
+_README_CAP = 12_000
+_HEADER_CAP = 1_200
+
+
+def _project_prose(root_dir: str | None, rows: list) -> tuple[str, list[dict]]:
+    """What the project says about itself: its README, and each file's opening.
+
+    A file's opening is its module docstring and any comment block above the
+    first definition. That is where an author writes the things the code cannot
+    say — what a rule gives up, which order matters, what the program is not for
+    — and until now no bootstrap pass ever read it, because chunks start at the
+    first symbol.
+    """
+    import os as _os
+    import re as _re
+
+    readme = ""
+    if root_dir:
+        for name in ("README.md", "README.rst", "README.txt", "README",
+                     "pyproject.toml", "package.json"):
+            path = _os.path.join(root_dir, name)
+            if _os.path.isfile(path):
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as handle:
+                        readme += f"\n\n--- {name} ---\n{handle.read()[:_README_CAP]}"
+                except OSError:
+                    continue
+            if len(readme) > _README_CAP:
+                break
+
+    headers: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row.file in seen:
+            continue
+        seen.add(row.file)
+        if not root_dir:
+            continue
+        path = _os.path.join(root_dir, row.file)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                text = handle.read(_HEADER_CAP * 3)
+        except OSError:
+            continue
+        # Everything before the first definition: the module docstring, the
+        # imports, and any comment that came with them.
+        cut = _re.search(r"^(?:def |class |async def )", text, _re.M)
+        opening = text[: cut.start()] if cut else text
+        opening = opening.strip()[:_HEADER_CAP]
+        if opening:
+            headers.append({"file": row.file, "opening": opening})
+    return readme.strip(), headers
+
+
 def bootstrap_hier_from_chunks(
     rows: list,
     store: Store,
     *,
     propose_file=propose_file_features,
     propose_org=propose_organization,
+    propose_the_brief=propose_brief,
     repo_name: str = "codebase",
     config=None,
     organize: bool = True,
@@ -231,6 +291,28 @@ def bootstrap_hier_from_chunks(
     elif total > 1000:
         say(f"  ⚠ {total} source files — bootstrap makes ~1 LLM call per file, so this "
             "will take a while (and cost, on a paid key). Set CODOC_BOOTSTRAP_MAX_FILES to cap it.")
+
+    # Phase 0: read what the project says about itself, before describing any
+    # part of it. One call, and everything it produces rides in every file
+    # prompt below. Without it each file is named on its own terms and the tree
+    # has no account of what the program is for.
+    brief: dict = {}
+    readme, headers = _project_prose(root_dir, rows)
+    if readme or headers:
+        say("  · reading what the project says about itself")
+        try:
+            brief = propose_the_brief(readme, headers, repo_name=repo_name,
+                                      config=config, doc_language=doc_language) or {}
+        except Exception as exc:  # noqa: BLE001
+            # A bootstrap without a brief is the old behaviour, which worked.
+            # Losing every file's description because the orientation call
+            # failed would be a much worse trade.
+            say(f"  ⚠ could not read the project's own prose ({exc}); "
+                "describing each file on its own terms")
+        else:
+            found = sum(len(brief.get(k, [])) for k in ("decisions", "ordering"))
+            say(f"    {found} recorded decision{'' if found == 1 else 's'} "
+                "and ordering constraint" + ("" if found == 1 else "s"))
 
     calls = 0
     # ~40 progress ticks regardless of repo size, so a large bootstrap shows steady
@@ -300,7 +382,7 @@ def bootstrap_hier_from_chunks(
                     try:
                         return propose_file(file, chunks, edges, titles_snapshot,
                                             repo_name=repo_name, config=config, why=why,
-                                            doc_language=doc_language)
+                                            brief=brief, doc_language=doc_language)
                     except Exception as exc:  # noqa: BLE001 — per-file tolerance
                         last = exc
                 failures.append((file, last))
@@ -357,7 +439,7 @@ def bootstrap_hier_from_chunks(
             for f in top_level
         ]
         coupling = _feature_coupling(store)
-        ops = propose_org(features, coupling, repo_name=repo_name, config=config,
+        ops = propose_org(features, coupling, repo_name=repo_name, config=config, brief=brief,
                           flows=flow_lines(store), doc_language=doc_language)
         _apply_ops_with_local_ids(ops, store, {}, source="bootstrap")
         calls += 1

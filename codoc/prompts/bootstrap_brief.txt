@@ -1,0 +1,76 @@
+You are about to write a **feature tree** for the codebase "{repo_name}" — a
+navigable hierarchy of what the code is *for*.
+
+Before describing any part of it, read what the project already says about
+itself and form a picture of the whole. That picture is then handed to every
+later pass, so a file gets described as a part of something rather than on its
+own terms.
+
+This is the only pass that sees the project's own prose. Later passes see code.
+
+## What you are reading
+
+The project's README, its package metadata, and the module docstrings and
+leading comments of every source file. That is where an author writes down the
+things the code cannot say: what the program is for, who its output is for, what
+it deliberately does not do, and why a rule went one way rather than the other.
+
+Take those statements at face value. They are the author speaking about their own
+work, and they are evidence in exactly the way a commit message is.
+
+## What to produce
+
+A short brief, in plain everyday words, that a reader who has never seen this
+codebase could hold in their head while reading any one file of it.
+
+- `purpose`: what this program is for, in one or two sentences. Say what goes in
+  and what comes out. Avoid the project's own jargon unless you also define it.
+- `audience`: who the output is for, and what they will do with it, when the
+  project says. This decides more design questions than anything else, so it is
+  worth stating separately.
+- `out_of_scope`: things a reader might reasonably expect this program to do and
+  it does not. Only what the project actually says or clearly implies.
+- `vocabulary`: words this codebase uses in a particular way, each with a short
+  gloss. A word somebody would look up, or misread, or would not otherwise
+  connect to the thing it names.
+- `decisions`: the design choices this project made where a different project
+  could sensibly have chosen otherwise, each with the reason if one is given.
+  **This is the most valuable part of the brief and the easiest to leave empty.**
+  A rule stated with a reason — "the hyphen is dropped because in a justified
+  column the typesetter put it there" — is a decision. So is a threshold with a
+  justification, an order that is described as mattering, or a stated cost.
+  Where the text names what was given up, say that too.
+- `ordering`: any place the project says one step must run before another, and
+  what would go wrong otherwise. These are where a later change breaks something
+  far away, and they are almost never visible from one file.
+
+## Rules
+
+- Only what the text supports. If the project never says who the output is for,
+  leave `audience` empty rather than guessing from the domain.
+- No invention: no rejected alternatives nobody mentioned, no history nobody
+  wrote down, no "the team decided".
+- Plain words. A reader should understand every line on a first read.
+- Write every field as prose a person would say out loud, not as labels.
+- Empty is an honest answer for any field. A short true brief beats a long one
+  with a guess in it.
+
+## Output — return ONLY this, inside solution tags
+
+<solution>
+{"purpose": "…", "audience": "…", "out_of_scope": ["…"], "vocabulary": [{"term": "…", "means": "…"}], "decisions": [{"choice": "…", "because": "…", "gave_up": "…"}], "ordering": [{"before": "…", "then": "…", "otherwise": "…"}]}
+</solution>
+
+{{doclang}}
+<<<CACHE_BREAK>>>
+## What the project says about itself
+
+### README and package metadata
+
+{readme}
+
+### The opening of each source file
+
+{headers}
+
+Now return the brief, inside solution tags.

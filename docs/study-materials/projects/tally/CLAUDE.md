@@ -1,113 +1,107 @@
-# tally
+# CLAUDE.md
 
-A bank export, into a monthly summary.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A CSV of transactions answers "what happened on the 3rd". tally answers "what did
-I spend on food last month", which is the question people actually have. It
-groups by month and category, drops what should not count, and lists the payments
-that come round every month.
+## Commands
 
-The output is for the person whose statement it is, not for an accountant
-reconciling against the bank. That distinction decides several of the rules
-below.
+No `.venv` is checked in. Create one before using the console script:
 
-Not in scope: connecting to a bank, judging the spending, or telling anybody what
-they can afford.
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+```
 
-## Reading the input
+```bash
+.venv/bin/tally summarise fixtures/current.csv   # writes current.md beside the input
+.venv/bin/tally summarise fixtures/current.csv - # writes to stdout instead
+.venv/bin/tally check fixtures/                  # summarise every *.csv, write nothing
+python3 -m tally.cli summarise fixtures/current.csv -   # same, without installing
+```
 
-Every bank names its columns differently and writes dates differently, so the
-header is matched loosely against the names banks actually use, and dates are
-tried against several formats. What comes out is a `Row`, and every rule works on
-those rather than on whatever the bank happened to write.
+Tests (stdlib-only package, so a system `pytest` works too):
 
-`transaction date` is listed before `date`, and that order matters: a bank
-exporting both would otherwise give the posting date and shift every month-end
-transaction into the wrong month.
+```bash
+python3 -m pytest tests/ -q
+python3 -m pytest tests/test_rules.py -q                          # one file
+python3 -m pytest tests/test_rules.py::test_the_first_matching_rule_wins -q   # one test
+python3 -m pytest tests/ -q -k transfer                           # by name
+```
 
-A row that cannot be read is skipped rather than guessed at.
+There is no linter or formatter configured.
 
-## The nine rules
+## Architecture
 
-Every one is a judgement call with a defensible alternative.
+One pipeline, `summarise(raw: str) -> Summary` in `tally/summary.py`. Everything
+else is either the parser or a single-policy module it calls.
 
-**Category.** The merchant name is matched against a list of patterns and the
-first match wins. Specific patterns sit above general ones, so `shell energy` is
-a utility and `shell` is fuel; the other order puts the electricity bill in the
-car. Requiring exactly one match and refusing when two apply is stricter and is
-what an accounting system should do — here it would stop the whole month's
-summary over one ambiguous coffee shop.
+**`rows.py` parses and never decides.** It matches the bank's header loosely
+against `COLUMNS`, coerces dates and amounts, and emits `Row` objects. Every rule
+downstream reads `Row`, never the bank's raw text. Unreadable rows are skipped
+rather than guessed at; a file with no amount or no transaction-date column reads
+as zero rows rather than raising. If you find yourself adding a judgement call
+here, it belongs in a policy module instead.
 
-**Anything unmatched** goes to an `uncategorised` bucket rather than stopping the
-run. A summary with an uncategorised line is useful; a summary that refused to be
-written is not. The bucket is visible in the output so it cannot be ignored.
+**The policy modules each own one decision**, and each docstring names the
+alternative that was rejected and why. Keep that convention when adding rules —
+it is how the tradeoffs stay reviewable.
 
-**Which month.** The date the transaction was made, not the date it posted. A
-card payment on the 31st can post on the 2nd, and filing it in February means a
-summary that does not match what the person remembers doing. The posting date is
-what the bank's own statement uses and is right if you are reconciling against
-the bank.
+| module | policy |
+| --- | --- |
+| `money.py` | rounding (once, at the total) and sign convention |
+| `dedupe.py` | what is a duplicate, what is an own-account transfer |
+| `categories.py` | merchant description to category |
+| `months.py` | which month a row belongs to, how refunds net |
+| `recurring.py` | which payments are fixed commitments |
 
-**Refunds.** Money coming back nets against the category it came from, because
-somebody asking what they spent on clothes means net of the jumper they returned.
-Reporting them separately is what a tax return wants, where the gross figure
-matters.
+### The step order in `summarise()` is load-bearing
 
-Netting happens inside a month and not across months, so a January purchase
-refunded in February leaves both showing. That is a real limitation and a
-deliberate one: a summary of January should say what happened in January.
+Four coupling constraints, all of them easy to break by reordering:
 
-**Transfers.** Money moved between the account holder's own accounts is left out,
-because nothing was spent — the money is still theirs. Including them would
-double every transfer and make a month of moving savings around look like a month
-of spending. Recognised by wording, which is the only signal a single export
-gives.
+1. `money.sign_convention` runs first and **mutates rows in place** — it flips
+   every sign when >80% of amounts are positive. Every rule below reads signs, so
+   nothing may run before it.
+2. `dedupe.drop_duplicates` runs before transfers are filtered out, and exempts
+   transfers internally. Both legs of an own-account transfer are the same date,
+   amount and description — the exact shape of a duplicate. Drop one and the
+   money looks like it went somewhere it did not.
+3. Transfers are removed from `spending` before recurring and categorisation, so
+   moving savings around never reads as spending.
+4. Categories are assigned before `months.net` sums them, because a refund nets
+   against the category it came from.
 
-**Duplicates.** A repeat is the same date, amount and description, keeping the
-first. The bank's own reference would be exact, but half the exports do not carry
-one and the ones that do reuse them across statements.
+### First-match-wins ordering
 
-**Recurring.** A payment in at least three months at the same amount. Both the
-merchant and the amount have to match: merchant alone calls a supermarket
-recurring, which is true and useless — the point is to find the fixed
-commitments. Two months is a coincidence often enough to be annoying.
+Two ordered lists where the specific entry must sit above the general one:
 
-**Rounding.** Every row is kept to the penny and only the totals are rounded, so
-a hundred small transactions do not accumulate a hundred small errors. Rounding
-each row is what you want if the summary has to agree line by line with a printed
-statement.
+- `rows.COLUMNS` — `"transaction date"` before `"date"`, or a bank exporting both
+  yields the posting date and shifts every month-end transaction.
+- `categories.RULES` — `shell energy` before `shell`, or the electricity bill
+  lands in fuel.
 
-**Signs.** Negative means money out. Some banks export the opposite, so the
-direction is guessed: if almost everything is positive, every sign is flipped.
-Guessing is uncomfortable and refusing to guess is safer — it is done this way
-because the tool is for one person's own statements, where the convention never
-changes, and stopping to ask about it every time is worse than being wrong once
-on a file they would notice immediately.
+Adding an entry to either means deciding where in the order it goes, not
+appending.
 
-## The order the rules run in
+### Deliberate behaviours that look like bugs
 
-Not arbitrary, and the thing most likely to surprise somebody changing this.
+- Refunds net **within a month only**. January keeps its spend and a February
+  refund shows as February income. Covered by
+  `test_a_refund_nets_within_its_own_month_and_not_across_months`.
+- `sign_convention` guesses from the data rather than asking. This is a
+  single-user tool; a wrong guess is immediately visible.
+- Anything unmatched lands in `categories.UNCATEGORISED` and is counted in the
+  summary line, rather than halting the run.
+- `months.is_refund` is defined but currently unused by the pipeline.
 
-**Signs are normalised first**, because every rule below reads them.
+## Fixtures
 
-**Transfers are recognised before duplicates are dropped.** A transfer between
-two of your own accounts exports as two rows on the same day, for the same
-amount, with the same wording — which is exactly the shape of a duplicate.
-Dropping one leg leaves a lone entry that looks like a real payment, and the
-money appears to have gone somewhere it did not. This is why `drop_duplicates` is
-not three lines.
+Each of the three files exercises something the others cannot, and the end-to-end
+tests assert exact totals against them. Editing a fixture breaks those
+assertions.
 
-**Categories are assigned before refunds are netted**, because a refund nets
-against the category it came from.
+- `current.csv` — duplicates, a same-day transfer pair, a cross-month refund,
+  recurring payments, one uncategorised merchant
+- `other-bank.csv` — different column names, spending exported as positive
+- `boundary.csv` — made in one month, posted in the next
 
-## The sample statements
-
-Three, in `fixtures/`, different on purpose.
-
-`current.csv` is a current account over three months, with a genuine duplicate,
-a transfer pair that looks exactly like one, a refund, and three recurring
-payments. `other-bank.csv` names its columns differently, writes dates as
-`dd/mm/yyyy`, and exports spending as positive, so it is the file the sign rule
-exists for. `boundary.csv` is short and has transactions made at the end of one
-month and posted at the start of the next, which is the file that makes "made or
-posted" a real question.
+Split of the suite: `tests/test_rules.py` tests each policy in isolation (plus a
+coupled-pair test at the bottom), `tests/test_statements.py` runs the fixtures
+end to end.

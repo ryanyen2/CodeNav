@@ -3,6 +3,15 @@ feature below was derived from one source file. Your job: group related features
 under a few broad **theme** nodes so the tree reads as a clear table of contents —
 without losing, renaming, or rewriting the existing features.
 
+## The brief — what this project is, read from its own prose
+
+Formed before any file was looked at. Use its words for your theme names: a
+reader who has read the project's own README should recognise the top level of
+this tree as the same thing described again, not as a second vocabulary they now
+have to learn.
+
+{brief}
+
 ## Existing top-level features
 
 {features}

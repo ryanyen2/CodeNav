@@ -1,129 +1,111 @@
-# scribe
+# CLAUDE.md
 
-Text pulled out of a PDF, into clean Markdown.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Something else reads the PDF and hands scribe plain text with a form feed between
-pages. scribe puts the writing back together: joins words the typesetter broke,
-joins lines the column broke, drops the parts of the page that belong to the
-paper rather than the writing, and gathers the footnotes at the end.
+## Commands
 
-The output is meant to be grepped, diffed and pasted into other things. That is
-why characters like `ﬁ` and curly quotes are replaced, and why fidelity to the
-original page is not a goal.
+The repo ships no `.venv`; the README's `.venv/bin/...` invocations assume you made one:
 
-Not in scope: reading PDF files, recovering tables, columns or images. That
-information is gone before scribe sees it.
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"     # installs pytest and the `scribe` console script
+```
 
-## Reading the input
+Day to day (from the repo root — `scribe/` is importable from cwd, so the editable install is only needed for the console script):
 
-**Pages and lines.** The form feed between pages is the only structure the input
-gives for free, so it is turned into real objects once rather than split on
-repeatedly. Every rule downstream needs to know which page a line came from and
-where it sat, because a line at the top of every page means something a line in
-the middle does not.
+```bash
+python -m pytest tests/ -q                                  # full suite, ~0.3s
+python -m pytest tests/test_rules.py -q                      # one file
+python -m pytest tests/test_rules.py::test_a_decimal_is_not_a_footnote_marker -q   # one test
+python -m pytest -k furniture -q                             # one policy area
 
-A blank page is kept rather than dropped, so the numbering keeps matching the PDF
-somebody would open beside the output.
+python -m scribe.cli convert fixtures/report.txt             # writes report.md beside it
+python -m scribe.cli convert fixtures/report.txt -           # writes to stdout
+python -m scribe.cli check fixtures/                         # converts every .txt, writes nothing
+```
 
-## The nine rules
+`check` is the fast way to see the blast radius of a rule change across the corpus: it prints a
+one-line summary per document (`report.txt: 3 pages, 8 headings, 12 paragraphs, ...`) and touches no
+files. There is no linter or formatter configured, and no runtime dependencies.
 
-Every one of these is a judgement call with a defensible alternative. What was
-chosen is below; what it costs is below it.
+## Architecture
 
-**Joining broken words.** A hyphen at the end of a line is dropped and the word
-joined, because in a justified column most of them were put there by the
-typesetter. The exception is a short list of prefixes — `co`, `non`, `pre`, `re`,
-`self`, `well` — where the hyphen usually is part of the word: `well-being` split
-across two lines is not `wellbeing`. Nothing in the text says which is which, so
-the list is the whole of the judgement. Keeping every hyphen would be right for a
-corpus of technical writing full of real compounds.
+Input is the output of `pdftotext` or similar: one string, form feeds between pages. Output is
+Markdown. Everything happens in-process; `convert.convert(raw) -> Converted` is pure, and `cli.py` is
+a thin wrapper that does file I/O around it.
 
-**Joining broken lines.** A single newline continues the paragraph; a blank line
-breaks it. A short line that ends a sentence also breaks, without which the last
-line of every paragraph glues onto the first line of the next — the most visible
-failure there is. Treating every newline as a break is what poetry or an address
-block wants and would ruin a report.
+### One structural module, six policy modules
 
-**Headings.** Found by leading numbering: `3.1.4 Findings`. Depth comes from the
-numbering, so Markdown is offset by one because `#` belongs to the document
-title. Guessing from length instead — a short line with no full stop — was tried
-first and promoted every caption, every list item and every name in a list of
-names. The cost of numbering is that a document which does not number its
-headings gets none.
+`lines.py` is the only module that describes the document as it *is*. It parses the form-feed-
+delimited string into `Document -> Page -> Line` and strips trailing whitespace; it makes no other
+judgement. Each `Line` carries `page`, `index`, `total_on_page`, and derived `from_top` /
+`from_bottom` — positional metadata that the furniture and footnote rules depend on and that cannot
+be recovered later.
 
-A numbered line is not a heading if it is longer than twelve words, if it ends in
-punctuation, or if something is on the very next line. That last check is what
-separates a heading from the first line of a wrapped numbered list item, which
-otherwise looks identical.
+Every other module is a *policy*: a guess about what the text means, made from the text alone. Each
+one owns its guesses and states, in its module docstring, what alternative was rejected and what it
+costs. `furniture.py` (running headers, page numbers), `paragraphs.py` (dehyphenation, paragraph
+breaks, reflow), `blocks.py` (headings, bullets, blank space), `notes.py` (footnotes), `text.py`
+(ligatures, smart punctuation).
 
-**Page furniture.** A line near the top or bottom of most pages is a running
-header or footer and is dropped, as are bare page numbers. Digits are folded
-before comparing, so `Chapter 3 — page 7` and `page 8` count as the same header.
+### The pipeline order is load-bearing
 
-Two guards. A document under three pages has none removed, because there is no
-pattern to establish and a short letter whose first line echoes its last would
-lose both. And a page has to be long enough to have a margin: on a four-line page
-every line is near an edge, so body text differing only by a number was being read
-as a header.
+`convert.convert` runs the rules in a fixed order, and this is the thing most likely to surprise you:
 
-Keeping the header is the right choice for a one-off document, where that line is
-the letterhead.
+1. `lines.read` — string into `Document`.
+2. `furniture.strip` — **before** anything looks for headings. A running header is usually the
+   section title, so it looks exactly like a heading; stripping first means the heading rule never
+   sees it. `tests/test_rules.py::test_furniture_runs_before_headings_and_that_is_load_bearing`
+   pins this. Note `strip` mutates the `Document` in place; `convert` measures the drop by
+   comparing `len(doc.lines)` before and after.
+3. `_collect_notes` — **before** reflow, or a note at the foot of a page gets glued to the last
+   sentence above it. This is also the last step that can see positional data: it consumes the
+   `Document` and returns `list[str]`. Anything needing `from_bottom` must run at or before this
+   point. It appends a blank line at each page boundary so reflow gets the chance to decide whether
+   the sentence runs on.
+4. `blocks.collapse_blanks` — runs of blanks to one.
+5. The main loop — headings and bullets are decided line by line (both are properties of a single
+   line); everything between them accumulates into a prose `run` that is flushed through
+   `paragraphs.reflow` whenever a heading or bullet interrupts, so a paragraph broken across a
+   heading is never silently joined.
+6. Footnote definitions appended, `_join` inserts blank lines between blocks (skipping between
+   consecutive bullets, which would make a loose list).
+7. `text.normalise` — **last**, so every rule above sees the text as it came out of the PDF rather
+   than a partly rewritten version.
 
-**Bullets.** Recognised from `-`, `*` or `•`, and only when a space follows, so
-`-3 degrees` stays prose.
+Two non-obvious control-flow details: `blocks.heading_level` takes the *following* line as a lookahead
+(a heading has space under it; a wrapped numbered list item runs straight on), and
+`paragraphs.reflow` rebuilds its own `lines` list mid-loop to push the remainder of a dehyphenated
+line back onto the queue so the rest of it still passes through every rule.
 
-**Blank space.** Runs of blank lines become one. A PDF is full of vertical space
-that was typesetting rather than meaning. The cost is that deliberate spacing, in
-a poem or on a title page, is flattened.
+### Tuning constants
 
-**Footnotes.** A numbered line near the foot of a page is the note; digits welded
-to a word in the prose are the marker. The notes are collected at the end and
-linked, because that is what Markdown footnotes are. Leaving them inline keeps
-the page's original look and is what you want if the notes are asides meant to be
-read in place.
+The behaviour of this program is mostly these numbers. Each is commented at its definition with the
+failure that motivated it:
 
-Position is what separates a note from a numbered list item — the same shape in
-the middle of a page is a list, and treating those as notes would move half a
-list to the end of the document.
+- `furniture.EDGE` (2), `MIN_PAGE` (6), `REPEAT_SHARE` (0.6), plus a hard floor of 3 pages before
+  furniture detection runs at all.
+- `blocks.MAX_HEADING_WORDS` (12) — the only thing separating "3. Findings" from a wrapped list item.
+- `paragraphs.KEEP_HYPHEN` — prefixes whose hyphen survives a line break; and the 60-character
+  threshold in `is_break`.
+- `notes.looks_like_note`'s `from_bottom <= 6`.
+- `notes.MARKER` deliberately excludes a preceding digit, so decimals and years are not footnote
+  references.
 
-**Typesetting characters.** Ligatures and smart punctuation are replaced with
-plain equivalents, because the output is meant to be searched. A corpus being
-archived for fidelity would want the opposite.
+## Tests
 
-## The order the rules run in
+Two files, two jobs. `tests/test_rules.py` is one test per policy, with a final section for the
+places two policies meet — that section is where a change to one rule shows up as a break in another.
+`tests/test_documents.py` runs the three fixtures end to end.
 
-Not arbitrary, and the thing most likely to surprise somebody changing this.
+The fixtures are the spec, and each covers something the others cannot: `report.txt` has furniture,
+footnotes and numbered headings; `memo.txt` has none of those and is what makes "keep the running
+header" a live alternative; `handbook.txt` has deep numbering plus a numbered list that must not
+become headings. A new rule generally needs a fixture change or a new fixture, not just a unit test.
 
-**Furniture is stripped before headings are found.** A running header is often
-the section title, so it looks exactly like a heading; taking it out first means
-the heading rule never sees it. The cost is that a genuine heading which happens
-to repeat is gone before anything can rescue it, which is why the repeat
-threshold is as high as it is.
+## Conventions
 
-**Footnotes are collected before paragraphs are reflowed**, or a note at the foot
-of a page would be glued to the last sentence above it.
-
-**Characters are normalised last**, so every rule above sees the text as it came
-out of the PDF rather than a partly rewritten version of it.
-
-## Changes worth knowing about
-
-**Footnote markers used to fire after any full stop.** Every decimal in a
-document became a footnote reference: `0.8 metres` came out as `0.[^8] metres`.
-The character before is now checked and digits are excluded. Every test passed
-before this, because none of them had a number in them.
-
-**Heading detection did not look at the following line.** The first line of a
-wrapped numbered list item — `1. Entering water above the knee, whether or not
-you are wearing a` — was short enough to be a heading, and the rest of the
-sentence became a paragraph beneath it.
-
-## The sample documents
-
-Three, in `fixtures/`, different on purpose.
-
-`report.txt` has a running header, page numbers, numbered headings, hyphenation
-and footnotes. `memo.txt` has none of those and is only two pages, so it is the
-document that makes "keep the running header" a real alternative — a rule that
-helps the report can hurt the memo. `handbook.txt` has deep numbering, a numbered
-list that must not become headings, and a paragraph running across a page break.
+Docstrings here carry the argument, not the mechanics — what the rule does, what the rejected
+alternative was, and what the current choice costs. Match that when adding or changing a policy; a
+rule with no stated cost reads as if it had no downside. Comments in tests record the bug that the
+test was written for.
