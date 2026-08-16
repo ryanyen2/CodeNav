@@ -67,4 +67,8 @@ include = ["codoc*"]
 "codoc.prompts" = ["*.txt"]
 
 [tool.pytest.ini_options]
+# The study codebases carry their own suites and are run from inside
+# themselves, the way a participant runs them. Collected from here they
+# fail on import, because they are not installed and are not meant to be.
+norecursedirs = ["docs/study-materials/projects/*"]
 testpaths = ["tests"]
