@@ -25,8 +25,18 @@ function fakeClient({ failWrites = false, existing = new Set() } = {}) {
     return {
         written, existing,
         get signIns() { return signIns; },
-        restore() {},
-        async signIn() { signIns += 1; return { uid: `uid-${signIns}`, refreshToken: `refresh-${signIns}` }; },
+        // Modelled on the real client: restoring a refresh token gets the SAME
+        // identity back rather than minting a new one. A fake that always issued
+        // a fresh uid hid the bug where a participant's second workspace signed
+        // in again and lost the mirror slot.
+        restore({ refreshToken, uid } = {}) { this.refreshToken = refreshToken || null; this.uid = uid || null; },
+        async signIn() {
+            if (this.refreshToken && this.uid) return { uid: this.uid, refreshToken: this.refreshToken };
+            signIns += 1;
+            this.uid = `uid-${signIns}`;
+            this.refreshToken = `refresh-${signIns}`;
+            return { uid: this.uid, refreshToken: this.refreshToken };
+        },
         async createDocument(collection, id, data) {
             const key = `${collection}/${id}`;
             if (failWrites) throw new Error('offline');
@@ -310,3 +320,81 @@ test('values are encoded in the form Firestore expects', () => {
 });
 
 console.log('study logger mirror: all assertions pass');
+
+// ── the second condition ─────────────────────────────────────────────────────
+
+test('both of a participant\'s conditions mirror from the one machine', async () => {
+    // The bug: a participant works in two workspaces, so the logger writes two
+    // log files and therefore two state files. Identity lived in those, so the
+    // second condition signed in as a NEW anonymous user, could not claim the one
+    // mirror slot the first had taken, and mirrored nothing. Half of every
+    // participant's data, silently, behind a message on a channel nobody opens.
+    const dir = tmpdir();
+    const client = fakeClient();
+    const problems = [];
+
+    const runCondition = async (workspace, condition) => {
+        const logPath = path.join(dir, `interaction-${workspace}.jsonl`);
+        fs.writeFileSync(logPath, Array.from({ length: 40 }, (_, i) =>
+            JSON.stringify(edit(i * 20_000))).join('\n') + '\n');
+        const m = new Mirror({
+            logPath, config: {}, code: 'p-abcdefghjkmn', condition, client,
+            onError: (msg) => problems.push(`${condition}: ${msg}`),
+        });
+        await m.start();
+        await m.flush(true);
+        await m.stop();
+    };
+
+    await runCondition('hearth', 'codoc');
+    await runCondition('ember-baseline', 'baseline');
+
+    assert.deepEqual(problems, [], problems.join('; '));
+    assert.equal(client.signIns, 1, 'one machine signs in once, not once per workspace');
+
+    const sent = [...client.written.keys()];
+    assert.ok(sent.some((k) => k.includes('/sessions/codoc/batches')),
+        'the first condition reached Firestore');
+    assert.ok(sent.some((k) => k.includes('/sessions/baseline/batches')),
+        'and so did the second, which is what used to be lost');
+});
+
+test('the identity is shared, and the read offset is not', async () => {
+    // The offset is about one log; the sign-in is about the machine. Sharing the
+    // offset too would make the second workspace skip its own first events.
+    const dir = tmpdir();
+    const client = fakeClient();
+    const a = path.join(dir, 'interaction-hearth.jsonl');
+    const b = path.join(dir, 'interaction-ember.jsonl');
+    for (const p of [a, b]) {
+        fs.writeFileSync(p, Array.from({ length: 40 }, (_, i) =>
+            JSON.stringify(edit(i * 20_000))).join('\n') + '\n');
+    }
+    const run = async (logPath, condition) => {
+        const m = new Mirror({ logPath, config: {}, code: 'p-x', condition, client });
+        await m.start(); await m.flush(true); await m.stop();
+        return m;
+    };
+    const m1 = await run(a, 'codoc');
+    const m2 = await run(b, 'baseline');
+
+    assert.equal(m1.state.uid, m2.state.uid, 'one identity');
+    assert.ok(fs.existsSync(path.join(dir, 'mirror-identity.json')), 'kept beside the logs');
+    assert.ok(m2.state.offset > 0, 'the second log was read from its own start');
+});
+
+test('a machine set up before this change keeps the slot it already holds', async () => {
+    // An old state file carried the identity itself. Signing in again would mint
+    // a new uid and lose the slot, which is the very failure being fixed.
+    const dir = tmpdir();
+    const client = fakeClient();
+    const logPath = path.join(dir, 'interaction-hearth.jsonl');
+    fs.writeFileSync(logPath, JSON.stringify(edit(0)) + '\n');
+    fs.writeFileSync(`${logPath}.mirror.json`, JSON.stringify({
+        offset: 0, seq: 3, uid: 'uid-from-before', refreshToken: 'old-refresh',
+    }));
+
+    const m = new Mirror({ logPath, config: {}, code: 'p-x', condition: 'codoc', client });
+    assert.equal(m.state.uid, 'uid-from-before');
+    assert.equal(m.state.seq, 3, 'and its place in the sequence');
+});

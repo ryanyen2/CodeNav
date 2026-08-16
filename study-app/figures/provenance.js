@@ -21,7 +21,7 @@ const AGENT_CODE = ['AGENT_EDIT'];
 
 /** Per participant, per condition, how many writes of each kind. */
 export function authorship(sessions) {
-    const count = (acts, names) => acts.filter((a) => names.includes(a.action)).length;
+    const count = (acts, names) => acts.filter((a) => names.includes(a.a)).length;
     return sessions.map((s) => {
         const acts = s.actions || [];
         const humanDoc = count(acts, HUMAN_DOC);

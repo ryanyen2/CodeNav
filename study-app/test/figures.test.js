@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 let likert; let tally; let timeShare; let timeProfile;
 let authorship; let provenance; let transitionLift; let mediation; let TRANSITIONS;
-let toCsv; let serialize;
+let toCsv; let serialize; let toSequence;
 
 const OUT = process.env.FIGURE_OUT;
 
@@ -25,6 +25,7 @@ before(async () => {
     ({ authorship, provenance } = await import('../figures/provenance.js'));
     ({ transitionLift, mediation, TRANSITIONS } = await import('../figures/mediation.js'));
     ({ toCsv, serialize } = await import('../figures/export.js'));
+    ({ toSequence } = await import('../../docs/study-materials/logger/actions-vocab.js'));
     if (OUT) mkdirSync(OUT, { recursive: true });
 });
 
@@ -33,28 +34,63 @@ function save(name, node) {
     writeFileSync(join(OUT, `${name}.svg`), serialize(node));
 }
 
-/** A session of plausible shape, deterministic so a test never flickers. */
+/**
+ * A session, built by running raw logger events through the REAL sequence
+ * builder rather than by writing actions out directly.
+ *
+ * This is not fastidiousness. Every figure originally read `a.action`; the logger
+ * emits `a.a`. Sixteen tests passed because the fixtures agreed with the figures
+ * and neither agreed with the logger, and the whole set would have drawn nothing
+ * from a real session. Fixtures that come from the source of truth cannot drift
+ * from it again.
+ */
 function fakeSession(code, condition, seed = 1) {
     let s = seed;
     const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+    const doc = condition === 'codoc' ? '.codoc/tree.codoc' : 'CLAUDE.md';
     const pool = condition === 'codoc'
-        ? ['READ_DOC', 'READ_CODE', 'EDIT_DOC', 'PROMPT', 'AGENT_EDIT', 'AGENT_DOC', 'RUN_TEST', 'ACCEPT']
-        : ['READ_DOC', 'READ_CODE', 'EDIT_CODE', 'PROMPT', 'AGENT_EDIT', 'RUN_TEST'];
-    const actions = [];
+        ? [[doc, 'document', 'view'], ['hearth/post.py', 'code', 'view'],
+           [doc, 'document', 'human'], [null, null, 'prompt'],
+           ['hearth/post.py', 'code', 'agent'], [doc, 'document', 'agent'],
+           [null, null, 'pytest'], [null, null, 'accept']]
+        : [[doc, 'document', 'view'], ['hearth/post.py', 'code', 'view'],
+           ['hearth/post.py', 'code', 'human'], [null, null, 'prompt'],
+           ['hearth/post.py', 'code', 'agent'], [null, null, 'pytest']];
+    const raw = [];
     let t = 1_700_000_000_000;
     for (let i = 0; i < 120; i += 1) {
-        const action = pool[Math.floor(rnd() * pool.length)];
-        const ms = action.startsWith('READ') ? 4000 + rnd() * 20000 : 0;
-        actions.push({ action, t, ms });
-        t += (ms || 3000) + rnd() * 5000;
+        const [file, surface, kind] = pool[Math.floor(rnd() * pool.length)];
+        if (kind === 'view') {
+            const ms = 4000 + Math.floor(rnd() * 20000);
+            t += ms;
+            raw.push({ t, ev: 'view', surface, file, ms });
+        } else if (kind === 'human' || kind === 'agent') {
+            t += 4000;
+            raw.push({ t, ev: 'edit', surface, file, added: 20,
+                active: kind === 'human', focused: kind === 'human' });
+        } else if (kind === 'prompt') {
+            t += 20000; raw.push({ t, ev: 'prompt', chars: 140 });
+        } else if (kind === 'pytest') {
+            t += 9000; raw.push({ t, ev: 'agent', cmd: 'pytest' });
+        } else {
+            t += 3000; raw.push({ t, ev: 'verdict', kind: 'accept' });
+        }
     }
-    return { code, condition, actions };
+    return { code, condition, actions: toSequence(raw) };
 }
 
-const COHORT = [
-    ...Array.from({ length: 6 }, (_, i) => fakeSession(`p-${i}`, 'codoc', i + 1)),
-    ...Array.from({ length: 6 }, (_, i) => fakeSession(`p-${i}`, 'baseline', i + 20)),
-];
+// Built on first use, not at import: the fixtures now run through the real
+// sequence builder, which is only loaded once the DOM exists.
+let _cohort = null;
+function cohort() {
+    if (!_cohort) {
+        _cohort = [
+            ...Array.from({ length: 6 }, (_, i) => fakeSession(`p-${i}`, 'codoc', i + 1)),
+            ...Array.from({ length: 6 }, (_, i) => fakeSession(`p-${i}`, 'baseline', i + 20)),
+        ];
+    }
+    return _cohort;
+}
 
 // ── every figure renders and carries its own styling ─────────────────────────
 
@@ -73,17 +109,17 @@ function makeAll() {
     };
     const byCondition = {};
     for (const c of ['codoc', 'baseline']) {
-        byCondition[c] = transitionLift(COHORT.filter((s) => s.condition === c));
+        byCondition[c] = transitionLift(cohort().filter((s) => s.condition === c));
     }
     return {
         likert: likert({ items: ITEMS, conditions: ['codoc', 'baseline'], counts, points: 7 }),
         timeprofile: timeProfile(['codoc', 'baseline'].map((c) => ({
             condition: c,
-            n: COHORT.filter((s) => s.condition === c).length,
+            n: cohort().filter((s) => s.condition === c).length,
             medianMinutes: 42,
-            profile: timeShare(COHORT.filter((s) => s.condition === c)),
+            profile: timeShare(cohort().filter((s) => s.condition === c)),
         }))),
-        provenance: provenance(authorship(COHORT)),
+        provenance: provenance(authorship(cohort())),
         mediation: mediation(byCondition),
     };
 }
@@ -145,7 +181,7 @@ test('both Likert panels share one scale', () => {
 });
 
 test('the time profile sums to one in every slice', () => {
-    const p = timeShare(COHORT.filter((s) => s.condition === 'codoc'));
+    const p = timeShare(cohort().filter((s) => s.condition === 'codoc'));
     for (let b = 0; b < p.bins; b += 1) {
         const total = p.actions.reduce((a, k) => a + p.share[k][b], 0);
         assert.ok(Math.abs(total - 1) < 1e-9, `slice ${b} sums to ${total}`);
@@ -156,9 +192,9 @@ test('a long session does not outweigh a short one', () => {
     // Per session rather than per action, or one person who worked for ninety
     // minutes becomes the finding.
     const short = { condition: 'codoc', actions: [
-        { action: 'READ_DOC', t: 0, ms: 1000 }, { action: 'PROMPT', t: 1000, ms: 0 }] };
+        { a: 'READ_DOC', t: 0, ms: 1000 }, { a: 'PROMPT', t: 1000, ms: 0 }] };
     const long = { condition: 'codoc', actions: Array.from({ length: 200 }, (_, i) =>
-        ({ action: 'READ_CODE', t: i * 1000, ms: 1000 })) };
+        ({ a: 'READ_CODE', t: i * 1000, ms: 1000 })) };
     const p = timeShare([short, long]);
     const docShare = p.share.READ_DOC ? p.share.READ_DOC[0] : 0;
     assert.ok(docShare > 0.2,
@@ -169,15 +205,15 @@ test('a description nobody wrote to has no author split', () => {
     // Plotting it at the midpoint would invent a balanced authorship out of
     // nothing, which is the exact claim the figure exists to test.
     const rows = authorship([{ code: 'p-1', condition: 'baseline', actions: [
-        { action: 'READ_CODE', t: 1 }, { action: 'PROMPT', t: 2 }] }]);
+        { a: 'READ_CODE', t: 1 }, { a: 'PROMPT', t: 2 }] }]);
     assert.equal(rows[0].docWrites, 0);
     assert.equal(rows[0].humanShareOfDoc, null);
 });
 
 test('authorship counts the person and the agent separately', () => {
     const rows = authorship([{ code: 'p-1', condition: 'codoc', actions: [
-        { action: 'EDIT_DOC', t: 1 }, { action: 'EDIT_DOC', t: 2 }, { action: 'AGENT_DOC', t: 3 },
-        { action: 'EDIT_CODE', t: 4 }, { action: 'AGENT_EDIT', t: 5 }] }]);
+        { a: 'EDIT_DOC', t: 1 }, { a: 'EDIT_DOC', t: 2 }, { a: 'AGENT_DOC', t: 3 },
+        { a: 'EDIT_CODE', t: 4 }, { a: 'AGENT_EDIT', t: 5 }] }]);
     assert.deepEqual(
         [rows[0].humanDoc, rows[0].agentDoc, rows[0].humanCode, rows[0].agentCode],
         [2, 1, 1, 1]);
@@ -188,9 +224,9 @@ test('lift is above zero only when a pair beats its own parts', () => {
     // A sequence where READ_DOC always precedes PROMPT, against one where the
     // two never touch. Same counts of each action in both.
     const always = { condition: 'codoc', actions: 'READ_DOC PROMPT READ_DOC PROMPT READ_DOC PROMPT READ_DOC PROMPT'
-        .split(' ').map((action, i) => ({ action, t: i * 1000 })) };
+        .split(' ').map((a, i) => ({ a, t: i * 1000 })) };
     const never = { condition: 'codoc', actions: 'READ_DOC READ_DOC READ_DOC READ_DOC PROMPT PROMPT PROMPT PROMPT'
-        .split(' ').map((action, i) => ({ action, t: i * 1000 })) };
+        .split(' ').map((a, i) => ({ a, t: i * 1000 })) };
     const [a] = transitionLift([always], [TRANSITIONS[0]]);
     const [n] = transitionLift([never], [TRANSITIONS[0]]);
     assert.ok(a.lift > 0, `paired should be positive, got ${a.lift}`);
@@ -201,7 +237,7 @@ test('a transition whose parts never happened contributes nothing', () => {
     // Otherwise a condition that cannot produce an action at all would be
     // scored as strongly avoiding it, which is an artifact, not a behaviour.
     const s = { condition: 'baseline', actions: 'READ_CODE PROMPT READ_CODE PROMPT'
-        .split(' ').map((action, i) => ({ action, t: i * 1000 })) };
+        .split(' ').map((a, i) => ({ a, t: i * 1000 })) };
     const [r] = transitionLift([s], [{ from: 'EDIT_DOC', to: 'PROMPT', label: 'x' }]);
     assert.equal(r.n, 0);
     assert.equal(r.lift, null);
@@ -209,8 +245,8 @@ test('a transition whose parts never happened contributes nothing', () => {
 
 test('idle does not break a pair in half', () => {
     const s = { condition: 'codoc', actions: [
-        { action: 'READ_DOC', t: 0 }, { action: 'IDLE', t: 1 }, { action: 'PROMPT', t: 2 },
-        { action: 'READ_DOC', t: 3 }, { action: 'PROMPT', t: 4 }] };
+        { a: 'READ_DOC', t: 0 }, { a: 'IDLE', t: 1 }, { a: 'PROMPT', t: 2 },
+        { a: 'READ_DOC', t: 3 }, { a: 'PROMPT', t: 4 }] };
     const [r] = transitionLift([s], [TRANSITIONS[0]]);
     assert.equal(r.obs, 2, 'a gap between two moves does not break the relationship');
 });
@@ -260,7 +296,7 @@ test('the exported file parses as XML', () => {
 test('no row of the provenance figure writes into the next one', () => {
     // The tick labels sat below their own row and landed in the band beneath,
     // which is only visible once the thing is rendered.
-    const node = provenance(authorship(COHORT));
+    const node = provenance(authorship(cohort()));
     const rows = [...node.querySelectorAll('rect')]
         .filter((r) => r.getAttribute('fill') === '#f2f4f6')
         .map((r) => ({ y: Number(r.getAttribute('y')), h: Number(r.getAttribute('height')) }))
@@ -273,4 +309,67 @@ test('no row of the provenance figure writes into the next one', () => {
         const inside = rows.filter((r) => ty > r.y && ty < r.y + r.h);
         assert.ok(inside.length <= 1, `"${t.textContent}" spans two rows`);
     }
+});
+
+test('the figures read the field the logger actually writes', () => {
+    // The bug this exists for: every figure read `a.action`, the logger emits
+    // `a.a`, and the whole set would have drawn nothing from a real session while
+    // passing sixteen tests against fixtures that agreed with the figures.
+    const raw = [
+        { t: 1000, ev: 'view', surface: 'document', file: 'CLAUDE.md', ms: 1000 },
+        { t: 5000, ev: 'prompt', chars: 100 },
+    ];
+    const seq = toSequence(raw);
+    assert.ok(seq.every((x) => typeof x.a === 'string'),
+        'the logger writes the action under `a`');
+    assert.ok(seq.every((x) => x.action === undefined),
+        'and writes nothing under `action`, so nothing may read it');
+
+    // And the analysis actually sees it.
+    const rows = authorship([{ code: 'p-1', condition: 'codoc', actions: toSequence([
+        { t: 1, ev: 'edit', surface: 'document', file: 'CLAUDE.md', added: 5, active: true, focused: true },
+    ]) }]);
+    assert.equal(rows[0].humanDoc, 1, 'authorship counts a real logger event');
+
+    const share = timeShare([{ actions: seq }]);
+    assert.ok(share.actions.length > 0, 'the time profile sees real logger events');
+});
+
+test('a consultation separated by one move still counts as a consultation', () => {
+    // The pilot found this: a session that read the description before every
+    // instruction scored as AVOIDING that pattern, because what it did was read,
+    // write, then instruct, and the strictly adjacent pair never happened.
+    const round = 'READ_DOC EDIT_DOC PROMPT AGENT_EDIT RUN_TEST'.split(' ');
+    const s = { condition: 'codoc', actions: Array.from({ length: 5 })
+        .flatMap(() => round).map((a, i) => ({ a, t: i * 1000 })) };
+
+    const consult = TRANSITIONS.find((t) => t.from === 'READ_DOC' && t.to === 'PROMPT');
+    const [windowed] = transitionLift([s], [consult]);
+    assert.ok(windowed.lift > 0,
+        `reading before every instruction should score positive, got ${windowed.lift}`);
+
+    const [strict] = transitionLift([s], [{ ...consult, within: 1 }]);
+    assert.ok(strict.lift < 0, 'and strict adjacency is what got it wrong');
+});
+
+test('a window counts one occurrence per opportunity, not one per hit', () => {
+    // Otherwise a burst of agent edits scores as several separate checks of what
+    // is really one change.
+    const s = { condition: 'codoc', actions: 'PROMPT AGENT_EDIT AGENT_EDIT AGENT_EDIT'
+        .split(' ').map((a, i) => ({ a, t: i * 1000 })) };
+    const [r] = transitionLift([s], [{ from: 'PROMPT', to: 'AGENT_EDIT', within: 3, label: 'x' }]);
+    assert.equal(r.obs, 1, 'one prompt, one opportunity, one count');
+});
+
+test('every transition says how far ahead it looked', () => {
+    // A reader cannot tell an adjacent pair from a windowed one otherwise, and
+    // they mean different things.
+    for (const t of TRANSITIONS) {
+        assert.ok(Number.isInteger(t.within) && t.within >= 1, `${t.label} has no window`);
+        assert.ok(t.within <= 3, `${t.label} looks too far ahead to mean "then"`);
+    }
+    const node = mediation({ codoc: transitionLift(cohort().filter((s) => s.condition === 'codoc')),
+        baseline: transitionLift(cohort().filter((s) => s.condition === 'baseline')) });
+    const marks = [...node.querySelectorAll('text')].filter((t) => /^≤\d$/.test(t.textContent));
+    assert.equal(marks.length, TRANSITIONS.length, 'the window is on the figure, per row');
 });

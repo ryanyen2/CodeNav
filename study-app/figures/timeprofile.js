@@ -25,7 +25,7 @@ export function timeShare(sessions, bins = 20, { includeIdle = false } = {}) {
     const totals = Array.from({ length: bins }, () => ({}));
 
     for (const s of sessions) {
-        const acts = (s.actions || []).filter((a) => includeIdle || a.action !== 'IDLE');
+        const acts = (s.actions || []).filter((a) => includeIdle || a.a !== 'IDLE');
         if (acts.length < 2) continue;
         const t0 = acts[0].t;
         const t1 = acts[acts.length - 1].t + (acts[acts.length - 1].ms || 0);
@@ -40,7 +40,7 @@ export function timeShare(sessions, bins = 20, { includeIdle = false } = {}) {
             const dur = a.ms && a.ms > 0 ? a.ms : 1500;
             const from = (a.t - t0) / span;
             const to = Math.min(1, (a.t - t0 + dur) / span);
-            present.add(a.action);
+            present.add(a.a);
             // Spread the action across every slice it actually covers.
             const first = Math.max(0, Math.min(bins - 1, Math.floor(from * bins)));
             const last = Math.max(first, Math.min(bins - 1, Math.ceil(to * bins) - 1));
@@ -50,7 +50,7 @@ export function timeShare(sessions, bins = 20, { includeIdle = false } = {}) {
                 const overlap = Math.max(0, hi - lo);
                 if (overlap <= 0) continue;
                 // Per session, so one long session cannot dominate the shape.
-                totals[b][a.action] = (totals[b][a.action] || 0)
+                totals[b][a.a] = (totals[b][a.a] || 0)
                     + (overlap / (1 / bins)) / sessions.length;
             }
         }

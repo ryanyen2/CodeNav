@@ -36,6 +36,16 @@ export class Mirror {
     constructor(opts) {
         this.logPath = opts.logPath;
         this.statePath = opts.statePath || `${opts.logPath}.mirror.json`;
+        // Who this machine is, kept beside the logs rather than beside one log.
+        //
+        // A participant works in two workspaces, so the logger writes two log
+        // files and therefore two state files. When identity lived in those, the
+        // second condition signed in as a NEW anonymous user, could not claim the
+        // one mirror slot the first had taken, and mirrored nothing. Half of every
+        // participant's data, silently, with a message on an output channel
+        // nobody has open. The read offset stays per log, because it is about
+        // that log; the sign-in is about the machine.
+        this.identityPath = opts.identityPath || defaultIdentityPath(opts.logPath);
         this.code = opts.code;
         this.condition = opts.condition || 'codoc';
         this.flushMs = opts.flushMs ?? DEFAULTS.flushMs;
@@ -48,14 +58,32 @@ export class Mirror {
     }
 
     _loadState() {
-        try {
-            return JSON.parse(fs.readFileSync(this.statePath, 'utf8'));
-        } catch {
-            return { offset: 0, seq: 0, uid: null, refreshToken: null };
-        }
+        const read = (file, fallback) => {
+            try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+        };
+        const perLog = read(this.statePath, { offset: 0, seq: 0 });
+        const identity = read(this.identityPath, {});
+        // An older state file carried the identity itself. Honour it, so a
+        // machine set up before this change does not sign in again and lose the
+        // slot it already holds.
+        return {
+            offset: perLog.offset || 0,
+            seq: perLog.seq || 0,
+            uid: identity.uid || perLog.uid || null,
+            refreshToken: identity.refreshToken || perLog.refreshToken || null,
+        };
     }
 
     _saveState() {
+        if (this.state.uid) {
+            const itmp = `${this.identityPath}.tmp`;
+            try {
+                fs.writeFileSync(itmp, JSON.stringify({
+                    uid: this.state.uid, refreshToken: this.state.refreshToken,
+                }));
+                fs.renameSync(itmp, this.identityPath);
+            } catch { /* the per-log state below is what a restart needs most */ }
+        }
         const tmp = `${this.statePath}.tmp`;
         fs.writeFileSync(tmp, JSON.stringify(this.state));
         fs.renameSync(tmp, this.statePath);   // never a half-written state file
@@ -218,4 +246,14 @@ export const FIREBASE_CONFIG = Object.freeze({
 
 export function defaultStatePath(logPath) {
     return path.join(path.dirname(logPath), `${path.basename(logPath)}.mirror.json`);
+}
+
+/**
+ * One identity per machine, shared by every workspace.
+ *
+ * Beside the logs rather than inside one, because a participant's two conditions
+ * are two workspaces and the mirror slot is claimed once.
+ */
+export function defaultIdentityPath(logPath) {
+    return path.join(path.dirname(logPath), 'mirror-identity.json');
 }
