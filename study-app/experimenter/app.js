@@ -12,7 +12,7 @@ import {
     connectAuthEmulator,
 } from 'firebase/auth';
 import {
-    getFirestore, collection, doc, setDoc, getDocs, onSnapshot, query, orderBy,
+    getFirestore, collection, doc, setDoc, getDocs, deleteDoc, onSnapshot, query, orderBy,
     connectFirestoreEmulator,
 } from 'firebase/firestore';
 import { timeline, legend, ribbon, patterns } from './charts.js';
@@ -349,6 +349,29 @@ function renderDetail() {
 // ── handing the session over ─────────────────────────────────────────────────
 
 /**
+ * Free the device slots so a participant can register again.
+ *
+ * The slot is claimed once, on purpose: it is what stops a stray copy of the code
+ * writing into somebody's session. But a participant who changes machine or
+ * reinstalls is then locked out, and the message their editor shows tells them to
+ * ask the experimenter — who, until now, had no way to do it. The pilot hit this
+ * and it took a hand-written REST call to clear, which is not something to be
+ * doing on a call.
+ */
+async function releaseCode(code) {
+    const held = state.devices.join(' and ');
+    if (!confirm(`Release ${code}?\n\nThis frees the ${held} slot so their `
+        + 'software can register again. Nothing they have already sent is touched.')) return;
+    try {
+        for (const slot of state.devices) {
+            await deleteDoc(doc(db, `participants/${code}/devices/${slot}`));
+        }
+    } catch (err) {
+        alert(`Could not release: ${err.code || err.message}`);
+    }
+}
+
+/**
  * The two things to send, and whether they landed.
  *
  * This is the first card on the page until both have checked in, and one quiet
@@ -403,6 +426,10 @@ function renderOpenHandoff(el, p, browser, mirror) {
         <p class="give-note">${dot(mirror)} ${mirror
             ? 'Their editor is reporting.'
             : 'Their editor has not reported. Until it does, nothing they do in it arrives here.'}</p>
+        ${state.devices.length ? `<p class="give-note">
+          <button class="link-btn" id="release">release this code</button>
+          — if they have changed machine, or reinstalled. Their editor says to ask
+          you for this, and the slot is claimed once.</p>` : ''}
       </div>
 
       <div class="give">
@@ -415,6 +442,9 @@ function renderOpenHandoff(el, p, browser, mirror) {
         finishes, so ask them to read you the last few lines rather than watching
         for it here. Nothing about a key reaches this page.</p>
       </div>`;
+
+    const release = el.querySelector('#release');
+    if (release) release.onclick = () => void releaseCode(p.code);
 
     for (const b of el.querySelectorAll('[data-copy]')) {
         b.onclick = async () => {

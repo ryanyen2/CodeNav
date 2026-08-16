@@ -36,6 +36,10 @@ export const connectFirestoreEmulator = () => {};
 export const collection = (...a) => ({ path: a.slice(1).join('/') });
 export const doc = (...a) => ({ path: a.slice(1).join('/') });
 export const setDoc = async () => {};
+export const deleteDoc = async (ref) => {
+  globalThis.__deleted = globalThis.__deleted || [];
+  globalThis.__deleted.push((ref && ref.path) || '');
+};
 export const getDoc = async () => ({ exists: () => false, data: () => ({}) });
 // A test can plant collections here, keyed by path, so the results view can be
 // driven with real-shaped data rather than only checked when empty.
@@ -377,4 +381,43 @@ test('a pilot is left out of the figures unless asked for', async () => {
     await new Promise((r) => setTimeout(r, 60));
     assert.equal(document.querySelectorAll('#detail .fig').length, 4,
         'and it comes back when explicitly asked for');
+});
+
+test('a code can be released when a participant changes machine', async () => {
+    // The device slot is claimed once, which is what stops a stray copy of the
+    // code writing into a session. The pilot found the other side of that: a
+    // participant who reinstalls is locked out, their editor tells them to ask
+    // the experimenter, and the experimenter had no way to do it.
+    const { document, window } = await loadPage('experimenter');
+    window.confirm = () => true;
+    window.__deleted = [];
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+    const devices = (window.__snaps || [])
+        .find((s) => s.ref.path === 'participants/p-abcdefghjkmn/devices');
+    devices.cb({ docs: [{ id: 'browser' }, { id: 'mirror' }] });
+
+    // Only offered once something is actually holding a slot.
+    document.querySelector('#handoff-more').click();
+    const release = document.querySelector('#release');
+    assert.ok(release, 'the release is on the handoff card');
+    release.click();
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.deepEqual(window.__deleted.sort(), [
+        'participants/p-abcdefghjkmn/devices/browser',
+        'participants/p-abcdefghjkmn/devices/mirror',
+    ], 'both slots freed, so their software can register again');
+});
+
+test('there is nothing to release before anything has registered', async () => {
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+    assert.equal(document.querySelector('#release'), null,
+        'offering it would suggest something is wrong when nothing is');
 });
