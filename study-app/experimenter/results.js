@@ -14,6 +14,8 @@ import { authorship, provenance } from '../figures/provenance.js';
 import { transitionLift, mediation, TRANSITIONS } from '../figures/mediation.js';
 import { downloadSvg, downloadPng, downloadCsv } from '../figures/export.js';
 import { esc } from '../shared/html.js';
+import { isPilot } from '../shared/cohort.js';
+import { isPilotCode } from '../shared/schema.js';
 
 const CONDITIONS = ['codoc', 'baseline'];
 
@@ -23,7 +25,7 @@ const CONDITIONS = ['codoc', 'baseline'];
  * @param cohort [{ code, pilot, excluded, answers: {after-codoc,…}, sessions: {codoc:{actions},…} }]
  */
 export function buildFigures(cohort, { includePilots = false } = {}) {
-    const people = cohort.filter((p) => includePilots || !p.pilot).filter((p) => !p.excluded);
+    const people = cohort.filter((p) => includePilots || !isPilot(p)).filter((p) => !p.excluded);
 
     const sessions = [];
     for (const p of people) {
@@ -96,7 +98,7 @@ export function buildFigures(cohort, { includePilots = false } = {}) {
                     item: q.id, text: q.text, reverse: !!q.reverse,
                     construct: q.c, condition: c, point: i + 1, n,
                 })))),
-            provenance: authorship(sessions),
+            provenance: authorship(sessions).map((r) => ({ ...r, pilot: isPilotCode(r.code) })),
             mediation: CONDITIONS.flatMap((c) => lift[c].map((r) => ({
                 condition: c, from: r.from, to: r.to, label: r.label,
                 sessions: r.n, meanObserved: r.obs, lift: r.lift,

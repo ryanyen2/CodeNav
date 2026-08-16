@@ -3,7 +3,8 @@
 //   node --test test/cohort.test.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { plan, fill, nextOrder, progress, PILOTS, PARTICIPANTS } from '../shared/cohort.js';
+import { plan, fill, nextOrder, progress, isPilot, PILOTS, PARTICIPANTS } from '../shared/cohort.js';
+import { newParticipantCode, isPilotCode, CODE_PATTERN } from '../shared/schema.js';
 
 const person = (i, over = {}) => ({ code: `p-${i}`, createdAt: i, order: 'codoc-first', ...over });
 
@@ -110,4 +111,54 @@ test('a balanced cohort reports no imbalance', () => {
         person(1, { order: 'codoc-first' }), person(2, { order: 'baseline-first' }),
     ];
     assert.equal(progress(existing).imbalance, 0);
+});
+
+// ── telling a pilot from a participant ───────────────────────────────────────
+
+test('a pilot says so in its own code', () => {
+    // The flag lives in Firestore and stops there. An exported JSON, a CSV of
+    // figure data, a collected zip and a log line all carry the code and none of
+    // them carried the flag, so a pilot left the dashboard indistinguishable
+    // from a real participant. The prefix goes everywhere the code goes.
+    const pilot = newParticipantCode('pilot');
+    const person = newParticipantCode('participant');
+    assert.ok(isPilotCode(pilot));
+    assert.ok(!isPilotCode(person));
+    assert.match(pilot, /^pilot-/);
+    assert.match(person, /^p-/);
+});
+
+test('both shapes are still valid codes', () => {
+    // setup.sh, the participant page and the rules all take a code. A new shape
+    // that any of them refuses would fail at the worst moment.
+    for (const kind of ['pilot', 'participant']) {
+        assert.match(newParticipantCode(kind), CODE_PATTERN);
+    }
+});
+
+test('a pilot code is not mistaken for a participant, or the reverse', () => {
+    // 'pilot-' also starts with 'p', which is exactly the kind of near-miss that
+    // makes a prefix scheme quietly wrong.
+    assert.ok(!isPilotCode('p-abcdefghjkmn'));
+    assert.ok(isPilotCode('pilot-abcdefghjkmn'));
+    assert.ok(!isPilotCode(''));
+    assert.ok(!isPilotCode(null));
+});
+
+test('a record that lost its flag is still treated as a pilot', () => {
+    // The reason both are checked. A copy, an export or a hand-edited row can
+    // drop a boolean; it cannot drop the code.
+    assert.ok(isPilot({ code: 'pilot-abcdefghjkmn' }), 'by the code alone');
+    assert.ok(isPilot({ code: 'p-abcdefghjkmn', pilot: true }), 'by the flag alone');
+    assert.ok(!isPilot({ code: 'p-abcdefghjkmn' }));
+});
+
+test('a pilot known only by its code is still kept out of the analysis', () => {
+    const existing = [
+        { code: 'pilot-aaaaaaaaaaaa', createdAt: 1, order: 'codoc-first' },  // no flag
+        { code: 'p-bbbbbbbbbbbb', createdAt: 2, order: 'codoc-first' },
+    ];
+    const p = progress(existing);
+    assert.equal(p.pilots.filled, 1, 'it fills a pilot slot');
+    assert.equal(p.analysable, 1, 'and only the real participant is analysed');
 });

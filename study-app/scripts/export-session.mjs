@@ -115,7 +115,17 @@ export async function exportSession({ code, project, token, emulator }) {
         };
     }
 
-    return { code, exportedAt: new Date().toISOString(), participant, answers, assessments, sessions };
+    // Stated in the file itself. A folder of exports is where a pilot gets
+    // analysed by accident, and a reader should not have to know that a prefix
+    // means something.
+    const pilot = code.startsWith('pilot-') || !!(participant && participant.pilot);
+    return {
+        code,
+        pilot,
+        analyse: !pilot && !(participant && participant.excluded),
+        exportedAt: new Date().toISOString(),
+        participant, answers, assessments, sessions,
+    };
 }
 
 function main() {
@@ -133,6 +143,7 @@ function main() {
         console.log(`wrote ${dest}`);
         console.log(`  ${counts}`);
         console.log(`  ${data.answers.length} answer sets, ${data.assessments.length} assessments`);
+        if (data.pilot) console.log('  THIS IS A PILOT — not for analysis');
     }).catch((err) => {
         console.error(`could not export: ${err.message}`);
         console.error('Reading needs an allowlisted account. Pass --token, or set CODOC_STUDY_TOKEN.');

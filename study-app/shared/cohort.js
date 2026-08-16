@@ -9,6 +9,17 @@
 // exists cannot show you the gap you are trying to fill, and "how many more do I
 // need, in which order" is the question a researcher actually has mid-study.
 
+import { isPilotCode } from './schema.js';
+
+/**
+ * A pilot, by the code or by the flag.
+ *
+ * Either alone is enough. The flag is what the dashboard writes; the prefix is
+ * what survives an export, a CSV and a zip. Trusting both means a record that
+ * lost one is still handled correctly rather than quietly analysed.
+ */
+export const isPilot = (p) => !!(p && (p.pilot || isPilotCode(p.code)));
+
 export const PILOTS = 2;
 export const PARTICIPANTS = 12;
 
@@ -53,7 +64,7 @@ export function fill(existing, opts = {}) {
     const slots = plan(opts).map((s) => ({ ...s, participant: null }));
     const byKind = { pilot: [], participant: [] };
     for (const p of [...existing].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))) {
-        byKind[p.pilot ? 'pilot' : 'participant'].push(p);
+        byKind[isPilot(p) ? 'pilot' : 'participant'].push(p);
     }
     const extra = [];
     for (const kind of ['pilot', 'participant']) {
@@ -91,7 +102,7 @@ export function progress(existing) {
     const count = (kind, pred) =>
         slots.filter((s) => s.kind === kind && s.participant && pred(s.participant)).length;
 
-    const analysable = existing.filter((p) => !p.pilot && !p.excluded);
+    const analysable = existing.filter((p) => !isPilot(p) && !p.excluded);
     const byOrder = { 'codoc-first': 0, 'baseline-first': 0 };
     for (const p of analysable) if (p.order in byOrder) byOrder[p.order] += 1;
 

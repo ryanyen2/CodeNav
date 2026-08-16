@@ -52,12 +52,28 @@ export function hasForbiddenField(data) {
  * A participant code. Long and random, because it is the only thing standing
  * between a stranger and a write. Ambiguous characters are left out so a code
  * can be read aloud over a call without confusion.
+ *
+ * A pilot's code says so, in the code itself, rather than only in a flag in the
+ * database. The flag does not travel: an exported JSON file, a CSV of figure
+ * data, a collected zip and a log line all carry the code and none of them
+ * carried the flag, so the moment data left the dashboard a pilot was
+ * indistinguishable from a real participant. The prefix travels everywhere the
+ * code does, and cannot be lost by a step that did not know to copy it.
  */
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 
-export function newParticipantCode(random = defaultRandom) {
+export const PREFIX = Object.freeze({ participant: 'p', pilot: 'pilot' });
+
+export function newParticipantCode(random = defaultRandom, kind = 'participant') {
+    // Called with (kind) in places that do not care about the generator.
+    if (typeof random === 'string') { kind = random; random = defaultRandom; }
     const body = Array.from({ length: 12 }, () => ALPHABET[random(ALPHABET.length)]).join('');
-    return `p-${body}`;
+    return `${PREFIX[kind] || PREFIX.participant}-${body}`;
+}
+
+/** Whether this code belongs to a pilot, from the code alone. */
+export function isPilotCode(code) {
+    return typeof code === 'string' && code.startsWith(`${PREFIX.pilot}-`);
 }
 
 function defaultRandom(n) {
@@ -73,4 +89,4 @@ function defaultRandom(n) {
     return Math.floor(Math.random() * n);
 }
 
-export const CODE_PATTERN = /^p-[abcdefghjkmnpqrstuvwxyz23456789]{12}$/;
+export const CODE_PATTERN = /^(p|pilot)-[abcdefghjkmnpqrstuvwxyz23456789]{12}$/;

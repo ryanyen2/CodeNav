@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { timeline, legend, ribbon, patterns } from './charts.js';
 import { newParticipantCode } from '../shared/schema.js';
-import { fill, progress, nextOrder, PARTICIPANTS } from '../shared/cohort.js';
+import { fill, progress, nextOrder, isPilot, PARTICIPANTS } from '../shared/cohort.js';
 import { renderResults } from './results.js';
 import { esc } from '../shared/html.js';
 import { toLetters } from '../shared/actions.js';
@@ -225,7 +225,9 @@ function renderRoster() {
 
 /** Create the person who belongs in this slot, with the order the plan says. */
 async function createInto(slot) {
-    const code = newParticipantCode();
+    // The kind is in the code, so it survives every export, CSV and zip that
+    // knows nothing about a `pilot` field.
+    const code = newParticipantCode(slot.kind === 'pilot' ? 'pilot' : 'participant');
     try {
         await setDoc(doc(db, 'participants', code), {
             createdAt: Date.now(),

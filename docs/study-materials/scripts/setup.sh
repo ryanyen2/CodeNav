@@ -69,7 +69,7 @@ with_deadline() {
 # Asked first, so a typo costs a second rather than a whole install. The code is
 # not secret and identifies nobody. It is how your work is filed.
 if [ "$CHECK_ONLY" = 0 ]; then
-  while ! printf '%s' "$CODE" | grep -Eq '^p-[a-z0-9]+$'; do
+  while ! printf '%s' "$CODE" | grep -Eq '^(p|pilot)-[a-z0-9]+$'; do
     [ -n "$CODE" ] && echo "  That does not look like a code. They look like p-abcdefghjkmn."
     printf 'Participant code from the researcher: '
     read -r CODE || { echo; echo "No code given, so there is nothing to set up."; exit 1; }

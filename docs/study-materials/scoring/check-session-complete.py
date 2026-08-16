@@ -220,6 +220,11 @@ def main() -> int:
         live = {}
         try:
             live = json.loads(exports[0].read_text())
+            # Said first and loudly. A folder of exports is exactly where a pilot
+            # gets analysed by accident, and by the time anybody notices it is
+            # already inside a mean.
+            if live.get("pilot") or str(live.get("code", "")).startswith("pilot-"):
+                print("\n  ** THIS IS A PILOT. It is not part of the analysis. **\n")
         except json.JSONDecodeError:
             rep.gap("the live copy agrees with the local one",
                     f"{exports[0].name} is not readable JSON")

@@ -35,7 +35,10 @@ export const connectAuthEmulator = () => {};
 export const connectFirestoreEmulator = () => {};
 export const collection = (...a) => ({ path: a.slice(1).join('/') });
 export const doc = (...a) => ({ path: a.slice(1).join('/') });
-export const setDoc = async () => {};
+export const setDoc = async (ref) => {
+  globalThis.__written = globalThis.__written || [];
+  globalThis.__written.push((ref && ref.path) || '');
+};
 export const deleteDoc = async (ref) => {
   globalThis.__deleted = globalThis.__deleted || [];
   globalThis.__deleted.push((ref && ref.path) || '');
@@ -420,4 +423,23 @@ test('there is nothing to release before anything has registered', async () => {
     });
     assert.equal(document.querySelector('#release'), null,
         'offering it would suggest something is wrong when nothing is');
+});
+
+test('a pilot slot mints a pilot code', async () => {
+    // The kind has to be decided where the participant is created; nothing
+    // downstream can recover it from a random code.
+    const { document, window } = await loadPage('experimenter');
+    window.__written = [];
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({ docs: [] });
+
+    const slots = [...document.querySelectorAll('.p-item.open')];
+    slots[0].click();                 // the first pilot slot
+    await new Promise((r) => setTimeout(r, 20));
+    assert.match(window.__written[0], /^participants\/pilot-/,
+        'the first slot is a pilot, and its code says so');
+
+    slots[2].click();                 // the first participant slot
+    await new Promise((r) => setTimeout(r, 20));
+    assert.match(window.__written[1], /^participants\/p-/);
 });
