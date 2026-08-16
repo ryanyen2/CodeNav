@@ -12,11 +12,13 @@ import {
     connectAuthEmulator,
 } from 'firebase/auth';
 import {
-    getFirestore, collection, doc, setDoc, onSnapshot, query, orderBy,
+    getFirestore, collection, doc, setDoc, getDocs, onSnapshot, query, orderBy,
     connectFirestoreEmulator,
 } from 'firebase/firestore';
 import { timeline, legend, ribbon, patterns } from './charts.js';
 import { newParticipantCode } from '../shared/schema.js';
+import { fill, progress, nextOrder, PARTICIPANTS } from '../shared/cohort.js';
+import { renderResults } from './results.js';
 import { esc } from '../shared/html.js';
 import { toLetters } from '../shared/actions.js';
 import { comparableEpisodes, letters } from '../analysis/sequences.js';
@@ -60,6 +62,47 @@ const state = {
     assessment: null,
     project: 'hearth',
 };
+
+// ── the results view ─────────────────────────────────────────────────────────
+
+/**
+ * Everything the figures need, pulled once when the view is opened.
+ *
+ * Not a live subscription like the rest of the dashboard. Figures redrawing
+ * under a researcher who is reading them is worse than figures that need a
+ * click, and this is the one view nobody watches during a session.
+ */
+async function loadCohort() {
+    const out = [];
+    for (const p of state.participants) {
+        const person = { ...p, answers: {}, sessions: {} };
+        for (const c of CONDITIONS) {
+            const batches = await getDocs(query(
+                collection(db, `participants/${p.code}/sessions/${c}/batches`), orderBy('seq')));
+            const actions = batches.docs.flatMap((d) => d.data().actions || [])
+                .sort((a, b) => a.t - b.t);
+            if (actions.length) person.sessions[c] = { actions };
+        }
+        const answers = await getDocs(collection(db, `participants/${p.code}/answers`));
+        for (const d of answers.docs) person.answers[d.id] = d.data();
+        out.push(person);
+    }
+    return out;
+}
+
+async function showResults() {
+    state.view = 'results';
+    renderRoster();
+    const el = $('#detail');
+    el.innerHTML = '<div class="empty">Reading every session…</div>';
+    try {
+        const cohort = await loadCohort();
+        renderResults(el, cohort, { includePilots: false });
+    } catch (err) {
+        el.innerHTML = `<div class="notice">Could not read the sessions: ${
+            esc(err.code || err.message)}</div>`;
+    }
+}
 
 // Where the participant's own page lives. The order rides in the link because
 // the participant cannot read their own record, by design.
@@ -110,38 +153,107 @@ function watchParticipants() {
     );
 }
 
+/**
+ * The roster is the plan, not a list of whoever exists.
+ *
+ * Empty slots are drawn too. "How many more do I need, and in which order" is
+ * the question mid-study, and a list of only what exists cannot answer it.
+ */
 function renderRoster() {
     const list = $('#roster-list');
     list.innerHTML = '';
-    for (const p of state.participants) {
+    const { slots, extra } = fill(state.participants);
+    const p = progress(state.participants);
+
+    $('#show-results').setAttribute('aria-pressed', String(state.view === 'results'));
+
+    const head = document.createElement('div');
+    head.className = 'cohort';
+    head.innerHTML = `
+      <div class="cohort-line">
+        <span>${p.pilots.filled} of ${p.pilots.of} pilots</span>
+        <span>${p.participants.filled} of ${p.participants.of} participants</span>
+      </div>
+      <div class="cohort-line sub">
+        <span>${p.analysable} analysable${p.excluded ? `, ${p.excluded} excluded` : ''}</span>
+        ${p.imbalance > 1 ? `<span class="off">${p.imbalance} apart on order</span>` : ''}
+      </div>`;
+    list.append(head);
+
+    let lastKind = null;
+    for (const s of slots) {
+        if (s.kind !== lastKind) {
+            const h = document.createElement('div');
+            h.className = 'slot-head';
+            h.textContent = s.kind === 'pilot' ? 'Pilots' : 'Participants';
+            list.append(h);
+            lastKind = s.kind;
+        }
+        if (!s.participant) {
+            const open = document.createElement('button');
+            open.className = 'p-item open';
+            open.innerHTML = `<div class="code">${esc(s.label)}</div>
+                <div class="meta">not created · ${esc(s.order)}</div>`;
+            open.onclick = () => createInto(s);
+            list.append(open);
+            continue;
+        }
+        const person = s.participant;
         const b = document.createElement('button');
         b.className = 'p-item';
-        b.setAttribute('aria-current', String(p.code === state.selected));
-        b.innerHTML = `<div class="code">${esc(p.code)}</div>
-            <div class="meta">${esc(p.order || 'order not set')}</div>`;
-        b.onclick = () => select(p.code);
+        b.setAttribute('aria-current',
+            String(state.view !== 'results' && person.code === state.selected));
+        b.innerHTML = `<div class="code">${esc(s.label)}
+              <span class="pcode">${esc(person.code)}</span></div>
+            <div class="meta">${esc(person.order || 'order not set')}${
+                person.excluded ? ' · excluded' : ''}</div>`;
+        b.onclick = () => select(person.code);
+        list.append(b);
+    }
+
+    // Anyone past the end of the plan. Rare, and worse than useless if hidden.
+    for (const person of extra) {
+        const b = document.createElement('button');
+        b.className = 'p-item extra';
+        b.setAttribute('aria-current', String(person.code === state.selected));
+        b.innerHTML = `<div class="code">${esc(person.code)}</div>
+            <div class="meta">beyond the planned ${PARTICIPANTS}</div>`;
+        b.onclick = () => select(person.code);
         list.append(b);
     }
 }
 
-$('#new-participant').addEventListener('click', async () => {
+/** Create the person who belongs in this slot, with the order the plan says. */
+async function createInto(slot) {
     const code = newParticipantCode();
-    // The order that is least represented so far, so the four combinations fill
-    // evenly without anyone having to keep a tally.
-    const counts = { 'codoc-first': 0, 'baseline-first': 0 };
-    for (const p of state.participants) if (p.order in counts) counts[p.order] += 1;
-    const order = counts['codoc-first'] <= counts['baseline-first'] ? 'codoc-first' : 'baseline-first';
     try {
-        await setDoc(doc(db, 'participants', code), { createdAt: Date.now(), order, released: false });
+        await setDoc(doc(db, 'participants', code), {
+            createdAt: Date.now(),
+            order: slot.order,
+            pilot: slot.kind === 'pilot',
+            released: false,
+        });
         select(code);
     } catch (err) {
         alert(`Could not create a participant: ${err.code || err.message}`);
     }
+}
+
+$('#show-results').addEventListener('click', () => { void showResults(); });
+
+$('#new-participant').addEventListener('click', () => {
+    const { slots } = fill(state.participants);
+    const open = slots.find((s) => s.kind === 'participant' && !s.participant)
+        || slots.find((s) => !s.participant);
+    void createInto(open || {
+        kind: 'participant', order: nextOrder(state.participants),
+    });
 });
 
 // ── one participant ──────────────────────────────────────────────────────────
 
 function select(code) {
+    state.view = 'participant';
     state.selected = code;
     state.actions = [];
     state.devices = [];

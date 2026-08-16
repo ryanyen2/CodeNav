@@ -37,6 +37,11 @@ export const collection = (...a) => ({ path: a.slice(1).join('/') });
 export const doc = (...a) => ({ path: a.slice(1).join('/') });
 export const setDoc = async () => {};
 export const getDoc = async () => ({ exists: () => false, data: () => ({}) });
+// A test can plant collections here, keyed by path, so the results view can be
+// driven with real-shaped data rather than only checked when empty.
+export const getDocs = async (ref) => ({
+  docs: (globalThis.__collections || {})[(ref && ref.path) || ''] || [],
+});
 export const query = (c) => c;
 export const orderBy = () => ({});
 export const serverTimestamp = () => 0;
@@ -243,4 +248,133 @@ test('a link with no code says so rather than failing quietly', async () => {
     dom.window.eval(readFileSync(out, 'utf8'));
     await new Promise((r) => setTimeout(r, 30));
     assert.match(dom.window.document.body.textContent, /missing its code/);
+});
+
+// ── the cohort roster ────────────────────────────────────────────────────────
+
+test('the roster shows the whole plan, not only who exists', async () => {
+    // "How many more do I need, in which order" is the mid-study question, and a
+    // list of only what exists cannot answer it.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({ docs: [] });
+
+    const list = document.querySelector('#roster-list');
+    assert.match(list.textContent, /0 of 2 pilots/);
+    assert.match(list.textContent, /0 of 12 participants/);
+    assert.equal(list.querySelectorAll('.p-item.open').length, 14,
+        'every unfilled slot is drawn');
+    assert.match(list.textContent, /Pilots/);
+    assert.match(list.textContent, /P01/);
+});
+
+test('a created person takes their slot and the count moves', async () => {
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [
+            { id: 'p-aaaaaaaaaaaa', data: () => ({ createdAt: 1, order: 'codoc-first', pilot: true }) },
+            { id: 'p-bbbbbbbbbbbb', data: () => ({ createdAt: 2, order: 'codoc-first' }) },
+        ],
+    });
+    const list = document.querySelector('#roster-list');
+    assert.match(list.textContent, /1 of 2 pilots/);
+    assert.match(list.textContent, /1 of 12 participants/);
+    assert.equal(list.querySelectorAll('.p-item.open').length, 12);
+    assert.match(list.textContent, /2 analysable|1 analysable/);
+});
+
+test('an excluded person is counted as run but not as analysable', async () => {
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [
+            { id: 'p-cccccccccccc', data: () => ({ createdAt: 1, order: 'codoc-first' }) },
+            { id: 'p-dddddddddddd', data: () => ({ createdAt: 2, order: 'baseline-first', excluded: true }) },
+        ],
+    });
+    const list = document.querySelector('#roster-list');
+    assert.match(list.textContent, /2 of 12 participants/, 'both sessions happened');
+    assert.match(list.textContent, /1 analysable, 1 excluded/);
+});
+
+// ── the results view ─────────────────────────────────────────────────────────
+
+test('results draws every figure, and says so when there is nothing yet', async () => {
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({ docs: [] });
+
+    document.querySelector('#show-results').click();
+    await new Promise((r) => setTimeout(r, 60));
+
+    // With no sessions it must say so rather than showing four empty frames,
+    // which read as broken rather than as early.
+    assert.match(document.querySelector('#detail').textContent, /Nothing to draw yet/);
+    assert.match(document.querySelector('#detail').textContent, /Pilots are out/,
+        'the default is stated, because it changes what the numbers mean');
+});
+
+test('results draws all four figures once sessions exist', async () => {
+    const { document, window } = await loadPage('experimenter');
+    const acts = (pool, n) => Array.from({ length: n }, (_, i) => ({
+        action: pool[i % pool.length], t: 1_700_000_000_000 + i * 9000,
+        ms: i % 3 === 0 ? 8000 : 0,
+    }));
+    window.__collections = {
+        'participants/p-eeeeeeeeeeee/sessions/codoc/batches': [
+            { data: () => ({ seq: 0, actions: acts(['READ_DOC', 'PROMPT', 'AGENT_EDIT', 'EDIT_DOC', 'RUN_TEST'], 60) }) },
+        ],
+        'participants/p-eeeeeeeeeeee/sessions/baseline/batches': [
+            { data: () => ({ seq: 0, actions: acts(['READ_CODE', 'PROMPT', 'AGENT_EDIT', 'RUN_TEST'], 60) }) },
+        ],
+        'participants/p-eeeeeeeeeeee/answers': [
+            { id: 'after-codoc', data: () => ({ doc1: 6, umux1: 5, tlxMental: 3 }) },
+            { id: 'after-baseline', data: () => ({ doc1: 2, umux1: 4, tlxMental: 5 }) },
+        ],
+    };
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-eeeeeeeeeeee', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+
+    document.querySelector('#show-results').click();
+    await new Promise((r) => setTimeout(r, 120));
+
+    const detail = document.querySelector('#detail');
+    assert.equal(detail.querySelectorAll('.fig').length, 4, 'four figures');
+    // Each one drew something, rather than showing its own failure notice.
+    for (const card of detail.querySelectorAll('.fig')) {
+        const svg = card.querySelector('.fig-holder svg');
+        assert.ok(svg, `${card.dataset.fig} drew nothing: ${card.textContent.slice(0, 120)}`);
+        assert.ok(svg.querySelectorAll('*').length > 5, `${card.dataset.fig} is empty`);
+    }
+    // And every one offers its numbers, not only the picture.
+    assert.equal(detail.querySelectorAll('[data-dl="csv"]').length, 4);
+});
+
+test('a pilot is left out of the figures unless asked for', async () => {
+    // A pilot exists to find out the instrument is broken. Analysing it quietly
+    // removes the only way left to say so.
+    const { document, window } = await loadPage('experimenter');
+    window.__collections = {
+        'participants/p-ffffffffffff/sessions/codoc/batches': [
+            { data: () => ({ seq: 0, actions: Array.from({ length: 40 }, (_, i) =>
+                ({ action: 'READ_DOC', t: 1_700_000_000_000 + i * 9000, ms: 5000 })) }) },
+        ],
+    };
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-ffffffffffff', data: () => ({ createdAt: 1, order: 'codoc-first', pilot: true }) }],
+    });
+
+    document.querySelector('#show-results').click();
+    await new Promise((r) => setTimeout(r, 120));
+    assert.match(document.querySelector('#detail').textContent, /Nothing to draw yet/,
+        'the only session is a pilot, so there is nothing to report');
+
+    document.querySelector('#inc-pilots').click();
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(document.querySelectorAll('#detail .fig').length, 4,
+        'and it comes back when explicitly asked for');
 });
