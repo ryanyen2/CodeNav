@@ -6,7 +6,9 @@ the day.
 
 ## Start here
 
-Read `experimenter-guide.md`. It takes you from a machine with nothing installed to
+`研究執行筆記.md` is the one-page version in Traditional Chinese, enough to run a
+session from. `experimenter-guide.md` is the full English one and is where the
+reasoning lives; read it before the first session rather than during one. It takes you from a machine with nothing installed to
 a folder of collected data, and it points at everything else listed below. The
 section called "The two pages, and how a session runs" is the short version.
 
