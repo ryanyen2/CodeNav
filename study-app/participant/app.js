@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import {
     CONSENT_FORM, PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS,
-    scaleFor, MANIPULATION_CHECK, SCENARIOS, DEBRIEF, TASK_CARDS,
+    scaleFor, MANIPULATION_CHECK, SCENARIOS, SIGNOFF, INTERVIEW, TASK_CARDS,
     PROJECTS, RESPONSIBILITY, HOW_TO_START, QUIZZES, buildSteps, answerDoc,
 } from './steps.js';
 import { drawCard } from './card.js';
@@ -178,6 +178,12 @@ function complete(step) {
             && MANIPULATION_CHECK.filter((q) => q.type !== 'longtext').every((q) => given(q.id));
     }
     if (step.kind === 'scenarios') return SCENARIOS.every((s) => given(s.id));
+    if (step.kind === 'signoff') {
+        // The free-text one is optional; "no" is a real answer and a required
+        // box buys blank characters typed to get past the button.
+        return ['correct', 'confidence'].every((id) => given(id))
+            && (a.grounds || []).length > 0;
+    }
     if (step.kind === 'quiz') {
         // Every one answered. A blank is indistinguishable from "I do not know",
         // and the guess is the data: which wrong option attracted somebody is
@@ -231,15 +237,13 @@ const VIEWS = {
         <p>Unzip the bundle we sent you, open a terminal in that folder, and run
         this. It has your code in it already.</p>
         <p><code class="pick">./setup.sh ${esc(state.code)} ${esc(state.order)}</code></p>
-        <p>It will ask you for two keys. The researcher sends those separately,
-        not through this page. Paste each one and press enter. They are not shown
-        as you type, so they will not appear on screen later when you share it.</p>
-        <p>It takes about ten minutes. Do this a few days before the session, not
-        on the day.</p>
-        <div class="note">The keys are ours and we pay for them, so nothing in
-        this study costs you anything and you do not need a Claude plan. They are
-        written only into the four project folders, so deleting those folders
-        removes them, and your own projects keep using your own account.</div>
+        <p>It takes about ten minutes and asks you for nothing else. Do this a
+        few days before the session, not on the day.</p>
+        <div class="note">We pay for the AI, so nothing in this study costs you
+        anything and you do not need your own plan. Everything it sets up lives
+        inside the four project folders, including a separate assistant profile,
+        so your own setup is untouched and deleting those folders removes all of
+        it.</div>
 
         <h2>On the day</h2>
         <p>Run this in the same folder and read the result to the researcher.</p>
@@ -366,21 +370,28 @@ const VIEWS = {
           </div>`).join('')}`;
     },
 
-    debrief: (step) => `
-        <h1>Last two</h1>
-        <p>Now that both are done. Say as much or as little as you like.</p>
-        ${DEBRIEF.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
+    // Their own sign-off, in their own words. It used to be typed into the
+    // dashboard while they spoke, which made it a record of how well somebody
+    // explained themselves and how fast the researcher could type.
+    signoff: (step) => `
+        <h1>Before you move on</h1>
+        <p class="lead">About the change you just made. There is no right answer
+        and nobody is marking it.</p>
+        ${SIGNOFF.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
 
-    break: () => `
-        <h1>Take a couple of minutes</h1>
-        <p>Stretch, get a drink. When you come back you will do the same kind of
-        task the other way, on a different project.</p>`,
-
-    scenarios: (step) => `
-        <h1>Which would you pick</h1>
-        <p>Now that you have tried both. For each one, pick the way of working you
-        would choose.</p>
-        ${SCENARIOS.map((s) => scenarioRow(s, answersFor(step)[s.id])).join('')}`,
+    interview: (step) => {
+        const a = answersFor(step);
+        return `
+        <h1>Last part</h1>
+        <p class="lead">Now that both are done. Write as much or as little as you
+        like — the researcher will pick some of these up with you.</p>
+        ${INTERVIEW.map((part) => `
+          <section class="block">
+            <h2>${esc(part.title)}</h2>
+            ${part.questions.map((q) => field(
+        { id: q.id, type: 'longtext', label: q.label }, a[q.id])).join('')}
+          </section>`).join('')}`;
+    },
 
     done: () => `
         <h1>That is everything</h1>
@@ -401,6 +412,17 @@ function field(q, value) {
             <div class="choices">${q.options.map((o) => `
                 <button type="button" data-value="${esc(o)}"
                     aria-pressed="${String(value === o)}">${esc(o)}</button>`).join('')}</div>
+        </div>`;
+    }
+    if (q.type === 'multi') {
+        // More than one can be true at once, and which combination somebody
+        // picks is the answer. Forcing a single choice would throw that away.
+        const chosen = Array.isArray(value) ? value : [];
+        return `<div class="q" data-q="${q.id}" data-multi="1">
+            <span class="label">${esc(q.label)}</span>
+            <div class="choices">${q.options.map((o) => `
+                <button type="button" data-value="${esc(o)}"
+                    aria-pressed="${String(chosen.includes(o))}">${esc(o)}</button>`).join('')}</div>
         </div>`;
     }
     if (q.type === 'scale5') {
@@ -468,6 +490,16 @@ function wire(section, step) {
         for (const b of q.querySelectorAll('button[data-value]')) {
             b.addEventListener('click', () => {
                 const raw = b.dataset.value;
+                if (q.dataset.multi) {
+                    const held = Array.isArray(answersFor(step)[id]) ? answersFor(step)[id] : [];
+                    const next = held.includes(raw)
+                        ? held.filter((x) => x !== raw) : [...held, raw];
+                    answersFor(step)[id] = next;
+                    b.setAttribute('aria-pressed', String(next.includes(raw)));
+                    void save(step);
+                    updateNext(step);
+                    return;
+                }
                 // Numbers stay numbers; reverse keyed items are stored exactly as
                 // answered and flipped once, during analysis, so the stored data
                 // always matches what the person actually saw.

@@ -54,13 +54,14 @@ export const SETTLED_BY = Object.freeze([
     'The agent did it, they never noticed',
 ]);
 
-/** What the sign-off answer rested on. The number matters less than this. */
-export const GROUNDS = Object.freeze([
-    'Ran the tests',
-    'Read the diff',
-    'Read the description',
-    'The agent said so',
-]);
+/**
+ * The sign-off is no longer here.
+ *
+ * It used to be typed into this form while somebody spoke, which made it a
+ * record of how well they explained themselves and how fast the researcher could
+ * type. The participant answers it on their own page now, straight after the
+ * task, and it arrives here read-only along with everything else they wrote.
+ */
 
 export const questionsFor = (project) => questions[project] || [];
 
@@ -104,9 +105,6 @@ export function emptyAssessment(project) {
         consistency[d] = null;
     }
     return {
-        signoffConfidence: null,
-        signoffGrounds: [],
-        signoffVerbatim: '',
         decisions,
         consistency,
         answers,
@@ -132,10 +130,6 @@ export function score(assessment, project, sitting) {
 export function outstanding(assessment, project) {
     const a = assessment || {};
     const gaps = [];
-    if (a.signoffConfidence == null) gaps.push('the sign-off number');
-    if (!(a.signoffGrounds || []).length) gaps.push('what the sign-off rested on');
-    if (!(a.signoffVerbatim || '').trim()) gaps.push('the sign-off in their words');
-
     const undecided = Object.entries(a.decisions || {}).filter(([, v]) => !v).length;
     if (undecided) gaps.push(`${undecided} open decision${undecided > 1 ? 's' : ''} unattributed`);
 

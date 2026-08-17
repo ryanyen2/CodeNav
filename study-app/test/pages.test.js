@@ -125,7 +125,7 @@ test('creating a participant does not throw', async () => {
     assert.match(document.body.textContent, /p-5zm335hytfs6/, 'the participant is listed');
     // Selecting one renders the whole detail pane, including the forms, which is
     // where the undefined helper was used.
-    assert.match(document.body.textContent, /The sign-off/, 'the forms rendered');
+    assert.match(document.body.textContent, /Their sign-off/, 'the forms rendered');
     assert.match(document.body.textContent, /Who settled what/);
     assert.match(document.body.textContent, /The questions/);
 });
@@ -189,10 +189,9 @@ test('the handoff card does not carry a key, and says so', async () => {
         'no key or key-shaped value anywhere in the card');
 });
 
-test('the participant page warns that setup will ask for the keys', async () => {
-    // They run setup alone, days ahead. Being surprised by a prompt for a
-    // credential is how somebody pastes the wrong thing or gives up and waits
-    // for the call, which costs the session's first twenty minutes.
+test('the participant page does not promise a prompt that no longer happens', async () => {
+    // Setup fetches the keys with the code now. A page still saying it will ask
+    // for two keys would have somebody waiting for a prompt that never comes.
     const { buildSteps } = await import('../participant/steps.js');
     const at = buildSteps('codoc-first').findIndex((s) => s.kind === 'setup');
     assert.ok(at > 0, 'there is a setup step to land on');
@@ -205,9 +204,8 @@ test('the participant page warns that setup will ask for the keys', async () => 
     assert.deepEqual(errors, [], errors.join('; '));
     const text = document.body.textContent.replace(/\s+/g, ' ');
     assert.match(text, /Set up your machine/, 'we are on the setup step');
-    assert.match(text, /ask you for two keys/);
-    assert.match(text, /not shown as you type/, 'so they do not share a key on screen');
-    assert.match(text, /we pay for them/, 'nobody should think this costs them');
+    assert.ok(!/ask you for two keys/.test(text), 'nothing asks for a key');
+    assert.match(text, /costs you\s+anything|nothing in this study costs you/, 'nobody should think this costs them');
     // The command itself must still carry their own code, not the example.
     assert.match(text, /\.\/setup\.sh p-abcdefghjkmn codoc-first/);
 });

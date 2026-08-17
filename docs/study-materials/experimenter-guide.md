@@ -63,48 +63,28 @@ nothing, which is the one failure that cannot be repaired afterwards.
 
 ## Who pays for the model
 
-You do. The study supplies two keys, so a participant never spends their own
-money and never needs a Claude plan.
+You do, and the participant never sees a key.
 
-- An **Anthropic key** runs Claude Code, in all four workspaces, on
-  `claude-sonnet-5` with thinking set to medium.
-- An **OpenAI key** runs codoc, in its two workspaces, on `gpt-5.6-luna` with
-  reasoning and verbosity both medium.
+Put them in once, in the dashboard under **Session keys**. Every participant
+created afterwards gets their own copy, and their setup script fetches it using
+the code that is already on their study page. Nothing is pasted, because a key
+that has to be copied by hand is a key that ends up in the wrong window, and the
+copying is the step that fails while somebody is waiting on a call.
 
-Setup asks for both and writes them into the four project folders. Nothing goes
-into the participant's shell, so deleting the folders removes the keys and their
-own projects are untouched.
+Setup then builds an assistant profile **inside the study folder**. Their own
+`~/.claude` is neither read nor written, so nothing here can disturb the setup
+they use for real work and nothing they have already configured can leak into a
+session. Authentication goes through a key helper in that folder rather than
+`ANTHROPIC_API_KEY`, because setting that variable makes Claude Code ask once
+whether to trust the key — a prompt with no benefit in the middle of a session.
+The launcher it writes, `./claude-study`, also clears any key of their own from
+the environment, so a key they happen to have cannot be picked up and billed to
+them.
 
-An API key beats a claude.ai login, which is what makes this work: a participant
-already signed in to their own account still runs the session on ours. Setup then
-proves it by asking Claude Code one question through the key it just wrote, and
-by asking OpenAI whether that key can see `gpt-5.6-luna`. Both failures are worth
-catching before the day. A key that works but landed in the wrong file fails a
-session exactly like a bad key, and only a check against the written
-configuration tells them apart.
-
-### It does not disturb their own Claude Code
-
-Tested on a machine signed in to a Claude subscription, with a real study key.
-
-- Inside the study workspace, Claude Code answered on the study's key.
-- With that key deliberately broken, the same folder failed with a 401 while a
-  plain folder beside it still answered on the machine's own login. So the key is
-  genuinely what the workspace uses, and genuinely only that workspace.
-- `~/.claude/settings.json` and `~/.claude/.credentials.json` came back
-  byte-identical. No key appeared in any file under the home directory, and no
-  approval was recorded. The subscription login stayed exactly as it was.
-
-The only global file that changed was `~/.claude.json`, which records which
-directories have been opened. It held no key.
-
-Nothing here is written to a shell profile, and that is the point rather than
-tidiness. A key exported in a profile would follow the participant into their own
-projects for as long as the line stayed there.
-
-Codoc would otherwise pick its provider from the environment, so a key in a
-participant's own shell profile could move it onto their account. The two codoc
-workspaces name the provider outright so nothing is inferred.
+Two other things are pinned in that profile. The model, in two places, so it
+cannot drift. And the auto-updater is off: the assistant's version is part of
+the condition, and one that upgraded itself between participant three and
+participant four would be a confound nobody could reconstruct afterwards.
 
 ### Before you hand keys out
 
@@ -115,10 +95,11 @@ key went somewhere it should not have.
 Once a key is on somebody else's machine you cannot get it back, so the limit and
 the expiry are the whole of your protection. Neither is set by anything here.
 
-You can read the keys down the call, which is what the prompts are written for,
-or put a `keys.env` next to `setup.sh` holding `STUDY_ANTHROPIC_KEY=…` and
-`STUDY_OPENAI_KEY=…` and send that separately. Do not put it inside the bundle
-zip: the zip is built once and goes to everybody.
+Anything holding a participant's link can read that participant's copy of the
+keys. That is the price of not pasting them, and it is why they must be study
+keys with a hard cap. Each participant's page has a **Revoke** button for the day
+one leaks; press it, then revoke at the provider too, because that button only
+stops it being handed out again.
 
 ## Part 1. Set up your own machine, once
 

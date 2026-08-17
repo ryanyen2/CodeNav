@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseQuiz } from '../scripts/extract-questions.mjs';
 import {
-    OPEN_DECISIONS, SETTLED_BY, GROUNDS, CONSISTENCY, COUPLED_DECISION,
+    OPEN_DECISIONS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
     BANDS, SITTINGS, questionsFor, bandsFor, score,
     emptyAssessment, outstanding,
 } from '../experimenter/forms.js';
@@ -128,22 +128,24 @@ test('the ways a decision can be settled are the three that matter', () => {
     assert.match(SETTLED_BY[2], /never noticed/);
 });
 
-test('what the sign-off rested on is offered, not typed', () => {
-    assert.ok(GROUNDS.includes('Read the description'));
-    assert.ok(GROUNDS.includes('The agent said so'));
+test('the sign-off is no longer something this form collects', () => {
+    // The participant answers it on their own page. Leaving a copy here would
+    // give two records of one thing and no rule for which is right.
+    const a = emptyAssessment('scribe');
+    assert.ok(!('signoffConfidence' in a));
+    assert.ok(!('signoffGrounds' in a));
+    assert.ok(!('signoffVerbatim' in a));
 });
 
 test('gaps are named while the call is still on', () => {
     const gaps = outstanding(emptyAssessment('scribe'), 'scribe');
     assert.ok(gaps.length, 'a blank record has gaps');
-    assert.ok(gaps.some((g) => /sign-off/.test(g)));
+    assert.ok(gaps.some((g) => /consistency/.test(g)),
+        'the rating that cannot be recovered afterwards is the one named');
 });
 
 test('a filled record has no gaps', () => {
     const a = emptyAssessment('scribe');
-    a.signoffConfidence = 4;
-    a.signoffGrounds = ['Ran the tests'];
-    a.signoffVerbatim = 'It works and I checked the quote case.';
     for (const d of Object.keys(a.decisions)) {
         a.decisions[d] = 1;
         a.consistency[d] = 2;

@@ -72,6 +72,21 @@ service cloud.firestore {
       ]);
     }
 
+    // The two keys the study pays for, entered once by the experimenter.
+    //
+    // A participant's setup script fetches its own copy with the code, so
+    // nobody ever pastes a key. That is the point: a key that has to be copied
+    // by hand is a key that ends up in the wrong window, and the copying is the
+    // step that fails on a call.
+    //
+    // The price is stated rather than hidden: anything holding a participant
+    // link can read that participant's copy. So these must be keys issued FOR
+    // the study, with a hard spend cap, revoked when the sessions end. The
+    // dashboard has a Revoke button per participant for the day one leaks.
+    match /settings/{name} {
+      allow read, write: if isExperimenter();
+    }
+
     // Who a code belongs to, kept in its own collection.
     //
     // The one place identifying detail is allowed, and it is deliberately NOT a
@@ -111,6 +126,14 @@ service cloud.firestore {
         // A slot is claimed once. Releasing is the experimenter's job, and it is
         // how a participant who lost their browser storage gets back in.
         allow update, delete: if isExperimenter();
+      }
+
+      // This participant's copy of the keys. Readable by their own registered
+      // devices and by nobody else — not by another participant, not by a
+      // stranger with the collection path.
+      match /secrets/{name} {
+        allow read: if isExperimenter() || isDevice(code);
+        allow write: if isExperimenter();
       }
 
       match /answers/{form} {

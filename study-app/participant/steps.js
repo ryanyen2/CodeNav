@@ -8,7 +8,7 @@
 export {
     CONSENT_FORM, PRESTUDY, REQUIRED, EXCLUDING, shouldExclude,
     AGREE, AMOUNT, CONSTRUCTS, AFTER_CONDITION, scaleFor, keyed,
-    MANIPULATION_CHECK, SCENARIOS, DEBRIEF,
+    MANIPULATION_CHECK, SCENARIOS, SIGNOFF, INTERVIEW, INTERVIEW_QUESTIONS,
 } from './instrument.js';
 export { PROJECTS, RESPONSIBILITY, HOW_TO_START } from './content.js';
 export { QUIZZES } from './quiz.js';
@@ -66,6 +66,7 @@ export function buildSteps(order = 'codoc-first') {
         { id: `about-${n}`, kind: 'about', ...c, n },
         { id: `quiz-before-${n}`, kind: 'quiz', sitting: 'before', ...c, n },
         { id: `task-${n}`, kind: 'task', ...c, n },
+        { id: `signoff-${n}`, kind: 'signoff', ...c, n },
         { id: `quiz-after-${n}`, kind: 'quiz', sitting: 'after', ...c, n },
         { id: `after-${n}`, kind: 'questionnaire', ...c, n },
     ];
@@ -79,7 +80,7 @@ export function buildSteps(order = 'codoc-first') {
         { id: 'break', kind: 'break' },
         ...forCondition(second, 2),
         { id: 'scenarios', kind: 'scenarios' },
-        { id: 'debrief', kind: 'debrief' },
+        { id: 'interview', kind: 'interview' },
         { id: 'done', kind: 'done' },
     ];
 }
@@ -90,6 +91,7 @@ export function answerDoc(step) {
     if (step.kind === 'quiz') return `quiz-${step.project}-${step.sitting}`;
     if (step.kind === 'questionnaire') return `after-${step.condition}`;
     if (step.kind === 'scenarios') return 'scenarios';
-    if (step.kind === 'debrief') return 'debrief';
+    if (step.kind === 'signoff') return `signoff-${step.condition}`;
+    if (step.kind === 'interview') return 'interview';
     return null;
 }

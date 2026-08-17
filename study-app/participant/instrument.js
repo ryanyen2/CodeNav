@@ -187,6 +187,31 @@ export const MANIPULATION_CHECK = Object.freeze([
       placeholder: 'A sentence or two. This is the answer we quote in the paper.' },
 ]);
 
+/**
+ * The sign-off, asked of the participant rather than transcribed by the
+ * researcher.
+ *
+ * It used to be typed into the dashboard while they spoke, which made it a
+ * record of how well somebody explained themselves and how fast the researcher
+ * could type. Asked here it is their own words, in their own time, and it is the
+ * same words for everybody.
+ */
+export const SIGNOFF = Object.freeze([
+    { id: 'correct', type: 'choice',
+      label: 'Is the change you just made correct and complete?',
+      options: ['Yes', 'Mostly', 'Not sure', 'No'] },
+    { id: 'confidence', type: 'scale5',
+      label: 'How confident are you in that answer',
+      low: 'Not at all', high: 'Completely' },
+    { id: 'grounds', type: 'multi',
+      label: 'What is that resting on? Pick everything that applies.',
+      options: ['I ran the tests', 'I read the diff', 'I read the description',
+                'The agent said it was done', 'I ran the project and looked at the output'] },
+    { id: 'unsure', type: 'longtext',
+      label: 'Is there any part of it you are less sure about?',
+      placeholder: 'A sentence is enough, and "no" is a real answer.' },
+]);
+
 /** Asked once at the very end, with both conditions done. */
 export const SCENARIOS = Object.freeze([
     { id: 's1', text: 'Fixing a typo in a repository you have never seen' },
@@ -196,10 +221,61 @@ export const SCENARIOS = Object.freeze([
     { id: 's5', text: 'A production hotfix, under time pressure' },
 ]);
 
-/** The closing free-text, which is where the unexpected findings come from. */
-export const DEBRIEF = Object.freeze([
-    { id: 'differed', type: 'longtext',
-      label: 'What was the biggest difference between the two ways of working' },
-    { id: 'wouldKeep', type: 'longtext',
-      label: 'Is there anything from either one you would want in your own work' },
+/**
+ * The closing interview, in three parts.
+ *
+ * Written down so it is asked the same way every time. The researcher still
+ * follows up on whatever an answer opens up — that is the point of doing it
+ * live — but the openings are fixed, and each one is here because it speaks to
+ * a research question rather than because it seemed interesting to ask.
+ *
+ * On the page as well as on the call: somebody who has just spent two hours
+ * often writes a sharper answer than they say, and the writing gives the
+ * researcher something to follow up on rather than something to transcribe.
+ */
+export const INTERVIEW = Object.freeze([
+    {
+        id: 'comparison',
+        title: 'Comparing the two',
+        questions: [
+            { id: 'workflow', rq: 'RQ1, RQ2',
+              label: 'How did the way you worked differ between the two — both in understanding the codebase and in making changes to it?' },
+            { id: 'strategy', rq: 'RQ2',
+              label: 'Did you go about editing differently in each? If so, why — was it about staying in control, or something else?' },
+            { id: 'tracking', rq: 'RQ1',
+              label: 'Which one made it easier to keep track of changes across the codebase?' },
+            { id: 'keepingUp', rq: 'RQ1',
+              label: 'The agent changes things quickly. In which one could you keep up with what had changed?' },
+            { id: 'thinking', rq: 'RQ1',
+              label: 'Did having the description in a different shape — a chat, or a tree of features — change how you thought about the codebase, or how you talked to the agent?' },
+        ],
+    },
+    {
+        id: 'trust',
+        title: 'Trust, and disagreeing',
+        questions: [
+            { id: 'whyChanged', rq: 'RQ1',
+              label: 'Did you understand why the agent made the changes it made?' },
+            { id: 'disagreed', rq: 'RQ2',
+              label: 'Was there a point where you disagreed with it? What did each way of working give you to settle that?' },
+            { id: 'verified', rq: 'RQ2',
+              label: 'How did you check that what it did was what you meant?' },
+        ],
+    },
+    {
+        id: 'adoption',
+        title: 'Whether you would use it',
+        questions: [
+            { id: 'fit', rq: null,
+              label: 'Where would something like codoc fit in the work you actually do?' },
+            { id: 'blocking', rq: null,
+              label: 'What would have to be different before you would use it day to day?' },
+            { id: 'prefer', rq: null,
+              label: 'What would make you pick one over the other?' },
+        ],
+    },
 ]);
+
+/** Flat, for the page and for checking nothing is missed. */
+export const INTERVIEW_QUESTIONS = Object.freeze(
+    INTERVIEW.flatMap((part) => part.questions.map((q) => ({ ...q, part: part.id }))));

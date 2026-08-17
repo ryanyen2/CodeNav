@@ -24,7 +24,7 @@ import { toLetters } from '../shared/actions.js';
 import { comparableEpisodes, letters } from '../analysis/sequences.js';
 import { score } from '../analysis/ngrams.js';
 import {
-    OPEN_DECISIONS, SETTLED_BY, GROUNDS, CONSISTENCY, COUPLED_DECISION,
+    OPEN_DECISIONS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
     questionsFor, bandsFor, score as quizScore, emptyAssessment, outstanding,
 } from './forms.js';
 
@@ -62,6 +62,8 @@ const state = {
     unsubDevices: null,
     unsubContact: null,
     contact: {},
+    keys: {},
+    answers: {},
     devices: [],
     assessment: null,
     quiz: {},
@@ -134,6 +136,7 @@ onAuthStateChanged(auth, (user) => {
     $('#who').innerHTML = `${user.email} · <a href="#" id="sign-out">sign out</a>`;
     $('#sign-out').onclick = (e) => { e.preventDefault(); void signOut(auth); };
     watchParticipants();
+    watchKeys();
 });
 
 // ── the roster ───────────────────────────────────────────────────────────────
@@ -229,6 +232,84 @@ function renderRoster() {
 }
 
 /** Create the person who belongs in this slot, with the order the plan says. */
+/**
+ * The study's keys, entered once and issued to each participant.
+ *
+ * Kept here rather than typed on a call, and copied to the participant when
+ * they are created so their setup script can fetch its own copy. Nobody pastes
+ * a key: a key copied by hand is a key that ends up in the wrong window, and
+ * the copying is the step that fails while somebody is waiting.
+ */
+function watchKeys() {
+    onSnapshot(doc(db, 'settings/keys'), (snap) => {
+        state.keys = snap.exists() ? snap.data() : {};
+        renderKeys();
+    }, () => { state.keys = {}; });
+}
+
+const keyTail = (k) => (k ? `…${String(k).slice(-6)}` : '');
+
+function renderKeys() {
+    const el = $('#keys');
+    if (!el) return;
+    const k = state.keys || {};
+    const have = !!(k.anthropicApiKey && k.openaiApiKey);
+    el.innerHTML = `
+      <h3>Session keys</h3>
+      <p class="hint">Entered once. Every participant created after this gets a
+      copy, and their setup script fetches it with their code — nobody pastes a
+      key.</p>
+      <div class="who-row">
+        <label>Anthropic<input id="k-anthropic" type="password"
+          placeholder="${k.anthropicApiKey ? `set ${keyTail(k.anthropicApiKey)}` : 'sk-ant-…'}"></label>
+        <label>OpenAI<input id="k-openai" type="password"
+          placeholder="${k.openaiApiKey ? `set ${keyTail(k.openaiApiKey)}` : 'sk-…'}"></label>
+        <button id="k-save">Save</button>
+      </div>
+      <p class="hint">${have
+        ? 'Anything holding a participant link can read that participant’s copy. That is the price of not pasting, so these must be keys issued for the study, with a hard spend cap, revoked when the sessions end.'
+        : 'No keys yet. Setup will tell a participant to come back to you rather than failing halfway.'}</p>`;
+    el.querySelector('#k-save').onclick = async () => {
+        const a = el.querySelector('#k-anthropic').value.trim();
+        const o = el.querySelector('#k-openai').value.trim();
+        const update = {};
+        if (a) update.anthropicApiKey = a;
+        if (o) update.openaiApiKey = o;
+        if (!Object.keys(update).length) return;
+        try {
+            await setDoc(doc(db, 'settings/keys'), { ...update, updatedAt: Date.now() }, { merge: true });
+            el.querySelector('#k-anthropic').value = '';
+            el.querySelector('#k-openai').value = '';
+        } catch (err) {
+            alert(`Could not save: ${err.code || err.message}`);
+        }
+    };
+}
+
+/** Give one participant their own copy, or take it away again. */
+async function issueKeys(code) {
+    const k = state.keys || {};
+    if (!k.anthropicApiKey) return false;
+    await setDoc(doc(db, `participants/${code}/secrets/session`), {
+        anthropicApiKey: k.anthropicApiKey,
+        openaiApiKey: k.openaiApiKey || '',
+        issuedAt: Date.now(),
+    });
+    return true;
+}
+
+async function revokeKeys(code) {
+    if (!confirm(`Revoke the keys issued to ${code}?\n\nTheir copy is cleared, so `
+        + 'a setup run from now on gets nothing. Revoke them at the provider too — '
+        + 'this only stops them being handed out again.')) return;
+    try {
+        await deleteDoc(doc(db, `participants/${code}/secrets/session`));
+        renderManage();
+    } catch (err) {
+        alert(`Could not revoke: ${err.code || err.message}`);
+    }
+}
+
 async function createInto(slot) {
     // The kind is in the code, so it survives every export, CSV and zip that
     // knows nothing about a `pilot` field.
@@ -240,7 +321,16 @@ async function createInto(slot) {
             pilot: slot.kind === 'pilot',
             released: false,
         });
+        // Their own copy, so setup can fetch it. Issued at creation rather than
+        // on demand, because the moment it is missing is the moment somebody is
+        // running setup and cannot ask.
+        const issued = await issueKeys(code);
         select(code);
+        if (!issued) {
+            alert('This participant has no keys, because none are set yet.\n\n'
+                + 'Put them in under Session keys, then press Reissue on their page. '
+                + 'Their setup will say to come back to you rather than failing halfway.');
+        }
     } catch (err) {
         alert(`Could not create a participant: ${err.code || err.message}`);
     }
@@ -405,6 +495,12 @@ function renderManage() {
             : 'Use this if something went wrong, or they should not have been run.'}</span>
       </div>
       <div class="manage-row">
+        <button id="m-reissue">Reissue keys</button>
+        <button id="m-revoke" class="danger">Revoke</button>
+        <span class="hint">Their setup fetches these with their code. Revoke if a
+        key leaks, then revoke it at the provider too.</span>
+      </div>
+      <div class="manage-row">
         <button id="m-reset">Reset their data</button>
         <span class="hint">Clears every answer and session this code holds, and frees
         their devices. The code and the order stay, so they can start again.</span>
@@ -419,6 +515,12 @@ function renderManage() {
         input.oninput = () => saveContact(key, input.value);
     }
     el.querySelector('#m-excluded').onchange = (e) => void setExcluded(p.code, e.target.checked);
+    el.querySelector('#m-reissue').onclick = async () => {
+        const ok = await issueKeys(p.code).catch(() => false);
+        alert(ok ? 'Issued. Their setup can fetch them now.'
+                 : 'No keys are set yet — put them in under Session keys first.');
+    };
+    el.querySelector('#m-revoke').onclick = () => void revokeKeys(p.code);
     el.querySelector('#m-reset').onclick = () => void resetParticipant(p.code);
     el.querySelector('#m-delete').onclick = () => void deleteParticipant(p.code);
 }
@@ -621,8 +723,12 @@ function watchQuiz() {
         collection(db, `participants/${state.selected}/answers`),
         (snap) => {
             state.quiz = {};
+            state.answers = {};
             for (const d of snap.docs) {
                 // quiz-scribe-before -> { scribe: { q1-before: 'b', … } }
+                // Everything they wrote, so the read-only panels can show it.
+                state.answers = state.answers || {};
+                state.answers[d.id] = d.data();
                 const match = /^quiz-([a-z]+)-(before|after)$/.exec(d.id);
                 if (!match) continue;
                 const [, project, sitting] = match;
@@ -632,6 +738,7 @@ function watchQuiz() {
                 }
             }
             renderRounds();
+            renderForms();
         },
         () => { state.quiz = {}; renderRounds(); },
     );
@@ -678,21 +785,10 @@ function renderForms() {
       <p class="hint">Typed once, here. Everything saves as you go.</p>
 
       <div class="form-block">
-        <h4>The sign-off</h4>
-        <p class="quote">Is this change correct and complete? How confident are you,
-        1 to 5? And what is that resting on?</p>
-        <div class="row">
-          <span class="row-label">Confidence</span>
-          <div class="choices" id="signoff-n">${[1, 2, 3, 4, 5].map((n) => `
-            <button data-n="${n}" aria-pressed="${String(a.signoffConfidence === n)}">${n}</button>`).join('')}</div>
-        </div>
-        <div class="row">
-          <span class="row-label">Resting on</span>
-          <div class="choices" id="signoff-g">${GROUNDS.map((g) => `
-            <button data-g="${esc(g)}" aria-pressed="${String((a.signoffGrounds || []).includes(g))}">${esc(g)}</button>`).join('')}</div>
-        </div>
-        <textarea id="signoff-text" rows="3"
-          placeholder="Their answer, word for word">${esc(a.signoffVerbatim || '')}</textarea>
+        <h4>Their sign-off</h4>
+        <p class="hint">They answer this on their own page, straight after the
+        task. It appears here as they write it.</p>
+        <div id="their-signoff" class="said"></div>
       </div>
 
       <div class="form-block">
@@ -794,29 +890,16 @@ function renderGaps() {
 function wireForms() {
     const a = state.assessment;
 
-    for (const b of document.querySelectorAll('#signoff-n button')) {
-        b.onclick = () => {
-            a.signoffConfidence = Number(b.dataset.n);
-            for (const s of document.querySelectorAll('#signoff-n button')) {
-                s.setAttribute('aria-pressed', String(s === b));
-            }
-            saveAssessment();
-        };
+    // Their sign-off, shown rather than typed. It arrives with everything else
+    // they answer, so this only has to render it.
+    const said = $('#their-signoff');
+    if (said) {
+        const sign = (state.answers || {})[`signoff-${state.condition}`];
+        said.innerHTML = !sign ? '<span class="hint">Not answered yet.</span>' : `
+          <p><b>${esc(sign.correct || '—')}</b>, confidence ${esc(String(sign.confidence ?? '—'))}/5</p>
+          <p class="hint">Resting on: ${esc((sign.grounds || []).join(', ') || 'nothing selected')}</p>
+          ${sign.unsure ? `<p class="quote">${esc(sign.unsure)}</p>` : ''}`;
     }
-    for (const b of document.querySelectorAll('#signoff-g button')) {
-        b.onclick = () => {
-            // More than one ground is normal: people run the tests and read the
-            // diff, and forcing one answer would lose that.
-            const g = b.dataset.g;
-            const list = new Set(a.signoffGrounds || []);
-            if (list.has(g)) list.delete(g); else list.add(g);
-            a.signoffGrounds = [...list];
-            b.setAttribute('aria-pressed', String(list.has(g)));
-            saveAssessment();
-        };
-    }
-    const text = $('#signoff-text');
-    if (text) text.oninput = () => { a.signoffVerbatim = text.value; saveAssessment(); };
 
     for (const group of document.querySelectorAll('[data-decision]')) {
         for (const b of group.querySelectorAll('button')) {

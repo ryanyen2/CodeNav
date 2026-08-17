@@ -28,13 +28,13 @@ CODE="${1:-${CODOC_STUDY_PARTICIPANT:-}}"
 ORDER="${2:-${CODOC_STUDY_ORDER:-}}"
 [ "$CHECK_ONLY" = 1 ] && { CODE=""; ORDER=""; }
 
-# The two keys the study pays for. The researcher sends them separately from the
-# bundle, so they are asked for here rather than shipped inside it. A keys file
-# placed next to this script is honoured too, for a researcher who would rather
-# hand over a file than read a key down a call.
-[ -f "$HERE/keys.env" ] && . "$HERE/keys.env"
-STUDY_ANTHROPIC_KEY="${STUDY_ANTHROPIC_KEY:-}"
-STUDY_OPENAI_KEY="${STUDY_OPENAI_KEY:-}"
+# The two keys the study pays for are FETCHED with the code, not pasted.
+#
+# A key that has to be copied by hand is a key that ends up in the wrong window,
+# and the copying is the step that fails while somebody is on a call. The code is
+# already on their study page and already has to be typed; nothing else does.
+STUDY_ANTHROPIC_KEY=""
+STUDY_OPENAI_KEY=""
 
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$1"; }
 warn() { printf '  \033[33mtodo\033[0m  %s\n' "$1"; }
@@ -80,23 +80,6 @@ if [ "$CHECK_ONLY" = 0 ]; then
     read -r ORDER || { echo; echo "No order given."; exit 1; }
   done
 
-  # Not echoed, so the keys stay off the shared screen and out of the scrollback
-  # of a call that is being recorded.
-  echo
-  echo "The researcher will give you two keys. The study pays for these, so"
-  echo "nothing in the session is billed to you. They are not shown as you type."
-  while ! printf '%s' "$STUDY_ANTHROPIC_KEY" | grep -q '^sk-ant-'; do
-    [ -n "$STUDY_ANTHROPIC_KEY" ] && echo "  That is not an Anthropic key. They start with sk-ant-."
-    printf 'Anthropic key (for Claude Code): '
-    read -rs STUDY_ANTHROPIC_KEY || { echo; echo "No key given."; exit 1; }
-    echo
-  done
-  while ! printf '%s' "$STUDY_OPENAI_KEY" | grep -q '^sk-'; do
-    [ -n "$STUDY_OPENAI_KEY" ] && echo "  That is not an OpenAI key. They start with sk-."
-    printf 'OpenAI key (for the tool being studied): '
-    read -rs STUDY_OPENAI_KEY || { echo; echo "No key given."; exit 1; }
-    echo
-  done
 fi
 
 # ---------------------------------------------------------------- prerequisites
@@ -302,49 +285,126 @@ for name in scribe tally; do
 done
 
 # ------------------------------------------------------------ which model runs
-step "Putting the study's keys in place"
-# The study pays for the models, so neither the agent nor codoc touches the
-# participant's own account or quota.
+step "Fetching this session's keys"
+# Fetched with the code rather than pasted. The participant never sees a key.
 #
-# Everything is written per workspace rather than into a shell profile. Two
-# reasons. Deleting the four folders is then enough to be rid of the keys. And a
-# key in a shell profile leaks in the other direction too: it would follow the
-# participant into their own projects long after the session.
-#
-# Both files hold a secret, so both are readable only by their owner, and both
-# are kept out of git so a participant's own commit cannot carry a key into the
-# archive they send back.
-for name in scribe scribe-baseline tally tally-baseline; do
-  d="$WORK/$name"
+# Anything holding a participant link can read that participant's copy, which is
+# the price of not pasting. It is why these are keys issued FOR the study, with a
+# hard spend cap, revoked when the sessions end — and why the dashboard has a
+# Revoke button for the day one leaks.
+FIREBASE_KEY="AIzaSyCeIFBc8HhCmtw9-pXjUm1qT3CUyo5GbkY"
+FIRESTORE="https://firestore.googleapis.com/v1/projects/codoc-11b10/databases/(default)/documents"
 
-  # Claude Code. An API key takes precedence over a claude.ai login, which is
-  # what makes this work at all: a participant already signed in to their own
-  # account still runs the session on ours. Checked against the real CLI, which
-  # says so and then 401s on a bad key rather than quietly falling back.
-  #
-  # Merged into whatever `codoc install-hooks` wrote, and written after it, so
-  # the hooks and the MCP registration survive.
-  mkdir -p "$d/.claude"
-  KEY="$STUDY_ANTHROPIC_KEY" python3 - "$d/.claude/settings.json" <<'PY'
-import json, os, sys
-path = sys.argv[1]
+fetch_keys() {
+  local token uid
+  # An anonymous account, then claim this code's setup slot. The rules hand the
+  # keys to a registered device and to nobody else, so a stranger who guessed
+  # the URL gets nothing.
+  token="$(curl -s -X POST \
+    "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$FIREBASE_KEY" \
+    -H 'content-type: application/json' -d '{"returnSecureToken":true}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin).get('idToken',''))" 2>/dev/null)"
+  [ -n "$token" ] || return 1
+  uid="$(printf '%s' "$token" | python3 -c "
+import sys, base64, json
+part = sys.stdin.read().split('.')[1]
+part += '=' * (-len(part) % 4)
+print(json.loads(base64.urlsafe_b64decode(part)).get('user_id', ''))" 2>/dev/null)"
+  [ -n "$uid" ] || return 1
+
+  curl -s -o /dev/null -X PATCH "$FIRESTORE/participants/$CODE/devices/setup" \
+    -H "authorization: Bearer $token" -H 'content-type: application/json' \
+    -d "{\"fields\":{\"uid\":{\"stringValue\":\"$uid\"},\"kind\":{\"stringValue\":\"setup\"},\"registeredAt\":{\"integerValue\":\"$(date +%s)000\"}}}"
+
+  curl -s -H "authorization: Bearer $token" \
+    "$FIRESTORE/participants/$CODE/secrets/session" \
+    | python3 -c "
+import sys, json
 try:
-    with open(path) as f: settings = json.load(f)
+    fields = json.load(sys.stdin).get('fields', {})
+except Exception:
+    raise SystemExit(1)
+get = lambda name: (fields.get(name) or {}).get('stringValue', '')
+print(get('anthropicApiKey'))
+print(get('openaiApiKey'))"
+}
+
+KEYS="$(fetch_keys 2>/dev/null)"
+STUDY_ANTHROPIC_KEY="$(printf '%s' "$KEYS" | sed -n 1p)"
+STUDY_OPENAI_KEY="$(printf '%s' "$KEYS" | sed -n 2p)"
+
+if [ -z "$STUDY_ANTHROPIC_KEY" ]; then
+  bad "no keys have been issued for $CODE yet. Tell the researcher before you start;"
+  echo  "          everything else is set up, so this is a one-minute fix on their side."
+  FAILED=1
+else
+  ok "fetched this session's keys"
+fi
+
+step "Setting up an assistant profile that is not yours"
+# The whole config tree lives inside the study folder. Their own ~/.claude is
+# neither read nor written, so nothing here can disturb the setup they use for
+# their real work, and nothing they have already set can leak into a session.
+#
+# Authentication goes through apiKeyHelper rather than ANTHROPIC_API_KEY on
+# purpose: setting the variable makes Claude Code ask once whether to trust the
+# key, which is a prompt with no benefit in the middle of a session.
+write_profile() {
+  local d="$1" profile="$1/.claude-study"
+  mkdir -p "$profile"
+  printf '%s\n' "$STUDY_ANTHROPIC_KEY" > "$profile/api-key"
+  chmod 600 "$profile/api-key"
+  printf '#!/bin/sh\ncat "%s"\n' "$profile/api-key" > "$profile/api-key.sh"
+  chmod 700 "$profile/api-key.sh"
+  HELPER="$profile/api-key.sh" PROFILE="$profile/settings.json" python3 - <<'PROFILE_PY'
+import json, os
+path = os.environ["PROFILE"]
+try:
+    with open(path) as handle:
+        settings = json.load(handle)
 except Exception:
     settings = {}
-settings.setdefault('env', {})['ANTHROPIC_API_KEY'] = os.environ['KEY']
-settings['model'] = 'claude-sonnet-5'
-settings['effortLevel'] = 'medium'
-with open(path, 'w') as f: json.dump(settings, f, indent=2); f.write('\n')
-PY
-  if [ $? = 0 ]; then chmod 600 "$d/.claude/settings.json"; ok "$name: Claude Code runs on the study's account"
-  else bad "could not write $d/.claude/settings.json"; FAILED=1; fi
+settings.update({
+    "apiKeyHelper": os.environ["HELPER"],
+    "model": "claude-sonnet-5",
+    "effortLevel": "medium",
+    "theme": "light",
+    "env": {
+        # The version is part of the condition. An assistant that upgraded
+        # itself between participant three and participant four would be a
+        # confound nobody could reconstruct afterwards.
+        "DISABLE_AUTOUPDATER": "1",
+        "ANTHROPIC_MODEL": "claude-sonnet-5",
+    },
+})
+with open(path, "w") as handle:
+    json.dump(settings, handle, indent=2)
+    handle.write("\n")
+PROFILE_PY
+}
 
-  # Keep both files out of git. .gitignore is the project's own tracked file, so
-  # this goes in the private exclude list instead and changes nothing the
-  # participant would see in a diff.
+for name in scribe scribe-baseline tally tally-baseline; do
+  d="$WORK/$name"
+  if write_profile "$d"; then
+    ok "$name: its own assistant profile"
+  else
+    bad "could not write $d/.claude-study/settings.json"
+    FAILED=1
+  fi
+  # A launcher, so nothing depends on the participant remembering to set an
+  # environment variable. It also unsets any key of their own that happens to be
+  # in their shell, which would otherwise be picked up and billed to them.
+  cat > "$d/claude-study" <<LAUNCHER
+#!/usr/bin/env bash
+# Start the assistant for this study. Use this, not plain \`claude\`.
+export CLAUDE_CONFIG_DIR="$d/.claude-study"
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+exec claude "\$@"
+LAUNCHER
+  chmod +x "$d/claude-study"
+
   if [ -d "$d/.git" ]; then
-    for pat in '.env' '.claude/settings.json'; do
+    for pat in '.env' '.claude-study/' 'claude-study'; do
       grep -qxF "$pat" "$d/.git/info/exclude" 2>/dev/null \
         || printf '%s\n' "$pat" >> "$d/.git/info/exclude"
     done
@@ -353,8 +413,7 @@ done
 
 # codoc, in the two workspaces that have it. Written down rather than inferred:
 # left alone codoc reads the environment, and a key in the participant's own
-# shell would silently move it onto their account, which is both their money and
-# a way for codoc to break partway through the condition being measured.
+# shell would silently move it onto their account.
 for name in scribe tally; do
   ENVFILE="$WORK/$name/.env"
   if grep -q '^CODOC_PROVIDER=' "$ENVFILE" 2>/dev/null; then
@@ -364,9 +423,6 @@ for name in scribe tally; do
       printf 'CODOC_PROVIDER=openai\n'
       printf 'OPENAI_API_KEY=%s\n' "$STUDY_OPENAI_KEY"
       printf 'CODOC_MODEL=%s\n' "${STUDY_CODOC_MODEL:-gpt-5.6-luna}"
-      # Empty on purpose: this model accepts only its own default temperature and
-      # answers 400 to every value, including that one. Saying so here means the
-      # session never spends a refused call discovering it.
       printf 'CODOC_TEMPERATURE=\n'
       printf 'CODOC_REASONING_EFFORT=medium\n'
       printf 'CODOC_VERBOSITY=medium\n'

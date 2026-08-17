@@ -287,3 +287,61 @@ test('only the experimenter can delete a participant', async () => {
     await assertFails(deleteDoc(doc(them, 'participants/p-todelete000')));
     await assertSucceeds(deleteDoc(doc(me, 'participants/p-todelete000')));
 });
+
+// ── the keys, fetched rather than pasted ─────────────────────────────────────
+
+test('a registered device can read its own copy of the keys', async () => {
+    // This is what removes the pasting step. A key copied by hand is a key that
+    // ends up in the wrong window, and the copying is the step that fails on a
+    // call.
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, 'participants/p-abcdefghjkmn'),
+        { createdAt: 1, order: 'codoc-first', released: false }));
+    await assertSucceeds(setDoc(doc(me, 'participants/p-abcdefghjkmn/secrets/session'),
+        { anthropicApiKey: 'sk-ant-x', openaiApiKey: 'sk-y' }));
+
+    const them = anon('their-machine');
+    await claim(them, 'p-abcdefghjkmn', 'mirror', 'their-machine');
+    await assertSucceeds(getDoc(doc(them, 'participants/p-abcdefghjkmn/secrets/session')));
+});
+
+test('somebody who has not registered a device cannot read them', async () => {
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, 'participants/p-qqqqqqqqqqqq'),
+        { createdAt: 1, order: 'codoc-first', released: false }));
+    await assertSucceeds(setDoc(doc(me, 'participants/p-qqqqqqqqqqqq/secrets/session'),
+        { anthropicApiKey: 'sk-ant-x' }));
+    const stranger = anon('some-stranger');
+    await assertFails(getDoc(doc(stranger, 'participants/p-qqqqqqqqqqqq/secrets/session')));
+});
+
+test('a participant cannot read another participant\'s keys', async () => {
+    const me = experimenter();
+    for (const code of ['p-aaaaaaaaaaaa', 'p-bbbbbbbbbbbb']) {
+        await assertSucceeds(setDoc(doc(me, `participants/${code}`),
+            { createdAt: 1, order: 'codoc-first', released: false }));
+        await assertSucceeds(setDoc(doc(me, `participants/${code}/secrets/session`),
+            { anthropicApiKey: 'sk-ant-x' }));
+    }
+    const theirs = anon('machine-a');
+    await claim(theirs, 'p-aaaaaaaaaaaa', 'mirror', 'machine-a');
+    await assertFails(getDoc(doc(theirs, 'participants/p-bbbbbbbbbbbb/secrets/session')));
+});
+
+test('a device cannot write over the keys it was issued', async () => {
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, 'participants/p-cccccccccccc'),
+        { createdAt: 1, order: 'codoc-first', released: false }));
+    const them = anon('machine-c');
+    await claim(them, 'p-cccccccccccc', 'mirror', 'machine-c');
+    await assertFails(setDoc(doc(them, 'participants/p-cccccccccccc/secrets/session'),
+        { anthropicApiKey: 'sk-ant-mine' }));
+});
+
+test('the keys the experimenter types once are theirs alone to read', async () => {
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, 'settings/keys'),
+        { anthropicApiKey: 'sk-ant-x', openaiApiKey: 'sk-y' }));
+    await assertFails(getDoc(doc(anon('anyone'), 'settings/keys')));
+    await assertFails(getDoc(doc(outsider(), 'settings/keys')));
+});

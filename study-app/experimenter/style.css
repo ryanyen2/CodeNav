@@ -414,3 +414,11 @@ table.key td { color: var(--ink-soft); padding: 4px 0; line-height: 1.5; }
 .roster-head { flex-wrap: wrap; }
 .roster-head button { margin-left: 0; }
 .roster-head h2 { width: 100%; margin-bottom: 6px; }
+
+/* The keys, entered once. In the sidebar under the roster, because it is set up
+   before the study and touched again only when one has to be rotated. */
+.keys { margin-top: 14px; padding: 14px; }
+.keys .who-row { align-items: flex-end; }
+.keys input { width: 100%; }
+.said p { margin: 0 0 5px; font-size: 13.5px; color: var(--ink-soft); }
+.said p.quote { border-left: 2px solid var(--line); padding-left: 10px; color: var(--ink); }

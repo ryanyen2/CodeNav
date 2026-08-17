@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import {
     PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, scaleFor, keyed,
+    SIGNOFF, INTERVIEW, INTERVIEW_QUESTIONS,
     SCENARIOS, TASK_CARDS, PROJECTS, HOW_TO_START,
     buildSteps, answerDoc, shouldExclude, CONSENT_FORM,
 } from '../participant/steps.js';
@@ -289,7 +290,65 @@ test('the session leaves nowhere for the researcher to improvise', () => {
     // Every step either shows something written down or collects something. A
     // step whose content lives on the call is a step that differs per session.
     const kinds = new Set(buildSteps('codoc-first').map((s) => s.kind));
-    for (const needed of ['intro', 'about', 'task', 'questionnaire', 'debrief', 'prestudy']) {
+    for (const needed of ['intro', 'about', 'task', 'questionnaire', 'interview',
+        'prestudy', 'signoff', 'quiz']) {
         assert.ok(kinds.has(needed), `no ${needed} step`);
+    }
+});
+
+// ── the sign-off, and the interview ──────────────────────────────────────────
+
+test('the sign-off is answered by the participant, not transcribed', () => {
+    // It used to be typed into the dashboard while they spoke, which made it a
+    // record of how well somebody explained themselves and how fast the
+    // researcher could type.
+    const steps = buildSteps('codoc-first').filter((s) => s.kind === 'signoff');
+    assert.equal(steps.length, 2, 'once per condition');
+    assert.deepEqual(steps.map(answerDoc), ['signoff-codoc', 'signoff-baseline'],
+        'stored per condition, so one cannot overwrite the other');
+});
+
+test('the sign-off comes straight after the task, before anything else', () => {
+    // Confidence decays the moment somebody starts answering other questions
+    // about what they just did.
+    const kinds = buildSteps('codoc-first').map((s) => s.kind);
+    assert.equal(kinds[kinds.indexOf('task') + 1], 'signoff');
+});
+
+test('what the answer rests on takes more than one', () => {
+    // "I ran the tests" and "the agent said so" are different answers, and
+    // somebody who did both should be able to say so.
+    const grounds = SIGNOFF.find((q) => q.id === 'grounds');
+    assert.equal(grounds.type, 'multi');
+    assert.ok(grounds.options.some((o) => /agent said/i.test(o)));
+    assert.ok(grounds.options.some((o) => /read the description/i.test(o)));
+});
+
+test('every interview question is written down, in three parts', () => {
+    // Written down so it is asked the same way every time. The researcher still
+    // follows up live; the openings are fixed.
+    assert.equal(INTERVIEW.length, 3);
+    assert.ok(INTERVIEW_QUESTIONS.length >= 10);
+    for (const q of INTERVIEW_QUESTIONS) {
+        assert.ok(q.label.trim().endsWith('?'), `"${q.label}" is not a question`);
+        assert.ok(q.part, `${q.id} belongs to no part`);
+    }
+});
+
+test('the comparison and trust questions each name a research question', () => {
+    // The adoption ones deliberately do not: they are for the discussion, not
+    // for a result, and pretending otherwise would put them in a figure.
+    for (const part of ['comparison', 'trust']) {
+        const qs = INTERVIEW_QUESTIONS.filter((q) => q.part === part);
+        assert.ok(qs.length);
+        for (const q of qs) assert.ok(q.rq, `${q.id} answers no research question`);
+    }
+    assert.ok(INTERVIEW_QUESTIONS.filter((q) => q.part === 'adoption').every((q) => !q.rq));
+});
+
+test('no interview question tells them which way to answer', () => {
+    for (const q of INTERVIEW_QUESTIONS) {
+        assert.ok(!/\bbetter\b|\beasier for you\b|\bimproved\b/i.test(q.label),
+            `"${q.label}" leads`);
     }
 });
