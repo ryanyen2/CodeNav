@@ -17,7 +17,8 @@ import {
     type Consequence,
 } from '../state/grammar';
 import { featureState, stateBadge, PLANNED_TITLE } from '../state/feature-state';
-import { unseenEdits, catchUpLabel } from '../state/auto-edits';
+import { unseenEdits, catchUpLabel, keepAllLabel, keepAllVerdicts } from '../state/auto-edits';
+import { shouldQuietSkeleton } from '../state/translate-model';
 import { icon, iconMaskDataUri } from './icons';
 import { tweenScrollTop, TweenController, popLanded, spinReject, saveShimmer, launchPlane } from './motion';
 import { shouldCenter, centerScrollTarget } from './tree-center';
@@ -338,9 +339,16 @@ function busyFromPayload(p: DocPayload): Record<string, BusyInfo> {
     const out: Record<string, BusyInfo> = {};
     const tr = p.translation;
     if (tr?.running) {
+        // A whole-document run is not the case the shimmer was drawn for. See
+        // BusyInfo.quiet: translating a tree into a language it has never been in
+        // makes every node pending at once, and dimming and sweeping all of them
+        // costs the reader the document while telling them what the toolbar's
+        // "translating 6/25" already says. Guard them all; animate none.
+        const quiet = shouldQuietSkeleton(tr);
         for (const fid of tr.pending) {
             out[fid] = {
                 kind: 'translating',
+                quiet,
                 label: `Translating into ${tr.targetName} (${tr.translated}/${tr.total} done). `
                     + 'This section updates itself when its batch lands — editing resumes then.',
             };
@@ -1199,6 +1207,38 @@ function renderToolbar(): HTMLElement {
             setSelected(unseen[(after + 1) % unseen.length].fid, true);
         };
         actions.append(pill);
+
+        // Keep all — acknowledge the lot without changing a word.
+        //
+        // One at a time is right when the loop rewrites a description here and
+        // there. It is not right after `codoc translate`, which rewrites EVERY
+        // node: the reader is then asked for twenty-five verdicts on a rewrite
+        // they asked for by name, and the honest answer to each is the same.
+        //
+        // Safe in a way Accept-all is not, and for a structural reason: Keep is
+        // the verdict that changes nothing. It records that the rewrite was seen
+        // and leaves the prose exactly as it is. Restore is the one that writes,
+        // and it stays per-node, because reverting twenty-five descriptions in one
+        // click is a different and much worse button.
+        //
+        // The one thing it can hide is a rewrite that displaced the author's OWN
+        // wording, which the store holds to a stricter bar and this surface draws
+        // heavier. Those are counted on the button, the same way Accept-all counts
+        // the proposals that ask the agent to write code.
+        const verdicts = keepAllVerdicts(unseen);
+        const mine = unseen.filter(u => u.edit.written_by === 'human').length;
+        const keepAll = el('button', 'toggle bulk');
+        keepAll.append(document.createTextNode(keepAllLabel(unseen)));
+        keepAll.title = (mine
+            ? `${mine} of these replaced wording you wrote yourself. Keeping them `
+              + 'acknowledges the change; it does not undo it, and Restore stays '
+              + 'available on each one until you decide.'
+            : 'All of these are codoc revising its own earlier wording.')
+            + ' Keep changes nothing — it only clears the marks.';
+        keepAll.onclick = () => {
+            for (const v of verdicts) vscode.postMessage({ kind: 'auto-edit-verdict', ...v });
+        };
+        actions.append(keepAll);
     }
 
     const ids = payload.pendingEventIds;

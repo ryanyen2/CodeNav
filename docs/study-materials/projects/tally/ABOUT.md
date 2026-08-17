@@ -47,35 +47,36 @@ of patterns: anything with "tesco" is groceries, anything with "shell" is fuel.
 
 **Groups by month.** So you can compare one month against another.
 
-**Drops repeats.** Banks sometimes export the same payment twice. The second one
-is dropped.
+**Drops repeats.** Banks sometimes export the same payment twice. tally removes
+the duplicate.
 
 **Leaves out transfers.** Moving £300 from your current account to your savings
-is not spending — the money is still yours.
+is not spending, because the money is still yours.
 
 **Finds what recurs.** A payment that appears every month at the same amount is a
 fixed commitment. Those are listed separately.
 
 ## What it does not do
 
-It does not connect to a bank. Something else downloads the file. It does not
+It does not connect to a bank. Something else downloads the CSV file. It does not
 tell you whether you can afford anything, and it has no opinion about your
 spending.
 
-## The one idea worth holding
+## Each rule is a tradeoff
 
-**Every one of those is a judgement call, and it could have gone the other way.**
+Each of the six rules above chose one reasonable option over another reasonable
+option.
 
-Take the month a payment belongs to. You pay for something on the 31st of
-January; the bank processes it on the 2nd of February. Which month was it?
-tally says January, because that is the day you remember. Your bank's own
-statement says February. Both are right, for different questions.
+For example, you pay for something on the 31st of January, and the bank
+processes it on the 2nd of February. Which month does it belong to? tally says
+January, because January is the day you remember. Your bank says February. Both
+answers are correct for different questions.
 
-Or transfers. Leaving them out is right if you are asking what you spent. If you
-are asking where your money went, you might want them in.
+Another example: leaving transfers out is correct if you want to know what you
+spent. If you want to know where your money went, you might want them included.
 
-tally made a choice about each. The code shows you what it chose. It does not
-tell you why, or what it gave up.
+The code shows you what tally chose in each case. It does not always say why, or
+what the alternative would have cost.
 
 ## Running it
 

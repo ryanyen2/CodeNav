@@ -7,11 +7,13 @@
 
 export {
     CONSENT_FORM, PRESTUDY, REQUIRED, EXCLUDING, shouldExclude,
-    AGREE, AMOUNT, CONSTRUCTS, AFTER_CONDITION, scaleFor, keyed,
-    MANIPULATION_CHECK, SCENARIOS, SIGNOFF, INTERVIEW, INTERVIEW_QUESTIONS,
+    AGREE, AMOUNT, PERFORMANCE, CONSTRUCTS, AFTER_CONDITION, scaleFor, keyed,
+    normalized, rtlx, umuxLite, constructScore,
+    MANIPULATION_CHECK, SCENARIOS, SIGNOFF, REFLECTION,
+    INTERVIEW, INTERVIEW_QUESTIONS,
 } from './instrument.js';
 export { PROJECTS, RESPONSIBILITY, HOW_TO_START } from './content.js';
-export { QUIZZES } from './quiz.js';
+export { QUIZZES, AFTER_QUIZZES } from './quiz.js';
 
 /** The task cards. Drawn as pictures, never as text anyone can copy. */
 export const TASK_CARDS = Object.freeze({
@@ -57,17 +59,23 @@ export function buildSteps(order = 'codoc-first') {
     const first = { condition: codocFirst ? 'codoc' : 'baseline', project: 'scribe' };
     const second = { condition: codocFirst ? 'baseline' : 'codoc', project: 'tally' };
 
-    // The quiz is asked twice, either side of the task, and it is the same
-    // twelve questions both times. Neither answer says much on its own —
-    // somebody may know the domain, or guess well — and the CHANGE between them
-    // is what the session did to their understanding.
+    // The quiz is asked ONCE, before the task, open book and timed: how fast
+    // somebody can find twelve answers about a codebase they met today is the
+    // thing the two ways of working differ on.
+    //
+    // Afterwards comes a different question set, closed book, about the change
+    // they just made. It used to be the same twelve again, and the change between
+    // the two sittings was the measure. But both sittings asked about the
+    // CODEBASE, and what the study is about is whether the person still owns
+    // their own change. Their change is different every time, so it is asked in
+    // their own words and rated by hand.
     const forCondition = (c, n) => [
         { id: `intro-${n}`, kind: 'intro', ...c, n },
         { id: `about-${n}`, kind: 'about', ...c, n },
         { id: `quiz-before-${n}`, kind: 'quiz', sitting: 'before', ...c, n },
         { id: `task-${n}`, kind: 'task', ...c, n },
         { id: `signoff-${n}`, kind: 'signoff', ...c, n },
-        { id: `quiz-after-${n}`, kind: 'quiz', sitting: 'after', ...c, n },
+        { id: `reflect-${n}`, kind: 'reflect', ...c, n },
         { id: `after-${n}`, kind: 'questionnaire', ...c, n },
     ];
 
@@ -92,6 +100,8 @@ export function answerDoc(step) {
     if (step.kind === 'questionnaire') return `after-${step.condition}`;
     if (step.kind === 'scenarios') return 'scenarios';
     if (step.kind === 'signoff') return `signoff-${step.condition}`;
-    if (step.kind === 'interview') return 'interview';
+    if (step.kind === 'reflect') return `reflect-${step.condition}`;
+    // The interview is spoken and typed into the dashboard, so this page stores
+    // nothing for it.
     return null;
 }

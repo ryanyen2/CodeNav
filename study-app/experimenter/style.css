@@ -422,3 +422,16 @@ table.key td { color: var(--ink-soft); padding: 4px 0; line-height: 1.5; }
 .keys input { width: 100%; }
 .said p { margin: 0 0 5px; font-size: 13.5px; color: var(--ink-soft); }
 .said p.quote { border-left: 2px solid var(--line); padding-left: 10px; color: var(--ink); }
+
+/* The closing interview. One question, one box, asked out loud and typed here. */
+.iv { display: block; margin: 0 0 12px; }
+.iv-q {
+    display: block; font-size: 13px; color: var(--ink-soft);
+    margin: 0 0 5px; line-height: 1.45;
+}
+.iv textarea {
+    width: 100%; box-sizing: border-box; resize: vertical;
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--panel);
+}
+.iv textarea:focus { outline: none; border-color: var(--accent); }

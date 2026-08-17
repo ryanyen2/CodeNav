@@ -513,8 +513,9 @@ Two stages per condition: comprehend → probe → modify → probe.
 
 **Session format: one 105-minute session**, compensated accordingly. Two-session
 splits cost dropout and re-warm-up time and break the same-sitting comparison that
-within-subjects buys. Keep NASA-TLX as RTLX (raw, unweighted) to save minutes.
-**[decide — recommend single session]**
+within-subjects buys. Keep NASA-TLX as RTLX (raw, unweighted) to save minutes —
+the pairwise weighting step earns its minutes in single-task studies, and this
+compares two conditions. **[decide — recommend single session]**
 
 **Counterbalancing.** System order × codebase assignment fully crossed → 4 cells.
 n=12 gives 3/cell; **n=16 (4/cell) is meaningfully better for the price of four
@@ -612,31 +613,69 @@ Ko et al. seek/relate/collect **[verify]**.
 
 ### 8.6 Questionnaires — rebuilt for balance
 
-**Standardized:** UMUX-LITE raw (no SUS conversion — say so); NASA-RTLX; Jian,
-Bisantz & Drury trust-in-automation items adapted to "the document" as referent
-**[verify]** (report subscale, not the folk sum).
+**Standardized:** UMUX-LITE raw (no SUS conversion — say so), on its published
+seven points, with the bracketed referent filled in as "this workflow" rather
+than "this system" — both conditions run the same agent in the same editor, so
+"system" would have been answered about two different things by different
+people. NASA-RTLX, all six subscales, **on TLX's own 21-point 0–100 scale, not
+on the page's seven** (Lee et al., TOCHI 2026: 5- and 7-point TLX moves
+frustration onto the physical factor and splits effort across both, so a coarse
+scale measures a differently shaped thing rather than a blurrier one); subscale
+names and full definitions shown on screen; performance collected
+failure-to-perfect and reversed in scoring; the block names the modification
+task rather than the session, because TLX measures a task. Jian, Bisantz & Drury
+trust-in-automation items adapted to "the document" as referent **[verify]**
+(report subscale, not the folk sum).
 
-**Custom block (7-point, administered after each condition, system-blind wording
-"the workflow you just used", order randomized, (R) = reverse-keyed):**
+**Custom items (7-point agreement, administered after each condition, system-blind
+wording "the way of working you just used", (R) = reverse-keyed).** These are
+Likert-*type items grouped into ad-hoc composites*, not validated scales — they
+are reported item by item, with the block mean as a summary rather than as a
+construct score. Every item names a construct and an RQ; the ones that could name
+neither were cut. Seventeen items in four labelled blocks, in the fixed order
+below.
 
-1. I always knew what the agent had changed and why.
-2. I could steer the work toward what I wanted with little effort.
-3. (R) Keeping the written description current felt like busywork.
-4. Whenever I checked, the written description matched the code.
-5. (R) I accepted changes I had not really reviewed.
-6. When I needed to know why something was built a certain way, I could find out quickly.
-7. (R) I lost track of the overall state of the codebase while the agent worked.
-8. The effort I spent writing things down paid off within this session.
-9. (R) I would have finished faster without maintaining the written description.
-10. If I came back in a month, what's written down would get me back up to speed.
-11. (R) The agent made decisions that were mine to make.
-12. I could tell which parts of the result I still needed to check.
+*Understanding and control (RQ1)*
+1. I always knew what the agent had changed, and why.
+2. I could steer the work toward what I wanted.
+3. I felt in control of the overall editing process.
+4. (R) I lost track of the state of the codebase while the agent worked.
+5. (R) The agent made decisions that were mine to make.
 
-Items 3, 5, 9, 11 are the honesty valves: if CoDoc wins everything *including* "no
-busywork" and "didn't slow me down," suspect acquiescence; if it wins understanding
-and control while *losing* 3 and 9, the data is credible and the story is "a cost
-paid knowingly." v1's ten items are additionally administered unchanged, in a
-separate labeled block, for cross-paper comparability — analyzed separately.
+*Alignment (RQ3)*
+6. What the agent produced matched what I intended.
+7. This way of working helped me build a clearer picture of the codebase.
+8. I could move between changing code and checking it without losing my place.
+
+*The written description (RQ2)*
+9. Whenever I checked, the written description matched the code.
+10. (R) Keeping the written description current felt like busywork.
+11. The effort I spent writing things down paid off within this session.
+12. If I came back in a month, what is written down would get me back up to speed.
+13. When I needed to know why something was built a certain way, I could find out quickly.
+
+*Review and trust (RQ2)*
+14. I was confident the code produced was correct.
+15. I could reject or change anything I disagreed with.
+16. (R) I accepted changes I had not really reviewed.
+17. I could tell which parts of the result I still needed to check.
+
+**Order is fixed and grouped, not randomized.** An unbroken column of twenty-five
+near-identical rows gets answered by pattern rather than by reading; the block
+headings are the cheapest thing that stops that, and they only work if the items
+that belong together sit together. The guard against straight-lining is the
+reverse-keyed items instead — 4, 5, 10 and 16, plus TLX's performance item.
+
+Items 5, 10 and 16 are the **honesty valves**: if codoc wins everything
+*including* "no busywork," suspect acquiescence; if it wins understanding and
+control while *losing* 10, the data is credible and the story is "a cost paid
+knowingly."
+
+**[decide]** v1 carried a fourth valve — "(R) I would have finished faster without
+maintaining the written description" — which is the only one that puts a *time*
+cost on the record; item 10 puts a tedium cost and item 11 a payoff. It is not in
+the running instrument. Restore it as an eighteenth item or drop it on purpose,
+but not by drift.
 
 **Discriminant scenario preferences (end of session, after both conditions):**
 "For each scenario, which workflow would you pick, in one line why —
@@ -656,11 +695,23 @@ the gap between the answer and the logs is itself data).
 
 ## 9. Analysis & pre-registration
 
-Non-parametric throughout: Wilcoxon signed-rank with matched-pairs rank-biserial
-effect sizes and bootstrap CIs; **exact McNemar** for per-hazard binaries; the
+**The estimate is the headline, not the test.** Every outcome is a paired
+difference (codoc − baseline, one value per participant) reported as a mean with
+a 95% bootstrap CI and plotted; at the n this study can recruit, a p-value from a
+dozen pairs invites a binary reading the data cannot support, while the interval
+says the same thing and shows how little it pins down. Where a test is wanted:
+Wilcoxon signed-rank with matched-pairs rank-biserial effect sizes, reported
+*with* the interval rather than instead of it; **exact McNemar** for per-hazard
+binaries. Individual Likert items are not given a metric model — that much the
+ordinal-data literature agrees on even where it disagrees about composites.
+Questionnaire distributions are shown per item, because four people at the middle
+and four at the ends average alike and are not the same finding. No reliability
+coefficient is reported for a three-to-five-item ad-hoc block. The
 spec-integrity composite is the primary outcome, probes secondary, questionnaires
 tertiary. State plainly: powered for large effects; execution numbers corroborate the
-qualitative account.
+qualitative account. Full scoring rules are in
+`docs/study-materials/analysis-plan.md` and implemented once, in
+`study-app/participant/instrument.js`.
 
 Qualitative: reflexive thematic analysis (Braun & Clarke); think-aloud as protocol
 analysis (Ericsson & Simon); two coders, 25% → consensus → one completes **[verify]**.

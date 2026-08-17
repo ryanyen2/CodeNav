@@ -5,9 +5,10 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import {
-    PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, scaleFor, keyed,
+    PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, PERFORMANCE,
+    scaleFor, keyed, normalized, rtlx, umuxLite, constructScore,
     SIGNOFF, INTERVIEW, INTERVIEW_QUESTIONS,
-    SCENARIOS, TASK_CARDS, PROJECTS, HOW_TO_START,
+    SCENARIOS, TASK_CARDS, PROJECTS, HOW_TO_START, REFLECTION,
     buildSteps, answerDoc, shouldExclude, CONSENT_FORM,
 } from '../participant/steps.js';
 
@@ -79,26 +80,116 @@ test('a reverse keyed item is stored as answered, not flipped on the way in', ()
     assert.ok(!('flip' in q) && !('score' in q),
         'the item carries only a marker; the flip happens once, during analysis');
     // And the flip, when it happens, is around the midpoint of that item's own
-    // scale rather than a hardcoded 8.
-    assert.equal(keyed({ ...q, reverse: true }, 1), 7);
-    assert.equal(keyed({ ...q, reverse: true }, 4), 4);
-    assert.equal(keyed({ ...q, reverse: false }, 1), 1);
-    assert.equal(keyed(q, null), null, 'unanswered stays unanswered');
+    // scale rather than a hardcoded number.
+    const agree = AFTER_CONDITION.find((x) => x.reverse && x.c !== 'load');
+    assert.equal(keyed(agree, 1), 7);
+    assert.equal(keyed(agree, 4), 4);
+    assert.equal(keyed({ ...agree, reverse: false }, 1), 1);
+    assert.equal(keyed(agree, null), null, 'unanswered stays unanswered');
 });
 
-test('both scales have a midpoint and labelled ends', () => {
-    for (const s of [AGREE, AMOUNT]) {
-        assert.equal((s.max - s.min) % 2, 0, 'an odd number of points, so there is a middle');
+test('every scale has a midpoint and labelled ends', () => {
+    for (const s of [AGREE, AMOUNT, PERFORMANCE]) {
+        const points = (s.max - s.min) / (s.step || 1);
+        assert.equal(points % 2, 0, 'an odd number of points, so there is a middle');
+        assert.ok(Number.isInteger(points), 'the ends sit on the step grid');
         assert.ok(s.lowLabel && s.highLabel);
     }
     assert.notEqual(AGREE.lowLabel, AMOUNT.lowLabel,
         'workload is not answered on an agreement scale, and must not be labelled like one');
 });
 
-test('the workload block runs low to high, and the rest disagree to agree', () => {
-    for (const q of AFTER_CONDITION) {
-        assert.equal(scaleFor(q), q.c === 'load' ? AMOUNT : AGREE, q.id);
+test('workload is collected on TLX\'s own 21 points, not the page\'s seven', () => {
+    // The finding this guards is not precision. Lee et al. show that collecting
+    // TLX on five or seven points moves frustration onto the physical factor and
+    // splits effort across both, so a coarse scale does not measure a blurrier
+    // version of the same thing — it measures a differently shaped thing.
+    for (const s of [AMOUNT, PERFORMANCE]) {
+        assert.equal(s.min, 0);
+        assert.equal(s.max, 100);
+        assert.equal(s.step, 5, 'the original is 0–100 in fives: 21 marks, 20 intervals');
     }
+    assert.equal(AGREE.max - AGREE.min, 6, 'the agreement blocks stay on seven points');
+});
+
+test('each item is answered on the scale its own words describe', () => {
+    for (const q of AFTER_CONDITION) {
+        const expected = q.id === 'tlxSuccess' ? PERFORMANCE : (q.c === 'load' ? AMOUNT : AGREE);
+        assert.equal(scaleFor(q), expected, q.id);
+    }
+    // Performance is the item the literature says gets broken, and it is broken
+    // by labelling. It is asked the way people read it and flipped in scoring,
+    // so the words at the ends must say which end is which.
+    const perf = AFTER_CONDITION.find((q) => q.id === 'tlxSuccess');
+    assert.ok(perf.reverse, 'asked high-is-good, so it has to be flipped');
+    assert.equal(PERFORMANCE.lowLabel, 'Failure');
+    assert.equal(PERFORMANCE.highLabel, 'Perfect');
+});
+
+test('every workload item shows its subscale name and definition', () => {
+    // Showing only the short question is one of the reasons the six subscales
+    // correlate so much more strongly in HCI studies than in TLX's validation.
+    for (const q of AFTER_CONDITION.filter((x) => x.c === 'load')) {
+        assert.ok(q.title, `${q.id} has no subscale name`);
+        assert.ok(q.description && q.description.length > 60,
+            `${q.id} has no definition to show`);
+    }
+    const named = AFTER_CONDITION.filter((q) => q.title).map((q) => q.id);
+    assert.equal(named.length, 6, 'the definitions belong to TLX and to nothing else');
+});
+
+test('raw TLX flips performance, and refuses an incomplete answer', () => {
+    // The whole reason rtlx exists: an analysis that averages the six raw
+    // numbers gets a plausible answer that is wrong in exactly one direction.
+    // These are the numbers from Lee et al.'s worked example.
+    const load = AFTER_CONDITION.filter((q) => q.c === 'load');
+    const all = (v) => Object.fromEntries(load.map((q) => [q.id, v]));
+
+    const easy = { ...all(0), tlxSuccess: 100 };    // nothing demanded, did perfectly
+    const hard = { ...all(20), tlxSuccess: 0 };     // demanding throughout, failed
+
+    assert.equal(rtlx(easy).overall, 0, 'a perfect result on an effortless task is no load');
+    assert.equal(Math.round(rtlx(hard).overall * 10) / 10, 33.3);
+
+    // And the failure it prevents: unflipped, both of those average to 16.7.
+    const raw = (a) => load.reduce((s, q) => s + a[q.id], 0) / load.length;
+    assert.equal(Math.round(raw(easy) * 10), Math.round(raw(hard) * 10),
+        'raw averaging cannot tell the easiest task from a demanding one');
+
+    assert.equal(rtlx({ ...easy, tlxEffort: undefined }), null,
+        'five of six is not a raw TLX');
+    assert.equal(rtlx({}), null);
+});
+
+test('UMUX-Lite matches its published formula', () => {
+    // (item1 + item2 − 2) × (100/12) on seven points. Written in the source as
+    // a share of the scale so it survives a scale change; checked here against
+    // the form it was published in.
+    const published = (i1, i2) => (i1 + i2 - 2) * (100 / 12);
+    for (const [i1, i2] of [[1, 1], [7, 7], [4, 4], [2, 6], [7, 1]]) {
+        assert.ok(Math.abs(umuxLite({ umux1: i1, umux2: i2 }) - published(i1, i2)) < 1e-9,
+            `${i1},${i2}`);
+    }
+    assert.equal(umuxLite({ umux1: 5 }), null, 'one of two items is not the instrument');
+});
+
+test('a construct score keys its reverse items', () => {
+    // The same trap as TLX performance, in the blocks that are ours. ctl4 and
+    // ctl5 are reverse keyed, so agreeing with them is the bad direction.
+    const answers = { ctl1: 7, ctl2: 7, ctl3: 7, ctl4: 1, ctl5: 1 };
+    assert.equal(constructScore(answers, 'control'), 7,
+        'a consistent best-case answer scores at the top, not in the middle');
+    assert.equal(constructScore({}, 'control'), null);
+});
+
+test('normalized puts every scale on one 0-100 range', () => {
+    const mental = AFTER_CONDITION.find((q) => q.id === 'tlxMental');
+    const umux = AFTER_CONDITION.find((q) => q.id === 'umux1');
+    assert.equal(normalized(mental, 0), 0);
+    assert.equal(normalized(mental, 100), 100);
+    assert.equal(normalized(umux, 1), 0);
+    assert.equal(normalized(umux, 7), 100);
+    assert.equal(normalized(umux, 4), 50);
 });
 
 test('the items are asked in a fixed order with no duplicates', () => {
@@ -397,10 +488,21 @@ test('the defaults come from the instrument, not from a second copy of it', asyn
     }
     const signoff = defaultsFor({ kind: 'signoff' });
     for (const q of SIGNOFF) assert.ok(signoff[q.id] !== undefined, `${q.id} was not filled`);
-    const interview = defaultsFor({ kind: 'interview' });
-    for (const q of INTERVIEW_QUESTIONS) {
-        assert.ok(interview[q.id] !== undefined, `${q.id} was not filled`);
-    }
+});
+
+test('the interview is spoken, so the page neither shows it nor stores it', async () => {
+    // It was typed on the participant's page, which got short written answers to
+    // questions whose value is the follow-up, at the end of two hours. The
+    // researcher asks them on the call and types what was said into the
+    // dashboard, so this page has nothing to fill in and nothing to save.
+    const { defaultsFor } = await import('../participant/autofill.js');
+    const step = buildSteps().find((s) => s.kind === 'interview');
+    assert.ok(step, 'the step is still in the session, as a hand-off');
+    assert.equal(answerDoc(step), null, 'but it stores nothing');
+    assert.equal(defaultsFor(step), null, 'so there is nothing to autofill');
+
+    // The questions themselves stay, because the dashboard asks from them.
+    assert.ok(INTERVIEW_QUESTIONS.length >= 10, 'and they are still written down');
 });
 
 test('a filled quiz answers all twelve, for either project', async () => {
@@ -448,4 +550,220 @@ test('the page names the launcher that setup actually writes', async () => {
     // codoc that may or may not be on their PATH.
     assert.ok(named.some((c) => c.startsWith('~/codoc-study/codoc ')));
     assert.match(setup, /ln -sf "\$CODOC" "\$WORK\/codoc"/);
+});
+
+// ── copying a command ────────────────────────────────────────────────────────
+
+test('a command renders with a copy button carrying the exact text', async () => {
+    const { cmd } = await import('../participant/copy.js');
+    const html = cmd('./setup.sh p-abcdefghjkmn codoc-first');
+    assert.match(html, /class="pick"/, 'the command is still shown');
+    assert.match(html, /button[^>]*class="copy"/, 'and has a copy button');
+    assert.match(html, /data-copy="\.\/setup\.sh p-abcdefghjkmn codoc-first"/,
+        'the button carries the command verbatim, not a re-typed copy of it');
+});
+
+test('a command with markup in it cannot inject anything', async () => {
+    const { cmd } = await import('../participant/copy.js');
+    // The participant code comes off the query string and is interpolated into
+    // this, so it reaches the page unfiltered. Parse the result and check the
+    // DOM rather than the string: the payload's own characters survive as text,
+    // and only whether they became markup matters.
+    const html = cmd('./setup.sh "><img src=x onerror=alert(1)>');
+    const host = document.createElement('div');
+    host.innerHTML = html;
+
+    assert.equal(host.querySelectorAll('img').length, 0, 'no tag was created');
+    assert.equal(host.children.length, 1, 'and nothing escaped the wrapper');
+    const button = host.querySelector('button.copy');
+    assert.equal(button.dataset.copy, './setup.sh "><img src=x onerror=alert(1)>',
+        'the command still round-trips exactly, quotes and all');
+    assert.equal(host.querySelector('code.pick').textContent,
+        './setup.sh "><img src=x onerror=alert(1)>');
+});
+
+test('clicking copy writes the command to the clipboard', async () => {
+    const { cmd, wireCopy } = await import('../participant/copy.js');
+    const root = document.createElement('div');
+    root.innerHTML = cmd('./collect.sh p-abcdefghjkmn');
+    document.body.append(root);
+
+    let written = null;
+    Object.defineProperty(global.navigator, 'clipboard', {
+        value: { writeText: async (t) => { written = t; } },
+        configurable: true,
+    });
+    wireCopy(root);
+    const button = root.querySelector('button.copy');
+    button.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal(written, './collect.sh p-abcdefghjkmn');
+    assert.equal(button.textContent, 'Copied', 'and it says so');
+    root.remove();
+});
+
+test('a refused clipboard tells them what to press instead', async () => {
+    const { cmd, wireCopy } = await import('../participant/copy.js');
+    const root = document.createElement('div');
+    root.innerHTML = cmd('./setup.sh --check');
+    document.body.append(root);
+
+    // Chrome can refuse the permission. A button that still says "Copied" would
+    // leave somebody pasting whatever was in the clipboard before.
+    Object.defineProperty(global.navigator, 'clipboard', {
+        value: { writeText: async () => { throw new Error('denied'); } },
+        configurable: true,
+    });
+    wireCopy(root);
+    const button = root.querySelector('button.copy');
+    button.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal(button.textContent, 'Press Cmd+C');
+    root.remove();
+});
+
+test('nothing the participant reads names the condition', async () => {
+    // The folders were ~/codoc-study/scribe-baseline and ~/codoc-study/tally,
+    // so half the participants spent the session typing "baseline" into a
+    // terminal and then answered a questionnaire comparing the two. The word
+    // ranks the arms, and it was on screen throughout one of them.
+    //
+    // The manipulation is not a secret: one folder holds a feature tree and the
+    // other a CLAUDE.md, and they will see that. It just does not get a name
+    // that says which one is the control.
+    for (const [name, how] of Object.entries(HOW_TO_START)) {
+        for (const project of ['scribe', 'tally']) {
+            const folder = how.folder(project);
+            assert.equal(folder, `~/codoc-study/${project}`,
+                `${name} points at a folder named for the project alone`);
+        }
+        for (const [text, command] of how.steps) {
+            const shown = `${text} ${command || ''}`;
+            assert.ok(!/baseline/i.test(shown),
+                `a step in ${name} says "baseline" to the participant: ${shown}`);
+        }
+        assert.ok(!/baseline/i.test(how.title + how.about.join(' ')),
+            `${name} describes itself without ranking the two`);
+    }
+
+    // And the setup command the page prints unpacks into those same folders.
+    const { readFileSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const setup = readFileSync(
+        join(root, 'docs', 'study-materials', 'scripts', 'setup.sh'), 'utf8');
+    assert.match(setup, /--strip-components=1/,
+        'setup unpacks scribe-baseline.tar.gz into a folder called scribe');
+    assert.match(setup, /PROJECTS="scribe tally"/);
+});
+
+test('the preference item asks about kinds of work, and can go against the tool', async () => {
+    // The earlier list mixed how big a job is, how long you own the code, and how
+    // much of a hurry you are in, inside single items like "a throwaway script
+    // you will delete tomorrow". An answer to that cannot be read as being about
+    // any one of them.
+    assert.ok(SCENARIOS.length >= 6, 'enough activities to tell them apart');
+    for (const s of SCENARIOS) {
+        assert.ok(s.text.split(/\s+/).length >= 5,
+            `"${s.text}" is too terse to reason about`);
+        assert.ok(!/\bcodoc\b/i.test(s.text), 'no item names the tool');
+    }
+
+    // The load-bearing property. Three items are cases where a written
+    // description plausibly does NOT help: a fault you can already reproduce is
+    // answered by running the code, a file that does not exist yet has nothing
+    // to describe, and an hour-long fix is where keeping a description current is
+    // pure overhead. A list the tool could only win on measures the list.
+    const against = SCENARIOS.filter((s) =>
+        /reproduce/i.test(s.text)            // debugging
+        || /does not exist yet/i.test(s.text) // greenfield
+        || /within the hour/i.test(s.text));  // time pressure
+    assert.ok(against.length >= 3,
+        'at least three items where a description plausibly does not help');
+});
+
+// ── after the task, closed book ──────────────────────────────────────────────
+
+test('the quiz is asked once, and what follows the task is about their own change', async () => {
+    // It used to be the same twelve questions again, and the change between the
+    // two sittings was the measure. Both sittings asked about the CODEBASE,
+    // which the open-book sitting already reaches. What the study is about is
+    // whether the person still owns the change their agent helped them write,
+    // and that can only be asked about their own change.
+    const steps = buildSteps('codoc-first');
+    const quizzes = steps.filter((s) => s.kind === 'quiz');
+    assert.equal(quizzes.length, 2, 'one quiz per condition, not two');
+    assert.ok(quizzes.every((s) => s.sitting === 'before'), 'all before the task');
+
+    const reflect = steps.filter((s) => s.kind === 'reflect');
+    assert.equal(reflect.length, 2, 'one reflection per condition');
+    for (const step of reflect) {
+        const kinds = steps.map((s) => s.kind);
+        const task = steps.findIndex((s) => s.kind === 'task' && s.n === step.n);
+        assert.ok(steps.indexOf(step) > task, 'it comes after the task it is about');
+        assert.equal(kinds.filter((k) => k === 'reflect').length, 2);
+    }
+
+    // Stored per condition, so one cannot overwrite the other.
+    const docs = reflect.map(answerDoc);
+    assert.deepEqual(docs, ['reflect-codoc', 'reflect-baseline']);
+    assert.equal(new Set(docs).size, 2);
+});
+
+test('the after-task questions are about their own change and have right answers', async () => {
+    // They were four boxes to type in. Freeform got short answers to questions
+    // whose value is in the follow-up, at the end of two hours, and nothing
+    // comparable between participants. These are multiple choice with a key, so
+    // two sessions can be compared, and the follow-up happens out loud in the
+    // closing interview instead.
+    const { AFTER_QUIZZES } = await import('../participant/quiz.js');
+    for (const [project, questions] of Object.entries(AFTER_QUIZZES)) {
+        assert.equal(questions.length, 6, `${project} asks six`);
+        for (const q of questions) {
+            assert.equal(q.options.length, 4, `${project} Q${q.n} offers four`);
+            // The key must NOT be here: this file ships to a browser.
+            assert.ok(!('answer' in q), `${project} Q${q.n} carries its answer to the page`);
+        }
+        // Every one names the participant's own change or the codebase it landed
+        // in. A question answerable from the briefing measures reading.
+        const text = questions.map((q) => q.question).join(' ').toLowerCase();
+        assert.match(text, /your change|you had|you chose|you decided|picks this up/,
+            `${project}'s set does not refer to what they did`);
+    }
+
+    // And the answers live only where the dashboard can see them.
+    const { afterFor } = await import('../experimenter/forms.js');
+    for (const project of ['scribe', 'tally']) {
+        const set = afterFor(project);
+        assert.equal(set.length, 6);
+        for (const q of set) {
+            assert.ok(q.answer, `${project} Q${q.n} has no answer to mark against`);
+            assert.ok(q.options.some((o) => o.letter === q.answer),
+                `${project} Q${q.n} marks an option that does not exist`);
+        }
+    }
+});
+
+test('the two projects ask the same shape after the task', async () => {
+    // Each participant does one project each way, so a harder set on one project
+    // lands entirely on whichever condition drew it.
+    const { AFTER_QUIZZES } = await import('../participant/quiz.js');
+    const shape = (qs) => qs.map((q) => q.band).sort().join(',');
+    assert.equal(shape(AFTER_QUIZZES.scribe), shape(AFTER_QUIZZES.tally),
+        'scribe and tally cover the same bands, band for band');
+});
+
+test('a reflection can be finished without writing an essay', async () => {
+    // The scale is required; the four written answers are not. A required box
+    // buys blank characters typed to get past the button, and "I am not sure" is
+    // a finding rather than a gap.
+    const { defaultsFor } = await import('../participant/autofill.js');
+    const step = buildSteps().find((s) => s.kind === 'reflect');
+    const filled = defaultsFor(step);
+    for (const q of REFLECTION) {
+        assert.ok(filled[q.id] !== undefined, `${q.id} was not filled`);
+    }
 });

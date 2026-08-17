@@ -40,6 +40,22 @@ export interface BusyInfo {
     kind: BusyKind;
     /** One hover sentence: what is happening and why typing here waits. */
     label: string;
+    /**
+     * Guard the section, but do not shimmer it.
+     *
+     * The shimmer says "this section is being produced" — which reads correctly
+     * when a few nodes are in flight and wrongly when the whole document is.
+     * Translating a tree into a language it has never been in puts EVERY node in
+     * the pending set at once, and the result was the entire document dimmed and
+     * sweeping for the length of the run, with the still-perfectly-true old prose
+     * underneath it. Nothing was gained: the toolbar already says
+     * "translating 6/25", which is the document-level fact.
+     *
+     * So above a threshold the per-node animation drops away and only the edit
+     * guard remains, because typing into text that is about to be replaced is
+     * still a keystroke merged against text that is already gone.
+     */
+    quiet?: boolean;
 }
 
 export interface BusyDecorationsOptions {
@@ -102,7 +118,7 @@ export function buildBusyDecorations(
             if (pos < r.from || pos >= r.to) return false;
             if (!node.isBlock) return false;
             decos.push(Decoration.node(pos, pos + node.nodeSize, {
-                class: 'ce-busy ce-busy-' + r.info.kind,
+                class: 'ce-busy ce-busy-' + r.info.kind + (r.info.quiet ? ' ce-busy-quiet' : ''),
                 title: r.info.label,
             }));
             return false; // top-level blocks only

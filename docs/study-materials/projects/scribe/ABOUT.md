@@ -42,9 +42,9 @@ surprise.
 **Broken paragraphs.** As above. Lines inside a paragraph are joined; the gap
 between paragraphs is kept.
 
-**Repeated headers.** A report often has the same line at the top of every page:
-`Coastal Erosion Survey 2026 — Marine Institute`. Useful on paper, noise in the
-text. scribe drops it. So it does with page numbers.
+**Repeated headers.** A report often has the same line at the top of every page,
+like `Coastal Erosion Survey 2026, Marine Institute`. Useful on paper, noise in
+the text. scribe drops it, and drops page numbers the same way.
 
 **Headings.** `3.1 Sites` becomes a real heading, so the result has structure.
 
@@ -58,24 +58,25 @@ for straight ones. scribe replaces them, so the result can be searched normally.
 ## What it does not do
 
 It does not read PDF files. Something else does that first and hands scribe plain
-text. It does not recover tables, images or columns — that information is gone
-before scribe sees it.
+text. It does not recover tables, images or columns. All of those are lost before scribe
+sees the text.
 
-## The one idea worth holding
+## Each rule is a tradeoff
 
-**Every one of those six is a judgement call, and it could have gone the other
-way.**
+Each of the six rules above chose one reasonable option over another reasonable
+option.
 
-Take repeated headers. Dropping them is right for a hundred-page report. For a
-one-page letter, the line at the top is the letterhead and dropping it loses
-something.
+For example, scribe drops repeated headers. For a hundred-page report, the
+repeated title is noise. For a one-page letter, the line at the top is the
+letterhead, and dropping it loses information. scribe drops it anyway.
 
-Or broken words. `photogram-metric` should join. But `well-being` split across
-two lines should *keep* its hyphen, because that hyphen is part of the word.
-Nothing in the text tells you which is which.
+Another example: `photogram-metric` split across two lines should join into
+`photogrammetric`. But `well-being` split across two lines should keep its
+hyphen, because the hyphen is part of the word. Nothing in the text says which
+case applies. scribe guesses, and the guess has a rule you can read.
 
-scribe made a choice about each. The code shows you what it chose. It does not
-tell you why, or what it gave up.
+The code shows you what scribe chose in each case. It does not always say why, or
+what the alternative would have cost.
 
 ## Running it
 
@@ -94,8 +95,8 @@ A run prints one line:
 report.txt: 3 pages, 8 headings, 8 paragraphs, 6 bullets, 2 notes, 6 lines of furniture
 ```
 
-"Furniture" is the project's word for repeated headers and page numbers: the
-parts of the page that belong to the paper, not the writing.
+"Furniture" is the project's word for repeated headers and page numbers, meaning
+the parts of the page that belong to the paper rather than to the writing.
 
 ## The files
 
@@ -112,7 +113,7 @@ scribe/convert.py     runs the rules, in order
 ```
 
 There are three sample documents in `fixtures/`: a survey report, a short memo,
-and a field handbook. They are different on purpose — the memo has no repeated
+and a field handbook. They are different on purpose. The memo has no repeated
 header, so a rule that helps the report can hurt the memo.
 
 ## What we are asking

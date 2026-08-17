@@ -28,8 +28,32 @@ export const paths = {
  */
 export const DEVICE_SLOTS = Object.freeze(['browser', 'mirror']);
 
+/**
+ * The setup script's slot. It writes nothing under the participant — it takes
+ * this slot only to read that participant's copy of the keys — and it is retaken
+ * on every run, because setup signs in anonymously and keeps no account between
+ * runs. Kept out of DEVICE_SLOTS so the two writers stay two.
+ */
+export const FETCH_SLOT = 'setup';
+
 /** The two conditions, used as session document ids. */
 export const CONDITIONS = Object.freeze(['codoc', 'baseline']);
+
+/**
+ * The languages a participant can be run in.
+ *
+ * A session runs entirely in ONE of these: the page, the questions, the task
+ * cards, both descriptions and both workspaces. A participant does one project
+ * each way, so translating only one arm would make language vary WITH condition,
+ * and every result would be as attributable to reading in a second language as to
+ * the tool. Nothing here is per-condition for that reason.
+ *
+ * It is stored on the participant and carried on their link, like the order.
+ */
+export const LANGUAGES = Object.freeze(['en', 'zh-Hans']);
+export const DEFAULT_LANGUAGE = 'en';
+
+export const isLanguage = (code) => LANGUAGES.includes(code);
 
 /**
  * Field names that must never reach Firestore. Consent is collected in a Google

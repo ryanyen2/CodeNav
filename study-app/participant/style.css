@@ -74,7 +74,20 @@ code {
 code.pick {
     display: inline-block; user-select: all; padding: 9px 12px;
     font-size: 15px; max-width: 100%; overflow-x: auto; white-space: nowrap;
+    vertical-align: middle;
 }
+
+/* The copy button beside a command. Selecting and pressing Cmd+C still works,
+   but a participant on a call should not have to. */
+.cmd { display: inline-flex; align-items: stretch; gap: 6px; max-width: 100%; }
+.cmd > code.pick { flex: 0 1 auto; }
+button.copy {
+    flex: 0 0 auto; border: 1px solid var(--line); background: var(--panel);
+    color: var(--ink-soft); border-radius: 6px; padding: 0 11px;
+    font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+button.copy:hover { border-color: var(--accent); color: var(--accent); }
+button.copy.done { border-color: var(--accent); color: var(--accent); }
 
 .loading { color: var(--ink-faint); }
 
@@ -128,6 +141,49 @@ input:focus { outline: none; border-color: var(--accent); }
 .scale button[aria-pressed="true"] {
     background: var(--accent); border-color: var(--accent); color: #fff;
 }
+
+/* NASA-TLX's twenty-one points. Its own form is a ruled line you mark a
+   position on, not a row of buttons, and twenty-one circles would neither fit
+   nor be read. The ends carry the words; the ticks carry the resolution. Every
+   fifth tick is taller, so a position can be described and found again. */
+.scale.wide { gap: 8px; }
+/* Wide enough that twenty-one ticks are still worth aiming at, and allowed to
+   take a line of its own rather than squeezing to a hairline. Without the basis
+   the bar shrinks silently on a narrow window instead of wrapping, which is the
+   kind of thing that is discovered by a participant. */
+.scale.wide .dots {
+    flex: 1 1 280px; min-width: 240px; gap: 0; align-items: flex-end;
+    border-bottom: 1px solid var(--line);
+}
+.scale.wide button {
+    flex: 1; width: auto; height: 26px; border-radius: 0;
+    border: none; border-left: 1px solid var(--line);
+    background: none; color: transparent; font-size: 0;
+    transform: none;
+}
+.scale.wide button:last-child { border-right: 1px solid var(--line); }
+.scale.wide button:nth-child(5n+1) { height: 34px; }   /* 0, 25, 50, 75, 100 */
+.scale.wide button:hover {
+    background: var(--accent-soft); border-color: var(--line); transform: none;
+}
+/* The ring, not just the fill: at the narrow end a marked tick is a few pixels
+   wide, and a few pixels of colour is not an answer anybody can see they gave. */
+.scale.wide button[aria-pressed="true"] {
+    background: var(--accent); border-color: var(--accent);
+    box-shadow: 0 0 0 1.5px var(--accent);
+}
+@media (max-width: 640px) {
+    .scale.wide .end { min-width: 0; flex: 1; }
+    .scale.wide .dots { flex-basis: 100%; order: 3; }
+}
+
+/* The subscale definition. Present because the short question alone is not the
+   instrument, and quiet because it is read once per item and not compared. */
+.define {
+    display: block; margin: -8px 0 12px;
+    font-size: 13px; line-height: 1.5; color: var(--ink-faint); max-width: 60ch;
+}
+.blocklead { font-size: 14px; color: var(--ink-soft); margin: -4px 0 18px; }
 
 /* ── the task card ───────────────────────────────────────────────────────── */
 
@@ -312,3 +368,12 @@ textarea:focus { outline: none; border-color: var(--accent); }
 }
 .opts button[aria-pressed="true"] .opt-letter { color: var(--accent); font-weight: 600; }
 .opt-text { flex: 1; }
+
+/* The question clock. Present, readable, and not alarming until it matters. */
+.timer {
+    font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 600;
+    color: var(--ink-soft); background: var(--accent-soft);
+    border-radius: 6px; padding: 8px 12px; display: inline-block;
+    margin: 0 0 18px;
+}
+.timer.out { color: #8a2f2f; background: #f6e9e9; }

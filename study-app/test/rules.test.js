@@ -305,6 +305,67 @@ test('a registered device can read its own copy of the keys', async () => {
     await assertSucceeds(getDoc(doc(them, 'participants/p-abcdefghjkmn/secrets/session')));
 });
 
+// The path setup.sh actually walks. Written out separately because every test
+// above claims `mirror`, and the rules once allowed only the two writer slots
+// while the script took a third called `setup` — so the suite was green and
+// every participant's key fetch was denied.
+test('the setup script takes its own slot and reads the keys', async () => {
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, `participants/${CODE}/secrets/session`),
+        { anthropicApiKey: 'sk-ant-x', openaiApiKey: 'sk-y' }));
+
+    const run = anon('setup-run-1');
+    await assertSucceeds(claim(run, CODE, 'setup', 'setup-run-1'));
+    const got = await assertSucceeds(getDoc(doc(run, `participants/${CODE}/secrets/session`)));
+    assert.equal(got.data().anthropicApiKey, 'sk-ant-x');
+});
+
+test('running setup again takes the slot back and still reads the keys', async () => {
+    // Setup keeps no account between runs, so a second run arrives as a
+    // different anonymous uid. Claim-once here would mean setup works exactly
+    // once per participant, which is the run before anybody needs it to work.
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, `participants/${CODE}/secrets/session`),
+        { anthropicApiKey: 'sk-ant-x' }));
+
+    await assertSucceeds(claim(anon('setup-run-1'), CODE, 'setup', 'setup-run-1'));
+    const again = anon('setup-run-2');
+    await assertSucceeds(claim(again, CODE, 'setup', 'setup-run-2'));
+    await assertSucceeds(getDoc(doc(again, `participants/${CODE}/secrets/session`)));
+    // And the run that lost the slot loses the keys with it.
+    await assertFails(getDoc(doc(anon('setup-run-1'), `participants/${CODE}/secrets/session`)));
+});
+
+test('the setup slot cannot be taken once the code is released', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), `participants/${CODE}`), {
+            createdAt: Date.now(), order: 'codoc-first', released: true,
+        });
+    });
+    await assertFails(claim(anon('setup-run-1'), CODE, 'setup', 'setup-run-1'));
+});
+
+test('the setup slot reads the keys and writes nothing else', async () => {
+    // It is a fetch, not a third writer. Session data still comes from the two.
+    const run = anon('setup-run-1');
+    await assertSucceeds(claim(run, CODE, 'setup', 'setup-run-1'));
+    await assertFails(setDoc(doc(run, `participants/${CODE}/answers/questionnaire`),
+        { q1: 3 }));
+    await assertFails(setDoc(doc(run, `participants/${CODE}/sessions/codoc`),
+        { startedAt: 1 }));
+    await assertFails(setDoc(doc(run, `participants/${CODE}/secrets/session`),
+        { anthropicApiKey: 'sk-ant-mine' }));
+});
+
+test('holding the setup slot on one code reads no other code\'s keys', async () => {
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, `participants/${OTHER}/secrets/session`),
+        { anthropicApiKey: 'sk-ant-theirs' }));
+    const run = anon('setup-run-1');
+    await assertSucceeds(claim(run, CODE, 'setup', 'setup-run-1'));
+    await assertFails(getDoc(doc(run, `participants/${OTHER}/secrets/session`)));
+});
+
 test('somebody who has not registered a device cannot read them', async () => {
     const me = experimenter();
     await assertSucceeds(setDoc(doc(me, 'participants/p-qqqqqqqqqqqq'),

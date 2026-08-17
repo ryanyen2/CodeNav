@@ -5,6 +5,7 @@
 // obvious who settled them, and the questions have to be scored with the rules
 // in front of you rather than from memory an hour later.
 import questions from './questions.json' with { type: 'json' };
+import afterQuestions from './after-questions.json' with { type: 'json' };
 
 /**
  * What each task deliberately leaves open, and the three ways one can be
@@ -65,6 +66,9 @@ export const SETTLED_BY = Object.freeze([
 
 export const questionsFor = (project) => questions[project] || [];
 
+/** The closed-book set asked after the task, about the change they just made. */
+export const afterFor = (project) => afterQuestions[project] || [];
+
 /** The four bands, in the order RQ1 asks them. */
 export const BANDS = Object.freeze(['Purpose', 'Rationale', 'Change', 'Extension']);
 
@@ -76,7 +80,12 @@ export const BANDS = Object.freeze(['Purpose', 'Rationale', 'Change', 'Extension
  * between them is what a session did to their understanding. Splitting the
  * questions across the two sittings would make the two scores incomparable.
  */
-export const SITTINGS = Object.freeze(['before', 'after']);
+// One sitting. The quiz used to be asked again after the task, and the change
+// between the two was the measure; both sittings asked about the CODEBASE. What
+// comes after the task now is a different set, closed book and in their own
+// words, about the change they themselves made — see REFLECTION in the
+// instrument. It has no answer key, so it is not scored here.
+export const SITTINGS = Object.freeze(['before']);
 
 export function bandsFor(project) {
     const all = questionsFor(project);

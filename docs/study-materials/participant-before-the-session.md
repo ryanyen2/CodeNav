@@ -3,10 +3,10 @@
 Thank you for taking part. Please read this page and set up your machine before
 we meet. Setup takes about 15 minutes, and most of it runs on its own.
 
-Start from the link the researcher sent you, not from this page. The link opens
-a page that walks you through everything in order, including the consent form,
-and it tells you when to come back here. If you have lost the link, ask for it
-again. It carries your participant code, and nothing here works without it.
+Start from the link the researcher sent you, not from this page. The link opens a
+page that walks you through everything in order, including the consent form, and
+it tells you when to come back here. If you have lost the link, ask for it again.
+The link carries your participant code, and nothing here works without it.
 
 ## What the session is
 
@@ -27,7 +27,7 @@ us. You can open both and read them first if you want to.
 
 We label everything with a code rather than your name, and we remove your name
 before anyone analyses the data. You can stop at any time, and we will delete
-your recording if you ask.
+your recording if you ask us to.
 
 ## What you need
 
@@ -38,8 +38,7 @@ You also need two programs that ask you to sign in, so please install them
 yourself:
 
 - Claude Code. Install it with `curl -fsSL https://claude.ai/install.sh | bash`.
-  You do not need to sign in, and you do not need to buy a plan. We provide the
-  account.
+  You do not need to sign in or buy a plan. We provide the account.
 - Visual Studio Code, from https://code.visualstudio.com. Open it once, press
   Cmd+Shift+P (Ctrl+Shift+P on Linux), and run the command
   "Shell Command: Install 'code' command in PATH".
@@ -106,5 +105,5 @@ Send us the output and we will fix it with you. Common problems:
   step above.
 - `claude` is not found. Close and reopen your terminal after installing it,
   because the installer changes your PATH.
-- The script stops on the Python step. Your machine may block downloads from
-  `astral.sh`. Tell us and we will send you a different bundle.
+- The script stops on the Python step. Your machine or network may block
+  downloads from `astral.sh`. Tell us and we will send you a different bundle.

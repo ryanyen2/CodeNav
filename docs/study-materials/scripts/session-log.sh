@@ -64,6 +64,9 @@ Git branch: $BRANCH
 Stop it with:
   kill \$(cat "$LOG/logger.pid")
 
-At the end of the session, also collect the Claude Code transcript:
-  cp -R ~/.claude/projects/*scribe* "$LOG/claude-transcript/"
+At the end of the session, run collect.sh — it packs the transcripts with
+everything else. They are NOT in ~/.claude/projects: each workspace runs the
+assistant under its own config directory, which is what keeps the study off the
+participant's account, so they are here:
+  $WS/.claude-study/projects/
 EOF

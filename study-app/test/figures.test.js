@@ -109,9 +109,9 @@ const RATINGS = Array.from({ length: 8 }, (_, p) => ITEMS.flatMap((it) => [
 function makeAll() {
     const counts = {
         codoc: tally([{ doc1: 6, doc2: 2, rev1: 5 }, { doc1: 7, doc2: 3, rev1: 6 },
-            { doc1: 5, doc2: 2, rev1: 4 }], ITEMS),
+            { doc1: 5, doc2: 2, rev1: 4 }], ITEMS).counts,
         baseline: tally([{ doc1: 3, doc2: 5, rev1: 4 }, { doc1: 2, doc2: 6, rev1: 3 },
-            { doc1: 4, doc2: 4, rev1: 5 }], ITEMS),
+            { doc1: 4, doc2: 4, rev1: 5 }], ITEMS).counts,
     };
     const byCondition = {};
     for (const c of ['codoc', 'baseline']) {
@@ -175,8 +175,8 @@ test('both Likert panels share one scale', () => {
     // answers look the same as a full one, which is the classic way to make a
     // small n disappear.
     const counts = {
-        codoc: tally([{ doc1: 7 }, { doc1: 7 }, { doc1: 7 }], ITEMS),
-        baseline: tally([{ doc1: 7 }], ITEMS),
+        codoc: tally([{ doc1: 7 }, { doc1: 7 }, { doc1: 7 }], ITEMS).counts,
+        baseline: tally([{ doc1: 7 }], ITEMS).counts,
     };
     const node = likert({ items: ITEMS, conditions: ['codoc', 'baseline'], counts, points: 7 });
     const widths = [...node.querySelectorAll('rect')]
@@ -185,6 +185,20 @@ test('both Likert panels share one scale', () => {
     const wide = Math.max(...widths);
     const narrow = Math.min(...widths.filter((w) => w > 1));
     assert.ok(wide > narrow * 2, 'one answer must not fill the panel like three do');
+});
+
+test('an answer off the scale is counted, not quietly dropped', () => {
+    // The workload block is answered on 0–100 in fives and is reported as a
+    // score rather than drawn here. If it is ever handed to this figure anyway,
+    // every bar would come out empty and the picture would look merely sparse.
+    const seven = tally([{ doc1: 7 }, { doc1: 55 }, { doc1: 4 }], ITEMS);
+    assert.equal(seven.offScale, 1);
+    assert.equal(seven.counts.doc1[6], 1, '7 lands on the last of seven points');
+
+    const tlx = tally([{ doc1: 55 }, { doc1: 0 }], ITEMS, { min: 0, max: 100, step: 5 });
+    assert.equal(tlx.offScale, 0);
+    assert.equal(tlx.counts.doc1.length, 21);
+    assert.equal(tlx.counts.doc1[11], 1, '55 is the twelfth of twenty-one marks');
 });
 
 test('the time profile sums to one in every slice', () => {

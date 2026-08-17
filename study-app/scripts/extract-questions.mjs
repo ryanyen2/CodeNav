@@ -25,13 +25,33 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const PROJECTS = join(here, '..', '..', 'docs', 'study-materials', 'projects');
 
-const BAND = /^###\s+(.+?)(?:\s+—.*)?$/;
+// The band is the first word or phrase of the heading, up to whatever separates
+// it from its gloss. Both separators are accepted: the headings were written with
+// an em dash and later rewritten with a colon, and reading only the dash form
+// meant every question landed in a band called "Purpose: what it is for, and
+// where it stops". It refuses rather than writes when a band comes out empty, so
+// that showed up as a refusal rather than as a silently unscoreable quiz.
+const BAND = /^###\s+(.+?)(?:\s*[—:].*)?$/;
 const QUESTION = /^\*\*Q(\d+)\.\s*(.+?)\*\*\s*$/;
+// A difficulty tag at the front of the question, which is recorded and then
+// REMOVED from what anybody is shown. A participant who reads "(hard)" answers
+// differently from one who does not, and the tag exists to check the spread of
+// the instrument, not to tell them how much to worry.
+const DIFFICULTY = /^\((easy|medium|hard)\)\s*/;
 const OPTION = /^-\s*([a-d])\)\s*(.+?)\s*$/;
 const CORRECT = /\s*✓\s*$/;
 
 export function parseQuiz(markdown) {
-    const start = markdown.indexOf('## The quiz');
+    return parseSection(markdown, '## The quiz');
+}
+
+/** The closed-book set asked straight after the task, about the change they made. */
+export function parseAfter(markdown) {
+    return parseSection(markdown, '## The after-task questions');
+}
+
+function parseSection(markdown, heading) {
+    const start = markdown.indexOf(heading);
     if (start < 0) return [];
     // Stop at the next second-level heading, so anything after the quiz — the
     // matching notes, for instance — cannot be read as a question.
@@ -58,10 +78,14 @@ export function parseQuiz(markdown) {
         const questionMatch = QUESTION.exec(line.trim());
         if (questionMatch) {
             finish();
+            let text = questionMatch[2].trim();
+            const tag = DIFFICULTY.exec(text);
+            if (tag) text = text.slice(tag[0].length);
             current = {
                 n: Number(questionMatch[1]),
                 band,
-                question: questionMatch[2].trim(),
+                difficulty: tag ? tag[1] : '',
+                question: text,
                 options: [],
                 answer: null,
             };
@@ -80,7 +104,7 @@ export function parseQuiz(markdown) {
     return questions;
 }
 
-function check(project, questions) {
+function check(project, questions, opts = {}) {
     const problems = [];
     if (!questions.length) problems.push('no questions found');
     for (const q of questions) {
@@ -100,11 +124,46 @@ function check(project, questions) {
     }
     const numbers = questions.map((q) => q.n);
     if (new Set(numbers).size !== numbers.length) problems.push('two questions share a number');
+
+    // Every question carries a difficulty, and the spread is checked here.
+    //
+    // A quiz where everything is hard measures who already knew the domain. One
+    // where everything is easy separates nobody. The tag never reaches the
+    // participant — it is stripped from the text and left out of the browser
+    // copy — and it exists so this can refuse a set that has drifted to one end.
+    for (const q of questions) {
+        if (!q.difficulty) problems.push(`Q${q.n} has no (easy|medium|hard) tag`);
+    }
+    const least = opts.leastPerLevel ?? 3;
+    for (const level of ['easy', 'medium', 'hard']) {
+        const n = questions.filter((q) => q.difficulty === level).length;
+        if (n < least) problems.push(`only ${n} ${level} questions; a spread needs at least ${least}`);
+    }
     return problems;
+}
+
+/**
+ * The two projects have to be the same instrument in a different domain.
+ *
+ * Each participant does one project each way, so a difference in difficulty
+ * between the projects lands entirely on whichever condition happened to get the
+ * harder one. Band for band and level for level, or the counterbalancing does
+ * not cancel it.
+ */
+function compare(all) {
+    const shape = (questions) => questions
+        .map((q) => `${q.band}/${q.difficulty}`).sort().join(',');
+    const [a, b] = Object.keys(all);
+    if (shape(all[a]) !== shape(all[b])) {
+        return [`${a} and ${b} do not match band for band and level for level:`,
+            `  ${a}: ${shape(all[a])}`, `  ${b}: ${shape(all[b])}`];
+    }
+    return [];
 }
 
 function main() {
     const out = {};
+    const afterOut = {};
     let failed = false;
 
     for (const project of ['scribe', 'tally']) {
@@ -118,16 +177,29 @@ function main() {
             continue;
         }
         const questions = parseQuiz(markdown);
-        const problems = check(project, questions);
+        const after = parseAfter(markdown);
+        // The after-task set is six, so it cannot carry three of each level.
+        const problems = [
+            ...check(project, questions),
+            ...check(project, after, { leastPerLevel: 1 }).map((p) => `after-task: ${p}`),
+        ];
         if (problems.length) {
             failed = true;
             console.error(`${project}:`);
             for (const problem of problems) console.error(`  ${problem}`);
         } else {
             console.log(`${project}: ${questions.length} questions, `
-                + `${new Set(questions.map((q) => q.band)).size} bands`);
+                + `${new Set(questions.map((q) => q.band)).size} bands`
+                + `, + ${after.length} after the task`);
         }
         out[project] = questions;
+        afterOut[project] = after;
+    }
+
+    const mismatch = failed ? [] : [...compare(out), ...compare(afterOut)];
+    if (mismatch.length) {
+        failed = true;
+        for (const line of mismatch) console.error(line);
     }
 
     if (failed) {
@@ -138,15 +210,17 @@ function main() {
     writeFileSync(join(here, '..', 'experimenter', 'questions.json'),
         `${JSON.stringify(out, null, 2)}\n`);
     console.log('wrote experimenter/questions.json');
+    writeFileSync(join(here, '..', 'experimenter', 'after-questions.json'),
+        `${JSON.stringify(afterOut, null, 2)}\n`);
+    console.log('wrote experimenter/after-questions.json');
 
     // The participant's copy, with the answers stripped. It ships to a browser,
     // and a participant who opened the console would otherwise find them — which
     // would make the second sitting a measure of their curiosity.
-    const forBrowser = {};
-    for (const [project, questions] of Object.entries(out)) {
-        forBrowser[project] = questions.map(({ n, band, question, options }) =>
-            ({ n, band, question, options }));
-    }
+    const strip = (set) => Object.fromEntries(Object.entries(set).map(([project, qs]) =>
+        [project, qs.map(({ n, band, question, options }) => ({ n, band, question, options }))]));
+    const forBrowser = strip(out);
+    const afterForBrowser = strip(afterOut);
     writeFileSync(join(here, '..', 'participant', 'quiz.js'),
 `// The quiz, as the participant sees it.
 //
@@ -156,6 +230,9 @@ function main() {
 //
 // Do not edit by hand. Run: npm run questions
 export const QUIZZES = Object.freeze(${JSON.stringify(forBrowser, null, 4)});
+
+// Asked straight after the task, closed book, about the change they just made.
+export const AFTER_QUIZZES = Object.freeze(${JSON.stringify(afterForBrowser, null, 4)});
 `);
     console.log('wrote participant/quiz.js');
 }

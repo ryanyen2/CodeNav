@@ -60,8 +60,8 @@ deploy the site afterwards or participants keep getting the old one.
 `scripts/setup.sh` runs on the participant's machine, from inside the unzipped
 bundle. It takes their code and their order, e.g.
 `./setup.sh p-abcdefghjkmn codoc-first`, and asks for them if they are left out.
-It installs everything, sets up all four project copies, files each one under the
-code, then checks they work. `./setup.sh --check` runs only the checks, and says
+It installs everything, unpacks the two workspaces that participant needs,
+files each one under the code, then checks they work. `./setup.sh --check` runs only the checks, and says
 whether the code is set.
 
 `scripts/test-setup.sh` runs on your machine and tests the part of `setup.sh`
@@ -78,11 +78,11 @@ send back. Also on their machine, also in the bundle.
 
 ## The scoring scripts
 
-There is no automatic scorer for the task any more, and that is the design rather
-than an omission. The old one checked three fixed behaviours; the outcome now is
-whether four open decisions are consistent with what the codebase already
-believes, and no script can read a diff for that. The rating guide is in each
-project's `STUDY.md` and the rating is done by hand, blind to condition.
+There is no automatic scorer for the task, and this is the design rather than an
+omission. The old scorer checked three fixed behaviours. The outcome now is
+whether four open decisions are consistent with what the codebase already does,
+and no script can read a diff for that. The rating guide is in each project's
+`STUDY.md`, and the rating is done by hand, blind to condition.
 
 What is mechanical is the gate: the existing tests still pass and the project
 still runs over all three sample inputs. Two commands, in Part 8 of the guide.
@@ -100,10 +100,11 @@ still on the call.
 `logger/` is a small VS Code extension that records which file is on screen, which
 lines, for how long, and how much text changed. It never records the text itself.
 
-It installs in **both** conditions. That is the point of it being separate from
-codoc: if only one condition logged navigation, every navigation result would
+It installs in **both** conditions, and this is the reason it is separate from
+codoc. If only one condition logged navigation, every navigation result would
 describe the tool rather than the person. Five measures come from this log and
-nowhere else, and `check-session-complete.py` names them when it is missing.
+from nowhere else. `check-session-complete.py` names them when the log is
+missing.
 
 ## Before you run anyone
 
@@ -118,4 +119,5 @@ nowhere else, and `check-session-complete.py` names them when it is missing.
   scoring tables are fixed from then on.
 - Run the three pilot sessions with the full protocol.
 - Build the two missing logs described in section 10 of the design doc, so what
-  people open and click is recorded in both conditions and not only in codoc.
+  people open and click is recorded in both conditions, not only in the codoc
+  condition.

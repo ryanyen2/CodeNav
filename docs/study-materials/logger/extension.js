@@ -103,6 +103,36 @@ function activate(context) {
 
     const cfg = vscode.workspace.getConfiguration('codocStudyLogger');
     participant = cfg.get('participant') || process.env.CODOC_STUDY_PARTICIPANT || '';
+
+    // No code means this is not a study workspace, and nothing here is recorded.
+    //
+    // Setup writes the code into each study project's own .vscode/settings.json,
+    // so a workspace without one is the participant's own work. This extension
+    // is installed globally and days ahead of the session, so without this check
+    // it recorded the file paths of every repo they opened in the meantime,
+    // under an empty code, into the same folder collect.sh sweeps, and therefore
+    // into the zip they email back. Their consent covers the study projects and
+    // nothing else.
+    //
+    // The commands are still registered, because "show what is being recorded"
+    // is how the researcher checks the logger before a task starts, and a
+    // command that does not exist is a worse answer than one that says why.
+    activation.logging = Boolean(participant);
+    if (!participant) {
+        const why = `No participant code is set in ${workspaceName || 'this window'}, `
+            + 'so nothing here is recorded. Only the study projects are logged.';
+        channel.appendLine(why);
+        context.subscriptions.push(
+            vscode.commands.registerCommand('codocStudyLogger.showLog', () => {
+                channel.appendLine(why);
+                channel.show();
+            }),
+            vscode.commands.registerCommand('codocStudyLogger.openStudyPage', () => {
+                void openStudyPage(cfg, true);
+            }));
+        return;
+    }
+
     out = cfg.get('file') || process.env.CODOC_STUDY_LOG || '';
     if (!out) {
         const dir = path.join(os.homedir(), 'codoc-study', 'session-logs');
@@ -207,7 +237,7 @@ function activate(context) {
 let mirror = null;
 const activation = { mirrorReady: null };
 
-const STUDY_PROJECTS = ['scribe', 'scribe-baseline', 'tally', 'tally-baseline'];
+const STUDY_PROJECTS = ['scribe', 'tally'];
 
 /** Whether this folder is one of the study's, so nothing is offered elsewhere. */
 function isStudyProject(name) {
@@ -277,8 +307,10 @@ async function startMirror(cfg, sub) {
         channel.appendLine(`mirror could not be loaded: ${err && err.message}`);
         return null;
     }
-    const condition = cfg.get('condition')
-        || (workspaceName.includes('baseline') ? 'baseline' : 'codoc');
+    // Set by setup, and the only thing on the machine that says which arm this
+    // is: the folders are named for the project alone, so there is no longer a
+    // folder name to fall back to guessing from.
+    const condition = cfg.get('condition') || '';
     mirror = new mod.Mirror({
         logPath: out, code, condition,
         config: mod.FIREBASE_CONFIG,

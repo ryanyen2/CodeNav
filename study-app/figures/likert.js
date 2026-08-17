@@ -212,18 +212,36 @@ export function likert(data, opts = {}) {
     return root;
 }
 
-/** Counts per point, from raw answers, for one condition. */
-export function tally(answersByParticipant, items, points = 7) {
-    const out = {};
+/**
+ * Counts per point, from raw answers, for one condition.
+ *
+ * The scale is passed in rather than assumed. This figure draws the seven-point
+ * blocks; the workload block is answered on twenty-one points and is reported
+ * as a score with an interval instead, because twenty-one bands per row is not
+ * a picture anybody reads. An answer off the scale's grid is
+ * returned as a count rather than dropped, so drawing an item on the wrong
+ * scale shows up as a number the caller can assert on rather than as a bar that
+ * is merely short.
+ *
+ * @returns {{ counts: Record<string, number[]>, offScale: number }}
+ */
+export function tally(answersByParticipant, items, scale = { min: 1, max: 7, step: 1 }) {
+    const step = scale.step || 1;
+    const points = Math.round((scale.max - scale.min) / step) + 1;
+    const counts = {};
+    let offScale = 0;
     for (const it of items) {
         const row = new Array(points).fill(0);
         for (const a of answersByParticipant) {
             const v = a && a[it.id];
-            if (typeof v === 'number' && v >= 1 && v <= points) row[v - 1] += 1;
+            if (typeof v !== 'number') continue;
+            const k = (v - scale.min) / step;
+            if (Number.isInteger(k) && k >= 0 && k < points) row[k] += 1;
+            else offScale += 1;
         }
-        out[it.id] = row;
+        counts[it.id] = row;
     }
-    return out;
+    return { counts, offScale };
 }
 
 export const LIKERT_WIDTH = WIDTH;

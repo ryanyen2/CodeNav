@@ -48,6 +48,27 @@ class Report:
                 print(f"            {detail}")
 
 
+def _exported_answers(root: Path) -> dict | None:
+    """Every answer set in the Firestore export, keyed by its name.
+
+    None means there is no export to read, which is different from an export
+    that has no answers in it: the first is a step not yet run, the second is
+    data that did not arrive.
+    """
+    found = find(root, "firestore-*.json")
+    if not found:
+        return None
+    try:
+        live = json.loads(found[0].read_text())
+    except Exception:
+        return None
+    out = {}
+    for entry in live.get("answers") or []:
+        name = entry.get("id") or entry.get("name") or ""
+        out[name] = entry.get("data") or entry
+    return out
+
+
 def load_jsonl(path: Path) -> list[dict]:
     out = []
     if not path.exists():
@@ -132,7 +153,8 @@ def main() -> int:
                f"{len(transcripts)} transcript file(s)")
     else:
         rep.gap("what the agent wrote back, and decision survival",
-                "no Claude Code transcript. Copy it from ~/.claude/projects before the machine is wiped.")
+                "no Claude Code transcript. Each workspace keeps its own under "
+                "codoc-study/<workspace>/.claude-study/projects — copy those before the machine is wiped.")
     rep.manual("who settled each open decision", "your notes and the think-aloud")
     rep.show("Question 1, who writes what")
 
@@ -171,7 +193,40 @@ def main() -> int:
 
     # ── question 3 and the task ──────────────────────────────────────────────
     rep.rows.clear()
-    rep.manual("the ten questions, closed book then open book", "your notes and the scoring tables")
+    # The two question sets, checked against the export when there is one.
+    #
+    # Both used to be listed as "your notes", from when the researcher read them
+    # out and marked them. The participant answers both on their own page now, so
+    # they arrive in the export and this can say whether they did.
+    live_answers = _exported_answers(root)
+    if live_answers is None:
+        rep.manual("the twelve questions, and what they said afterwards",
+                   "no Firestore export here yet; run scripts/export-session.mjs")
+    else:
+        quizzes = {k: v for k, v in live_answers.items() if k.startswith("quiz-")}
+        if quizzes:
+            timed = [k for k, v in quizzes.items() if v.get("elapsedMs")]
+            rep.ok("the twelve questions, open book and timed",
+                   f"{len(quizzes)} sitting(s), {len(timed)} with a time recorded")
+        else:
+            rep.gap("the twelve questions, open book and timed",
+                    "no quiz answers in the export, so this condition has no score")
+
+        # The closed-book half. Four written answers per condition, and the whole
+        # of what the study claims a description leaves behind.
+        reflects = {k: v for k, v in live_answers.items() if k.startswith("reflect-")}
+        written = sum(1 for v in reflects.values()
+                      for key in ("whatFor", "downstream", "decided", "next")
+                      if str(v.get(key) or "").strip())
+        if reflects and written:
+            rep.ok("what they said afterwards, from memory",
+                   f"{len(reflects)} condition(s), {written} written answer(s) to rate")
+        elif reflects:
+            rep.gap("what they said afterwards, from memory",
+                    "the step was reached but every box was left blank")
+        else:
+            rep.gap("what they said afterwards, from memory",
+                    "no reflection answers, so there is nothing to rate for this half")
     if projects:
         rep.ok("the three things being scored, and regressions",
                "run check-scribe.py or check-tally.py on the collected project")
@@ -297,8 +352,8 @@ def main() -> int:
     rep.show("Replaying the session")
 
     print("\nNot visible from here, and still your job:")
-    print("  the screen and audio recording, the sign-off, the answers to the")
-    print("  ten questions, and the questionnaires.")
+    print("  the screen and audio recording, and the rating of what they wrote")
+    print("  from memory, which is done afterwards and blind to condition.")
 
     if rep.missing:
         print(f"\n{rep.missing} measure(s) have no data. Fix before the participant leaves.")

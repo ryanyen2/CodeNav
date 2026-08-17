@@ -15,6 +15,7 @@ import { Node as PMModelNode } from '@tiptap/pm/model';
 import { codocSchema } from '../webview/tiptap/schema';
 import {
     parseTranslateProgress, TRANSLATE_LEASE_MS, TRANSLATE_LINGER_MS,
+    shouldQuietSkeleton,
 } from '../state/translate-model';
 import { pendingForTarget } from '../webview/doc-lang';
 import {
@@ -238,5 +239,38 @@ describe('ghostEditsFor: edits ride the verdict only when they differ', () => {
     it('a blanked title never rides (an empty title would blank the node)', () => {
         setGhostDraft('e-1', 'title', '   ');
         expect(ghostEditsFor(ghost)).toBeUndefined();
+    });
+});
+
+describe('a whole-document translation is guarded, not animated', () => {
+    const run = (pending: number, total: number) => ({
+        running: true, target: 'zh-Hans', targetName: 'Chinese (Simplified)',
+        total, translated: total - pending, skipped: [], pending: Array.from(
+            { length: pending }, (_, i) => `f-${i}`),
+    });
+
+    it('a few nodes in flight still shimmer — that is what the skeleton is for', () => {
+        expect(shouldQuietSkeleton(run(3, 25))).toBe(false);
+    });
+
+    it('a fresh language, where every node is pending, does not', () => {
+        // The reported bug: switching to a language the tree has never been in
+        // put all 25 nodes in the pending set, and the whole document dimmed and
+        // swept for the length of the run. The old prose was still there and
+        // still true; only its language was about to change.
+        expect(shouldQuietSkeleton(run(25, 25))).toBe(true);
+    });
+
+    it('and it comes back as the run drains past halfway', () => {
+        expect(shouldQuietSkeleton(run(13, 25))).toBe(true);
+        expect(shouldQuietSkeleton(run(12, 25))).toBe(false);
+    });
+
+    it('a run with nothing pending is never quiet, because it is not busy at all', () => {
+        expect(shouldQuietSkeleton(run(0, 25))).toBe(false);
+    });
+
+    it('a total of zero cannot divide, and reads as not-quiet', () => {
+        expect(shouldQuietSkeleton(run(0, 0))).toBe(false);
     });
 });

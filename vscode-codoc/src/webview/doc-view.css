@@ -2182,3 +2182,11 @@ body.vscode-high-contrast .ce-autoedit-del { color: var(--vscode-foreground); }
 }
 .tb-lang-later:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
 .tb-lang-item.translate .tb-lang-check { color: var(--dir-await); }
+
+/* A whole-document translation: guarded, but not animated.
+   The shimmer means "this section is being produced", which is true of a few
+   nodes in flight and misleading when every node is. The toolbar carries the
+   document-level fact ("translating 6/25"), so here the prose just stays
+   readable and slightly quieted until its batch lands. */
+.ce-busy-quiet { color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent); }
+.ce-busy-quiet::after { content: none; }

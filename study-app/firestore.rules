@@ -35,9 +35,20 @@ service cloud.firestore {
           && request.auth.token.get('email', '') in allowlist();
     }
 
-    // The two writers under a participant code. A third name is not a slot.
+    // The two writers under a participant code. A fourth name is not a slot.
     function isSlot(slot) {
       return slot in ['browser', 'mirror'];
+    }
+
+    // The setup script's slot, which is not a writer and is not claim-once.
+    //
+    // It only ever reads: the script signs in anonymously, takes this slot, reads
+    // the keys, and keeps nothing — no refresh token, no stored uid. So every run
+    // arrives as a different account, and a claim-once slot would lock a
+    // participant out of their own keys the second time they run setup, which is
+    // exactly when somebody is stuck and re-running it.
+    function isFetchSlot(slot) {
+      return slot == 'setup';
     }
 
     function participantExists(code) {
@@ -119,20 +130,31 @@ service cloud.firestore {
                       && resource.data.uid == request.auth.uid);
         allow list: if isExperimenter();
         allow create: if request.auth != null
-                      && isSlot(slot)
+                      && (isSlot(slot) || isFetchSlot(slot))
                       && participantOpen(code)
                       && request.resource.data.uid == request.auth.uid
                       && noIdentifyingFields();
-        // A slot is claimed once. Releasing is the experimenter's job, and it is
-        // how a participant who lost their browser storage gets back in.
-        allow update, delete: if isExperimenter();
+        // A writer slot is claimed once. Releasing is the experimenter's job, and
+        // it is how a participant who lost their browser storage gets back in.
+        // The setup slot is the exception: it is retaken on every run, because
+        // setup is meant to be safe to run again and its account is thrown away
+        // each time. It grants no more than a free slot already would.
+        allow update: if isExperimenter()
+                      || (request.auth != null
+                          && isFetchSlot(slot)
+                          && participantOpen(code)
+                          && request.resource.data.uid == request.auth.uid
+                          && noIdentifyingFields());
+        allow delete: if isExperimenter();
       }
 
       // This participant's copy of the keys. Readable by their own registered
       // devices and by nobody else — not by another participant, not by a
       // stranger with the collection path.
       match /secrets/{name} {
-        allow read: if isExperimenter() || isDevice(code);
+        allow read: if isExperimenter()
+                    || isDevice(code)
+                    || (request.auth != null && holdsSlot(code, 'setup'));
         allow write: if isExperimenter();
       }
 

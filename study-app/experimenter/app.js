@@ -16,7 +16,9 @@ import {
     connectFirestoreEmulator,
 } from 'firebase/firestore';
 import { timeline, legend, ribbon, patterns } from './charts.js';
-import { newParticipantCode } from '../shared/schema.js';
+import {
+    newParticipantCode, LANGUAGES, DEFAULT_LANGUAGE,
+} from '../shared/schema.js';
 import { fill, progress, nextOrder, isPilot, PARTICIPANTS } from '../shared/cohort.js';
 import { renderResults } from './results.js';
 import { esc } from '../shared/html.js';
@@ -25,8 +27,12 @@ import { comparableEpisodes, letters } from '../analysis/sequences.js';
 import { score } from '../analysis/ngrams.js';
 import {
     OPEN_DECISIONS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
-    questionsFor, bandsFor, score as quizScore, emptyAssessment, outstanding,
+    questionsFor, afterFor, bandsFor, score as quizScore, emptyAssessment, outstanding,
 } from './forms.js';
+// The interview is asked from the dashboard now, so its questions come from the
+// same instrument file the participant page uses. One copy, so the two cannot
+// drift into asking different things.
+import { INTERVIEW } from '../participant/instrument.js';
 
 const firebaseConfig = {
     apiKey: 'AIzaSyCeIFBc8HhCmtw9-pXjUm1qT3CUyo5GbkY',
@@ -55,6 +61,9 @@ const state = {
     participants: [],
     selected: null,
     condition: 'codoc',
+    // The language the NEXT participant is created in. Sticky for a run of
+    // recruiting, since a cohort is usually recruited in one language at a time.
+    newLang: DEFAULT_LANGUAGE,
     actions: [],
     unsubBatches: null,
     unsubAssessment: null,
@@ -114,7 +123,13 @@ async function showResults() {
 // Where the participant's own page lives. The order rides in the link because
 // the participant cannot read their own record, by design.
 const PARTICIPANT_PAGE = `${location.origin}/participant/`;
-const linkFor = (p) => `${PARTICIPANT_PAGE}?code=${p.code}&order=${p.order || 'codoc-first'}`;
+// Their link carries everything their page and their setup need, because the
+// participant document is deliberately not readable by the participant. A link
+// missing the language would run the page in English against workspaces built in
+// another one, which is the confound this whole feature exists to avoid.
+const linkFor = (p) => `${PARTICIPANT_PAGE}?code=${p.code}`
+    + `&order=${p.order || 'codoc-first'}`
+    + `&lang=${p.lang || DEFAULT_LANGUAGE}`;
 const setupFor = (p) => `./setup.sh ${p.code} ${p.order || 'codoc-first'}`;
 
 // ── signing in ───────────────────────────────────────────────────────────────
@@ -318,6 +333,11 @@ async function createInto(slot) {
         await setDoc(doc(db, 'participants', code), {
             createdAt: Date.now(),
             order: slot.order,
+            // The language the WHOLE session runs in: this page's, the questions,
+            // the task cards, both descriptions and both workspaces. Chosen here
+            // because it decides which workspace archives their setup unpacks,
+            // and setup runs days before anybody could change their mind.
+            lang: slot.lang || state.newLang || DEFAULT_LANGUAGE,
             pilot: slot.kind === 'pilot',
             released: false,
         });
@@ -354,6 +374,22 @@ function createNext(kind) {
 
 $('#new-participant').addEventListener('click', () => createNext('participant'));
 $('#new-pilot').addEventListener('click', () => createNext('pilot'));
+
+// Which language the next participant is created in. A select rather than a
+// per-participant edit: it decides which archives their setup unpacks, and setup
+// runs days ahead, so changing it afterwards would leave a machine already built
+// in the other language.
+const langPicker = $('#new-lang');
+if (langPicker) {
+    langPicker.replaceChildren(...LANGUAGES.map((code) => {
+        const o = document.createElement('option');
+        o.value = code;
+        o.textContent = code === 'en' ? 'English' : code === 'zh-Hans' ? '简体中文' : code;
+        return o;
+    }));
+    langPicker.value = state.newLang;
+    langPicker.onchange = () => { state.newLang = langPicker.value; };
+}
 
 // ── one participant ──────────────────────────────────────────────────────────
 
@@ -430,6 +466,7 @@ function renderDetail() {
         <div class="ribbon" id="ribbon"></div>
       </div>
       <div class="card" id="forms"></div>
+      <div class="card" id="interview"></div>
       <div class="card">
         <h3>What recurs</h3>
         <p class="hint">Ranked by how much more often each happens than its parts alone would predict, so the longest bar is not simply the commonest action twice.</p>
@@ -449,8 +486,10 @@ function renderDetail() {
     renderManage();
     renderHandoff();
     renderForms();
+    renderInterview();
     renderSession();
     watchAssessment();
+    watchInterview();
     watchQuiz();
     watchContact();
 }
@@ -796,6 +835,14 @@ function renderForms() {
       </div>
 
       <div class="form-block">
+        <h4>What they knew afterwards, from memory</h4>
+        <p class="hint">Six questions about the change they just made, answered on
+        their own page with the code, the description and the agent closed. They
+        have right answers, so nothing here needs marking by hand.</p>
+        <div id="their-reflection" class="said"></div>
+      </div>
+
+      <div class="form-block">
         <h4>Who settled what</h4>
         <p class="hint">The four things the card leaves open.</p>
         ${(OPEN_DECISIONS[state.project] || []).map((d) => `
@@ -823,6 +870,70 @@ function renderForms() {
     renderGaps();
 }
 
+// ── the closing interview ────────────────────────────────────────────────────
+//
+// Asked out loud, at the end, with both conditions done. It used to be typed by
+// the participant on their own page, which got short written answers to
+// questions whose whole value is in the follow-up, and asked somebody to write
+// for a quarter of an hour after two hours of work. The questions are here so
+// they are asked the same way every time, and the box is for what was said.
+//
+// Stored under its own name rather than per condition, because there is one
+// interview and it is about the pair.
+
+let interviewTimer;
+function saveInterview() {
+    state.interview.updatedAt = Date.now();
+    clearTimeout(interviewTimer);
+    interviewTimer = setTimeout(() => {
+        void setDoc(
+            doc(db, `participants/${state.selected}/assessments/interview`),
+            state.interview, { merge: true },
+        ).catch((err) => console.warn('interview not saved', err.code));
+    }, 500);
+}
+
+function watchInterview() {
+    if (state.unsubInterview) state.unsubInterview();
+    const path = `participants/${state.selected}/assessments/interview`;
+    state.unsubInterview = onSnapshot(doc(db, path), (snap) => {
+        const incoming = snap.exists() ? snap.data() : null;
+        // Same guard as the assessment: never stamp over a box being typed in.
+        if (!state.interview || !document.activeElement
+            || !document.activeElement.closest('#interview')) {
+            state.interview = incoming || {};
+            renderInterview();
+        }
+    }, () => { state.interview = state.interview || {}; });
+}
+
+function renderInterview() {
+    const el = $('#interview');
+    if (!el) return;
+    state.interview = state.interview || {};
+    const a = state.interview;
+
+    el.innerHTML = `
+      <h3>The closing interview</h3>
+      <p class="hint">Asked out loud, once, with both conditions done. The
+      participant's page tells them to expect it and shows them nothing. Type
+      what they say; the recording is the full record.</p>
+      ${INTERVIEW.map((part) => `
+        <div class="form-block">
+          <h4>${esc(part.title)}</h4>
+          ${part.questions.map((q) => `
+            <label class="iv">
+              <span class="iv-q">${esc(q.label)}</span>
+              <textarea rows="2" data-iv="${esc(q.id)}"
+                placeholder="what they said">${esc(a[q.id] || '')}</textarea>
+            </label>`).join('')}
+        </div>`).join('')}`;
+
+    for (const t of el.querySelectorAll('[data-iv]')) {
+        t.oninput = () => { a[t.dataset.iv] = t.value; saveInterview(); };
+    }
+}
+
 function projectFor(p, condition) {
     // scribe goes with whichever condition comes first, so the pairing of
     // project to condition alternates with the order and neither project is
@@ -834,12 +945,17 @@ function projectFor(p, condition) {
 }
 
 /**
- * What the participant answered, and what changed between the two sittings.
+ * What the participant answered, and how long it took them.
  *
  * Read only. The quiz is multiple choice and they answer it themselves, so
  * there is nothing to mark by hand — and a researcher marking during a session
  * would be scoring while listening, which is how a score ends up reflecting how
  * well somebody explained rather than what they knew.
+ *
+ * One sitting, before the task, answered with the description, the code and the
+ * agent all open and a clock running. The time is as much the result as the
+ * score: both ways of working can reach every answer, and the question is what
+ * it costs to get there.
  */
 function renderRounds() {
     const wrap = $('#rounds');
@@ -847,38 +963,39 @@ function renderRounds() {
     const project = state.project;
     const answers = (state.quiz && state.quiz[project]) || {};
     const before = quizScore({ answers }, project, 'before');
-    const after = quizScore({ answers }, project, 'after');
+    const took = (state.answers || {})[`quiz-${project}-before`] || {};
 
-    if (!before.answered && !after.answered) {
+    if (!before.answered) {
         wrap.innerHTML = `<p class="hint">The quiz appears here once they have
-          answered it. They do it on their own page, before and after the task.</p>`;
+          answered it. They do it on their own page, before the task, with
+          everything open.</p>`;
         return;
     }
 
+    const minutes = took.elapsedMs
+        ? `${Math.floor(took.elapsedMs / 60000)}m ${Math.round((took.elapsedMs % 60000) / 1000)}s`
+        : null;
+
     wrap.innerHTML = `
       <div class="quiz-score">
-        <span><b>${before.right}</b>/${before.of} before</span>
-        <span><b>${after.right}</b>/${after.of} after</span>
-        <span class="delta ${after.right > before.right ? 'up' : after.right < before.right ? 'down' : ''}">
-          ${after.right - before.right >= 0 ? '+' : ''}${after.right - before.right}</span>
+        <span><b>${before.right}</b>/${before.of} correct</span>
+        ${minutes ? `<span>in <b>${esc(minutes)}</b></span>` : ''}
       </div>
       ${bandsFor(project).map((group) => `
         <div class="band">
           <h5>${esc(group.band)}</h5>
           ${group.questions.map((q) => {
-        const b = answers[`q${q.n}-before`];
-        const a = answers[`q${q.n}-after`];
-        const mark = (given) => (given == null ? '<i class="unanswered">·</i>'
-            : given === q.answer ? '<i class="right">✓</i>' : `<i class="wrong">${esc(given)}</i>`);
+        const given = answers[`q${q.n}-before`];
+        const mark = given == null ? '<i class="unanswered">·</i>'
+            : given === q.answer ? '<i class="right">✓</i>' : `<i class="wrong">${esc(given)}</i>`;
         return `<div class="q-line">
-              <span class="q-marks">${mark(b)}${mark(a)}</span>
+              <span class="q-marks">${mark}</span>
               <span class="q-title">${q.n}. ${esc(q.question)}</span>
             </div>`;
     }).join('')}
         </div>`).join('')}
-      <p class="hint">Two marks per question: before, then after. A letter is the
-      wrong option they chose, which is usually more informative than the fact
-      that they were wrong.</p>`;
+      <p class="hint">A letter is the wrong option they chose, which is usually
+      more informative than the fact that they were wrong.</p>`;
 }
 
 function renderGaps() {
@@ -896,6 +1013,40 @@ function wireForms() {
 
     // Their sign-off, shown rather than typed. It arrives with everything else
     // they answer, so this only has to render it.
+    // Their four closed-book answers, shown rather than typed. Nothing here is
+    // scored during the session: rating what somebody wrote about their own
+    // change, while listening to them talk, is how a rating ends up measuring
+    // how well they explained rather than what they knew.
+    // The closed-book set, scored here because it has right answers. Read only:
+    // the participant answers it on their own page, and a researcher marking it
+    // during a session would be scoring while listening.
+    const rf = $('#their-reflection');
+    if (rf) {
+        const answers = (state.answers || {})[`reflect-${state.condition}`];
+        const set = afterFor(state.project);
+        if (!answers || !set.length) {
+            rf.innerHTML = '<span class="hint">Not answered yet.</span>';
+        } else {
+            const right = set.filter((q) => answers[`a${q.n}`] === q.answer).length;
+            rf.innerHTML = `
+              <div class="quiz-score">
+                <span><b>${right}</b>/${set.length} correct</span>
+                <span>sure of it: <b>${esc(String(answers.recall ?? '—'))}</b>/5</span>
+              </div>
+              ${set.map((q) => {
+        const given = answers[`a${q.n}`];
+        const mark = given == null ? '<i class="unanswered">·</i>'
+            : given === q.answer ? '<i class="right">✓</i>' : `<i class="wrong">${esc(given)}</i>`;
+        return `<div class="q-line">
+                  <span class="q-marks">${mark}</span>
+                  <span class="q-title">${q.n}. ${esc(q.question)}</span>
+                </div>`;
+    }).join('')}
+              <p class="hint">A letter is the wrong option they chose. The scale is
+              their own read on whether they knew it or worked it out just now.</p>`;
+        }
+    }
+
     const said = $('#their-signoff');
     if (said) {
         const sign = (state.answers || {})[`signoff-${state.condition}`];

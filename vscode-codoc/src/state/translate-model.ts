@@ -65,3 +65,22 @@ export function parseTranslateProgress(
             : [],
     };
 }
+
+/**
+ * Whether this run should shimmer each node, or just guard them quietly.
+ *
+ * The per-node skeleton means "this section is being produced". That reads
+ * correctly when a few nodes are in flight. It reads wrongly when every node is:
+ * translating a tree into a language it has never held puts the whole document in
+ * the pending set at once, and the result was every section dimmed and sweeping
+ * for the length of the run, with the old prose — still perfectly true, just in
+ * the previous language — underneath it. Nothing was gained, because the toolbar
+ * already carries the document-level fact ("translating 6/25").
+ *
+ * Above half the document, the animation drops and only the edit guard stays.
+ * The guard is not negotiable at any size: typing into a paragraph that is about
+ * to be replaced wholesale merges a keystroke against text that is already gone.
+ */
+export function shouldQuietSkeleton(tr: TranslationProgress): boolean {
+    return tr.total > 0 && tr.pending.length > tr.total / 2;
+}

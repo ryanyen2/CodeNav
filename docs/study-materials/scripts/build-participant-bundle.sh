@@ -44,6 +44,7 @@ run bash "$MAT/scripts/test-setup.sh"
 echo "Building the study logger."
 run node "$MAT/logger/test-classify.js"
 run node "$MAT/logger/test-extension.js"
+run node "$MAT/logger/test-scope.js"
 run node --test "$MAT/logger/test-composition.js"
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
     --allow-missing-repository --skip-license --out "$OUT/" )
@@ -53,20 +54,37 @@ echo "Built $(basename "$LOGGER")"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp "$VSIX" "$LOGGER" "$STAGE/"
 cp "$EXT"/bundled/codoc-*.whl "$STAGE/"
-cp "$MAT"/workspaces/scribe.tar.gz "$STAGE/"
-cp "$MAT"/workspaces/tally.tar.gz "$STAGE/"
+# Every language's archives. A session runs entirely in ONE of them: the page,
+# the questions, the task cards and BOTH descriptions. Translating one arm and
+# not the other would make language vary with condition, so the languages are
+# whole sets and setup picks a set, never a file.
+#
+# '' is English, whose archives carry no suffix.
+LANGS=('' '.zh-Hans')
+for suffix in "${LANGS[@]}"; do
+  cp "$MAT/workspaces/scribe$suffix.tar.gz" "$STAGE/"
+  cp "$MAT/workspaces/tally$suffix.tar.gz" "$STAGE/"
+done
 
-# Repack the baseline with the skill text from this repo, so the copy under
+# Repack each baseline with the skill text from this repo, so the copy under
 # docs/study-materials/baseline/ is the only place the skill is ever edited.
-echo "Installing the doc-maintenance skill into the baseline workspace."
-for base in scribe-baseline tally-baseline; do
-  TMP="$(mktemp -d)"
-  tar xzf "$MAT/workspaces/$base.tar.gz" -C "$TMP"
-  mkdir -p "$TMP/$base/.claude/skills/doc-maintenance"
-  cp "$MAT/baseline/doc-maintenance/SKILL.md" \
-     "$TMP/$base/.claude/skills/doc-maintenance/SKILL.md"
-  ( cd "$TMP" && COPYFILE_DISABLE=1 tar czf "$STAGE/$base.tar.gz" "$base" )
-  rm -rf "$TMP"
+#
+# The skill is the instruction the baseline agent works from, so it is translated
+# with everything else. An English skill inside a Chinese workspace would have the
+# agent writing English back into a description the participant is reading in
+# Chinese — the same confound, one layer down.
+echo "Installing the doc-maintenance skill into the baseline workspaces."
+for suffix in "${LANGS[@]}"; do
+  skill="$MAT/baseline/doc-maintenance/SKILL${suffix}.md"
+  [ -f "$skill" ] || { echo "  no doc-maintenance skill for '${suffix:-en}'"; exit 1; }
+  for base in scribe-baseline tally-baseline; do
+    TMP="$(mktemp -d)"
+    tar xzf "$MAT/workspaces/$base$suffix.tar.gz" -C "$TMP"
+    mkdir -p "$TMP/$base/.claude/skills/doc-maintenance"
+    cp "$skill" "$TMP/$base/.claude/skills/doc-maintenance/SKILL.md"
+    ( cd "$TMP" && COPYFILE_DISABLE=1 tar czf "$STAGE/$base$suffix.tar.gz" "$base" )
+    rm -rf "$TMP"
+  done
 done
 
 mkdir -p "$STAGE/logger"

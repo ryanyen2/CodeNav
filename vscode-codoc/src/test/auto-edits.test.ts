@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     displacedHuman, editKey, unseenEdits, pruneSeen, catchUpLabel,
+    keepAllLabel, keepAllVerdicts,
 } from '../state/auto-edits';
 import type { AutoEdit } from '../state/bindings-model';
 
@@ -85,5 +86,52 @@ describe('the catch-up line spends words only on the distinction that matters', 
     it('separates the two when the batch is mixed', () => {
         expect(catchUpLabel([{ edit: edit({ written_by: 'human' }) }, { edit: edit() }]))
             .toBe('codoc rewrote 2 descriptions (1 of yours)');
+    });
+});
+
+describe('keeping the lot at once', () => {
+    const unseen = (...kinds: string[]) =>
+        kinds.map((written_by, i) => ({ fid: `f${i}`, edit: edit({ at: String(i), written_by }) }));
+
+    it('says how many there are', () => {
+        expect(keepAllLabel(unseen('loop', 'loop', 'loop'))).toBe('✓ Keep all (3)');
+    });
+
+    it("names the ones that replaced the reader's own wording", () => {
+        // The one thing a bulk verdict can hide. Accept-all names the proposals
+        // that ask the agent to write code; this names the rewrites of your prose.
+        expect(keepAllLabel(unseen('loop', 'human', 'human'))).toBe('✓ Keep all (3, 2 of your wording)');
+    });
+
+    it('says nothing when there is nothing owed', () => {
+        expect(keepAllLabel([])).toBe('');
+    });
+
+    it('sends one keep per rewrite, and keeps every one of them', () => {
+        // Keep is the verdict that changes nothing, which is why it may be given
+        // in bulk at all. If any of these came out as a Restore it would rewrite
+        // a description nobody asked it to.
+        const rows = unseen('loop', 'human');
+        const out = keepAllVerdicts(rows);
+        expect(out).toHaveLength(2);
+        expect(out.every(v => v.keep)).toBe(true);
+        expect(out.map(v => v.fid)).toEqual(['f0', 'f1']);
+    });
+
+    it('carries each rewrite own HLC, so a later rewrite is still unseen', () => {
+        // The seen-set is keyed by fid@at. Sending the wrong `at` would mark a
+        // rewrite that has not happened yet as already acknowledged.
+        const rows = [
+            { fid: 'a', edit: edit({ at: '7', prev: 'was A' }) },
+            { fid: 'b', edit: edit({ at: '9', prev: 'was B' }) },
+        ];
+        expect(keepAllVerdicts(rows)).toEqual([
+            { fid: 'a', at: '7', keep: true, prev: 'was A' },
+            { fid: 'b', at: '9', keep: true, prev: 'was B' },
+        ]);
+    });
+
+    it('does nothing when nothing is owed', () => {
+        expect(keepAllVerdicts([])).toEqual([]);
     });
 });

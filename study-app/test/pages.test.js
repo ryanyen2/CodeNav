@@ -10,7 +10,7 @@
 // code runs at all.
 //
 //   node --test test/pages.test.js
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { build } from 'esbuild';
@@ -113,8 +113,18 @@ async function loadPage(page, storage, code = 'p-abcdefghjkmn') {
     } catch (err) {
         errors.push(String(err && err.message));
     }
+    // Every window this file makes, so they can all be shut at the end.
+    //
+    // A page is allowed to run a repeating timer — the question round shows a
+    // countdown — and a jsdom window with a pending timer keeps Node's event
+    // loop alive. Left open, this file ran every assertion, passed, and then
+    // never exited, which reads exactly like a hung test.
+    OPEN.push(dom);
     return { dom, errors, window: dom.window, document: dom.window.document };
 }
+
+const OPEN = [];
+after(() => { for (const d of OPEN) d.window.close(); OPEN.length = 0; });
 
 // ── the dashboard ────────────────────────────────────────────────────────────
 
@@ -156,10 +166,25 @@ test('the dashboard hands over a link and a command, both carrying the code', as
 
     const shown = [...document.querySelectorAll('.give-row code')].map((c) => c.textContent);
     assert.equal(shown.length, 2, 'a link and a command');
-    assert.match(shown[0], /\/participant\/\?code=p-abcdefghjkmn&order=baseline-first$/);
-    // The order has to ride in the link: a participant cannot read their own
-    // record, so a bare link would silently run them in the wrong order.
+    // The order AND the language have to ride in the link: a participant cannot
+    // read their own record, so anything missing from the link is a session run
+    // with the wrong setting and nothing on either side saying so. A missing
+    // language would run the page in English against workspaces built in another,
+    // which is the confound the whole feature exists to avoid.
+    assert.match(shown[0],
+        /\/participant\/\?code=p-abcdefghjkmn&order=baseline-first&lang=en$/);
     assert.equal(shown[1], './setup.sh p-abcdefghjkmn baseline-first');
+});
+
+test('a participant created in another language gets it on their link', async () => {
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn',
+            data: () => ({ createdAt: 1, order: 'codoc-first', lang: 'zh-Hans' }) }],
+    });
+    const shown = [...document.querySelectorAll('.give-row code')].map((c) => c.textContent);
+    assert.match(shown[0], /&lang=zh-Hans$/);
 });
 
 test('it says which half of the handoff has not landed', async () => {
@@ -586,6 +611,35 @@ test('every step in the session renders', async () => {
         assert.ok(text.length > 40,
             `step ${at} (${steps[at].kind}) rendered almost nothing`);
     }
+});
+
+test('the workload block is TLX as published, and says which task it is about', async () => {
+    // Three implementation errors this catches, all of which produce a page that
+    // looks perfectly fine and numbers that cannot be compared to anything:
+    // collecting on seven points, hiding the subscale definitions, and asking
+    // about "the session" instead of a task.
+    const { buildSteps } = await import('../participant/steps.js');
+    const steps = buildSteps('codoc-first');
+    const at = steps.findIndex((s) => s.kind === 'questionnaire');
+    const { document } = await participantAt(at);
+
+    const row = (id) => document.querySelector(`.q[data-q="${id}"]`);
+    assert.equal(row('tlxMental').querySelectorAll('button').length, 21,
+        'TLX is collected on its own 21 points');
+    assert.equal(row('doc1').querySelectorAll('button').length, 7,
+        'the agreement blocks stay on seven');
+
+    assert.match(row('tlxMental').textContent, /Mental demand/);
+    assert.match(row('tlxMental').textContent, /thinking, deciding, calculating/,
+        'the definition is on screen, not in a manual');
+
+    const ends = [...row('tlxSuccess').querySelectorAll('.end')].map((e) => e.textContent);
+    assert.deepEqual(ends, ['Failure', 'Perfect'],
+        'the item that gets reversed in scoring must say which end is which');
+
+    const block = row('tlxMental').closest('.block');
+    assert.match(block.textContent, /scribe/,
+        'the workload block names the task rather than the session');
 });
 
 test('the task card is a picture, and its words are in no text node', async () => {

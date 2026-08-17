@@ -10,7 +10,53 @@ export const QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "Somebody moves the character normalising so it runs first instead of last. What breaks?",
+            "question": "Jane wants scribe to keep the tables out of a report. Can it?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Yes, it rebuilds them from where the columns sat"
+                },
+                {
+                    "letter": "b",
+                    "text": "Yes, but only for tables with a header row"
+                },
+                {
+                    "letter": "c",
+                    "text": "No: the table is gone before scribe is handed anything"
+                },
+                {
+                    "letter": "d",
+                    "text": "No, but it marks the place where a table was"
+                }
+            ]
+        },
+        {
+            "n": 2,
+            "band": "Purpose",
+            "question": "Raj makes heading detection stricter, so fewer lines become headings. Which other part of the output changes?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Footnotes, because a note number looks like a heading number"
+                },
+                {
+                    "letter": "b",
+                    "text": "Character normalising, because heading text is normalised separately"
+                },
+                {
+                    "letter": "c",
+                    "text": "The paragraphs, because a line that is no longer a heading joins the prose around it"
+                },
+                {
+                    "letter": "d",
+                    "text": "Nothing else: headings are decided line by line and touch nothing else"
+                }
+            ]
+        },
+        {
+            "n": 3,
+            "band": "Purpose",
+            "question": "Raj moves the character normalising so it runs first instead of last. What breaks?",
             "options": [
                 {
                     "letter": "a",
@@ -31,101 +77,9 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 2,
-            "band": "Purpose",
-            "question": "Somebody makes heading detection stricter so fewer things become headings. Which other rule is most likely to start behaving differently?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Footnotes, because a note number looks like a heading number"
-                },
-                {
-                    "letter": "b",
-                    "text": "Character normalising, because heading text is normalised separately"
-                },
-                {
-                    "letter": "c",
-                    "text": "Paragraph reflow, because what is no longer a heading joins the prose around it"
-                },
-                {
-                    "letter": "d",
-                    "text": "None: heading detection is decided line by line and touches nothing else"
-                }
-            ]
-        },
-        {
-            "n": 3,
-            "band": "Purpose",
-            "question": "Which piece of information does scribe have while removing page furniture, and no longer have afterwards?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Which words were hyphenated across a line break"
-                },
-                {
-                    "letter": "b",
-                    "text": "The order the pages came in"
-                },
-                {
-                    "letter": "c",
-                    "text": "Where each line sat on its page"
-                },
-                {
-                    "letter": "d",
-                    "text": "Which characters were ligatures"
-                }
-            ]
-        },
-        {
             "n": 4,
-            "band": "Purpose",
-            "question": "The output cannot be both faithful to the page and easy to search. Which did scribe choose?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Easy to search, even where that loses how the page looked"
-                },
-                {
-                    "letter": "b",
-                    "text": "Faithful to the page, even where that makes it awkward to search"
-                },
-                {
-                    "letter": "c",
-                    "text": "Whatever the input already was, unchanged"
-                },
-                {
-                    "letter": "d",
-                    "text": "Faithful for prose and searchable for everything else"
-                }
-            ]
-        },
-        {
-            "n": 5,
             "band": "Rationale",
-            "question": "A word is split across a line break as `well-` then `being`. What comes out?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "`wellbeing`, because the hyphen was the typesetter's"
-                },
-                {
-                    "letter": "b",
-                    "text": "`well-being`, because the hyphen is part of the word"
-                },
-                {
-                    "letter": "c",
-                    "text": "`well- being`, leaving the break visible"
-                },
-                {
-                    "letter": "d",
-                    "text": "`well-being` only if the word appears elsewhere in the document unbroken"
-                }
-            ]
-        },
-        {
-            "n": 6,
-            "band": "Rationale",
-            "question": "A word is split as `photogram-` then `metric`. What comes out?",
+            "question": "A word is split across a line break as `photogram-` then `metric`. What comes out?",
             "options": [
                 {
                     "letter": "a",
@@ -146,30 +100,30 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 7,
+            "n": 5,
             "band": "Rationale",
-            "question": "A three-page report has the same line at the top of two of its pages. What happens to it?",
+            "question": "A word is split as `well-` then `being`. What comes out?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It is kept, because two pages is not a pattern"
+                    "text": "`wellbeing`, because the hyphen was the typesetter's"
                 },
                 {
                     "letter": "b",
-                    "text": "It is dropped, because two of three is over the threshold"
+                    "text": "`well-being`, because that hyphen belongs to the word"
                 },
                 {
                     "letter": "c",
-                    "text": "It is kept on the first page and dropped on the second"
+                    "text": "`well- being`, leaving the break visible"
                 },
                 {
                     "letter": "d",
-                    "text": "It is dropped only if a page number appears with it"
+                    "text": "`well-being`, but only if the word appears unbroken elsewhere in the document"
                 }
             ]
         },
         {
-            "n": 8,
+            "n": 6,
             "band": "Rationale",
             "question": "A line reads `3. We asked each participant to describe what they had understood.` What does scribe make of it?",
             "options": [
@@ -192,9 +146,32 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 9,
+            "n": 7,
             "band": "Change",
-            "question": "Footnote markers used to be found after any full stop. What went wrong?",
+            "question": "A three-page report has the same line at the top of two of its three pages. What happens to that line?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "It is kept, because two pages is not a pattern"
+                },
+                {
+                    "letter": "b",
+                    "text": "It is dropped: two pages out of three is over the threshold"
+                },
+                {
+                    "letter": "c",
+                    "text": "It is kept on the first page and dropped on the second"
+                },
+                {
+                    "letter": "d",
+                    "text": "It is dropped only if a page number appears with it"
+                }
+            ]
+        },
+        {
+            "n": 8,
+            "band": "Change",
+            "question": "Footnote markers used to be found after any full stop, and that rule was changed. What was going wrong?",
             "options": [
                 {
                     "letter": "a",
@@ -206,7 +183,7 @@ export const QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "c",
-                    "text": "Every decimal number in the document became a footnote reference"
+                    "text": "Every decimal number in the document was read as a footnote reference"
                 },
                 {
                     "letter": "d",
@@ -215,9 +192,9 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 10,
+            "n": 9,
             "band": "Change",
-            "question": "Page furniture is removed before headings are found. What does that cost?",
+            "question": "Page furniture is removed before headings are looked for. What does that ordering cost?",
             "options": [
                 {
                     "letter": "a",
@@ -229,7 +206,7 @@ export const QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "c",
-                    "text": "A real heading that happens to repeat is gone before anything can rescue it"
+                    "text": "A real heading that happens to repeat is gone before the heading rule can see it"
                 },
                 {
                     "letter": "d",
@@ -238,9 +215,32 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
+            "n": 10,
+            "band": "Extension",
+            "question": "Jane wants scribe to recognise a new kind of block. Where does that go?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Into `lines.py`, with the rest of the parsing"
+                },
+                {
+                    "letter": "b",
+                    "text": "Into a policy module of its own, and into the order in `convert.py`"
+                },
+                {
+                    "letter": "c",
+                    "text": "Into `text.py`, with the other rewriting"
+                },
+                {
+                    "letter": "d",
+                    "text": "Anywhere: the rules do not depend on each other"
+                }
+            ]
+        },
+        {
             "n": 11,
-            "band": "Change",
-            "question": "Two guards stop furniture removal from firing on a short document. One is a minimum number of pages. What is the other?",
+            "band": "Extension",
+            "question": "Two guards stop furniture removal firing on a short document. One is a minimum number of pages. What is the other?",
             "options": [
                 {
                     "letter": "a",
@@ -248,7 +248,7 @@ export const QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "b",
-                    "text": "A minimum number of lines on the page, so that a margin means anything"
+                    "text": "A minimum number of lines on a page, so that being near the edge means something"
                 },
                 {
                     "letter": "c",
@@ -263,7 +263,7 @@ export const QUIZZES = Object.freeze({
         {
             "n": 12,
             "band": "Extension",
-            "question": "You want the running header kept on a one-off letter but still dropped from a report. What is the obstacle?",
+            "question": "Jane wants the running header kept on a one-page letter but still dropped from a long report. What stands in the way?",
             "options": [
                 {
                     "letter": "a",
@@ -271,7 +271,7 @@ export const QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "b",
-                    "text": "Nothing scribe can see distinguishes them: it is handed text and no more"
+                    "text": "Nothing scribe can see tells them apart: it is handed text and nothing else"
                 },
                 {
                     "letter": "c",
@@ -288,7 +288,53 @@ export const QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "Somebody moves the sign-flipping step so it runs last instead of first. What breaks?",
+            "question": "Jane wants tally to tell her whether she can afford a holiday. Can it?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Yes, from the recurring payments and the monthly totals"
+                },
+                {
+                    "letter": "b",
+                    "text": "Yes, if she gives it a target to save towards"
+                },
+                {
+                    "letter": "c",
+                    "text": "No: it reports what was spent and has no opinion beyond that"
+                },
+                {
+                    "letter": "d",
+                    "text": "No, but it flags the months where spending rose"
+                }
+            ]
+        },
+        {
+            "n": 2,
+            "band": "Purpose",
+            "question": "Raj makes the transfer rule stricter, so fewer rows count as transfers. Which other rule starts behaving differently?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Categorisation, because transfers have no category"
+                },
+                {
+                    "letter": "b",
+                    "text": "Rounding, because the totals change"
+                },
+                {
+                    "letter": "c",
+                    "text": "Duplicate removal, because transfers are the rows it was told to leave alone"
+                },
+                {
+                    "letter": "d",
+                    "text": "Nothing else: the two are applied to different columns"
+                }
+            ]
+        },
+        {
+            "n": 3,
+            "band": "Purpose",
+            "question": "Raj moves the sign-flipping step so it runs last instead of first. What breaks?",
             "options": [
                 {
                     "letter": "a",
@@ -309,78 +355,32 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 2,
-            "band": "Purpose",
-            "question": "Somebody makes the transfer rule stricter, so fewer rows count as transfers. Which other rule starts behaving differently?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Categorisation, because transfers have no category"
-                },
-                {
-                    "letter": "b",
-                    "text": "Rounding, because the totals change"
-                },
-                {
-                    "letter": "c",
-                    "text": "Duplicate removal, because transfers are the rows it is told to leave alone"
-                },
-                {
-                    "letter": "d",
-                    "text": "None: the two are applied to different columns"
-                }
-            ]
-        },
-        {
-            "n": 3,
-            "band": "Purpose",
-            "question": "Which piece of information does tally read from the bank's file and then never use again?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "The amount"
-                },
-                {
-                    "letter": "b",
-                    "text": "The posting date, once a transaction date has been found"
-                },
-                {
-                    "letter": "c",
-                    "text": "The merchant description"
-                },
-                {
-                    "letter": "d",
-                    "text": "The account name"
-                }
-            ]
-        },
-        {
             "n": 4,
-            "band": "Purpose",
-            "question": "A summary cannot both match the bank's statement line by line and match what the person remembers doing. Which did tally choose?",
+            "band": "Rationale",
+            "question": "A merchant matches no category rule at all. What happens to that transaction?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The bank's statement, because that is the authoritative record"
+                    "text": "The row is dropped"
                 },
                 {
                     "letter": "b",
-                    "text": "What the person remembers, because it is their own statement they are reading"
+                    "text": "The run stops and asks"
                 },
                 {
                     "letter": "c",
-                    "text": "Neither: it reports both dates side by side"
+                    "text": "It is counted in a bucket of its own, which appears in the summary"
                 },
                 {
                     "letter": "d",
-                    "text": "The bank's, for dates, and the person's, for categories"
+                    "text": "It is guessed at from the amount"
                 }
             ]
         },
         {
             "n": 5,
             "band": "Rationale",
-            "question": "A transaction is made on the 31st of January and posted on the 2nd of February. Which month is it in?",
+            "question": "A payment is made on the 31st of January and posted by the bank on the 2nd of February. Which month does tally put it in?",
             "options": [
                 {
                     "letter": "a",
@@ -396,35 +396,12 @@ export const QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "d",
-                    "text": "February, unless the summary for January has already been written"
+                    "text": "February, unless January's summary has already been written"
                 }
             ]
         },
         {
             "n": 6,
-            "band": "Rationale",
-            "question": "The same merchant is charged £11.99 in each of three months. Is it recurring?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "No: three months is not long enough to be sure"
-                },
-                {
-                    "letter": "b",
-                    "text": "No: only a payment with a reference the bank marks as a standing order counts"
-                },
-                {
-                    "letter": "c",
-                    "text": "Yes: same merchant and same amount, in three months"
-                },
-                {
-                    "letter": "d",
-                    "text": "Yes, and it would be recurring at three different amounts too"
-                }
-            ]
-        },
-        {
-            "n": 7,
             "band": "Rationale",
             "question": "A row's merchant matches both the utilities rule and the fuel rule. What happens?",
             "options": [
@@ -447,32 +424,32 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 8,
-            "band": "Rationale",
-            "question": "A merchant matches no rule at all. What happens?",
+            "n": 7,
+            "band": "Change",
+            "question": "The same merchant charges £11.99 in each of three months. Does tally call that recurring?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The row is dropped"
+                    "text": "No: three months is not long enough to be sure"
                 },
                 {
                     "letter": "b",
-                    "text": "The run stops and asks"
+                    "text": "No: only a payment the bank marks as a standing order counts"
                 },
                 {
                     "letter": "c",
-                    "text": "It is counted in a bucket of its own, which appears in the summary"
+                    "text": "Yes: same merchant, same amount, three months"
                 },
                 {
                     "letter": "d",
-                    "text": "It is guessed at from the amount"
+                    "text": "Yes, and it would be recurring at three different amounts too"
                 }
             ]
         },
         {
-            "n": 9,
+            "n": 8,
             "band": "Change",
-            "question": "Transfers are exempted from duplicate removal. What would go wrong without that?",
+            "question": "Transfers are exempted from duplicate removal. What would go wrong without that exemption?",
             "options": [
                 {
                     "letter": "a",
@@ -493,7 +470,7 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 10,
+            "n": 9,
             "band": "Change",
             "question": "Rounding happens once, at the total, rather than on each row. What does that cost?",
             "options": [
@@ -516,32 +493,55 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 11,
-            "band": "Change",
-            "question": "A refund arrives in February for something bought in January. What do the two months show?",
+            "n": 10,
+            "band": "Extension",
+            "question": "Jane's bank exports a column tally does not recognise. What does she change?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "January shows nothing, February shows nothing: they cancel"
+                    "text": "The CSV itself, to rename the column"
                 },
                 {
                     "letter": "b",
-                    "text": "January shows the purchase reduced by the refund"
+                    "text": "The list of names in `rows.py` that each field is matched against"
                 },
                 {
                     "letter": "c",
-                    "text": "January shows the purchase, February shows the money coming back"
+                    "text": "`summary.py`, where the pipeline runs"
                 },
                 {
                     "letter": "d",
-                    "text": "Both show the purchase, and the refund is listed separately"
+                    "text": "Nothing: an unknown column is worked out from what is in it"
+                }
+            ]
+        },
+        {
+            "n": 11,
+            "band": "Extension",
+            "question": "Adding `shell energy` to the category rules means deciding one thing beyond the pattern itself. What?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Which month it starts applying from"
+                },
+                {
+                    "letter": "b",
+                    "text": "Where in the list it goes, because the first rule that matches wins"
+                },
+                {
+                    "letter": "c",
+                    "text": "Whether it counts as a recurring payment"
+                },
+                {
+                    "letter": "d",
+                    "text": "What to do when the amount is positive"
                 }
             ]
         },
         {
             "n": 12,
             "band": "Extension",
-            "question": "You want a refund to reduce the month the purchase was in. What is the obstacle?",
+            "question": "Jane wants a refund to reduce the month the purchase was in. What stands in the way?",
             "options": [
                 {
                     "letter": "a",
@@ -558,6 +558,290 @@ export const QUIZZES = Object.freeze({
                 {
                     "letter": "d",
                     "text": "The two months could be in different files"
+                }
+            ]
+        }
+    ]
+});
+
+// Asked straight after the task, closed book, about the change they just made.
+export const AFTER_QUIZZES = Object.freeze({
+    "scribe": [
+        {
+            "n": 1,
+            "band": "Purpose",
+            "question": "Your change turns some passages into Markdown block quotes. What decides which passages?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "The words in them, matched against a list"
+                },
+                {
+                    "letter": "b",
+                    "text": "Something about their shape on the page, which is all `lines.py` keeps"
+                },
+                {
+                    "letter": "c",
+                    "text": "Their font, which the extracted text records"
+                },
+                {
+                    "letter": "d",
+                    "text": "Their position in the document, counted from the top"
+                }
+            ]
+        },
+        {
+            "n": 2,
+            "band": "Purpose",
+            "question": "A line that is now inside a quote. Which existing behaviour is most likely to treat it differently than before?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Whether its ligatures were normalised"
+                },
+                {
+                    "letter": "b",
+                    "text": "Which page it is recorded on"
+                },
+                {
+                    "letter": "c",
+                    "text": "Whether it was joined into the paragraph around it"
+                },
+                {
+                    "letter": "d",
+                    "text": "Whether it counted toward the furniture threshold"
+                }
+            ]
+        },
+        {
+            "n": 3,
+            "band": "Rationale",
+            "question": "You chose how a quote is recognised. What makes a rule based on font inconsistent with the rest of scribe, whatever its merits?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Markdown cannot express a font"
+                },
+                {
+                    "letter": "b",
+                    "text": "It would be slower than the other rules"
+                },
+                {
+                    "letter": "c",
+                    "text": "`lines.py` keeps text, page and index and nothing else, so no rule downstream has a font to look at"
+                },
+                {
+                    "letter": "d",
+                    "text": "The other rules are all in one file and it would have to be too"
+                }
+            ]
+        },
+        {
+            "n": 4,
+            "band": "Rationale",
+            "question": "`furniture.strip` runs before anything looks for quotes. For a quote that runs across a page break, what does that ordering do?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "It splits the quote, because the running header lands between the halves"
+                },
+                {
+                    "letter": "b",
+                    "text": "It joins them, because the running header is gone before quotes are looked for"
+                },
+                {
+                    "letter": "c",
+                    "text": "It drops the quote, because furniture removal takes the whole block"
+                },
+                {
+                    "letter": "d",
+                    "text": "Nothing: the two rules never see the same lines"
+                }
+            ]
+        },
+        {
+            "n": 5,
+            "band": "Change",
+            "question": "Suppose you had put quote detection BEFORE `furniture.strip` instead. What would have started going wrong?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Nothing: the two are independent"
+                },
+                {
+                    "letter": "b",
+                    "text": "Quotes would lose their indentation"
+                },
+                {
+                    "letter": "c",
+                    "text": "A quote crossing a page break would have the running header inside it"
+                },
+                {
+                    "letter": "d",
+                    "text": "Headings would stop being recognised"
+                }
+            ]
+        },
+        {
+            "n": 6,
+            "band": "Extension",
+            "question": "Somebody picks this up tomorrow and wants a rule that runs before yours. What do they have to decide that they would not have to in a codebase of independent rules?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Which file to put it in"
+                },
+                {
+                    "letter": "b",
+                    "text": "Whether to give its threshold a named constant"
+                },
+                {
+                    "letter": "c",
+                    "text": "Where in `convert.py`'s fixed order it goes, because the order is load-bearing"
+                },
+                {
+                    "letter": "d",
+                    "text": "Whether to write a fixture for it"
+                }
+            ]
+        }
+    ],
+    "tally": [
+        {
+            "n": 1,
+            "band": "Purpose",
+            "question": "Your change lets one purchase be split across two categories. Where does a split have to be written down?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "In a separate file the run is pointed at"
+                },
+                {
+                    "letter": "b",
+                    "text": "In the transaction's own row or rows, because that is where every other fact about it lives"
+                },
+                {
+                    "letter": "c",
+                    "text": "On the command line, as an argument"
+                },
+                {
+                    "letter": "d",
+                    "text": "In the summary, after the fact"
+                }
+            ]
+        },
+        {
+            "n": 2,
+            "band": "Purpose",
+            "question": "A transaction that is now split in two. Which existing rule is most likely to treat it differently than before?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "The month it is counted in"
+                },
+                {
+                    "letter": "b",
+                    "text": "Whether it is recognised as recurring"
+                },
+                {
+                    "letter": "c",
+                    "text": "Duplicate removal, because two equal halves on one day at one merchant is the shape it matches"
+                },
+                {
+                    "letter": "d",
+                    "text": "The sign convention applied to its amount"
+                }
+            ]
+        },
+        {
+            "n": 3,
+            "band": "Rationale",
+            "question": "You decided whether a split counts as one transaction or two. What makes the count a decision rather than an implementation detail?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "It changes how the rows are stored"
+                },
+                {
+                    "letter": "b",
+                    "text": "It changes which month the halves land in"
+                },
+                {
+                    "letter": "c",
+                    "text": "The number is in the summary the person reads, so a loop deciding it by accident still publishes it"
+                },
+                {
+                    "letter": "d",
+                    "text": "It changes whether the duplicate rule fires"
+                }
+            ]
+        },
+        {
+            "n": 4,
+            "band": "Rationale",
+            "question": "`categorise` sends anything unmatched to `uncategorised`, and `summary` counts that bucket. For a split where one half matches a rule and the other does not, what does that mean?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "The whole transaction is dropped, because it is ambiguous"
+                },
+                {
+                    "letter": "b",
+                    "text": "The whole transaction goes to `uncategorised`, because any doubt sends it there"
+                },
+                {
+                    "letter": "c",
+                    "text": "Each half can be categorised on its own, so only the unmatched half lands in the bucket"
+                },
+                {
+                    "letter": "d",
+                    "text": "The run stops and asks which category to use"
+                }
+            ]
+        },
+        {
+            "n": 5,
+            "band": "Change",
+            "question": "Suppose you had made the duplicate key finer — adding the reference — so the halves stopped matching. What else would that have changed?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Nothing: the key is only used for splits"
+                },
+                {
+                    "letter": "b",
+                    "text": "Transfers would stop being exempted"
+                },
+                {
+                    "letter": "c",
+                    "text": "Duplicate detection would loosen for every ordinary transaction, not just for splits"
+                },
+                {
+                    "letter": "d",
+                    "text": "The months would be recomputed"
+                }
+            ]
+        },
+        {
+            "n": 6,
+            "band": "Extension",
+            "question": "Somebody adds a new category rule tomorrow. What do they have to decide that they would not have to in a codebase of independent rules?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Which file to put it in"
+                },
+                {
+                    "letter": "b",
+                    "text": "Whether it applies to refunds"
+                },
+                {
+                    "letter": "c",
+                    "text": "Where in `categories.RULES` it goes, because the first rule that matches wins"
+                },
+                {
+                    "letter": "d",
+                    "text": "Whether to write a fixture for it"
                 }
             ]
         }

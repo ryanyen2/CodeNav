@@ -129,15 +129,29 @@ export const RESPONSIBILITY = Object.freeze([
  * once here rather than improvised on a call where one participant gets a fuller
  * explanation than the next.
  */
+/**
+ * The workspace trust prompt, in both conditions.
+ *
+ * VS Code asks whether you trust a folder the first time you open it, and until
+ * you say yes it runs in Restricted Mode with every extension DISABLED. That is
+ * silent: the editor looks normal, the files open, and the study logger and codoc
+ * simply never start. The session would then record nothing at all, which is the
+ * one failure that cannot be repaired afterwards.
+ */
+const TRUST = 'VS Code will ask whether you trust the folder. Choose "Yes, I trust '
+    + 'the authors". Until you do, it turns off extensions, and this study needs '
+    + 'them running.';
+
 export const HOW_TO_START = Object.freeze({
     codoc: {
         title: 'The way of working with codoc',
         folder: (p) => `~/codoc-study/${p}`,
         steps: [
-            ['Open the folder in VS Code.', null],
+            ['Open this folder in VS Code.', '{folder}'],
+            [TRUST, null],
             ['Open a terminal inside VS Code and run this. Leave it running for the whole task.', '~/codoc-study/codoc watch --root {folder}'],
-            ['Open the written description: press Cmd+Shift+P and run "codoc: Open".', null],
-            ['Open a second terminal and start the coding agent with this. Use it rather than plain claude — it runs on the study\'s account, not yours.', './claude-study'],
+            ['Open the written description: press Cmd+Shift+P and run "codoc: Open". It opens as a tab, beside your code.', null],
+            ['Open a second terminal and start the coding agent with this. Use it rather than plain claude, so it runs on the study\'s account rather than yours.', './claude-study'],
             ['Open a third terminal for running the project.', null],
         ],
         about: [
@@ -148,10 +162,11 @@ export const HOW_TO_START = Object.freeze({
     },
     baseline: {
         title: 'The way of working without codoc',
-        folder: (p) => `~/codoc-study/${p}-baseline`,
+        folder: (p) => `~/codoc-study/${p}`,
         steps: [
-            ['Open the folder in VS Code.', null],
-            ['Open a terminal inside VS Code and start the coding agent with this. Use it rather than plain claude — it runs on the study\'s account, not yours.', './claude-study'],
+            ['Open this folder in VS Code.', '{folder}'],
+            [TRUST, null],
+            ['Open a terminal inside VS Code and start the coding agent with this. Use it rather than plain claude, so it runs on the study\'s account rather than yours.', './claude-study'],
             ['Open a second terminal for running the project.', null],
         ],
         about: [

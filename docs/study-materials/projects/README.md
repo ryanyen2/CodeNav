@@ -15,23 +15,25 @@ archives, which means nobody has ever reviewed a line of them.
 
 Each project holds four documents:
 
-- `README.md` — what a developer opening the folder reads
-- `ABOUT.md` — what the participant reads, two minutes, no assumed knowledge
-- `STUDY.md` — the task card, the four rated decisions, the twelve-question quiz
+- `README.md`: what a developer opening the folder reads
+- `ABOUT.md`: what the participant reads, two minutes, no assumed knowledge
+- `STUDY.md`: the task card, the four rated decisions, the twelve-question quiz
 - the code, the fixtures and the tests
 
 `STUDY.md` is never shipped to a participant.
 
 ## Why these, and not hearth and ember
 
-The first pilot could not run. Two thousand lines across fifteen files, a few
-minutes, a stranger: both conditions floored and nothing was compared. The
-bottleneck was search, and an agent searches instantly, so the human was a
-spectator and the two arms looked alike.
+The first pilot could not run. The original codebases had two thousand lines
+across fifteen files. A stranger working in a few minutes scored at the floor in
+both conditions, so there was nothing to compare. The bottleneck was finding
+code, and an agent finds code instantly, so the participant had nothing to do and
+the two conditions looked alike.
 
-These are built so the task is **easy to implement and hard to decide**. The agent
-writes the change in a minute either way. What the person has to supply is
-judgement, and judgement depends on knowing why the existing code decided what it
-decided — which is the thing under test.
+These projects are built so the task is **easy to implement and hard to decide**.
+The agent writes the change in a minute in either condition. What the participant
+has to supply is judgement, and judgement depends on knowing why the existing code
+made the choices it made. Understanding those choices is the thing the study
+measures.
 
 The design is `../../plans/2026-08-16-001-task-redesign.md`.

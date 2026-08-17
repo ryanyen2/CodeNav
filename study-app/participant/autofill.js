@@ -21,7 +21,7 @@
 // silently stop covering a question the moment one was added.
 import {
     PRESTUDY, REQUIRED, EXCLUDING, AFTER_CONDITION, MANIPULATION_CHECK,
-    SCENARIOS, SIGNOFF, INTERVIEW_QUESTIONS, scaleFor,
+    SCENARIOS, SIGNOFF, REFLECTION, scaleFor,
 } from './instrument.js';
 import { QUIZZES } from './quiz.js';
 
@@ -86,11 +86,11 @@ export function defaultsFor(step, project) {
         case 'signoff':
             for (const q of SIGNOFF) out[q.id] = answer(q);
             break;
+        case 'reflect':
+            for (const q of REFLECTION) out[q.id] = answer(q);
+            break;
         case 'scenarios':
             for (const s of SCENARIOS) out[s.id] = 'No preference';
-            break;
-        case 'interview':
-            for (const q of INTERVIEW_QUESTIONS) out[q.id] = SAID;
             break;
         default:
             return null;    // nothing to answer; the step is read and moved past
