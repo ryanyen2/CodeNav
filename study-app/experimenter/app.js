@@ -60,6 +60,8 @@ const state = {
     unsubAssessment: null,
     unsubQuiz: null,
     unsubDevices: null,
+    unsubContact: null,
+    contact: {},
     devices: [],
     assessment: null,
     quiz: {},
@@ -246,14 +248,22 @@ async function createInto(slot) {
 
 $('#show-results').addEventListener('click', () => { void showResults(); });
 
-$('#new-participant').addEventListener('click', () => {
+/**
+ * Create the next of a kind.
+ *
+ * Two buttons rather than one, because the kind cannot be recovered later: it is
+ * baked into the code, and a pilot created as a participant would quietly enter
+ * the analysis. Asking at the only moment it is knowable is cheaper than any
+ * amount of fixing afterwards.
+ */
+function createNext(kind) {
     const { slots } = fill(state.participants);
-    const open = slots.find((s) => s.kind === 'participant' && !s.participant)
-        || slots.find((s) => !s.participant);
-    void createInto(open || {
-        kind: 'participant', order: nextOrder(state.participants),
-    });
-});
+    const open = slots.find((s) => s.kind === kind && !s.participant);
+    void createInto(open || { kind, order: nextOrder(state.participants, kind) });
+}
+
+$('#new-participant').addEventListener('click', () => createNext('participant'));
+$('#new-pilot').addEventListener('click', () => createNext('pilot'));
 
 // ── one participant ──────────────────────────────────────────────────────────
 
@@ -315,6 +325,7 @@ function renderDetail() {
         <span class="sub">${p.order || 'order not set'}</span>
       </div>
       <div class="card handoff" id="handoff"></div>
+      <div class="card manage" id="manage"></div>
       <div class="tabs" id="tabs"></div>
       <div class="stats" id="stats"></div>
       <div class="card">
@@ -345,11 +356,141 @@ function renderDetail() {
         tabs.append(b);
     }
     legend($('#legend'));
+    renderManage();
     renderHandoff();
     renderForms();
     renderSession();
     watchAssessment();
     watchQuiz();
+    watchContact();
+}
+
+// ── managing one participant ─────────────────────────────────────────────────
+
+/**
+ * Who this is, and what can be done to them.
+ *
+ * The name and the note are held in a separate collection that the export never
+ * touches, so a collaborator who is given a session's data cannot see who it
+ * belonged to. That separation is the whole reason it is not simply a field on
+ * the participant.
+ */
+function renderManage() {
+    const el = $('#manage');
+    if (!el) return;
+    const p = state.participants.find((x) => x.code === state.selected);
+    if (!p) return;
+    const c = state.contact || {};
+
+    el.innerHTML = `
+      <h3>Who this is</h3>
+      <p class="hint">Kept apart from their session data, and never exported with
+      it. For your own scheduling; nobody analysing the results sees it.</p>
+      <div class="who-row">
+        <label>Name<input id="c-name" value="${esc(c.name || '')}" placeholder="For your list"></label>
+        <label>Email<input id="c-email" value="${esc(c.email || '')}" placeholder="For scheduling"></label>
+      </div>
+      <label class="who-note">Note
+        <textarea id="c-note" rows="2" placeholder="When they are booked, anything to remember">${esc(c.note || '')}</textarea>
+      </label>
+
+      <h3 class="manage-h">Managing this ${isPilot(p) ? 'pilot' : 'participant'}</h3>
+      <div class="manage-row">
+        <label class="toggle">
+          <input type="checkbox" id="m-excluded" ${p.excluded ? 'checked' : ''}>
+          Leave out of the analysis
+        </label>
+        <span class="hint">${p.excluded
+            ? 'Their session still counts as having happened, and is not analysed.'
+            : 'Use this if something went wrong, or they should not have been run.'}</span>
+      </div>
+      <div class="manage-row">
+        <button id="m-reset">Reset their data</button>
+        <span class="hint">Clears every answer and session this code holds, and frees
+        their devices. The code and the order stay, so they can start again.</span>
+      </div>
+      <div class="manage-row">
+        <button id="m-delete" class="danger">Delete</button>
+        <span class="hint">Removes the code and everything under it. There is no undo.</span>
+      </div>`;
+
+    for (const [id, key] of [['c-name', 'name'], ['c-email', 'email'], ['c-note', 'note']]) {
+        const input = el.querySelector(`#${id}`);
+        input.oninput = () => saveContact(key, input.value);
+    }
+    el.querySelector('#m-excluded').onchange = (e) => void setExcluded(p.code, e.target.checked);
+    el.querySelector('#m-reset').onclick = () => void resetParticipant(p.code);
+    el.querySelector('#m-delete').onclick = () => void deleteParticipant(p.code);
+}
+
+let contactTimer;
+function saveContact(key, value) {
+    state.contact = { ...(state.contact || {}), [key]: value };
+    clearTimeout(contactTimer);
+    contactTimer = setTimeout(() => {
+        void setDoc(doc(db, `contacts/${state.selected}`),
+            { ...state.contact, updatedAt: Date.now() }, { merge: true })
+            .catch((err) => console.warn('contact not saved', err.code));
+    }, 500);
+}
+
+function watchContact() {
+    if (state.unsubContact) state.unsubContact();
+    state.contact = {};
+    state.unsubContact = onSnapshot(doc(db, `contacts/${state.selected}`), (snap) => {
+        // Not while somebody is typing into it.
+        if (document.activeElement && document.activeElement.closest('#manage')) return;
+        state.contact = snap.exists() ? snap.data() : {};
+        renderManage();
+    }, () => { state.contact = {}; });
+}
+
+async function setExcluded(code, excluded) {
+    try {
+        await setDoc(doc(db, 'participants', code), { excluded }, { merge: true });
+    } catch (err) {
+        alert(`Could not change that: ${err.code || err.message}`);
+    }
+}
+
+/** Everything under a participant, so a code can be handed out again. */
+async function clearUnder(code) {
+    for (const c of CONDITIONS) {
+        const batches = await getDocs(
+            collection(db, `participants/${code}/sessions/${c}/batches`));
+        for (const d of batches.docs) await deleteDoc(d.ref);
+    }
+    for (const sub of ['answers', 'assessments', 'devices']) {
+        const snap = await getDocs(collection(db, `participants/${code}/${sub}`));
+        for (const d of snap.docs) await deleteDoc(d.ref);
+    }
+}
+
+async function resetParticipant(code) {
+    if (!confirm(`Reset ${code}?\n\nEvery answer and session this code holds is `
+        + 'deleted, and their devices are freed. The code and the order stay, so '
+        + 'they can start again with the same link.\n\nThere is no undo.')) return;
+    try {
+        await clearUnder(code);
+        alert(`${code} is empty again. Their existing link still works.`);
+    } catch (err) {
+        alert(`Could not reset: ${err.code || err.message}`);
+    }
+}
+
+async function deleteParticipant(code) {
+    if (!confirm(`Delete ${code}?\n\nThe code and everything under it goes. `
+        + 'If you only want them out of the results, tick "leave out of the '
+        + 'analysis" instead — that keeps the record that a session happened.'
+        + '\n\nThere is no undo.')) return;
+    try {
+        await clearUnder(code);
+        await deleteDoc(doc(db, 'contacts', code)).catch(() => {});
+        await deleteDoc(doc(db, 'participants', code));
+        state.selected = null;
+    } catch (err) {
+        alert(`Could not delete: ${err.code || err.message}`);
+    }
 }
 
 // ── handing the session over ─────────────────────────────────────────────────

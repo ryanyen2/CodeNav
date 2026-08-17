@@ -21,7 +21,7 @@ import {
     assertFails,
     assertSucceeds,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, collection, getDocs, addDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PROJECT = 'codoc-study-rules-test';
@@ -248,4 +248,42 @@ test('an action batch carrying an identifying field is refused', async () => {
     await claim(db, CODE, 'mirror', 'u1');
     await assertFails(addDoc(collection(db, `participants/${CODE}/sessions/codoc/batches`),
         { seq: 1, actions: [], email: 'alex@example.com' }));
+});
+
+// ── who a code belongs to ────────────────────────────────────────────────────
+
+test('a participant cannot read the contact record for their own code', async () => {
+    // The code is the credential for everything else they touch, and this is
+    // the one thing it must not open. A name is the whole of what separates a
+    // session log from a person.
+    const them = anon('someone');
+    await assertFails(getDoc(doc(them, 'contacts/p-abcdefghjkmn')));
+});
+
+test('a signed-out stranger cannot read one either', async () => {
+    await assertFails(getDoc(doc(nobody(), 'contacts/p-abcdefghjkmn')));
+});
+
+test('the experimenter can keep a name and an email there', async () => {
+    // The one place identifying detail is allowed, and it is a separate
+    // collection so that exporting a session cannot pick it up by accident.
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, 'contacts/p-abcdefghjkmn'),
+        { name: 'A Person', email: 'a@example.com', note: 'booked Tuesday' }));
+});
+
+test('a name is still refused on the participant document itself', async () => {
+    // Where it would travel with the session data by default.
+    const me = experimenter();
+    await assertFails(setDoc(doc(me, 'participants/p-abcdefghjkmn'),
+        { createdAt: 1, order: 'codoc-first', name: 'A Person' }));
+});
+
+test('only the experimenter can delete a participant', async () => {
+    const me = experimenter();
+    await assertSucceeds(setDoc(doc(me, 'participants/p-todelete000'),
+        { createdAt: 1, order: 'codoc-first', released: false }));
+    const them = anon('someone-else');
+    await assertFails(deleteDoc(doc(them, 'participants/p-todelete000')));
+    await assertSucceeds(deleteDoc(doc(me, 'participants/p-todelete000')));
 });

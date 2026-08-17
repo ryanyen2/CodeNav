@@ -13,7 +13,7 @@ import {
     getFirestore, doc, getDoc, setDoc, connectFirestoreEmulator, serverTimestamp,
 } from 'firebase/firestore';
 import {
-    CONSENT_FORM, PRESTUDY_FORM, SCREENING, AFTER_CONDITION, CONSTRUCTS,
+    CONSENT_FORM, PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS,
     scaleFor, MANIPULATION_CHECK, SCENARIOS, DEBRIEF, TASK_CARDS,
     PROJECTS, RESPONSIBILITY, HOW_TO_START, QUIZZES, buildSteps, answerDoc,
 } from './steps.js';
@@ -170,7 +170,7 @@ function render() {
 function complete(step) {
     const a = answersFor(step);
     const given = (id) => a[id] !== undefined && String(a[id]).trim() !== '';
-    if (step.kind === 'screening') return SCREENING.every((q) => given(q.id));
+    if (step.kind === 'prestudy') return REQUIRED.every((id) => given(id));
     if (step.kind === 'questionnaire') {
         // The free-text answer is optional. Blocking on it would buy blank
         // characters typed to get past the button, which is worse than no answer.
@@ -209,18 +209,22 @@ const VIEWS = {
         <iframe src="${CONSENT_FORM}" height="900" title="Consent form"></iframe>
         <p>When you have submitted it, continue.</p>`,
 
-    prestudy: () => `
+    prestudy: (step) => {
+        const a = answersFor(step);
+        const shown = PRESTUDY.filter((q) => {
+            if (!q.showWhen) return true;
+            // A follow-up appears only once the answer that calls for it is
+            // given, so nobody is asked to self-describe something they did not
+            // choose to.
+            const [key, value] = Object.entries(q.showWhen)[0];
+            return a[key] === value;
+        });
+        return `
         <h1>A few questions about you</h1>
-        <p>So we can describe who took part. There are no right answers, and the
-        first field asks for your code, which is at the top of this page.</p>
-        <iframe src="${PRESTUDY_FORM}" height="2536" title="Pre-study questionnaire"></iframe>
-        <p>When you have submitted it, continue.</p>`,
-
-    screening: (step) => `
-        <h1>One more</h1>
-        <p>This one is here rather than in the form above because the researcher
-        needs to see it before the session.</p>
-        ${SCREENING.map((q) => field(q, answersFor(step)[q.id])).join('')}`,
+        <p class="lead">So we can describe who took part. There are no right
+        answers, and you can skip anything marked optional.</p>
+        ${shown.map((q) => field(q, a[q.id])).join('')}`;
+    },
 
     setup: () => `
         <h1>Set up your machine</h1>
@@ -397,6 +401,21 @@ function field(q, value) {
             <div class="choices">${q.options.map((o) => `
                 <button type="button" data-value="${esc(o)}"
                     aria-pressed="${String(value === o)}">${esc(o)}</button>`).join('')}</div>
+        </div>`;
+    }
+    if (q.type === 'scale5') {
+        const dots = [];
+        for (let i = 1; i <= 5; i += 1) {
+            dots.push(`<button type="button" data-value="${i}"
+                aria-label="${i}" aria-pressed="${String(value === i)}">${i}</button>`);
+        }
+        return `<div class="q" data-q="${q.id}">
+            <span class="label">${esc(q.label)}</span>
+            <div class="scale">
+                <span class="end">${esc(q.low)}</span>
+                <div class="dots">${dots.join('')}</div>
+                <span class="end high">${esc(q.high)}</span>
+            </div>
         </div>`;
     }
     if (q.type === 'longtext') {

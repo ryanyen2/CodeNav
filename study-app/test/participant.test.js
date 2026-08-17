@@ -5,9 +5,9 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import {
-    SCREENING, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, scaleFor, keyed,
+    PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, scaleFor, keyed,
     SCENARIOS, TASK_CARDS, PROJECTS, HOW_TO_START,
-    buildSteps, answerDoc, shouldExclude, CONSENT_FORM, PRESTUDY_FORM,
+    buildSteps, answerDoc, shouldExclude, CONSENT_FORM,
 } from '../participant/steps.js';
 
 let drawCard;
@@ -181,7 +181,7 @@ test('somebody who never reads a diff is flagged for exclusion', () => {
 });
 
 test('the screening question does not tell them which answer excludes', () => {
-    const q = SCREENING.find((x) => x.id === 'readsDiff');
+    const q = PRESTUDY.find((x) => x.id === 'readsDiff');
     assert.ok(!/exclud|disqualif|must/i.test(q.label),
         'saying so would stop the answer being honest');
 });
@@ -252,7 +252,7 @@ test('consent points at the Google form and not at our own database', () => {
 test('no question anywhere asks for a name or an email', () => {
     // Those live in the consent form. The rules would refuse them anyway, but a
     // question that cannot be saved is a worse failure than one never asked.
-    const all = [...SCREENING, ...SCENARIOS.map((s) => ({ label: s.text })),
+    const all = [...PRESTUDY, ...SCENARIOS.map((s) => ({ label: s.text })),
         ...AFTER_CONDITION.map((q) => ({ label: q.text }))];
     for (const q of all) {
         assert.ok(!/\b(name|e-?mail|address|phone)\b/i.test(q.label || ''),
@@ -260,22 +260,36 @@ test('no question anywhere asks for a name or an email', () => {
     }
 });
 
-test('demographics go to Google, and only the screening answer is stored here', () => {
-    // Gender and age belong with consent, not beside a session log in the study
-    // database. The cost is that those answers are joined by hand, keyed on the
-    // code typed into the form, and that trade is deliberate.
-    assert.match(PRESTUDY_FORM, /^https:\/\/docs\.google\.com\/forms\//);
+test('everything except consent is asked in one place', () => {
+    // It used to be split, which made the page explain its own plumbing: "this
+    // one is here rather than in the form above because the researcher needs to
+    // see it". Consent stays in Google because that is where a signature
+    // belongs; nothing else does.
     assert.match(CONSENT_FORM, /^https:\/\/docs\.google\.com\/forms\//);
-    assert.notEqual(PRESTUDY_FORM, CONSENT_FORM);
-    assert.equal(SCREENING.length, 1,
-        'anything more asked here is something the Google form already asks');
+    assert.ok(PRESTUDY.length >= 8, 'the whole questionnaire is here');
+    assert.ok(PRESTUDY.some((q) => q.id === 'readsDiff'), 'including the screening item');
+});
+
+test('the two questions that could identify somebody can be declined', () => {
+    // A paper has to describe who took part, which is why they are asked at all.
+    // Neither is required, and gender offers a way out that is not a refusal.
+    const gender = PRESTUDY.find((q) => q.id === 'gender');
+    assert.ok(gender.options.includes('Prefer not to say'));
+    assert.ok(!REQUIRED.includes('age'), 'age is optional');
+});
+
+test('a follow-up only appears once it is called for', () => {
+    // Nobody is asked to describe something they did not choose.
+    const self = PRESTUDY.find((q) => q.id === 'genderSelf');
+    assert.deepEqual(self.showWhen, { gender: 'Prefer to self-describe' });
+    assert.ok(!REQUIRED.includes('genderSelf'), 'and it is never required');
 });
 
 test('the session leaves nowhere for the researcher to improvise', () => {
     // Every step either shows something written down or collects something. A
     // step whose content lives on the call is a step that differs per session.
     const kinds = new Set(buildSteps('codoc-first').map((s) => s.kind));
-    for (const needed of ['intro', 'about', 'task', 'questionnaire', 'debrief']) {
+    for (const needed of ['intro', 'about', 'task', 'questionnaire', 'debrief', 'prestudy']) {
         assert.ok(kinds.has(needed), `no ${needed} step`);
     }
 });

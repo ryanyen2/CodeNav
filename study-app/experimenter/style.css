@@ -380,3 +380,37 @@ table.key td { color: var(--ink-soft); padding: 4px 0; line-height: 1.5; }
 .q-marks .wrong { color: var(--warn); }
 .q-marks .unanswered { color: var(--ink-faint); }
 .q-line .q-title { color: var(--ink-soft); }
+
+/* ── managing one participant ────────────────────────────────────────────── */
+
+.manage h3 { margin-bottom: 3px; }
+.manage h3.manage-h { margin-top: 22px; }
+.who-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.who-row label, .who-note {
+    display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px;
+    font-size: 11.5px; color: var(--ink-faint);
+    text-transform: uppercase; letter-spacing: 0.06em;
+}
+.who-note { text-transform: none; letter-spacing: 0; font-size: 12.5px; }
+.who-row input, .who-note textarea {
+    font: inherit; font-size: 13.5px; text-transform: none; letter-spacing: 0;
+    color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 7px 10px;
+}
+.who-row input:focus, .who-note textarea:focus { outline: none; border-color: var(--accent); }
+
+.manage-row {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 9px 0; border-top: 1px solid var(--line);
+}
+.manage-row .hint { margin: 0; flex: 1; min-width: 220px; }
+.manage-row .toggle {
+    display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer;
+}
+/* Destructive, and it should look it without shouting. */
+.manage-row button.danger { border-color: var(--warn); color: var(--warn); }
+.manage-row button.danger:hover { background: var(--warn); color: var(--bg); border-color: var(--warn); }
+
+.roster-head { flex-wrap: wrap; }
+.roster-head button { margin-left: 0; }
+.roster-head h2 { width: 100%; margin-bottom: 6px; }

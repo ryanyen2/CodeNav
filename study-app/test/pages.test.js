@@ -443,3 +443,97 @@ test('a pilot slot mints a pilot code', async () => {
     await new Promise((r) => setTimeout(r, 20));
     assert.match(window.__written[1], /^participants\/p-/);
 });
+
+// ── creating, and managing ───────────────────────────────────────────────────
+
+async function dashboardWith(docs) {
+    const page = await loadPage('experimenter');
+    page.window.__written = [];
+    page.window.__deleted = [];
+    page.window.confirm = () => true;
+    page.window.__authCb?.({ email: 'someone@example.com' });
+    (page.window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({ docs });
+    return page;
+}
+
+test('the kind is chosen when it is created, because it cannot be recovered later', async () => {
+    // It is baked into the code. A pilot created as a participant would quietly
+    // enter the analysis, and nothing downstream could tell.
+    const { document, window } = await dashboardWith([]);
+    document.querySelector('#new-pilot').click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.match(window.__written[0], /^participants\/pilot-/);
+
+    document.querySelector('#new-participant').click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.match(window.__written[1], /^participants\/p-/);
+});
+
+test('a third pilot can be created, because two was an intention not a limit', async () => {
+    const { document, window } = await dashboardWith([
+        { id: 'pilot-aaaaaaaaaaaa', data: () => ({ createdAt: 1, order: 'codoc-first', pilot: true }) },
+        { id: 'pilot-bbbbbbbbbbbb', data: () => ({ createdAt: 2, order: 'baseline-first', pilot: true }) },
+    ]);
+    document.querySelector('#new-pilot').click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.match(window.__written[0], /^participants\/pilot-/);
+});
+
+test('a name is offered, and it is kept away from the session data', async () => {
+    const { document, window } = await dashboardWith([
+        { id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) },
+    ]);
+    const name = document.querySelector('#c-name');
+    assert.ok(name, 'there is somewhere to put it');
+
+    name.value = 'A Person';
+    name.dispatchEvent(new window.Event('input'));
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Its own collection. On the participant document it would travel with
+    // every export by default, and the rules refuse it there for that reason.
+    assert.ok(window.__written.some((p) => p === 'contacts/p-abcdefghjkmn'),
+        `expected a write to contacts, got ${JSON.stringify(window.__written)}`);
+    assert.ok(!window.__written.some((p) => p === 'participants/p-abcdefghjkmn'));
+});
+
+test('leaving somebody out of the analysis is not the same as deleting them', async () => {
+    // The session still happened, and a study that erases the record of a
+    // session it chose not to analyse cannot say how many it ran.
+    const { document, window } = await dashboardWith([
+        { id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) },
+    ]);
+    document.querySelector('#m-excluded').click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.ok(window.__written.includes('participants/p-abcdefghjkmn'));
+    assert.deepEqual(window.__deleted, [], 'nothing was removed');
+});
+
+test('resetting clears what is under a code and keeps the code', async () => {
+    const { document, window } = await dashboardWith([
+        { id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) },
+    ]);
+    window.__collections = {
+        'participants/p-abcdefghjkmn/answers': [{ id: 'prestudy', ref: { path: 'answers/prestudy' } }],
+        'participants/p-abcdefghjkmn/devices': [{ id: 'mirror', ref: { path: 'devices/mirror' } }],
+    };
+    document.querySelector('#m-reset').click();
+    await new Promise((r) => setTimeout(r, 80));
+
+    assert.ok(window.__deleted.includes('answers/prestudy'), 'their answers go');
+    assert.ok(window.__deleted.includes('devices/mirror'), 'and their devices are freed');
+    assert.ok(!window.__deleted.includes('participants/p-abcdefghjkmn'),
+        'the code itself stays, so their existing link still works');
+});
+
+test('deleting removes the contact record too', async () => {
+    // Otherwise a name outlives the code it belonged to, which is the one thing
+    // the separate collection exists to prevent.
+    const { document, window } = await dashboardWith([
+        { id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) },
+    ]);
+    document.querySelector('#m-delete').click();
+    await new Promise((r) => setTimeout(r, 80));
+    assert.ok(window.__deleted.includes('contacts/p-abcdefghjkmn'));
+    assert.ok(window.__deleted.includes('participants/p-abcdefghjkmn'));
+});

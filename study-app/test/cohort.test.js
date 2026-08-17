@@ -51,12 +51,24 @@ test('people land in slots of their own kind, oldest first', () => {
     assert.equal(ps[1].participant.code, 'p-3');
 });
 
-test('more people than slots is visible rather than dropped', () => {
+test('the plan grows to hold whoever exists', () => {
+    // Two pilots and twelve is the intention, not a limit. A thirteenth used to
+    // land in a "beyond the plan" pile where nothing counted it, which is the
+    // wrong answer to a study that turned out to need one more.
     const existing = Array.from({ length: PARTICIPANTS + 3 }, (_, i) => person(i));
     const { slots, extra } = fill(existing);
-    assert.equal(extra.length, 3);
-    assert.equal(slots.filter((s) => s.kind === 'participant' && s.participant).length, PARTICIPANTS);
-    assert.equal(progress(existing).extra, 3);
+    assert.equal(extra.length, 0, 'nobody falls off the end');
+    assert.equal(slots.filter((s) => s.kind === 'participant').length, PARTICIPANTS + 3);
+    assert.equal(progress(existing).participants.of, PARTICIPANTS + 3,
+        'and the denominator says how many there now are');
+});
+
+test('a third pilot is a pilot, not an overflow', () => {
+    const existing = Array.from({ length: 3 }, (_, i) => person(i, { pilot: true }));
+    const p = progress(existing);
+    assert.equal(p.pilots.filled, 3);
+    assert.equal(p.pilots.of, 3);
+    assert.equal(p.analysable, 0, 'and still none of them are analysed');
 });
 
 test('the next order is whatever the plan says is open', () => {

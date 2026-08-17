@@ -72,10 +72,29 @@ service cloud.firestore {
       ]);
     }
 
+    // Who a code belongs to, kept in its own collection.
+    //
+    // The one place identifying detail is allowed, and it is deliberately NOT a
+    // field on the participant: everything under `participants` is what gets
+    // exported and handed to whoever analyses it, and a name on that document
+    // would travel with the session data by default. Here it has to be asked for
+    // separately, and the export never does.
+    //
+    // Only an experimenter can read or write it. A participant holding their own
+    // code cannot, which matters because the code is the credential everywhere
+    // else and this is the one thing it must not open.
+    match /contacts/{code} {
+      allow read, write: if isExperimenter();
+    }
+
     match /participants/{code} {
       allow get, list: if isExperimenter();
       allow create, update: if isExperimenter() && noIdentifyingFields();
-      allow delete: if false;
+      // Deleting a participant is how a code created by mistake, or a session
+      // that must not exist, goes away. Only an experimenter, and everything
+      // under it has to be removed first — the rules cannot cascade, so the
+      // dashboard clears the subcollections before this.
+      allow delete: if isExperimenter();
 
       // Registering a device. Anyone holding the code may take a free slot on a
       // participant that exists and has not been released. The code is the

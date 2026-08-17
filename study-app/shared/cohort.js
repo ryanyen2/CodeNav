@@ -33,6 +33,8 @@ export const ORDERS = Object.freeze(['codoc-first', 'baseline-first']);
  * blocked one leaves every remaining participant in the same condition first.
  */
 export function plan({ pilots = PILOTS, participants = PARTICIPANTS } = {}) {
+    pilots = Math.max(0, pilots);
+    participants = Math.max(0, participants);
     const slots = [];
     for (let i = 0; i < pilots; i += 1) {
         slots.push({
@@ -61,7 +63,17 @@ export function plan({ pilots = PILOTS, participants = PARTICIPANTS } = {}) {
  * study even when somebody is excluded later.
  */
 export function fill(existing, opts = {}) {
-    const slots = plan(opts).map((s) => ({ ...s, participant: null }));
+    // The plan grows to hold whoever exists. Two pilots is the intention, not a
+    // limit: a study that turns out to need a third should not have to edit a
+    // constant, and the third would otherwise land in the "beyond the plan" pile
+    // where nothing counts it.
+    const counts = { pilot: 0, participant: 0 };
+    for (const p of existing) counts[p.pilot || isPilotCode(p.code) ? 'pilot' : 'participant'] += 1;
+    const grown = {
+        pilots: Math.max(opts.pilots ?? PILOTS, counts.pilot),
+        participants: Math.max(opts.participants ?? PARTICIPANTS, counts.participant),
+    };
+    const slots = plan(grown).map((s) => ({ ...s, participant: null }));
     const byKind = { pilot: [], participant: [] };
     for (const p of [...existing].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))) {
         byKind[isPilot(p) ? 'pilot' : 'participant'].push(p);

@@ -41,7 +41,10 @@ other, and the zip is what they install.
 
 A whole session, in order:
 
-1. You press New in the dashboard. It gives you a code, e.g. `p-abcdefghjkmn`,
+1. You press **+ Participant** in the dashboard, or **+ Pilot** for a practice
+   run. The kind is chosen here because it cannot be recovered later: it is
+   baked into the code, and a pilot created as a participant would quietly end
+   up in the analysis. It gives you a code, e.g. `p-abcdefghjkmn`,
    and picks the order for you so the four combinations fill evenly.
 2. You send them the link and the zip. Both are on the dashboard, ready to copy.
 3. They open the link, give consent, answer the background questions, and run the
@@ -142,7 +145,7 @@ that participant's page in the dashboard.
 1. Their link, which looks like
    `https://codoc-11b10.web.app/participant/?code=p-abcdefghjkmn&order=codoc-first`.
    Ask them to open it and work through it until it tells them to stop. That
-   covers consent and the background questions.
+   covers consent, the questions about them, and setting their machine up.
 2. `dist/codoc-study-bundle.zip`. Their page tells them to unzip it and run the
    setup command, which is the second thing on that card. It has their code and
    order already in it, so it can be pasted as it stands.
@@ -160,8 +163,13 @@ Ask them to send back the last few lines the setup script printed. If it does no
 say "Everything is ready", sort it out now rather than during the session. The
 common problems and their fixes are at the end of the file inside the zip.
 
-Do not run anyone who says they never read a diff before accepting it. That is
-one of the background questions, and you can see their answers in the dashboard.
+Do not run anyone who says they never read a diff before accepting it. It is one
+of the questions on their own page, and their answers are in the dashboard. The
+page does not say which answer excludes, or the answer stops being honest.
+
+Their name and email go on their page in the dashboard, under "Who this is".
+That is kept in a separate place from their session data and is never exported
+with it, so whoever analyses the results cannot see who a session belonged to.
 
 ## Part 3. On the day
 

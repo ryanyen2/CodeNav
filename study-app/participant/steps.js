@@ -6,7 +6,7 @@
 // other.
 
 export {
-    CONSENT_FORM, PRESTUDY_FORM, SCREENING, EXCLUDING, shouldExclude,
+    CONSENT_FORM, PRESTUDY, REQUIRED, EXCLUDING, shouldExclude,
     AGREE, AMOUNT, CONSTRUCTS, AFTER_CONDITION, scaleFor, keyed,
     MANIPULATION_CHECK, SCENARIOS, DEBRIEF,
 } from './instrument.js';
@@ -74,7 +74,6 @@ export function buildSteps(order = 'codoc-first') {
         { id: 'welcome', kind: 'welcome' },
         { id: 'consent', kind: 'consent' },
         { id: 'prestudy', kind: 'prestudy' },
-        { id: 'screening', kind: 'screening' },
         { id: 'setup', kind: 'setup' },
         ...forCondition(first, 1),
         { id: 'break', kind: 'break' },
@@ -87,7 +86,7 @@ export function buildSteps(order = 'codoc-first') {
 
 /** Where a set of answers gets stored, so the page and the dashboard agree. */
 export function answerDoc(step) {
-    if (step.kind === 'screening') return 'screening';
+    if (step.kind === 'prestudy') return 'prestudy';
     if (step.kind === 'quiz') return `quiz-${step.project}-${step.sitting}`;
     if (step.kind === 'questionnaire') return `after-${step.condition}`;
     if (step.kind === 'scenarios') return 'scenarios';

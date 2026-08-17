@@ -20,29 +20,57 @@ export const CONSENT_FORM =
 /**
  * Demographics and experience, asked once before the session.
  *
- * In Google rather than on this page because it asks for gender and age, and
- * those belong with consent rather than in the study database beside a session
- * log. The cost is that these answers cannot be joined automatically: they are
- * keyed by the participant code typed into the form's first field, and joined by
- * hand at analysis. That is the trade we want for this particular data.
- */
-export const PRESTUDY_FORM =
-    'https://docs.google.com/forms/d/e/1FAIpQLSeWiRCuv3ZlcGrNKoOy_HKzfs9SUsMaCZ1B9RZ-bF0eB8IpzA/viewform?embedded=true';
-
-/**
- * The one background item that stays on this page.
+ * On this page rather than in a Google form. It used to be a form, which meant
+ * the page had to say "this one is here rather than in the form above because
+ * the researcher needs to see it" about the one question that could not go
+ * there — a sentence that told a participant about our plumbing. Asking
+ * everything in one place removes the sentence and the reason for it.
  *
- * It is the screening question, and the dashboard has to be able to see it: a
- * person who never reads a diff cannot answer the questions this study is built
- * on, and finding that out after the session is finding it out too late. The
- * page does not say that it excludes, or the answer stops being honest.
+ * Gender and age are asked because a paper has to describe who took part. They
+ * are the only answers here that could identify anybody, so both offer a way to
+ * decline, and neither is required.
  */
-export const SCREENING = Object.freeze([
+export const PRESTUDY = Object.freeze([
+    { id: 'gender', type: 'choice', label: 'Gender',
+      options: ['Woman', 'Man', 'Non-binary', 'Prefer to self-describe', 'Prefer not to say'] },
+    { id: 'genderSelf', type: 'text', label: 'If you would rather describe it yourself',
+      placeholder: 'Optional', showWhen: { gender: 'Prefer to self-describe' } },
+    { id: 'age', type: 'number', label: 'Age', min: 18, max: 99, optional: true },
+    { id: 'education', type: 'choice', label: 'Highest level of education finished',
+      options: ["Bachelor's", "Master's", 'Doctorate', 'Professional degree',
+                'Trade or vocational', 'Other'] },
+    { id: 'years', type: 'number', label: 'Years you have been programming', min: 0, max: 60 },
+    { id: 'aiUse', type: 'choice', label: 'How often do you use AI tools to write code',
+      options: ['Almost every day', 'Several times a week', 'About once a week',
+                'A few times a month', 'Less than once a month', 'Never'] },
+    { id: 'aiFamiliar', type: 'scale5', label: 'How familiar are you with AI coding tools',
+      low: 'Not at all', high: 'Very' },
+    { id: 'python', type: 'scale5', label: 'How confident are you reading Python',
+      low: 'Not at all', high: 'Very' },
+    { id: 'aiToUnderstand', type: 'longtext',
+      label: 'Have you used an AI tool to understand a codebase you did not write? What happened?',
+      placeholder: 'A sentence or two, or leave it blank.', optional: true },
+    // The screening question. It sits with the rest now, in the order somebody
+    // would naturally answer them, rather than alone on a page that had to
+    // explain itself. The page still does not say which answer excludes, or the
+    // answer stops being honest.
     { id: 'readsDiff', type: 'choice',
-      label: 'When an agent proposes a change across several files, how often do you read the diff before accepting',
+      label: 'When an AI proposes a change across several files, how often do you read the diff before accepting',
       options: ['Always', 'Usually', 'About half the time', 'Rarely', 'Never'] },
 ]);
 
+/** Which of them must be answered before the page will move on. */
+export const REQUIRED = Object.freeze(
+    PRESTUDY.filter((q) => !q.optional && !q.showWhen).map((q) => q.id));
+
+/**
+ * Answers that mean this person should not be run.
+ *
+ * Somebody who never reads a diff cannot answer the questions this study is
+ * built on. The page does not say which answer excludes, or the answer stops
+ * being honest — the dashboard flags it instead, before the session rather than
+ * after it.
+ */
 export const EXCLUDING = Object.freeze({ readsDiff: ['Never'] });
 
 export function shouldExclude(answers) {
