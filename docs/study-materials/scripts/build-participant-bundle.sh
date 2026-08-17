@@ -28,7 +28,11 @@ echo "Building the VS Code extension."
 run() { "$@" >>"$LOG" 2>&1 || { echo "failed: $*"; echo "see $LOG"; tail -20 "$LOG"; exit 1; }; }
 : > "$LOG"
 ( cd "$EXT" && run npm run build && run npm run bundle-wheel )
-( cd "$EXT" && run npx --yes @vscode/vsce package --allow-missing-repository --out "$OUT/" )
+# --no-dependencies: the extension is esbuild-bundled into dist/, so vsce's npm
+# dependency traversal would only add ~11MB of inert node_modules — and in a
+# clean export (git archive) that traversal returns an empty file list and the
+# package step dies with "entrypoint missing". Skip it in both places.
+( cd "$EXT" && run npx --yes @vscode/vsce package --allow-missing-repository --no-dependencies --out "$OUT/" )
 
 VSIX="$(ls -t "$OUT"/codoc-*.vsix | head -1)"
 echo "Built $(basename "$VSIX")"
@@ -47,7 +51,7 @@ run node "$MAT/logger/test-extension.js"
 run node "$MAT/logger/test-scope.js"
 run node --test "$MAT/logger/test-composition.js"
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
-    --allow-missing-repository --skip-license --out "$OUT/" )
+    --allow-missing-repository --skip-license --no-dependencies --out "$OUT/" )
 LOGGER="$(ls -t "$OUT"/codoc-study-logger-*.vsix | head -1)"
 echo "Built $(basename "$LOGGER")"
 
