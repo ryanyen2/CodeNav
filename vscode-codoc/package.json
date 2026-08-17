@@ -221,6 +221,14 @@
       {
         "command": "codoc.pickBinding",
         "title": "codoc: Pick code binding to open"
+      },
+      {
+        "command": "codoc.find",
+        "title": "codoc: Find in Tree"
+      },
+      {
+        "command": "codoc.replace",
+        "title": "codoc: Replace in Tree"
       }
     ],
     "keybindings": [
@@ -270,6 +278,18 @@
         "key": "alt+b",
         "mac": "alt+b",
         "when": "editorTextFocus && editorLangId == 'codoc'"
+      },
+      {
+        "command": "codoc.find",
+        "key": "ctrl+f",
+        "mac": "cmd+f",
+        "when": "activeCustomEditorId == 'codoc.tree-editor'"
+      },
+      {
+        "command": "codoc.replace",
+        "key": "ctrl+h",
+        "mac": "cmd+alt+f",
+        "when": "activeCustomEditorId == 'codoc.tree-editor'"
       }
     ],
     "configuration": {

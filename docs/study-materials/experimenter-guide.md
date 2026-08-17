@@ -14,8 +14,22 @@ that description is kept.
 
 - With codoc, they use VS Code with the codoc extension. The description is
   connected to the code, and when codoc proposes a change they accept or reject it.
+  The codoc arm also has two reading aids the baseline does not: `Cmd+F` search and
+  replace across the tree, and `/codoc:ask`, which answers a question about the
+  codebase by drawing a numbered path through the description. Both are part of the
+  manipulation — codoc is meant to make a codebase easier to understand, and these
+  are how — so they are on by default and are not a defect to hide.
 - Without codoc, they use a `CLAUDE.md` file holding exactly the same text. The
   agent is told to update it after every change it makes.
+
+> **Cut-over.** `/codoc:ask` and tree search were added on 2026-08-17. They change
+> what the codoc arm can do during the understanding quiz, so a session run before
+> that date is not comparable to a later one on the quiz's *time*, and the codoc arm
+> must be described as it now stands. Re-run any pilot that predates it before
+> pooling. `/codoc:ask` is subject to the same rule as any other way of asking the
+> agent: the participant may ask it about the codebase, but pasting a quiz question
+> or its options into it is barred exactly as pasting one into the terminal is —
+> that would measure the agent, not the pair. Watch for it the same way.
 
 There are two projects, scribe and tally, with matched tasks. Each participant
 does one project each way, so nobody solves the same problem twice.
@@ -321,6 +335,13 @@ The warm-up exists so that nobody encounters an unfamiliar screen for the first
 time while the clock is running. In the codoc condition it makes them use the
 description, the agent, and the accept button. In the baseline condition it makes
 them use the description and the agent.
+
+In the codoc condition, also show them the two reading aids once, here, so they are
+not discovering them on the clock: `Cmd+F` to search the description, and one
+`/codoc:ask` about the project (its own question, not a quiz question) so they have
+seen a walkthrough appear and stepped through it. Point out the `‹ ›` stepper and
+`✕`. Do not demonstrate these in the baseline condition — it has neither, and a
+demonstration of something the participant will not have is its own confound.
 
 ## Part 5. The task
 

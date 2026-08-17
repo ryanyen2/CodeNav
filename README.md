@@ -19,8 +19,8 @@ integration surfaces into your repo:
 
 | Surface | Installed to | Role |
 |---|---|---|
-| **MCP server** (`codoc`) | `.mcp.json` → `codoc-mcp` (FastMCP, stdio) | The agent's reflection API: `codoc_context` (the relevant tree slice for the files you're editing — the primary read), `codoc_tree` (whole tree, scopeable), `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`. The agent carries real intent straight into the store instead of leaving it to a blind index-diff. |
-| **Slash commands** | `.claude/commands/codoc/` | `/codoc:plan <task>` — propose plan nodes *before* writing code; `/codoc:sync` — reconcile whichever side is behind (implements queued directives, drains tree edits, or reflects code drift). |
+| **MCP server** (`codoc`) | `.mcp.json` → `codoc-mcp` (FastMCP, stdio) | The agent's reflection API: `codoc_context` (the relevant tree slice for the files you're editing — the primary read), `codoc_tree` (whole tree, scopeable), `codoc_reflect`, `codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`, and `codoc_walkthrough` (draw a numbered reading path over the tree — the answer surface for `/codoc:ask`). The agent carries real intent straight into the store instead of leaving it to a blind index-diff. |
+| **Slash commands** | `.claude/commands/codoc/` | `/codoc:plan <task>` — propose plan nodes *before* writing code; `/codoc:sync` — reconcile whichever side is behind (implements queued directives, drains tree edits, or reflects code drift); `/codoc:ask <question>` — answer a question *in the tree*, drawing the reading path through the features that hold the answer instead of replying in chat. |
 | **Skill** `codoc-intent` | `.claude/skills/codoc-intent/SKILL.md` | Auto-loaded every session; teaches Claude the MCP-first propose-then-implement workflow for this repo. |
 | **Hooks** | `.claude/settings.json` | `SessionStart` · `Stop` · `SessionEnd` · `PreToolUse` · `PostToolUse` · `UserPromptSubmit` — maintain `.codoc/activity.json` (the live agent touch-log → VS Code gutter decorations), run recovery reflection when the session stops, and nudge `/codoc:sync` when work is queued. Fire-and-forget; they never block the agent. |
 
@@ -231,6 +231,9 @@ A `> …` blockquote in a description is ordinary prose — that text path was r
   intent.jsonl        — captured author prompts (the UserPromptSubmit hook), quoted back
                         to the realizing agent as `Author asked:`
   activity.json       — agent touch-log: the CC hooks write here, the VS Code extension reads it
+  ask.json            — the `/codoc:ask` walkthrough overlay: a numbered reading path over
+                        existing features. Ephemeral like activity.json (safe to delete, no loop
+                        reads it); written by `codoc_walkthrough`, deleted to dismiss
   index.meta.json     — indexing checkpoint (lets an interrupted `codoc init` resume)
   codoc.db            — features + bindings + event log + blocks/marks/comments (SQLite WAL)
   lancedb/            — cocoindex-managed chunk index: AST + identity hashes (chunk embeddings only when CODOC_EMBED_CHUNKS=1)

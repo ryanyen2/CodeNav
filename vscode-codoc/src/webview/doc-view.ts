@@ -26,6 +26,8 @@ import { BridgeDebounce } from '../state/bridge';
 import { deriveAgentPresences, type PresencePhase } from '../state/presence';
 import { PresenceLayer } from './presence-layer';
 import { CommandPalette } from './palette-view';
+import { createAskBar, type AskBarHandle } from './ask-bar';
+import { createFindView, type FindViewHandle } from './find-view';
 import type { PaletteContext, PaletteItem } from './palette';
 import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
@@ -61,6 +63,11 @@ let prefsSeeded = false;
 const authorController = new AuthorController();
 // The whole-doc editor — one TipTap instance over the entire tree.
 let wholeEditor: WholeDocEditorHandle | null = null;
+// The /codoc:ask header and the ⌘F widget. Both live inside .doc-host and are
+// rebuilt with it; `reconcile` keeps the editor alive, so a search or a
+// walkthrough survives every ordinary payload repaint.
+let askBar: AskBarHandle | null = null;
+let findView: FindViewHandle | null = null;
 // Guard: while the editor's own selection drives the tree highlight, don't scroll
 // the editor back (would fight the user's caret).
 let syncingFromEditor = false;
@@ -869,6 +876,7 @@ function reconcile(): void {
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
         wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
         wholeEditor.setDoc(payload.doc, payload.baselineId);
+        applyAsk();        // an ask can land, change, or clear at any point in an edit
         applyGlance();     // refresh pitch map (a loop pass may have rewritten pitches)
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
@@ -1475,11 +1483,31 @@ function appendRow(parent: HTMLElement, id: string): void {
 function renderDocHost(): HTMLElement {
     const host = el('div', 'doc-host');
     if (wholeEditor) { wholeEditor.destroy(); wholeEditor = null; }
+    askBar?.destroy(); askBar = null;
+    findView?.destroy(); findView = null;
     computeFocus(null); // editor torn down → clear the dependency-spotlight body class
     if (!payload.doc) {
         host.append(el('div', 'doc empty', 'No features yet. Run `codoc init` to bootstrap the tree.'));
         return host;
     }
+    askBar = createAskBar({
+        onStep: fid => wholeEditor?.goToAskStep(fid),
+        onDismiss: () => {
+            // Suppress THIS walkthrough by id so an in-flight payload can't restore it
+            // between the click and the file actually going away — the dismiss feels
+            // instant on every host, and a suggest-only hub viewer (who cannot delete
+            // the shared file) still gets to hide it for themselves.
+            dismissedAskId = payload.ask?.id ?? '';
+            askBar?.setWalkthrough(null);
+            wholeEditor?.setAsk(null);
+            applyAskLayout(host);
+            // Delete the shared file only when this viewer may — VS Code always; the
+            // hub only for a hand-off collaborator (dispatch gates it too, this just
+            // avoids a dead 403 and the overlay flickering back for a read-only viewer).
+            if (canDismissAsk()) vscode.postMessage({ kind: 'ask-dismiss' });
+        },
+    });
+    host.append(askBar.element);
     wholeEditor = mountWholeDocEditor(host, {
         controller: authorController,
         getSymbols: () => payload.symbols ?? [],
@@ -1527,6 +1555,9 @@ function renderDocHost(): HTMLElement {
             syncingFromEditor = true;
             setSelected(fid, false); // highlight the tree row, don't re-scroll the editor
             syncingFromEditor = false;
+            // Reading down the document past a stop advances the counter, so "3 of 7"
+            // stays true whether the reader used the stepper or just scrolled.
+            askBar?.syncActive(fid);
             // Eased re-center ONLY on the scroll-driven spy — a caret move (source==='selection')
             // just highlights, else typing would animate the tree on every keystroke (KTD2).
             if (shouldCenter(source)) centerTreeRow(fid);
@@ -1534,7 +1565,16 @@ function renderDocHost(): HTMLElement {
         onEditFeature: fid => onBridgeEdit(fid),  // P2 doc→code (§A.1), debounced below
         onHoverFeature: fid => peekTreeRow(fid), // WS5: preview a dependency link's target
         onBlockEdit: edit => vscode.postMessage({ kind: 'block-edit', block: edit }),  // v6
+        onFindUpdate: state => findView?.render(state),
     });
+    findView = createFindView({
+        onSearch: (q, o) => wholeEditor?.setFindQuery(q, o) ?? { count: 0, index: -1, query: q },
+        onStep: d => wholeEditor?.stepFind(d) ?? { count: 0, index: -1, query: '' },
+        onReplace: (r, pc) => wholeEditor?.replaceFind(r, pc) ?? { count: 0, index: -1, query: '' },
+        onReplaceAll: (r, pc) => wholeEditor?.replaceAllFind(r, pc) ?? 0,
+        onClose: () => wholeEditor?.setFindOpen(false),
+    });
+    host.append(findView.element);
     wholeEditor.setSuggestions(payload.suggestions ?? []); // before setDoc — see reconcile()
     wholeEditor.setThreads(payload.threads ?? {});
     wholeEditor.setPhases(payload.sync.phase ?? {});
@@ -1549,6 +1589,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
     wholeEditor.setHistory(payload.history ?? {});   // W2 blame data
     wholeEditor.setDoc(payload.doc, payload.baselineId);
+    applyAsk(host);     // seed the /codoc:ask overlay, if one is up
     applyGlance();      // seed pitch + glance state into the fresh editor
     applyBlame();       // seed the History stance into the fresh editor
     // Presence rides the doc surface — re-place the avatar as the surface scrolls (the agent's
@@ -1556,6 +1597,43 @@ function renderDocHost(): HTMLElement {
     host.querySelector<HTMLElement>('.ce-whole-surface')
         ?.addEventListener('scroll', () => presence.reposition(), { passive: true });
     return host;
+}
+
+// ─── /codoc:ask walkthrough ───────────────────────────────────────────────────
+/** The bar only occupies space when there IS a walkthrough — `.doc-host` stays a
+ *  plain single-child row otherwise, so nothing about the ordinary layout changes
+ *  for readers who never ask anything. */
+function applyAskLayout(host?: HTMLElement | null): void {
+    const h = host ?? document.querySelector<HTMLElement>('.doc-host');
+    h?.classList.toggle('has-ask', !!payload.ask);
+}
+
+/** Push the current payload's walkthrough into the bar and the editor. Called on
+ *  first render and on every reconcile, so an ask that lands while the reader is
+ *  mid-edit simply appears, and `codoc_walkthrough_clear` makes it vanish. */
+function applyAsk(host?: HTMLElement | null): void {
+    // A walkthrough the reader dismissed stays gone even though the file may not be
+    // deleted yet (or, for a read-only hub viewer, at all) — until a genuinely NEW
+    // question replaces it.
+    const walk = (payload.ask && payload.ask.id !== dismissedAskId) ? payload.ask : null;
+    askBar?.setWalkthrough(walk);
+    wholeEditor?.setAsk(walk);
+    applyAskLayout(host);
+    // Land on the first stop when a NEW walkthrough arrives — an answer nobody is
+    // taken to the start of is a list of numbers.
+    const first = askBar?.currentFid();
+    if (walk && first && walk.id !== lastAskId) wholeEditor?.goToAskStep(first);
+    lastAskId = walk?.id ?? '';
+}
+let lastAskId = '';
+let dismissedAskId = '';
+
+/** Whether this viewer may take the shared walkthrough down for everyone. VS Code
+ *  has no viewer block → full authority; on the hub only a hand-off collaborator
+ *  may, matching dispatch.py's gate — a suggest-only contributor sees it and
+ *  dismisses it locally. */
+function canDismissAsk(): boolean {
+    return payload.viewer?.canHandOff !== false;
 }
 
 // ─── Focus dimming (WS5) ──────────────────────────────────────────────────────
@@ -1723,12 +1801,45 @@ const IS_MAC = typeof navigator !== 'undefined'
     && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
 document.addEventListener('keydown', ev => {
     if (palette.isOpen && palette.onKeydown(ev)) return;
+    // ⌘F / ⌘⌥F (Ctrl+F / Ctrl+H elsewhere). Capture phase for the same reason ⌘S
+    // is captured: a webview never receives VS Code's Find widget — the keystroke
+    // arrives here as a plain DOM event and, unclaimed, does nothing at all.
+    if (findView && openFindChord(ev, IS_MAC)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openFind(replaceChord(ev, IS_MAC));
+        return;
+    }
+    if (findView?.onKeydown(ev)) { ev.stopPropagation(); return; }
     if ((IS_MAC ? ev.metaKey : ev.ctrlKey) && (ev.key === 'k' || ev.key === 'K')) {
         ev.preventDefault();
         ev.stopPropagation();
         palette.toggle();
     }
 }, true);
+
+/** ⌘F (mac) / Ctrl+F — and Ctrl+H, which is Replace on Windows and Linux. */
+function openFindChord(ev: KeyboardEvent, mac: boolean): boolean {
+    const accel = mac ? ev.metaKey : ev.ctrlKey;
+    if (!accel) return false;
+    const k = ev.key.toLowerCase();
+    return k === 'f' || (!mac && k === 'h');
+}
+
+/** Whether the chord asks for the replace row: ⌘⌥F on mac, Ctrl+H elsewhere. */
+function replaceChord(ev: KeyboardEvent, mac: boolean): boolean {
+    return mac ? ev.altKey : ev.key.toLowerCase() === 'h';
+}
+
+/** Open find, seeded from the editor selection the way ⌘F does everywhere. */
+function openFind(replace: boolean): void {
+    if (!findView || !wholeEditor) return;
+    wholeEditor.setFindOpen(true);
+    const seed = (window.getSelection()?.toString() ?? '').trim();
+    // A multi-line selection is a passage, not a search term — seeding it would put
+    // a paragraph in the field and report no matches.
+    findView.open({ replace, seed: seed.includes('\n') ? '' : seed.slice(0, 120) });
+}
 
 // ⌘S / Ctrl-S = "save the file" from ANY focus context (nav-tree pane, toolbar, editor,
 // anywhere in the webview) → stage & send (commit) (U6 / R11, R12). `tree.codoc` is a
@@ -1798,6 +1909,9 @@ window.addEventListener('message', ev => {
     // no directive minted) — flash a quiet "saved" confirmation on the heading
     // so the edit doesn't vanish into silence.
     if (msg.kind === 'saved-flash') { onSavedFlash(msg.fids ?? []); return; }
+    // The `codoc.find` command — ⌘F pressed while focus sits outside the webview
+    // (the tree pane, the toolbar), where the DOM listener above never sees it.
+    if (msg.kind === 'find') { openFind(!!(ev.data as { replace?: boolean }).replace); return; }
     // Code→doc navigation (the source CodeLens): select + scroll to the feature.
     if (msg.kind === 'reveal-feature') {
         const fid = msg.fid;

@@ -26,6 +26,7 @@ import { parseRealize, pendingCodeByFile, PendingChange, parseRealizedLog, newOu
 import { statusBarView } from './status-presentation';
 import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS, daemonUnresponsive, HOST_LOG_GRACE_MS } from './status-model';
 import { parseTranslateProgress } from './translate-model';
+import { parseAsk, ASK_TTL_MS, type AskWalkthrough } from './ask-model';
 import type { TranslationProgress } from '../webview/protocol';
 
 export { ParsedFeature, SidecarData };
@@ -57,6 +58,10 @@ export class WorkspaceState {
     private _pendingCode: Map<string, PendingChange[]> = new Map();
     // `codoc translate` progress (lease-guarded; null when no run is in play).
     private _translation: TranslationProgress | null = null;
+    // The /codoc:ask walkthrough overlay. Read like any other control file, but it
+    // is the only one that is purely a VIEW — nothing derives from it, so a corrupt
+    // or absent ask.json costs the reader an overlay and nothing else.
+    private _ask: AskWalkthrough | null = null;
     private _provisioning = false;
     // One-shot timer that re-derives state when a TTL lease (realizing / agent
     // epoch) expires with no file event to trigger a reload — see
@@ -112,6 +117,8 @@ export class WorkspaceState {
             '**/.codoc/config.json',     // authoring language — changed by `codoc lang` too,
                                         // so a switch made in the terminal repaints the view
             '**/.codoc/translate.json',  // `codoc translate` progress — per-batch skeleton updates
+            '**/.codoc/ask.json',        // the /codoc:ask walkthrough overlay — a pure view,
+                                         // written by the MCP tool and deleted to dismiss
             '**/.codoc/edits.host.jsonl', // the IDE's own append log: its lifetime is the
                                           // daemon-liveness signal (status-model.daemonUnresponsive)
         ]) {
@@ -238,6 +245,16 @@ export class WorkspaceState {
             this._translation = parseTranslateProgress(
                 fs.readFileSync(tp, 'utf-8'), fs.statSync(tp).mtimeMs, Date.now());
         } catch { /* no run in play */ }
+
+        // `.codoc/ask.json` — the walkthrough overlay, expired the same way the
+        // Python reader expires it (mtime, not the recorded time) so a clock change
+        // cannot resurrect yesterday's question.
+        this._ask = null;
+        try {
+            const ap = this._codocPath('ask.json');
+            const age = Date.now() - fs.statSync(ap).mtimeMs;
+            if (age <= ASK_TTL_MS) this._ask = parseAsk(JSON.parse(fs.readFileSync(ap, 'utf-8')));
+        } catch { /* absent, corrupt, or unreadable → no overlay */ }
 
         this._updateStatusBar();
         this._onDidChange.fire();
@@ -382,6 +399,7 @@ export class WorkspaceState {
     get activity(): ActivityData { return this._activity; }
     /** `codoc translate` progress (lease-guarded), or null when no run is in play. */
     get translation(): TranslationProgress | null { return this._translation; }
+    get ask(): AskWalkthrough | null { return this._ask; }
     /** activity.json's last-modified time — the epoch lease's `last_seen`. */
     get activityMtimeMs(): number | undefined { return this._activityMtimeMs; }
     get agentActive(): boolean { return isAgentActive(this._activity, this._activityMtimeMs); }

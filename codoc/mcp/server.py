@@ -257,6 +257,55 @@ def codoc_plan_status() -> dict:
     return err or tools.plan_status(cd)
 
 
+@mcp.tool
+def codoc_walkthrough(question: str, steps: list[dict], answer: str = "") -> dict:
+    """ANSWER A QUESTION IN THE TREE instead of in chat: lay a numbered reading
+    path over the features that already carry the answer. The IDE draws it as a
+    subtle overlay — a step number beside each feature, your note under its title,
+    a highlight on the sentence you are pointing at — and the reader walks it.
+
+    This is the answer surface for /codoc:ask. Use it whenever someone asks how
+    something works, where something happens, or why something is the way it is,
+    and the tree already covers it. Prefer it over a prose reply: the reader ends
+    up oriented in their own document rather than holding a paragraph you wrote.
+
+    Each step: {feature_id, note, quote?, group?, file?, symbol?, line?}
+      feature_id  an f-id from codoc_context / codoc_tree (a title also resolves).
+      note        ONE short line saying what THIS node contributes to the answer —
+                  not a summary of the node, which the reader can already see.
+      quote       a span copied VERBATIM from that feature's title/description, to
+                  highlight. It is checked; a quote that is not there is reported
+                  back and its step simply shows without a highlight.
+      group       the procedure stage this step belongs to ("parsing the CLI
+                  args"). Consecutive steps sharing one are numbered 1a, 1b, 1c —
+                  give every step a group or none of them.
+      file/symbol/line  the code this step points at; the step becomes a jump to it.
+
+    Order the steps the way a reader should VISIT them (the order things happen),
+    which is usually not tree order. Keep it to the few nodes that actually carry
+    the answer — a walkthrough over the whole tree is a table of contents, and the
+    reader already has one. Writes nothing to the tree; replaces any previous
+    walkthrough; dismissed by the reader."""
+    cd, err = _need_dir()
+    return err or tools.walkthrough(cd, question=question, answer=answer, steps=steps)
+
+
+@mcp.tool
+def codoc_walkthrough_clear() -> dict:
+    """Dismiss the walkthrough overlay currently on screen. Idempotent."""
+    cd, err = _need_dir()
+    return err or tools.clear_walkthrough_tool(cd)
+
+
+@mcp.tool
+def codoc_walkthrough_read() -> dict:
+    """The walkthrough currently on the reader's screen (or null) — what question
+    was asked and which features it points at. Use it to build on the path the
+    reader is already following instead of replacing it blind."""
+    cd, err = _need_dir()
+    return err or tools.read_walkthrough_tool(cd)
+
+
 def main() -> None:
     """Console entrypoint (``codoc-mcp``). Runs the stdio server."""
     mcp.run()

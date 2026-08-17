@@ -2190,3 +2190,200 @@ body.vscode-high-contrast .ce-autoedit-del { color: var(--vscode-foreground); }
    readable and slightly quieted until its batch lands. */
 .ce-busy-quiet { color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent); }
 .ce-busy-quiet::after { content: none; }
+
+/* ═══ /codoc:ask — the walkthrough overlay ═══════════════════════════════════
+   The quietest layer in the editor, and deliberately the only one with NO HUE.
+   Every other decoration's colour carries lifecycle meaning (blue = captured,
+   amber = deletion, sage = staged, the proposal hues); a walkthrough is not a
+   lifecycle state, it is a reading order somebody asked for. So it reads as
+   STRUCTURE — an ordinal in the margin, a stage named once, one line of note,
+   a graphite wash on the sentence — and borrows the accent only to say "you are
+   here". That is what lets it sit on top of an edit in progress without
+   competing with the diff already there. */
+
+/* ── the header: question, answer, stepper ── */
+.doc-host.has-ask { flex-direction: column; }
+.doc-host.has-ask > .codoc-whole-editor { height: auto; min-height: 0; }
+
+.ce-ask-bar {
+    flex: 0 0 auto;
+    display: flex; align-items: flex-start; gap: 16px;
+    padding: 10px clamp(24px, 4vw, 64px) 11px;
+    background: var(--vscode-editor-background);
+    border-bottom: var(--rule);
+    animation: ask-bar-in var(--dur-base) var(--ease-out) both;
+}
+@keyframes ask-bar-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+body.vscode-reduce-motion .ce-ask-bar { animation: none; }
+
+.ce-ask-lede { flex: 1 1 auto; min-width: 0; }
+/* The question in the reader's own words, quieted — it is context for the answer,
+   not the headline. Never uppercased: these are somebody's words, not a label. */
+.ce-ask-question {
+    font: 11px/1.45 var(--font-doc); color: var(--fg-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* The answer IS the deliverable: somebody who reads only this line is already
+   better off, and the numbered path exists to show them where it lives. */
+.ce-ask-answer { font: 12.5px/1.5 var(--font-doc); color: var(--fg-body); margin-top: 2px; }
+
+.ce-ask-nav { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding-top: 1px; }
+.ce-ask-count {
+    font: 10.5px var(--font-mono); color: var(--fg-muted);
+    min-width: 72px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.ce-ask-step-btn, .ce-ask-close {
+    font: 12px var(--vscode-font-family); line-height: 1;
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-ctrl);
+    background: transparent; color: var(--fg-muted); cursor: pointer;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.ce-ask-step-btn:hover, .ce-ask-close:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
+.ce-ask-close { margin-left: 6px; }
+
+/* ── the step chip: an ordinal in the left whitespace ── */
+.codoc-feature-heading.ce-ask-head::before {
+    content: attr(data-ask-label);
+    position: absolute; right: calc(100% + 8px); top: 0.28em;
+    font: 10px/1.5 var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums;
+    letter-spacing: 0; text-transform: none; white-space: nowrap;
+    padding: 1px 4px; border-radius: 3px;
+    color: var(--fg-muted);
+    background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+    user-select: none; pointer-events: none;
+}
+/* "You are here" is the ONE thing worth the accent. */
+.codoc-feature-heading.ce-ask-head.ce-ask-here::before {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* Below this the left whitespace cannot hold a chip, so it joins the line rather
+   than being clipped into a sliver. */
+@media (max-width: 900px) {
+    .codoc-feature-heading.ce-ask-head::before {
+        position: static; margin-right: 8px; display: inline-block; vertical-align: 0.18em;
+    }
+}
+
+/* ── the procedure stage, named once above its first step ── */
+.ce-ask-group {
+    display: flex; align-items: center; gap: 10px;
+    font: 10.5px/1.4 var(--font-doc); color: var(--fg-muted);
+    margin: 1.6em 0 -0.6em; user-select: none; cursor: default;
+}
+.ce-ask-group::after { content: ''; flex: 1 1 auto; border-top: var(--rule); }
+
+/* ── the note: one line on what THIS stop contributes ── */
+.ce-ask-note {
+    display: flex; align-items: baseline; gap: 12px;
+    font: 11.5px/1.5 var(--font-doc); color: var(--fg-muted);
+    margin: 0.15em 0 0.35em; user-select: none;
+}
+.ce-ask-note-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ce-ask-cite {
+    flex: 0 0 auto; font: 10.5px var(--font-mono); color: var(--accent-refs);
+    background: none; border: 0; padding: 0; cursor: pointer;
+    opacity: 0.75; transition: opacity var(--dur-fast) var(--ease);
+}
+.ce-ask-cite:hover { opacity: 1; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ── the quote wash: graphite, with a baseline rule so it survives a themed
+      background. Sits UNDER the edit decorations by being lighter than all of
+      them, and is suppressed entirely on a feature that already carries a diff. */
+.ce-ask-quote {
+    background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--vscode-foreground) 20%, transparent);
+    border-radius: 2px;
+}
+.ce-ask-quote-here {
+    background: color-mix(in srgb, var(--accent) 11%, transparent);
+    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 45%, transparent);
+}
+body.vscode-high-contrast .ce-ask-quote { background: none; box-shadow: inset 0 -2px 0 var(--vscode-foreground); }
+body.vscode-high-contrast .codoc-feature-heading.ce-ask-head::before {
+    background: none; border: 1px solid var(--vscode-contrastBorder, currentColor); color: var(--vscode-foreground);
+}
+
+/* ═══ ⌘F — find & replace ════════════════════════════════════════════════════
+   Shaped like the editor find bar every VS Code user already knows. Familiarity
+   is the whole point: this is the affordance whose ABSENCE was the problem, so
+   it should cost nobody a moment's learning. Not modal — no scrim — because
+   searching while reading the document is what it is for. */
+.ce-find {
+    position: absolute; top: 6px; right: 32px; z-index: 8;
+    display: flex; align-items: flex-start; gap: 2px;
+    padding: 4px 6px 4px 2px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-contrastBorder, transparent));
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-pop-sm);
+    animation: find-in var(--dur-fast) var(--ease-out) both;
+}
+@keyframes find-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+body.vscode-reduce-motion .ce-find { animation: none; }
+
+.ce-find-expand {
+    align-self: stretch; width: 18px; padding: 0; border: 0; border-radius: var(--radius-ctrl);
+    background: transparent; color: var(--fg-faint); cursor: pointer; font-size: 10px; line-height: 1;
+}
+.ce-find-expand:hover { background: var(--hover-bg); color: var(--fg-muted); }
+.ce-find-rows { display: flex; flex-direction: column; gap: 4px; }
+.ce-find-row { display: flex; align-items: center; gap: 4px; }
+
+.ce-find-field {
+    display: flex; align-items: center; gap: 1px; padding: 0 2px 0 0;
+    background: var(--vscode-input-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border, transparent));
+    border-radius: var(--radius-ctrl);
+}
+.ce-find-field:focus-within { border-color: var(--vscode-focusBorder, var(--accent)); }
+.ce-find-input {
+    width: 168px; padding: 3px 6px; border: 0; outline: none; background: transparent;
+    font: 12px var(--vscode-font-family); color: var(--vscode-input-foreground, var(--vscode-foreground));
+}
+.ce-find-input::placeholder { color: var(--fg-faint); }
+/* A query with no hits reads as a soft state, never an error — the reader is
+   usually still typing, and scolding them for it would be absurd. */
+.ce-find-input.no-match { color: var(--accent-retire); }
+
+.ce-find-toggle {
+    width: 20px; height: 19px; padding: 0; border: 0; border-radius: 3px;
+    background: transparent; color: var(--fg-faint); cursor: pointer;
+    font: 10px/1 var(--font-mono); letter-spacing: -0.02em;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.ce-find-toggle:hover { background: var(--hover-bg); color: var(--fg-muted); }
+.ce-find-toggle.on {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--vscode-foreground);
+}
+
+.ce-find-count {
+    font: 10.5px var(--font-mono); color: var(--fg-muted);
+    min-width: 62px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.ce-find-count.empty { color: var(--fg-faint); }
+
+.ce-find-btn {
+    min-width: 22px; height: 22px; padding: 0 4px; border: 0; border-radius: var(--radius-ctrl);
+    background: transparent; color: var(--fg-muted); cursor: pointer;
+    font: 11px/1 var(--vscode-font-family);
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.ce-find-btn:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
+.ce-find-replace-row .ce-find-input { width: 168px; }
+
+/* Matches borrow VS Code's OWN find colours, so a search in the tree looks like a
+   search in any other editor — with fallbacks for the hub, which has no such tokens. */
+.ce-find-match {
+    background: var(--vscode-editor-findMatchHighlightBackground,
+                color-mix(in srgb, var(--vscode-charts-yellow, #c9a24a) 34%, transparent));
+    border-radius: 2px;
+}
+.ce-find-current {
+    background: var(--vscode-editor-findMatchBackground,
+                color-mix(in srgb, var(--vscode-charts-yellow, #c9a24a) 62%, transparent));
+    box-shadow: 0 0 0 1px var(--vscode-editor-findMatchBorder, var(--accent));
+}
+body.vscode-high-contrast .ce-find-match { background: none; box-shadow: inset 0 -2px 0 var(--vscode-foreground); }
+body.vscode-high-contrast .ce-find-current { background: none; box-shadow: 0 0 0 1px var(--vscode-foreground); }

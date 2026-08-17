@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Two ways to *read* the tree, where before there was only editing it.
+
+### Added
+
+- **`/codoc:ask` — a question, answered in the tree.** Ask the agent how something
+  works and instead of a paragraph in chat it draws a numbered reading path over the
+  features that already hold the answer: a step number beside each heading, one line
+  of note under it, a quiet highlight on the sentence it is pointing at, and a header
+  carrying the answer with a `‹ ›` stepper. It writes nothing to the tree — it is a
+  pure overlay (`.codoc/ask.json`), safe to raise mid-edit and gone when dismissed —
+  so it never collides with a draft, a proposal, or a rewrite in flight.
+
+- **Find & replace in the Codoc Tree (`Cmd+F` / `Cmd+Alt+F`).** The tree editor is a
+  webview, which gets no native Find widget, and `tree.codoc` is a read-only export
+  you cannot edit directly — so searching or renaming across the tree had nowhere to
+  happen. Now `Cmd+F` searches titles and descriptions (case / whole-word / regex),
+  and replace routes through the same path as typing, so a rename is an ordinary edit
+  the daemon reconciles, not a back-door write.
+
+> **Study note.** Both surfaces are on by default in the codoc arm, so they change
+> the tool the study measures: sessions run before this cut-over are not comparable
+> on the task-1 (understanding) timing, and the codoc arm must be described as it now
+> stands. The study logger records a codoc-only `ASK` action (a count of stops, never
+> the question) so walkthrough use is visible within the arm.
+
 ## 0.2.1
 
 The release the user study actually runs on. 0.2.0 could not have collected a

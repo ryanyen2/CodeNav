@@ -176,6 +176,7 @@ codoc sync    # one-shot: apply tree edits, reflect code once, exit
 | `codoc: Open code reference` / `Open First Code Binding` / `Pick code binding to open` | Jump to bound code |
 | `codoc: Collapse all (table of contents)` / `Expand all features` | Fold / unfold the whole tree |
 | `codoc: Collapse / Expand feature subtree` | Fold / unfold under the cursor |
+| `codoc: Find in Tree` / `codoc: Replace in Tree` | Search titles + descriptions, with replace / replace-all |
 
 ---
 
@@ -190,6 +191,8 @@ codoc sync    # one-shot: apply tree edits, reflect code once, exit
 | `Cmd+K ↓` | Next sibling | `tree.codoc` editor |
 | `Cmd+K ←` | Jump to parent | `tree.codoc` editor |
 | `Cmd+K →` | Jump to first child | `tree.codoc` editor |
+| `Cmd+F` | Find in the tree | Codoc Tree editor |
+| `Cmd+Alt+F` (`Ctrl+H` on Win/Linux) | Find & replace in the tree | Codoc Tree editor |
 
 The `⌘K` nav chords move the cursor between feature title lines while leaving
 normal arrow-key text editing intact.
@@ -351,11 +354,21 @@ when work is queued.
 **MCP server** (`codoc`, registered in `.mcp.json`): the agent's reflection API —
 `codoc_context` (the relevant tree slice for the files being edited — the primary
 read), `codoc_tree` (whole tree, scopeable), `codoc_status`, `codoc_reflect`,
-`codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`.
+`codoc_propose_{add,amend,move,retire}`, `codoc_attach`, `codoc_plan_add`,
+`codoc_walkthrough` (draw a reading path over the tree — the `/codoc:ask` answer).
 
 **Skill + commands** (`.claude/skills/codoc-intent/`, `.claude/commands/codoc/`):
 the skill teaches Claude the MCP-first propose-then-implement workflow; `/codoc:plan`
-proposes plan nodes before coding, `/codoc:sync` implements the queued directives.
+proposes plan nodes before coding, `/codoc:sync` implements the queued directives,
+and `/codoc:ask <question>` answers a question *in the tree* — it reads the code and
+draws a numbered walkthrough through the features that hold the answer (writing
+nothing, so it is safe at any time). Read the walkthrough in the Codoc Tree editor;
+the step counter and `‹ ›` walk it, `✕` dismisses it.
+
+**Reading the tree.** In the Codoc Tree editor, `Cmd+F` searches feature titles and
+descriptions and `Cmd+Alt+F` (Windows/Linux `Ctrl+H`) adds find-and-replace — the
+raw `tree.codoc` file is a read-only export, so this is how you search and rename
+across the tree.
 
 ### The loop
 

@@ -12,6 +12,7 @@ import type { Suggestion } from '../state/suggestion-model';
 import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
 import type { HoldDetail, HistoryEntry } from '../state/bindings-model';
+import type { AskWalkthrough } from '../state/ask-model';
 import type { ViewerInfo } from './viewer-status';
 import type { CommandKind } from '../state/edits-channel';
 
@@ -263,6 +264,12 @@ export interface DocPayload {
      *  skeleton shimmer, the read-only guard on still-pending nodes, and the
      *  toolbar progress line. Absent when no run is in play. */
     translation?: TranslationProgress;
+    /** The `/codoc:ask` walkthrough currently on screen (`.codoc/ask.json`), or
+     *  absent for none. A pure VIEW: the numbered path is drawn over features that
+     *  already exist, nothing about it is authored state, and dismissing it leaves
+     *  the tree byte-identical — which is what lets it arrive at any point in an
+     *  edit without a gate of its own. */
+    ask?: AskWalkthrough | null;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }
@@ -395,6 +402,10 @@ export type WebviewMessage =
      *  (base64) carry an optional file attachment (image/pdf `add`) the host
      *  writes under `.codoc/media/` before persisting the block-edit; text-only
      *  kinds (diagram/latex/url) omit them. */
+    /** Dismiss the `/codoc:ask` walkthrough: the host deletes `.codoc/ask.json`.
+     *  Deleting is the whole teardown — the overlay owns no other state — so this
+     *  can never leave anything half-cleared. */
+    | { kind: 'ask-dismiss' }
     | {
           kind: 'block-edit';
           block: {
@@ -416,4 +427,8 @@ export type HostMessage =
     /** Code→doc spark (P2 / §A.3): a bound source file was edited — light up these feature
      *  headings with a travelling inbound glyph + a brief tree-row pulse. `big` marks fids
      *  whose change was large enough to likely re-question the prose (gets the divergent halo). */
-    | { kind: 'code-touch'; fids: string[]; big?: string[] };
+    | { kind: 'code-touch'; fids: string[]; big?: string[] }
+    /** Open the in-document find widget (the `codoc.find` command / ⌘F pressed
+     *  while focus is outside the webview). `replace` opens it with the replace
+     *  row already showing. */
+    | { kind: 'find'; replace?: boolean };

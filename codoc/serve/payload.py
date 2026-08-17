@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from codoc.codoc_file.render import BINDINGS_FILENAME
+from codoc.loop.ask import read_walkthrough
 from codoc.loop.fsio import read_json
 from codoc.loop.status import STATUS_FILENAME
 from codoc.model.hlc import HLC
@@ -458,5 +459,12 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
             for fid, meta in features.items()
             if isinstance(meta, dict) and meta.get("local_id")
         },
+        # The /codoc:ask walkthrough overlay — a maintainer's answer, drawn over
+        # features that already exist. A pure VIEW served read-only to a contributor:
+        # nothing about it is authored state, so it costs the browser one field and
+        # carries the same TTL discipline the reader applies (mtime, see ask.py), so
+        # a hub restart never resurrects yesterday's question. Only a HANDOFF-capable
+        # viewer may dismiss it (dispatch.py) — a contributor sees it and moves on.
+        "ask": read_walkthrough(codoc_dir),
         "rev": payload_version(codoc_dir),
     }

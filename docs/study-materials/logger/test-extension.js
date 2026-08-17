@@ -50,6 +50,12 @@ const vscode = {
         getConfiguration: () => ({ get: (k) => (k === 'file' ? LOG : k === 'participant' ? 'p04' : '') }),
         onDidChangeTextDocument: on('change'),
         onDidSaveTextDocument: on('save'),
+        createFileSystemWatcher: () => ({
+            onDidCreate: on('askCreate'),
+            onDidChange: on('askChange'),
+            onDidDelete: on('askDelete'),
+            dispose() {},
+        }),
     },
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
@@ -111,6 +117,18 @@ fire('change', {
     contentChanges: [{ text: 'x'.repeat(200), rangeLength: 12 }],
 });
 
+// A /codoc:ask walkthrough is drawn — .codoc/ask.json appears with three stops.
+// The watcher reads it to count them (a real file, since the extension reads it).
+const askFile = path.join(path.dirname(LOG), 'ask.json');
+fs.writeFileSync(askFile, JSON.stringify({
+    version: 1, id: 'ask-99', question: 'WALKTHROUGH_QUESTION_TEXT', answer: 'because',
+    steps: [{ feature_id: 'f-1' }, { feature_id: 'f-2' }, { feature_id: 'f-3' }],
+}));
+fire('askCreate', { fsPath: askFile, scheme: 'file' });
+// Re-observing the SAME walkthrough (a double-fired watcher, or a re-render) must
+// not count twice — the dedupe is on the walkthrough's own id.
+fire('askChange', { fsPath: askFile, scheme: 'file' });
+
 // Save, then lose the window.
 fire('save', { uri: uri('.codoc/tree.codoc') });
 fire('window', { focused: false });
@@ -148,10 +166,16 @@ assert.strictEqual(agentish.active, false, 'a file changing underneath is not th
 assert.strictEqual(agentish.added, 200);
 assert.strictEqual(agentish.removed, 12);
 
+// A /codoc:ask walkthrough is recorded once, with its stop count and not its text.
+const asks = rows.filter(r => r.ev === 'ask');
+assert.strictEqual(asks.length, 1, 'one ASK per walkthrough, deduped on its id');
+assert.strictEqual(asks[0].steps, 3, 'the number of stops is recorded');
+
 // No file contents anywhere.
 const blob = fs.readFileSync(LOG, 'utf8');
 assert.ok(!blob.includes('hello'), 'the text of an edit is never written');
 assert.ok(!blob.includes('x'.repeat(20)), 'the text of an edit is never written');
+assert.ok(!blob.includes('WALKTHROUGH_QUESTION_TEXT'), 'the question behind an ask is never written');
 
 assert.ok(rows.some(r => r.ev === 'save'), 'saves are recorded');
 assert.ok(rows.some(r => r.ev === 'window' && r.focused === false), 'losing focus is recorded');
@@ -175,5 +199,5 @@ assert.match(opened[0], /[?&]code=p04\b/, 'carrying the participant code');
     assert.equal(m.code, 'p04');
     assert.equal(m.condition, 'codoc', 'the condition is read from the workspace name');
     await m.stop();
-    console.log(`study logger: ${rows.length} events, all 20 assertions pass`);
+    console.log(`study logger: ${rows.length} events, all assertions pass`);
 })().catch((err) => { console.error(err); process.exit(1); });

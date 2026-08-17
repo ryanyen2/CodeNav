@@ -27,6 +27,7 @@ test('every action in the list is produced by at least one input, so none is dea
         { ev: 'agent', t: 1, cmd: 'scribe' },
         { ev: 'codoc', t: 1, kind: 'verdict', accept: true },
         { ev: 'codoc', t: 1, kind: 'verdict', accept: false },
+        { ev: 'ask', t: 1, steps: 3 },
     ];
     for (const s of samples) {
         const a = mapEvent(s);
@@ -42,7 +43,8 @@ test('the shared level contains no action only one condition can produce', () =>
     for (const a of CODOC_ONLY) assert.ok(!SHARED.includes(a), `${a} must not be shared`);
     assert.ok(!SHARED.includes('ACCEPT'));
     assert.ok(!SHARED.includes('REJECT'));
-    assert.ok(isShared('READ_DOC') && !isShared('ACCEPT'));
+    assert.ok(!SHARED.includes('ASK'));
+    assert.ok(isShared('READ_DOC') && !isShared('ACCEPT') && !isShared('ASK'));
 });
 
 test('the vocabulary is closed: an unknown event maps to nothing, not to a catch-all', () => {
@@ -197,9 +199,13 @@ test('a comparison between conditions cannot include the codoc-only actions', ()
     const seq = toSequence([
         { ev: 'view', surface: 'document', file: 'x', t: 2000, ms: 1000 },
         { ev: 'codoc', t: 3000, kind: 'verdict', accept: true },
+        { ev: 'ask', t: 3500, steps: 4 },
         { ev: 'edit', surface: 'code', file: 'a.py', t: 4000, active: true, focused: true },
     ]);
     assert.ok(toLetters(seq).includes('ACCEPT'));
+    assert.ok(toLetters(seq).includes('ASK'));
+    // Both the verdict and the walkthrough drop out of a cross-condition view —
+    // the baseline can produce neither, so counting them would compare the tool.
     assert.deepEqual(toLetters(sharedOnly(seq)), ['READ_DOC', 'EDIT_CODE']);
 });
 

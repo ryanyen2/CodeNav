@@ -34,8 +34,16 @@ export const SHARED = Object.freeze([
  * Seeing which proposal was opened would mean instrumenting codoc's own editor,
  * and nothing in this study changes the tool being studied. Looking at the
  * description is READ_DOC in both conditions; the verdict is what differs.
+ *
+ * ASK is `/codoc:ask` — the participant asked the agent a question and it drew the
+ * answer as a numbered reading path over the tree (`.codoc/ask.json`). It is here,
+ * not in SHARED, because only the codoc arm can produce it: the baseline has no
+ * such surface, so counting it across conditions would compare a thing one side
+ * cannot do. The PROMPT that triggered it is SHARED and is counted on both sides;
+ * ASK records only that the answer landed as a walkthrough, reported within the
+ * codoc arm the way ACCEPT/REJECT are.
  */
-export const CODOC_ONLY = Object.freeze(['ACCEPT', 'REJECT']);
+export const CODOC_ONLY = Object.freeze(['ACCEPT', 'REJECT', 'ASK']);
 
 export const ACTIONS = Object.freeze([...SHARED, ...CODOC_ONLY]);
 
@@ -106,6 +114,13 @@ export function mapEvent(raw) {
                 t: raw.t, a: 'PROMPT',
                 chars: raw.chars || 0, words: raw.words || 0, lines: raw.lines || 0,
             };
+
+        // A `/codoc:ask` walkthrough was drawn (`.codoc/ask.json` appeared). Only
+        // the codoc arm produces this file, so the action is codoc-only and never
+        // enters a cross-condition comparison. `steps` is how many stops the path
+        // drew — a count, never the question text.
+        case 'ask':
+            return { t: raw.t, a: 'ASK', steps: raw.steps || 0 };
 
         // From codoc's change ledger. In the codoc condition the description is
         // edited through a custom editor, so no text edit ever reaches the logger

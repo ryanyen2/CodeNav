@@ -62,7 +62,11 @@ _SUGGEST_KINDS = frozenset({
 # structural identity-keyed commands (U3 / KTD10) join here: only a write collaborator
 # may add/move/retire a feature directly; a suggest-only client's structural change is
 # queued as a pending proposal, never applied.
-_HANDOFF_KINDS = frozenset({"verdict", "hand-off", "add", "move", "retire"})
+# A walkthrough is a maintainer's answer drawn over the tree; a SUGGEST-role
+# contributor SEES it (it rides the payload read-only) but may not take it down for
+# everyone — dismissing it deletes the shared file, a maintainer-level act like a
+# verdict or a hand-off. So it joins the HANDOFF kinds, not the SUGGEST ones.
+_HANDOFF_KINDS = frozenset({"verdict", "hand-off", "add", "move", "retire", "ask-dismiss"})
 
 
 def allowed(kind: str | None, capability: Capability) -> bool:
@@ -217,6 +221,19 @@ def _comment_passthrough(_message: dict, _codoc_dir: str) -> dict:
     return {"ok": True}
 
 
+def _ask_dismiss(_message: dict, codoc_dir: str) -> dict:
+    """Take the walkthrough overlay down by deleting ``.codoc/ask.json``.
+
+    Idempotent, and safe from the hub: the file is a single-slot ephemeral view
+    with no read-modify-write to race — the worst a concurrent ``codoc_walkthrough``
+    can do is leave the newer overlay in place, which is the harmless direction.
+    Gated to HANDOFF in :func:`dispatch`, so a suggest-only contributor sees the
+    walkthrough but cannot dismiss it for the maintainer."""
+    from codoc.loop.ask import clear_walkthrough
+
+    return {"ok": True, "cleared": clear_walkthrough(codoc_dir)}
+
+
 def _block_edit(message: dict, codoc_dir: str) -> dict:
     """Persist a typed-media block edit (v6) to the `block_edits` channel — the
     SAME persistence the local webview's `handleBlockEdit` uses (KTD5/KTD8), so a
@@ -263,6 +280,7 @@ _HANDLERS = {
     "comment-edit": _comment_passthrough,
     "comment-resolve": _comment_passthrough,
     "block-edit": _block_edit,
+    "ask-dismiss": _ask_dismiss,
     "set-pref": _noop,
     # Identity-keyed authored commands (U3): all five route to the same persist
     # handler; the per-kind capability gate runs in dispatch() (KTD10).

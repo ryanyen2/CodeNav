@@ -331,6 +331,11 @@ cd ~/code/my-project && codoc init</pre>
     <td>You run <code>/codoc:sync</code> in your session (nudged by a hook)</td>
     <td>Reads the directive codoc queued, writes the code, calls <code>codoc_reflect</code> to bind it. Runs <strong>in your interactive session, with your permissions</strong> — never a headless <code>claude -p</code>.</td>
   </tr>
+  <tr>
+    <td><strong>Reading</strong></td>
+    <td>You run <code>/codoc:ask &lt;question&gt;</code></td>
+    <td>Answers a question about the codebase <em>in the tree</em>: it reads the code and calls <code>codoc_walkthrough</code> to draw a numbered reading path through the features that hold the answer. Changes nothing — no proposal, no code — so it is safe at any time.</td>
+  </tr>
 </table>
 
 <p><strong>The MCP server</strong> (<code>codoc</code>, registered in <code>.mcp.json</code> as the <code>codoc-mcp</code> console script; FastMCP over stdio) is the agent's primary reflection path. Instead of relying on Loop A's blind index-diff, Claude calls tools that carry real intent straight into the store:</p>
@@ -342,6 +347,7 @@ cd ~/code/my-project && codoc init</pre>
   <li><code>codoc_reflect</code> — bulk-reconcile after writing code (pass <code>caused_by=⟨d-id⟩</code> to chain it to the directive it implements).</li>
   <li><code>codoc_plan_add</code> — author an unrealized <strong>plan</strong> node (realized only once code binds).</li>
   <li><code>codoc_await_verdicts</code> — block on the IDE inbox so a plan can be proposed, accepted, and implemented in one turn.</li>
+  <li><code>codoc_walkthrough</code> — lay a numbered reading path over existing features (the <code>/codoc:ask</code> answer surface). A pure overlay in <code>.codoc/ask.json</code> — it writes nothing to the tree, so it never collides with an edit in flight; <code>codoc_walkthrough_read</code> / <code>_clear</code> observe and dismiss.</li>
 </ul>
 
 <p><strong>The hooks</strong> (deep-merged into <code>.claude/settings.json</code>): <code>SessionStart</code>, <code>Stop</code>, <code>PreToolUse</code> (<code>Edit|Write|MultiEdit|Read</code>), <code>PostToolUse</code> (<code>Edit|Write|MultiEdit</code>), and <code>UserPromptSubmit</code>.</p>
@@ -368,6 +374,8 @@ cd ~/code/my-project && codoc init</pre>
   <li><strong>Agent changes are tracked changes</strong> you review — drift/reflection/amend render as the vendored engine's <code>insertion</code>/<code>deletion</code> marks (struck old / inserted new), tinted per author, with inline ✓/✗. ADD/MOVE keep ghost rows, RETIRE a strike, with toolbar Accept-all / Reject-all.</li>
   <li><strong>Inline comments</strong> — select prose → a comment bubble → a composer. The note anchors to the span and is handed to Loop B as a one-shot <code>STEER</code> directive.</li>
   <li><strong>Code-ref chips</strong> with <code>@</code>-autocomplete from the AST-bound symbols.</li>
+  <li><strong>Find &amp; replace</strong> — <kbd>⌘F</kbd> searches feature titles and descriptions (case / whole-word / regex), <kbd>⌘⌥F</kbd> adds replace and replace-all. Because <code>tree.codoc</code> is a read-only export, this is how you search and rename across the tree; a replace routes through the same edit path as typing, so the daemon reconciles it like any other change.</li>
+  <li><strong>Walkthroughs</strong> — a <code>/codoc:ask</code> answer renders as a numbered reading path over the tree: a step chip beside each heading, a one-line note, a highlight on the sentence it points at, and a header with the answer and a <code>‹ ›</code> stepper. A pure overlay — it never edits the tree.</li>
 </ul>
 <p>The webview persists its authored doc to <code>.codoc/tree.doc.json</code> and never writes <code>tree.codoc</code> — the daemon is the sole writer of that file, which closes the save-conflict the two-writer model used to hit.</p>
 
@@ -562,6 +570,7 @@ cd ~/code/my-project && codoc init</pre>
   <tr><th>File</th><th>Written by</th><th>Role</th></tr>
   <tr><td><code>status.json</code></td><td>loops</td><td><code>{state, pending, detail, at}</code>; state ∈ <code>in_sync · code_drift · tree_dirty · awaiting_impl · realizing</code>. Drives the status bar + header CodeLens.</td></tr>
   <tr><td><code>inbox.json</code></td><td>IDE</td><td>verdict channel: Accept/Reject writes here; Loop B drains and clears it.</td></tr>
+  <tr><td><code>ask.json</code></td><td><code>codoc_walkthrough</code></td><td>the <code>/codoc:ask</code> walkthrough overlay: a numbered reading path over existing features. Ephemeral (no loop reads it, safe to delete); deleted to dismiss.</td></tr>
   <tr><td><code>realize.md</code></td><td>Loop B</td><td>the realization queue the live session implements via <code>/codoc:sync</code>, then deletes. Each <code>### N.</code> heading carries its <code>⟨d-id⟩</code>.</td></tr>
   <tr><td><code>realize.json</code></td><td>Loop B</td><td>machine manifest <code>{id, feature_id, kind, caused_by, text}</code> beside <code>realize.md</code> — feeds the hold set, <code>caused_by</code> tagging, and append-not-clobber rebuilds.</td></tr>
   <tr><td><code>edits.json</code></td><td>IDE host</td><td>provenance/intent channel: per-feature authorship annotations for settles, one-shot inline-comment <code>steers</code> + realize <code>cancellations</code> (withdrawals), and the <code>intents</code> hold-set list.</td></tr>

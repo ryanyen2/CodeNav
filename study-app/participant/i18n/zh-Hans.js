@@ -473,6 +473,7 @@ export const ZH_HANS = Object.freeze({
     'start.codoc.about.0': '那份写下来的说明是一棵功能树。每一个节点说明这个项目做的一件事，并指向实现它的代码。',
     'start.codoc.about.1': '它是你可以编辑的。当底下的代码变了，codoc 会提出对说明的修改，你在原地接受或拒绝。',
     'start.codoc.about.2': '编程 agent 也读得到它，所以你写在那里的任何东西，都是 agent 可以照着做的。',
+    'start.codoc.about.3': '要在里面找东西：在说明里按 Cmd+F 搜索（也可以全局替换）。遇到看不懂的地方，在 agent 里运行“/codoc:ask”并问一个关于这个项目的问题——它会在说明里画出一条带编号的路径，指向能回答你的那几处，你用箭头逐步走过。',
 
     'start.baseline.title': '不用 codoc 的工作方式',
     'start.baseline.step.0': '在 VS Code 里打开这个文件夹。',

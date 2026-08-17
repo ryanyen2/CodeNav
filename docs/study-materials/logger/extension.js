@@ -30,6 +30,9 @@
 //   agent    a command started in a terminal. Present only on VS Code versions
 //            that expose shell integration; the Claude Code transcript is the
 //            authoritative record of agent turns either way.
+//   ask      a /codoc:ask walkthrough was drawn (.codoc/ask.json appeared).
+//            Carries the number of stops, never the question. Only the codoc
+//            condition produces the file, so this never appears in the baseline.
 //   window   the whole window gained or lost focus, so time away is not counted
 //            as time spent looking.
 const vscode = require('vscode');
@@ -203,6 +206,30 @@ function activate(context) {
         if (!s.focused) closeCurrent(Date.now());
         write('window', { focused: s.focused });
     }));
+
+    // The /codoc:ask walkthrough. codoc writes .codoc/ask.json when the participant
+    // asks a question and the agent draws the answer as a numbered reading path over
+    // the tree; it is deleted on dismiss. The file exists in the codoc condition
+    // ONLY — the baseline has no such surface — so the very same watcher run in both
+    // arms produces ASK in one and nothing in the other, which is exactly why ASK is
+    // codoc-only. We log that an ask happened and how many stops it drew, and dedupe
+    // on the walkthrough's own id so a double-fired watcher or a re-render is one ASK.
+    let lastAskId = '';
+    const askWatcher = vscode.workspace.createFileSystemWatcher('**/.codoc/ask.json');
+    const onAsk = uri => {
+        let steps = 0, id = '';
+        try {
+            const j = JSON.parse(fs.readFileSync(uri.fsPath, 'utf8'));
+            steps = Array.isArray(j.steps) ? j.steps.length : 0;
+            id = typeof j.id === 'string' ? j.id : '';
+        } catch (_e) { return; }               // mid-write or already gone — a later event catches it
+        if (!steps || id === lastAskId) return; // no stops, or the same walkthrough re-observed
+        lastAskId = id;
+        write('ask', { steps });                // a count, never the question text
+    };
+    sub.push(askWatcher);
+    sub.push(askWatcher.onDidCreate(onAsk));
+    sub.push(askWatcher.onDidChange(onAsk));
 
     // Commands run in a terminal, where that is available. Optional on purpose:
     // shell integration is a recent addition and the transcript is the real

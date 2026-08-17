@@ -153,6 +153,14 @@ daemon) and `codoc watch --auto-realize` (no session), via `loop/sdk_realize.py`
 (preferred) or a blind `claude -p /codoc:sync`. The unified `/codoc:sync` reads
 `status.json` and dispatches direction.
 
+**Reading, not writing — `/codoc:ask`.** A separate, read-only slash command:
+the session reads the tree + code and calls `codoc_walkthrough` to lay a numbered
+reading path over the features that already hold the answer (`.codoc/ask.json`;
+see the control-files list). It changes nothing — no store write, no directive, no
+realize queue — so it needs no verdict and no trigger; it is the *understanding*
+counterpart to plan/sync's *change* loop. Companion tools `codoc_walkthrough_read`
+/ `codoc_walkthrough_clear` observe and dismiss.
+
 ## Blocks — typed media + plugin codecs (agent-native notebook protocol)
 
 The feature node generalizes to a typed, bindable, lifecycled **block**. Prose stays
@@ -443,6 +451,17 @@ state** and is re-emitted on every pass even when the text render is held back
   tree-update prompt as `changes["author_intent"]`, and `codoc_status` /
   `read_status` expose it as `recent_intent` so a fresh session can resume where
   the author left off. Gitignored with the rest of `.codoc/`.
+- **`ask.json`** — the `/codoc:ask` walkthrough overlay (`loop/ask.py`): a single
+  slot holding `{version, id, question, answer, at, steps[{label, feature_id, note,
+  quote?, group?, file?, symbol?, line?}]}`. A walkthrough is a numbered *reading
+  path over features that already exist* — the `codoc_walkthrough` MCP tool writes
+  it, the IDE draws it (chip + note + quote wash), and it is deleted to dismiss. Like
+  `activity.json` it is **ephemeral**: no loop reads it, nothing derives from it, it
+  writes nothing to the store or the change ledger, and it is safe to delete at any
+  time — which is what lets an ask happen at any point in an edit. mtime-TTL'd (8 h)
+  so a restart never resurrects yesterday's question; `label` (`1a 1b / 2a`) is
+  computed by the writer so an LLM cannot emit a broken sequence. It rides the hub
+  payload read-only; only a HANDOFF viewer may dismiss it (`serve/dispatch.py`).
 - **`tree.index.json`** — cross-reference registry (features/bindings/refs) for
   dead-ref flagging + hover; `refs[].resolved` is leaf-tolerant.
 - **`drift.json`** — `{fid: "questioned" | "binding-lost"}`, re-emitted as the
@@ -591,6 +610,24 @@ workflow readable in place:
   revert on the next settle). Ghost ADD proposals are additionally **editable in
   place** (`suggestion-decorations.editableGhostField`; drafts survive rebuilds in
   a module store) — the edited text rides the verdict as accept-time edits.
+- **The `/codoc:ask` walkthrough** (`webview/tiptap/ask-decorations.ts` +
+  `webview/ask-bar.ts`, state in `state/ask-model.ts`): a numbered reading path over
+  existing features, read from `.codoc/ask.json`. Deliberately the one layer with
+  **no hue** — every other decoration's colour carries lifecycle meaning, and a
+  walkthrough is a reading order, not a state — so it reads as structure: an ordinal
+  chip in the margin, the stage named once, a one-line note, a graphite quote wash
+  (suppressed on any feature already carrying a diff, so two highlights never
+  overlap). It writes nothing and blocks nothing, which is why an ask is safe
+  mid-edit. The header carries the answer + a stepper; dismiss deletes the file.
+- **Find & replace** (`webview/find.ts` pure logic, `webview/find-view.ts` widget,
+  `webview/tiptap/find-decorations.ts`): ⌘F / ⌘⌥F over the tree doc's titles and
+  descriptions (`tree.codoc` is a read-only export the daemon overwrites, and a
+  webview receives no native Find widget, so the one document you can actually edit
+  had no search). Highlights are decorations, never marks; **replace routes through
+  the ordinary settle→command path**, so a replace is indistinguishable from typing
+  and its `base_text` provenance stays trustworthy. Replace-all runs back-to-front
+  (original positions stay valid) and skips sections the agent is mid-rewrite. The
+  `codoc.find` / `codoc.replace` commands cover focus outside the iframe.
 
 Key source files: `state/workspace-state.ts` (root/reload/status, `writeVerdict`),
 `state/tree-model.ts` (TS port of `parse.py`, parity-tested), `state/bindings-model.ts`,

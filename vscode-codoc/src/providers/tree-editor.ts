@@ -80,6 +80,22 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         return true;
     }
 
+    /** Open the in-document find widget in whichever tree webview is active.
+     *
+     *  Needed alongside the webview's own ⌘F listener because that listener only
+     *  sees the keystroke when focus is INSIDE the iframe: with the cursor in the
+     *  tree pane or the toolbar, VS Code routes the chord to the keybinding
+     *  instead. Returns false when no panel is live. */
+    public static openFind(replace: boolean): boolean {
+        let sent = false;
+        for (const panel of CodocTreeEditorProvider.panelByUri.values()) {
+            if (!panel.active) continue;
+            void panel.webview.postMessage({ kind: 'find', replace });
+            sent = true;
+        }
+        return sent;
+    }
+
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly state: WorkspaceState,
@@ -310,6 +326,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     // so the mark clears now rather than on the next daemon write.
                     await this.markAutoEditSeen(msg.fid, msg.at);
                     post();
+                    return;
+                case 'ask-dismiss':
+                    // Deleting the file IS the teardown — the overlay owns no other
+                    // state, so this cannot half-clear. The watcher reposts with no
+                    // `ask`, which is also how a `codoc_walkthrough_clear` from the
+                    // agent's side reaches the editor.
+                    await this.dismissAsk(document);
                     return;
                 case 'set-pref':
                     await this.setPref(document, msg.pref, msg.value);
@@ -873,8 +896,26 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             // toolbar line. Works whether the run was started from the menu or a
             // terminal: the file is the channel, not the child process.
             ...(this.state.translation ? { translation: this.state.translation } : {}),
+            // The /codoc:ask overlay. Always present as a field (null when there is
+            // none) rather than omitted, because the webview must be able to tell
+            // "dismissed" from "this payload didn't carry one" — omitting it would
+            // leave a cleared walkthrough on screen until the next reload.
+            ask: this.state.ask,
             rev: ++this.rev,
         };
+    }
+
+    /** Dismiss the walkthrough overlay by deleting `.codoc/ask.json`.
+     *
+     *  Safe to do from the host despite the "the host holds no cross-process lock"
+     *  rule that keeps it off `edits.json`: there is nothing to read-modify-write
+     *  here. The worst a race with a fresh `codoc_walkthrough` can do is leave the
+     *  new overlay on screen, which is the harmless direction. */
+    private async dismissAsk(document: vscode.TextDocument): Promise<void> {
+        const dir = path.dirname(document.uri.fsPath);
+        try {
+            await vscode.workspace.fs.delete(vscode.Uri.file(path.join(dir, 'ask.json')));
+        } catch { /* already gone — dismissing nothing is not a failure */ }
     }
 
     /** Bound-symbol autocomplete candidates from the sidecar `by_file` (deduped by

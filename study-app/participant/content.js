@@ -158,6 +158,7 @@ export const HOW_TO_START = Object.freeze({
             'The written description is a tree of features. Each one names something the project does and points at the code that does it.',
             'It is yours to edit. When the code changes underneath it, codoc proposes a change to the description, and you accept or reject it inline.',
             'The coding agent can read it too, so anything you write there is something the agent can act on.',
+            'To find your way around it: press Cmd+F in the description to search it (and replace across it). To get oriented on something you do not understand, run "/codoc:ask" in the agent with a question about the project — it draws a numbered path through the description to the parts that answer it, which you step through with the arrows.',
         ],
     },
     baseline: {

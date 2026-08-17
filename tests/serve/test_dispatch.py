@@ -24,6 +24,32 @@ def test_capability_matrix():
     assert allowed("comment-create", Capability.HANDOFF)
     assert not allowed("comment-create", Capability.NONE)
     assert not allowed("hand-off", Capability.NONE)
+    # A walkthrough is a maintainer's answer: a contributor SEES it (it rides the
+    # payload) but only a hand-off collaborator may take the shared file down.
+    assert not allowed("ask-dismiss", Capability.SUGGEST)
+    assert allowed("ask-dismiss", Capability.HANDOFF)
+    assert not allowed("ask-dismiss", Capability.NONE)
+
+
+def test_suggest_cannot_dismiss_a_walkthrough(tmp_path):
+    from codoc.loop.ask import ask_path
+
+    ask_path(tmp_path).write_text('{"version":1,"steps":[{"feature_id":"f-1"}]}')
+    with pytest.raises(CommandError) as ei:
+        dispatch({"kind": "ask-dismiss"}, Capability.SUGGEST, str(tmp_path))
+    assert ei.value.status == 403
+    assert ask_path(tmp_path).exists()  # the maintainer's answer survives
+
+
+def test_handoff_dismisses_a_walkthrough(tmp_path):
+    from codoc.loop.ask import ask_path
+
+    ask_path(tmp_path).write_text('{"version":1,"steps":[{"feature_id":"f-1"}]}')
+    res = dispatch({"kind": "ask-dismiss"}, Capability.HANDOFF, str(tmp_path))
+    assert res["ok"] is True and res["cleared"] is True
+    assert not ask_path(tmp_path).exists()
+    # Idempotent: dismissing nothing is not a failure.
+    assert dispatch({"kind": "ask-dismiss"}, Capability.HANDOFF, str(tmp_path))["cleared"] is False
 
 
 # Flow 1 — a read collaborator comments → steer written.

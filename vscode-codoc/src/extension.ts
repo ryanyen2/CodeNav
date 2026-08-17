@@ -502,6 +502,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── codoc.navigateToFeature ───────────────────────────────────────────────
     context.subscriptions.push(
+        // ⌘F / ⌘⌥F in the Codoc Tree editor. The webview catches these itself when
+        // focus is inside it; these keybindings cover the rest of the surface (the
+        // nav tree, the toolbar), where VS Code routes the chord to a command.
+        vscode.commands.registerCommand('codoc.find', () => {
+            CodocTreeEditorProvider.openFind(false);
+        }),
+        vscode.commands.registerCommand('codoc.replace', () => {
+            CodocTreeEditorProvider.openFind(true);
+        }),
         vscode.commands.registerCommand('codoc.navigateToFeature', async (titleOrId: string | null) => {
             const treePath = state.rootDir && path.join(state.rootDir, '.codoc', 'tree.codoc');
             if (!treePath || !titleOrId || !fs.existsSync(treePath)) return;

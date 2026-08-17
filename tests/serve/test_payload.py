@@ -256,6 +256,21 @@ def test_corrupt_files_are_tolerant(tmp_path):
     p = build_browser_payload(str(cd))
     assert p["nodes"] == {}
     assert p["rev"] == 0
+    assert p["ask"] is None  # no overlay on a bare repo
+
+
+# The walkthrough overlay rides the browser payload read-only, so a contributor
+# sees the maintainer's answer even though only a maintainer may dismiss it.
+def test_payload_carries_the_walkthrough_overlay(tmp_path):
+    cd = tmp_path / ".codoc"
+    cd.mkdir(parents=True)
+    (cd / "ask.json").write_text(json.dumps({
+        "version": 1, "id": "ask-1", "question": "how?", "answer": "because",
+        "steps": [{"label": "1", "feature_id": "f-1", "note": "here"}],
+    }))
+    p = build_browser_payload(str(cd))
+    assert p["ask"]["question"] == "how?"
+    assert p["ask"]["steps"][0]["feature_id"] == "f-1"
 
 
 # Flow 5b — a malformed parent cycle must not recurse forever.

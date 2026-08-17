@@ -11,6 +11,9 @@ REALIZE_FILENAME = "realize.md"
 REALIZE_MANIFEST_FILENAME = "realize.json"  # machine-readable directive manifest (ids + targets)
 EDITS_FILENAME = "edits.json"               # IDE→loop provenance annotations + live doc-ahead intents
 HOST_OPS_FILENAME = "edits.host.jsonl"      # IDE→daemon append-only op log; merged into edits.json under lock
+ASK_FILENAME = "ask.json"                   # ephemeral /codoc:ask walkthrough overlay (single slot, TTL'd);
+                                            # like activity.json it is safe to delete at any time and no loop
+                                            # reads it — the IDE draws it and nothing else depends on it.
 DRIFT_FILENAME = "drift.json"               # loop-computed per-feature drift/trust signal (sidecar re-emits)
 INTENT_FILENAME = "intent.jsonl"            # captured author prompts (UserPromptSubmit hook → Loop A context)
 REALIZED_LOG_FILENAME = "realized.jsonl"    # durable directive outcomes (queue drained → what happened)

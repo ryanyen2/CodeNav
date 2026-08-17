@@ -23,6 +23,14 @@ from codoc.doclang import (
 )
 from codoc.loop.activity import PHASE_DONE, mark_feature_phase
 from codoc.loop.apply import apply_op, should_auto_apply
+from codoc.loop.ask import (
+    MAX_STEPS,
+    AskStep,
+    build_walkthrough,
+    clear_walkthrough as ask_clear,
+    read_walkthrough as ask_read,
+    write_walkthrough,
+)
 from codoc.loop.classify import suppressed_by_hold
 from codoc.loop.edits import hold_set, read_manifest
 from codoc.loop.inbox import read_verdicts as inbox_read
@@ -812,3 +820,125 @@ def plan_status(codoc_dir: str) -> dict:
                 "Read that file and implement them, reflecting each with "
                 "caused_by=<its ⟨d-…⟩ id> — or tell the user to run /codoc:sync.")
         return out
+
+
+# ─── ask / walkthrough ─────────────────────────────────────────────────────────
+
+def _norm_ws(text: str) -> str:
+    """Whitespace-collapsed form, for matching a quote against prose that may have
+    been re-wrapped between the read and the write."""
+    return " ".join((text or "").split())
+
+
+def _quotable_blocks(title: str, description: str) -> list[str]:
+    """The spans a highlight can actually cover: the title, and each PARAGRAPH of
+    the description.
+
+    Paragraph-wise rather than whole-description on purpose — the editor draws a
+    highlight as one decoration inside one block, so a quote straddling a
+    paragraph break is one the IDE could not render. Accepting it here would put
+    the failure on screen instead of in the tool result.
+    """
+    blocks = [title or ""]
+    para: list[str] = []
+    for line in (description or "").split("\n"):
+        if line.strip():
+            para.append(line)
+        elif para:
+            blocks.append("\n".join(para))
+            para = []
+    if para:
+        blocks.append("\n".join(para))
+    return blocks
+
+
+def walkthrough(codoc_dir: str, *, question: str, answer: str = "",
+                steps: list[dict] | None = None) -> dict:
+    """Lay a numbered reading path over features that already exist.
+
+    Validates every step against the store BEFORE writing, because a step naming a
+    feature that is gone would render as a numbered chip on nothing, and a quote
+    that is not in the description would highlight nothing — both of which read to
+    the user as the tool being broken rather than the answer being wrong.
+    """
+    rows = list(steps or [])
+    if not rows:
+        return _err("pass steps=[{feature_id, note, quote?, group?, file?, symbol?, line?}, ...]")
+
+    with open_store(codoc_dir) as store:
+        feats = {f.id: f for f in store.list_features()}
+        by_title = {f.title.strip().lower(): f for f in feats.values() if f.title}
+
+        built: list[AskStep] = []
+        dropped: list[dict] = []
+        unresolved: list[dict] = []
+        seen: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                dropped.append({"step": str(row), "why": "not an object"})
+                continue
+            fid = str(row.get("feature_id") or "").strip()
+            feat = feats.get(fid)
+            if feat is None and fid:
+                # A title is what a human would paste, and the agent has just read
+                # the tree — accept it rather than failing the whole walkthrough.
+                feat = by_title.get(fid.lower())
+            if feat is None:
+                dropped.append({"feature_id": fid, "why": "no such live feature"})
+                continue
+            if feat.id in seen:
+                # One chip per feature: a node carrying "1b" and "3a" at once has
+                # no legible rendering, and the reader cannot tell which note
+                # belongs to which number. The first visit is the one that counts.
+                dropped.append({"feature_id": feat.id, "why": "already a stop on this path"})
+                continue
+            seen.add(feat.id)
+            quote = str(row.get("quote") or "").strip()
+            if quote:
+                needle = _norm_ws(quote)
+                blocks = _quotable_blocks(feat.title, feat.description)
+                if not any(needle in _norm_ws(b) for b in blocks):
+                    unresolved.append({"feature_id": feat.id, "quote": quote})
+                    quote = ""  # keep the step; drop the highlight that would miss
+            line = row.get("line")
+            built.append(AskStep(
+                feature_id=feat.id,
+                note=str(row.get("note") or ""),
+                quote=quote,
+                group=str(row.get("group") or ""),
+                file=str(row.get("file") or ""),
+                symbol=str(row.get("symbol") or ""),
+                line=int(line) if isinstance(line, (int, float)) else None,
+            ))
+
+        if not built:
+            return _err("no step named a live feature — read the tree with "
+                        "codoc_context or codoc_tree first, and pass real f-ids")
+
+        walk = build_walkthrough(question, answer, built)
+        write_walkthrough(codoc_dir, walk)
+
+    out: dict = {"ok": True, "id": walk.id, "steps": len(walk.steps),
+                 "labels": [s.label for s in walk.steps]}
+    if len(built) > len(walk.steps):
+        out["truncated"] = len(built) - len(walk.steps)
+        out["note"] = (f"kept the first {MAX_STEPS} steps — a walkthrough longer "
+                       f"than that stops being followed in order")
+    if dropped:
+        out["dropped"] = dropped
+    if unresolved:
+        out["unresolved_quotes"] = unresolved
+        out["quote_note"] = ("these quotes are not present in their feature's prose, "
+                             "so those steps show without a highlight — quote the "
+                             "description verbatim to highlight a span")
+    return out
+
+
+def clear_walkthrough_tool(codoc_dir: str) -> dict:
+    """Dismiss the overlay. Idempotent — clearing nothing is not an error."""
+    return {"ok": True, "cleared": ask_clear(codoc_dir)}
+
+
+def read_walkthrough_tool(codoc_dir: str) -> dict:
+    """The overlay currently on screen, or ``{"ok": True, "walkthrough": None}``."""
+    return {"ok": True, "walkthrough": ask_read(codoc_dir)}

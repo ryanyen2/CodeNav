@@ -71,6 +71,17 @@ comment surface, which writes them to `edits.json` (`drain_steers`). Typing a
 `tree.codoc` in U6, and U7 retired the text-ingest path that used to read `> ` lines
 out of it (see `loop_b` step 2.7), so a `> ` line is now ordinary prose.
 
+**Reading the tree** (surfaces that change nothing):
+- `/codoc:ask <question>` answers a question by drawing a numbered *walkthrough* — a
+  reading path over features that already exist (the `codoc_walkthrough` MCP tool →
+  ephemeral `.codoc/ask.json`; see `codoc/loop/ask.py`). It writes nothing to the
+  store or the change ledger, so it is safe at any point in an edit. Prefer it to a
+  chat paragraph when the tree already covers the answer; `codoc_walkthrough_read` /
+  `codoc_walkthrough_clear` observe and dismiss.
+- In the Codoc Tree editor, `Cmd+F` / `Cmd+Alt+F` search and replace across feature
+  titles and descriptions (the raw `tree.codoc` is a read-only export, so this is the
+  only place to search/rename the tree).
+
 ## Authoring language
 
 The tree can be authored in any language; `codoc/doclang.py` owns that (NOT

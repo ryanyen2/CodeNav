@@ -16,7 +16,7 @@
  * agent→human review direction (tracked changes, accept/reject) lands in U4.
  */
 import { Editor, Extension } from '@tiptap/core';
-import { TextSelection } from '@tiptap/pm/state';
+import { TextSelection, type Transaction } from '@tiptap/pm/state';
 import { codocExtensions } from './schema';
 import { AuthorStamp, AuthorController, REFLECT_META } from './author-plugin';
 import {
@@ -57,7 +57,7 @@ import { AskDecorations, ASK_UPDATED } from './ask-decorations';
 import { FindDecorations, FIND_UPDATED, searchBlocks } from './find-decorations';
 import {
     DEFAULT_FIND_OPTIONS, findInBlocks, replacementFor, stepIndexFrom, wrapIndex,
-    type FindMatch, type FindOptions,
+    type FindMatch, type FindOptions, type FindState,
 } from '../find';
 import type { AskWalkthrough } from '../../state/ask-model';
 import { resetCommentDecorations } from './comment-decorations';
@@ -126,6 +126,10 @@ export interface WholeDocEditorOptions {
     /** A typed-media block (v6) was edited — handed to the host → edits.json → Loop B
      *  `lower`. A pure move (ord change) never fires this; only content edits. */
     onBlockEdit?: (edit: BlockEditMsg) => void;
+    /** The find results changed on their own — the prose moved under an open ⌘F
+     *  widget — so the count it shows needs refreshing. Not fired for searches the
+     *  widget itself initiated; those return their state directly. */
+    onFindUpdate?: (state: FindState) => void;
 }
 
 export interface WholeDocEditorHandle {
@@ -175,6 +179,24 @@ export interface WholeDocEditorHandle {
     setPitches: (pitches: Record<string, string>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
     setGlance: (on: boolean) => void;
+    /** The `/codoc:ask` walkthrough overlay (`.codoc/ask.json`), or null for none.
+     *  Decoration only — it never enters the doc, so it needs no adopt gate. */
+    setAsk: (walk: AskWalkthrough | null) => void;
+    /** Move the walkthrough to the stop on `fid` ('' clears the emphasis) and glide
+     *  there. Returns the fid actually landed on, or '' when it is not in the doc. */
+    goToAskStep: (fid: string) => string;
+    /** Open / close find. Opening seeds the query from the current selection, the
+     *  way every editor's ⌘F does. */
+    setFindOpen: (open: boolean) => FindState;
+    /** Re-run the search. Returns what the widget renders from. */
+    setFindQuery: (query: string, opts: FindOptions) => FindState;
+    /** Step the current match by `delta`, wrapping, and reveal it. */
+    stepFind: (delta: number) => FindState;
+    /** Replace the current match, then land on the next. */
+    replaceFind: (replacement: string, preserveCase: boolean) => FindState;
+    /** Replace every match. Returns how many were actually replaced — sections the
+     *  agent is rewriting are skipped rather than silently half-applied. */
+    replaceAllFind: (replacement: string, preserveCase: boolean) => number;
     scrollToFeature: (fid: string) => void;
     /** Stage & send now (U4) — the Commit button's entry point; same as ⌘S in the editor. */
     commit: () => void;
@@ -477,6 +499,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // P2 fix 2: editing the feature means the user is now reviewing it → clear its
             // code-touched tick (it has served its purpose).
             if (editedFid) clearTouchTick(editedFid);
+            // The prose moved under the search — re-run it so the count and the
+            // highlights stay true. Only while the widget is open: with it shut this
+            // would be a full-document scan on every keystroke for nobody.
+            scheduleFindRefresh();
         },
         onSelectionUpdate: () => {
             const { from, to, empty } = editor.state.selection;
@@ -777,6 +803,20 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         return { count: findMatches.length, index: findIndex, query: findQuery };
     }
 
+    let findRefreshTimer = 0;
+    /** Re-search after the doc changed under an open widget. Debounced and
+     *  deferred out of the update handler: recomputing dispatches a transaction,
+     *  and dispatching from inside one is how a re-entrancy bug starts. */
+    function scheduleFindRefresh(): void {
+        if (!findOpen || !findQuery) return;
+        if (findRefreshTimer) clearTimeout(findRefreshTimer);
+        findRefreshTimer = window.setTimeout(() => {
+            findRefreshTimer = 0;
+            recomputeFind();
+            opts.onFindUpdate?.(findResult());
+        }, 120);
+    }
+
     function repaintFind(): void {
         editor.view.dispatch(editor.state.tr.setMeta(FIND_UPDATED, true));
     }
@@ -809,6 +849,55 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         // and never settles.
         editor.view.dispatch(tr);
         scrollPosIntoView(m.from);
+    }
+
+    /** Matches the reader may actually rewrite. A section the agent is mid-rewrite
+     *  rejects edits outright (busy-decorations' filterTransaction), so a bulk
+     *  replace including one would be silently dropped in part — better to leave
+     *  those matches alone and report a smaller number that is true. */
+    function replaceableMatches(): FindMatch[] {
+        return findMatches.filter(m => !currentBusy.has(m.fid));
+    }
+
+    /** Apply one replacement into an open transaction. Empty text deletes. */
+    function applyReplacement(tr: Transaction, m: FindMatch,
+                              replacement: string, preserveCase: boolean): void {
+        const text = replacementFor(m, replacement, { ...findOpts, preserveCase });
+        if (text) tr.insertText(text, m.from, m.to);
+        else tr.delete(m.from, m.to);
+    }
+
+    function replaceCurrentMatch(replacement: string, preserveCase: boolean): FindState {
+        const m = findMatches[findIndex];
+        if (!m || currentBusy.has(m.fid)) return findResult();
+        const tr = editor.state.tr;
+        applyReplacement(tr, m, replacement, preserveCase);
+        editor.view.dispatch(tr);
+        // Land on the NEXT match rather than re-finding the one just rewritten —
+        // repeated ⌘⌥E then walks the document, which is what the button means.
+        recomputeFind(m.from + replacement.length);
+        revealCurrentMatch();
+        return findResult();
+    }
+
+    function replaceAllMatches(replacement: string, preserveCase: boolean): number {
+        const targets = replaceableMatches();
+        if (!targets.length) return 0;
+        const tr = editor.state.tr;
+        // Back to front: every position ahead of an applied step is untouched by it,
+        // so the ORIGINAL positions stay valid for the whole batch and no mapping is
+        // needed. Front to back would need each step remapped through the last.
+        for (let i = targets.length - 1; i >= 0; i--) {
+            applyReplacement(tr, targets[i], replacement, preserveCase);
+        }
+        editor.view.dispatch(tr);
+        // Force the settle: a bulk replace usually rewrites titles, and the ordinary
+        // debounce holds a title back while the caret sits in a heading. The result
+        // is captured, not sent — a replace is an edit like any other, and the
+        // author still commits it with ⌘S.
+        settleNow(true);
+        recomputeFind();
+        return targets.length;
     }
     function scrollToFeatureInternal(fid: string, smooth: boolean): void {
         const pos = headingPosForFid(editor, fid);
@@ -1736,6 +1825,49 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             document.body.classList.toggle('glance', on);
             editor.view.dispatch(editor.state.tr.setMeta(GLANCE_UPDATED, true));
         },
+        setAsk: (walk: AskWalkthrough | null) => {
+            currentAsk = walk;
+            // A new walkthrough starts at its first stop; a cleared one has none.
+            currentAskFid = walk?.steps[0]?.feature_id ?? '';
+            editor.view.dispatch(editor.state.tr.setMeta(ASK_UPDATED, true));
+        },
+        goToAskStep: (fid: string) => {
+            currentAskFid = fid;
+            editor.view.dispatch(editor.state.tr.setMeta(ASK_UPDATED, true));
+            if (!fid) return '';
+            if (headingPosForFid(editor, fid) == null) return '';
+            scrollToFeatureInternal(fid, true);
+            return fid;
+        },
+        setFindOpen: (open: boolean) => {
+            findOpen = open;
+            if (!open) {
+                findQuery = '';
+                findMatches = [];
+                findIndex = -1;
+                repaintFind();
+                editor.commands.focus();
+            }
+            return findResult();
+        },
+        setFindQuery: (query: string, o: FindOptions) => {
+            findQuery = query;
+            findOpts = { ...o };
+            recomputeFind();
+            revealCurrentMatch();
+            return findResult();
+        },
+        stepFind: (delta: number) => {
+            if (!findMatches.length) return findResult();
+            findIndex = wrapIndex(findIndex < 0 ? -delta : findIndex, findMatches.length, delta);
+            repaintFind();
+            revealCurrentMatch();
+            return findResult();
+        },
+        replaceFind: (replacement: string, preserveCase: boolean) =>
+            replaceCurrentMatch(replacement, preserveCase),
+        replaceAllFind: (replacement: string, preserveCase: boolean) =>
+            replaceAllMatches(replacement, preserveCase),
         scrollToFeature: (fid: string) => scrollToFeatureInternal(fid, false),
         commit: () => commitNow(),
         createFeature: (title: string) => {
@@ -1778,6 +1910,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // the editor they belong to.
             try { settleNow(true); } catch { /* best effort: teardown must still finish */ }
             if (settleTimer) clearTimeout(settleTimer);
+            if (findRefreshTimer) clearTimeout(findRefreshTimer);
             if (railTimer) clearTimeout(railTimer);
             if (muteTimer) clearTimeout(muteTimer);
             if (blurTimer) clearTimeout(blurTimer);
