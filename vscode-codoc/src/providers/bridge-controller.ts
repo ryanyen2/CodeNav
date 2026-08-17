@@ -43,6 +43,9 @@ interface BridgeState {
 
 export class BridgeController {
     private state: BridgeState | null = null;
+    /** Whether the current open() may create a split (explicit gesture) or only
+     *  highlight what is already visible (typing). */
+    private revealRequested = true;
     /** The fid+file the lit lines currently belong to — so a plain repaint (sidecar reload,
      *  same target) does NOT re-flash; only a genuine target change does (P2 fix 1). */
     private litSig: string | null = null;
@@ -71,7 +74,8 @@ export class BridgeController {
      *  open it Beside (non-focus-stealing, unless dismissed this session), and light the
      *  implicated lines. A dead/unresolvable binding silently no-ops (§A.6 — the doc already
      *  shows the dead-ref hovercard). */
-    async open(fid: string): Promise<void> {
+    async open(fid: string, opts: { reveal?: boolean } = {}): Promise<void> {
+        this.revealRequested = opts.reveal !== false;
         const binds = (this.ws.sidecar.by_feature[fid] ?? []) as BridgeBinding[];
         const realized = this.ws.sidecar.features[fid]?.realized !== false;
         const title = this.ws.sidecar.features[fid]?.title ?? this.titleFromFeatures(fid);
@@ -221,6 +225,9 @@ export class BridgeController {
         const already = vscode.window.visibleTextEditors.some(
             ed => vscode.workspace.asRelativePath(ed.document.fileName) === relFile);
         if (already) { this.openedByBridge.add(relFile); return; }   // track for dismiss-detection
+        // Typing lights what is visible and opens nothing: the screen must not
+        // rearrange under a caret that is in prose. Explicit gestures still open.
+        if (!this.revealRequested) return;
         if (!this.autoOpen) return;                                  // §A.6: user dismissed this session
         const uri = vscode.Uri.file(path.join(this.ws.rootDir, relFile));
         try {

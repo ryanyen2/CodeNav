@@ -20,6 +20,9 @@ import {
 } from './steps.js';
 import { drawCard } from './card.js';
 import { cmd, wireCopy } from './copy.js';
+import {
+    QUIZ_MINUTES, QUIZ_WARN_MS, QUIZ_ADVANCE_DELAY_MS, timedOutAllowsAdvance,
+} from './quiz-timing.js';
 import { defaultsFor } from './autofill.js';
 import { isPilotCode } from '../shared/schema.js';
 import { setLanguage, language, t, localize, localizeAll } from './i18n/index.js';
@@ -43,14 +46,7 @@ const CODE = params.get('code') || '';
 // somebody which condition they were in before they started.
 const BUNDLE_URL = '/bundles/codoc-study-bundle.zip';
 
-// How long the open-book question round runs for.
-//
-// Long enough to look things up in twelve questions, short enough that somebody
-// cannot read the whole codebase and answer from that instead, which would erase
-// the difference between the two ways of working. It is not enforced: the clock
-// runs out, it says so, and the researcher decides. A page that locked itself
-// mid-answer would throw away the answer being typed.
-const QUIZ_MINUTES = 10;
+
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -240,7 +236,14 @@ function complete(step) {
         // Every one answered. A blank is indistinguishable from "I do not know",
         // and the guess is the data: which wrong option attracted somebody is
         // most of what a wrong answer tells us.
-        return (QUIZZES[step.project] || []).every((q) => given(`q${q.n}`));
+        //
+        // Unless the clock ran out, which is the one case where a blank means
+        // something on its own — and holding somebody on a step they are out of
+        // time for would make the button, not the timer, the thing in charge.
+        return timedOutAllowsAdvance({
+            answered: (QUIZZES[step.project] || []).every((q) => given(`q${q.n}`)),
+            timedOut: a.timedOut,
+        });
     }
     return true;
 }
@@ -441,7 +444,8 @@ const VIEWS = {
         ? t('ui.quiz.h.before', 'Before you start')
         : t('ui.quiz.h.after', 'A few questions'))}</h1>
         <p class="lead">${esc(t('ui.quiz.lead',
-        'Twelve questions about {project}. You have {minutes} minutes, and you may look anything up.')
+        'Twelve questions about {project}. You have {minutes} minutes and may look anything up. '
+        + 'When the time is up the page moves on by itself.')
         .replace('{project}', step.project).replace('{minutes}', String(QUIZ_MINUTES)))}</p>
         <div class="timer" id="quiz-timer" role="timer" aria-live="off"></div>
         <div class="note">
@@ -576,14 +580,24 @@ function startQuizTimer(step) {
         if (!el.isConnected) { clearInterval(quizTick); return; }
         const left = a.startedAt + QUIZ_MINUTES * 60_000 - Date.now();
         if (left <= 0) {
-            el.textContent = t('ui.quiz.timeup', 'Time is up. Finish the one you are on.');
-            el.classList.add('out');
             clearInterval(quizTick);
+            el.textContent = t('ui.quiz.timeup', 'Time is up.');
+            el.classList.add('out');
+            // The clock RUNS OUT — it does not merely say so. Letting somebody
+            // carry on past it meant the sitting was not timed at all, and how
+            // long they took is half of what this measures: a score reached in
+            // fourteen minutes is not the same result as the same score in ten.
+            // Whatever is answered at this instant is the answer.
+            timeUp(step, a);
             return;
         }
         const total = Math.round(left / 1000);
         const clock = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
         el.textContent = t('ui.quiz.timeleft', '{time} left').replace('{time}', clock);
+        // Warn before it happens rather than after. Being moved on mid-click with
+        // no notice reads as the page malfunctioning; thirty seconds is enough to
+        // put an answer down on the question in hand.
+        el.classList.toggle('soon', left <= QUIZ_WARN_MS);
     };
 
     clearInterval(quizTick);
@@ -594,6 +608,27 @@ function startQuizTimer(step) {
     // it returns a handle, and without this the page's own clock kept the run
     // from ever exiting.
     quizTick?.unref?.();
+}
+
+/**
+ * The clock reached zero: stamp it and move on.
+ *
+ * `timedOut` is recorded so the analysis can tell an unanswered question that RAN
+ * OUT from one somebody chose to leave — they are different findings, and without
+ * the flag both arrive as the same blank.
+ */
+function timeUp(step, answers) {
+    if (answers.timedOut) return;          // already handled (a re-render re-armed the clock)
+    answers.timedOut = true;
+    answers.finishedAt = Date.now();
+    if (answers.startedAt) answers.elapsedMs = answers.finishedAt - answers.startedAt;
+    void save(step);
+    // A beat before the page changes under them, so the last thing they see is
+    // the clock reaching zero rather than a different screen arriving unexplained.
+    setTimeout(() => {
+        if (state.steps[state.at] !== step) return;   // they already moved on themselves
+        advance();
+    }, QUIZ_ADVANCE_DELAY_MS)?.unref?.();
 }
 
 function field(q, value) {
@@ -796,9 +831,9 @@ function stepName(step) {
 
 // ── moving ───────────────────────────────────────────────────────────────────
 
-$('#next').addEventListener('click', () => {
+/** Move to the next step, stamping anything the step owes on the way out. */
+function advance() {
     const step = state.steps[state.at];
-    if (!complete(step)) return;
     // How long twelve answers took, with everything open, is one of the numbers
     // the two ways of working are compared on. Stamped on the way out rather
     // than computed later, because nothing else records when they left.
@@ -810,6 +845,11 @@ $('#next').addEventListener('click', () => {
     }
     void save(step);
     if (state.at < state.steps.length - 1) { state.at += 1; remember(); render(); }
+}
+
+$('#next').addEventListener('click', () => {
+    if (!complete(state.steps[state.at])) return;
+    advance();
 });
 
 $('#back').addEventListener('click', () => {

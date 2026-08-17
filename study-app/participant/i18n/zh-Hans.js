@@ -192,7 +192,7 @@ export const ZH_HANS = Object.freeze({
 
     'ui.quiz.h.before': '开始之前',
     'ui.quiz.h.after': '几个问题',
-    'ui.quiz.lead': '关于 {project} 的十二个问题。你有 {minutes} 分钟，任何东西都可以查。',
+    'ui.quiz.lead': '关于 {project} 的十二个问题。限时 {minutes} 分钟，任何东西都可以查；时间一到就会自动进入下一步。',
     'ui.quiz.go': '去把答案找出来。',
     'ui.quiz.gop': '你可以读{where}，可以运行这个项目，也可以随便问 agent 什么。弄清楚答案在哪里，本身就是我们要看的东西之一。',
     'ui.quiz.rule': '只有一条规矩：',
@@ -201,7 +201,7 @@ export const ZH_HANS = Object.freeze({
     'ui.quiz.where.codoc': '那棵功能树和代码',
     'ui.quiz.where.baseline': 'CLAUDE.md 和代码',
     'ui.quiz.timeleft': '还剩 {time}',
-    'ui.quiz.timeup': '时间到了。把手上这一题做完就好。',
+    'ui.quiz.timeup': '时间到。',
 
     'ui.signoff.h': '在你继续之前',
     'ui.signoff.lead': '关于你刚做的这个修改。没有标准答案，也没有人在打分。',

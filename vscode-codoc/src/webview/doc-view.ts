@@ -208,12 +208,12 @@ function runPaletteAction(item: PaletteItem, shift: boolean): void {
     switch (item.action) {
         case 'goto':
             if (item.arg) {
-                if (shift) { bridgeFid = item.arg; vscode.postMessage({ kind: 'bridge-open', fid: item.arg }); }
+                if (shift) { bridgeFid = item.arg; vscode.postMessage({ kind: 'bridge-open', fid: item.arg, reveal: true }); }
                 setSelected(item.arg, true);
             }
             return;
         case 'open-code':
-            if (item.arg) { bridgeFid = item.arg; vscode.postMessage({ kind: 'bridge-open', fid: item.arg }); }
+            if (item.arg) { bridgeFid = item.arg; vscode.postMessage({ kind: 'bridge-open', fid: item.arg, reveal: true }); }
             return;
         case 'accept-all': if (payload.pendingEventIds.length) { beginApplying(null); postVerdict(payload.pendingEventIds.slice(), true); } return;
         case 'reject-all': if (payload.pendingEventIds.length) { beginApplying(null); postVerdict(payload.pendingEventIds.slice(), false); } return;
@@ -584,7 +584,13 @@ function onBridgeEdit(fid: string | null): void {
     if (!bridgeable) { bridgeDebounce.clear(); return; }
     bridgeDebounce.fire(() => {
         bridgeFid = fid;
-        vscode.postMessage({ kind: 'bridge-open', fid });
+        // Typing NEVER opens a split. A pilot editing a description had the bound
+        // file swing open beside them mid-sentence — the screen rearranging while
+        // the caret is in prose reads as the tool grabbing the wheel. The
+        // highlight still lands when the file is already visible; OPENING it is
+        // reserved for the explicit gestures (the binding chips, ⇧↵, the palette),
+        // which say "show me the code" in so many words.
+        vscode.postMessage({ kind: 'bridge-open', fid, reveal: false });
     });
 }
 

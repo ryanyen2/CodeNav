@@ -193,3 +193,45 @@ describe('U1: sentenceDiff', () => {
         expect(reconstructS(runs)).toEqual({ old: 'one clause here', neu: 'a different clause' });
     });
 });
+
+describe('scripts that write without spaces', () => {
+    // The pilot case, verbatim shape: five English words typed into a Chinese
+    // description. Whitespace-only tokenizing read the whole paragraph as ONE
+    // word, so every diff surface lit the entire node instead of the insertion.
+    const before = '换页符会变成页面对象，尾随空白会被移除，因为下游策略模块需要自行判断。';
+    const after = '换页符会变成页面对象，尾随空白会被移除，因为下游策略模块需要自行判断, but how to determine this。';
+
+    it('wordDiff isolates an insertion inside Chinese prose', () => {
+        const runs = wordDiff(before, after);
+        const ins = runs.filter(r => r.t === 'ins').map(r => r.s).join('');
+        const del = runs.filter(r => r.t === 'del').map(r => r.s).join('');
+        expect(ins).toContain('but how to determine this');
+        // The unchanged Chinese must NOT be counted as changed.
+        expect(ins).not.toContain('换页符');
+        expect(del).not.toContain('尾随空白');
+    });
+
+    it('a one-character CJK edit is a one-character diff', () => {
+        const runs = wordDiff('规则保持先后顺序', '规则保留先后顺序');
+        const changed = runs.filter(r => r.t !== 'same').map(r => r.s).join('');
+        expect(changed.length).toBeLessThanOrEqual(2);   // 持→留, one del + one ins
+    });
+
+    it('sentenceSplit sees fullwidth stops as boundaries', () => {
+        // `。` is never followed by a space, so requiring one read a whole Chinese
+        // description as a single sentence — and the agent's reflected change then
+        // diffed as "the entire node".
+        const s = '第一句。第二句！第三句？最后一句';
+        const parts = sentenceSplit(s);
+        expect(parts.length).toBe(4);
+        expect(parts.join('')).toBe(s);   // reassembles exactly
+    });
+
+    it('Latin behaviour is unchanged', () => {
+        expect(sentenceSplit('One. Two! Three')).toEqual(['One. ', 'Two! ', 'Three']);
+        const runs = wordDiff('the quick fox', 'the slow fox');
+        expect(runs.filter(r => r.t === 'ins').map(r => r.s)).toEqual(['slow']);
+        // A mid-token dot still does not split.
+        expect(sentenceSplit('needs 3.11 and codoc:x.py')).toHaveLength(1);
+    });
+});

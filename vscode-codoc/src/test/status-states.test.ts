@@ -76,3 +76,31 @@ describe('statusBarView', () => {
         expect(v.text).toContain('2 proposals');
     });
 });
+
+describe('the pill when the daemon is not consuming edits', () => {
+    const base = {
+        initialized: true, provisioning: false, agentActive: false,
+        agentFileCount: 0, state: 'in_sync' as const, pending: 0,
+        detail: '', featureCount: 25,
+    };
+
+    it('outranks the stale lifecycle, and says what to run', () => {
+        // The lifecycle came from a status.json only the daemon updates. Showing
+        // "in sync" here is repeating a dead process's last words.
+        const v = statusBarView({ ...base, daemonDown: true });
+        expect(v.text).toContain('not running');
+        expect(v.warn).toBe(true);
+        expect(v.tooltip).toContain('codoc watch');
+    });
+
+    it('yields to provisioning and to a missing .codoc', () => {
+        expect(statusBarView({ ...base, daemonDown: true, provisioning: true }).text)
+            .toContain('setting up');
+        expect(statusBarView({ ...base, daemonDown: true, initialized: false }).text)
+            .toContain('Set up codoc');
+    });
+
+    it('absent means the ordinary lifecycle states stand', () => {
+        expect(statusBarView(base).text).toContain('25');
+    });
+});

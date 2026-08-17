@@ -210,3 +210,68 @@ describe('settledPendingFids — an edit undone stops being pending', () => {
         expect(settledPendingFids(new Set(['f-a']), current, adopted).has('f-a')).toBe(false);
     });
 });
+
+describe('the underline survives a settle, and stops at CJK boundaries', () => {
+    it('changedRange does not swallow a Chinese paragraph around an insertion', async () => {
+        const { changedRange } = await import('../webview/tiptap/hold-decorations');
+        const base = '将提取的文本流转换为带编号的页面和行，因为下游策略模块需要自行判断；空白页会被保留。';
+        const cur = '将提取的文本流转换为带编号的页面和行，因为下游策略模块需要自行判断, but how to determine this；空白页会被保留。';
+        const r = changedRange(base, cur);
+        expect(r).not.toBeNull();
+        const marked = cur.slice(r!.start, r!.end);
+        // The insertion, snapped to at most a couple of neighbouring characters —
+        // NOT the whole paragraph, which is what whitespace-only word-snapping
+        // produced for a script that writes without spaces.
+        expect(marked).toContain('but how to determine this');
+        expect(marked).not.toContain('将提取的文本流');
+        expect(marked).not.toContain('空白页会被保留');
+    });
+
+    it('Latin snapping still grows to whole words', async () => {
+        const { changedRange } = await import('../webview/tiptap/hold-decorations');
+        const r = changedRange('the quick brown fox', 'the quicker brown fox');
+        expect('the quicker brown fox'.slice(r!.start, r!.end)).toBe('quicker');
+    });
+
+    it('a held draft keeps its word diff after the local baseline adopts', async () => {
+        // The vanishing underline: settle → daemon renders the new text back →
+        // the feature adopts → the local baseline equals the current text → diff
+        // empty. The DIRECTIVE kept the pre-edit text, and the captured build now
+        // falls back to it, so the author's change stays underlined until they
+        // press Commit & send.
+        const { buildCapturedDecorations } = await import('../webview/tiptap/captured-decorations');
+        const { Schema } = await import('@tiptap/pm/model');
+        const schema = new Schema({
+            nodes: {
+                doc: { content: 'block+' },
+                featureHeading: {
+                    group: 'block', content: 'inline*',
+                    attrs: { fid: { default: null }, localId: { default: null } },
+                },
+                paragraph: { group: 'block', content: 'inline*' },
+                text: { group: 'inline' },
+            },
+        });
+        const doc = schema.node('doc', null, [
+            schema.node('featureHeading', { fid: 'f-1' }, [schema.text('Summary total rounding')]),
+            schema.node('paragraph', null, [schema.text('Rounds once at the summary so I would like to remove this feature.')]),
+        ]);
+        // Local baseline has ADOPTED the settled text (equal to current) …
+        const baseline = new Map([['f-1', {
+            title: 'Summary total rounding',
+            paras: ['Rounds once at the summary so I would like to remove this feature.'],
+        }]]);
+        // … but the directive still knows what the edit displaced.
+        const detail = { 'f-1': {
+            kind: 'amend', intent: 'update the summary rounding',
+            baseline: 'Rounds once at the summary',
+        } };
+        const withFallback = buildCapturedDecorations(doc, new Set(['f-1']), baseline, detail);
+        const without = buildCapturedDecorations(doc, new Set(['f-1']), baseline, {});
+        const adds = (set: import('@tiptap/pm/view').DecorationSet): number =>
+            set.find().filter(d => (d as unknown as { type: { attrs: { class?: string } } })
+                .type.attrs?.class === 'ce-captured-add').length;
+        expect(adds(without)).toBe(0);
+        expect(adds(withFallback)).toBeGreaterThan(0);
+    });
+});

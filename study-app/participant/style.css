@@ -377,3 +377,7 @@ textarea:focus { outline: none; border-color: var(--accent); }
     margin: 0 0 18px;
 }
 .timer.out { color: #8a2f2f; background: #f6e9e9; }
+
+/* The last half-minute. Amber, not red: it is a prompt to finish the question in
+   hand, not an error. The out state (time reached zero) keeps the red it had. */
+.timer.soon { color: #8a5a00; background: #fbf0dc; }

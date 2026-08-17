@@ -386,7 +386,7 @@ export type WebviewMessage =
      *  open its primary binding file Beside (non-focus-stealing) and light the implicated
      *  decl lines green. The host resolves file/symbols/lines from the sidecar bindings, so
      *  the webview only sends the fid. Debounced 180 ms after the last keystroke. */
-    | { kind: 'bridge-open'; fid: string }
+    | { kind: 'bridge-open'; fid: string; reveal?: boolean }
     /** Clear the code-side bridge highlight when the caret leaves the feature (§A.1). The
      *  code pane STAYS open (opening is eager, closing is the user's call). */
     | { kind: 'bridge-dim'; fid: string | null }

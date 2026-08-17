@@ -98,8 +98,17 @@ progress (`pending` remaining) and stop; don't start a second pass. If you belie
 this is wrong (e.g. you know the other session died), just wait a few minutes and
 re-run — no manual cleanup needed.
 
-### `in_sync` — nothing to do
-Report that codoc and the codebase are in sync and stop.
+### `in_sync` — usually nothing to do
+Check `held_drafts` first. Non-zero means the author edited descriptions and the
+edits are CAPTURED but not handed off — codoc holds them as drafts until the
+author presses **Commit & send** (⌘S) in the tree editor. Do not implement a held
+draft uninvited. Tell the author, in one sentence, that their edit is saved and
+waiting, and that pressing Commit & send hands it to you — or that they can ask
+you here directly and you will treat the draft's text as the instruction. If they
+confirm in chat, read `.codoc/realize.json` for the draft's `text` and implement
+it as if it were a queued directive, passing its `id` as `caused_by`.
+
+When `held_drafts` is 0, report that codoc and the codebase are in sync and stop.
 
 ## 3. Confirm
 - After acting, call `codoc_status` again and report the resulting state (ideally

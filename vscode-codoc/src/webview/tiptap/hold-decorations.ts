@@ -57,7 +57,13 @@ export function changedRange(baseline: string, current: string): { start: number
     while (s < n - p && s < m - p && current[n - 1 - s] === baseline[m - 1 - s]) s++;
     let start = p, end = n - s;
     if (start >= end) return null; // pure deletion — no added/changed span in `current`
-    const isWord = (c: string): boolean => !!c && !/\s/.test(c);
+    // Snap OUT to word boundaries so half a Latin word is never underlined — but a
+    // CJK character is a word of its own (those scripts write without spaces), so
+    // expansion stops at one instead of swallowing the paragraph. Before this, a
+    // five-word English insertion into a Chinese description underlined the whole
+    // node: every char back to the previous space was "the same word".
+    const isWord = (c: string): boolean =>
+        !!c && !/[\s\u2E80-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF\u3000-\u303F\uFF00-\uFFEF]/u.test(c);
     while (start > 0 && isWord(current[start - 1])) start--;   // grow left to the word start
     while (end < n && isWord(current[end])) end++;             // grow right to the word end
     return { start, end };

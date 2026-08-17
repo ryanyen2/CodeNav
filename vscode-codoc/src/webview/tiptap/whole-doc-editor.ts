@@ -407,6 +407,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 getBaseline: () => capturedBaseline,
                 getDrafts: () => currentDrafts,
                 getHandedOff: () => currentHeld, // handed-off features show pending, not captured
+                // The daemon's pre-edit baseline for a held draft — what the diff
+                // falls back to once the local baseline has adopted the settled
+                // text, so the underline survives from keystroke to Commit & send.
+                getDetail: () => currentHoldDetail,
             }),
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,

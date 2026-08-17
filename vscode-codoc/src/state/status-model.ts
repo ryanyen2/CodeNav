@@ -67,3 +67,31 @@ export function leaseStatus(
     }
     return { state: 'in_sync', pending: 0, detail: '' };
 }
+
+// How long the IDE's edits.host.jsonl append log may sit unconsumed before the
+// daemon is presumed dead. A live daemon folds the log into edits.json at the top
+// of EVERY Loop B pass, so on the happy path the file exists for seconds. Twenty
+// gives a busy pass room while still catching the failure within one breath of
+// the participant noticing nothing happened.
+export const HOST_LOG_GRACE_MS = 20_000;
+
+/**
+ * The author has appended edits and nothing is consuming them.
+ *
+ * This is the state a pilot sat in for a whole session: the daemon was never
+ * started (the study workspaces need `codoc watch` run by hand), their edit went
+ * into edits.host.jsonl, and the status pill read the SHIPPED status.json — a
+ * file frozen at `in_sync` on the machine that built the archive. Every surface
+ * downstream of that lie agreed with it: no hand-off button (nothing held), and
+ * /codoc:sync's dispatch found nothing to do. The one honest signal on disk was
+ * the append log itself, sitting there with nobody eating it — so that is the
+ * signal this reads.
+ */
+export function daemonUnresponsive(
+    hostLogBytes: number,
+    hostLogMtimeMs: number | undefined,
+    nowMs: number = Date.now(),
+): boolean {
+    if (hostLogBytes <= 0 || hostLogMtimeMs === undefined) return false;
+    return (nowMs - hostLogMtimeMs) > HOST_LOG_GRACE_MS;
+}

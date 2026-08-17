@@ -25,6 +25,11 @@ export interface StatusBarInput {
     readonly provisioning: boolean;
     /** A coding agent is currently touching files. */
     readonly agentActive: boolean;
+    /** Authored edits are sitting in edits.host.jsonl with nothing consuming
+     *  them (status-model.daemonUnresponsive) — the daemon is down or was never
+     *  started. Outranks every lifecycle state, because those are read from a
+     *  status.json the dead daemon cannot be updating. */
+    readonly daemonDown?: boolean;
     /** Number of files the active agent has touched (for the agent label). */
     readonly agentFileCount: number;
     /** The `.codoc/status.json` lifecycle state. */
@@ -67,7 +72,20 @@ export function statusBarView(input: StatusBarInput): StatusBarView {
         };
     }
 
-    // 3. A coding agent is working.
+    // 3. The daemon is not consuming edits — every lifecycle state below is
+    // read from a file only the daemon updates, so showing one would repeat the
+    // stale file's claim. This is the second "you owe an action" state.
+    if (input.daemonDown) {
+        return {
+            text: '$(warning) codoc: not running',
+            tooltip: 'Your tree edits are saved but nothing is applying them. '
+                + 'Start the daemon in a terminal: codoc watch  (or run codoc sync once).',
+            command: 'codoc.open',
+            warn: true,
+        };
+    }
+
+    // 4. A coding agent is working.
     if (input.agentActive) {
         return {
             text: `$(zap) codoc: agent working… (${input.agentFileCount} files)`,

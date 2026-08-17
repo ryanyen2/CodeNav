@@ -56,29 +56,49 @@ function tokenDiff(a: string[], b: string[]): DiffRun[] {
     return out;
 }
 
+/** One "word" per script. Latin (and everything else spaced) tokenizes on
+ *  whitespace runs; CJK ideographs, kana, hangul and fullwidth punctuation are
+ *  each their own token, because those scripts put no spaces between words. The
+ *  whitespace-only split read an entire Chinese paragraph as ONE token, so any
+ *  mid-paragraph edit diffed as "the whole paragraph changed" — a pilot typing
+ *  five English words into a Chinese description watched the entire node light
+ *  up as changed. (The Python side made the same correction once already:
+ *  doclang's `terms`/`tokens` segment per script for exactly this reason.) */
+const CJK = '\\u2E80-\\u9FFF\\uF900-\\uFAFF\\u3040-\\u30FF\\uAC00-\\uD7AF\\u3000-\\u303F\\uFF00-\\uFFEF';
+const WORD_TOKENS = new RegExp(`\\s+|[${CJK}]|[^\\s${CJK}]+`, 'gu');
+
+export function wordTokens(s: string): string[] {
+    return String(s).match(WORD_TOKENS) ?? [];
+}
+
 /**
- * Word-level diff: split on whitespace runs (whitespace preserved as its own tokens
- * so spacing round-trips). Adjacent runs of the same op are merged.
+ * Word-level diff: script-aware tokens (see `wordTokens`), whitespace preserved
+ * as its own tokens so spacing round-trips. Adjacent runs of the same op merge.
  */
 export function wordDiff(oldStr: string, newStr: string): DiffRun[] {
-    return tokenDiff(String(oldStr).split(/(\s+)/), String(newStr).split(/(\s+)/));
+    return tokenDiff(wordTokens(oldStr), wordTokens(newStr));
 }
 
 /**
  * Split a string into sentences, each keeping its trailing delimiter + whitespace
  * so the parts concatenate back to the input exactly. A sentence ends at one or more
  * of `. ! ?` that is followed by whitespace or end-of-string — so a mid-token dot
- * ("3.11", a `codoc:` ref) does NOT split. A string with no such boundary is one
- * sentence. Conservative by design (an abbreviation like "e.g." may over-split — the
- * cost is one extra accept/reject unit, never a wrong diff).
+ * ("3.11", a `codoc:` ref) does NOT split — or at fullwidth CJK terminators
+ * (`。！？；`), which are never followed by a space because those scripts do not
+ * write one: requiring whitespace after the stop read an entire Chinese
+ * description as ONE sentence, so the agent's reflected change diffed as "the
+ * whole node changed". A string with no boundary is one sentence. Conservative by
+ * design (an abbreviation like "e.g." may over-split — the cost is one extra
+ * accept/reject unit, never a wrong diff).
  */
 export function sentenceSplit(s: string): string[] {
     const str = String(s);
     if (str === '') return [];
     const out: string[] = [];
-    // A sentence chunk: minimal text up to boundary punctuation (followed by space/end),
-    // plus the trailing whitespace; or the final remainder with no boundary punctuation.
-    const re = /.*?[.!?]+(?=\s|$)\s*|.+$/gs;
+    // A sentence chunk: minimal text up to boundary punctuation (Latin stops need a
+    // following space/end; CJK stops are boundaries on their own), plus trailing
+    // whitespace; or the final remainder with no boundary punctuation.
+    const re = /.*?(?:[.!?]+(?=\s|$)|[\u3002\uFF01\uFF1F\uFF1B]+)\s*|.+$/gs;
     let m: RegExpExecArray | null;
     while ((m = re.exec(str)) !== null) {
         if (m[0] === '') { re.lastIndex++; continue; } // guard against a zero-width match

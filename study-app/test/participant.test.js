@@ -767,3 +767,20 @@ test('a reflection can be finished without writing an essay', async () => {
         assert.ok(filled[q.id] !== undefined, `${q.id} was not filled`);
     }
 });
+
+test('the question round is actually timed', async () => {
+    // A clock that says "time is up" and then lets somebody carry on is not a
+    // timed sitting. How long twelve answers took is half of what this measures —
+    // the same score in fourteen minutes is not the same result as in ten — so
+    // the clock has to end the step, not comment on it.
+    const { QUIZ_MINUTES } = await import('../participant/quiz-timing.js');
+    assert.ok(QUIZ_MINUTES > 0, 'there is a limit at all');
+
+    const { timedOutAllowsAdvance } = await import('../participant/quiz-timing.js');
+    // Unanswered + still running → held, so nobody skips the sitting by clicking.
+    assert.equal(timedOutAllowsAdvance({ answered: false, timedOut: false }), false);
+    // Unanswered + the clock ran out → released: holding somebody on a step they
+    // are out of time for would make the button, not the timer, the thing in charge.
+    assert.equal(timedOutAllowsAdvance({ answered: false, timedOut: true }), true);
+    assert.equal(timedOutAllowsAdvance({ answered: true, timedOut: false }), true);
+});

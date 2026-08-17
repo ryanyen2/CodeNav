@@ -321,8 +321,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     post();
                     return;
                 case 'bridge-open':
-                    // P2 doc→code (§A.1): open the edited feature's bound code Beside + light it.
-                    await this.bridge.open(msg.fid);
+                    // P2 doc→code (§A.1): light the edited feature's bound code — and open
+                    // it Beside only when the gesture was explicit (reveal), never from
+                    // typing. Absent means an older webview: treat as explicit, the old
+                    // behaviour.
+                    await this.bridge.open(msg.fid, { reveal: msg.reveal !== false });
                     return;
                 case 'bridge-dim':
                     // Caret left the feature (§A.1): clear the code-side highlight (pane stays open).

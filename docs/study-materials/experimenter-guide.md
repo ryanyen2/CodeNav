@@ -407,8 +407,12 @@ the agent. The one thing barred is pasting a question or its options at the
 agent, which would measure the agent rather than the pair. Nothing enforces it,
 so watch the screen, and the transcript shows it afterwards.
 
-The clock is on their page and does not lock anything when it runs out. If they
-are still going at twelve minutes, ask them to stop.
+The clock is on their page and **ends the sitting**: at zero it stamps whatever is
+answered and moves to the next step by itself, with a thirty-second warning first.
+You do not have to call time, and should not extend it — how long twelve answers
+took is half the measure, so a sitting that ran long is not the same result as one
+that did not. An unanswered question is recorded as `timedOut` rather than as a
+blank, so the analysis can tell "ran out" from "left it".
 
 **Both the score and the time are results.** Either way of working can reach
 every answer eventually, so what separates them is what it costs to get there.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS, DisplayStatus } from '../state/status-model';
+import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS, DisplayStatus, daemonUnresponsive, HOST_LOG_GRACE_MS } from '../state/status-model';
 
 const NOW = 1_000_000_000_000;
 
@@ -54,5 +54,31 @@ describe('leaseStatus', () => {
     it('treats the exact lease boundary as still fresh', () => {
         const s = realizing();
         expect(leaseStatus(s, NOW - REALIZING_LEASE_MS, 2, NOW)).toEqual(s);
+    });
+});
+
+describe('daemon liveness, read off the append log', () => {
+    // The state a pilot sat in for a session: daemon never started, their edit in
+    // edits.host.jsonl, and the pill reading the ARCHIVE's status.json — frozen at
+    // in_sync on the machine that built it. The one honest signal was the append
+    // log nobody was consuming.
+    const NOW = 1_700_000_000_000;
+
+    it('an empty or absent log is not a dead daemon', () => {
+        expect(daemonUnresponsive(0, NOW - 60_000, NOW)).toBe(false);
+        expect(daemonUnresponsive(0, undefined, NOW)).toBe(false);
+        expect(daemonUnresponsive(120, undefined, NOW)).toBe(false);
+    });
+
+    it('a fresh log is a daemon mid-pass, not a dead one', () => {
+        // The daemon merges at the top of every Loop B pass; a log a few seconds
+        // old is the happy path in flight.
+        expect(daemonUnresponsive(120, NOW - 3_000, NOW)).toBe(false);
+        expect(daemonUnresponsive(120, NOW - HOST_LOG_GRACE_MS, NOW)).toBe(false);
+    });
+
+    it('a log past the grace means nothing is eating it', () => {
+        expect(daemonUnresponsive(120, NOW - HOST_LOG_GRACE_MS - 1, NOW)).toBe(true);
+        expect(daemonUnresponsive(1, NOW - 3_600_000, NOW)).toBe(true);
     });
 });

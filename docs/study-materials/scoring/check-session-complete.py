@@ -206,8 +206,14 @@ def main() -> int:
         quizzes = {k: v for k, v in live_answers.items() if k.startswith("quiz-")}
         if quizzes:
             timed = [k for k, v in quizzes.items() if v.get("elapsedMs")]
-            rep.ok("the twelve questions, open book and timed",
-                   f"{len(quizzes)} sitting(s), {len(timed)} with a time recorded")
+            # A sitting the clock ended is a normal, reportable outcome — its blanks
+            # mean "ran out", not "chose not to". Saying so here stops somebody
+            # reading them as missing data later.
+            cut = [k for k, v in quizzes.items() if v.get("timedOut")]
+            note = f"{len(quizzes)} sitting(s), {len(timed)} with a time recorded"
+            if cut:
+                note += f"; {len(cut)} ended on the clock"
+            rep.ok("the twelve questions, open book and timed", note)
         else:
             rep.gap("the twelve questions, open book and timed",
                     "no quiz answers in the export, so this condition has no score")

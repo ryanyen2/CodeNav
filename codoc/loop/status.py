@@ -214,8 +214,44 @@ def refresh_status(
             count = queued
         if not detail:
             detail = f"{queued} change(s) ready to implement — run /codoc:sync"
+    elif (authored := _pending_authored(codoc_dir)):
+        # Authored edits nobody has drained yet. This is what a pilot hit: the
+        # daemon was not running, their edit sat in edits.host.jsonl, and every
+        # recompute of this state said in_sync — so the editor showed no hand-off
+        # affordance and /codoc:sync's dispatch found nothing to do. An edit that
+        # exists only in the channel files is exactly as real as a pending
+        # proposal, and a state that cannot see it reports a lie.
+        state = TREE_DIRTY
+        if pending is None:
+            count = authored
+        if not detail:
+            detail = (f"{authored} edit(s) waiting to be applied — start codoc watch, "
+                      "or run codoc sync once")
     elif n_proposals:
         state = CODE_DRIFT
     else:
         state = IN_SYNC
     return write_status(codoc_dir, state, pending=count, detail=detail)
+
+
+def _pending_authored(codoc_dir: str | Path) -> int:
+    """Authored work sitting in the edit channels with no daemon having consumed
+    it: identity-keyed commands and steers already merged into ``edits.json``,
+    plus ops still in the IDE's ``edits.host.jsonl`` append log. Zero on the happy
+    path — a live daemon drains all three at the top of every Loop B pass, so
+    anything counted here has outlived at least one place it should have died.
+
+    The host-log count is line-based rather than parsed: a merge is about to
+    replay it anyway, and this only needs to know that SOMETHING is waiting.
+    """
+    from codoc.loop import edits as edits_channel
+
+    n = len(edits_channel.read_commands(codoc_dir)) + len(edits_channel.read_steers(codoc_dir))
+    try:
+        host = edits_channel.host_ops_path(codoc_dir)
+        if host.exists():
+            n += sum(1 for line in host.read_text(encoding="utf-8").splitlines()
+                     if line.strip())
+    except OSError:
+        pass
+    return n

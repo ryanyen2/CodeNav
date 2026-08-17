@@ -347,6 +347,18 @@ def read_status(codoc_dir: str) -> dict:
     from codoc.loop.status import refresh_status
     import json
 
+    # Fold the IDE's append log into edits.json first (locked, idempotent, cheap).
+    # This status call is the first thing /codoc:sync runs, and when the daemon is
+    # not running it is the only consumer left: without the merge, an edit the
+    # author just typed exists only in edits.host.jsonl, the recomputed state says
+    # in_sync, and the sync dispatch concludes there is nothing to do — which is
+    # how a pilot edited a description, saw "in sync", and got nothing.
+    try:
+        from codoc.loop.edits import merge_host_ops
+        merge_host_ops(codoc_dir)
+    except Exception:  # noqa: BLE001 — status must stay readable regardless
+        pass
+
     with open_store(codoc_dir) as store:
         feats = store.list_features()
         pending = store.pending_events()
@@ -364,9 +376,20 @@ def read_status(codoc_dir: str) -> dict:
             intent = recent_intent(codoc_dir)
         except Exception:  # noqa: BLE001 — advisory
             intent = []
+        # Directives minted from the author's own edits and not yet handed off.
+        # They are invisible to `state` by design (a held draft is the author's to
+        # release), but a sync dispatch that cannot see them tells an author who
+        # just typed an edit that there is nothing to do — the exact wrong answer.
+        try:
+            from codoc.loop.edits import read_manifest
+            held = [{"feature_id": d.feature_id, "id": d.id}
+                    for d in read_manifest(codoc_dir) if not d.handed_off]
+        except Exception:  # noqa: BLE001 — advisory
+            held = []
         return {
             "ok": True, "features": len(feats), "pending": len(pending),
             "unrealized": len(unrealized), "state": state,
+            "held_drafts": len(held), "held_draft_list": held[:20],
             # Count is exact; the list is capped so a repo with hundreds of stale
             # refs doesn't flood the agent's context through a status call.
             "dead_refs": len(dead), "dead_ref_list": dead[:20],

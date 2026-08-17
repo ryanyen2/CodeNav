@@ -24,7 +24,7 @@ import { loadRegistry } from './registry-loader';
 import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines, EPOCH_UI_TTL_MS } from './activity-model';
 import { parseRealize, pendingCodeByFile, PendingChange, parseRealizedLog, newOutcomes, RealizedOutcome } from './realize-model';
 import { statusBarView } from './status-presentation';
-import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS } from './status-model';
+import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS, daemonUnresponsive, HOST_LOG_GRACE_MS } from './status-model';
 import { parseTranslateProgress } from './translate-model';
 import type { TranslationProgress } from '../webview/protocol';
 
@@ -51,6 +51,9 @@ export class WorkspaceState {
     // status.json's last-modified time — the realizing lease's `last_seen`
     // (see status-model.ts). Undefined when the file is unreadable.
     private _statusMtimeMs: number | undefined;
+    private _hostLogBytes = 0;
+    private _hostLogMtimeMs: number | undefined;
+    private _statusNeverWritten = false;
     private _pendingCode: Map<string, PendingChange[]> = new Map();
     // `codoc translate` progress (lease-guarded; null when no run is in play).
     private _translation: TranslationProgress | null = null;
@@ -109,6 +112,8 @@ export class WorkspaceState {
             '**/.codoc/config.json',     // authoring language — changed by `codoc lang` too,
                                         // so a switch made in the terminal repaints the view
             '**/.codoc/translate.json',  // `codoc translate` progress — per-batch skeleton updates
+            '**/.codoc/edits.host.jsonl', // the IDE's own append log: its lifetime is the
+                                          // daemon-liveness signal (status-model.daemonUnresponsive)
         ]) {
             const w = vscode.workspace.createFileSystemWatcher(glob);
             this.context.subscriptions.push(w, w.onDidChange(reload), w.onDidCreate(reload), w.onDidDelete(reload));
@@ -178,6 +183,7 @@ export class WorkspaceState {
         this._pendingCode = pendingCodeByFile(parseRealize(realizeText));
 
         this._statusMtimeMs = undefined;
+        this._statusNeverWritten = false;
         try {
             const statusPath = this._codocPath('status.json');
             const st = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
@@ -191,10 +197,28 @@ export class WorkspaceState {
                 realizeQueueSize(realizeText),
             );
         } catch {
-            // No status file yet → derive from the parsed proposal count.
+            // No status file at all. Only the daemon writes one (every watch pass,
+            // and the CLI), so its absence in an initialized repo means no daemon
+            // has EVER run here — which is exactly what a freshly-unpacked study
+            // workspace is. Deriving "in_sync" from the proposal count here is
+            // how a machine with a dead daemon showed a green check for a whole
+            // pilot session. Mark it instead; the pill says what to start.
             const n = this._proposals.length;
             this._status = { state: n ? 'code_drift' : 'in_sync', pending: n, detail: '' };
+            this._statusNeverWritten = true;
         }
+
+        // The daemon-liveness signal: our own append log's size and age. A live
+        // daemon consumes it within one Loop B pass; a log that sits there past
+        // the grace means every status read above came from a file nobody is
+        // updating — including the frozen `in_sync` a study archive ships with.
+        this._hostLogBytes = 0;
+        this._hostLogMtimeMs = undefined;
+        try {
+            const st = fs.statSync(this._codocPath('edits.host.jsonl'));
+            this._hostLogBytes = st.size;
+            this._hostLogMtimeMs = st.mtimeMs;
+        } catch { /* absent → consumed or never written; either way the daemon is not owed */ }
 
         let activityText = '';
         this._activityMtimeMs = undefined;
@@ -272,6 +296,12 @@ export class WorkspaceState {
         if (this.agentActive && this._activityMtimeMs !== undefined) {
             expiries.push(this._activityMtimeMs + EPOCH_UI_TTL_MS);
         }
+        // A pending host log flips the pill to "not running" when the grace
+        // passes — an expiry with no file event, exactly like the leases above.
+        if (this._hostLogBytes > 0 && this._hostLogMtimeMs !== undefined
+            && !daemonUnresponsive(this._hostLogBytes, this._hostLogMtimeMs, nowMs)) {
+            expiries.push(this._hostLogMtimeMs + HOST_LOG_GRACE_MS);
+        }
         const next = expiries.filter(t => t > nowMs).sort((a, b) => a - b)[0];
         if (next === undefined) return;
         // +50ms cushion so the lease clock is definitively past when we re-read.
@@ -295,6 +325,8 @@ export class WorkspaceState {
             initialized: this._rootDir !== null,
             provisioning: this._provisioning,
             agentActive: this.agentActive,
+            daemonDown: this._statusNeverWritten
+                || daemonUnresponsive(this._hostLogBytes, this._hostLogMtimeMs),
             agentFileCount: Object.keys(this._activity.touched ?? {}).length,
             state: this._status.state,
             pending: this._status.pending,
