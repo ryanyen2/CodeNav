@@ -78,3 +78,64 @@ class TestParseSolution:
     def test_unrecoverable_output_still_raises(self):
         with pytest.raises((ValueError, json.JSONDecodeError)):
             parse_solution("I'm afraid I can't help with that.")
+
+
+class TestSeveralValuesInOneAnswer:
+    """A model asked for one object that answers with several.
+
+    Seen on gpt-5.6-luna during a study bootstrap: two files in eleven came back
+    as `{"ops": [...]}` twice, back to back inside the solution tags. json.loads
+    read the first, found more after it, and raised "Extra data" — so the file
+    was skipped and landed in the tree as a bare filename with no description.
+    Five of the six policy modules in one workspace ended up that way, which is
+    precisely the prose the thing exists to hold.
+    """
+
+    def test_two_objects_merge_rather_than_raising(self):
+        got = parse_solution(_sol(
+            '{"ops": [{"id": "n1", "title": "One"}]}\n'
+            '{"ops": [{"id": "n2", "title": "Two"}]}'))
+        assert [op["title"] for op in got["ops"]] == ["One", "Two"], \
+            "the second object's work must not be dropped"
+
+    def test_two_arrays_concatenate(self):
+        got = parse_solution(_sol('[{"a": 1}]\n[{"a": 2}]'))
+        assert got == [{"a": 1}, {"a": 2}]
+
+    def test_a_comma_between_them_is_tolerated(self):
+        # An array the model forgot to wrap.
+        got = parse_solution(_sol('{"ops": [1]},\n{"ops": [2]}'))
+        assert got["ops"] == [1, 2]
+
+    def test_prose_after_the_json_is_dropped(self):
+        got = parse_solution(_sol(
+            '{"ops": [{"id": "n1"}]}\nThat covers the whole file.'))
+        assert got["ops"] == [{"id": "n1"}]
+
+    def test_a_scalar_said_twice_keeps_the_first(self):
+        got = parse_solution(_sol('{"file": "a.py", "ops": [1]}\n{"file": "b.py", "ops": [2]}'))
+        assert got["file"] == "a.py"
+        assert got["ops"] == [1, 2]
+
+    def test_one_clean_object_is_untouched(self):
+        # The ordinary path must not go anywhere near the merge.
+        got = parse_solution(_sol('{"ops": [{"id": "n1", "title": "Only"}]}'))
+        assert got == {"ops": [{"id": "n1", "title": "Only"}]}
+
+    def test_a_broken_sample_still_reaches_the_repair(self):
+        # "Extra data" is not the only way to fail, and the repair pass is what
+        # catches the common one — an unescaped quote inside prose.
+        got = parse_solution(_sol(
+            '{"description": "the server calls it "stale" on retry"}'))
+        assert got["description"] == 'the server calls it "stale" on retry'
+
+    def test_a_truncated_second_object_goes_to_the_repair(self):
+        # It opens like JSON, so it is a broken value rather than the model
+        # talking. Keeping only the first would silently halve the file.
+        raw = _sol('{"ops": [{"id": "n1"}]}\n{"ops": [{"id": "n2", "title": "cut off')
+        try:
+            got = parse_solution(raw)
+        except (ValueError, json.JSONDecodeError):
+            return                       # refused, which is the honest outcome
+        assert len(got.get("ops", [])) == 2, \
+            "if it parses at all, the second object must not have been dropped"

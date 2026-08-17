@@ -119,16 +119,45 @@ build_one() {
 
 seed_codoc() {
   local project="$1" dir="$2"
-  local codoc
+  local codoc log
   codoc="$(command -v codoc || echo "$REPO/.venv/bin/codoc")"
   [ -x "$codoc" ] || { bad "codoc not found; run with --no-seed or install it"; return 1; }
-  ( cd "$dir" && "$codoc" init >/dev/null 2>&1 ) || { bad "$project: codoc init failed"; return 1; }
+
+  # Kept, not discarded. This used to be `>/dev/null 2>&1`, and init's own
+  # warning that some files could not be described went into it — so a workspace
+  # whose five policy modules were bare filenames with no prose was packed,
+  # shipped, and reported as "ok · 21 features".
+  log="$dir/.seed.log"
+  ( cd "$dir" && "$codoc" init >"$log" 2>&1 ) \
+    || { bad "$project: codoc init failed"; tail -20 "$log"; return 1; }
+  if grep -q "could not be described" "$log"; then
+    bad "$project: init could not describe every file"
+    grep -A 6 "could not be described" "$log" | sed 's/^/      /'
+    return 1
+  fi
+
+  # And checked against the store rather than against the log, because the two
+  # can disagree: a file can be described and still yield a node with nothing in
+  # it. A description is the whole reason the codoc arm exists — a blank one is
+  # the arm having LESS than the baseline's CLAUDE.md on exactly the point the
+  # study asks about.
+  local blanks
+  blanks="$( cd "$dir" && python3 -c "
+import sqlite3, sys
+rows = sqlite3.connect('.codoc/codoc.db').execute(
+    'select title, description from features').fetchall()
+print('|'.join(t for t, d in rows if not (d or '').strip()))" 2>/dev/null )"
+  if [ -n "$blanks" ]; then
+    bad "$project: these features have no description: ${blanks//|/, }"
+    return 1
+  fi
+
   local features
   features="$( cd "$dir" && "$codoc" status 2>/dev/null | head -1 )"
-  ok "$project: $features"
+  ok "$project: $features, every feature described"
   # The realize queue is a side effect of bootstrap and would hand the first
   # participant a pending job nobody asked for.
-  rm -f "$dir/.codoc/realize.md" "$dir/.codoc/realize.json"
+  rm -f "$dir/.codoc/realize.md" "$dir/.codoc/realize.json" "$log"
 }
 
 for project in "${PROJECTS[@]}"; do

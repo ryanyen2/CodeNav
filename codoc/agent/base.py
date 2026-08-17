@@ -195,11 +195,71 @@ def repair_json(text: str) -> str:
     return "".join(out)
 
 
+def _concatenated(raw: str) -> dict | list | None:
+    """Every complete JSON value in ``raw``, combined — or None if there is one.
+
+    A model asked for one object sometimes answers with several, back to back:
+    `{"ops": [...]}\\n{"ops": [...]}`. ``json.loads`` reads the first, finds more
+    after it, and raises "Extra data", so the whole call is lost — and on a
+    bootstrap that is a whole file described as a bare filename with no prose.
+
+    Reading only the first value would be worse than the error, because the rest
+    of the file's features would vanish with nothing said. So every value is
+    decoded and combined: lists concatenate, objects merge with their list-valued
+    keys concatenated. Trailing prose after the last value is dropped, which is
+    the one case where taking what parsed is plainly right.
+    """
+    decoder = json.JSONDecoder()
+    values: list[dict | list] = []
+    i, n = 0, len(raw)
+    while i < n:
+        while i < n and raw[i] in " \t\r\n,":   # a separator between values
+            i += 1
+        if i >= n:
+            break
+        try:
+            value, i = decoder.raw_decode(raw, i)
+        except json.JSONDecodeError:
+            # Something here is not a complete JSON value. If it OPENS like one
+            # it is a broken one — truncated, or with a stray quote in it — and
+            # the repair pass is likelier to recover it than dropping it is. If
+            # it does not, it is the model talking after its answer, and keeping
+            # what parsed is right.
+            if raw[i] in "[{":
+                return None
+            break
+        values.append(value)
+    if not values:
+        return None                            # nothing gained; let the caller repair
+    if len(values) == 1:
+        return values[0]
+    if all(isinstance(v, list) for v in values):
+        return [item for v in values for item in v]
+    if all(isinstance(v, dict) for v in values):
+        out: dict = {}
+        for v in values:
+            for key, val in v.items():
+                if isinstance(val, list) and isinstance(out.get(key), list):
+                    out[key] = out[key] + val
+                else:
+                    out.setdefault(key, val)   # a scalar said twice: the first wins
+        return out
+    return values[0]
+
+
 def _loads(raw: str) -> dict | list:
-    """Strict first, repaired second — so a clean sample is never rewritten."""
+    """Strict first, concatenated second, repaired third.
+
+    A clean sample is never rewritten, and the repair pass stays the last resort
+    — it rewrites the text, so anything that can be read as it stands should be.
+    """
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        if exc.msg == "Extra data":
+            merged = _concatenated(raw)
+            if merged is not None:
+                return merged
         return json.loads(repair_json(raw))
 
 

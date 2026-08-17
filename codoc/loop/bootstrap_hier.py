@@ -429,6 +429,19 @@ def bootstrap_hier_from_chunks(
         say(f"  ⚠ {len(failures)} of {total} files could not be described "
             f"(retried once each): {', '.join(f for f, _ in failures[:5])}"
             + (" …" if len(failures) > 5 else ""))
+        # WHY each one failed, not just which. Without this the message names a
+        # file and stops, so the only way to tell a truncated response from a
+        # rate limit from a bad key is to reproduce it by hand — and the two
+        # want opposite responses (re-run vs fix the config). One line per
+        # distinct cause, because a rate limit hits several files at once and
+        # printing it once per file buries the message it is trying to give.
+        seen: dict[str, list[str]] = {}
+        for file, exc in failures:
+            seen.setdefault(f"{type(exc).__name__}: {exc}"[:200], []).append(file)
+        for cause, files in seen.items():
+            say(f"    {cause}")
+            say(f"      ({len(files)}×: {', '.join(files[:4])}"
+                + (" …)" if len(files) > 4 else ")"))
         say("    Each is in the tree as a node named after its file, with no "
             "description — fill them in, or re-run `codoc init` to retry.")
 
