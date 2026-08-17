@@ -53,6 +53,13 @@ import {
     rebaseCaptured, settledPendingFids, type FeatureText,
 } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
+import { AskDecorations, ASK_UPDATED } from './ask-decorations';
+import { FindDecorations, FIND_UPDATED, searchBlocks } from './find-decorations';
+import {
+    DEFAULT_FIND_OPTIONS, findInBlocks, replacementFor, stepIndexFrom, wrapIndex,
+    type FindMatch, type FindOptions,
+} from '../find';
+import type { AskWalkthrough } from '../../state/ask-model';
 import { resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
@@ -310,6 +317,18 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
     let glanceOn = false;
+    // The /codoc:ask walkthrough overlay, and which of its stops the reader is on.
+    // Pure view state: nothing here is ever settled, so it needs no gate and can
+    // arrive or vanish at any point in an edit.
+    let currentAsk: AskWalkthrough | null = null;
+    let currentAskFid = '';
+    // ⌘F state. `findOpen` gates the per-keystroke re-search: with the widget shut,
+    // a doc change must not pay for a search nobody asked for.
+    let findOpen = false;
+    let findQuery = '';
+    let findOpts: FindOptions = { ...DEFAULT_FIND_OPTIONS };
+    let findMatches: FindMatch[] = [];
+    let findIndex = -1;
     // Last NON-EMPTY selection — a fallback so a bubble action still has a range to act
     // on if focus moved and the live selection collapsed (the "comment did nothing" bug).
     let lastSelection: { from: number; to: number } | null = null;
@@ -415,6 +434,27 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',
+            }),
+            AskDecorations.configure({
+                getAsk: () => currentAsk,
+                getCurrent: () => currentAskFid,
+                // A feature already showing a diff keeps its chip and note but loses
+                // the quote wash — the reader is looking at a change there, and a
+                // second highlight over the same words only competes with it.
+                getSuppressed: () => new Set<string>([
+                    ...currentBusy.keys(),
+                    ...Object.keys(currentAutoEdits),
+                    ...currentSuggestions
+                        .map(s => s.featureId)
+                        .filter((f): f is string => !!f),
+                ]),
+                onOpenCode: (file, symbol) => opts.onOpenBinding(file, symbol),
+            }),
+            // Last in the list so a find highlight paints over the layers beneath it:
+            // when you searched for a word, that word is what you are looking at.
+            FindDecorations.configure({
+                getMatches: () => findMatches,
+                getCurrent: () => findIndex,
             }),
             makeKeymap(() => commitNow()),
         ],
@@ -692,6 +732,84 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // Land the heading just below the scroll-spy's active threshold (surface top + 72), so the
     // section we glide to is the one the spy then marks active.
     const SPY_TOP_INSET = 72;
+
+    /** Bring an arbitrary document position into view, the same way a feature nav
+     *  does — tween the surface, mute the spy for the glide. Used by find, whose
+     *  target is a span inside a paragraph rather than a heading. Only scrolls
+     *  when the position is actually off-screen, so stepping between two matches
+     *  in one paragraph does not jog the page. */
+    function scrollPosIntoView(pos: number): void {
+        let box: { top: number; bottom: number };
+        try {
+            const c = editor.view.coordsAtPos(Math.max(0, Math.min(pos, editor.state.doc.content.size)));
+            box = { top: c.top, bottom: c.bottom };
+        } catch {
+            return;  // a position the view cannot resolve yet — the next repaint will
+        }
+        const surf = surface.getBoundingClientRect();
+        if (box.top >= surf.top + SPY_TOP_INSET && box.bottom <= surf.bottom - 24) return;
+        const target = Math.max(0, surface.scrollTop + (box.top - surf.top) - SPY_TOP_INSET);
+        if (navTween) { navTween.cancel(); navTween = null; }
+        muteSpy = true;
+        clearTimeout(muteTimer);
+        const distance = Math.abs(target - surface.scrollTop);
+        if (prefersReducedMotion()) {
+            surface.scrollTop = Math.round(target);
+            muteTimer = window.setTimeout(() => { muteSpy = false; }, 350);
+            return;
+        }
+        const duration = navDuration(distance);
+        navTween = tweenScrollTop(surface, target, {
+            duration, ease: 'outExpo',
+            onComplete: () => { navTween = null; muteSpy = false; },
+        });
+        muteTimer = window.setTimeout(() => { muteSpy = false; }, muteWindowFor(duration));
+    }
+
+    // ── find & replace (⌘F) ───────────────────────────────────────────────────
+    // The search runs over the doc's own text, and every replacement is applied as
+    // an ordinary ProseMirror transaction — so a replace is indistinguishable from
+    // typing, and reaches the daemon through the SAME settle → command path. It is
+    // deliberately not a separate write channel: a bulk edit that bypassed the
+    // provenance rules would be the one edit whose base_text nobody could trust.
+
+    function findResult(): FindState {
+        return { count: findMatches.length, index: findIndex, query: findQuery };
+    }
+
+    function repaintFind(): void {
+        editor.view.dispatch(editor.state.tr.setMeta(FIND_UPDATED, true));
+    }
+
+    /** Re-run the search over the current doc. `anchor` is the position to pick the
+     *  current match from when the previous one no longer exists (after an edit or
+     *  a changed query) — the caret, so the reader lands near where they were. */
+    function recomputeFind(anchor?: number): void {
+        findMatches = findQuery ? findInBlocks(searchBlocks(editor.state.doc), findQuery, findOpts) : [];
+        if (!findMatches.length) {
+            findIndex = -1;
+        } else {
+            const at = anchor ?? editor.state.selection.from;
+            findIndex = stepIndexFrom(findMatches, at, true);
+        }
+        repaintFind();
+    }
+
+    /** Select the current match and scroll it into view. Selecting (rather than
+     *  merely highlighting) is what makes ⌘F → type → replace behave like every
+     *  other editor, and what lets Escape leave the caret where you searched to. */
+    function revealCurrentMatch(): void {
+        const m = findMatches[findIndex];
+        if (!m) return;
+        const max = editor.state.doc.content.size;
+        if (m.to > max) return;
+        const tr = editor.state.tr.setSelection(
+            TextSelection.create(editor.state.doc, m.from, m.to));
+        // A selection-only transaction: not a doc change, so it never marks dirty
+        // and never settles.
+        editor.view.dispatch(tr);
+        scrollPosIntoView(m.from);
+    }
     function scrollToFeatureInternal(fid: string, smooth: boolean): void {
         const pos = headingPosForFid(editor, fid);
         if (pos == null) return;
@@ -1479,7 +1597,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // projection. A feature the gate kept local keeps its own baseline, so an
             // unrelated daemon write can no longer erase the change marks under the
             // user's cursor. Commit is the other re-baseline point (commitNow).
-            capturedBaseline = rebaseCaptured(capturedBaseline, projected, new Set(gate.adopted.keys()));
+            capturedBaseline = rebaseCaptured(capturedBaseline, projected, new Set(gate.adopted.keys()), currentDrafts);
             lastProposalsSig = sig;
 
             const keepFid = activeFid();          // stable anchor for existing features

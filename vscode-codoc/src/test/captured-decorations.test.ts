@@ -135,6 +135,26 @@ describe('U3: blockDiffSpans (add underline range + deletion caret position)', (
  * erased the change marks under the user's cursor mid-sentence.
  */
 describe('rebaseCaptured — a projection only re-baselines what it was adopted for', () => {
+    it('a held DRAFT keeps its baseline through the settle echo', () => {
+        // The flicker: the settle commits, the daemon echoes the committed text
+        // back, the version gate ADOPTS it (it is newer — it is the echo), and
+        // the baseline moves to the settled text. Diff empty, underline gone,
+        // for the second or two until the sidecar's directive baseline arrives.
+        // A fid the author holds as a draft is mid-lifecycle: its baseline
+        // belongs to the edit, not to the echo, so adoption must not move it.
+        const prev = new Map([['f-a', ft('Auth', 'Login and sessions.')]]);
+        const next = new Map([['f-a', ft('Auth', 'Login and sessions. And remove this.')]]);
+        const out = rebaseCaptured(prev, next, new Set(['f-a']), new Set(['f-a']));
+        expect(out.get('f-a')).toEqual(ft('Auth', 'Login and sessions.'));
+    });
+
+    it('a non-draft adoption still re-baselines as before', () => {
+        const prev = new Map([['f-a', ft('Auth', 'Old.')]]);
+        const next = new Map([['f-a', ft('Auth', 'New from the daemon.')]]);
+        const out = rebaseCaptured(prev, next, new Set(['f-a']), new Set());
+        expect(out.get('f-a')).toEqual(ft('Auth', 'New from the daemon.'));
+    });
+
     const ft = (title: string, ...paras: string[]): FeatureText => ({ title, paras });
 
     it('keeps the baseline of a feature the gate kept LOCAL', () => {

@@ -38,6 +38,12 @@ have to learn.
   reader given a filing cabinet has to open every drawer.
 - A feature that appears early in several paths is usually an entry point and
   belongs near the top of the tree, not filed under whatever it happens to call.
+- The opposite holds for **housekeeping metadata**: package identity, version
+  constants, packaging/build configuration, and similar "what this project is
+  called" features go at the BOTTOM of the tree, after everything that says what
+  the project does. They read early in files (a module docstring, a __version__)
+  but nobody opens a codebase to learn its version string — a reader's first
+  screen should be the work, not the label on the box.
 
 ## What to do
 
