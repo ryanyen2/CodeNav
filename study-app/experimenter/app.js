@@ -652,8 +652,10 @@ function renderHandoff() {
 function renderOpenHandoff(el, p, browser, mirror) {
     const dot = (on) => `<span class="tick ${on ? 'on' : 'off'}">${on ? '●' : '○'}</span>`;
     el.innerHTML = `
-      <h3>Send these</h3>
-      <p class="hint">The first two carry the code. Everything they do is filed against it.</p>
+      <h3>Send this</h3>
+      <p class="hint">One link, and it is the whole handoff. The download, the
+      command and the keys are all on it, and it carries the code everything they
+      do is filed against.</p>
 
       <div class="give">
         <label>Their link</label>
@@ -667,11 +669,13 @@ function renderOpenHandoff(el, p, browser, mirror) {
       </div>
 
       <div class="give">
-        <label>What they run in the folder they unzipped</label>
+        <label>What their page tells them to run</label>
         <div class="give-row">
           <code>${esc(setupFor(p))}</code>
           <button data-copy="${esc(setupFor(p))}">Copy</button>
         </div>
+        <p class="give-note">Here so you can read it back to them if they get
+        stuck. You do not need to send it.</p>
         <p class="give-note">${dot(mirror)} ${mirror
             ? 'Their editor is reporting.'
             : 'Their editor has not reported. Until it does, nothing they do in it arrives here.'}</p>
@@ -682,14 +686,14 @@ function renderOpenHandoff(el, p, browser, mirror) {
       </div>
 
       <div class="give">
-        <label>The two keys, by hand</label>
-        <p class="give-note">Setup asks for an Anthropic key and an OpenAI key.
-        Read them down the call, or send a <code>keys.env</code> separately. They
-        are deliberately not held here, and not in the bundle: this page is a
-        website, and the bundle is built once and goes to everybody.</p>
+        <label>The keys are not sent, and not shown here</label>
+        <p class="give-note">Setup fetches them with the code on their page, so
+        nobody pastes one. Put them in once under <strong>Session keys</strong>;
+        every participant made afterwards gets their own copy, and this card is a
+        website, so no key is ever drawn on it.</p>
         <p class="give-note">Setup checks both against the model before it
         finishes, so ask them to read you the last few lines rather than watching
-        for it here. Nothing about a key reaches this page.</p>
+        for it here.</p>
       </div>`;
 
     const release = el.querySelector('#release');

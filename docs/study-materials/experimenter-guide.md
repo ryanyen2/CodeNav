@@ -26,8 +26,8 @@ differences are the ones above.
 
 ## The two pages, and how a session runs
 
-There are two web pages and one zip. You use one page, the participant uses the
-other, and the zip is what they install.
+There are two web pages. You use one, the participant uses the other, and the
+bundle they install is downloaded from theirs.
 
 - Your dashboard is <https://codoc-11b10.web.app/experimenter/>. You sign in with
   your MIT address. You create participants here, you get the link to send them
@@ -36,8 +36,9 @@ other, and the zip is what they install.
 - Their page is <https://codoc-11b10.web.app/participant/>, reached only through
   the link you send. It walks them through consent, the questionnaires, the task
   cards and the break, one step at a time, and saves as they go.
-- The zip is `dist/codoc-study-bundle.zip`. It holds the extension, the four
-  projects and a setup script.
+- The bundle is at `/bundles/codoc-study-bundle.zip` on the same site, with a
+  Download button on their setup step. It holds the extension, the four projects
+  and a setup script. You never send it: publishing the site publishes it.
 
 A whole session, in order:
 
@@ -46,7 +47,7 @@ A whole session, in order:
    baked into the code, and a pilot created as a participant would quietly end
    up in the analysis. It gives you a code, e.g. `p-abcdefghjkmn`,
    and picks the order for you so the four combinations fill evenly.
-2. You send them the link and the zip. Both are on the dashboard, ready to copy.
+2. You send them the link. That is the whole handoff — the download is on it.
 3. They open the link, give consent, answer the background questions, and run the
    setup script with their code. Days ahead, not on the day.
 4. You watch the dashboard. Two marks turn green: one when they open the link,
@@ -110,26 +111,53 @@ You need node, npm, uv and zip. Then, from the repo root:
 ```
 
 It builds the VS Code extension, takes the matching codoc wheel out of it, and
-writes `dist/codoc-study-bundle.zip`. Build it again whenever codoc changes, so
-the extension and the wheel stay the same version.
+writes `dist/codoc-study-bundle.zip` — and a copy into `study-app/bundles/`,
+which is what the site serves. Build it again whenever codoc changes, so the
+extension and the wheel stay the same version, and deploy the site afterwards or
+participants keep downloading the old one.
 
 Try the bundle yourself on a spare machine or a fresh account first. The setup
 script inside it is the one participants run, so running it is the only way to
 know what their setup will feel like.
 
+### Piloting a change to the pages
+
+A pilot code is not only left out of the figures. Their page carries a bar along
+the bottom with **Fill and skip** and a menu of every step, so you can land on
+the one you want to look at in a couple of clicks instead of answering twenty-five
+scales to reach it. Everything it fills in is marked `autofilled` in the same
+document as the answers, so the marker survives an export rather than living only
+in the dashboard's idea of who was a pilot.
+
+Use it whenever you change the participant page. Before it existed the last steps
+were piloted least, which is the wrong way round — they are the ones nobody has
+ever walked through.
+
 ## Part 2. Before the session
 
 At least three days ahead, open the dashboard and press New. You get a code and
-an order. Then send the participant two things, both from the card at the top of
-that participant's page in the dashboard.
+an order. Then send the participant **one thing**: their link, which looks like
 
-1. Their link, which looks like
-   `https://codoc-11b10.web.app/participant/?code=p-abcdefghjkmn&order=codoc-first`.
-   Ask them to open it and work through it until it tells them to stop. That
-   covers consent, the questions about them, and setting their machine up.
-2. `dist/codoc-study-bundle.zip`. Their page tells them to unzip it and run the
-   setup command, which is the second thing on that card. It has their code and
-   order already in it, so it can be pasted as it stands.
+```
+https://codoc-11b10.web.app/participant/?code=p-abcdefghjkmn&order=codoc-first
+```
+
+Ask them to open it and work through it until it tells them to stop. That covers
+consent, the questions about them, and setting their machine up. The download is
+on that page, and so is the setup command with their own code and order already
+in it.
+
+The bundle used to be emailed alongside the link. Two things sent separately can
+disagree about which version they are, and they did: a rebuilt bundle reached
+nobody who had already been sent the old one, and nothing on either side said so.
+It is served from the site now, so publishing the site publishes the bundle.
+
+To rebuild and publish it:
+
+```
+./docs/study-materials/scripts/build-participant-bundle.sh
+cd study-app && npm run build && npx firebase deploy --only hosting
+```
 
 You do not need to decide the order yourself. The dashboard picks whichever of
 the two is behind, so the combinations fill evenly without you keeping a tally.
@@ -142,7 +170,7 @@ handoff worked. If the second one is still not green, ask them to run
 
 Ask them to send back the last few lines the setup script printed. If it does not
 say "Everything is ready", sort it out now rather than during the session. The
-common problems and their fixes are at the end of the file inside the zip.
+common problems and their fixes are at the end of the README in the bundle.
 
 Do not run anyone who says they never read a diff before accepting it. It is one
 of the questions on their own page, and their answers are in the dashboard. The

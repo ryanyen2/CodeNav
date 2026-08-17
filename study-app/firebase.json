@@ -32,6 +32,16 @@
             "value": "no-cache"
           }
         ]
+      },
+      {
+        "comment": "The bundle keeps one filename across rebuilds, because the download link on the participant's setup page is fixed. So the name cannot carry the cache key and revalidation has to. Without this, rebuilding the bundle mid-study hands somebody an hour-old copy with nothing on screen to say so.",
+        "source": "/bundles/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
       }
     ],
     "cleanUrls": true

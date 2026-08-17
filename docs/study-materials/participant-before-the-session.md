@@ -46,28 +46,28 @@ yourself:
 
 You do not need Python. The setup script installs everything else.
 
-## About the two keys
+## Who pays for the AI
 
-We pay for the models, so nothing in the session costs you anything. We will
-give you two keys, separately from this bundle, and the setup script asks for
-them. They are not shown as you type, so they will not appear on screen while
-you are sharing it.
+We do. Nothing in the session costs you anything, and you do not need a plan of
+your own.
 
-They are written only into the four project folders, so deleting those folders
-removes them. Nothing is added to your shell, and nothing changes for your own
-projects.
+You never handle a key. The setup fetches them using the code in your link, and
+writes them only into the four project folders, so deleting those folders removes
+them. Nothing is added to your shell.
 
-If you already use Claude Code with your own account, that keeps working
-everywhere except these four folders. Inside them the study's account is used
-instead, so your own plan is never spent on this.
-
-Please do not use these keys for anything else, and tell us if you think one has
-ended up somewhere it should not have. We turn them off after the study.
+Each project folder gets its own assistant profile and its own launcher, called
+`./claude-study`. Start the agent with that rather than with `claude`. If you
+already use Claude Code with your own account, it keeps working everywhere else
+exactly as it did, and your own plan is never spent on this.
 
 ## Setting up
 
-Unzip the bundle we sent you and open a terminal in the unzipped folder. Then run
-the command from your study page. It looks like this, with your own code in it:
+Everything is on your study page. In short:
+
+1. Press **Download** on the page. It is one zip file, about 5 MB.
+2. Unzip it. Double-click on a Mac, or `unzip codoc-study-bundle.zip`.
+3. Open a terminal in the unzipped folder, e.g. `cd ~/Downloads/codoc-study-bundle`.
+4. Run the command shown on your page. It already has your code in it:
 
 ```
 ./setup.sh p-abcdefghjkmn codoc-first
@@ -77,9 +77,10 @@ Copy it from the page rather than typing it. The code is how your work is filed,
 and a machine without it records nothing. If you run `./setup.sh` with nothing
 after it, it will ask you for the code before it starts.
 
-It prints a line for each thing it does, and it takes about 10 minutes. When it
-finishes it either says "Everything is ready" or lists what is still missing. If
-anything is missing, fix it and then run this from the same folder:
+It prints a line for each thing it does, asks you for nothing, and takes about 10
+minutes. When it finishes it either says "Everything is ready" or lists what is
+still missing. If anything is missing, fix it and then run this from the same
+folder:
 
 ```
 ./setup.sh --check

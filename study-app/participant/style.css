@@ -146,6 +146,28 @@ iframe {
 
 /* ── footer ──────────────────────────────────────────────────────────────── */
 
+/* The pilot's own bar, above the footer. Deliberately unlike everything else on
+   the page: it is the one control a participant must never be handed, and it
+   should be obvious at a glance in a screen recording which kind of session
+   is being watched. */
+.pilot-bar {
+    position: sticky; bottom: 0; z-index: 2;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 24px;
+    border-top: 1px dashed #c9a227;
+    background: #fdf6e0;
+    font-size: 13px;
+}
+.pilot-tag {
+    font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: #7a5c00; font-size: 11px;
+}
+.pilot-bar select, .pilot-bar button {
+    font: inherit; padding: 4px 10px; border-radius: 6px;
+    border: 1px solid #d8c375; background: #fff; color: inherit; cursor: pointer;
+}
+.pilot-bar select { flex: 1; max-width: 320px; }
+
 footer {
     position: sticky; bottom: 0;
     display: flex; align-items: center; gap: 12px;
@@ -225,6 +247,17 @@ dl.words dd { margin: 4px 0 0; color: var(--ink-soft); }
 ol.do { margin: 0 0 22px; padding-left: 22px; color: var(--ink-soft); }
 ol.do li { margin-bottom: 14px; }
 ol.do code.pick { display: block; margin-top: 8px; }
+
+/* The one download on the site, so it should look like the obvious thing to
+   press rather than like another link in a paragraph. */
+a.dl {
+    display: inline-block; margin-top: 10px;
+    padding: 10px 18px; border-radius: var(--radius);
+    background: var(--accent); border: 1px solid var(--accent);
+    color: #fff; text-decoration: none; font-weight: 500;
+    transition: filter 140ms var(--ease);
+}
+a.dl:hover { filter: brightness(1.08); }
 
 p.fine { color: var(--ink-faint); font-size: 13.5px; }
 

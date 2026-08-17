@@ -59,7 +59,7 @@ export const onSnapshot = (ref, cb) => {
 };
 `;
 
-async function loadPage(page, storage) {
+async function loadPage(page, storage, code = 'p-abcdefghjkmn') {
     const dir = mkdtempSync(join(tmpdir(), 'page-'));
     const stub = join(dir, 'firebase-stub.js');
     writeFileSync(stub, STUB);
@@ -74,12 +74,27 @@ async function loadPage(page, storage) {
 
     const html = readFileSync(join(root, page, 'index.html'), 'utf8');
     const dom = new JSDOM(html, {
-        url: 'https://example.test/?code=p-abcdefghjkmn&order=codoc-first',
+        url: `https://example.test/?code=${code}&order=codoc-first`,
         pretendToBeVisual: true, runScripts: 'outside-only',
     });
     // Seeded before the bundle runs, because the page reads where it got to on
     // start. This is how a test lands on a step other than the first.
     for (const [k, v] of Object.entries(storage || {})) dom.window.localStorage.setItem(k, v);
+
+    // jsdom ships no canvas, so without this every page test took the task
+    // card's no-canvas fallback — the branch that writes the words into the DOM
+    // as text. The branch a participant actually gets was the one never
+    // exercised, which is the wrong way round for the control that stops them
+    // pasting the card at the agent. It records nothing; it only has to exist.
+    dom.window.HTMLCanvasElement.prototype.getContext = function getContext() {
+        const noop = () => {};
+        return new Proxy({}, {
+            get: (_, k) => (k === 'canvas' ? this : noop),
+            set: () => true,
+        });
+    };
+    // Same reason: jsdom refuses scrollTo and logs a page of noise per render.
+    dom.window.scrollTo = () => {};
 
     const errors = [];
     dom.window.addEventListener('error', (e) => errors.push(e.message));
@@ -181,7 +196,14 @@ test('the handoff card does not carry a key, and says so', async () => {
     });
 
     const card = document.querySelector('#handoff');
-    assert.match(card.textContent.replace(/\s+/g, ' '), /two keys, by hand/i);
+    const said = card.textContent.replace(/\s+/g, ' ');
+    assert.match(said, /keys are not sent, and not shown here/i);
+    assert.match(said, /Session keys/, 'and it says where they do go');
+    // This used to say setup would ask for two keys and to read them down the
+    // call. Setup fetches them with the code now, so a card still saying that
+    // would have somebody reading a key aloud to a participant who was never
+    // going to be asked for one.
+    assert.ok(!/asks for an Anthropic key|Read them down the call/i.test(said));
     // Only the link and the command are copyable. A third copy field would mean
     // somebody had put a key in the page.
     assert.equal(card.querySelectorAll('[data-copy]').length, 2);
@@ -534,4 +556,113 @@ test('deleting removes the contact record too', async () => {
     await new Promise((r) => setTimeout(r, 80));
     assert.ok(window.__deleted.includes('contacts/p-abcdefghjkmn'));
     assert.ok(window.__deleted.includes('participants/p-abcdefghjkmn'));
+});
+
+// ── every step, actually rendered ────────────────────────────────────────────
+
+/** Open the participant page landed on step `at`. */
+async function participantAt(at, code = 'p-abcdefghjkmn') {
+    const page = await loadPage('participant', {
+        [`codoc-study:${code}`]: JSON.stringify({ at, answers: {} }),
+    }, code);
+    await new Promise((r) => setTimeout(r, 30));
+    return page;
+}
+
+test('every step in the session renders', async () => {
+    // Two steps had no view at all. `buildSteps` emitted `break` and
+    // `scenarios`, `VIEWS` defined neither, and reaching either threw
+    // "VIEWS[step.kind] is not a function" — halfway through a session, on a
+    // call. Every other test passed: they checked the ORDER of the steps and
+    // the CONTENT of the views, and nothing had ever walked one into the other.
+    const { buildSteps } = await import('../participant/steps.js');
+    const steps = buildSteps('codoc-first');
+
+    for (let at = 0; at < steps.length; at += 1) {
+        const { document, errors } = await participantAt(at);
+        assert.deepEqual(errors, [],
+            `step ${at} (${steps[at].kind}) threw: ${errors.join('; ')}`);
+        const text = document.querySelector('#stage').textContent.trim();
+        assert.ok(text.length > 40,
+            `step ${at} (${steps[at].kind}) rendered almost nothing`);
+    }
+});
+
+test('the task card is a picture, and its words are in no text node', async () => {
+    // If it can be selected it can be pasted at the agent, and then the agent is
+    // working from our wording instead of theirs. What they write is one of the
+    // things the study measures.
+    const { TASK_CARDS, buildSteps } = await import('../participant/steps.js');
+    const steps = buildSteps('codoc-first');
+    const at = steps.findIndex((s) => s.kind === 'task');
+    const { document } = await participantAt(at);
+
+    const stage = document.querySelector('#stage');
+    assert.ok(stage.querySelector('canvas'), 'the card is drawn, not written');
+    const shown = stage.textContent.replace(/\s+/g, ' ');
+    for (const line of TASK_CARDS[steps[at].project].lines) {
+        if (line.trim()) {
+            assert.ok(!shown.includes(line.trim()),
+                `the card's words are selectable on the page: ${line}`);
+        }
+    }
+});
+
+test('the setup step offers the download rather than naming a file nobody has', async () => {
+    const { buildSteps } = await import('../participant/steps.js');
+    const at = buildSteps('codoc-first').findIndex((s) => s.kind === 'setup');
+    const { document } = await participantAt(at);
+
+    const dl = document.querySelector('#stage a[download]');
+    assert.ok(dl, 'there is a download link');
+    assert.equal(dl.getAttribute('href'), '/bundles/codoc-study-bundle.zip');
+    const text = document.querySelector('#stage').textContent.replace(/\s+/g, ' ');
+    assert.ok(!/bundle we sent you/.test(text),
+        'nothing points at a file that arrives separately from the link');
+});
+
+// ── the pilot bar ────────────────────────────────────────────────────────────
+
+test('a participant is never offered the skip', async () => {
+    const { document } = await participantAt(0, 'p-abcdefghjkmn');
+    assert.equal(document.querySelector('#pilot-bar').hidden, true);
+});
+
+test('a pilot can fill a step in and move on', async () => {
+    const code = 'pilot-abcdefghjkmn';
+    const { buildSteps } = await import('../participant/steps.js');
+    const steps = buildSteps('codoc-first');
+    const at = steps.findIndex((s) => s.kind === 'prestudy');
+    const { document } = await participantAt(at, code);
+
+    const bar = document.querySelector('#pilot-bar');
+    assert.equal(bar.hidden, false, 'the bar is shown for a pilot code');
+
+    document.querySelector('#pilot-skip').click();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.match(document.querySelector('#stage').textContent, /Set up your machine/,
+        'it moved on without the questions being answered by hand');
+});
+
+test('a pilot can jump to a step, and everything skipped is filled and marked', async () => {
+    const code = 'pilot-abcdefghjkmn';
+    const { buildSteps } = await import('../participant/steps.js');
+    const steps = buildSteps('codoc-first');
+    const to = steps.findIndex((s) => s.kind === 'interview');
+    const { document, window } = await participantAt(0, code);
+
+    const jump = document.querySelector('#pilot-jump');
+    assert.equal(jump.options.length, steps.length, 'every step is in the menu');
+    jump.value = String(to);
+    jump.dispatchEvent(new window.Event('change'));
+    await new Promise((r) => setTimeout(r, 60));
+
+    assert.match(document.querySelector('#stage').textContent, /Last part/);
+
+    // Everything it filled in on the way says a machine did it, in the same
+    // document as the answers, so the marker travels with an export.
+    const saved = JSON.parse(window.localStorage.getItem(`codoc-study:${code}`));
+    const filled = Object.entries(saved.answers).filter(([, v]) => v.autofilled);
+    assert.ok(filled.length >= 6, `expected several filled docs, got ${filled.length}`);
+    for (const [, values] of filled) assert.equal(values.autofilled, true);
 });

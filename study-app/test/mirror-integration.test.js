@@ -18,6 +18,7 @@ const PROJECT = 'codoc-study-rules-test';
 const CODE = 'p-abcdefghjkmn';
 const CODE2 = 'p-nmkjhgfedcba';
 const CODE3 = 'p-qrstuvwxyz23';
+const CODE4 = 'p-23456789abcd';
 const hosts = emulatorHosts();
 const cfg = { apiKey: 'emulator-key', projectId: PROJECT, hosts };
 
@@ -54,7 +55,7 @@ const edit = (t) => ({ ev: 'edit', surface: 'code', file: 'a.py', t, active: tru
 before(async () => {
     // The experimenter creates the participant in advance. Here that is done with
     // an unauthenticated admin write, which the emulator allows.
-    for (const code of [CODE, CODE2, CODE3]) {
+    for (const code of [CODE, CODE2, CODE3, CODE4]) {
         await adminWrite(`participants?documentId=${code}`, {
             createdAt: { integerValue: String(Date.now()) },
             released: { booleanValue: false },
@@ -102,19 +103,50 @@ test('a resend of the same bytes does not create a second batch', async () => {
     assert.equal((batches.documents || []).length, 1, 'one batch survives the double send');
 });
 
-test('a second machine on one code is told the slot is taken', async () => {
-    // Realistic: the participant opens the project on a laptop and a desktop, or
-    // an old sign-in is gone. The answer must name the problem, because every
-    // batch afterwards would otherwise be refused with nothing saying why.
+test('both of one machine\'s workspaces mirror under the same code', async () => {
+    // A participant works in two folders, so the logger writes two logs and two
+    // state files. Identity is per MACHINE, in a file beside the logs, exactly so
+    // the second workspace is the same signed-in user and can hold the one slot
+    // the first claimed. When identity lived in the per-log state, the second
+    // condition signed in as a new user, could not claim the slot, and mirrored
+    // nothing — half of every participant's data, silently.
     const logPath = makeLog([edit(0)]);
     const first = new Mirror({ logPath, code: CODE3, condition: 'codoc', client: new FirestoreRest(cfg) });
     assert.equal(await first.start(), true);
 
     const errors = [];
+    const secondWorkspace = new Mirror({
+        logPath, code: CODE3, condition: 'baseline',
+        client: new FirestoreRest(cfg),
+        statePath: `${logPath}.baseline.json`,     // its own read offset…
+        onError: (e) => errors.push(e),            // …and the machine's identity
+    });
+    assert.equal(await secondWorkspace.start(), true, 'the same machine gets in again');
+    assert.deepEqual(errors, [], errors.join('; '));
+});
+
+test('a second machine on one code is told the slot is taken', async () => {
+    // Realistic: the participant opens the project on a laptop and a desktop, or
+    // an old sign-in is gone. The answer must name the problem, because every
+    // batch afterwards would otherwise be refused with nothing saying why.
+    //
+    // A different machine is a different identity file, which is what this now
+    // has to say out loud. It used to say it by giving a different state path,
+    // which stopped meaning "another machine" the day identity moved out of the
+    // state file — so the test passed a mirror its own identity back and checked
+    // that it was refused.
+    const logPath = makeLog([edit(0)]);
+    const first = new Mirror({
+        logPath, code: CODE4, condition: 'codoc', client: new FirestoreRest(cfg),
+    });
+    assert.equal(await first.start(), true);
+
+    const errors = [];
     const second = new Mirror({
-        logPath, code: CODE3, condition: 'codoc',
+        logPath, code: CODE4, condition: 'codoc',
         client: new FirestoreRest(cfg),
         statePath: `${logPath}.second.json`,
+        identityPath: `${logPath}.second-machine.json`,
         onError: (e) => errors.push(e),
     });
     assert.equal(await second.start(), false, 'the second machine does not think it registered');

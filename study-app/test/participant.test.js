@@ -352,3 +352,100 @@ test('no interview question tells them which way to answer', () => {
             `"${q.label}" leads`);
     }
 });
+
+// ── filling a step in, for a pilot ───────────────────────────────────────────
+
+test('every step that stores answers has defaults', async () => {
+    // Otherwise a pilot presses skip on a step, nothing is filled, the Continue
+    // button stays disabled, and the control looks broken rather than absent.
+    const { defaultsFor } = await import('../participant/autofill.js');
+    for (const step of buildSteps('codoc-first')) {
+        if (answerDoc(step) === null) continue;
+        const values = defaultsFor(step);
+        assert.ok(values, `no defaults for ${step.kind}`);
+        assert.equal(values.autofilled, true, `${step.kind} is not marked`);
+    }
+});
+
+test('the defaults answer every required question', async () => {
+    const { defaultsFor } = await import('../participant/autofill.js');
+    const prestudy = defaultsFor({ kind: 'prestudy' });
+    for (const id of REQUIRED) {
+        assert.ok(prestudy[id] !== undefined && String(prestudy[id]).trim() !== '',
+            `${id} was left blank`);
+    }
+});
+
+test('a filled-in pilot is not screened out of its own pilot run', async () => {
+    // The screening question's excluding answer is a real option, and taking
+    // options in order would have picked it.
+    const { defaultsFor } = await import('../participant/autofill.js');
+    assert.equal(shouldExclude(defaultsFor({ kind: 'prestudy' })), false);
+});
+
+test('the defaults come from the instrument, not from a second copy of it', async () => {
+    // A question added to the instrument has to be filled by this without
+    // anybody remembering to come here, or the skip quietly stops working on
+    // whichever step gained the question.
+    const { defaultsFor } = await import('../participant/autofill.js');
+    const after = defaultsFor({ kind: 'questionnaire' });
+    for (const q of AFTER_CONDITION) {
+        assert.ok(after[q.id] !== undefined, `${q.id} was not filled`);
+        const s = scaleFor(q);
+        assert.ok(after[q.id] > s.min && after[q.id] < s.max,
+            'a default sits in the middle rather than on an endpoint');
+    }
+    const signoff = defaultsFor({ kind: 'signoff' });
+    for (const q of SIGNOFF) assert.ok(signoff[q.id] !== undefined, `${q.id} was not filled`);
+    const interview = defaultsFor({ kind: 'interview' });
+    for (const q of INTERVIEW_QUESTIONS) {
+        assert.ok(interview[q.id] !== undefined, `${q.id} was not filled`);
+    }
+});
+
+test('a filled quiz answers all twelve, for either project', async () => {
+    const { defaultsFor } = await import('../participant/autofill.js');
+    const { QUIZZES } = await import('../participant/quiz.js');
+    for (const project of ['scribe', 'tally']) {
+        const filled = defaultsFor({ kind: 'quiz', project });
+        for (const q of QUIZZES[project]) {
+            assert.ok(filled[`q${q.n}`], `${project} q${q.n} was left blank`);
+        }
+    }
+});
+
+test('nothing outside a pilot code can reach the skip', async () => {
+    const { isPilotCode } = await import('../shared/schema.js');
+    assert.equal(isPilotCode('p-abcdefghjkmn'), false);
+    assert.equal(isPilotCode('pilot-abcdefghjkmn'), true);
+    assert.equal(isPilotCode(''), false);
+    assert.equal(isPilotCode(null), false);
+});
+
+// ── the page and the setup script, against each other ────────────────────────
+
+test('the page names the launcher that setup actually writes', async () => {
+    // The page told them to run `claude`. Setup writes `./claude-study`, which
+    // is the whole isolation: plain claude picks up their own login and bills
+    // their own plan, and nothing on either side would have said so. Two files,
+    // each correct, disagreeing.
+    const { readFileSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const setup = readFileSync(
+        join(root, 'docs', 'study-materials', 'scripts', 'setup.sh'), 'utf8');
+
+    const named = Object.values(HOW_TO_START)
+        .flatMap((h) => h.steps.map(([, cmd]) => cmd).filter(Boolean));
+    assert.ok(named.some((c) => c === './claude-study'),
+        'both conditions start the agent through the study launcher');
+    assert.ok(!named.some((c) => /^claude(\s|$)/.test(c)),
+        'nothing tells them to run plain claude, which would use their own account');
+    assert.match(setup, /claude-study/, 'and setup writes that launcher');
+
+    // The codoc arm's watch command has to be the launcher setup made, not the
+    // codoc that may or may not be on their PATH.
+    assert.ok(named.some((c) => c.startsWith('~/codoc-study/codoc ')));
+    assert.match(setup, /ln -sf "\$CODOC" "\$WORK\/codoc"/);
+});

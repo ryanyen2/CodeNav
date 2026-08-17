@@ -137,7 +137,8 @@ export const HOW_TO_START = Object.freeze({
             ['Open the folder in VS Code.', null],
             ['Open a terminal inside VS Code and run this. Leave it running for the whole task.', '~/codoc-study/codoc watch --root {folder}'],
             ['Open the written description: press Cmd+Shift+P and run "codoc: Open".', null],
-            ['Open two more terminals, one for the coding agent and one for running the project.', null],
+            ['Open a second terminal and start the coding agent with this. Use it rather than plain claude — it runs on the study\'s account, not yours.', './claude-study'],
+            ['Open a third terminal for running the project.', null],
         ],
         about: [
             'The written description is a tree of features. Each one names something the project does and points at the code that does it.',
@@ -150,7 +151,7 @@ export const HOW_TO_START = Object.freeze({
         folder: (p) => `~/codoc-study/${p}-baseline`,
         steps: [
             ['Open the folder in VS Code.', null],
-            ['Start the coding agent in a terminal.', 'claude'],
+            ['Open a terminal inside VS Code and start the coding agent with this. Use it rather than plain claude — it runs on the study\'s account, not yours.', './claude-study'],
             ['Open a second terminal for running the project.', null],
         ],
         about: [

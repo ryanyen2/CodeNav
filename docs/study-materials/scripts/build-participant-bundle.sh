@@ -80,10 +80,21 @@ chmod +x "$STAGE"/setup.sh "$STAGE"/session-log.sh "$STAGE"/collect.sh
 ( cd "$OUT" && rm -f codoc-study-bundle.zip && zip -qr codoc-study-bundle.zip codoc-study-bundle )
 rm -rf "$STAGE"
 
+# Straight into the website's static files, so deploying the site and publishing
+# the bundle are one action. It used to be emailed separately, which meant a
+# rebuilt bundle reached nobody who had already been sent the old one, and there
+# was nothing on either side to say so. The download button on the participant's
+# setup page points at exactly this path.
+SITE="$REPO/study-app/bundles"
+mkdir -p "$SITE"
+cp "$OUT/codoc-study-bundle.zip" "$SITE/codoc-study-bundle.zip"
+
 echo
 echo "Bundle: $OUT/codoc-study-bundle.zip"
+echo "        $SITE/codoc-study-bundle.zip  (deployed with the site)"
 echo "Contents:"
 unzip -l "$OUT/codoc-study-bundle.zip" | sed -n '4,20p'
 echo
-echo "Send this zip with the participant's link, which is on their page in the"
-echo "dashboard. The consent form and the questionnaires are on that link."
+echo "Publish it:  cd study-app && npm run build && npx firebase deploy --only hosting"
+echo "Participants download it from their own study page. Send them the link"
+echo "only — it is on their page in the dashboard, and it carries their code."

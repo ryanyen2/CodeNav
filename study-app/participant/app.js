@@ -18,6 +18,8 @@ import {
     PROJECTS, RESPONSIBILITY, HOW_TO_START, QUIZZES, buildSteps, answerDoc,
 } from './steps.js';
 import { drawCard } from './card.js';
+import { defaultsFor } from './autofill.js';
+import { isPilotCode } from '../shared/schema.js';
 import { esc } from '../shared/html.js';
 
 const firebaseConfig = {
@@ -31,6 +33,12 @@ const firebaseConfig = {
 
 const params = new URLSearchParams(location.search);
 const CODE = params.get('code') || '';
+
+// One name, one path, for everybody. It is not per-condition and not
+// per-participant: the same folder holds all four workspaces, and the setup
+// script picks which two to use from the code. A name that varied would tell
+// somebody which condition they were in before they started.
+const BUNDLE_URL = '/bundles/codoc-study-bundle.zip';
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -94,6 +102,7 @@ async function start() {
     state.at = Math.min(saved.at || 0, state.steps.length - 1);
     state.answers = saved.answers || {};
 
+    pilotBar();
     render();
 }
 
@@ -164,6 +173,9 @@ function render() {
     $('#next').hidden = step.kind === 'done';
     $('#next').textContent = step.kind === 'task' ? 'I have finished the task' : 'Continue';
     updateNext(step);
+
+    const jump = $('#pilot-jump');
+    if (jump && jump.options.length) jump.value = String(state.at);
 }
 
 /** Whether this step has been answered enough to move on. */
@@ -232,18 +244,33 @@ const VIEWS = {
         ${shown.map((q) => field(q, a[q.id])).join('')}`;
     },
 
+    // The download is here rather than in an email. A file sent separately from
+    // the link is a file that can be the wrong version, and nothing on either
+    // side says so.
     setup: () => `
         <h1>Set up your machine</h1>
-        <p>Unzip the bundle we sent you, open a terminal in that folder, and run
-        this. It has your code in it already.</p>
-        <p><code class="pick">./setup.sh ${esc(state.code)} ${esc(state.order)}</code></p>
-        <p>It takes about ten minutes and asks you for nothing else. Do this a
-        few days before the session, not on the day.</p>
+        <p class="lead">Four steps, about ten minutes, mostly waiting. Do this a
+        few days before the session rather than on the day.</p>
+
+        <ol class="do">
+          <li>Download the study folder.
+            <a class="dl" href="${BUNDLE_URL}" download>Download (about 5 MB)</a></li>
+          <li>Unzip it. Double-click on a Mac, or <code class="pick">unzip codoc-study-bundle.zip</code></li>
+          <li>Open a terminal in the unzipped folder.
+            <code class="pick">cd ~/Downloads/codoc-study-bundle</code></li>
+          <li>Run this. Your code is already in it.
+            <code class="pick">./setup.sh ${esc(state.code)} ${esc(state.order)}</code></li>
+        </ol>
+
+        <p>It prints a line for each thing it does and asks you for nothing. When
+        it finishes it either says everything is ready or lists what is missing.
+        Send the last few lines to the researcher either way.</p>
+
         <div class="note">We pay for the AI, so nothing in this study costs you
-        anything and you do not need your own plan. Everything it sets up lives
-        inside the four project folders, including a separate assistant profile,
-        so your own setup is untouched and deleting those folders removes all of
-        it.</div>
+        anything and you do not need your own plan. The keys come down with your
+        code, so you never paste one. Everything it sets up lives inside the four
+        project folders, including a separate assistant profile, so your own
+        setup is untouched and deleting those folders removes all of it.</div>
 
         <h2>On the day</h2>
         <p>Run this in the same folder and read the result to the researcher.</p>
@@ -368,6 +395,29 @@ const VIEWS = {
                 <span class="opt-text">${esc(o.text)}</span>
               </button>`).join('')}</div>
           </div>`).join('')}`;
+    },
+
+    break: () => `
+        <h1>Halfway</h1>
+        <p class="lead">Take five minutes. Stretch, get a drink, leave the call
+        running.</p>
+        <p>The second half is the same shape as the first: a different project,
+        the other way of working, and the same questions afterwards.</p>
+        <div class="note">Leave the folder you have just been working in exactly
+        as it is. Nothing needs saving or closing, and we collect it at the
+        end.</div>`,
+
+    // Asked once, with both conditions behind them. Which way of working somebody
+    // would pick depends heavily on the job, and asking it as one flat question
+    // gets an answer about whichever job they happened to picture.
+    scenarios: (step) => {
+        const a = answersFor(step);
+        return `
+        <h1>Which one, for which job</h1>
+        <p class="lead">For each of these, which of the two ways of working you
+        just used would you rather have? "The first one" means the one you did
+        first.</p>
+        ${SCENARIOS.map((s) => scenarioRow(s, a[s.id])).join('')}`;
     },
 
     // Their own sign-off, in their own words. It used to be typed into the
@@ -523,6 +573,64 @@ function wire(section, step) {
     }
 }
 
+// ── the pilot bar ────────────────────────────────────────────────────────────
+//
+// Two controls, shown only to a `pilot-` code: fill this step in and move on,
+// and jump straight to a step by name. Piloting the interview meant answering
+// twenty-five scales and two quizzes first, so in practice the last steps were
+// piloted least — which is the wrong way round, since they are the ones nobody
+// has walked through before.
+
+/** Fill a step in and record that a machine did it. */
+function autofill(step) {
+    const name = answerDoc(step);
+    const values = defaultsFor(step);
+    if (!name || !values) return false;
+    state.answers[name] = { ...state.answers[name], ...values };
+    void save(step);
+    return true;
+}
+
+function pilotBar() {
+    const bar = $('#pilot-bar');
+    if (!isPilotCode(state.code)) return;
+    bar.hidden = false;
+
+    const jump = $('#pilot-jump');
+    jump.replaceChildren(...state.steps.map((s, i) => {
+        const o = document.createElement('option');
+        o.value = String(i);
+        o.textContent = `${i + 1}. ${stepName(s)}`;
+        return o;
+    }));
+
+    $('#pilot-skip').addEventListener('click', () => {
+        autofill(state.steps[state.at]);
+        if (state.at < state.steps.length - 1) state.at += 1;
+        remember();
+        render();
+    });
+
+    // Jumping fills in everything skipped over, so the step landed on behaves
+    // the way it would have if the session had reached it — a questionnaire that
+    // reads an earlier answer gets one, and the dashboard sees a session at that
+    // point rather than one that answered nothing and then answered the end.
+    jump.addEventListener('change', () => {
+        const to = Number(jump.value);
+        for (let i = state.at; i < to; i += 1) autofill(state.steps[i]);
+        state.at = to;
+        remember();
+        render();
+    });
+}
+
+/** What a step is called in the jump menu. */
+function stepName(step) {
+    const which = step.n ? ` ${step.n} (${step.condition})` : '';
+    if (step.kind === 'quiz') return `quiz ${step.sitting}, ${step.project}`;
+    return `${step.kind}${which}`;
+}
+
 // ── moving ───────────────────────────────────────────────────────────────────
 
 $('#next').addEventListener('click', () => {
@@ -538,4 +646,4 @@ $('#back').addEventListener('click', () => {
 
 void start();
 
-export { state, complete, VIEWS };
+export { state, complete, VIEWS, stepName };

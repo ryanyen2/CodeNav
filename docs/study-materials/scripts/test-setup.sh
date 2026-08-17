@@ -88,8 +88,10 @@ echo "The study's keys, not the participant's account"
 keys_block() {
   local work="$1"
   local body
-  body="$(awk '/^step "Putting the study.s keys in place"/,/^step "Checking that both keys work"/' "$SETUP" | sed '$d')"
-  [ -n "$body" ] || { echo "could not find the keys block in setup.sh"; return 99; }
+  # The block that writes the assistant profile and codoc's .env, given the keys.
+  # Fetching them is the step above it and needs the network, so it is left out.
+  body="$(awk '/^step "Setting up an assistant profile that is not yours"/,/^step "Checking that both keys work"/' "$SETUP" | sed '$d')"
+  [ -n "$body" ] || { echo "could not find the profile block in setup.sh"; return 99; }
   WORK="$work" STUDY_ANTHROPIC_KEY="sk-ant-test" STUDY_OPENAI_KEY="sk-openai-test" \
   bash -c "
     set -uo pipefail
@@ -114,25 +116,52 @@ echo '{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"codo
   > "$TMP/scribe/.claude/settings.json"
 
 if keys_block "$TMP"; then
-  # All four, because the agent does the work in both conditions. A key in only
-  # the codoc pair would bill the participant for half the study.
+  # All four, because the agent does the work in both conditions. A profile in
+  # only the codoc pair would bill the participant for half the study.
   n=0
   for w in scribe scribe-baseline tally tally-baseline; do
-    [ "$(read_json "$TMP/$w/.claude/settings.json" env.ANTHROPIC_API_KEY)" = "sk-ant-test" ] && n=$((n+1))
+    [ "$(cat "$TMP/$w/.claude-study/api-key" 2>/dev/null)" = "sk-ant-test" ] && n=$((n+1))
   done
   [ "$n" = 4 ] && ok "all four workspaces carry the Anthropic key" \
     || bad "only $n of 4 workspaces carry the Anthropic key"
 
-  [ "$(read_json "$TMP/scribe/.claude/settings.json" model)" = "claude-sonnet-5" ] \
+  PROFILE="$TMP/scribe/.claude-study/settings.json"
+  # Through a helper rather than ANTHROPIC_API_KEY: setting the variable makes
+  # Claude Code ask once whether to trust the key, mid-session, for no benefit.
+  [ "$(read_json "$PROFILE" apiKeyHelper)" = "$TMP/scribe/.claude-study/api-key.sh" ] \
+    && ok "the key is served by a helper, so nothing prompts them" \
+    || bad "no apiKeyHelper, so they will be asked to trust the key"
+  [ "$(read_json "$PROFILE" model)" = "claude-sonnet-5" ] \
     && ok "the model is pinned to sonnet-5" || bad "the model is not pinned"
-  [ "$(read_json "$TMP/scribe/.claude/settings.json" effortLevel)" = "medium" ] \
+  [ "$(read_json "$PROFILE" effortLevel)" = "medium" ] \
     && ok "thinking is set to medium" || bad "thinking is not set"
-  # Erasing these would silently unhook codoc from Claude Code in the very
-  # condition the study is about.
+  # The assistant's version is part of the condition. One that upgraded itself
+  # between participant three and four is a confound nobody can reconstruct.
+  [ "$(read_json "$PROFILE" env.DISABLE_AUTOUPDATER)" = "1" ] \
+    && ok "the auto-updater is off, so the version stays put" \
+    || bad "the assistant may upgrade itself mid-study"
+
+  # The profile is a config directory of its own. Their own ~/.claude is never
+  # read, and the workspace's .claude — where codoc installs its hooks — is not
+  # touched by this block at all, so unhooking codoc is not possible here.
   [ -n "$(read_json "$TMP/scribe/.claude/settings.json" hooks.Stop)" ] \
-    && ok "codoc's own hooks survive the merge" || bad "the hooks were erased"
-  [ "$(stat -f '%Lp' "$TMP/scribe/.claude/settings.json" 2>/dev/null || stat -c '%a' "$TMP/scribe/.claude/settings.json")" = "600" ] \
-    && ok "and the file holding it is private" || bad "the settings file is world-readable"
+    && ok "codoc's own hooks are left alone" || bad "the hooks were erased"
+
+  # The key is the one file here worth reading off a shared machine.
+  m="$(stat -f '%Lp' "$TMP/scribe/.claude-study/api-key" 2>/dev/null \
+       || stat -c '%a' "$TMP/scribe/.claude-study/api-key")"
+  [ "$m" = "600" ] && ok "the file holding the key is private" \
+    || bad "the key file is $m, not 600"
+
+  # The launcher, because nothing may depend on remembering an environment
+  # variable, and a key of their own in the shell would otherwise be picked up
+  # and billed to them.
+  L="$TMP/scribe/claude-study"
+  [ -x "$L" ] && ok "each workspace has its own launcher" || bad "no launcher"
+  grep -q 'CLAUDE_CONFIG_DIR' "$L" 2>/dev/null \
+    && ok "it points the assistant at the study profile" || bad "it does not set the config dir"
+  grep -q 'unset ANTHROPIC_API_KEY' "$L" 2>/dev/null \
+    && ok "and clears any key of their own first" || bad "their own key could be billed"
 
   # codoc, in its two workspaces only.
   grep -q '^CODOC_PROVIDER=openai$' "$TMP/scribe/.env" && ok "scribe sends codoc to OpenAI" || bad "scribe does not"
@@ -197,7 +226,7 @@ cmp -s "$FAKE_HOME/.zshrc" "$FAKE_HOME/.zshrc-before" \
 grep -rqF "sk-ant-test" "$FAKE_HOME/.claude" "$FAKE_HOME/.zshrc" 2>/dev/null \
   && bad "the Anthropic key leaked outside the workspaces" \
   || ok "neither key leaks outside the four workspaces"
-grep -qF "sk-ant-test" "$FAKE_HOME/codoc-study/scribe/.claude/settings.json" 2>/dev/null \
+grep -qF "sk-ant-test" "$FAKE_HOME/codoc-study/scribe/.claude-study/api-key" 2>/dev/null \
   && ok "and it is present where it is supposed to be" \
   || bad "the key is not in the workspace either, so nothing was written"
 rm -rf "$FAKE_HOME"

@@ -1,5 +1,10 @@
 node_modules/
 dist/
+
+# The participant bundle, built by docs/study-materials/scripts/build-participant-bundle.sh
+# and copied here so `npm run build` publishes it with the site. It is 5 MB of
+# .vsix and workspace archives, all of it reproducible from this repo.
+bundles/
 .firebase/
 firebase-debug.log
 firestore-debug.log

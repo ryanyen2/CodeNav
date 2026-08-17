@@ -51,9 +51,11 @@ them each way, so most files come as a pair.
 
 ## The scripts
 
-`scripts/build-participant-bundle.sh` runs on your machine and makes the zip you
-send to a participant. Run it again whenever codoc changes, so the extension and
-the codoc command inside stay the same version.
+`scripts/build-participant-bundle.sh` runs on your machine and makes the zip the
+participant downloads. It writes `dist/codoc-study-bundle.zip` and a copy into
+`study-app/bundles/`, which is what the site serves. Run it again whenever codoc
+changes, so the extension and the codoc command inside stay the same version, and
+deploy the site afterwards or participants keep getting the old one.
 
 `scripts/setup.sh` runs on the participant's machine, from inside the unzipped
 bundle. It takes their code and their order, e.g.
@@ -106,7 +108,10 @@ nowhere else, and `check-session-complete.py` names them when it is missing.
 ## Before you run anyone
 
 - Build the participant bundle again, so it matches the version of codoc you are
-  studying.
+  studying, and deploy the site so that is the one they download.
+- Put the two keys in under **Session keys** in the dashboard. Without them a
+  setup run reaches the key step, tells the participant to come back to you, and
+  the rest of their setup is wasted.
 - Run `setup.sh` yourself on a spare machine or a fresh account. It is the
   participant's entire experience of setup, so it is worth feeling once.
 - Pre-register the design and the scoring. The two question sheets and their
