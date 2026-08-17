@@ -63,89 +63,97 @@ and they accepted, or the agent did it and they never noticed.
 
 ## The quiz
 
-Twelve questions, four options, one right. Closed book, before the task and again
-after. Wrong options are plausible to somebody who read the code and never learned
-why it is that way.
+Twelve questions, four options, one right. Asked before the task and again after,
+so the change is the measure. Matched to scribe band for band.
 
-### Purpose
+**Every wrong option is something tally could defensibly have done and did not,
+and the right answer is usually the less obvious of the two.** A question whose
+right answer is simply the more sensible one is answerable without reading
+anything. Check with:
 
-**Q1. What is tally for?**
-- a) Connecting to a bank and downloading transactions
-- b) **Turning a CSV of transactions into a summary of what was spent, by month and category** ✓
-- c) Checking a statement for fraud
-- d) Preparing a tax return
+```
+python3 ../../scoring/check-description-answers.py --blind tally
+```
 
-**Q2. What does tally assume about its input?**
-- a) It comes from one particular bank
-- b) It is already sorted by date
-- c) **It is a CSV whose columns may be named any of several ways** ✓
-- d) It has been checked for errors first
+### Purpose — what it is for, and where it stops
 
-**Q3. Which of these is out of scope?**
-- a) Deciding which month a transaction belongs to
-- b) Spotting a payment that comes round every month
-- c) Leaving out money moved between your own accounts
-- d) **Telling you whether you can afford something** ✓
+**Q1. Somebody moves the sign-flipping step so it runs last instead of first. What breaks?**
+- a) Nothing: flipping signs is the same operation whenever it happens
+- b) The totals come out positive instead of negative
+- c) **Every rule that reads an amount has already read it the wrong way round** ✓
+- d) Refunds stop netting, because a refund is recognised by its sign
 
-**Q4. Who is the output for?**
-- a) An accountant reconciling against the bank
-- b) **The person whose statement it is, asking what they spent** ✓
-- c) A budgeting app that will import it
-- d) A tax authority
+**Q2. Somebody makes the transfer rule stricter, so fewer rows count as transfers. Which other rule starts behaving differently?**
+- a) Categorisation, because transfers have no category
+- b) Rounding, because the totals change
+- c) **Duplicate removal, because transfers are the rows it is told to leave alone** ✓
+- d) None: the two are applied to different columns
 
-### Rationale
+**Q3. Which piece of information does tally read from the bank's file and then never use again?**
+- a) The amount
+- b) **The posting date, once a transaction date has been found** ✓
+- c) The merchant description
+- d) The account name
 
-**Q5. Why does the first matching category rule win, rather than requiring exactly one?**
-- a) It is faster
-- b) Banks guarantee only one will match
-- c) **Requiring one would stop the whole summary over a single ambiguous merchant** ✓
-- d) The rules are guaranteed not to overlap
+**Q4. A summary cannot both match the bank's statement line by line and match what the person remembers doing. Which did tally choose?**
+- a) The bank's statement, because that is the authoritative record
+- b) **What the person remembers, because it is their own statement they are reading** ✓
+- c) Neither: it reports both dates side by side
+- d) The bank's, for dates, and the person's, for categories
 
-**Q6. Why is a transaction filed under the date it was made rather than posted?**
-- a) The posting date is often missing
-- b) **A card payment on the 31st can post on the 2nd, and the summary should match what the person remembers doing** ✓
-- c) It is what the bank's statement does
-- d) Posting dates are unreliable across banks
+### Rationale — which way it went, and why
 
-**Q7. Why does recurring detection need the amount to match, not just the merchant?**
-- a) Merchant names change between statements
-- b) **Merchant alone calls a supermarket recurring, which is true and useless** ✓
-- c) Amounts are easier to compare than text
-- d) To avoid matching refunds
+**Q5. A transaction is made on the 31st of January and posted on the 2nd of February. Which month is it in?**
+- a) February, the month the bank processed it
+- b) **January, the month it was made** ✓
+- c) Both, split across the boundary
+- d) February, unless the summary for January has already been written
 
-**Q8. Why does rounding happen at the total rather than on each row?**
-- a) It is faster
-- b) Decimals cannot be rounded twice
-- c) **A hundred small transactions would accumulate a hundred small errors** ✓
-- d) The bank rounds that way
+**Q6. The same merchant is charged £11.99 in each of three months. Is it recurring?**
+- a) No: three months is not long enough to be sure
+- b) No: only a payment with a reference the bank marks as a standing order counts
+- c) **Yes: same merchant and same amount, in three months** ✓
+- d) Yes, and it would be recurring at three different amounts too
 
-### Change
+**Q7. A row's merchant matches both the utilities rule and the fuel rule. What happens?**
+- a) It is reported as ambiguous and the run stops
+- b) **Whichever rule is listed first wins** ✓
+- c) It goes to the uncategorised bucket, because the answer is unclear
+- d) It is counted under both, and the total is adjusted
 
-**Q9. Why does `drop_duplicates` treat transfers differently?**
-- a) Transfers are not real spending
-- b) **A transfer between your own accounts is two rows that look exactly like a duplicate** ✓
-- c) Transfers have no category
-- d) Banks export them twice by mistake
+**Q8. A merchant matches no rule at all. What happens?**
+- a) The row is dropped
+- b) The run stops and asks
+- c) **It is counted in a bucket of its own, which appears in the summary** ✓
+- d) It is guessed at from the amount
 
-**Q10. Why does `sign_convention` guess rather than ask?**
-- a) Asking is impossible in a command line tool
-- b) The guess is always right
-- c) **The tool is for one person's own statements, where the convention never changes** ✓
-- d) The bank does not say which way round it is
+### Change — what happened, and what it cost
 
-**Q11. Why does `COLUMNS` list "transaction date" before "date"?**
-- a) It is alphabetical
-- b) **A bank exporting both would otherwise give the posting date and shift every month-end transaction** ✓
-- c) "date" is a reserved word
-- d) The order does not matter; it is arbitrary
+**Q9. Transfers are exempted from duplicate removal. What would go wrong without that?**
+- a) Every transfer would be counted twice in the spending
+- b) The two legs would end up in different months
+- c) **One leg of each transfer would be dropped, and the money would look like it went somewhere it did not** ✓
+- d) Transfers would be categorised as spending
 
-### Extension
+**Q10. Rounding happens once, at the total, rather than on each row. What does that cost?**
+- a) Nothing: the two come to the same figure
+- b) **A total that does not add up line by line against a printed statement** ✓
+- c) Amounts under a penny are lost
+- d) The recurring detection stops matching on amount
 
-**Q12. To make a refund reduce the month the purchase was in, rather than the month the refund arrived, what has to be decided first?**
-- a) Which category the refund belongs to
-- b) Whether refunds should be positive or negative
-- c) **What happens when the refund arrives after that month's summary has already been read** ✓
-- d) Whether to store the original purchase's date
+**Q11. A refund arrives in February for something bought in January. What do the two months show?**
+- a) January shows nothing, February shows nothing: they cancel
+- b) January shows the purchase reduced by the refund
+- c) **January shows the purchase, February shows the money coming back** ✓
+- d) Both show the purchase, and the refund is listed separately
+
+### Extension — what a further change would need
+
+**Q12. You want a refund to reduce the month the purchase was in. What is the obstacle?**
+- a) The refund row does not record which purchase it is for
+- b) Refunds are recognised by sign, so income would be reduced too
+- c) **A summary for that month may already have been read, and there is no answer for what happens then** ✓
+- d) The two months could be in different files
 
 ## Where it does not match scribe, and by how much
 

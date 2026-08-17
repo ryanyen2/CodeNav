@@ -10,92 +10,92 @@ export const QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "What is scribe for?",
+            "question": "Somebody moves the character normalising so it runs first instead of last. What breaks?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Pulling the text layer out of a PDF file"
+                    "text": "Nothing: normalising early or late comes to the same thing"
                 },
                 {
                     "letter": "b",
-                    "text": "Turning text already extracted from a PDF into readable Markdown"
+                    "text": "The footnote markers are normalised away before they can be found"
                 },
                 {
                     "letter": "c",
-                    "text": "Converting a PDF to HTML and then to Markdown"
+                    "text": "Rules that match on the characters as they came out of the PDF stop matching"
                 },
                 {
                     "letter": "d",
-                    "text": "Tidying up Markdown that somebody wrote by hand"
+                    "text": "The output keeps its ligatures, because normalising happens before the text exists"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Purpose",
-            "question": "What does scribe expect to be handed?",
+            "question": "Somebody makes heading detection stricter so fewer things become headings. Which other rule is most likely to start behaving differently?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "A PDF file"
+                    "text": "Footnotes, because a note number looks like a heading number"
                 },
                 {
                     "letter": "b",
-                    "text": "One text file per page"
+                    "text": "Character normalising, because heading text is normalised separately"
                 },
                 {
                     "letter": "c",
-                    "text": "One text file, with a form feed between pages"
+                    "text": "Paragraph reflow, because what is no longer a heading joins the prose around it"
                 },
                 {
                     "letter": "d",
-                    "text": "Text with each page's number on a line of its own"
+                    "text": "None: heading detection is decided line by line and touches nothing else"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Purpose",
-            "question": "Which of these is out of scope for scribe?",
+            "question": "Which piece of information does scribe have while removing page furniture, and no longer have afterwards?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Dropping a header repeated on every page"
+                    "text": "Which words were hyphenated across a line break"
                 },
                 {
                     "letter": "b",
-                    "text": "Joining a word split across a line break"
+                    "text": "The order the pages came in"
                 },
                 {
                     "letter": "c",
-                    "text": "Working out where a table's columns were"
+                    "text": "Where each line sat on its page"
                 },
                 {
                     "letter": "d",
-                    "text": "Gathering footnotes at the end of the document"
+                    "text": "Which characters were ligatures"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Purpose",
-            "question": "Who is the output written for?",
+            "question": "The output cannot be both faithful to the page and easy to search. Which did scribe choose?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "An archive that has to preserve the original exactly"
+                    "text": "Easy to search, even where that loses how the page looked"
                 },
                 {
                     "letter": "b",
-                    "text": "Somebody who will search it, diff it and paste it elsewhere"
+                    "text": "Faithful to the page, even where that makes it awkward to search"
                 },
                 {
                     "letter": "c",
-                    "text": "A typesetter laying the document out again"
+                    "text": "Whatever the input already was, unchanged"
                 },
                 {
                     "letter": "d",
-                    "text": "A screen reader"
+                    "text": "Faithful for prose and searchable for everything else"
                 }
             ]
         },
@@ -240,46 +240,46 @@ export const QUIZZES = Object.freeze({
         {
             "n": 11,
             "band": "Change",
-            "question": "A document of four lines has a repeated first line. Is it removed?",
+            "question": "Two guards stop furniture removal from firing on a short document. One is a minimum number of pages. What is the other?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Yes, repetition is repetition"
+                    "text": "A minimum number of words in the repeated line"
                 },
                 {
                     "letter": "b",
-                    "text": "No: the page is too short for anything to count as being in the margin"
+                    "text": "A minimum number of lines on the page, so that a margin means anything"
                 },
                 {
                     "letter": "c",
-                    "text": "Yes, but only if it is also on the last page"
+                    "text": "A maximum number of pages, above which it is assumed to be a book"
                 },
                 {
                     "letter": "d",
-                    "text": "No, because a four-line document has only one page"
+                    "text": "There is only one guard"
                 }
             ]
         },
         {
             "n": 12,
             "band": "Extension",
-            "question": "To keep the running header on a one-off document while still dropping it from a report, what has to be settled first?",
+            "question": "You want the running header kept on a one-off letter but still dropped from a report. What is the obstacle?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Whether the header becomes a heading or ordinary text"
+                    "text": "By the time anything could tell the two apart, the header has already been removed"
                 },
                 {
                     "letter": "b",
-                    "text": "How to keep the page numbers while dropping the header"
+                    "text": "Nothing scribe can see distinguishes them: it is handed text and no more"
                 },
                 {
                     "letter": "c",
-                    "text": "What tells the two kinds of document apart, given that scribe sees only text"
+                    "text": "Markdown has no way to mark a line as a page header"
                 },
                 {
                     "letter": "d",
-                    "text": "Where the setting that turns it off should live"
+                    "text": "The page numbers would have to be kept along with it"
                 }
             ]
         }
@@ -288,276 +288,276 @@ export const QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "What is tally for?",
+            "question": "Somebody moves the sign-flipping step so it runs last instead of first. What breaks?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Connecting to a bank and downloading transactions"
+                    "text": "Nothing: flipping signs is the same operation whenever it happens"
                 },
                 {
                     "letter": "b",
-                    "text": "Turning a CSV of transactions into a summary of what was spent, by month and category"
+                    "text": "The totals come out positive instead of negative"
                 },
                 {
                     "letter": "c",
-                    "text": "Checking a statement for fraud"
+                    "text": "Every rule that reads an amount has already read it the wrong way round"
                 },
                 {
                     "letter": "d",
-                    "text": "Preparing a tax return"
+                    "text": "Refunds stop netting, because a refund is recognised by its sign"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Purpose",
-            "question": "What does tally assume about its input?",
+            "question": "Somebody makes the transfer rule stricter, so fewer rows count as transfers. Which other rule starts behaving differently?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It comes from one particular bank"
+                    "text": "Categorisation, because transfers have no category"
                 },
                 {
                     "letter": "b",
-                    "text": "It is already sorted by date"
+                    "text": "Rounding, because the totals change"
                 },
                 {
                     "letter": "c",
-                    "text": "It is a CSV whose columns may be named any of several ways"
+                    "text": "Duplicate removal, because transfers are the rows it is told to leave alone"
                 },
                 {
                     "letter": "d",
-                    "text": "It has been checked for errors first"
+                    "text": "None: the two are applied to different columns"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Purpose",
-            "question": "Which of these is out of scope?",
+            "question": "Which piece of information does tally read from the bank's file and then never use again?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Deciding which month a transaction belongs to"
+                    "text": "The amount"
                 },
                 {
                     "letter": "b",
-                    "text": "Spotting a payment that comes round every month"
+                    "text": "The posting date, once a transaction date has been found"
                 },
                 {
                     "letter": "c",
-                    "text": "Leaving out money moved between your own accounts"
+                    "text": "The merchant description"
                 },
                 {
                     "letter": "d",
-                    "text": "Telling you whether you can afford something"
+                    "text": "The account name"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Purpose",
-            "question": "Who is the output for?",
+            "question": "A summary cannot both match the bank's statement line by line and match what the person remembers doing. Which did tally choose?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "An accountant reconciling against the bank"
+                    "text": "The bank's statement, because that is the authoritative record"
                 },
                 {
                     "letter": "b",
-                    "text": "The person whose statement it is, asking what they spent"
+                    "text": "What the person remembers, because it is their own statement they are reading"
                 },
                 {
                     "letter": "c",
-                    "text": "A budgeting app that will import it"
+                    "text": "Neither: it reports both dates side by side"
                 },
                 {
                     "letter": "d",
-                    "text": "A tax authority"
+                    "text": "The bank's, for dates, and the person's, for categories"
                 }
             ]
         },
         {
             "n": 5,
             "band": "Rationale",
-            "question": "Why does the first matching category rule win, rather than requiring exactly one?",
+            "question": "A transaction is made on the 31st of January and posted on the 2nd of February. Which month is it in?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It is faster"
+                    "text": "February, the month the bank processed it"
                 },
                 {
                     "letter": "b",
-                    "text": "Banks guarantee only one will match"
+                    "text": "January, the month it was made"
                 },
                 {
                     "letter": "c",
-                    "text": "Requiring one would stop the whole summary over a single ambiguous merchant"
+                    "text": "Both, split across the boundary"
                 },
                 {
                     "letter": "d",
-                    "text": "The rules are guaranteed not to overlap"
+                    "text": "February, unless the summary for January has already been written"
                 }
             ]
         },
         {
             "n": 6,
             "band": "Rationale",
-            "question": "Why is a transaction filed under the date it was made rather than posted?",
+            "question": "The same merchant is charged £11.99 in each of three months. Is it recurring?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The posting date is often missing"
+                    "text": "No: three months is not long enough to be sure"
                 },
                 {
                     "letter": "b",
-                    "text": "A card payment on the 31st can post on the 2nd, and the summary should match what the person remembers doing"
+                    "text": "No: only a payment with a reference the bank marks as a standing order counts"
                 },
                 {
                     "letter": "c",
-                    "text": "It is what the bank's statement does"
+                    "text": "Yes: same merchant and same amount, in three months"
                 },
                 {
                     "letter": "d",
-                    "text": "Posting dates are unreliable across banks"
+                    "text": "Yes, and it would be recurring at three different amounts too"
                 }
             ]
         },
         {
             "n": 7,
             "band": "Rationale",
-            "question": "Why does recurring detection need the amount to match, not just the merchant?",
+            "question": "A row's merchant matches both the utilities rule and the fuel rule. What happens?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Merchant names change between statements"
+                    "text": "It is reported as ambiguous and the run stops"
                 },
                 {
                     "letter": "b",
-                    "text": "Merchant alone calls a supermarket recurring, which is true and useless"
+                    "text": "Whichever rule is listed first wins"
                 },
                 {
                     "letter": "c",
-                    "text": "Amounts are easier to compare than text"
+                    "text": "It goes to the uncategorised bucket, because the answer is unclear"
                 },
                 {
                     "letter": "d",
-                    "text": "To avoid matching refunds"
+                    "text": "It is counted under both, and the total is adjusted"
                 }
             ]
         },
         {
             "n": 8,
             "band": "Rationale",
-            "question": "Why does rounding happen at the total rather than on each row?",
+            "question": "A merchant matches no rule at all. What happens?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It is faster"
+                    "text": "The row is dropped"
                 },
                 {
                     "letter": "b",
-                    "text": "Decimals cannot be rounded twice"
+                    "text": "The run stops and asks"
                 },
                 {
                     "letter": "c",
-                    "text": "A hundred small transactions would accumulate a hundred small errors"
+                    "text": "It is counted in a bucket of its own, which appears in the summary"
                 },
                 {
                     "letter": "d",
-                    "text": "The bank rounds that way"
+                    "text": "It is guessed at from the amount"
                 }
             ]
         },
         {
             "n": 9,
             "band": "Change",
-            "question": "Why does `drop_duplicates` treat transfers differently?",
+            "question": "Transfers are exempted from duplicate removal. What would go wrong without that?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Transfers are not real spending"
+                    "text": "Every transfer would be counted twice in the spending"
                 },
                 {
                     "letter": "b",
-                    "text": "A transfer between your own accounts is two rows that look exactly like a duplicate"
+                    "text": "The two legs would end up in different months"
                 },
                 {
                     "letter": "c",
-                    "text": "Transfers have no category"
+                    "text": "One leg of each transfer would be dropped, and the money would look like it went somewhere it did not"
                 },
                 {
                     "letter": "d",
-                    "text": "Banks export them twice by mistake"
+                    "text": "Transfers would be categorised as spending"
                 }
             ]
         },
         {
             "n": 10,
             "band": "Change",
-            "question": "Why does `sign_convention` guess rather than ask?",
+            "question": "Rounding happens once, at the total, rather than on each row. What does that cost?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Asking is impossible in a command line tool"
+                    "text": "Nothing: the two come to the same figure"
                 },
                 {
                     "letter": "b",
-                    "text": "The guess is always right"
+                    "text": "A total that does not add up line by line against a printed statement"
                 },
                 {
                     "letter": "c",
-                    "text": "The tool is for one person's own statements, where the convention never changes"
+                    "text": "Amounts under a penny are lost"
                 },
                 {
                     "letter": "d",
-                    "text": "The bank does not say which way round it is"
+                    "text": "The recurring detection stops matching on amount"
                 }
             ]
         },
         {
             "n": 11,
             "band": "Change",
-            "question": "Why does `COLUMNS` list \"transaction date\" before \"date\"?",
+            "question": "A refund arrives in February for something bought in January. What do the two months show?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It is alphabetical"
+                    "text": "January shows nothing, February shows nothing: they cancel"
                 },
                 {
                     "letter": "b",
-                    "text": "A bank exporting both would otherwise give the posting date and shift every month-end transaction"
+                    "text": "January shows the purchase reduced by the refund"
                 },
                 {
                     "letter": "c",
-                    "text": "\"date\" is a reserved word"
+                    "text": "January shows the purchase, February shows the money coming back"
                 },
                 {
                     "letter": "d",
-                    "text": "The order does not matter; it is arbitrary"
+                    "text": "Both show the purchase, and the refund is listed separately"
                 }
             ]
         },
         {
             "n": 12,
             "band": "Extension",
-            "question": "To make a refund reduce the month the purchase was in, rather than the month the refund arrived, what has to be decided first?",
+            "question": "You want a refund to reduce the month the purchase was in. What is the obstacle?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Which category the refund belongs to"
+                    "text": "The refund row does not record which purchase it is for"
                 },
                 {
                     "letter": "b",
-                    "text": "Whether refunds should be positive or negative"
+                    "text": "Refunds are recognised by sign, so income would be reduced too"
                 },
                 {
                     "letter": "c",
-                    "text": "What happens when the refund arrives after that month's summary has already been read"
+                    "text": "A summary for that month may already have been read, and there is no answer for what happens then"
                 },
                 {
                     "letter": "d",
-                    "text": "Whether to store the original purchase's date"
+                    "text": "The two months could be in different files"
                 }
             ]
         }
