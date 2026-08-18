@@ -2,7 +2,7 @@
   "name": "codoc-study-logger",
   "displayName": "codoc study logger",
   "description": "Records which files a study participant opens, looks at, and edits. Runs in both conditions.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "codoc",
   "license": "MIT",
   "engines": {
@@ -53,6 +53,16 @@
           ],
           "default": "",
           "description": "Which way round this participant goes. Set during setup."
+        },
+        "codocStudyLogger.snapshots": {
+          "type": "boolean",
+          "default": true,
+          "description": "Record the project every few seconds, so the session can be replayed. On by default: this used to be a script somebody had to remember to start."
+        },
+        "codocStudyLogger.snapshotEverySeconds": {
+          "type": "number",
+          "default": 20,
+          "description": "How often to record the project, in seconds."
         }
       }
     },

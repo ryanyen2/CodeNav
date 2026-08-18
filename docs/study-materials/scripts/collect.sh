@@ -51,9 +51,20 @@ if [ -d "$WORK/session-logs" ]; then
   # token holds the participant's `mirror` device slot. The rules let a slot
   # holder read `secrets`, so the token is a second way to reach the two study
   # keys that api-key and .env are already excluded to keep out of this zip.
+  #
+  # The snapshots are taken per participant, into their own folder, so this takes
+  # THIS participant's and leaves anybody else's where they are. snapshot.index is
+  # a git index the recorder keeps for itself, and the lock is a pid; neither is
+  # data.
   rsync -a --exclude 'interaction-*.jsonl' --exclude '*.mirror.json' \
-           --exclude 'mirror-identity.json' \
+           --exclude 'mirror-identity.json' --exclude 'snapshots/*' \
            "$WORK/session-logs" "$DEST/" 2>/dev/null && echo "  session logs"
+  if [ -d "$WORK/session-logs/snapshots/$CODE" ]; then
+    mkdir -p "$DEST/session-logs/snapshots"
+    rsync -a --exclude 'snapshot.index' --exclude 'snapshot.lock' \
+             "$WORK/session-logs/snapshots/$CODE" \
+             "$DEST/session-logs/snapshots/" 2>/dev/null
+  fi
   n=0; skipped=0
   for f in "$WORK/session-logs"/interaction-*.jsonl; do
     [ -f "$f" ] || continue
@@ -69,6 +80,16 @@ if [ -d "$WORK/session-logs" ]; then
   echo "  interaction logs: $n"
   [ "$skipped" != "0" ] && echo "    ($skipped log(s) from other projects left on your machine)"
   [ "$n" = "0" ] && echo "    WARNING: none found. Tell the experimenter before you close the call."
+fi
+
+# Counted outside the block above on purpose: a session where the logger never
+# ran at all has no session-logs folder, and that is exactly the session this
+# needs to speak up about.
+snaps=$(find "$DEST/session-logs/snapshots" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')
+echo "  project snapshots: ${snaps:-0} workspace(s)"
+if [ "${snaps:-0}" = "0" ]; then
+  echo "    WARNING: the session was not being recorded, so it cannot be replayed."
+  echo "    Tell the experimenter before you close the call."
 fi
 
 # The transcripts. Each workspace runs the assistant under its own config

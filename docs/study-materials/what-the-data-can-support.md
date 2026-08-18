@@ -125,7 +125,10 @@ accept events only exist in the ledger.
    design is written against the abandoned RQ1 and a codebase that is no longer
    used. It needs restating against RQ1-understanding and RQ2-authored-modification
    before participant 1, or the study is exploratory and should say so.
-2. **The session snapshots did not run on the pilot** (`session-log.sh` was not
-   started), so no 20-second history exists and "what kind of edits people make to
-   the description" has no data for that session. The checker reports it as
-   MISSING; it needs to be started, or the measure dropped from the plan.
+2. **The session snapshots did not run on the pilot** (`session-log.sh` had to be
+   started by hand and was not), so no 20-second history exists and "what kind of
+   edits people make to the description" has no data for that session. FIXED for
+   every session from here: the logger takes the snapshots itself
+   (`logger/snapshot.js`), in both conditions, with nobody starting anything. The
+   pilot's own gap is not recoverable — that session has no replay, and its entry
+   in the plan stays MISSING.

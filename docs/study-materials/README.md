@@ -69,9 +69,11 @@ that files a machine under a code. Only that part, because the rest takes minute
 and needs the network. It is the step that decides whether a session records
 anything at all, so it is the one worth a test.
 
-`scripts/session-log.sh` saves a copy of the project every 20 seconds during a
-session, so it can be replayed afterwards. It runs on the participant's machine,
-because that is where the files are, so it ships in the bundle.
+`scripts/session-log.sh` is a fallback, and is not part of a normal session. The
+logger extension saves a copy of the project every 20 seconds by itself
+(`logger/snapshot.js`), in both conditions, from the moment VS Code opens; this
+script does the same thing by hand if the logger reports that snapshots are off
+or failing. It ships in the bundle for that case.
 
 `scripts/collect.sh` packs a finished session into one zip for the participant to
 send back. Also on their machine, also in the bundle.

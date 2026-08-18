@@ -180,6 +180,12 @@ assert.ok(!blob.includes('WALKTHROUGH_QUESTION_TEXT'), 'the question behind an a
 assert.ok(rows.some(r => r.ev === 'save'), 'saves are recorded');
 assert.ok(rows.some(r => r.ev === 'window' && r.focused === false), 'losing focus is recorded');
 
+// The snapshot recorder starts itself. Here the workspace is a stub path that is
+// not on disk, so it declines quietly — a logger must never fail an activation.
+// What it does on a real workspace is test-snapshot.js.
+assert.strictEqual(ext.activation.snapshots, null,
+    'a workspace that is not on disk is declined, not thrown at');
+
 // The mirror is an ES module and this file is loaded as CommonJS, which is what
 // the extension host does. Loading it the wrong way fails quietly and the session
 // looks healthy while nothing is sent, so assert that it really loads.

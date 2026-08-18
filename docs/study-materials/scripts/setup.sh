@@ -336,6 +336,18 @@ if [ "$CHECK_ONLY" = 1 ]; then
     log="$HOME/codoc-study/session-logs/interaction-$w.jsonl"
     if [ -s "$log" ]; then
       ok "$w: the logger has run there"
+      # And it takes the 20-second snapshots itself, so the session can be
+      # replayed. That recorder used to be a script somebody started by hand, and
+      # on the first pilot nobody did, in either condition — the only way to see
+      # it was to go looking, hours later, at collection. The proof is a ref it
+      # writes on its first pass, so the moment the logger has run at all, this
+      # says whether the replay is being recorded too.
+      if git -C "$WORK/$w" for-each-ref --format='%(refname)' refs/study 2>/dev/null | grep -q .; then
+        ok "$w: it is being snapshotted, so the session can be replayed"
+      else
+        bad "$w: nothing is snapshotting it, so that session could not be replayed"
+        FAILED=1
+      fi
     else
       note "$w has not been opened in VS Code yet. Nothing to do: you open it"
       echo  "          together on the day. When you do, answer YES to \"Do you trust"

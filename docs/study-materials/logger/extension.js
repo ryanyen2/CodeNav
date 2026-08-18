@@ -35,11 +35,14 @@
 //            condition produces the file, so this never appears in the baseline.
 //   window   the whole window gained or lost focus, so time away is not counted
 //            as time spent looking.
+//   snapshot the 20-second recorder started (see snapshot.js). Written once, as
+//            proof it is running, because the way this used to fail was silently.
 const vscode = require('vscode');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { surfaceOf, relativeTo } = require('./classify');
+const { Snapshotter, safeLabel } = require('./snapshot');
 
 let out = null;          // absolute path of the log file
 let participant = '';
@@ -143,9 +146,16 @@ function activate(context) {
         out = path.join(dir, `interaction-${workspaceName}.jsonl`);
     }
     channel.appendLine(`logging to ${out}`);
-    write('session', { start: true, version: '1.0.0' });
+    write('session', { start: true, version: '1.1.0' });
 
     const sub = context.subscriptions;
+
+    // The 20-second snapshots. This used to be a script somebody had to start by
+    // hand in its own terminal, at the start of each condition, and on the first
+    // pilot nobody did — the session looked completely normal and there is no
+    // replay of it. Nothing about it needed a person: the extension is already
+    // running, in both conditions, and already knows the code and the workspace.
+    startSnapshots(cfg, sub);
 
     // Send a copy upward while the session runs, if a code was configured. The
     // local file is the source of truth and does not depend on any of this
@@ -255,6 +265,15 @@ function activate(context) {
         channel.appendLine(`log file: ${out}`);
         channel.appendLine('Recorded: file paths, line numbers on screen, how long,');
         channel.appendLine('characters added and removed. Never file or prompt text.');
+        const st = snapshots && snapshots.status();
+        if (!st) {
+            channel.appendLine('Snapshots: off.');
+        } else if (st.failed) {
+            channel.appendLine(`Snapshots: FAILING (${st.failed}). Tell the experimenter.`);
+        } else {
+            channel.appendLine(`Snapshots: ${st.snapshots} taken, `
+                + `${st.copies} copies of the description, into ${st.dir}`);
+        }
         channel.show();
     }));
 
@@ -262,7 +281,36 @@ function activate(context) {
 }
 
 let mirror = null;
-const activation = { mirrorReady: null };
+let snapshots = null;
+const activation = { mirrorReady: null, snapshots: null };
+
+/**
+ * Record the workspace every 20 seconds, for the whole session.
+ *
+ * It is deliberately started from here rather than asked of anybody. See
+ * snapshot.js for what a snapshot is and why it never touches their branch.
+ */
+function startSnapshots(cfg, sub) {
+    if (cfg.get('snapshots') === false) { channel.appendLine('snapshots are off'); return null; }
+    const every = Number(cfg.get('snapshotEverySeconds')) || 20;
+    snapshots = new Snapshotter({
+        repo: rootDir,
+        // Both parts are folded through safeLabel: a participant code arrives from
+        // a settings file, and a path component is not the place to find out it
+        // had a slash in it.
+        dir: path.join(os.homedir(), 'codoc-study', 'session-logs', 'snapshots',
+                       safeLabel(participant), safeLabel(workspaceName)),
+        label: `${safeLabel(participant)}-${safeLabel(workspaceName)}`,
+        everyMs: Math.max(5, every) * 1000,
+        log: (m) => channel.appendLine(m),
+        onEvent: (e) => write(e.ev, e),
+    });
+    const started = snapshots.start();
+    if (!started) { snapshots = null; }
+    activation.snapshots = snapshots;
+    sub.push({ dispose: () => { if (snapshots) snapshots.stop(); } });
+    return snapshots;
+}
 
 const STUDY_PROJECTS = ['scribe', 'tally'];
 
@@ -351,6 +399,7 @@ async function startMirror(cfg, sub) {
 
 function deactivate() {
     closeCurrent(Date.now());
+    if (snapshots) { snapshots.stop(); snapshots = null; }
     write('session', { start: false });
 }
 

@@ -20,10 +20,11 @@ The session runs for about 105 minutes on a video call. We will ask you to think
 out loud while you work, and we will ask you questions about the code afterwards.
 
 We record the call, your screen, and your voice. We also save the files you
-change and the conversation you have with the agent. During the session we will
-ask you to run two short scripts from the bundle, one that saves your work every
-20 seconds and one at the end that packs it all into a single zip for you to send
-us. You can open both and read them first if you want to.
+change and the conversation you have with the agent. While you work, the study
+extension saves a copy of the project every 20 seconds, so we can see how the
+work came together rather than only how it ended. At the end we will ask you to
+run one short script from the bundle, which packs everything into a single zip
+for you to send us. You can open it and read it first if you want to.
 
 We label everything with a code rather than your name, and we remove your name
 before anyone analyses the data. You can stop at any time, and we will delete

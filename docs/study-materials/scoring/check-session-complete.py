@@ -115,7 +115,8 @@ def main() -> int:
     transcripts = find(root, "*.jsonl")
     transcripts = [p for p in transcripts if "interaction" not in p.name]
     projects = [p.parent for p in find(root, "pyproject.toml")]
-    logdirs = [p for p in root.rglob("session.meta") if p.is_file()]
+    logdirs = [p for p in root.rglob("snapshot.meta") if p.is_file()]
+    logdirs += [p for p in root.rglob("session.meta") if p.is_file()]
 
     print(f"\ninteraction log:  {len(events)} events from {len(inter)} file(s)")
     print(f"transcripts:      {len(transcripts)} file(s)")
@@ -139,14 +140,21 @@ def main() -> int:
                 "no edit events. The logger extension was not installed or not running.")
 
     # Snapshots of the description over time, wherever the recorder put them.
+    # The recorder only copies a file when it CHANGED, so no copies means either
+    # it was not running or they never touched the description — and those are
+    # opposite answers. `logdirs` says which, so say which.
     doc_snaps = [p for p in root.rglob("*")
                  if p.name in DOC_FILES and "session-logs" in p.parts]
     if doc_edits or doc_snaps:
         rep.ok("what kind of edits people make to the description",
                f"{len(doc_edits)} edits to the description, {len(doc_snaps)} snapshots of it")
+    elif logdirs:
+        rep.ok("what kind of edits people make to the description",
+               "recorded throughout, and they made none — which is itself the answer")
     else:
         rep.gap("what kind of edits people make to the description",
-                "no edits to tree.codoc or CLAUDE.md, and no snapshots of either")
+                "nothing recorded the session, so this cannot be told from "
+                "a participant who changed nothing")
 
     if transcripts:
         rep.ok("what the agent wrote back, and decision survival",
@@ -371,12 +379,20 @@ def main() -> int:
     # ── replayability ────────────────────────────────────────────────────────
     rep.rows.clear()
     for proj in projects:
-        n = len(git(proj, "log", "--oneline", "--all").splitlines())
-        if n > 13:
-            rep.ok(f"{proj.name} can be replayed", f"{n} commits including the session snapshots")
+        # The recorder writes its commits to refs/study/<label> and leaves the
+        # participant's own branch alone, so ask for the ref by name. (A session
+        # recorded by the old hand-started script left refs/heads/study/<label>
+        # instead; both are accepted, and both replay the same way.)
+        refs = [r for r in git(proj, "for-each-ref", "--format=%(refname)",
+                               "refs/study", "refs/heads/study").splitlines() if r.strip()]
+        n = sum(len(git(proj, "log", "--oneline", r).splitlines()) for r in refs)
+        if refs and n > 1:
+            rep.ok(f"{proj.name} can be replayed",
+                   f"{n} snapshots on {', '.join(refs)}")
         else:
             rep.gap(f"{proj.name} can be replayed",
-                    f"only {n} commits, so session-log.sh was not running for it")
+                    "no snapshot ref, so nothing recorded this workspace. The logger "
+                    "takes them itself now, so this means it was not running here at all.")
     rep.show("Replaying the session")
 
     print("\nNot visible from here, and still your job:")

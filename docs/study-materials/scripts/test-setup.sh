@@ -322,6 +322,12 @@ echo 'sk-ant-averyrealkey' > "$CHOME/codoc-study/scribe/.claude-study/api-key"
 printf 'CODOC_PROVIDER=openai\nOPENAI_API_KEY=sk-proj-averyrealkey\n' > "$CHOME/codoc-study/scribe/.env"
 echo '{"ev":"prompt"}' > "$CHOME/codoc-study/session-logs/interaction-scribe.jsonl"
 echo 'name = "scribe"' > "$CHOME/codoc-study/scribe/pyproject.toml"
+# The snapshots the logger takes, filed under the participant they belong to,
+# next to somebody else's on the same machine.
+mkdir -p "$CHOME/codoc-study/session-logs/snapshots/p-collecttest0/scribe/codoc-states/100000" \
+         "$CHOME/codoc-study/session-logs/snapshots/p-someone-else/tally"
+echo '# guide' > "$CHOME/codoc-study/session-logs/snapshots/p-collecttest0/scribe/codoc-states/100000/CLAUDE.md"
+echo 'not mine' > "$CHOME/codoc-study/session-logs/snapshots/p-someone-else/tally/note.txt"
 
 out="$(HOME="$CHOME" bash "$COL" p-collecttest0 2>&1)"
 ZIP="$CHOME/Desktop/codoc-study-p-collecttest0.zip"
@@ -343,6 +349,18 @@ if [ -s "$ZIP" ]; then
     *"transcripts: 0"*) bad "it reports 0 transcripts on a session that has them" ;;
     *) ok "and it counts them where they actually are" ;;
   esac
+  # The replay, and only this participant's. A machine can hold more than one
+  # session's snapshots, and the other one is not ours to mail.
+  if [ -f "$CHOME/unzipped/codoc-study-p-collecttest0/session-logs/snapshots/p-collecttest0/scribe/codoc-states/100000/CLAUDE.md" ]; then
+    ok "the snapshots come back, so the session can be replayed"
+  else
+    bad "the snapshots were left behind, so there is no replay"
+  fi
+  if grep -rq 'not mine' "$CHOME/unzipped" 2>/dev/null; then
+    bad "it swept up another participant's snapshots"
+  else
+    ok "and nobody else's"
+  fi
 else
   bad "collect.sh wrote no archive"
 fi
@@ -357,6 +375,11 @@ else
     *) bad "it claimed success with no archive written" ;;
   esac
 fi
+# The last chance to notice, while the participant is still on the call.
+case "$out2" in
+  *"was not being recorded"*) ok "a session with no snapshots says so before the call ends" ;;
+  *) bad "a session that cannot be replayed is packed up without a word" ;;
+esac
 rm -rf "$CHOME" "$CHOME2"
 
 echo
@@ -646,6 +669,42 @@ else
   ok "and says it without the word the page tells them to report"
 fi
 rm -rf "$NT"
+
+
+
+echo
+echo "The recording nobody has to start"
+# The 20-second snapshots used to be a script started by hand, and on the first
+# pilot they were not started in either condition — a session that looked normal
+# all the way through and has no replay. The logger takes them itself now, so the
+# check for them sits next to the check that anything is being recorded at all,
+# and fires at setup rather than at collection.
+SN="$(mktemp -d)"
+mkdir -p "$SN/codoc-study/scribe/.vscode" "$SN/codoc-study/tally/.vscode" \
+         "$SN/codoc-study/session-logs"
+git -C "$SN/codoc-study/scribe" init -q -b main . 2>/dev/null
+echo x > "$SN/codoc-study/scribe/a.py"
+git -C "$SN/codoc-study/scribe" add a.py >/dev/null 2>&1
+git -C "$SN/codoc-study/scribe" -c user.email=a@b -c user.name=a commit -qm f >/dev/null 2>&1
+echo '{"ev":"session"}' > "$SN/codoc-study/session-logs/interaction-scribe.jsonl"
+
+out="$(HOME="$SN" bash "$SETUP" --check 2>&1)"
+if printf '%s' "$out" | grep -q 'nothing is snapshotting it'; then
+  ok "a workspace the logger has run in, with no snapshots, is reported"
+else
+  bad "a session that could not be replayed passes --check"
+fi
+
+# And once it is recording, it says so instead of complaining.
+T="$(git -C "$SN/codoc-study/scribe" rev-parse HEAD)"
+git -C "$SN/codoc-study/scribe" update-ref refs/study/p04-scribe "$T"
+out="$(HOME="$SN" bash "$SETUP" --check 2>&1)"
+if printf '%s' "$out" | grep -q 'it is being snapshotted'; then
+  ok "and a workspace that is being recorded passes"
+else
+  bad "a recorded workspace is still reported as not being snapshotted"
+fi
+rm -rf "$SN"
 
 if [ "$FAIL" = 0 ]; then printf '\033[32m%s passed\033[0m\n' "$PASS"; else printf '\033[31m%s failed, %s passed\033[0m\n' "$FAIL" "$PASS"; fi
 exit "$FAIL"

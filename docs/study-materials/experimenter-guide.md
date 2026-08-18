@@ -250,51 +250,38 @@ updated PATH. The setup script creates `~/codoc-study/codoc` for this reason.
 They then open the description with Cmd+Shift+P and the command "codoc: Open".
 They will want a second terminal for Claude Code and a third for running builds.
 
-Check four things before going on. The status bar says codoc is in sync, the
-description lists 15 features for scribe or 23 for tally, `codoc watch` has not
-printed an error, and **the snapshot recorder is running in its own terminal**
-(see below) — it printed the line that stops it and has not exited.
+Check three things before going on. The status bar says codoc is in sync, the
+description lists 15 features for scribe or 23 for tally, and `codoc watch` has
+not printed an error.
 
 ### Starting a condition without codoc
 
-They open the other folder and start Claude Code in a terminal. Nothing else
-runs beyond the snapshot recorder, which runs in both conditions. `CLAUDE.md`
-sits in the project root and Claude Code picks it up on its own.
-
-### The one step that is silent when it fails
-
-`./session-log.sh` is the only part of the setup that leaves no mark on the
-participant's screen when it was never started, and it is the source for "what
-kind of edits people make to the description". On the first pilot it was not
-running in either condition, and that was discovered at collection, hours after
-the only moment it could have been fixed. Start it with the condition, check the
-terminal is still alive at the halfway point, and stop it at the end.
+They open the other folder and start Claude Code in a terminal. Nothing else runs.
+`CLAUDE.md` sits in the project root and Claude Code picks it up on its own.
 
 ### Recording the session
 
-The recorder runs on their machine, because that is where the files are. Ask them
-to run this at the start of each condition, from the folder they unzipped, using
-the code you gave them:
+Nothing to start. The study logger extension records which files are on screen,
+for how long, and how much text changed, and every 20 seconds it records the
+whole project so the session can be replayed afterwards. It starts on its own
+when VS Code opens and runs in both conditions, which is the only reason
+navigation can be compared between them at all. It does not record the screen or
+the voice. You record those from the call.
 
-```
-./session-log.sh ~/codoc-study/scribe p04-codoc
-```
+This used to be a script somebody had to start by hand, in its own terminal, at
+the start of each condition. It was the only step that leaves no mark on the
+screen when it was skipped: the session runs normally and looks fine, and the gap
+turns up at collection, hours after the one moment it could have been fixed. On
+the first pilot nobody started it in either condition, so there is no replay of
+it. `scripts/session-log.sh` still exists as a fallback and is not part of the
+normal run.
 
-It saves a copy of the whole project every 20 seconds, so the session can be
-replayed afterwards. It prints the line that stops it, so have them keep that
-terminal open and stop it at the end of the condition. It does not record the
-screen or the voice. You record those from the call.
-
-Alongside it, the study logger extension records which files are on screen, for
-how long, and how much text changed. It starts on its own when VS Code opens and
-needs nothing from you. It runs in both conditions, which is the only reason
-navigation can be compared between them at all.
-
-Check it is alive before the task starts. Ask them to run
-"Study logger: show what is being recorded" from Cmd+Shift+P. It prints the file
-it is writing to. If that file does not exist or is empty after they have clicked
-around for a few seconds, stop and fix it, because five of the measures come from
-nowhere else. `analysis-plan.md` says which five.
+**One check, once per condition, before the task starts.** Ask them to run
+"Study logger: show what is being recorded" from Cmd+Shift+P. It prints the log
+file and how many snapshots it has taken. You want a log file that exists and a
+snapshot count above zero. If it says snapshots are off or failing, or the log is
+empty after they have clicked around for a few seconds, stop and fix it — five of
+the measures come from nowhere else, and `analysis-plan.md` says which five.
 
 ## Part 4. The shape of the session
 

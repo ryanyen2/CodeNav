@@ -50,6 +50,7 @@ run node "$MAT/logger/test-classify.js"
 run node "$MAT/logger/test-extension.js"
 run node "$MAT/logger/test-scope.js"
 run node "$MAT/logger/test-transcript.js"
+run node "$MAT/logger/test-snapshot.js"
 run node --test "$MAT/logger/test-composition.js"
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
     --allow-missing-repository --skip-license --no-dependencies --out "$OUT/" )
