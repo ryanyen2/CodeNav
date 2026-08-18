@@ -206,8 +206,12 @@ iframe {
    the page: it is the one control a participant must never be handed, and it
    should be obvious at a glance in a screen recording which kind of session
    is being watched. */
+/* One sticky dock holds the pilot bar and the footer, so they stack (bar on top
+   of nav) instead of overlapping — both were sticky bottom:0 before, and the
+   pilot bar's z-index painted it over Back/Continue. */
+.dock { position: sticky; bottom: 0; z-index: 2; }
+
 .pilot-bar {
-    position: sticky; bottom: 0; z-index: 2;
     display: flex; align-items: center; gap: 10px;
     padding: 8px 24px;
     border-top: 1px dashed #c9a227;
@@ -225,7 +229,6 @@ iframe {
 .pilot-bar select { flex: 1; max-width: 320px; }
 
 footer {
-    position: sticky; bottom: 0;
     display: flex; align-items: center; gap: 12px;
     padding: 16px 24px;
     border-top: 1px solid var(--line);

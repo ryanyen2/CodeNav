@@ -101,7 +101,14 @@ function parseSection(markdown, heading) {
         }
     }
     finish();
-    return questions;
+    // By number, not by position in STUDY.md. The instrument groups questions by
+    // band (Purpose, Rationale, …), so the source order is not monotonic in `n` —
+    // and the participant, who sees the numbers but not the bands, would read
+    // "1, 2, 4, 3, 5" as a broken page. `n` stays each question's stable identity
+    // (it keys scoring); only the reading order is normalised. Sorting here, in
+    // the single parser, keeps every consumer — the generated files, the live
+    // dashboard parse, the tests — in one order.
+    return questions.sort((x, y) => x.n - y.n);
 }
 
 function check(project, questions, opts = {}) {

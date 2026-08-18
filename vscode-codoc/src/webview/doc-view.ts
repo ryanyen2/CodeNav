@@ -27,6 +27,7 @@ import { deriveAgentPresences, type PresencePhase } from '../state/presence';
 import { PresenceLayer } from './presence-layer';
 import { CommandPalette } from './palette-view';
 import { createAskBar, type AskBarHandle } from './ask-bar';
+import { stepsByFid, type AskStep } from '../state/ask-model';
 import { createFindView, type FindViewHandle } from './find-view';
 import type { PaletteContext, PaletteItem } from './palette';
 import { serializeUiState, deserializeUiState, UiState } from './ui-state';
@@ -1312,6 +1313,11 @@ function renderTree(): HTMLElement {
     wrap.tabIndex = 0;
     wrap.addEventListener('scroll', onManualTreeScroll, { passive: true });
     wrap.addEventListener('wheel', onTreeWheel, { passive: true });
+    // Recomputed fresh from `payload.ask` on every render (not cached in applyAsk,
+    // which runs on a different reconcile step) — appendRow reads this same way it
+    // reads busyByFid/divergent/draftSet, as module state rather than a threaded
+    // parameter, since it recurses into children itself.
+    treeAskSteps = stepsByFid(payload.ask ?? null);
     if (payload.roots.length === 0) {
         wrap.append(el('div', 'empty', 'No features yet. Run `codoc init` to bootstrap the tree.'));
         return wrap;
@@ -1319,6 +1325,7 @@ function renderTree(): HTMLElement {
     for (const id of payload.roots) appendRow(wrap, id);
     return wrap;
 }
+let treeAskSteps: Map<string, AskStep> = new Map();
 
 /**
  * A proposed node, drawn as the node it will become rather than as a card about it.
@@ -1403,6 +1410,16 @@ function appendRow(parent: HTMLElement, id: string): void {
         disc.onclick = ev => { ev.stopPropagation(); toggle(id); };
     }
     row.append(disc);
+
+    // The same ordinal chip the doc heading wears for this stop (ask-decorations.ts),
+    // so the walkthrough's shape reads at the tree's higher-level, all-collapsed view
+    // too, not only when scrolled to the stop itself.
+    const askStep = treeAskSteps.get(id);
+    if (askStep) {
+        const chip = el('span', 'ask-tree-badge' + (askBar?.currentFid() === id ? ' here' : ''), askStep.label);
+        chip.title = 'On the current walkthrough — stop ' + askStep.label;
+        row.append(chip);
+    }
 
     const titleWrap = el('span', 'title', n.title || '(untitled)');
     // ONE badge, ONE state (feature-state.ts). A feature used to wear up to six markers
@@ -1500,7 +1517,6 @@ function renderDocHost(): HTMLElement {
             dismissedAskId = payload.ask?.id ?? '';
             askBar?.setWalkthrough(null);
             wholeEditor?.setAsk(null);
-            applyAskLayout(host);
             // Delete the shared file only when this viewer may — VS Code always; the
             // hub only for a hand-off collaborator (dispatch gates it too, this just
             // avoids a dead 403 and the overlay flickering back for a read-only viewer).
@@ -1589,7 +1605,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
     wholeEditor.setHistory(payload.history ?? {});   // W2 blame data
     wholeEditor.setDoc(payload.doc, payload.baselineId);
-    applyAsk(host);     // seed the /codoc:ask overlay, if one is up
+    applyAsk();         // seed the /codoc:ask overlay, if one is up
     applyGlance();      // seed pitch + glance state into the fresh editor
     applyBlame();       // seed the History stance into the fresh editor
     // Presence rides the doc surface — re-place the avatar as the surface scrolls (the agent's
@@ -1600,25 +1616,16 @@ function renderDocHost(): HTMLElement {
 }
 
 // ─── /codoc:ask walkthrough ───────────────────────────────────────────────────
-/** The bar only occupies space when there IS a walkthrough — `.doc-host` stays a
- *  plain single-child row otherwise, so nothing about the ordinary layout changes
- *  for readers who never ask anything. */
-function applyAskLayout(host?: HTMLElement | null): void {
-    const h = host ?? document.querySelector<HTMLElement>('.doc-host');
-    h?.classList.toggle('has-ask', !!payload.ask);
-}
-
 /** Push the current payload's walkthrough into the bar and the editor. Called on
  *  first render and on every reconcile, so an ask that lands while the reader is
  *  mid-edit simply appears, and `codoc_walkthrough_clear` makes it vanish. */
-function applyAsk(host?: HTMLElement | null): void {
+function applyAsk(): void {
     // A walkthrough the reader dismissed stays gone even though the file may not be
     // deleted yet (or, for a read-only hub viewer, at all) — until a genuinely NEW
     // question replaces it.
     const walk = (payload.ask && payload.ask.id !== dismissedAskId) ? payload.ask : null;
     askBar?.setWalkthrough(walk);
     wholeEditor?.setAsk(walk);
-    applyAskLayout(host);
     // Land on the first stop when a NEW walkthrough arrives — an answer nobody is
     // taken to the start of is a list of numbers.
     const first = askBar?.currentFid();

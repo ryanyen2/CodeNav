@@ -53,13 +53,13 @@ import {
     rebaseCaptured, settledPendingFids, type FeatureText,
 } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
-import { AskDecorations, ASK_UPDATED } from './ask-decorations';
+import { AskDecorations, ASK_UPDATED, featureQuoteBlocks, quoteRange } from './ask-decorations';
 import { FindDecorations, FIND_UPDATED, searchBlocks } from './find-decorations';
 import {
     DEFAULT_FIND_OPTIONS, findInBlocks, replacementFor, stepIndexFrom, wrapIndex,
     type FindMatch, type FindOptions, type FindState,
 } from '../find';
-import type { AskWalkthrough } from '../../state/ask-model';
+import type { AskStep, AskWalkthrough } from '../../state/ask-model';
 import { resetCommentDecorations } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
@@ -470,7 +470,6 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                         .map(s => s.featureId)
                         .filter((f): f is string => !!f),
                 ]),
-                onOpenCode: (file, symbol) => opts.onOpenBinding(file, symbol),
             }),
             // Last in the list so a find highlight paints over the layers beneath it:
             // when you searched for a word, that word is what you are looking at.
@@ -1562,12 +1561,86 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         const top = anchorTopInContent(composeRange.from);
         if (top != null) composer.style.top = `${Math.round(top)}px`;
     }
+
+    // ── /codoc:ask margin notes ───────────────────────────────────────────────
+    // The walkthrough's per-stop notes render as cards in the SAME right whitespace
+    // the comment cards use, anchored to each stop's quote (or its heading), so the
+    // note sits beside the sentence it is about — like a comment. Deliberately does
+    // NOT set `.has-comments`: a walkthrough is a reading order OVER the document and
+    // must not reflow it, so the cards hang in the existing whitespace rather than
+    // reserving a column that slides the prose left. Read-only (a reading path), so
+    // no edit/resolve — clicking a card just steps the walkthrough to it.
+    function clearAskCards(): void {
+        surface.querySelectorAll('.ce-ask-mcard').forEach(n => n.remove());
+    }
+    function buildAskCard(step: AskStep, here: boolean): HTMLElement {
+        const card = elc('div', 'ce-ask-mcard' + (here ? ' here' : ''));
+        card.contentEditable = 'false';
+        const head = elc('div', 'ce-ask-mcard-head');
+        head.append(elc('span', 'ce-ask-mcard-chip', step.label));
+        if (step.group) head.append(elc('span', 'ce-ask-mcard-group', step.group));
+        card.append(head);
+        if (step.note) card.append(elc('div', 'ce-ask-mcard-note', step.note));
+        if (step.file) {
+            const cite = document.createElement('button');
+            cite.type = 'button';
+            cite.className = 'ce-ask-mcard-cite';
+            const leaf = step.file.split('/').pop() || step.file;
+            cite.textContent = step.line ? `${leaf}:${step.line}` : leaf;
+            cite.title = step.symbol || step.file;
+            cite.addEventListener('mousedown', ev => {
+                ev.preventDefault(); ev.stopPropagation();
+                opts.onOpenBinding(step.file || '', step.symbol || '');
+            });
+            card.append(cite);
+        }
+        // Clicking the card steps the walkthrough to this stop (reveals + scrolls),
+        // the read-only counterpart of a comment card revealing its anchor.
+        card.addEventListener('mousedown', ev => {
+            if ((ev.target as HTMLElement).closest('button')) return;
+            ev.preventDefault();
+            currentAskFid = step.feature_id;
+            editor.view.dispatch(editor.state.tr.setMeta(ASK_UPDATED, true));
+            scrollToFeatureInternal(step.feature_id, true);
+        });
+        return card;
+    }
+    /** Lay out the ask cards: anchor each to its quote (else its heading), sort by
+     *  top, push down to de-overlap — the same stacking the comment margin uses. */
+    function renderAskMargin(): void {
+        clearAskCards();
+        const walk = currentAsk;
+        if (!walk) return;
+        const blocks = featureQuoteBlocks(editor.state.doc);
+        const items: { card: HTMLElement; top: number }[] = [];
+        for (const step of walk.steps) {
+            if (!step.note && !step.file) continue;   // nothing to say → no card
+            const heading = headingPosForFid(editor, step.feature_id);
+            if (heading == null) continue;            // feature not in this doc
+            const q = step.quote ? quoteRange(blocks.get(step.feature_id) ?? [], step.quote) : null;
+            const top = anchorTopInContent(q ? q.from : heading + 1);
+            if (top == null) continue;
+            items.push({ card: buildAskCard(step, step.feature_id === currentAskFid), top });
+        }
+        items.sort((a, b) => a.top - b.top);
+        let cursor = -Infinity;
+        for (const it of items) {
+            surface.appendChild(it.card);             // append first so offsetHeight is real
+            const top = Math.max(it.top, cursor);
+            it.card.style.top = `${Math.round(top)}px`;
+            cursor = top + it.card.offsetHeight + CMT_STACK_GAP;
+        }
+    }
+    /** Both margin layers re-lay-out together — a width or doc change moves the
+     *  anchors both read from. */
+    function reflowMargins(): void { renderCommentMargin(); renderAskMargin(); }
+
     // Coalesce reflows during a typing burst (one re-lay-out per frame, not per keystroke).
     let cmtReflowQueued = false;
     function scheduleCommentReflow(): void {
         if (cmtReflowQueued) return;
         cmtReflowQueued = true;
-        requestAnimationFrame(() => { cmtReflowQueued = false; positionComposerInMargin(); renderCommentMargin(); });
+        requestAnimationFrame(() => { cmtReflowQueued = false; positionComposerInMargin(); reflowMargins(); });
     }
 
     // Reposition / dismiss the bubble + composer as the surface scrolls or blurs.
@@ -1591,7 +1664,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         if (bubble.style.display !== 'none') updateBubble();
         // a width change reflows the prose → margin anchors moved; re-place the composer + cards.
         positionComposerInMargin();
-        renderCommentMargin();
+        reflowMargins();
     }
     window.addEventListener('resize', repositionFloatingSurfaces);
 
@@ -1732,7 +1805,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             }
             markSaving('');
             rebuildRail();
-            requestAnimationFrame(renderCommentMargin); // anchors moved → re-place margin cards
+            requestAnimationFrame(reflowMargins); // anchors moved → re-place margin cards (comment + ask)
         },
         setSuggestions: (list: Suggestion[]) => {
             currentSuggestions = list;  // agent code-ahead proposals (the host's sidecar)
@@ -1745,7 +1818,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setComments: (comments: CommentThread[]) => {
             currentComments = comments;
-            requestAnimationFrame(renderCommentMargin); // persistent margin cards follow the store
+            // A comment appearing/leaving toggles `.has-comments`, which shifts the
+            // prose and moves the ask anchors too — reflow both layers.
+            requestAnimationFrame(reflowMargins);
         },
         setHoverCards: (cards: HoverCardData | null) => {
             // Pure overlay data — no doc transaction; the handler reads it lazily on
@@ -1830,10 +1905,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // A new walkthrough starts at its first stop; a cleared one has none.
             currentAskFid = walk?.steps[0]?.feature_id ?? '';
             editor.view.dispatch(editor.state.tr.setMeta(ASK_UPDATED, true));
+            requestAnimationFrame(renderAskMargin); // place/clear the margin note cards
         },
         goToAskStep: (fid: string) => {
             currentAskFid = fid;
             editor.view.dispatch(editor.state.tr.setMeta(ASK_UPDATED, true));
+            requestAnimationFrame(renderAskMargin); // repaint the "here" card highlight
             if (!fid) return '';
             if (headingPosForFid(editor, fid) == null) return '';
             scrollToFeatureInternal(fid, true);

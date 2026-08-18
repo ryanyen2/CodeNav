@@ -36,11 +36,9 @@ export interface AskDecorationsOptions {
     getAsk: () => AskWalkthrough | null;
     /** The feature id of the step the reader is currently on ('' for none). */
     getCurrent: () => string;
-    /** Features whose prose is already carrying a diff — chip and note stay, the
+    /** Features whose prose is already carrying a diff — the chip stays, the
      *  quote wash is dropped so two highlights never overlap the same words. */
     getSuppressed: () => Set<string>;
-    /** Open the code a step cites. */
-    onOpenCode: (file: string, symbol: string) => void;
 }
 
 /** A textblock and where it starts. Char offset `i` of `paraDisplayText(node)`
@@ -83,35 +81,6 @@ export function quoteRange(blocks: Block[], quote: string): { from: number; to: 
     return null;
 }
 
-function noteWidget(step: AskStep, onOpenCode: AskDecorationsOptions['onOpenCode']): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'ce-ask-note';
-    row.contentEditable = 'false';
-    if (step.note) {
-        const text = document.createElement('span');
-        text.className = 'ce-ask-note-text';
-        text.textContent = step.note;
-        row.appendChild(text);
-    }
-    if (step.file) {
-        const cite = document.createElement('button');
-        cite.className = 'ce-ask-cite';
-        cite.type = 'button';
-        const leaf = step.file.split('/').pop() || step.file;
-        cite.textContent = step.line ? `${leaf}:${step.line}` : leaf;
-        cite.title = step.symbol || step.file;
-        cite.addEventListener('mousedown', ev => {
-            // mousedown, not click: the editor moves the selection on mouseup, and
-            // a jump that also stole the caret would lose the reader's place.
-            ev.preventDefault();
-            ev.stopPropagation();
-            onOpenCode(step.file || '', step.symbol || '');
-        });
-        row.appendChild(cite);
-    }
-    return row;
-}
-
 function groupWidget(label: string): HTMLElement {
     const el = document.createElement('div');
     el.className = 'ce-ask-group';
@@ -125,7 +94,6 @@ function build(
     walk: AskWalkthrough | null,
     current: string,
     suppressed: Set<string>,
-    onOpenCode: AskDecorationsOptions['onOpenCode'],
 ): DecorationSet {
     if (!walk) return DecorationSet.empty;
     const byFid = stepsByFid(walk);
@@ -149,14 +117,12 @@ function build(
         decos.push(Decoration.node(pos, pos + node.nodeSize,
                                    { class: cls, 'data-ask-label': step.label }));
 
-        if (step.note || step.file) {
-            // The key carries everything the widget renders, so a changed note
-            // produces a DIFFERENT widget rather than ProseMirror reusing the old
-            // DOM with stale text (the lesson glance-decorations records).
-            const key = `ask-n-${fid}:${step.label}:${step.note ?? ''}:${step.file ?? ''}:${step.line ?? ''}`;
-            decos.push(Decoration.widget(pos + node.nodeSize, () => noteWidget(step, onOpenCode),
-                                         { side: 1, key }));
-        }
+        // The note is NOT an inline widget any more. A widget here (between the
+        // heading and the description) inserted a line and pushed the prose down —
+        // a walkthrough that can stay up for a whole reading session should not
+        // reflow the document it is a reading order OVER. It renders instead as a
+        // card in the right whitespace, anchored to the quote, like a comment
+        // (whole-doc-editor.ts:renderAskMargin). Only the highlight stays inline.
 
         if (step.quote && !suppressed.has(fid)) {
             const range = quoteRange(blocks.get(fid) ?? [], step.quote);
@@ -177,7 +143,6 @@ export const AskDecorations = Extension.create<AskDecorationsOptions>({
             getAsk: () => null,
             getCurrent: () => '',
             getSuppressed: () => new Set<string>(),
-            onOpenCode: () => undefined,
         };
     },
 
@@ -189,7 +154,7 @@ export const AskDecorations = Extension.create<AskDecorationsOptions>({
                 state: {
                     init: (_c, state) => {
                         const o = opts();
-                        return build(state.doc, o.getAsk(), o.getCurrent(), o.getSuppressed(), o.onOpenCode);
+                        return build(state.doc, o.getAsk(), o.getCurrent(), o.getSuppressed());
                     },
                     apply: (tr, old, _o, newState) => {
                         // Text-keyed, like the other quote/word layers: the wash is
@@ -198,7 +163,7 @@ export const AskDecorations = Extension.create<AskDecorationsOptions>({
                         // leave the highlight behind on the old words.
                         if (tr.getMeta(ASK_UPDATED) || tr.docChanged) {
                             const o = opts();
-                            return build(newState.doc, o.getAsk(), o.getCurrent(), o.getSuppressed(), o.onOpenCode);
+                            return build(newState.doc, o.getAsk(), o.getCurrent(), o.getSuppressed());
                         }
                         return old.map(tr.mapping, tr.doc);
                     },

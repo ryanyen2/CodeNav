@@ -51,31 +51,6 @@
       "answer": "b"
     },
     {
-      "n": 4,
-      "band": "Rationale",
-      "difficulty": "hard",
-      "question": "Page furniture is removed before anything looks for headings. What does that ordering cost?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Nothing: the two rules never look at the same lines"
-        },
-        {
-          "letter": "b",
-          "text": "Page numbers can no longer be used to order the sections"
-        },
-        {
-          "letter": "c",
-          "text": "A real heading that repeats on most pages is gone before the heading rule can see it"
-        },
-        {
-          "letter": "d",
-          "text": "A heading on the first page is missed, because there is nothing before it to compare against"
-        }
-      ],
-      "answer": "c"
-    },
-    {
       "n": 3,
       "band": "Change",
       "difficulty": "medium",
@@ -96,6 +71,31 @@
         {
           "letter": "d",
           "text": "A page number at the foot of a page was being taken for a marker"
+        }
+      ],
+      "answer": "c"
+    },
+    {
+      "n": 4,
+      "band": "Rationale",
+      "difficulty": "hard",
+      "question": "Page furniture is removed before anything looks for headings. What does that ordering cost?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Nothing: the two rules never look at the same lines"
+        },
+        {
+          "letter": "b",
+          "text": "Page numbers can no longer be used to order the sections"
+        },
+        {
+          "letter": "c",
+          "text": "A real heading that repeats on most pages is gone before the heading rule can see it"
+        },
+        {
+          "letter": "d",
+          "text": "A heading on the first page is missed, because there is nothing before it to compare against"
         }
       ],
       "answer": "c"
@@ -178,31 +178,6 @@
       "answer": "b"
     },
     {
-      "n": 4,
-      "band": "Rationale",
-      "difficulty": "hard",
-      "question": "A bank export lists every amount as a positive number, spending included. What does tally do?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Refuses the file, because the direction cannot be known from it"
-        },
-        {
-          "letter": "b",
-          "text": "Leaves the amounts alone and reads the direction from a separate column"
-        },
-        {
-          "letter": "c",
-          "text": "Takes the file's own shape as the convention and flips every sign"
-        },
-        {
-          "letter": "d",
-          "text": "Treats the largest amounts as spending and the rest as money coming in"
-        }
-      ],
-      "answer": "c"
-    },
-    {
       "n": 3,
       "band": "Change",
       "difficulty": "medium",
@@ -226,6 +201,31 @@
         }
       ],
       "answer": "b"
+    },
+    {
+      "n": 4,
+      "band": "Rationale",
+      "difficulty": "hard",
+      "question": "A bank export lists every amount as a positive number, spending included. What does tally do?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Refuses the file, because the direction cannot be known from it"
+        },
+        {
+          "letter": "b",
+          "text": "Leaves the amounts alone and reads the direction from a separate column"
+        },
+        {
+          "letter": "c",
+          "text": "Takes the file's own shape as the convention and flips every sign"
+        },
+        {
+          "letter": "d",
+          "text": "Treats the largest amounts as spending and the rest as money coming in"
+        }
+      ],
+      "answer": "c"
     },
     {
       "n": 5,

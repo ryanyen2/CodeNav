@@ -15,19 +15,24 @@
   </section>
 </main>
 
-<!-- Pilots only, and unhidden from the code. A participant never sees this. -->
-<div class="pilot-bar" id="pilot-bar" hidden>
-  <span class="pilot-tag">pilot</span>
-  <select id="pilot-jump" aria-label="Jump to a step"></select>
-  <button id="pilot-skip" type="button">Fill and skip</button>
-</div>
+<!-- The pilot bar and the footer share ONE sticky dock so they STACK (bar above
+     nav) instead of both sticking to bottom:0 and overlapping — which had the
+     pilot bar painting over Back/Continue. The bar is pilots-only, unhidden from
+     the code; a participant never sees it. -->
+<div class="dock">
+  <div class="pilot-bar" id="pilot-bar" hidden>
+    <span class="pilot-tag">pilot</span>
+    <select id="pilot-jump" aria-label="Jump to a step"></select>
+    <button id="pilot-skip" type="button">Fill and skip</button>
+  </div>
 
-<footer>
-  <button id="back" hidden>Back</button>
-  <span class="spacer"></span>
-  <span class="saved" id="saved"></span>
-  <button id="next" class="primary" hidden>Continue</button>
-</footer>
+  <footer>
+    <button id="back" hidden>Back</button>
+    <span class="spacer"></span>
+    <span class="saved" id="saved"></span>
+    <button id="next" class="primary" hidden>Continue</button>
+  </footer>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>

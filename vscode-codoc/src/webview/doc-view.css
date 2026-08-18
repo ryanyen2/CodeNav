@@ -482,6 +482,19 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .row.has-retire .title { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
 .row.unrealized .title { font-style: italic; opacity: 0.78; }
 
+/* The tree's echo of the ordinal chip a walkthrough stop wears on its doc heading
+   (`.codoc-feature-heading.ce-ask-head::before`) — same chip language, so the
+   walkthrough's shape reads in the collapsed, higher-level tree view too, not
+   only once scrolled to a stop. */
+.ask-tree-badge {
+    flex-shrink: 0; margin-left: 8px;
+    font: 10px/1.5 var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums;
+    padding: 0 4px; border-radius: 3px;
+    color: var(--fg-muted);
+    background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+}
+.ask-tree-badge.here { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
 .amend-inline {
     font-family: var(--vscode-editor-font-family); font-size: 11.5px;
     color: var(--dir-review); margin-left: 12px; opacity: 0.88;
@@ -2201,45 +2214,61 @@ body.vscode-high-contrast .ce-autoedit-del { color: var(--vscode-foreground); }
    here". That is what lets it sit on top of an edit in progress without
    competing with the diff already there. */
 
-/* ── the header: question, answer, stepper ── */
-.doc-host.has-ask { flex-direction: column; }
-.doc-host.has-ask > .codoc-whole-editor { height: auto; min-height: 0; }
+/* ── the header row: a truncated echo of the question + a stepper. Real flex
+   space, ONE thin line — not an absolutely-positioned overlay. An overlay sat
+   on top of whatever heading happened to be first in the doc, which is exactly
+   the "occluding the interface" a floating find-style widget gets away with
+   only because it is transient; a walkthrough can stay up for the whole
+   reading session, so it earns its own row instead of hiding real content.
+   `:has()` reserves that row only while the bar exists and is unhidden, so a
+   reader who never asked anything still gets a plain single-child .doc-host.
+   The answer is not printed here — hovering (or clicking) the question reveals
+   it in the same popover card the dependency hover-preview uses (`.ce-hovercard`,
+   via `showCard`), because the answer already lives, worded per-stop, in the
+   chips and notes below. ── */
+.doc-host:has(> .ce-ask-bar:not([hidden])) { flex-direction: column; }
+.doc-host:has(> .ce-ask-bar:not([hidden])) > .codoc-whole-editor { height: auto; min-height: 0; }
 
 .ce-ask-bar {
     flex: 0 0 auto;
-    display: flex; align-items: flex-start; gap: 16px;
-    padding: 10px clamp(24px, 4vw, 64px) 11px;
+    display: flex; align-items: center; gap: 2px;
+    padding: 4px clamp(20px, 3.5vw, 56px);
     background: var(--vscode-editor-background);
     border-bottom: var(--rule);
-    animation: ask-bar-in var(--dur-base) var(--ease-out) both;
+    animation: ask-bar-in var(--dur-fast) var(--ease-out) both;
 }
-@keyframes ask-bar-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.ce-ask-bar[hidden] { display: none; } /* author `display` beats UA `[hidden]` — see .ce-find */
+@keyframes ask-bar-in { from { opacity: 0; } to { opacity: 1; } }
 body.vscode-reduce-motion .ce-ask-bar { animation: none; }
 
-.ce-ask-lede { flex: 1 1 auto; min-width: 0; }
-/* The question in the reader's own words, quieted — it is context for the answer,
-   not the headline. Never uppercased: these are somebody's words, not a label. */
+/* The question in the reader's own words, quieted — it is context, not the
+   headline; never uppercased, since these are somebody's words, not a label. */
 .ce-ask-question {
-    font: 11px/1.45 var(--font-doc); color: var(--fg-muted);
+    flex: 1 1 auto; min-width: 0; text-align: left;
+    font: 11px/1.5 var(--font-doc); color: var(--fg-muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: transparent; border: 0; padding: 2px 4px; border-radius: var(--radius-ctrl);
+    cursor: pointer;
 }
-/* The answer IS the deliverable: somebody who reads only this line is already
-   better off, and the numbered path exists to show them where it lives. */
-.ce-ask-answer { font: 12.5px/1.5 var(--font-doc); color: var(--fg-body); margin-top: 2px; }
+.ce-ask-question:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
 
-.ce-ask-nav { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding-top: 1px; }
+.ce-ask-nav { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
 .ce-ask-count {
     font: 10.5px var(--font-mono); color: var(--fg-muted);
-    min-width: 72px; text-align: center; font-variant-numeric: tabular-nums;
+    min-width: 58px; text-align: center; font-variant-numeric: tabular-nums;
 }
 .ce-ask-step-btn, .ce-ask-close {
     font: 12px var(--vscode-font-family); line-height: 1;
-    width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-ctrl);
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-ctrl);
     background: transparent; color: var(--fg-muted); cursor: pointer;
     transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .ce-ask-step-btn:hover, .ce-ask-close:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
-.ce-ask-close { margin-left: 6px; }
+.ce-ask-close { margin-left: 4px; }
+
+/* The answer card borrows the dependency hover-preview's chrome (`.ce-hc-meta` /
+   `.ce-hc-gist`) verbatim — same card, same typography, just different fields. */
+.ce-ask-card-q { margin-bottom: 4px; }
 
 /* ── the step chip: an ordinal in the left whitespace ── */
 .codoc-feature-heading.ce-ask-head::before {
@@ -2273,19 +2302,53 @@ body.vscode-reduce-motion .ce-ask-bar { animation: none; }
 }
 .ce-ask-group::after { content: ''; flex: 1 1 auto; border-top: var(--rule); }
 
-/* ── the note: one line on what THIS stop contributes ── */
-.ce-ask-note {
-    display: flex; align-items: baseline; gap: 12px;
-    font: 11.5px/1.5 var(--font-doc); color: var(--fg-muted);
-    margin: 0.15em 0 0.35em; user-select: none;
+/* ── the note, as a margin card ────────────────────────────────────────────────
+   One card per stop, in the doc's right whitespace, anchored to the sentence it is
+   about (whole-doc-editor.ts:renderAskMargin) — the comment metaphor the author
+   asked for: highlight the prose, hang the note beside it. It borrows the comment
+   card's geometry (absolute, right-aligned, scrolls with the prose) but NOT its
+   `.has-comments` prose-shift, so the walkthrough never reflows the document it is
+   a reading order over. Neutral graphite, never a lifecycle hue — a walkthrough is
+   not a lifecycle state; only "you are here" earns the accent. */
+.ce-ask-mcard {
+    position: absolute; right: 16px; left: auto; width: 240px; max-width: calc(100% - 32px);
+    z-index: 5; /* under comment cards (6) — an active comment wins the whitespace */
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 12%, transparent));
+    border-left: 2px solid color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
+    border-radius: 9px; box-shadow: var(--shadow-pop-sm);
+    padding: 8px 10px; cursor: pointer;
+    transition: top .22s var(--ease-out), border-color var(--dur-fast) var(--ease);
+    animation: ce-pop-in var(--dur-base) var(--ease-out);
 }
-.ce-ask-note-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ce-ask-cite {
-    flex: 0 0 auto; font: 10.5px var(--font-mono); color: var(--accent-refs);
+.ce-ask-mcard:hover { border-left-color: color-mix(in srgb, var(--vscode-foreground) 38%, transparent); }
+.ce-ask-mcard.here { border-left-color: var(--accent); }
+.ce-ask-mcard-head { display: flex; align-items: baseline; gap: 7px; margin-bottom: 4px; }
+.ce-ask-mcard-chip {
+    flex: 0 0 auto; font: 10px/1.5 var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums;
+    padding: 0 4px; border-radius: 3px;
+    color: var(--fg-muted); background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+}
+.ce-ask-mcard.here .ce-ask-mcard-chip { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.ce-ask-mcard-group {
+    flex: 1 1 auto; min-width: 0; font: 10px/1.4 var(--font-doc); color: var(--fg-faint);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ce-ask-mcard-note { font: 11.5px/1.5 var(--font-doc); color: var(--fg-body); }
+.ce-ask-mcard-cite {
+    display: inline-block; margin-top: 6px; font: 10.5px var(--font-mono); color: var(--accent-refs);
     background: none; border: 0; padding: 0; cursor: pointer;
-    opacity: 0.75; transition: opacity var(--dur-fast) var(--ease);
+    opacity: 0.8; transition: opacity var(--dur-fast) var(--ease);
 }
-.ce-ask-cite:hover { opacity: 1; text-decoration: underline; text-underline-offset: 2px; }
+.ce-ask-mcard-cite:hover { opacity: 1; text-decoration: underline; text-underline-offset: 2px; }
+/* No room to hang a 240px card beside a full measure — same threshold the comment
+   margin overlays at. The chip on the heading + the quote wash still carry the
+   walkthrough; the note is available by hovering the "here" card as it stacks. */
+@media (max-width: 1100px) {
+    .ce-ask-mcard { right: 8px; width: 200px; }
+}
+body.vscode-high-contrast .ce-ask-mcard { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
 
 /* ── the quote wash: graphite, with a baseline rule so it survives a themed
       background. Sits UNDER the edit decorations by being lighter than all of
@@ -2319,6 +2382,11 @@ body.vscode-high-contrast .codoc-feature-heading.ce-ask-head::before {
     box-shadow: var(--shadow-pop-sm);
     animation: find-in var(--dur-fast) var(--ease-out) both;
 }
+/* `.ce-find` sets its own `display`, which — regardless of specificity — beats
+   the user-agent `[hidden] { display: none }` rule (author origin always wins
+   over UA origin). Without this, toggling the `hidden` property from JS does
+   nothing and the widget stays visible/interactive at all times. */
+.ce-find[hidden] { display: none; }
 @keyframes find-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 body.vscode-reduce-motion .ce-find { animation: none; }
 
@@ -2329,6 +2397,7 @@ body.vscode-reduce-motion .ce-find { animation: none; }
 .ce-find-expand:hover { background: var(--hover-bg); color: var(--fg-muted); }
 .ce-find-rows { display: flex; flex-direction: column; gap: 4px; }
 .ce-find-row { display: flex; align-items: center; gap: 4px; }
+.ce-find-row[hidden] { display: none; } /* same author-vs-UA override as .ce-find above */
 
 .ce-find-field {
     display: flex; align-items: center; gap: 1px; padding: 0 2px 0 0;

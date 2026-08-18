@@ -51,31 +51,6 @@
       "answer": "b"
     },
     {
-      "n": 4,
-      "band": "Rationale",
-      "difficulty": "hard",
-      "question": "Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Nothing: the two are independent"
-        },
-        {
-          "letter": "b",
-          "text": "Quotes would lose their indentation"
-        },
-        {
-          "letter": "c",
-          "text": "A quote crossing a page break would have the running header sitting inside it"
-        },
-        {
-          "letter": "d",
-          "text": "Headings would stop being recognised"
-        }
-      ],
-      "answer": "c"
-    },
-    {
       "n": 3,
       "band": "Change",
       "difficulty": "medium",
@@ -99,6 +74,31 @@
         }
       ],
       "answer": "b"
+    },
+    {
+      "n": 4,
+      "band": "Rationale",
+      "difficulty": "hard",
+      "question": "Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Nothing: the two are independent"
+        },
+        {
+          "letter": "b",
+          "text": "Quotes would lose their indentation"
+        },
+        {
+          "letter": "c",
+          "text": "A quote crossing a page break would have the running header sitting inside it"
+        },
+        {
+          "letter": "d",
+          "text": "Headings would stop being recognised"
+        }
+      ],
+      "answer": "c"
     },
     {
       "n": 5,
@@ -178,31 +178,6 @@
       "answer": "c"
     },
     {
-      "n": 4,
-      "band": "Rationale",
-      "difficulty": "hard",
-      "question": "After your change, one half of a split matches a category rule and the other half matches none. What happens?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "The whole transaction is dropped, because it is ambiguous"
-        },
-        {
-          "letter": "b",
-          "text": "The whole transaction goes to the uncategorised bucket, because any doubt sends it there"
-        },
-        {
-          "letter": "c",
-          "text": "Each half is categorised on its own, so only the unmatched half lands in that bucket"
-        },
-        {
-          "letter": "d",
-          "text": "The run stops and asks which category to use"
-        }
-      ],
-      "answer": "c"
-    },
-    {
       "n": 3,
       "band": "Change",
       "difficulty": "medium",
@@ -223,6 +198,31 @@
         {
           "letter": "d",
           "text": "It changes whether the duplicate rule fires"
+        }
+      ],
+      "answer": "c"
+    },
+    {
+      "n": 4,
+      "band": "Rationale",
+      "difficulty": "hard",
+      "question": "After your change, one half of a split matches a category rule and the other half matches none. What happens?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "The whole transaction is dropped, because it is ambiguous"
+        },
+        {
+          "letter": "b",
+          "text": "The whole transaction goes to the uncategorised bucket, because any doubt sends it there"
+        },
+        {
+          "letter": "c",
+          "text": "Each half is categorised on its own, so only the unmatched half lands in that bucket"
+        },
+        {
+          "letter": "d",
+          "text": "The run stops and asks which category to use"
         }
       ],
       "answer": "c"

@@ -54,29 +54,6 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 4,
-            "band": "Rationale",
-            "question": "Page furniture is removed before anything looks for headings. What does that ordering cost?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Nothing: the two rules never look at the same lines"
-                },
-                {
-                    "letter": "b",
-                    "text": "Page numbers can no longer be used to order the sections"
-                },
-                {
-                    "letter": "c",
-                    "text": "A real heading that repeats on most pages is gone before the heading rule can see it"
-                },
-                {
-                    "letter": "d",
-                    "text": "A heading on the first page is missed, because there is nothing before it to compare against"
-                }
-            ]
-        },
-        {
             "n": 3,
             "band": "Change",
             "question": "Footnote markers used to be found after any full stop, and the rule was tightened. What was going wrong?",
@@ -96,6 +73,29 @@ export const QUIZZES = Object.freeze({
                 {
                     "letter": "d",
                     "text": "A page number at the foot of a page was being taken for a marker"
+                }
+            ]
+        },
+        {
+            "n": 4,
+            "band": "Rationale",
+            "question": "Page furniture is removed before anything looks for headings. What does that ordering cost?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Nothing: the two rules never look at the same lines"
+                },
+                {
+                    "letter": "b",
+                    "text": "Page numbers can no longer be used to order the sections"
+                },
+                {
+                    "letter": "c",
+                    "text": "A real heading that repeats on most pages is gone before the heading rule can see it"
+                },
+                {
+                    "letter": "d",
+                    "text": "A heading on the first page is missed, because there is nothing before it to compare against"
                 }
             ]
         },
@@ -171,29 +171,6 @@ export const QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 4,
-            "band": "Rationale",
-            "question": "A bank export lists every amount as a positive number, spending included. What does tally do?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Refuses the file, because the direction cannot be known from it"
-                },
-                {
-                    "letter": "b",
-                    "text": "Leaves the amounts alone and reads the direction from a separate column"
-                },
-                {
-                    "letter": "c",
-                    "text": "Takes the file's own shape as the convention and flips every sign"
-                },
-                {
-                    "letter": "d",
-                    "text": "Treats the largest amounts as spending and the rest as money coming in"
-                }
-            ]
-        },
-        {
             "n": 3,
             "band": "Change",
             "question": "Amounts are rounded once at the summary rather than on every transaction. What does that give up?",
@@ -213,6 +190,29 @@ export const QUIZZES = Object.freeze({
                 {
                     "letter": "d",
                     "text": "Accuracy, because many small amounts drift further apart this way"
+                }
+            ]
+        },
+        {
+            "n": 4,
+            "band": "Rationale",
+            "question": "A bank export lists every amount as a positive number, spending included. What does tally do?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Refuses the file, because the direction cannot be known from it"
+                },
+                {
+                    "letter": "b",
+                    "text": "Leaves the amounts alone and reads the direction from a separate column"
+                },
+                {
+                    "letter": "c",
+                    "text": "Takes the file's own shape as the convention and flips every sign"
+                },
+                {
+                    "letter": "d",
+                    "text": "Treats the largest amounts as spending and the rest as money coming in"
                 }
             ]
         },
@@ -292,29 +292,6 @@ export const AFTER_QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 4,
-            "band": "Rationale",
-            "question": "Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Nothing: the two are independent"
-                },
-                {
-                    "letter": "b",
-                    "text": "Quotes would lose their indentation"
-                },
-                {
-                    "letter": "c",
-                    "text": "A quote crossing a page break would have the running header sitting inside it"
-                },
-                {
-                    "letter": "d",
-                    "text": "Headings would stop being recognised"
-                }
-            ]
-        },
-        {
             "n": 3,
             "band": "Change",
             "question": "The running header is removed before your change runs. For a quote that carries on across a page break, what does that ordering do?",
@@ -334,6 +311,29 @@ export const AFTER_QUIZZES = Object.freeze({
                 {
                     "letter": "d",
                     "text": "Nothing: the two never see the same lines"
+                }
+            ]
+        },
+        {
+            "n": 4,
+            "band": "Rationale",
+            "question": "Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "Nothing: the two are independent"
+                },
+                {
+                    "letter": "b",
+                    "text": "Quotes would lose their indentation"
+                },
+                {
+                    "letter": "c",
+                    "text": "A quote crossing a page break would have the running header sitting inside it"
+                },
+                {
+                    "letter": "d",
+                    "text": "Headings would stop being recognised"
                 }
             ]
         },
@@ -409,29 +409,6 @@ export const AFTER_QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 4,
-            "band": "Rationale",
-            "question": "After your change, one half of a split matches a category rule and the other half matches none. What happens?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "The whole transaction is dropped, because it is ambiguous"
-                },
-                {
-                    "letter": "b",
-                    "text": "The whole transaction goes to the uncategorised bucket, because any doubt sends it there"
-                },
-                {
-                    "letter": "c",
-                    "text": "Each half is categorised on its own, so only the unmatched half lands in that bucket"
-                },
-                {
-                    "letter": "d",
-                    "text": "The run stops and asks which category to use"
-                }
-            ]
-        },
-        {
             "n": 3,
             "band": "Change",
             "question": "Your change decides whether a split counts as one transaction or two. Why is that a decision rather than a detail?",
@@ -451,6 +428,29 @@ export const AFTER_QUIZZES = Object.freeze({
                 {
                     "letter": "d",
                     "text": "It changes whether the duplicate rule fires"
+                }
+            ]
+        },
+        {
+            "n": 4,
+            "band": "Rationale",
+            "question": "After your change, one half of a split matches a category rule and the other half matches none. What happens?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "The whole transaction is dropped, because it is ambiguous"
+                },
+                {
+                    "letter": "b",
+                    "text": "The whole transaction goes to the uncategorised bucket, because any doubt sends it there"
+                },
+                {
+                    "letter": "c",
+                    "text": "Each half is categorised on its own, so only the unmatched half lands in that bucket"
+                },
+                {
+                    "letter": "d",
+                    "text": "The run stops and asks which category to use"
                 }
             ]
         },
