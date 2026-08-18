@@ -43,7 +43,20 @@ export const deleteDoc = async (ref) => {
   globalThis.__deleted = globalThis.__deleted || [];
   globalThis.__deleted.push((ref && ref.path) || '');
 };
-export const getDoc = async () => ({ exists: () => false, data: () => ({}) });
+export const getDoc = async (ref) => {
+  // The participant document is unreadable by a participant in production
+  // (rules: isExperimenter only), so the stub denies it the same way. Every
+  // page test then runs through the denial the page actually gets — the old
+  // always-succeeding stub is how "denied read marks the page offline and no
+  // answer is ever saved" passed sixteen tests.
+  const path = (ref && ref.path) || '';
+  if (/^participants\\/[^/]+$/.test(path)) {
+    const err = new Error('Missing or insufficient permissions.');
+    err.code = 'permission-denied';
+    throw err;
+  }
+  return { exists: () => false, data: () => ({}) };
+};
 // A test can plant collections here, keyed by path, so the results view can be
 // driven with real-shaped data rather than only checked when empty.
 export const getDocs = async (ref) => ({
@@ -738,4 +751,46 @@ test('a pilot can jump to a step, and everything skipped is filled and marked', 
     const filled = Object.entries(saved.answers).filter(([, v]) => v.autofilled);
     assert.ok(filled.length >= 6, `expected several filled docs, got ${filled.length}`);
     for (const [, values] of filled) assert.equal(values.autofilled, true);
+});
+
+// ── saving, under the rules the page actually runs under ─────────────────────
+
+test('the denied participant read does not take the page offline', async () => {
+    // The rules deny a participant their own participant document, by design.
+    // That read used to share a try/catch with sign-in, so its guaranteed
+    // permission-denied set online=false — and every browser-side answer of a
+    // whole cohort stayed in localStorage, while the dashboard read n=0. The
+    // stub now denies that read the way production does; this asserts an
+    // answered step still reaches the server.
+    const code = 'p-abcdefghjkmn';
+    const { document, window } = await participantAt(2, code); // prestudy
+    window.__written = [];
+    const btn = document.querySelector('.q button[data-value]');
+    assert.ok(btn, 'the prestudy step renders answerable questions');
+    btn.click();
+    await new Promise((r) => setTimeout(r, 600));  // save() debounces 400ms
+    assert.ok(window.__written.some((p) => p.startsWith(`participants/${code}/answers/`)),
+        `the answer was saved to the server, got: ${window.__written.join(', ') || 'nothing'}`);
+});
+
+test('answers already on this computer are sent on load', async () => {
+    // The recovery path for a session that ran while saving was broken: the
+    // answers are all still in localStorage, so reopening the same link on the
+    // same browser must upload them without any interaction.
+    const code = 'p-abcdefghjkmn';
+    const page = await loadPage('participant', {
+        [`codoc-study:${code}`]: JSON.stringify({
+            at: 5,
+            answers: {
+                'after-codoc': { umux1: 6, tlxMental: 40 },
+                'quiz-scribe-before': { q1: 'b' },
+            },
+        }),
+    }, code);
+    await new Promise((r) => setTimeout(r, 60));
+    const paths = (page.window.__written || []).filter((p) => p.includes('/answers/'));
+    assert.ok(paths.includes(`participants/${code}/answers/after-codoc`),
+        `after-codoc was flushed, got: ${paths.join(', ') || 'nothing'}`);
+    assert.ok(paths.includes(`participants/${code}/answers/quiz-scribe-before`),
+        'the quiz answers were flushed too');
 });

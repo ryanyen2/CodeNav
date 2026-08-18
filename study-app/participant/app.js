@@ -94,12 +94,21 @@ async function start() {
         await setDoc(doc(db, `participants/${state.code}/devices/browser`), {
             uid: auth.currentUser.uid, kind: 'browser', registeredAt: Date.now(),
         }, { merge: false }).catch(() => {});
-        const snap = await getDoc(doc(db, `participants/${state.code}`));
-        participant = snap.exists() ? snap.data() : null;
         state.online = true;
     } catch {
         state.online = false;
     }
+    // The participant document is DENIED to a participant by the rules (only an
+    // experimenter previewing a page can read it), so this read failing is the
+    // normal case and says nothing about being online. It must not share the
+    // try above: when it did, the guaranteed permission-denied marked every
+    // participant's page offline, and every browser-side answer — prestudy,
+    // quizzes, questionnaires, task timings — stayed in localStorage and never
+    // reached the study.
+    try {
+        const snap = await getDoc(doc(db, `participants/${state.code}`));
+        participant = snap.exists() ? snap.data() : null;
+    } catch { /* expected for a participant; the link carries the order */ }
 
     // The participant document is not readable by the participant, by design, so
     // the order comes from the link. Falling back keeps the page usable if the
@@ -117,12 +126,36 @@ async function start() {
     state.at = Math.min(saved.at || 0, state.steps.length - 1);
     state.answers = saved.answers || {};
 
+    // Upload everything this browser already holds. This is both the recovery
+    // path for a session that ran while saving was broken (the answers are all
+    // still in localStorage — reopening the same link on the same browser sends
+    // them), and the catch-up for one that genuinely lost its connection for a
+    // while. Merge-writes of the same values are idempotent, so re-sending on
+    // every load costs nothing.
+    if (state.online) void flushAnswers();
+
     // Only a pilot code can reach the skip bar. The markup is hidden by default
     // and pilotBar() checks the code too; this is the third lock, because a
     // participant who saw a "Fill and skip" button would be one keystroke from
     // skipping the study.
     if (isPilotCode(state.code)) pilotBar();
     render();
+}
+
+/** Send every remembered answer document to the server, one merge each. */
+async function flushAnswers() {
+    for (const [name, values] of Object.entries(state.answers)) {
+        if (!values || !Object.keys(values).length) continue;
+        try {
+            await setDoc(doc(db, `participants/${state.code}/answers/${name}`), {
+                ...values, updatedAt: Date.now(),
+            }, { merge: true });
+        } catch {
+            // One failure means the rest would fail the same way; the per-step
+            // save() will try again as the session goes on.
+            return;
+        }
+    }
 }
 
 function fatal(title, detail) {
