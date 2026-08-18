@@ -10,13 +10,14 @@ const LANES = [
     { key: 'doc', label: 'Description', actions: ['READ_DOC', 'EDIT_DOC', 'AGENT_DOC'] },
     { key: 'code', label: 'Code', actions: ['READ_CODE', 'EDIT_CODE', 'AGENT_EDIT'] },
     { key: 'test', label: 'Tests', actions: ['READ_TEST', 'EDIT_TEST'] },
-    { key: 'agent', label: 'Agent', actions: ['PROMPT', 'ACCEPT', 'REJECT'] },
+    { key: 'output', label: 'Samples & output', actions: ['READ_OUTPUT', 'EDIT_OUTPUT'] },
+    { key: 'agent', label: 'Agent', actions: ['PROMPT', 'ASK', 'ACCEPT', 'REJECT'] },
     { key: 'run', label: 'Runs', actions: ['RUN_TEST', 'RUN_BUILD'] },
 ];
 
 const COLOR = {
     doc: 'var(--doc)', code: 'var(--code)', test: 'var(--test)',
-    agent: 'var(--agent)', run: 'var(--warn)',
+    output: 'var(--ok, #3f7f7a)', agent: 'var(--agent)', run: 'var(--warn)',
 };
 
 const laneOf = (action) => LANES.find((l) => l.actions.includes(action));

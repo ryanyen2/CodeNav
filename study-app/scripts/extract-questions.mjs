@@ -134,7 +134,11 @@ function check(project, questions, opts = {}) {
     for (const q of questions) {
         if (!q.difficulty) problems.push(`Q${q.n} has no (easy|medium|hard) tag`);
     }
-    const least = opts.leastPerLevel ?? 3;
+    // One of each level, not three. The set is five questions now: three of each
+    // would need nine. What this still refuses is a set that has drifted to ONE
+    // end — all-hard measures who already knew the domain, which is what the
+    // earliest draft did — and that refusal is what the rule is for.
+    const least = opts.leastPerLevel ?? 1;
     for (const level of ['easy', 'medium', 'hard']) {
         const n = questions.filter((q) => q.difficulty === level).length;
         if (n < least) problems.push(`only ${n} ${level} questions; a spread needs at least ${least}`);
@@ -178,7 +182,7 @@ function main() {
         }
         const questions = parseQuiz(markdown);
         const after = parseAfter(markdown);
-        // The after-task set is six, so it cannot carry three of each level.
+        // Both sets are five, so neither can carry three of each level.
         const problems = [
             ...check(project, questions),
             ...check(project, after, { leastPerLevel: 1 }).map((p) => `after-task: ${p}`),

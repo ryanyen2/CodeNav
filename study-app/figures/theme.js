@@ -43,24 +43,26 @@ export const ACTION_COLOR = {
     READ_DOC: '#a8ceb9', EDIT_DOC: '#2f6f4e', AGENT_DOC: '#6aa583',
     READ_CODE: '#a9c4de', EDIT_CODE: '#2f5f8c', AGENT_EDIT: '#5f8fbd',
     READ_TEST: '#c3b4d9', EDIT_TEST: '#6b4fa0',
-    PROMPT: '#e0a06a', ACCEPT: '#c2763a', REJECT: '#8c4a2f',
+    READ_OUTPUT: '#a9d5d2', EDIT_OUTPUT: '#3f7f7a',
+    PROMPT: '#e0a06a', ACCEPT: '#c2763a', REJECT: '#8c4a2f', ASK: '#eebb90',
     RUN_TEST: '#b39b7a', RUN_BUILD: '#8a7250',
     IDLE: '#e6e4e0',
 };
 
 /** Reading order for a stacked figure: attending, then changing, then checking. */
 export const ACTION_ORDER = [
-    'READ_DOC', 'READ_CODE', 'READ_TEST',
-    'EDIT_DOC', 'EDIT_CODE', 'EDIT_TEST',
-    'PROMPT', 'AGENT_DOC', 'AGENT_EDIT', 'ACCEPT', 'REJECT',
+    'READ_DOC', 'READ_CODE', 'READ_TEST', 'READ_OUTPUT',
+    'EDIT_DOC', 'EDIT_CODE', 'EDIT_TEST', 'EDIT_OUTPUT',
+    'PROMPT', 'AGENT_DOC', 'AGENT_EDIT', 'ASK', 'ACCEPT', 'REJECT',
     'RUN_TEST', 'RUN_BUILD', 'IDLE',
 ];
 
 export const ACTION_LABEL = {
     READ_DOC: 'Read description', READ_CODE: 'Read code', READ_TEST: 'Read tests',
     EDIT_DOC: 'Wrote description', EDIT_CODE: 'Wrote code', EDIT_TEST: 'Wrote tests',
+    READ_OUTPUT: 'Read a sample or its output', EDIT_OUTPUT: 'Edited a sample',
     PROMPT: 'Prompted', AGENT_DOC: 'Agent wrote description', AGENT_EDIT: 'Agent wrote code',
-    ACCEPT: 'Accepted', REJECT: 'Rejected',
+    ASK: 'Asked for a walkthrough', ACCEPT: 'Accepted', REJECT: 'Rejected',
     RUN_TEST: 'Ran tests', RUN_BUILD: 'Ran the project', IDLE: 'Away',
 };
 

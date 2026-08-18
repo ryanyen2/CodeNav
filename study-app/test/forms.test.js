@@ -24,7 +24,7 @@ test('the dashboard reads the same quiz the study file holds', () => {
     // STUDY files are what gets frozen at pre-registration.
     for (const project of PROJECTS) {
         const parsed = parseQuiz(study(project));
-        assert.equal(parsed.length, 12);
+        assert.equal(parsed.length, 5);
         assert.deepEqual(parsed.map((q) => q.n), questionsFor(project).map((q) => q.n));
         assert.deepEqual(parsed.map((q) => q.answer), questionsFor(project).map((q) => q.answer));
     }
@@ -77,7 +77,7 @@ test('the two projects ask the same shape of quiz', () => {
 
 test('the quiz is stored twice, before and after', () => {
     const a = emptyAssessment('scribe');
-    assert.equal(Object.keys(a.answers).length, 12 * SITTINGS.length);
+    assert.equal(Object.keys(a.answers).length, 5 * SITTINGS.length);
     for (const sitting of SITTINGS) assert.ok(`q1-${sitting}` in a.answers);
 });
 
@@ -95,7 +95,7 @@ test('scoring counts only what was answered', () => {
     const first = questionsFor('tally')[0];
     a.answers[`q${first.n}-after`] = first.answer;
     const result = score(a, 'tally', 'after');
-    assert.deepEqual([result.right, result.answered, result.of], [1, 1, 12]);
+    assert.deepEqual([result.right, result.answered, result.of], [1, 1, 5]);
 });
 
 test('every open decision has a consistency rating beside it', () => {

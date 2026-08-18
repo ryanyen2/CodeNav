@@ -307,10 +307,19 @@ test('the card is drawn as a picture with no text to select', () => {
 
 test('both cards leave the open decisions open', () => {
     for (const [name, card] of Object.entries(TASK_CARDS)) {
-        const text = [card.title, ...card.lines].join(' ').toLowerCase();
-        assert.ok(text.includes('decide anything'), `${name} invites them to decide`);
+        // Everything drawn on the card: the task, and the sample of what the
+        // finished thing looks like.
+        const text = [card.title, ...card.lines,
+            ...(card.example ? [card.example.label, ...card.example.lines] : [])]
+            .join(' ').toLowerCase();
+        // The card is the TASK and nothing else. "Decide anything this card does
+        // not specify" is an instruction about the study, and it now sits on the
+        // page beside the card rather than inside the picture of the task.
+        assert.ok(!text.includes('decide anything'),
+            `${name}'s card still carries the study's instruction; that belongs on the page`);
         // The card must not settle any of the four open decisions, because
-        // whether the participant settles them is the measure.
+        // whether the participant settles them is the measure. This is why the
+        // example shows the OUTPUT and never the input encoding.
         for (const giveaway of ['indent', 'hyphen', 'paragraph', 'page break',
             'duplicate', 'transfer', 'uncategorised', 'reference']) {
             assert.ok(!text.includes(giveaway),
@@ -322,8 +331,13 @@ test('both cards leave the open decisions open', () => {
     for (const name of ['scribe', 'tally']) {
         assert.ok(TASK_CARDS[name].lines.filter((l) => l.trim()).length <= 8,
             `${name}'s card is too long to have left anything open`);
+        // A sample that ran long would be a specification, not an illustration.
+        assert.ok((TASK_CARDS[name].example?.lines ?? []).length <= 4,
+            `${name}'s example is long enough to be answering the task`);
     }
 });
+
+
 
 test('drawing twice reuses the canvas rather than stacking them', () => {
     const el = document.createElement('div');
@@ -505,7 +519,7 @@ test('the interview is spoken, so the page neither shows it nor stores it', asyn
     assert.ok(INTERVIEW_QUESTIONS.length >= 10, 'and they are still written down');
 });
 
-test('a filled quiz answers all twelve, for either project', async () => {
+test('a filled quiz answers all five, for either project', async () => {
     const { defaultsFor } = await import('../participant/autofill.js');
     const { QUIZZES } = await import('../participant/quiz.js');
     for (const project of ['scribe', 'tally']) {
@@ -721,7 +735,7 @@ test('the after-task questions are about their own change and have right answers
     // closing interview instead.
     const { AFTER_QUIZZES } = await import('../participant/quiz.js');
     for (const [project, questions] of Object.entries(AFTER_QUIZZES)) {
-        assert.equal(questions.length, 6, `${project} asks six`);
+        assert.equal(questions.length, 5, `${project} asks five`);
         for (const q of questions) {
             assert.equal(q.options.length, 4, `${project} Q${q.n} offers four`);
             // The key must NOT be here: this file ships to a browser.
@@ -738,7 +752,7 @@ test('the after-task questions are about their own change and have right answers
     const { afterFor } = await import('../experimenter/forms.js');
     for (const project of ['scribe', 'tally']) {
         const set = afterFor(project);
-        assert.equal(set.length, 6);
+        assert.equal(set.length, 5);
         for (const q of set) {
             assert.ok(q.answer, `${project} Q${q.n} has no answer to mark against`);
             assert.ok(q.options.some((o) => o.letter === q.answer),

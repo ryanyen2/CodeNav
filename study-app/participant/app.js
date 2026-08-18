@@ -117,7 +117,11 @@ async function start() {
     state.at = Math.min(saved.at || 0, state.steps.length - 1);
     state.answers = saved.answers || {};
 
-    pilotBar();
+    // Only a pilot code can reach the skip bar. The markup is hidden by default
+    // and pilotBar() checks the code too; this is the third lock, because a
+    // participant who saw a "Fill and skip" button would be one keystroke from
+    // skipping the study.
+    if (isPilotCode(state.code)) pilotBar();
     render();
 }
 
@@ -175,6 +179,12 @@ function render() {
 
     const section = document.createElement('section');
     section.className = 'step';
+    // The questions are not copyable. They are open book — read the description,
+    // read the code, ask the agent about the PROJECT — but pasting the question
+    // itself into the agent measures the agent instead of the pair. Blocking the
+    // copy is not a security boundary and is not meant to be; it removes the
+    // thoughtless path, which is the one people actually take.
+    if (step.kind === 'quiz' || step.kind === 'reflect') section.classList.add('noselect');
     section.innerHTML = VIEWS[step.kind](step);
     stage.replaceChildren(section);
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -190,11 +200,25 @@ function render() {
         drawCard(section.querySelector('.card-wrap'), {
             title: t(`card.${step.project}.title`, card.title),
             lines: (t(`card.${step.project}.lines`, card.lines.join('\n'))).split('\n'),
+            // The sample stays in the language the OUTPUT is in — it is what the
+            // program prints, not prose written to be read in translation.
+            example: card.example && {
+                label: t(`card.${step.project}.example.label`, card.example.label),
+                lines: card.example.lines,
+            },
         }, { dark: false });
     }
     wire(section, step);
     wireCopy(section);
     if (step.kind === 'quiz') startQuizTimer(step);
+    // The task has no clock on screen — it is not timed against them — but the
+    // instant it opened is recorded, because that is where the interaction log
+    // stops being a record of working the codebase out and starts being a record
+    // of changing it.
+    if (step.kind === 'task') {
+        const a = answersFor(step);
+        if (!a.startedAt) { a.startedAt = Date.now(); void save(step); }
+    }
 
     $('#back').hidden = state.at === 0;
     $('#next').hidden = step.kind === 'done';
@@ -378,7 +402,8 @@ const VIEWS = {
     task: () => `
         <h1>${esc(t('ui.task.h', 'Your task'))}</h1>
         <div class="card-wrap"></div>
-        <p>${esc(t('ui.task.p', 'Anything the card does not say is yours to decide, and we will ask you about those decisions, so make them on purpose.'))}</p>`,
+        <p>${esc(t('ui.task.p', 'Anything the card does not say is yours to decide, and we will ask you about those decisions, so make them on purpose.'))}</p>
+        <p class="note">${esc(t('ui.task.time', 'About 17 minutes. Work as you normally would.'))}</p>`,
 
     // Grouped by what each block measures, with the groups named. An unbroken
     // column of twenty-five identical rows is answered by pattern rather than by
@@ -444,7 +469,7 @@ const VIEWS = {
         ? t('ui.quiz.h.before', 'Before you start')
         : t('ui.quiz.h.after', 'A few questions'))}</h1>
         <p class="lead">${esc(t('ui.quiz.lead',
-        'Twelve questions about {project}. You have {minutes} minutes and may look anything up. '
+        'Five questions about {project}. You have {minutes} minutes and may look anything up. '
         + 'When the time is up the page moves on by itself.')
         .replace('{project}', step.project).replace('{minutes}', String(QUIZ_MINUTES)))}</p>
         <div class="timer" id="quiz-timer" role="timer" aria-live="off"></div>
@@ -513,7 +538,7 @@ const VIEWS = {
         return `
         <h1>${esc(t('ui.reflect.h', 'About what you just did'))}</h1>
         <p class="lead">${esc(t('ui.reflect.lead',
-        'Six questions about the change you just made to {project}.')
+        'Five questions about the change you just made to {project}.')
         .replace('{project}', step.project))}</p>
         <div class="note">
           <p><b>${esc(t('ui.reflect.closed', 'Please answer from memory.'))}</b>
@@ -842,6 +867,14 @@ function advance() {
         a.finishedAt = Date.now();
         if (a.startedAt) a.elapsedMs = a.finishedAt - a.startedAt;
         clearInterval(quizTick);
+    }
+    // The task's clock, for the same reason as the quiz's: it is the only record
+    // of when the change stage began and ended, and the interaction log is cut on
+    // those two instants to tell comprehending from implementing.
+    if (step.kind === 'task') {
+        const a = answersFor(step);
+        a.finishedAt = Date.now();
+        if (a.startedAt) a.elapsedMs = a.finishedAt - a.startedAt;
     }
     void save(step);
     if (state.at < state.steps.length - 1) { state.at += 1; remember(); render(); }

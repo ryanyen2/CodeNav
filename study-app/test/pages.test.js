@@ -662,6 +662,25 @@ test('the task card is a picture, and its words are in no text node', async () =
     }
 });
 
+test('the study instruction and the clock are on the page, not on the card', async () => {
+    // Moved out of the picture in 2026-08. A card carrying "about 17 minutes" and
+    // "decide anything this card does not specify" was a picture of the task AND
+    // of the study's instructions, read as one thing. The card is the task now.
+    const { TASK_CARDS, buildSteps } = await import('../participant/steps.js');
+    const steps = buildSteps('codoc-first');
+    const at = steps.findIndex((s) => s.kind === 'task');
+    const { document } = await participantAt(at);
+    const text = document.querySelector('#stage').textContent.toLowerCase();
+
+    assert.ok(text.includes('yours to decide'), 'the invitation to decide is on the page');
+    assert.ok(text.includes('17 minutes'), 'the time is on the page');
+    for (const card of Object.values(TASK_CARDS)) {
+        const onCard = [...card.lines, ...(card.example?.lines ?? [])].join(' ').toLowerCase();
+        assert.ok(!onCard.includes('17 minutes') && !onCard.includes('decide anything'),
+            'the card carries the task and nothing else');
+    }
+});
+
 test('the setup step offers the download rather than naming a file nobody has', async () => {
     const { buildSteps } = await import('../participant/steps.js');
     const at = buildSteps('codoc-first').findIndex((s) => s.kind === 'setup');

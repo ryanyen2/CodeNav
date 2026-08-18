@@ -66,8 +66,7 @@ noticed.
 
 ## The quiz
 
-Twelve questions, four options, one right. Asked before the task and again after,
-so the change is the measure. Matched to scribe band for band and level for
+Five questions, four options, one right, asked before the task. Matched to scribe band for band and level for
 level, which `extract-questions.mjs` refuses to let drift.
 
 Answered open book with a clock running, and the difficulty tags work the same
@@ -97,87 +96,45 @@ questions are not separating the arms.
 
 ### Purpose: what it is for, and where it stops
 
-**Q1. (easy) Jane wants tally to tell her whether she can afford a holiday. Can it?**
-- a) Yes, from the recurring payments and the monthly totals
-- b) Yes, if she gives it a target to save towards
-- c) **No: it reports what was spent and has no opinion beyond that** ✓
-- d) No, but it flags the months where spending rose
-
-**Q2. (medium) Raj makes the transfer rule stricter, so fewer rows count as transfers. Which other rule starts behaving differently?**
-- a) Categorisation, because transfers have no category
-- b) Rounding, because the totals change
-- c) **Duplicate removal, because transfers are the rows it was told to leave alone** ✓
-- d) Nothing else: the two are applied to different columns
-
-**Q3. (hard) Raj moves the sign-flipping step so it runs last instead of first. What breaks?**
-- a) Nothing: flipping signs is the same operation whenever it happens
-- b) The totals come out positive instead of negative
-- c) **Every rule that reads an amount has already read it the wrong way round** ✓
-- d) Refunds stop netting, because a refund is recognised by its sign
+**Q1. (easy) You really did buy the same £3 coffee twice on the same day at the same shop. What does the summary show?**
+- a) Both, because they are two separate purchases
+- b) **One, because nothing in the row tells a real repeat from a repeated row** ✓
+- c) Both, with the second marked as a possible duplicate
+- d) It stops and asks which one to keep
 
 ### Rationale: which way it went, and why
 
-**Q4. (easy) A merchant matches no category rule at all. What happens to that transaction?**
-- a) The row is dropped
-- b) The run stops and asks
-- c) **It is counted in a bucket of its own, which appears in the summary** ✓
-- d) It is guessed at from the amount
+**Q2. (medium) A row whose description mentions a transfer is left out of duplicate removal. Why?**
+- a) Because a transfer is not spending, so it never reaches the totals anyway
+- b) **Because the two legs of a move between your own accounts look exactly like a duplicate** ✓
+- c) Because the two legs arrive on different dates and would never collide
+- d) Because the bank marks transfers already, so the rule is not needed
 
-**Q5. (medium) A payment is made on the 31st of January and posted by the bank on the 2nd of February. Which month does tally put it in?**
-- a) February, the month the bank processed it
-- b) **January, the month it was made** ✓
-- c) Both, split across the boundary
-- d) February, unless January's summary has already been written
-
-**Q6. (hard) A row's merchant matches both the utilities rule and the fuel rule. What happens?**
-- a) It is reported as ambiguous and the run stops
-- b) **Whichever rule is listed first wins** ✓
-- c) It goes to the uncategorised bucket, because the answer is unclear
-- d) It is counted under both, and the total is adjusted
+**Q4. (hard) A bank export lists every amount as a positive number, spending included. What does tally do?**
+- a) Refuses the file, because the direction cannot be known from it
+- b) Leaves the amounts alone and reads the direction from a separate column
+- c) **Takes the file's own shape as the convention and flips every sign** ✓
+- d) Treats the largest amounts as spending and the rest as money coming in
 
 ### Change: what happened, and what it cost
 
-**Q7. (easy) The same merchant charges £11.99 in each of three months. Does tally call that recurring?**
-- a) No: three months is not long enough to be sure
-- b) No: only a payment the bank marks as a standing order counts
-- c) **Yes: same merchant, same amount, three months** ✓
-- d) Yes, and it would be recurring at three different amounts too
-
-**Q8. (medium) Transfers are exempted from duplicate removal. What would go wrong without that exemption?**
-- a) Every transfer would be counted twice in the spending
-- b) The two legs would end up in different months
-- c) **One leg of each transfer would be dropped, and the money would look like it went somewhere it did not** ✓
-- d) Transfers would be categorised as spending
-
-**Q9. (hard) Rounding happens once, at the total, rather than on each row. What does that cost?**
-- a) Nothing: the two come to the same figure
-- b) **A total that does not add up line by line against a printed statement** ✓
-- c) Amounts under a penny are lost
-- d) The recurring detection stops matching on amount
+**Q3. (medium) Amounts are rounded once at the summary rather than on every transaction. What does that give up?**
+- a) Speed, because every exact amount has to be carried until the end
+- b) **Agreeing line by line with a printed receipt** ✓
+- c) Being able to show the totals in another currency
+- d) Accuracy, because many small amounts drift further apart this way
 
 ### Extension: what a further change would need
 
-**Q10. (easy) Jane's bank exports a column tally does not recognise. What does she change?**
-- a) The CSV itself, to rename the column
-- b) **The list of names in `rows.py` that each field is matched against** ✓
-- c) `summary.py`, where the pipeline runs
-- d) Nothing: an unknown column is worked out from what is in it
-
-**Q11. (medium) Adding `shell energy` to the category rules means deciding one thing beyond the pattern itself. What?**
-- a) Which month it starts applying from
-- b) **Where in the list it goes, because the first rule that matches wins** ✓
-- c) Whether it counts as a recurring payment
-- d) What to do when the amount is positive
-
-**Q12. (hard) Jane wants a refund to reduce the month the purchase was in. What stands in the way?**
-- a) The refund row does not record which purchase it is for
-- b) Refunds are recognised by sign, so income would be reduced too
-- c) **A summary for that month may already have been read, and there is no answer for what happens then** ✓
-- d) The two months could be in different files
+**Q5. (hard) You add a rule for one coffee shop, but a broader "cafe" rule already matches it. What decides which one applies?**
+- a) The more specific pattern wins, whichever order they are in
+- b) **Where it sits in the list, because the first pattern that matches wins** ✓
+- c) Both apply, and the amount is split between them
+- d) Neither: two matching rules send it to the uncategorised bucket
 
 ## The after-task questions
 
-Six questions, four options, one right, asked straight after the task with the
+Five questions, four options, one right, asked straight after the task with the
 code, the description and the agent CLOSED. Matched to scribe's set one for one,
 band for band and level for level. The reasoning for both is written out once, in
 `../scribe/STUDY.md`.
@@ -190,41 +147,35 @@ band for band and level for level. The reasoning for both is written out once, i
 - c) On the command line, as an argument
 - d) In the summary, after the fact
 
-**Q2. (medium) A transaction that is now split in two. Which existing rule is most likely to treat it differently than before?**
-- a) The month it is counted in
-- b) Whether it is recognised as recurring
-- c) **Duplicate removal, because two equal halves on one day at one merchant is the shape it matches** ✓
-- d) The sign convention applied to its amount
-
 ### Rationale: why that way and not the other
 
-**Q3. (medium) You decided whether a split counts as one transaction or two. What makes the count a decision rather than an implementation detail?**
-- a) It changes how the rows are stored
-- b) It changes which month the halves land in
-- c) **The number is in the summary the person reads, so a loop deciding it by accident still publishes it** ✓
-- d) It changes whether the duplicate rule fires
+**Q2. (medium) A purchase that your change splits in two. Which existing rule most likely treats it differently now?**
+- a) The month it is counted in
+- b) Whether it is recognised as a recurring payment
+- c) **Duplicate removal, because two equal halves on one day at one merchant is exactly the shape it matches** ✓
+- d) The sign convention applied to its amount
 
-**Q4. (hard) `categorise` sends anything unmatched to `uncategorised`, and `summary` counts that bucket. For a split where one half matches a rule and the other does not, what does that mean?**
+**Q4. (hard) After your change, one half of a split matches a category rule and the other half matches none. What happens?**
 - a) The whole transaction is dropped, because it is ambiguous
-- b) The whole transaction goes to `uncategorised`, because any doubt sends it there
-- c) **Each half can be categorised on its own, so only the unmatched half lands in the bucket** ✓
+- b) The whole transaction goes to the uncategorised bucket, because any doubt sends it there
+- c) **Each half is categorised on its own, so only the unmatched half lands in that bucket** ✓
 - d) The run stops and asks which category to use
 
 ### Change: what it cost, and what it touched
 
-**Q5. (hard) Suppose you had made the duplicate key finer — adding the reference — so the halves stopped matching. What else would that have changed?**
-- a) Nothing: the key is only used for splits
-- b) Transfers would stop being exempted
-- c) **Duplicate detection would loosen for every ordinary transaction, not just for splits** ✓
-- d) The months would be recomputed
+**Q3. (medium) Your change decides whether a split counts as one transaction or two. Why is that a decision rather than a detail?**
+- a) It changes how the rows are stored on disk
+- b) It changes which month the halves land in
+- c) **The number of transactions is in the summary somebody reads, so a loop that settles it by accident still publishes it** ✓
+- d) It changes whether the duplicate rule fires
 
 ### Extension: what a next person needs
 
-**Q6. (medium) Somebody adds a new category rule tomorrow. What do they have to decide that they would not have to in a codebase of independent rules?**
-- a) Which file to put it in
-- b) Whether it applies to refunds
-- c) **Where in `categories.RULES` it goes, because the first rule that matches wins** ✓
-- d) Whether to write a fixture for it
+**Q5. (hard) Suppose you had made the duplicate check finer — adding a reference — so the two halves stopped matching. What else would that have changed?**
+- a) Nothing: that check is only used for splits
+- b) Transfers would stop being left out
+- c) **Duplicate detection would loosen for every ordinary transaction, not only for splits** ✓
+- d) The months would all be recomputed
 
 ## Where it does not match scribe, and by how much
 

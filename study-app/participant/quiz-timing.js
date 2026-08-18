@@ -6,12 +6,18 @@
 /**
  * How long the open-book question round runs for.
  *
- * Long enough to look twelve answers up, short enough that somebody cannot read
+ * Long enough to look five answers up, short enough that somebody cannot read
  * the whole codebase and answer from that instead — which would erase the
  * difference between the two ways of working, since both can reach every answer
  * given unlimited time. The limit is what makes the SCORE mean something.
+ *
+ * Six, not the old ten. The set went from twelve questions to five, and a clock
+ * left at ten would have stopped binding — nobody would run out, every sitting
+ * would finish early, and the elapsed time (half the measure) would flatten to
+ * "however long it takes to read five questions". Kept slightly above
+ * twelve-minutes-pro-rata so the reduction is in the reading, not in the rush.
  */
-export const QUIZ_MINUTES = 10;
+export const QUIZ_MINUTES = 6;
 
 /** How long before the end the clock starts warning (ms). Enough to finish the
  *  question in hand; not so long that it nags for a quarter of the sitting. */

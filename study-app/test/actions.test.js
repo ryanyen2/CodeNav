@@ -28,6 +28,8 @@ test('every action in the list is produced by at least one input, so none is dea
         { ev: 'codoc', t: 1, kind: 'verdict', accept: true },
         { ev: 'codoc', t: 1, kind: 'verdict', accept: false },
         { ev: 'ask', t: 1, steps: 3 },
+        { ev: 'view', surface: 'output', file: 'fixtures/report.md', t: 5000, ms: 2000 },
+        { ev: 'edit', surface: 'output', file: 'fixtures/report.txt', t: 1, active: true, focused: true },
     ];
     for (const s of samples) {
         const a = mapEvent(s);

@@ -71,15 +71,14 @@ noticed.
 
 ## The quiz
 
-Twelve questions, four options, one right. Asked before the task and again after,
-so the change is the measure.
+Five questions, four options, one right, asked before the task.
 
 **They are answered open book, with a clock running.** The participant may read
 the description, read the code, run the project, and ask the agent. The one thing
 barred is pasting a question at the agent, which would measure the agent. This
 changed in 2026-08: asking people to answer "from what you have just read"
 measured how much of a two-minute briefing they retained, which is not what
-either way of working is for. How quickly somebody can find twelve answers is
+either way of working is for. How quickly somebody can find five answers is
 the comparison, so the elapsed time is stored with the answers.
 
 **Every wrong option is something scribe could reasonably have done and did not.**
@@ -87,8 +86,8 @@ A quiz whose wrong answers are obviously wrong is answered by picking the
 sensible one, and the first draft of the quiz scored twelve out of twelve with no
 description at all.
 
-**Every question carries an (easy), (medium) or (hard) tag**, four of each, one
-per band. The tag is stripped before anybody sees it and never reaches the
+**Every question carries an (easy), (medium) or (hard) tag.** With five
+questions one band carries two and the levels cannot be evenly split. The tag is stripped before anybody sees it and never reaches the
 browser copy. It is there so the extractor can refuse a set that has drifted to
 one end: a quiz where everything is hard measures who already knew the domain,
 and the earlier set was all hard. `extract-questions.mjs` also refuses if scribe
@@ -141,97 +140,45 @@ pre-registration rather than discovering them in the results.
 
 ### Purpose: what it is for, and where it stops
 
-Asked as behaviour rather than as description. "What is scribe for" is answerable
-from the name; "what happens when you hand it a PDF" is answerable only if you
-know where the program's edges are.
-
-**Q1. (easy) Jane wants scribe to keep the tables out of a report. Can it?**
-- a) Yes, it rebuilds them from where the columns sat
-- b) Yes, but only for tables with a header row
-- c) **No: the table is gone before scribe is handed anything** ✓
-- d) No, but it marks the place where a table was
-
-**Q2. (medium) Raj makes heading detection stricter, so fewer lines become headings. Which other part of the output changes?**
-- a) Footnotes, because a note number looks like a heading number
-- b) Character normalising, because heading text is normalised separately
-- c) **The paragraphs, because a line that is no longer a heading joins the prose around it** ✓
-- d) Nothing else: headings are decided line by line and touch nothing else
-
-**Q3. (hard) Raj moves the character normalising so it runs first instead of last. What breaks?**
-- a) Nothing: normalising early or late comes to the same thing
-- b) The footnote markers are normalised away before they can be found
-- c) **Rules that match on the characters as they came out of the PDF stop matching** ✓
-- d) The output keeps its ligatures, because normalising happens before the text exists
+**Q1. (easy) A three-page report repeats its section title at the top of every page. It is a real heading, not a running header. What does scribe do with it?**
+- a) Keeps it as a heading, because it is numbered like the others
+- b) **Drops it, because it repeats near the edge of most pages and that is all scribe can see** ✓
+- c) Keeps the first one and drops the repeats
+- d) Keeps it, and marks the repeats for review
 
 ### Rationale: which way it went, and why
 
-These ask what scribe actually does in a named case. Both answers are defensible
-and another converter would go the other way, so the only way to know is to have
-learned what this one decided. A question whose right answer is simply the more
-sensible one is answerable without reading anything, which is what the first
-draft of this quiz was.
+**Q2. (medium) A word is split across a line break as `well-` then `being`. What comes out?**
+- a) `wellbeing`, because a hyphen at a line end is the typesetter's, not the writer's
+- b) **`well-being`, because a short list of prefixes is allowed to keep its hyphen** ✓
+- c) `well- being`, because the break is preserved along with the hyphen
+- d) `well-being`, because a dictionary is consulted for the compound
 
-**Q4. (easy) A word is split across a line break as `photogram-` then `metric`. What comes out?**
-- a) `photogram-metric`, keeping the hyphen
-- b) `photogram metric`, as two words
-- c) **`photogrammetric`, joined with the hyphen dropped** ✓
-- d) It is left as it was, because the word is not in the exception list
-
-**Q5. (medium) A word is split as `well-` then `being`. What comes out?**
-- a) `wellbeing`, because the hyphen was the typesetter's
-- b) **`well-being`, because that hyphen belongs to the word** ✓
-- c) `well- being`, leaving the break visible
-- d) `well-being`, but only if the word appears unbroken elsewhere in the document
-
-**Q6. (hard) A line reads `3. We asked each participant to describe what they had understood.` What does scribe make of it?**
-- a) A second-level heading, from the numbering
-- b) A heading, but only if a blank line follows
-- c) **Not a heading: it is too long and it ends in a full stop** ✓
-- d) A numbered list item, rendered as a bullet
+**Q4. (hard) Page furniture is removed before anything looks for headings. What does that ordering cost?**
+- a) Nothing: the two rules never look at the same lines
+- b) Page numbers can no longer be used to order the sections
+- c) **A real heading that repeats on most pages is gone before the heading rule can see it** ✓
+- d) A heading on the first page is missed, because there is nothing before it to compare against
 
 ### Change: what happened, and what it cost
 
-**Q7. (easy) A three-page report has the same line at the top of two of its three pages. What happens to that line?**
-- a) It is kept, because two pages is not a pattern
-- b) **It is dropped: two pages out of three is over the threshold** ✓
-- c) It is kept on the first page and dropped on the second
-- d) It is dropped only if a page number appears with it
-
-**Q8. (medium) Footnote markers used to be found after any full stop, and that rule was changed. What was going wrong?**
-- a) A marker at the very end of a paragraph was missed
-- b) Two markers next to each other were read as one
-- c) **Every decimal number in the document was read as a footnote reference** ✓
-- d) A page number at the foot of a page was taken for a marker
-
-**Q9. (hard) Page furniture is removed before headings are looked for. What does that ordering cost?**
-- a) Nothing: the two rules do not interact
-- b) Page numbers can no longer be used to order the sections
-- c) **A real heading that happens to repeat is gone before the heading rule can see it** ✓
-- d) The line count per page is wrong by the time headings are found
+**Q3. (medium) Footnote markers used to be found after any full stop, and the rule was tightened. What was going wrong?**
+- a) A marker at the very end of a paragraph was being missed
+- b) Two markers next to each other were being read as one
+- c) **Every decimal number in the document was being read as a footnote reference** ✓
+- d) A page number at the foot of a page was being taken for a marker
 
 ### Extension: what a further change would need
 
-**Q10. (easy) Jane wants scribe to recognise a new kind of block. Where does that go?**
-- a) Into `lines.py`, with the rest of the parsing
-- b) **Into a policy module of its own, and into the order in `convert.py`** ✓
-- c) Into `text.py`, with the other rewriting
-- d) Anywhere: the rules do not depend on each other
-
-**Q11. (medium) Two guards stop furniture removal firing on a short document. One is a minimum number of pages. What is the other?**
-- a) A minimum number of words in the repeated line
-- b) **A minimum number of lines on a page, so that being near the edge means something** ✓
-- c) A maximum number of pages, above which it is assumed to be a book
-- d) There is only one guard
-
-**Q12. (hard) Jane wants the running header kept on a one-page letter but still dropped from a long report. What stands in the way?**
-- a) By the time anything could tell the two apart, the header has already been removed
-- b) **Nothing scribe can see tells them apart: it is handed text and nothing else** ✓
-- c) Markdown has no way to mark a line as a page header
-- d) The page numbers would have to be kept along with it
+**Q5. (hard) You want the running header kept on a one-page letter but still dropped from a long report. What stands in the way?**
+- a) Markdown has no way to mark a line as a page header
+- b) **Repetition across pages is the only signal there is, and one page cannot show it** ✓
+- c) The header is removed before anything could tell the two documents apart
+- d) The page number would have to be kept along with it
 
 ## The after-task questions
 
-Six questions, four options, one right, asked straight after the task with the
+Five questions, four options, one right, asked straight after the task with the
 code, the description and the agent CLOSED. Never shown to a participant before
 they have done the task.
 
@@ -251,47 +198,41 @@ They are matched to tally's set one for one, band for band.
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) Your change turns some passages into Markdown block quotes. What decides which passages?**
-- a) The words in them, matched against a list
-- b) **Something about their shape on the page, which is all `lines.py` keeps** ✓
-- c) Their font, which the extracted text records
-- d) Their position in the document, counted from the top
-
-**Q2. (medium) A line that is now inside a quote. Which existing behaviour is most likely to treat it differently than before?**
-- a) Whether its ligatures were normalised
-- b) Which page it is recorded on
-- c) **Whether it was joined into the paragraph around it** ✓
-- d) Whether it counted toward the furniture threshold
+**Q1. (easy) Your change decides which passages become block quotes. What does scribe know about a line that a rule could be based on?**
+- a) Its font and size, which the extracted text records
+- b) **Its text, which page it came from, and where it sat on that page — nothing else** ✓
+- c) Its colour and how far it was indented in the PDF
+- d) Where it ends up in the finished Markdown
 
 ### Rationale: why that way and not the other
 
-**Q3. (medium) You chose how a quote is recognised. What makes a rule based on font inconsistent with the rest of scribe, whatever its merits?**
-- a) Markdown cannot express a font
-- b) It would be slower than the other rules
-- c) **`lines.py` keeps text, page and index and nothing else, so no rule downstream has a font to look at** ✓
-- d) The other rules are all in one file and it would have to be too
+**Q2. (medium) A line that your change now puts inside a quote used to be joined into the paragraph around it. Which existing behaviour most likely treats it differently now?**
+- a) The characters in it, which are tidied separately
+- b) **Rejoining paragraphs, because a quote is a block and the prose around it stops flowing into it** ✓
+- c) Which page it is recorded on
+- d) Whether it counted towards the repeated-line threshold
 
-**Q4. (hard) `furniture.strip` runs before anything looks for quotes. For a quote that runs across a page break, what does that ordering do?**
-- a) It splits the quote, because the running header lands between the halves
-- b) **It joins them, because the running header is gone before quotes are looked for** ✓
-- c) It drops the quote, because furniture removal takes the whole block
-- d) Nothing: the two rules never see the same lines
+**Q4. (hard) Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?**
+- a) Nothing: the two are independent
+- b) Quotes would lose their indentation
+- c) **A quote crossing a page break would have the running header sitting inside it** ✓
+- d) Headings would stop being recognised
 
 ### Change: what it cost, and what it touched
 
-**Q5. (hard) Suppose you had put quote detection BEFORE `furniture.strip` instead. What would have started going wrong?**
-- a) Nothing: the two are independent
-- b) Quotes would lose their indentation
-- c) **A quote crossing a page break would have the running header inside it** ✓
-- d) Headings would stop being recognised
+**Q3. (medium) The running header is removed before your change runs. For a quote that carries on across a page break, what does that ordering do?**
+- a) It splits the quote, because the header lands between the two halves
+- b) **It lets the halves join, because the header is gone before quotes are looked for** ✓
+- c) It drops the quote, because removing the header takes the whole block
+- d) Nothing: the two never see the same lines
 
 ### Extension: what a next person needs
 
-**Q6. (medium) Somebody picks this up tomorrow and wants a rule that runs before yours. What do they have to decide that they would not have to in a codebase of independent rules?**
+**Q5. (hard) Someone picks this up tomorrow and adds another rule. What do they have to decide that they would not have to if the rules were independent?**
 - a) Which file to put it in
-- b) Whether to give its threshold a named constant
-- c) **Where in `convert.py`'s fixed order it goes, because the order is load-bearing** ✓
-- d) Whether to write a fixture for it
+- b) Whether to give its threshold a name
+- c) **Where it goes in the fixed order the stages run in, because each stage sees what the ones before it left** ✓
+- d) Whether to add a sample document for it
 
 ## Matching `tally`
 

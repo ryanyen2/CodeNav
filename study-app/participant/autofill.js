@@ -86,6 +86,14 @@ export function defaultsFor(step, project) {
         case 'signoff':
             for (const q of SIGNOFF) out[q.id] = answer(q);
             break;
+        case 'task':
+            // The task asks nothing; it stores only when it began and ended, so a
+            // pilot skipping through still leaves the two instants the analysis
+            // cuts the interaction log on.
+            out.startedAt = Date.now();
+            out.finishedAt = Date.now();
+            out.elapsedMs = 0;
+            break;
         case 'reflect':
             for (const q of REFLECTION) out[q.id] = answer(q);
             break;

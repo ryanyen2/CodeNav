@@ -147,8 +147,13 @@ if keys_block "$TMP"; then
     || bad "no apiKeyHelper, so they will be asked to trust the key"
   [ "$(read_json "$PROFILE" model)" = "claude-sonnet-5" ] \
     && ok "the model is pinned to sonnet-5" || bad "the model is not pinned"
-  [ "$(read_json "$PROFILE" effortLevel)" = "medium" ] \
-    && ok "thinking is set to medium" || bad "thinking is not set"
+  # Low on purpose, and pinned so it is part of the condition: the session is
+  # timed, the task is small enough that the model one-shots it either way, and a
+  # participant sitting through deliberation is not experiencing either condition.
+  # The launcher passes --effort low too; this covers plain `claude`.
+  [ "$(read_json "$PROFILE" effortLevel)" = "low" ] \
+    && ok "thinking is set to low, so nobody waits on deliberation" \
+    || bad "thinking is not pinned to low"
   # The assistant's version is part of the condition. One that upgraded itself
   # between participant three and four is a confound nobody can reconstruct.
   [ "$(read_json "$PROFILE" env.DISABLE_AUTOUPDATER)" = "1" ] \
@@ -176,6 +181,18 @@ if keys_block "$TMP"; then
     && ok "it points the assistant at the study profile" || bad "it does not set the config dir"
   grep -q 'unset ANTHROPIC_API_KEY' "$L" 2>/dev/null \
     && ok "and clears any key of their own first" || bad "their own key could be billed"
+  # The pace of the assistant is part of the condition, and it is identical in
+  # both arms. These live in the launcher rather than in either description,
+  # because the baseline's description IS its CLAUDE.md and anything written
+  # there would be read as part of the project.
+  grep -q -- '--effort low' "$L" 2>/dev/null \
+    && ok "the assistant is set to work at a session's pace" || bad "no effort setting: they will watch it think"
+  grep -q -- '--disallowedTools Task' "$L" 2>/dev/null \
+    && ok "and cannot fan the work out to sub-agents" || bad "sub-agents are allowed: minutes lost, no transcript"
+  grep -q -- '--append-system-prompt' "$L" 2>/dev/null \
+    && ok "and is told to make the change and stop" || bad "no pace instruction"
+  bash -n "$L" 2>/dev/null \
+    && ok "and the launcher is valid shell" || bad "the launcher does not parse"
 
   # codoc, in the ONE workspace that runs it. keys_block ran as codoc-first, so
   # that is scribe. Writing a codoc key into the other arm would put an OpenAI

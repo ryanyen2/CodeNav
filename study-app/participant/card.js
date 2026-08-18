@@ -23,7 +23,14 @@ export function drawCard(el, card, { width = 720, dark = false } = {}) {
     const scale = (globalThis.devicePixelRatio || 1);
     const lineHeight = 30;
     const padding = 44;
-    const height = padding * 2 + 54 + card.lines.length * lineHeight + 40;
+    const ex = card.example && card.example.lines && card.example.lines.length
+        ? card.example : null;
+    // The card is the task and nothing else. The time and the "decide anything
+    // this card does not specify" instruction used to be drawn inside it, which
+    // made a picture of the task also a picture of the study's instructions —
+    // two different things to read as one. They live on the page now.
+    const exHeight = ex ? 18 + 22 + ex.lines.length * 24 : 0;
+    const height = padding * 2 + 54 + card.lines.length * lineHeight + exHeight;
 
     let canvas = el.querySelector('canvas');
     if (!canvas) {
@@ -49,7 +56,10 @@ export function drawCard(el, card, { width = 720, dark = false } = {}) {
         el.innerHTML = `<div class="card-fallback">
             <strong>${escapeText(card.title)}</strong>
             ${card.lines.map((l) => `<p>${escapeText(l)}</p>`).join('')}
-            <em>About 17 minutes. Work as you normally would.</em>
+            ${card.example && card.example.lines && card.example.lines.length
+                ? `<p class="card-ex-label">${escapeText(card.example.label)}</p>`
+                  + `<pre class="card-ex">${card.example.lines.map(escapeText).join('\n')}</pre>`
+                : ''}
         </div>`;
         return null;
     }
@@ -80,9 +90,27 @@ export function drawCard(el, card, { width = 720, dark = false } = {}) {
         y += lineHeight;
     }
 
-    ctx.font = `14px ${FONT}`;
-    ctx.fillStyle = soft;
-    ctx.fillText('About 17 minutes. Work as you normally would.', padding, y + 6);
+    if (ex) {
+        // A hairline, then the label, then the sample in a mono face so it reads
+        // as a thing the program produces rather than as more instruction.
+        y += 4;
+        ctx.strokeStyle = line;
+        ctx.beginPath();
+        ctx.moveTo(padding, y + 0.5);
+        ctx.lineTo(width - padding, y + 0.5);
+        ctx.stroke();
+        y += 18;
+        ctx.font = `12px ${FONT}`;
+        ctx.fillStyle = soft;
+        ctx.fillText(ex.label, padding, y);
+        y += 22;
+        ctx.font = '14px ui-monospace, SFMono-Regular, Menlo, monospace';
+        ctx.fillStyle = ink;
+        for (const l of ex.lines) {
+            ctx.fillText(l, padding, y);
+            y += 24;
+        }
+    }
 
     return canvas;
 }

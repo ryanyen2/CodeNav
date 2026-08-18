@@ -25,6 +25,20 @@ const cases = [
     // Everything else.
     ['', 'other'],
     ['LICENSE', 'other'],
+    // The sample documents, and what the program writes beside them. Looking at
+    // output is not looking at the code that decided it, and counting it as code
+    // inflated "did they open the code before acting" — the measure meant to tell
+    // reading from trusting. The directory is the discriminator, not the suffix:
+    // scribe reads fixtures/report.txt and writes fixtures/report.md.
+    ['fixtures/report.txt', 'output'],
+    ['fixtures/report.md', 'output'],
+    ['fixtures/memo.txt', 'output'],
+    // tally's samples are .csv, which used to fall through to 'other' and vanish
+    // entirely — so the two projects were not even counted the same way.
+    ['fixtures/current.csv', 'output'],
+    ['scribe/fixtures/handbook.txt', 'output'],
+    // Ordinary source keeps its surface; a .md that is not the description is code.
+    ['README.md', 'code'],
     ['_site/posts/a/index.html', 'code'],
 ];
 

@@ -420,9 +420,9 @@ Two sets, one before the task and a different one after. The participant answers
 both on their own page. **You do not read either out and you do not score them
 during the session.**
 
-### Before the task: twelve questions, open book, ten minutes
+### Before the task: five questions, open book, six minutes
 
-Twelve multiple-choice questions about the project, four options each, one
+Five multiple-choice questions about the project, four options each, one
 correct. They may read the description, read the code, run the project and ask
 the agent. The one thing barred is pasting a question or its options at the
 agent, which would measure the agent rather than the pair. Nothing enforces it,
@@ -430,7 +430,7 @@ so watch the screen, and the transcript shows it afterwards.
 
 The clock is on their page and **ends the sitting**: at zero it stamps whatever is
 answered and moves to the next step by itself, with a thirty-second warning first.
-You do not have to call time, and should not extend it — how long twelve answers
+You do not have to call time, and should not extend it — how long five answers
 took is half the measure, so a sitting that ran long is not the same result as one
 that did not. An unanswered question is recorded as `timedOut` rather than as a
 blank, so the analysis can tell "ran out" from "left it".
@@ -443,10 +443,10 @@ were wrong.
 
 The bands are the four parts of RQ1: what the program is for, why it is the way
 it is, why a particular change was made, and what a further change would need
-decided first. Each band has an easy, a medium and a hard question, and scribe
-and tally match band for band and level for level.
+decided first. With five questions one band carries two; scribe and tally match
+band for band and level for level, so neither project is the harder draw.
 
-### After the task: six questions, closed book
+### After the task: five questions, closed book
 
 Multiple choice, about the change they just made. **Ask them to close the code,
 the description and the agent first**, and say why: what is being looked at is
@@ -459,7 +459,7 @@ the decision themselves and watched what it did, and not by somebody who let the
 agent write it and did not look. They have right answers, and the dashboard scores
 them as they answer. Nothing here needs marking by hand.
 
-Alongside the six is one scale: how much of it they were sure of rather than
+Alongside the five is one scale: how much of it they were sure of rather than
 working out on the spot. A fluent reconstruction and a real memory look the same
 in a set of answers, and only they can say which it was.
 

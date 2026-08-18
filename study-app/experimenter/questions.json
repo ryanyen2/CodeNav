@@ -4,211 +4,61 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "Jane wants scribe to keep the tables out of a report. Can it?",
+      "question": "A three-page report repeats its section title at the top of every page. It is a real heading, not a running header. What does scribe do with it?",
       "options": [
         {
           "letter": "a",
-          "text": "Yes, it rebuilds them from where the columns sat"
+          "text": "Keeps it as a heading, because it is numbered like the others"
         },
         {
           "letter": "b",
-          "text": "Yes, but only for tables with a header row"
+          "text": "Drops it, because it repeats near the edge of most pages and that is all scribe can see"
         },
         {
           "letter": "c",
-          "text": "No: the table is gone before scribe is handed anything"
+          "text": "Keeps the first one and drops the repeats"
         },
         {
           "letter": "d",
-          "text": "No, but it marks the place where a table was"
+          "text": "Keeps it, and marks the repeats for review"
         }
       ],
-      "answer": "c"
+      "answer": "b"
     },
     {
       "n": 2,
-      "band": "Purpose",
+      "band": "Rationale",
       "difficulty": "medium",
-      "question": "Raj makes heading detection stricter, so fewer lines become headings. Which other part of the output changes?",
+      "question": "A word is split across a line break as `well-` then `being`. What comes out?",
       "options": [
         {
           "letter": "a",
-          "text": "Footnotes, because a note number looks like a heading number"
+          "text": "`wellbeing`, because a hyphen at a line end is the typesetter's, not the writer's"
         },
         {
           "letter": "b",
-          "text": "Character normalising, because heading text is normalised separately"
+          "text": "`well-being`, because a short list of prefixes is allowed to keep its hyphen"
         },
         {
           "letter": "c",
-          "text": "The paragraphs, because a line that is no longer a heading joins the prose around it"
+          "text": "`well- being`, because the break is preserved along with the hyphen"
         },
         {
           "letter": "d",
-          "text": "Nothing else: headings are decided line by line and touch nothing else"
+          "text": "`well-being`, because a dictionary is consulted for the compound"
         }
       ],
-      "answer": "c"
-    },
-    {
-      "n": 3,
-      "band": "Purpose",
-      "difficulty": "hard",
-      "question": "Raj moves the character normalising so it runs first instead of last. What breaks?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Nothing: normalising early or late comes to the same thing"
-        },
-        {
-          "letter": "b",
-          "text": "The footnote markers are normalised away before they can be found"
-        },
-        {
-          "letter": "c",
-          "text": "Rules that match on the characters as they came out of the PDF stop matching"
-        },
-        {
-          "letter": "d",
-          "text": "The output keeps its ligatures, because normalising happens before the text exists"
-        }
-      ],
-      "answer": "c"
+      "answer": "b"
     },
     {
       "n": 4,
       "band": "Rationale",
-      "difficulty": "easy",
-      "question": "A word is split across a line break as `photogram-` then `metric`. What comes out?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "`photogram-metric`, keeping the hyphen"
-        },
-        {
-          "letter": "b",
-          "text": "`photogram metric`, as two words"
-        },
-        {
-          "letter": "c",
-          "text": "`photogrammetric`, joined with the hyphen dropped"
-        },
-        {
-          "letter": "d",
-          "text": "It is left as it was, because the word is not in the exception list"
-        }
-      ],
-      "answer": "c"
-    },
-    {
-      "n": 5,
-      "band": "Rationale",
-      "difficulty": "medium",
-      "question": "A word is split as `well-` then `being`. What comes out?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "`wellbeing`, because the hyphen was the typesetter's"
-        },
-        {
-          "letter": "b",
-          "text": "`well-being`, because that hyphen belongs to the word"
-        },
-        {
-          "letter": "c",
-          "text": "`well- being`, leaving the break visible"
-        },
-        {
-          "letter": "d",
-          "text": "`well-being`, but only if the word appears unbroken elsewhere in the document"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 6,
-      "band": "Rationale",
       "difficulty": "hard",
-      "question": "A line reads `3. We asked each participant to describe what they had understood.` What does scribe make of it?",
+      "question": "Page furniture is removed before anything looks for headings. What does that ordering cost?",
       "options": [
         {
           "letter": "a",
-          "text": "A second-level heading, from the numbering"
-        },
-        {
-          "letter": "b",
-          "text": "A heading, but only if a blank line follows"
-        },
-        {
-          "letter": "c",
-          "text": "Not a heading: it is too long and it ends in a full stop"
-        },
-        {
-          "letter": "d",
-          "text": "A numbered list item, rendered as a bullet"
-        }
-      ],
-      "answer": "c"
-    },
-    {
-      "n": 7,
-      "band": "Change",
-      "difficulty": "easy",
-      "question": "A three-page report has the same line at the top of two of its three pages. What happens to that line?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "It is kept, because two pages is not a pattern"
-        },
-        {
-          "letter": "b",
-          "text": "It is dropped: two pages out of three is over the threshold"
-        },
-        {
-          "letter": "c",
-          "text": "It is kept on the first page and dropped on the second"
-        },
-        {
-          "letter": "d",
-          "text": "It is dropped only if a page number appears with it"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 8,
-      "band": "Change",
-      "difficulty": "medium",
-      "question": "Footnote markers used to be found after any full stop, and that rule was changed. What was going wrong?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "A marker at the very end of a paragraph was missed"
-        },
-        {
-          "letter": "b",
-          "text": "Two markers next to each other were read as one"
-        },
-        {
-          "letter": "c",
-          "text": "Every decimal number in the document was read as a footnote reference"
-        },
-        {
-          "letter": "d",
-          "text": "A page number at the foot of a page was taken for a marker"
-        }
-      ],
-      "answer": "c"
-    },
-    {
-      "n": 9,
-      "band": "Change",
-      "difficulty": "hard",
-      "question": "Page furniture is removed before headings are looked for. What does that ordering cost?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Nothing: the two rules do not interact"
+          "text": "Nothing: the two rules never look at the same lines"
         },
         {
           "letter": "b",
@@ -216,86 +66,61 @@
         },
         {
           "letter": "c",
-          "text": "A real heading that happens to repeat is gone before the heading rule can see it"
+          "text": "A real heading that repeats on most pages is gone before the heading rule can see it"
         },
         {
           "letter": "d",
-          "text": "The line count per page is wrong by the time headings are found"
+          "text": "A heading on the first page is missed, because there is nothing before it to compare against"
         }
       ],
       "answer": "c"
     },
     {
-      "n": 10,
-      "band": "Extension",
-      "difficulty": "easy",
-      "question": "Jane wants scribe to recognise a new kind of block. Where does that go?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Into `lines.py`, with the rest of the parsing"
-        },
-        {
-          "letter": "b",
-          "text": "Into a policy module of its own, and into the order in `convert.py`"
-        },
-        {
-          "letter": "c",
-          "text": "Into `text.py`, with the other rewriting"
-        },
-        {
-          "letter": "d",
-          "text": "Anywhere: the rules do not depend on each other"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 11,
-      "band": "Extension",
+      "n": 3,
+      "band": "Change",
       "difficulty": "medium",
-      "question": "Two guards stop furniture removal firing on a short document. One is a minimum number of pages. What is the other?",
+      "question": "Footnote markers used to be found after any full stop, and the rule was tightened. What was going wrong?",
       "options": [
         {
           "letter": "a",
-          "text": "A minimum number of words in the repeated line"
+          "text": "A marker at the very end of a paragraph was being missed"
         },
         {
           "letter": "b",
-          "text": "A minimum number of lines on a page, so that being near the edge means something"
+          "text": "Two markers next to each other were being read as one"
         },
         {
           "letter": "c",
-          "text": "A maximum number of pages, above which it is assumed to be a book"
+          "text": "Every decimal number in the document was being read as a footnote reference"
         },
         {
           "letter": "d",
-          "text": "There is only one guard"
+          "text": "A page number at the foot of a page was being taken for a marker"
         }
       ],
-      "answer": "b"
+      "answer": "c"
     },
     {
-      "n": 12,
+      "n": 5,
       "band": "Extension",
       "difficulty": "hard",
-      "question": "Jane wants the running header kept on a one-page letter but still dropped from a long report. What stands in the way?",
+      "question": "You want the running header kept on a one-page letter but still dropped from a long report. What stands in the way?",
       "options": [
         {
           "letter": "a",
-          "text": "By the time anything could tell the two apart, the header has already been removed"
-        },
-        {
-          "letter": "b",
-          "text": "Nothing scribe can see tells them apart: it is handed text and nothing else"
-        },
-        {
-          "letter": "c",
           "text": "Markdown has no way to mark a line as a page header"
         },
         {
+          "letter": "b",
+          "text": "Repetition across pages is the only signal there is, and one page cannot show it"
+        },
+        {
+          "letter": "c",
+          "text": "The header is removed before anything could tell the two documents apart"
+        },
+        {
           "letter": "d",
-          "text": "The page numbers would have to be kept along with it"
+          "text": "The page number would have to be kept along with it"
         }
       ],
       "answer": "b"
@@ -306,301 +131,126 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "Jane wants tally to tell her whether she can afford a holiday. Can it?",
+      "question": "You really did buy the same £3 coffee twice on the same day at the same shop. What does the summary show?",
       "options": [
         {
           "letter": "a",
-          "text": "Yes, from the recurring payments and the monthly totals"
+          "text": "Both, because they are two separate purchases"
         },
         {
           "letter": "b",
-          "text": "Yes, if she gives it a target to save towards"
+          "text": "One, because nothing in the row tells a real repeat from a repeated row"
         },
         {
           "letter": "c",
-          "text": "No: it reports what was spent and has no opinion beyond that"
+          "text": "Both, with the second marked as a possible duplicate"
         },
         {
           "letter": "d",
-          "text": "No, but it flags the months where spending rose"
+          "text": "It stops and asks which one to keep"
         }
       ],
-      "answer": "c"
+      "answer": "b"
     },
     {
       "n": 2,
-      "band": "Purpose",
+      "band": "Rationale",
       "difficulty": "medium",
-      "question": "Raj makes the transfer rule stricter, so fewer rows count as transfers. Which other rule starts behaving differently?",
+      "question": "A row whose description mentions a transfer is left out of duplicate removal. Why?",
       "options": [
         {
           "letter": "a",
-          "text": "Categorisation, because transfers have no category"
+          "text": "Because a transfer is not spending, so it never reaches the totals anyway"
         },
         {
           "letter": "b",
-          "text": "Rounding, because the totals change"
+          "text": "Because the two legs of a move between your own accounts look exactly like a duplicate"
         },
         {
           "letter": "c",
-          "text": "Duplicate removal, because transfers are the rows it was told to leave alone"
+          "text": "Because the two legs arrive on different dates and would never collide"
         },
         {
           "letter": "d",
-          "text": "Nothing else: the two are applied to different columns"
+          "text": "Because the bank marks transfers already, so the rule is not needed"
+        }
+      ],
+      "answer": "b"
+    },
+    {
+      "n": 4,
+      "band": "Rationale",
+      "difficulty": "hard",
+      "question": "A bank export lists every amount as a positive number, spending included. What does tally do?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "Refuses the file, because the direction cannot be known from it"
+        },
+        {
+          "letter": "b",
+          "text": "Leaves the amounts alone and reads the direction from a separate column"
+        },
+        {
+          "letter": "c",
+          "text": "Takes the file's own shape as the convention and flips every sign"
+        },
+        {
+          "letter": "d",
+          "text": "Treats the largest amounts as spending and the rest as money coming in"
         }
       ],
       "answer": "c"
     },
     {
       "n": 3,
-      "band": "Purpose",
-      "difficulty": "hard",
-      "question": "Raj moves the sign-flipping step so it runs last instead of first. What breaks?",
+      "band": "Change",
+      "difficulty": "medium",
+      "question": "Amounts are rounded once at the summary rather than on every transaction. What does that give up?",
       "options": [
         {
           "letter": "a",
-          "text": "Nothing: flipping signs is the same operation whenever it happens"
+          "text": "Speed, because every exact amount has to be carried until the end"
         },
         {
           "letter": "b",
-          "text": "The totals come out positive instead of negative"
+          "text": "Agreeing line by line with a printed receipt"
         },
         {
           "letter": "c",
-          "text": "Every rule that reads an amount has already read it the wrong way round"
+          "text": "Being able to show the totals in another currency"
         },
         {
           "letter": "d",
-          "text": "Refunds stop netting, because a refund is recognised by its sign"
+          "text": "Accuracy, because many small amounts drift further apart this way"
         }
       ],
-      "answer": "c"
-    },
-    {
-      "n": 4,
-      "band": "Rationale",
-      "difficulty": "easy",
-      "question": "A merchant matches no category rule at all. What happens to that transaction?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "The row is dropped"
-        },
-        {
-          "letter": "b",
-          "text": "The run stops and asks"
-        },
-        {
-          "letter": "c",
-          "text": "It is counted in a bucket of its own, which appears in the summary"
-        },
-        {
-          "letter": "d",
-          "text": "It is guessed at from the amount"
-        }
-      ],
-      "answer": "c"
+      "answer": "b"
     },
     {
       "n": 5,
-      "band": "Rationale",
-      "difficulty": "medium",
-      "question": "A payment is made on the 31st of January and posted by the bank on the 2nd of February. Which month does tally put it in?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "February, the month the bank processed it"
-        },
-        {
-          "letter": "b",
-          "text": "January, the month it was made"
-        },
-        {
-          "letter": "c",
-          "text": "Both, split across the boundary"
-        },
-        {
-          "letter": "d",
-          "text": "February, unless January's summary has already been written"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 6,
-      "band": "Rationale",
-      "difficulty": "hard",
-      "question": "A row's merchant matches both the utilities rule and the fuel rule. What happens?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "It is reported as ambiguous and the run stops"
-        },
-        {
-          "letter": "b",
-          "text": "Whichever rule is listed first wins"
-        },
-        {
-          "letter": "c",
-          "text": "It goes to the uncategorised bucket, because the answer is unclear"
-        },
-        {
-          "letter": "d",
-          "text": "It is counted under both, and the total is adjusted"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 7,
-      "band": "Change",
-      "difficulty": "easy",
-      "question": "The same merchant charges £11.99 in each of three months. Does tally call that recurring?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "No: three months is not long enough to be sure"
-        },
-        {
-          "letter": "b",
-          "text": "No: only a payment the bank marks as a standing order counts"
-        },
-        {
-          "letter": "c",
-          "text": "Yes: same merchant, same amount, three months"
-        },
-        {
-          "letter": "d",
-          "text": "Yes, and it would be recurring at three different amounts too"
-        }
-      ],
-      "answer": "c"
-    },
-    {
-      "n": 8,
-      "band": "Change",
-      "difficulty": "medium",
-      "question": "Transfers are exempted from duplicate removal. What would go wrong without that exemption?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Every transfer would be counted twice in the spending"
-        },
-        {
-          "letter": "b",
-          "text": "The two legs would end up in different months"
-        },
-        {
-          "letter": "c",
-          "text": "One leg of each transfer would be dropped, and the money would look like it went somewhere it did not"
-        },
-        {
-          "letter": "d",
-          "text": "Transfers would be categorised as spending"
-        }
-      ],
-      "answer": "c"
-    },
-    {
-      "n": 9,
-      "band": "Change",
-      "difficulty": "hard",
-      "question": "Rounding happens once, at the total, rather than on each row. What does that cost?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Nothing: the two come to the same figure"
-        },
-        {
-          "letter": "b",
-          "text": "A total that does not add up line by line against a printed statement"
-        },
-        {
-          "letter": "c",
-          "text": "Amounts under a penny are lost"
-        },
-        {
-          "letter": "d",
-          "text": "The recurring detection stops matching on amount"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 10,
-      "band": "Extension",
-      "difficulty": "easy",
-      "question": "Jane's bank exports a column tally does not recognise. What does she change?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "The CSV itself, to rename the column"
-        },
-        {
-          "letter": "b",
-          "text": "The list of names in `rows.py` that each field is matched against"
-        },
-        {
-          "letter": "c",
-          "text": "`summary.py`, where the pipeline runs"
-        },
-        {
-          "letter": "d",
-          "text": "Nothing: an unknown column is worked out from what is in it"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 11,
-      "band": "Extension",
-      "difficulty": "medium",
-      "question": "Adding `shell energy` to the category rules means deciding one thing beyond the pattern itself. What?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Which month it starts applying from"
-        },
-        {
-          "letter": "b",
-          "text": "Where in the list it goes, because the first rule that matches wins"
-        },
-        {
-          "letter": "c",
-          "text": "Whether it counts as a recurring payment"
-        },
-        {
-          "letter": "d",
-          "text": "What to do when the amount is positive"
-        }
-      ],
-      "answer": "b"
-    },
-    {
-      "n": 12,
       "band": "Extension",
       "difficulty": "hard",
-      "question": "Jane wants a refund to reduce the month the purchase was in. What stands in the way?",
+      "question": "You add a rule for one coffee shop, but a broader \"cafe\" rule already matches it. What decides which one applies?",
       "options": [
         {
           "letter": "a",
-          "text": "The refund row does not record which purchase it is for"
+          "text": "The more specific pattern wins, whichever order they are in"
         },
         {
           "letter": "b",
-          "text": "Refunds are recognised by sign, so income would be reduced too"
+          "text": "Where it sits in the list, because the first pattern that matches wins"
         },
         {
           "letter": "c",
-          "text": "A summary for that month may already have been read, and there is no answer for what happens then"
+          "text": "Both apply, and the amount is split between them"
         },
         {
           "letter": "d",
-          "text": "The two months could be in different files"
+          "text": "Neither: two matching rules send it to the uncategorised bucket"
         }
       ],
-      "answer": "c"
+      "answer": "b"
     }
   ]
 }

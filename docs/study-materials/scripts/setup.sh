@@ -750,7 +750,11 @@ except Exception:
 settings.update({
     "apiKeyHelper": os.environ["HELPER"],
     "model": "claude-sonnet-5",
-    "effortLevel": "medium",
+    # Low, matching the launcher's --effort. The session is timed and the task is
+    # small enough that the model one-shots it either way, so deliberation the
+    # participant sits and watches buys the study nothing. Set in BOTH places so a
+    # participant who types plain `claude` gets the same pace as the launcher.
+    "effortLevel": "low",
     "theme": "light",
     "env": {
         # The version is part of the condition. An assistant that upgraded
@@ -777,12 +781,29 @@ for name in $PROJECTS; do
   # A launcher, so nothing depends on the participant remembering to set an
   # environment variable. It also unsets any key of their own that happens to be
   # in their shell, which would otherwise be picked up and billed to them.
+  # The pace settings below are IDENTICAL in both conditions and live here rather
+  # than in either description, so they cannot contaminate the study material: the
+  # baseline's description IS its CLAUDE.md, and anything written there would be
+  # read by the participant as part of the project.
+  #
+  # Why bother: the session is 35 minutes and the thing being studied is how a
+  # person works with a description, not how long an agent takes. A pilot spent
+  # most of the task watching the assistant think, write tests nobody asked for,
+  # and fan work out to sub-agents. None of that is what either condition is for.
+  #   --effort low          less deliberation per turn; the task is small and the
+  #                         model one-shots it either way
+  #   --disallowedTools Task  no sub-agents: they add minutes and their work lands
+  #                         with no trace in the transcript the analysis reads
   cat > "$d/claude-study" <<LAUNCHER
 #!/usr/bin/env bash
 # Start the assistant for this study. Use this, not plain \`claude\`.
 export CLAUDE_CONFIG_DIR="$d/.claude-study"
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
-exec claude "\$@"
+exec claude \\
+  --effort low \\
+  --disallowedTools Task \\
+  --append-system-prompt "You are helping someone during a short timed session. Work quickly and directly. Make the change they asked for and stop. Do not write new tests, and do not run the test suite unless they ask. Do not explore the codebase beyond what the change needs. Keep replies to a few sentences: say what you changed and any decision you had to make, and skip summaries, plans, and next-step suggestions. If a choice is genuinely open, make a reasonable one and say which you made in one line rather than asking." \\
+  "\$@"
 LAUNCHER
   chmod +x "$d/claude-study"
 

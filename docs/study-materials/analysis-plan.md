@@ -60,8 +60,8 @@ transcript, which the participant is told about.
 
 | Measure | Computed from |
 | --- | --- |
-| **How well and how fast they can find an answer in this codebase** | The twelve questions, asked once before the task, **open book and timed**. The participant may read the description, read the code, run the project and ask the agent. Score and elapsed time both land in `answers/quiz-<project>-before`. Both are results: either way of working can reach every answer given unlimited time, so the limit is what makes the score mean anything. The clock ends the sitting itself; a run that hit it carries `timedOut`, so an unanswered question is distinguishable from one somebody chose to leave. |
-| **What they carried out of the task** | Six multiple-choice questions in `answers/reflect-<condition>`, **closed book**: no code, no description, no agent. They have right answers, held in `experimenter/after-questions.json` and never shipped to the browser, so the dashboard scores them and nothing is marked by hand. They are per project and about the change the participant just made, in the same four bands as the pre-task set. |
+| **How well and how fast they can find an answer in this codebase** | The five questions, asked once before the task, **open book and timed**. The participant may read the description, read the code, run the project and ask the agent. Score and elapsed time both land in `answers/quiz-<project>-before`. Both are results: either way of working can reach every answer given unlimited time, so the limit is what makes the score mean anything. The clock ends the sitting itself; a run that hit it carries `timedOut`, so an unanswered question is distinguishable from one somebody chose to leave. |
+| **What they carried out of the task** | Five multiple-choice questions in `answers/reflect-<condition>`, **closed book**: no code, no description, no agent. They have right answers, held in `experimenter/after-questions.json` and never shipped to the browser, so the dashboard scores them and nothing is marked by hand. They are per project and about the change the participant just made, in the same four bands as the pre-task set. |
 | Whether they were sure or reconstructing | The `recall` scale on the same page. A fluent reconstruction and a real memory read the same in prose, so it is asked directly. |
 | Whether the decisions passed through them | The who-settled-what record in the dashboard, and the two after-task questions that turn on a decision the participant made rather than on the codebase alone. |
 
@@ -70,7 +70,7 @@ answers to questions whose value is in the follow-up, at the end of two hours,
 and nothing comparable between participants. The follow-up now happens out loud
 in the closing interview, where it belongs.
 
-Every one of the six turns on a consequence of the participant's own change
+Every one of the five turns on a consequence of the participant's own change
 meeting a rule that was already in the codebase, so the two ways to get it right
 are to have understood the codebase or to have made the decision and watched what
 it did. A question answerable from the project briefing would measure reading.
@@ -105,6 +105,7 @@ question sets, and none between participants.
 | How many files they opened before the right one | Focus events in order, against the file the change eventually landed in. |
 | How long their instructions to the agent were | The transcript. |
 | How they navigated, coded into seek, relate, and collect | The interaction log with the screen recording. Hand-coded. |
+| **Which stage an action belongs to: working the codebase out, or changing it** | The interaction log is one stream, and the same actions appear in both stages — reading the description to answer a question looks exactly like reading it to plan a change. Cut it on wall clock: the questions run from `quiz-<project>-<sitting>.startedAt` to its `finishedAt`, and the task from `task-<condition>.startedAt` to its `finishedAt`. Both are stamped by the participant's page, on the same machine as the log, so they merge on time like every other source here. Anything between the two (reading the task card, the break) belongs to neither and is reported as such rather than folded into the nearer one. |
 
 ## Questionnaires and notes
 

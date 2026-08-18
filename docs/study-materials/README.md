@@ -36,7 +36,7 @@ them each way, so most files come as a pair.
 | `participant-before-the-session.md` | Sent days ahead. What the study is and how to set up their machine. Also goes in the bundle as `README.md`. |
 | `projects/scribe/ABOUT.md` | What a participant reads at the start of a scribe condition. Also on their own page. |
 | `projects/tally/ABOUT.md` | The same, for tally. |
-| `projects/<name>/STUDY.md` | **The answer key.** The task card, the four rated decisions, the twelve-question quiz. Never shown to a participant. |
+| `projects/<name>/STUDY.md` | **The answer key.** The task card, the four rated decisions, the five-question quiz. Never shown to a participant. |
 | `projects/<name>/CLAUDE.md` | The description both arms start from. The baseline gets it as a file; the codoc arm gets the same content as a feature tree. |
 
 **The projects and the tools**

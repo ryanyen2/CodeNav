@@ -836,7 +836,7 @@ function renderForms() {
 
       <div class="form-block">
         <h4>What they knew afterwards, from memory</h4>
-        <p class="hint">Six questions about the change they just made, answered on
+        <p class="hint">Five questions about the change they just made, answered on
         their own page with the code, the description and the agent closed. They
         have right answers, so nothing here needs marking by hand.</p>
         <div id="their-reflection" class="said"></div>

@@ -4,107 +4,57 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "Your change turns some passages into Markdown block quotes. What decides which passages?",
+      "question": "Your change decides which passages become block quotes. What does scribe know about a line that a rule could be based on?",
       "options": [
         {
           "letter": "a",
-          "text": "The words in them, matched against a list"
+          "text": "Its font and size, which the extracted text records"
         },
         {
           "letter": "b",
-          "text": "Something about their shape on the page, which is all `lines.py` keeps"
+          "text": "Its text, which page it came from, and where it sat on that page — nothing else"
         },
         {
           "letter": "c",
-          "text": "Their font, which the extracted text records"
+          "text": "Its colour and how far it was indented in the PDF"
         },
         {
           "letter": "d",
-          "text": "Their position in the document, counted from the top"
+          "text": "Where it ends up in the finished Markdown"
         }
       ],
       "answer": "b"
     },
     {
       "n": 2,
-      "band": "Purpose",
+      "band": "Rationale",
       "difficulty": "medium",
-      "question": "A line that is now inside a quote. Which existing behaviour is most likely to treat it differently than before?",
+      "question": "A line that your change now puts inside a quote used to be joined into the paragraph around it. Which existing behaviour most likely treats it differently now?",
       "options": [
         {
           "letter": "a",
-          "text": "Whether its ligatures were normalised"
+          "text": "The characters in it, which are tidied separately"
         },
         {
           "letter": "b",
+          "text": "Rejoining paragraphs, because a quote is a block and the prose around it stops flowing into it"
+        },
+        {
+          "letter": "c",
           "text": "Which page it is recorded on"
         },
         {
-          "letter": "c",
-          "text": "Whether it was joined into the paragraph around it"
-        },
-        {
           "letter": "d",
-          "text": "Whether it counted toward the furniture threshold"
-        }
-      ],
-      "answer": "c"
-    },
-    {
-      "n": 3,
-      "band": "Rationale",
-      "difficulty": "medium",
-      "question": "You chose how a quote is recognised. What makes a rule based on font inconsistent with the rest of scribe, whatever its merits?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "Markdown cannot express a font"
-        },
-        {
-          "letter": "b",
-          "text": "It would be slower than the other rules"
-        },
-        {
-          "letter": "c",
-          "text": "`lines.py` keeps text, page and index and nothing else, so no rule downstream has a font to look at"
-        },
-        {
-          "letter": "d",
-          "text": "The other rules are all in one file and it would have to be too"
-        }
-      ],
-      "answer": "c"
-    },
-    {
-      "n": 4,
-      "band": "Rationale",
-      "difficulty": "hard",
-      "question": "`furniture.strip` runs before anything looks for quotes. For a quote that runs across a page break, what does that ordering do?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "It splits the quote, because the running header lands between the halves"
-        },
-        {
-          "letter": "b",
-          "text": "It joins them, because the running header is gone before quotes are looked for"
-        },
-        {
-          "letter": "c",
-          "text": "It drops the quote, because furniture removal takes the whole block"
-        },
-        {
-          "letter": "d",
-          "text": "Nothing: the two rules never see the same lines"
+          "text": "Whether it counted towards the repeated-line threshold"
         }
       ],
       "answer": "b"
     },
     {
-      "n": 5,
-      "band": "Change",
+      "n": 4,
+      "band": "Rationale",
       "difficulty": "hard",
-      "question": "Suppose you had put quote detection BEFORE `furniture.strip` instead. What would have started going wrong?",
+      "question": "Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?",
       "options": [
         {
           "letter": "a",
@@ -116,7 +66,7 @@
         },
         {
           "letter": "c",
-          "text": "A quote crossing a page break would have the running header inside it"
+          "text": "A quote crossing a page break would have the running header sitting inside it"
         },
         {
           "letter": "d",
@@ -126,10 +76,35 @@
       "answer": "c"
     },
     {
-      "n": 6,
-      "band": "Extension",
+      "n": 3,
+      "band": "Change",
       "difficulty": "medium",
-      "question": "Somebody picks this up tomorrow and wants a rule that runs before yours. What do they have to decide that they would not have to in a codebase of independent rules?",
+      "question": "The running header is removed before your change runs. For a quote that carries on across a page break, what does that ordering do?",
+      "options": [
+        {
+          "letter": "a",
+          "text": "It splits the quote, because the header lands between the two halves"
+        },
+        {
+          "letter": "b",
+          "text": "It lets the halves join, because the header is gone before quotes are looked for"
+        },
+        {
+          "letter": "c",
+          "text": "It drops the quote, because removing the header takes the whole block"
+        },
+        {
+          "letter": "d",
+          "text": "Nothing: the two never see the same lines"
+        }
+      ],
+      "answer": "b"
+    },
+    {
+      "n": 5,
+      "band": "Extension",
+      "difficulty": "hard",
+      "question": "Someone picks this up tomorrow and adds another rule. What do they have to decide that they would not have to if the rules were independent?",
       "options": [
         {
           "letter": "a",
@@ -137,15 +112,15 @@
         },
         {
           "letter": "b",
-          "text": "Whether to give its threshold a named constant"
+          "text": "Whether to give its threshold a name"
         },
         {
           "letter": "c",
-          "text": "Where in `convert.py`'s fixed order it goes, because the order is load-bearing"
+          "text": "Where it goes in the fixed order the stages run in, because each stage sees what the ones before it left"
         },
         {
           "letter": "d",
-          "text": "Whether to write a fixture for it"
+          "text": "Whether to add a sample document for it"
         }
       ],
       "answer": "c"
@@ -179,9 +154,9 @@
     },
     {
       "n": 2,
-      "band": "Purpose",
+      "band": "Rationale",
       "difficulty": "medium",
-      "question": "A transaction that is now split in two. Which existing rule is most likely to treat it differently than before?",
+      "question": "A purchase that your change splits in two. Which existing rule most likely treats it differently now?",
       "options": [
         {
           "letter": "a",
@@ -189,11 +164,11 @@
         },
         {
           "letter": "b",
-          "text": "Whether it is recognised as recurring"
+          "text": "Whether it is recognised as a recurring payment"
         },
         {
           "letter": "c",
-          "text": "Duplicate removal, because two equal halves on one day at one merchant is the shape it matches"
+          "text": "Duplicate removal, because two equal halves on one day at one merchant is exactly the shape it matches"
         },
         {
           "letter": "d",
@@ -203,35 +178,10 @@
       "answer": "c"
     },
     {
-      "n": 3,
-      "band": "Rationale",
-      "difficulty": "medium",
-      "question": "You decided whether a split counts as one transaction or two. What makes the count a decision rather than an implementation detail?",
-      "options": [
-        {
-          "letter": "a",
-          "text": "It changes how the rows are stored"
-        },
-        {
-          "letter": "b",
-          "text": "It changes which month the halves land in"
-        },
-        {
-          "letter": "c",
-          "text": "The number is in the summary the person reads, so a loop deciding it by accident still publishes it"
-        },
-        {
-          "letter": "d",
-          "text": "It changes whether the duplicate rule fires"
-        }
-      ],
-      "answer": "c"
-    },
-    {
       "n": 4,
       "band": "Rationale",
       "difficulty": "hard",
-      "question": "`categorise` sends anything unmatched to `uncategorised`, and `summary` counts that bucket. For a split where one half matches a rule and the other does not, what does that mean?",
+      "question": "After your change, one half of a split matches a category rule and the other half matches none. What happens?",
       "options": [
         {
           "letter": "a",
@@ -239,11 +189,11 @@
         },
         {
           "letter": "b",
-          "text": "The whole transaction goes to `uncategorised`, because any doubt sends it there"
+          "text": "The whole transaction goes to the uncategorised bucket, because any doubt sends it there"
         },
         {
           "letter": "c",
-          "text": "Each half can be categorised on its own, so only the unmatched half lands in the bucket"
+          "text": "Each half is categorised on its own, so only the unmatched half lands in that bucket"
         },
         {
           "letter": "d",
@@ -253,51 +203,51 @@
       "answer": "c"
     },
     {
-      "n": 5,
+      "n": 3,
       "band": "Change",
-      "difficulty": "hard",
-      "question": "Suppose you had made the duplicate key finer — adding the reference — so the halves stopped matching. What else would that have changed?",
+      "difficulty": "medium",
+      "question": "Your change decides whether a split counts as one transaction or two. Why is that a decision rather than a detail?",
       "options": [
         {
           "letter": "a",
-          "text": "Nothing: the key is only used for splits"
+          "text": "It changes how the rows are stored on disk"
         },
         {
           "letter": "b",
-          "text": "Transfers would stop being exempted"
+          "text": "It changes which month the halves land in"
         },
         {
           "letter": "c",
-          "text": "Duplicate detection would loosen for every ordinary transaction, not just for splits"
+          "text": "The number of transactions is in the summary somebody reads, so a loop that settles it by accident still publishes it"
         },
         {
           "letter": "d",
-          "text": "The months would be recomputed"
+          "text": "It changes whether the duplicate rule fires"
         }
       ],
       "answer": "c"
     },
     {
-      "n": 6,
+      "n": 5,
       "band": "Extension",
-      "difficulty": "medium",
-      "question": "Somebody adds a new category rule tomorrow. What do they have to decide that they would not have to in a codebase of independent rules?",
+      "difficulty": "hard",
+      "question": "Suppose you had made the duplicate check finer — adding a reference — so the two halves stopped matching. What else would that have changed?",
       "options": [
         {
           "letter": "a",
-          "text": "Which file to put it in"
+          "text": "Nothing: that check is only used for splits"
         },
         {
           "letter": "b",
-          "text": "Whether it applies to refunds"
+          "text": "Transfers would stop being left out"
         },
         {
           "letter": "c",
-          "text": "Where in `categories.RULES` it goes, because the first rule that matches wins"
+          "text": "Duplicate detection would loosen for every ordinary transaction, not only for splits"
         },
         {
           "letter": "d",
-          "text": "Whether to write a fixture for it"
+          "text": "The months would all be recomputed"
         }
       ],
       "answer": "c"

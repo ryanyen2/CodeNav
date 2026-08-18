@@ -18,9 +18,11 @@ export const SHARED = Object.freeze([
     'READ_DOC',    // looked at the written description
     'READ_CODE',   // looked at source
     'READ_TEST',   // looked at a test
+    'READ_OUTPUT', // looked at a sample document or at what the program produced
     'EDIT_DOC',    // changed the description by hand
     'EDIT_CODE',   // changed source by hand
     'EDIT_TEST',   // changed a test by hand
+    'EDIT_OUTPUT', // changed a sample document by hand (rare; usually the program writes these)
     'PROMPT',      // sent an instruction to the agent
     'AGENT_EDIT',  // the agent changed source or a test
     'AGENT_DOC',   // the agent changed the description
@@ -58,8 +60,8 @@ export const DEFAULTS = Object.freeze({
 
 // ── the mapping ──────────────────────────────────────────────────────────────
 
-const READ_BY_SURFACE = { document: 'READ_DOC', code: 'READ_CODE', test: 'READ_TEST' };
-const EDIT_BY_SURFACE = { document: 'EDIT_DOC', code: 'EDIT_CODE', test: 'EDIT_TEST' };
+const READ_BY_SURFACE = { document: 'READ_DOC', code: 'READ_CODE', test: 'READ_TEST', output: 'READ_OUTPUT' };
+const EDIT_BY_SURFACE = { document: 'EDIT_DOC', code: 'EDIT_CODE', test: 'EDIT_TEST', output: 'EDIT_OUTPUT' };
 
 const TEST_COMMANDS = /^(pytest|vitest|jest)$/;
 const BUILD_COMMANDS = /^(scribe|tally|make|npm|node|python|python3)$/;
@@ -94,6 +96,12 @@ export function mapEvent(raw) {
                 if (!a) return null;
                 return { t: raw.t, a, file: raw.file, added: raw.added || 0, removed: raw.removed || 0 };
             }
+            // A sample document changing while nobody is typing in it is the
+            // PROGRAM writing its own output — `scribe convert` dropping report.md
+            // beside report.txt. That is not an authored edit by anyone, and
+            // counting it as one would make every run look like the agent rewriting
+            // code. Running it is already recorded, as RUN_BUILD.
+            if (raw.surface === 'output') return null;
             const a = raw.surface === 'document' ? 'AGENT_DOC' : 'AGENT_EDIT';
             if (raw.surface !== 'document' && !EDIT_BY_SURFACE[raw.surface]) return null;
             return { t: raw.t, a, file: raw.file, added: raw.added || 0, removed: raw.removed || 0 };
