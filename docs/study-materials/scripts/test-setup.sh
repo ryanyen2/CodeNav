@@ -754,6 +754,30 @@ if printf '%s' "$out" | grep -q 'tally.*codoc:ask'; then
 else
   ok "and the other arm is not asked for them"
 fi
+
+# The MCP server those commands drive. Unapproved it sits at "pending approval"
+# and the assistant asks about it in the participant's first run — verified with
+# `claude mcp list` in a fresh config dir — so a participant who declines spends
+# the codoc condition with no codoc tools and nothing says so.
+case "$out" in
+  *"approve codoc's MCP server"*) ok "an unapproved MCP server is reported" ;;
+  *) bad "a workspace that would interrupt the task for approval passes --check" ;;
+esac
+mkdir -p "$CM/codoc-study/scribe/.claude-study"
+echo '{"enabledMcpjsonServers":["codoc"]}' > "$CM/codoc-study/scribe/.claude-study/settings.json"
+out="$(HOME="$CM" bash "$SETUP" --check 2>&1)"
+case "$out" in
+  *"MCP server is approved"*) ok "and an approved one passes" ;;
+  *) bad "an approved MCP server is still reported as unapproved" ;;
+esac
+
+# And the profile setup.sh writes actually carries it, which is the thing that
+# makes the check pass on a real machine rather than only in this test.
+prof="$(awk '/^write_profile\(\) \{/,/^\}/' "$SETUP")"
+case "$prof" in
+  *enabledMcpjsonServers*) ok "and the profile setup writes carries the approval" ;;
+  *) bad "setup writes a profile that would still ask the participant" ;;
+esac
 rm -rf "$CM"
 
 if [ "$FAIL" = 0 ]; then printf '\033[32m%s passed\033[0m\n' "$PASS"; else printf '\033[31m%s failed, %s passed\033[0m\n' "$FAIL" "$PASS"; fi

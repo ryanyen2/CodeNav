@@ -367,6 +367,26 @@ if [ "$CHECK_ONLY" = 1 ]; then
       bad "$w is missing$missing. Run: (cd $WORK/$w && $WORK/codoc install-hooks)"
       FAILED=1
     fi
+    # And that the assistant may actually USE the MCP server the commands drive.
+    # Unapproved, it sits at "pending approval" and the participant is asked about
+    # it in their first run; decline it and the codoc condition has no codoc tools.
+    if python3 - "$WORK/$w/.claude-study/settings.json" 2>/dev/null <<'MCP_PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        raise SystemExit(0 if "codoc" in (json.load(fh).get("enabledMcpjsonServers") or []) else 1)
+except SystemExit:
+    raise
+except Exception:
+    raise SystemExit(1)
+MCP_PY
+    then
+      ok "$w: codoc's MCP server is approved, so nothing is asked mid-task"
+    else
+      bad "$w would ask the participant to approve codoc's MCP server mid-task."
+      echo  "          Run setup again: ./setup.sh <your code> <your order>"
+      FAILED=1
+    fi
   done
 
   for w in $PROJECTS; do
@@ -797,6 +817,18 @@ except Exception:
 settings.update({
     "apiKeyHelper": os.environ["HELPER"],
     "model": "claude-sonnet-5",
+    # Approve the project's own MCP server ahead of time. Without this, a
+    # `.mcp.json` in the workspace sits at "pending approval" and the assistant
+    # asks about it in the participant's first run — `claude mcp list` in a fresh
+    # config dir says so in as many words. The pilot's participant did answer it,
+    # so codoc's tools were live for that session, but it is a trust dialog in
+    # the first minute of a timed task, and a participant who declines runs the
+    # codoc condition with no codoc tools at all and nothing says so.
+    #
+    # Set in BOTH profiles even though only one workspace has a `.mcp.json`: the
+    # two arms should differ in what they are given, not in how their assistant
+    # was configured.
+    "enabledMcpjsonServers": ["codoc"],
     # Low, matching the launcher's --effort. The session is timed and the task is
     # small enough that the model one-shots it either way, so deliberation the
     # participant sits and watches buys the study nothing. Set in BOTH places so a

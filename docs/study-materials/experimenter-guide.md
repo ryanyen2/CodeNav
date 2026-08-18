@@ -254,6 +254,11 @@ Check three things before going on. The status bar says codoc is in sync, the
 description lists 15 features for scribe or 23 for tally, and `codoc watch` has
 not printed an error.
 
+Nothing should ask them to approve anything. Setup pre-approves codoc's MCP
+server in the assistant's profile, and the daemon installs any `/codoc:*` command
+the archive is too old to carry. If a trust prompt does appear, answer it and tell
+me — it means the profile did not land, and `./setup.sh --check` will say so.
+
 ### Starting a condition without codoc
 
 They open the other folder and start Claude Code in a terminal. Nothing else runs.
