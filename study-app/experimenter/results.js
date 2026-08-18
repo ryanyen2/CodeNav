@@ -39,8 +39,12 @@ export function buildFigures(cohort, { includePilots = false } = {}) {
 
     const counts = {};
     for (const c of CONDITIONS) {
+        // `.counts` — tally() returns { counts, offScale }, and both the likert
+        // figure and the data table below read counts[c][itemId] as the point
+        // array. Passing the whole wrapper made every item resolve to undefined,
+        // which the figure drew as n=0 for the entire questionnaire.
         counts[c] = tally(people.map((p) => (p.answers || {})[`after-${c}`]).filter(Boolean),
-            AFTER_CONDITION);
+            AFTER_CONDITION).counts;
     }
 
     // The per-participant ratings, which the counts have lost: they no longer

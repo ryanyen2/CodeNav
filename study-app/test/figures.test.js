@@ -12,6 +12,7 @@ import { join } from 'node:path';
 let likert; let tally; let timeShare; let timeProfile;
 let authorship; let provenance; let transitionLift; let mediation; let TRANSITIONS;
 let toCsv; let serialize; let toSequence;
+let buildFigures; let AFTER_CONDITION;
 
 const OUT = process.env.FIGURE_OUT;
 
@@ -26,6 +27,8 @@ before(async () => {
     ({ transitionLift, mediation, TRANSITIONS } = await import('../figures/mediation.js'));
     ({ toCsv, serialize } = await import('../figures/export.js'));
     ({ toSequence } = await import('../../docs/study-materials/logger/actions-vocab.js'));
+    ({ buildFigures } = await import('../experimenter/results.js'));
+    ({ AFTER_CONDITION } = await import('../participant/instrument.js'));
     if (OUT) mkdirSync(OUT, { recursive: true });
 });
 
@@ -380,6 +383,31 @@ test('a window counts one occurrence per opportunity, not one per hit', () => {
         .split(' ').map((a, i) => ({ a, t: i * 1000 })) };
     const [r] = transitionLift([s], [{ from: 'PROMPT', to: 'AGENT_EDIT', within: 3, label: 'x' }]);
     assert.equal(r.obs, 1, 'one prompt, one opportunity, one count');
+});
+
+test('the questionnaire figure counts the answers a cohort holds', () => {
+    // Regression: buildFigures fed likert `tally(...)` (the { counts, offScale }
+    // wrapper) instead of `tally(...).counts`, so counts[c][itemId] resolved to
+    // undefined and every item drew as n=0 — the whole questionnaire empty in the
+    // live dashboard while the unit tests, which pass the right shape by hand,
+    // stayed green. This exercises the glue, not just the figure.
+    // Every 7-point item gets a rating in range; the exact value doesn't matter,
+    // only that it is a number tally() will count.
+    const answersFor = (base) => Object.fromEntries(
+        AFTER_CONDITION.map((q, i) => [q.id, ((base + i) % 7) + 1]));
+    const cohort = [
+        { code: 'p-a', answers: { 'after-codoc': answersFor(0), 'after-baseline': answersFor(2) } },
+        { code: 'p-b', answers: { 'after-codoc': answersFor(1), 'after-baseline': answersFor(4) } },
+    ];
+    const built = buildFigures(cohort);
+    const total = built.data.likert.reduce((sum, row) => sum + row.n, 0);
+    // Two people, two conditions, every scale item answered → real counts.
+    assert.ok(total > 0, 'the questionnaire counts are not all n=0');
+    // And the figure itself renders those counts (n labels are not all zero).
+    const node = built.figures.likert();
+    const zeros = [...node.querySelectorAll('text')].filter((t) => t.textContent === 'n=0').length;
+    const rows = built.data.likert.length / 2; // one row per item, two conditions
+    assert.ok(zeros < rows, 'not every item row is n=0 in the rendered figure');
 });
 
 test('every transition says how far ahead it looked', () => {
