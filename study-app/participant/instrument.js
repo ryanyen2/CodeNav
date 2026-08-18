@@ -140,13 +140,20 @@ export const PERFORMANCE = Object.freeze({
 export const CONSTRUCTS = Object.freeze([
     { id: 'umux', title: 'Usability', standard: 'UMUX-Lite', rq: null,
       note: 'Two items, scored as published. Comparable to other papers, which is the whole reason they are here.' },
+    // The rq tags below name the CURRENT questions (docs/plans/2026-08-16-001):
+    //   RQ1 — understanding: can codoc help somebody build a theory of the program
+    //   RQ2 — authored modification: do the decisions pass through the person
+    // They used to carry the numbering of the abandoned three-RQ design, where
+    // RQ1 was co-authorship and RQ3 was understanding. Same labels, different
+    // referents, in a file read beside the analysis plan — so a block tagged RQ1
+    // meant one thing here and another there.
     { id: 'load', title: 'Workload', standard: 'NASA-TLX', rq: null, scale: AMOUNT,
       note: 'Raw TLX, all six items, unweighted, on the original 21-point 0–100 scale. Physical demand is uninformative for seated work and is reported without interpretation, because dropping an item from a validated instrument costs more than carrying a dull one. Unweighted is the norm and is defensible here because the design compares two conditions; the pairwise weighting step earns its minutes only in single-task studies, which this is not.' },
-    { id: 'control', title: 'Understanding and control', rq: 'RQ1',
+    { id: 'control', title: 'Understanding and control', rq: 'RQ2',
       note: 'Whether the decisions passed through the person, and whether they knew what had happened.' },
-    { id: 'align', title: 'Alignment', rq: 'RQ3',
+    { id: 'align', title: 'Alignment', rq: 'RQ1',
       note: 'Whether the result matched the intent, and whether the person came away understanding the codebase better.' },
-    { id: 'doc', title: 'The written description', rq: 'RQ2',
+    { id: 'doc', title: 'The written description', rq: 'RQ1',
       note: 'The core of the thesis. Whether the description stayed true, what keeping it cost, and whether it would still be worth anything later.' },
     { id: 'review', title: 'Review and trust', rq: 'RQ2',
       note: 'What checking cost, and whether confidence was placed where it was earned.' },

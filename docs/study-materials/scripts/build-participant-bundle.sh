@@ -49,6 +49,7 @@ echo "Building the study logger."
 run node "$MAT/logger/test-classify.js"
 run node "$MAT/logger/test-extension.js"
 run node "$MAT/logger/test-scope.js"
+run node "$MAT/logger/test-transcript.js"
 run node --test "$MAT/logger/test-composition.js"
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
     --allow-missing-repository --skip-license --no-dependencies --out "$OUT/" )
@@ -77,6 +78,30 @@ done
 # with everything else. An English skill inside a Chinese workspace would have the
 # agent writing English back into a description the participant is reading in
 # Chinese — the same confound, one layer down.
+# The two arms must SAY THE SAME THING. If they drift apart the study stops
+# comparing two ways of working and starts comparing two documents — and the
+# drift is invisible, because each description reads fine on its own. This ran
+# for months as a script nobody ran; it is a build gate now, so a bundle that
+# would have shipped mismatched arms cannot be built at all.
+echo "Checking both conditions carry the same description."
+for pair in "scribe:scribe-baseline" "tally:tally-baseline"; do
+  codoc_ws="${pair%%:*}"; base_ws="${pair#*:}"
+  for suffix in "${LANGS[@]}"; do
+    TMPC="$(mktemp -d)"; TMPB="$(mktemp -d)"
+    tar xzf "$MAT/workspaces/$codoc_ws$suffix.tar.gz" -C "$TMPC"
+    tar xzf "$MAT/workspaces/$base_ws$suffix.tar.gz" -C "$TMPB"
+    if ! python3 "$MAT/scoring/check-descriptions-match.py" \
+        "$TMPC/$codoc_ws" "$TMPB/$base_ws" >>"$LOG" 2>&1; then
+      echo "  the two arms of $codoc_ws${suffix:-} do not say the same thing"
+      echo "  see $LOG"
+      rm -rf "$TMPC" "$TMPB"
+      exit 1
+    fi
+    rm -rf "$TMPC" "$TMPB"
+  done
+  echo "  $codoc_ws: both arms match, in every language"
+done
+
 echo "Installing the doc-maintenance skill into the baseline workspaces."
 for suffix in "${LANGS[@]}"; do
   skill="$MAT/baseline/doc-maintenance/SKILL${suffix}.md"

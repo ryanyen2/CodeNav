@@ -216,11 +216,18 @@ test('the published instruments are reproduced whole', () => {
 });
 
 test('each research question has items that can answer it', () => {
-    for (const rq of ['RQ1', 'RQ2', 'RQ3']) {
+    // Two questions, not three. RQ1 is understanding and RQ2 is authored
+    // modification (docs/plans/2026-08-16-001-task-redesign.md); the three-RQ set
+    // these blocks used to be tagged against was abandoned after the first pilot,
+    // and the tags outlived it — so a block tagged RQ1 meant co-authorship here
+    // and understanding in the guide, in files that get read together.
+    for (const rq of ['RQ1', 'RQ2']) {
         const cs = CONSTRUCTS.filter((c) => c.rq === rq).map((c) => c.id);
         assert.ok(cs.length, `nothing measures ${rq}`);
         assert.ok(AFTER_CONDITION.some((q) => cs.includes(q.c)), `no items for ${rq}`);
     }
+    assert.ok(!CONSTRUCTS.some((c) => c.rq === 'RQ3'),
+        'RQ3 belongs to the abandoned design; a block still tagged with it would be reported under a question nobody is asking');
 });
 
 // ── the briefing that used to be read off a call ─────────────────────────────

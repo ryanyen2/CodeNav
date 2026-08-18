@@ -250,14 +250,25 @@ updated PATH. The setup script creates `~/codoc-study/codoc` for this reason.
 They then open the description with Cmd+Shift+P and the command "codoc: Open".
 They will want a second terminal for Claude Code and a third for running builds.
 
-Check three things before going on. The status bar says codoc is in sync, the
-description lists 25 features, and `codoc watch` has not printed an error.
+Check four things before going on. The status bar says codoc is in sync, the
+description lists 15 features for scribe or 23 for tally, `codoc watch` has not
+printed an error, and **the snapshot recorder is running in its own terminal**
+(see below) — it printed the line that stops it and has not exited.
 
 ### Starting a condition without codoc
 
 They open the other folder and start Claude Code in a terminal. Nothing else
-runs. `CLAUDE.md` sits in the project root and Claude Code picks it up on its
-own.
+runs beyond the snapshot recorder, which runs in both conditions. `CLAUDE.md`
+sits in the project root and Claude Code picks it up on its own.
+
+### The one step that is silent when it fails
+
+`./session-log.sh` is the only part of the setup that leaves no mark on the
+participant's screen when it was never started, and it is the source for "what
+kind of edits people make to the description". On the first pilot it was not
+running in either condition, and that was discovered at collection, hours after
+the only moment it could have been fixed. Start it with the condition, check the
+terminal is still alive at the halfway point, and stop it at the end.
 
 ### Recording the session
 
@@ -542,7 +553,7 @@ when closing a finished task's terminal.
 **The description looks slightly different from what you expected.** On first
 start, codoc tidies up the project and reports something like "1 amend, 1
 attach". This is normal and does not change the text. Check that it still lists
-25 features before you begin.
+15 features (scribe) or 23 (tally) before you begin.
 
 **Claude Code is not signed in.** codoc uses the participant's Claude Code login.
 If they are not signed in, codoc has no model to call. Have them run `claude` in
@@ -553,10 +564,14 @@ prevents this. If it happens anyway, note it, because the instructions they writ
 to the agent are one of the measures, and pasted text would be yours rather than
 theirs.
 
-**A project looks wrong before they start.** A fresh scribe prints
-`12 pages, 12 rebuilt, aggregates rebuilt` and passes 233 tests. A fresh tally
-reads 36 items and passes 171 tests. Anything else means the copy has been used.
-Delete it and run `./setup.sh` again.
+**A project looks wrong before they start.** A fresh scribe passes 54 tests, and
+`scribe check fixtures/` reports three documents (`report.txt: 3 pages, 8 headings,
+12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture`). A fresh tally passes 43
+tests. Anything else means the copy has been used. Delete it and run `./setup.sh`
+again.
+
+These numbers were hearth's until 2026-08-18 — the codebase before this pair — so
+a correct workspace looked broken and a used one looked fine.
 
 ## Part 10. Before you run anyone
 

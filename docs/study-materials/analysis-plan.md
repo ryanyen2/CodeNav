@@ -12,6 +12,8 @@ same list against what actually arrived.
 | Source | Where it comes from | What it holds |
 | --- | --- | --- |
 | Interaction log | The study logger extension, in both conditions | Which file was on screen, which lines, for how long, and every edit as a character count |
+| **The agent's half** | `logger/transcript.js` over the collected transcript | Every file the agent read and wrote, and every command it ran. An editor can only see files that are OPEN: on the first pilot the agent touched 12 files per condition and the logger saw 1 and 2. Without this, "who writes what" counts almost none of what the agent did. |
+| **The codoc ledger** | `scoring/ledger-actions.py` over the collected `.codoc/` | The codoc arm's own description edits and verdicts. The tree is edited in a custom editor, so no text document changes and the interaction log records nothing — the baseline's `CLAUDE.md` edits WERE recorded, so before this the comparison counted one arm and not the other, against codoc. Seeding (bootstrap, translate) is excluded; on the pilot that was 57 of 68 events. |
 | Claude Code transcript | `codoc-study/<workspace>/.claude-study/projects/`, collected at the end | Every prompt the participant wrote and every action the agent took, timestamped |
 | Project snapshots | `session-log.sh`, every 20 seconds | The whole project, replayable commit by commit, plus codoc's own state files |
 | Final projects | Collected at the end | What they finished with, for scoring and for a blind rater |
@@ -33,7 +35,15 @@ It records file paths, line numbers, durations and character counts. It never
 records the text of a file, a description, or a prompt. Prompts live in the
 transcript, which the participant is told about.
 
-## Research question 1: who writes what
+## A note on the numbering
+
+RQ1 and RQ2 below are the CURRENT questions (`docs/plans/2026-08-16-001-task-redesign.md`):
+**RQ1 — understanding** (can codoc help somebody build a theory of the program)
+and **RQ2 — authored modification** (do the consequential decisions pass through
+the person). The section headings that follow kept the wording of the abandoned
+three-question design, so read the heading as a topic and the RQ tag as the claim.
+
+## Who writes what  (serves RQ2)
 
 | Measure | Computed from |
 | --- | --- |
@@ -43,7 +53,7 @@ transcript, which the participant is told about.
 | What the agent wrote back into the description | codoc's ledger for one condition; for the other, a `CLAUDE.md` edit inside an agent turn in the transcript. |
 | Whether decisions settled in chat survive anywhere at the end | The transcript, against the final project. Hand-coded. |
 
-## Research question 2: does the description stay true, and what does checking cost
+## Does the description stay true, and what does checking cost  (serves RQ2)
 
 | Measure | Computed from |
 | --- | --- |
@@ -56,7 +66,7 @@ transcript, which the participant is told about.
 | The sign-off, and what the confidence rested on | Your notes, verbatim. |
 | Warranted trust: acting on the description without opening the code | The interaction log shows whether the code file was ever on screen before the action, and the transcript shows the action. Whether the claim was true is rated afterwards. |
 
-## Research question 3: what they understand afterwards
+## What they understand afterwards  (serves RQ1)
 
 | Measure | Computed from |
 | --- | --- |

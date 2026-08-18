@@ -1,111 +1,103 @@
-# CLAUDE.md
+# Codebase feature guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Preparing extracted text
 
-## Commands
+Text pulled out of a PDF arrives as one long string with a form feed between pages, and the page furniture comes with it: the running header repeated at the top of every page, the page number at the foot. These features turn that string into pages and lines, then take the furniture back out, so the rules that follow are reading the document and not the paper it was printed on.
 
-The repo ships no `.venv`; the README's `.venv/bin/...` invocations assume you made one:
+### Extracted text page model
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"     # installs pytest and the `scribe` console script
-```
+Splits the raw string into pages at each form feed, and each page into lines.
 
-Day to day (from the repo root — `scribe/` is importable from cwd, so the editable install is only needed for the console script):
+A line knows three things: its text, which page it came from, and where it sits on that page. That is the whole model, and it is deliberate — everything downstream is a guess made from those three facts. A rule that would need to know a font, a colour, or where the words sat on the physical page cannot be written here without changing what scribe is.
 
-```bash
-python -m pytest tests/ -q                                  # full suite, ~0.3s
-python -m pytest tests/test_rules.py -q                      # one file
-python -m pytest tests/test_rules.py::test_a_decimal_is_not_a_footnote_marker -q   # one test
-python -m pytest -k furniture -q                             # one policy area
+Code: `scribe/lines.py::Document`, `scribe/lines.py::Document.lines`, `scribe/lines.py::Line`, `scribe/lines.py::Line.from_bottom`, `scribe/lines.py::Line.from_top`, `scribe/lines.py::Line.is_blank`, `scribe/lines.py::PAGE_BREAK`, `scribe/lines.py::Page`, `scribe/lines.py::__module__`, `scribe/lines.py::read`
 
-python -m scribe.cli convert fixtures/report.txt             # writes report.md beside it
-python -m scribe.cli convert fixtures/report.txt -           # writes to stdout
-python -m scribe.cli check fixtures/                         # converts every .txt, writes nothing
-```
+### Page furniture removal
 
-`check` is the fast way to see the blast radius of a rule change across the corpus: it prints a
-one-line summary per document (`report.txt: 3 pages, 8 headings, 12 paragraphs, ...`) and touches no
-files. There is no linter or formatter configured, and no runtime dependencies.
+Drops the running header, the footer, and the page number.
 
-## Architecture
+A line counts as furniture when it sits near the top or bottom of a page and the same text repeats on at least 60% of pages. Repetition is the only signal available, which has two consequences worth knowing: a one-page letter can never show it, so its header stays; and a real heading that happens to repeat is thrown away with the furniture. This runs before headings are looked for, so nothing later can rescue it.
 
-Input is the output of `pdftotext` or similar: one string, form feeds between pages. Output is
-Markdown. Everything happens in-process; `convert.convert(raw) -> Converted` is pure, and `cli.py` is
-a thin wrapper that does file I/O around it.
+Code: `scribe/furniture.py::EDGE`, `scribe/furniture.py::MIN_PAGE`, `scribe/furniture.py::PAGE_NUMBER`, `scribe/furniture.py::REPEAT_SHARE`, `scribe/furniture.py::__module__`, `scribe/furniture.py::_near_edge`, `scribe/furniture.py::_normalise`, `scribe/furniture.py::find_repeated`, `scribe/furniture.py::is_page_number`, `scribe/furniture.py::strip`
 
-### One structural module, six policy modules
+## Turning extracted text into clean Markdown
 
-`lines.py` is the only module that describes the document as it *is*. It parses the form-feed-
-delimited string into `Document -> Page -> Line` and strips trailing whitespace; it makes no other
-judgement. Each `Line` carries `page`, `index`, `total_on_page`, and derived `from_top` /
-`from_bottom` — positional metadata that the furniture and footnote rules depend on and that cannot
-be recovered later.
+Once the furniture is gone, what is left is prose that has been through a typesetter: paragraphs broken into lines, words split at the margin, footnotes stranded at the bottom of the page, and quotation marks that are not the ones on your keyboard. These features put it back together as Markdown.
 
-Every other module is a *policy*: a guess about what the text means, made from the text alone. Each
-one owns its guesses and states, in its module docstring, what alternative was rejected and what it
-costs. `furniture.py` (running headers, page numbers), `paragraphs.py` (dehyphenation, paragraph
-breaks, reflow), `blocks.py` (headings, bullets, blank space), `notes.py` (footnotes), `text.py`
-(ligatures, smart punctuation).
+### Extracted text conversion pipeline
 
-### The pipeline order is load-bearing
+Runs the stages in one fixed order: strip the furniture, find the blocks, collect the footnotes, rejoin the paragraphs, then tidy the characters.
 
-`convert.convert` runs the rules in a fixed order, and this is the thing most likely to surprise you:
+The order is the design. Furniture goes first so a running header is never mistaken for a heading; characters are tidied last so every rule before it sees the text exactly as the PDF gave it. Move a stage and rules start seeing text another stage has already altered.
 
-1. `lines.read` — string into `Document`.
-2. `furniture.strip` — **before** anything looks for headings. A running header is usually the
-   section title, so it looks exactly like a heading; stripping first means the heading rule never
-   sees it. `tests/test_rules.py::test_furniture_runs_before_headings_and_that_is_load_bearing`
-   pins this. Note `strip` mutates the `Document` in place; `convert` measures the drop by
-   comparing `len(doc.lines)` before and after.
-3. `_collect_notes` — **before** reflow, or a note at the foot of a page gets glued to the last
-   sentence above it. This is also the last step that can see positional data: it consumes the
-   `Document` and returns `list[str]`. Anything needing `from_bottom` must run at or before this
-   point. It appends a blank line at each page boundary so reflow gets the chance to decide whether
-   the sentence runs on.
-4. `blocks.collapse_blanks` — runs of blanks to one.
-5. The main loop — headings and bullets are decided line by line (both are properties of a single
-   line); everything between them accumulates into a prose `run` that is flushed through
-   `paragraphs.reflow` whenever a heading or bullet interrupts, so a paragraph broken across a
-   heading is never silently joined.
-6. Footnote definitions appended, `_join` inserts blank lines between blocks (skipping between
-   consecutive bullets, which would make a loose list).
-7. `text.normalise` — **last**, so every rule above sees the text as it came out of the PDF rather
-   than a partly rewritten version.
+Code: `scribe/convert.py::Converted`, `scribe/convert.py::Converted.summary`, `scribe/convert.py::_Collected`, `scribe/convert.py::__module__`, `scribe/convert.py::_collect_notes`, `scribe/convert.py::_join`, `scribe/convert.py::convert`
 
-Two non-obvious control-flow details: `blocks.heading_level` takes the *following* line as a lookahead
-(a heading has space under it; a wrapped numbered list item runs straight on), and
-`paragraphs.reflow` rebuilds its own `lines` list mid-loop to push the remainder of a dehyphenated
-line back onto the queue so the rest of it still passes through every rule.
+### Text block recognition rules
 
-### Tuning constants
+Decides which lines are headings and which are bullets.
 
-The behaviour of this program is mostly these numbers. Each is commented at its definition with the
-failure that motivated it:
+A heading is a numbered line — `3.`, `3.1`, `3.1.4 Findings` — of no more than twelve words. The catch is that a numbered list item looks exactly the same, so the line underneath settles it: a heading has a blank line under it, a wrapped list item runs straight on. That is why `3. We asked each participant to describe what they had understood.` is not a heading — too long, and nothing but prose beneath it.
 
-- `furniture.EDGE` (2), `MIN_PAGE` (6), `REPEAT_SHARE` (0.6), plus a hard floor of 3 pages before
-  furniture detection runs at all.
-- `blocks.MAX_HEADING_WORDS` (12) — the only thing separating "3. Findings" from a wrapped list item.
-- `paragraphs.KEEP_HYPHEN` — prefixes whose hyphen survives a line break; and the 60-character
-  threshold in `is_break`.
-- `notes.looks_like_note`'s `from_bottom <= 6`.
-- `notes.MARKER` deliberately excludes a preceding digit, so decimals and years are not footnote
-  references.
+Code: `scribe/blocks.py::BULLET`, `scribe/blocks.py::MAX_HEADING_WORDS`, `scribe/blocks.py::NUMBERED`, `scribe/blocks.py::__module__`, `scribe/blocks.py::bullet`, `scribe/blocks.py::collapse_blanks`, `scribe/blocks.py::heading_level`
 
-## Tests
+### Footnote recognition and references
 
-Two files, two jobs. `tests/test_rules.py` is one test per policy, with a final section for the
-places two policies meet — that section is where a change to one rule shows up as a break in another.
-`tests/test_documents.py` runs the three fixtures end to end.
+Finds footnotes and turns them into Markdown references.
 
-The fixtures are the spec, and each covers something the others cannot: `report.txt` has furniture,
-footnotes and numbered headings; `memo.txt` has none of those and is what makes "keep the running
-header" a live alternative; `handbook.txt` has deep numbering plus a numbered list that must not
-become headings. A new rule generally needs a fixture change or a new fixture, not just a unit test.
+A note is a numbered line near the foot of a page; the same shape in the middle of a page is a list item, so position is what tells them apart. The marker in the prose is digits welded to the end of a word — `comparable.1`. The character before the digits is restricted on purpose: allowing any full stop once made every decimal in the document — `0.8`, `3.14` — into a footnote reference.
 
-## Conventions
+Code: `scribe/notes.py::MARKER`, `scribe/notes.py::NOTE_LINE`, `scribe/notes.py::__module__`, `scribe/notes.py::looks_like_note`, `scribe/notes.py::mark`, `scribe/notes.py::split_note`
 
-Docstrings here carry the argument, not the mechanics — what the rule does, what the rejected
-alternative was, and what the current choice costs. Match that when adding or changing a policy; a
-rule with no stated cost reads as if it had no downside. Comments in tests record the bug that the
-test was written for.
+### Extracted text paragraph reflow
+
+Puts paragraphs back together and repairs words the typesetter broke.
+
+Ordinary line breaks are joined; a blank line or a short line ending in a full stop ends the paragraph. A word split at the margin is rejoined and the hyphen dropped, so `photogram-` + `metry` becomes `photogrammetry`. Some hyphens belong to the word, though, so a short list of prefixes keeps theirs: `well-` + `being` stays `well-being`. The text alone cannot tell a real compound from a line break, which is why that list exists.
+
+Code: `scribe/paragraphs.py::HYPHEN_END`, `scribe/paragraphs.py::KEEP_HYPHEN`, `scribe/paragraphs.py::SENTENCE_END`, `scribe/paragraphs.py::__module__`, `scribe/paragraphs.py::dehyphenate`, `scribe/paragraphs.py::is_break`, `scribe/paragraphs.py::reflow`
+
+### Typeset character normalization
+
+Replaces the typesetter's characters with plain ones: ligatures, curly quotes, en and em dashes, non-breaking spaces.
+
+So `ﬁ` becomes `fi` and a curly `’` becomes `'`. This loses typographic fidelity on purpose — the output is meant to be grepped, diffed, and pasted, and none of those work well against characters you cannot type.
+
+Code: `scribe/text.py::SUBSTITUTIONS`, `scribe/text.py::__module__`, `scribe/text.py::normalise`
+
+## Running conversions
+
+The ways to actually run it: convert one file, print the result instead of writing it, or check a whole folder without touching anything.
+
+### Command-line conversion interface
+
+`convert report.txt` writes `report.md` beside it; `convert report.txt -` prints it instead.
+
+`check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it.
+
+Code: `scribe/cli.py::__module__`, `scribe/cli.py::_convert_one`, `scribe/cli.py::main`
+
+## Checking conversion
+
+The tests are where the rules are pinned down, because most of them are judgement calls that look arbitrary until you see what they were protecting against.
+
+### End-to-end conversion tests
+
+Runs three sample documents end to end.
+
+Each covers something the others cannot: `report.txt` has furniture, footnotes and numbered headings; `memo.txt` has none of them, which is what makes keeping a running header a live option rather than a hypothetical; `handbook.txt` has deep numbering and a numbered list that must not turn into headings. The fixtures are the specification.
+
+Code: `tests/test_documents.py::FIXTURES`, `tests/test_documents.py::__module__`, `tests/test_documents.py::md`, `tests/test_documents.py::test_a_numbered_list_does_not_become_headings`, `tests/test_documents.py::test_a_paragraph_broken_across_a_page_is_rejoined`, `tests/test_documents.py::test_a_two_page_memo_keeps_its_first_line`, `tests/test_documents.py::test_a_word_split_across_a_line_break_is_whole_again`, `tests/test_documents.py::test_a_word_split_across_a_page_is_handled_the_same_way`, `tests/test_documents.py::test_bullets_are_a_tight_list`, `tests/test_documents.py::test_converting_twice_gives_the_same_thing`, `tests/test_documents.py::test_decimals_survive`, `tests/test_documents.py::test_deep_numbering_becomes_deep_headings`, `tests/test_documents.py::test_footnotes_are_collected_at_the_end`, `tests/test_documents.py::test_headings_carry_their_depth`, `tests/test_documents.py::test_ligatures_are_normalised`, `tests/test_documents.py::test_no_document_ends_up_empty`, `tests/test_documents.py::test_no_form_feed_survives`, `tests/test_documents.py::test_no_three_blank_lines_in_a_row`, `tests/test_documents.py::test_the_bullet_character_is_recognised`, `tests/test_documents.py::test_the_memo_has_no_headings`, `tests/test_documents.py::test_the_page_numbers_are_gone`, `tests/test_documents.py::test_the_running_header_is_gone_from_the_report`
+
+### Rule policy regression tests
+
+One test per rule, plus a section for the places two rules meet — which is where changing one of them shows up as a break in another.
+
+These record the boundaries: that furniture removal happens before headings, that a decimal is not a footnote marker, which hyphens survive a line break. A rule changed without updating them tends to bring back the layout artefact it was written to remove.
+
+Code: `tests/test_rules.py::__module__`, `tests/test_rules.py::page`, `tests/test_rules.py::test_a_bare_number_at_the_foot_is_a_page_number`, `tests/test_rules.py::test_a_blank_line_always_breaks`, `tests/test_rules.py::test_a_dash_before_a_number_is_not_a_broken_word`, `tests/test_rules.py::test_a_dash_with_no_space_is_prose`, `tests/test_rules.py::test_a_decimal_is_not_a_footnote_marker`, `tests/test_rules.py::test_a_line_on_every_page_near_the_top_is_furniture`, `tests/test_rules.py::test_a_long_numbered_line_is_a_list_item_not_a_heading`, `tests/test_rules.py::test_a_marker_welded_to_a_word_becomes_a_reference`, `tests/test_rules.py::test_a_number_in_the_middle_of_a_page_is_not`, `tests/test_rules.py::test_a_numbered_line_at_the_foot_is_a_note`, `tests/test_rules.py::test_a_real_compound_keeps_its_hyphen`, `tests/test_rules.py::test_a_running_header_with_a_changing_number_still_counts`, `tests/test_rules.py::test_a_short_line_ending_a_sentence_breaks`, `tests/test_rules.py::test_a_single_newline_continues_the_paragraph`, `tests/test_rules.py::test_a_two_page_document_has_no_furniture`, `tests/test_rules.py::test_a_typeset_hyphen_is_dropped`, `tests/test_rules.py::test_a_year_is_not_a_footnote_marker`, `tests/test_rules.py::test_an_unnumbered_line_is_not_a_heading`, `tests/test_rules.py::test_furniture_runs_before_headings_and_that_is_load_bearing`, `tests/test_rules.py::test_leading_and_trailing_blanks_go`, `tests/test_rules.py::test_ligatures_and_quotes_are_normalised`, `tests/test_rules.py::test_numbering_gives_the_depth`, `tests/test_rules.py::test_runs_of_blank_lines_become_one`, `tests/test_rules.py::test_the_same_line_in_the_middle_of_a_page_is_not`, `tests/test_rules.py::test_the_three_bullet_marks`
+
+## Package identity metadata
+
+Names the package and its version: scribe turns text pulled out of a PDF into clean Markdown.
+
+Code: `scribe/__init__.py::__module__`

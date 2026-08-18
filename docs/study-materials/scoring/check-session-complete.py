@@ -155,6 +155,28 @@ def main() -> int:
         rep.gap("what the agent wrote back, and decision survival",
                 "no Claude Code transcript. Each workspace keeps its own under "
                 "codoc-study/<workspace>/.claude-study/projects — copy those before the machine is wiped.")
+
+    # Who wrote what is the figure the thesis rests on, and neither half of it
+    # comes from the interaction log alone. The agent's edits are mostly to files
+    # nobody had open (11 of 12 on the first pilot), and the codoc arm's own
+    # description edits happen in a custom editor that writes no text document at
+    # all. Both are recoverable after the fact, and until they are run the
+    # provenance comparison counts the baseline and not codoc.
+    merged = list((root / "session-logs").glob("merged-*.jsonl"))
+    ledger = list((root / "session-logs").glob("ledger-*.jsonl"))
+    if merged:
+        rep.ok("the agent's reads and edits, merged with the editor log",
+               f"{len(merged)} merged stream(s)")
+    else:
+        rep.gap("the agent's reads and edits, merged with the editor log",
+                "run: node docs/study-materials/logger/transcript.js <this folder>")
+    if any((p / ".codoc").is_dir() for p in root.iterdir() if p.is_dir()):
+        if ledger:
+            rep.ok("the codoc arm's own description edits and verdicts",
+                   f"{len(ledger)} ledger stream(s)")
+        else:
+            rep.gap("the codoc arm's own description edits and verdicts",
+                    "run: python3 docs/study-materials/scoring/ledger-actions.py <this folder>")
     rep.manual("who settled each open decision", "your notes and the think-aloud")
     rep.show("Question 1, who writes what")
 
