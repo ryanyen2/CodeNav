@@ -140,11 +140,16 @@ def install_mcp(root_dir: str) -> None:
     os.replace(tmp, mcp_path)
 
 
-def install_hooks(root_dir: str) -> None:
+def install_hooks(root_dir: str) -> list[str]:
     """Install codoc CC hooks into ``<root_dir>/.claude/settings.json``.
 
     Also copies the SKILL.md into ``<root_dir>/.claude/skills/codoc-intent/``.
     Safe to call multiple times — idempotent and upgrades stale entries.
+
+    Returns the slash commands it installed (``["/codoc:ask", …]``) so the caller
+    reports what is actually there. The CLI used to print a hardcoded list, which
+    said ``/codoc:plan, /codoc:sync`` for months after ``/codoc:ask`` shipped —
+    the one line anybody reads to check the install, naming the wrong thing.
     """
     settings_path = Path(root_dir) / ".claude" / "settings.json"
 
@@ -169,12 +174,18 @@ def install_hooks(root_dir: str) -> None:
     # 3. Copy plugin commands into the local commands dir, preserving subdirs so
     #    `.claude/commands/codoc/plan.md` becomes the namespaced `/codoc:plan`.
     cmd_src_dir = _plugin_dir() / "commands"
+    installed_cmds: list[str] = []
     if cmd_src_dir.is_dir():
         cmd_dest_dir = Path(root_dir) / ".claude" / "commands"
         for cmd in cmd_src_dir.rglob("*.md"):
-            dest = cmd_dest_dir / cmd.relative_to(cmd_src_dir)
+            rel = cmd.relative_to(cmd_src_dir)
+            dest = cmd_dest_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(cmd.read_text(encoding="utf-8"), encoding="utf-8")
+            # `codoc/plan.md` is the namespaced `/codoc:plan`; a command at the
+            # top level would just be `/plan`.
+            parts = list(rel.parts)
+            installed_cmds.append("/" + ":".join(parts[:-1] + [rel.stem]))
         # Drop previously-installed codoc commands the plugin no longer ships
         # (e.g. the old /codoc:realize, folded into /codoc:sync).
         dest_ns = cmd_dest_dir / "codoc"
@@ -186,3 +197,4 @@ def install_hooks(root_dir: str) -> None:
 
     # 4. Register the codoc MCP server in <root>/.mcp.json.
     install_mcp(root_dir)
+    return sorted(installed_cmds)

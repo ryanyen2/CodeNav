@@ -242,3 +242,49 @@ def test_clean_workspace_is_noop(dirs):
     assert res.duplicate_groups == 0
     assert res.features_retired == 0
     assert res.comments_migrated == 0
+
+
+def test_heal_installs_a_command_that_shipped_after_the_workspace_was_wired(dirs):
+    """A workspace wired before /codoc:ask shipped gets it on the next daemon start.
+
+    Nothing re-ran ``install-hooks`` on upgrade, so a command added to codoc
+    reached only people who wired up a workspace after it — everybody else read
+    about a feature they did not have. Study participants were in that position:
+    /codoc:ask is what the first task is built around.
+    """
+    from codoc.agent.install_hooks import _plugin_dir
+
+    # A real workspace keeps .codoc INSIDE the repo, which is how the heal finds
+    # .claude next to it; the shared fixture puts them side by side.
+    root = Path(dirs[0])
+    codoc_dir = root / ".codoc"
+    codoc_dir.mkdir()
+    shipped = {p.name for p in (_plugin_dir() / "commands" / "codoc").glob("*.md")}
+    assert "ask.md" in shipped
+
+    cmds = root / ".claude" / "commands" / "codoc"
+    cmds.mkdir(parents=True)
+    (cmds / "sync.md").write_text("an older install, wired before ask existed")
+
+    res = migrate_workspace(codoc_dir)
+
+    assert {p.name for p in cmds.glob("*.md")} == shipped
+    assert "/codoc:ask" in res.commands_installed
+    assert res.changed()
+    # What was already there is left exactly as it is: overwriting is what
+    # install-hooks is for, and a heal that rewrites files is not idempotent in
+    # any sense the user can see.
+    assert (cmds / "sync.md").read_text() == "an older install, wired before ask existed"
+
+    again = migrate_workspace(codoc_dir)
+    assert again.commands_installed == []
+
+
+def test_heal_does_not_wire_a_workspace_that_never_wanted_the_plugin(dirs):
+    """No .claude/commands/codoc means the plugin was never installed here."""
+    root = Path(dirs[0])
+    codoc_dir = root / ".codoc"
+    codoc_dir.mkdir()
+    res = migrate_workspace(codoc_dir)
+    assert res.commands_installed == []
+    assert not (root / ".claude" / "commands").exists()

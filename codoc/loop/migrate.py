@@ -66,6 +66,7 @@ class MigrationResult:
     blocks_repointed: int = 0
     children_reparented: int = 0
     gitignore_healed: list[str] = field(default_factory=list)
+    commands_installed: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -77,12 +78,14 @@ class MigrationResult:
         )
         if self.gitignore_healed:
             base += f", .gitignore now tracks {', '.join(self.gitignore_healed)}"
+        if self.commands_installed:
+            base += f", installed {', '.join(self.commands_installed)}"
         return base
 
     def changed(self) -> bool:
         return bool(
             self.comments_migrated or self.duplicate_groups or self.features_retired
-            or self.gitignore_healed
+            or self.gitignore_healed or self.commands_installed
         )
 
 
@@ -273,6 +276,40 @@ def heal_gitignore(codoc_dir: str | Path, result: MigrationResult) -> None:
     result.gitignore_healed = missing
 
 
+def heal_plugin_commands(codoc_dir: str | Path, result: MigrationResult) -> None:
+    """Install slash commands that shipped after this workspace was wired up.
+
+    ``codoc install-hooks`` writes one file per command and nothing re-ran it on
+    upgrade, so a workspace wired before ``/codoc:ask`` shipped kept ``/codoc:plan``
+    and ``/codoc:sync`` for good — the command existed in the package, in the
+    docs, and in the MCP, and simply did not exist for anybody who had already
+    installed codoc. Nobody would think to re-run an installer to get a feature
+    they read about in a changelog.
+
+    ADDS ONLY, and only where the plugin is already installed. A workspace with
+    no ``.claude/commands/codoc/`` never wanted the plugin and this is not the
+    place to decide otherwise; and a command already on disk is left alone,
+    because overwriting is ``install-hooks``' job, not a heal's.
+    """
+    from codoc.agent.install_hooks import _plugin_dir
+
+    dest_ns = Path(codoc_dir).parent / ".claude" / "commands" / "codoc"
+    src_ns = _plugin_dir() / "commands" / "codoc"
+    if not dest_ns.is_dir() or not src_ns.is_dir():
+        return
+    added: list[str] = []
+    for cmd in sorted(src_ns.glob("*.md")):
+        dest = dest_ns / cmd.name
+        if dest.exists():
+            continue
+        try:
+            dest.write_text(cmd.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            continue
+        added.append(f"/codoc:{cmd.stem}")
+    result.commands_installed = added
+
+
 def migrate_workspace(codoc_dir: str | Path) -> MigrationResult:
     """Run the one-time heals against a ``.codoc`` dir. Idempotent and safe to
     rerun: a clean (already-converged, no stale comments) workspace is a no-op.
@@ -286,4 +323,5 @@ def migrate_workspace(codoc_dir: str | Path) -> MigrationResult:
         migrate_comments(store, codoc_dir, result)
         dedup_features(store, result)
     heal_gitignore(codoc_dir, result)
+    heal_plugin_commands(codoc_dir, result)
     return result

@@ -172,10 +172,10 @@ def init(
     if hooks:
         try:
             from codoc.agent.install_hooks import install_hooks
-            install_hooks(root)
+            commands = install_hooks(root)
             typer.echo("  ✓ Claude Code hooks installed in .claude/settings.json")
             typer.echo("  ✓ codoc MCP server registered in .mcp.json (codoc_tree, codoc_reflect, …)")
-            typer.echo("  ✓ /codoc:plan command + codoc-intent skill installed in .claude/")
+            typer.echo(f"  ✓ {', '.join(commands)} + codoc-intent skill installed in .claude/")
         except Exception as exc:
             typer.echo(f"  ⚠  Could not install hooks: {exc}", err=True)
 
@@ -870,12 +870,14 @@ def install_hooks_cmd(
     """
     from codoc.agent.install_hooks import install_hooks
 
-    install_hooks(root)
+    commands = install_hooks(root)
     typer.echo("✓ Claude Code plugin installed")
     typer.echo("  Hooks (.claude/settings.json): SessionStart, Stop, SessionEnd, "
                "PreToolUse(Edit|Write|Read), PostToolUse(Edit|Write), UserPromptSubmit")
     typer.echo("  Skill: .claude/skills/codoc-intent/SKILL.md")
-    typer.echo("  Commands: /codoc:plan, /codoc:sync")
+    # What was actually written, not a list kept by hand: this line read
+    # "/codoc:plan, /codoc:sync" for months after /codoc:ask shipped.
+    typer.echo(f"  Commands: {', '.join(commands) or 'none'}")
     typer.echo("  MCP server: registered in .mcp.json")
 
 

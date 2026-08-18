@@ -348,6 +348,31 @@ if [ "$CHECK_ONLY" = 1 ]; then
         bad "$w: nothing is snapshotting it, so that session could not be replayed"
         FAILED=1
       fi
+    fi
+  done
+
+  # The slash commands, in the arm that has them. install-hooks writes one file
+  # per command, and the verify step used to delete any that the archive was too
+  # old to have tracked — so the codoc condition ran without /codoc:ask, which is
+  # the command the first task is built around, and nothing said so.
+  for w in $PROJECTS; do
+    [ "$(condition_on_disk "$w")" = codoc ] || continue
+    missing=""
+    for c in ask plan sync; do
+      [ -f "$WORK/$w/.claude/commands/codoc/$c.md" ] || missing="$missing /codoc:$c"
+    done
+    if [ -z "$missing" ]; then
+      ok "$w: /codoc:ask, /codoc:plan and /codoc:sync are all there"
+    else
+      bad "$w is missing$missing. Run: (cd $WORK/$w && $WORK/codoc install-hooks)"
+      FAILED=1
+    fi
+  done
+
+  for w in $PROJECTS; do
+    log="$HOME/codoc-study/session-logs/interaction-$w.jsonl"
+    if [ -s "$log" ]; then
+      :
     else
       note "$w has not been opened in VS Code yet. Nothing to do: you open it"
       echo  "          together on the day. When you do, answer YES to \"Do you trust"
@@ -490,11 +515,21 @@ done
 # script puts the workspace back with `git clean`, which without this deletes the
 # participant code, the prompt hook, and the assistant profile it just wrote —
 # a machine that then looks set up and records nothing.
+#
+# `.claude/commands/` is on the list for a different reason, and it cost the
+# feature the first task is built around. `codoc install-hooks` writes one file
+# per slash command, and the archives were seeded when there were two of them, so
+# /codoc:ask arrives as an UNTRACKED file — which the skip-worktree hold below
+# does not cover (it only lists tracked-and-modified files) and `git clean`
+# therefore deletes. The workspace ends up with /codoc:plan and /codoc:sync and
+# no /codoc:ask, on a machine where setup reported success, and the same happens
+# to every command codoc adds after an archive is built.
 exclude_local() {
   local d="$1" pat
   [ -d "$d/.git" ] || return 0
   for pat in '.vscode/' '.venv/' '.env' '.claude-study/' 'claude-study' \
-             '.claude/settings.json' '.claude/settings.local.json'; do
+             '.claude/settings.json' '.claude/settings.local.json' \
+             '.claude/commands/'; do
     grep -qxF "$pat" "$d/.git/info/exclude" 2>/dev/null \
       || printf '%s\n' "$pat" >> "$d/.git/info/exclude"
   done

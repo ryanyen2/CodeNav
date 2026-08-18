@@ -37,7 +37,7 @@ codoc reflect               # recovery-grade state reconciliation (used by the S
 codoc propose <kind>        # author a plan proposal from the shell (humans/tests)
 codoc install-hooks         # (re)install the CC hooks + MCP registration
 codoc realize               # implement the realize queue NOW, foreground (SDK or CLI engine)
-codoc migrate               # one-time idempotent workspace heal (migrate tree.doc.json comments into the store + converge duplicate features + track config.json); also runs on daemon startup
+codoc migrate               # one-time idempotent workspace heal (migrate tree.doc.json comments into the store + converge duplicate features + track config.json + install /codoc:* commands that shipped after this workspace was wired); also runs on daemon startup
 codoc lang [<bcp47>]        # show / set the language the TREE is authored in (en, zh-Hans, ja, …) — see "Authoring language" below
 codoc translate             # rewrite an EXISTING tree's prose into that language (--dry-run, --limit N)
 codoc serve                 # the deployed hub: serve the tree to remote users (docs/serve-deployment.md)

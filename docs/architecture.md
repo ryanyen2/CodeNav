@@ -572,7 +572,13 @@ re-emits them onto the inline runs. A one-time idempotent migration
 (`loop/migrate.py`, run by `codoc migrate` and once on daemon startup) heals
 workspaces that predate the refactor: it lifts pre-existing `tree.doc.json`
 comment threads into the store and converges re-minted duplicate features onto the
-binding-owner.
+binding-owner. It also installs **slash commands that shipped after the workspace
+was wired up** (`heal_plugin_commands`): `install-hooks` writes one file per
+command and nothing re-ran it on upgrade, so a workspace wired before
+`/codoc:ask` existed kept `/codoc:plan` and `/codoc:sync` for good — the command
+was in the package, the docs and the MCP, and absent for everybody who had already
+installed codoc. Adds only, and only where `.claude/commands/codoc/` already
+exists; a workspace without one never asked for the plugin.
 
 **Workflow-legibility surfaces (v7).** Four surfaces make the messy, non-linear
 workflow readable in place:

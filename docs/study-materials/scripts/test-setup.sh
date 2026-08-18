@@ -423,6 +423,14 @@ json.dump(s, open(path, 'w'), indent=2)" "$W/.claude/settings.json"
 import json, sys
 json.dump({'mcpServers': {'codoc': {'command': '/this/machine/codoc-mcp'}}}, open(sys.argv[1], 'w'))" \
       "$W/.mcp.json"
+    # install-hooks writes one file per slash command. The archives were seeded
+    # when codoc shipped two, so /codoc:ask arrives as an UNTRACKED file — which
+    # the hold does not cover (it lists tracked-and-modified files) and which
+    # `git clean` therefore removes. That is exactly what happened: participants
+    # got /codoc:plan and /codoc:sync and no /codoc:ask, the command the first
+    # task is built around, on a machine where setup reported success.
+    mkdir -p "$W/.claude/commands/codoc"
+    printf -- '---\ndescription: draw a walkthrough\n---\n' > "$W/.claude/commands/codoc/ask.md"
 
     WORK="$VER/codoc-study" ORDER=codoc-first LANG_CODE=en \
       bash -c "set -uo pipefail; $ARMS
@@ -450,6 +458,9 @@ except Exception: print('')" "$W/.vscode/settings.json" 2>/dev/null)" = "p-verif
     [ -f "$W/.codoc/codoc.db" ] \
       && ok "the seeded codoc state is left alone" \
       || bad "the cleanup deleted the seeded codoc state"
+    [ -f "$W/.claude/commands/codoc/ask.md" ] \
+      && ok "a slash command newer than the archive survives it" \
+      || bad "the verify step deleted /codoc:ask, so the first task loses its command"
     [ -z "$(cd "$W" && git status --porcelain 2>/dev/null)" ] \
       && ok "and the participant's first git status is clean" \
       || bad "the workspace opens dirty: $(cd "$W" && git status --porcelain | head -3 | tr '\n' ' ')"
@@ -705,6 +716,45 @@ else
   bad "a recorded workspace is still reported as not being snapshotted"
 fi
 rm -rf "$SN"
+
+
+
+echo
+echo "The command the first task is built around"
+# It went missing on real machines: install-hooks writes it, the verify step
+# deleted it, and setup still said everything was fine. --check now names it.
+CM="$(mktemp -d)"
+mkdir -p "$CM/codoc-study/scribe/.vscode" "$CM/codoc-study/tally/.vscode" \
+         "$CM/codoc-study/scribe/.claude/commands/codoc"
+for w in scribe tally; do
+  cond=codoc; [ "$w" = tally ] && cond=baseline
+  printf '{"codocStudyLogger.participant":"p09","codocStudyLogger.condition":"%s"}\n' \
+    "$cond" > "$CM/codoc-study/$w/.vscode/settings.json"
+done
+: > "$CM/codoc-study/scribe/.claude/commands/codoc/plan.md"
+: > "$CM/codoc-study/scribe/.claude/commands/codoc/sync.md"
+
+out="$(HOME="$CM" bash "$SETUP" --check 2>&1)"
+case "$out" in
+  *"/codoc:ask"*missing*|*missing*"/codoc:ask"*) ok "a codoc workspace without /codoc:ask is reported" ;;
+  *) bad "the arm that lost its walkthrough command passes --check" ;;
+esac
+
+: > "$CM/codoc-study/scribe/.claude/commands/codoc/ask.md"
+out="$(HOME="$CM" bash "$SETUP" --check 2>&1)"
+if printf '%s' "$out" | grep -q 'are all there'; then
+  ok "and one with all three passes"
+else
+  bad "a complete codoc workspace is still reported as missing a command"
+fi
+
+# The other arm has no codoc, so it is never asked for codoc's commands.
+if printf '%s' "$out" | grep -q 'tally.*codoc:ask'; then
+  bad "the baseline arm is asked for a command it is not supposed to have"
+else
+  ok "and the other arm is not asked for them"
+fi
+rm -rf "$CM"
 
 if [ "$FAIL" = 0 ]; then printf '\033[32m%s passed\033[0m\n' "$PASS"; else printf '\033[31m%s failed, %s passed\033[0m\n' "$FAIL" "$PASS"; fi
 exit "$FAIL"

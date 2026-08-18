@@ -25,17 +25,32 @@ def test_install_mcp_is_idempotent_and_preserves_others(tmp_path):
     assert data["mcpServers"]["other"] == {"command": "x"}
 
 
-def test_install_hooks_ships_two_commands_and_removes_stale(tmp_path):
-    """The plugin ships exactly /codoc:plan + /codoc:sync; a previously-installed
-    command the plugin no longer ships (the old /codoc:realize) is removed, while
-    non-codoc commands are left alone."""
+def test_install_hooks_installs_every_shipped_command_and_removes_stale(tmp_path):
+    """Every command the plugin ships is installed, a previously-installed one it
+    no longer ships (the old /codoc:realize) is removed, and a command of the
+    user's own is left alone.
+
+    Asserted against the plugin directory rather than a list written here. The
+    list version said "exactly plan + sync" and went on passing for months after
+    /codoc:ask shipped, so the one test covering this agreed with the CLI's
+    hardcoded summary that the new command did not exist.
+    """
+    from codoc.agent.install_hooks import _plugin_dir
+
+    shipped = {p.name for p in (_plugin_dir() / "commands" / "codoc").glob("*.md")}
+    assert "ask.md" in shipped, "the walkthrough command is part of the plugin"
+
     cmd_dir = tmp_path / ".claude" / "commands" / "codoc"
     cmd_dir.mkdir(parents=True)
     (cmd_dir / "realize.md").write_text("stale")
     other = tmp_path / ".claude" / "commands" / "mine.md"
     other.write_text("user command")
 
-    install_hooks(str(tmp_path))
+    installed = install_hooks(str(tmp_path))
 
-    assert {p.name for p in cmd_dir.glob("*.md")} == {"plan.md", "sync.md"}
+    assert {p.name for p in cmd_dir.glob("*.md")} == shipped
     assert other.read_text() == "user command"
+
+    # What it reports is what it wrote: the CLI prints this list, and it is the
+    # one line anybody reads to check the install.
+    assert installed == sorted("/codoc:" + n[:-3] for n in shipped)
