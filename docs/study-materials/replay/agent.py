@@ -123,7 +123,12 @@ def capture(workspace: Path, seconds: float = 8.0) -> int:
 # a change. Setup runs the assistant once before this, which is what gets it past
 # these, and this is the check that says so rather than assuming it.
 FIRST_RUN = ("Let's get started", "Choose the text style", "Select login method",
-             "Do you want to use this API key")
+             "Do you want to use this API key",
+             # The folder trust dialog, which is per project rather than per
+             # machine. setup.sh pre-answers it in the profile it writes; this is
+             # what stops a machine where that did not work from keeping a
+             # security question as its welcome screen.
+             "Is this a project you created")
 
 
 def looks_unfinished(banner: bytes) -> bool:

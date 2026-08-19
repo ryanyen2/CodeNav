@@ -334,7 +334,14 @@ if [ "$CHECK_ONLY" = 1 ]; then
   # in Restricted Mode.
   for w in $PROJECTS; do
     log="$HOME/codoc-study/session-logs/interaction-$w.jsonl"
-    if [ -s "$log" ]; then
+    # The log has to belong to the folder as it is NOW. It lives outside the
+    # workspace, so it survives that folder being deleted and set up again, and a
+    # machine that has been used for an earlier pilot has one for a code that is
+    # no longer the one on disk. Read that way it said the logger had run in a
+    # folder nobody had opened, and then failed the snapshot check underneath it.
+    filed="$(filed_under "$WORK/$w")"
+    if [ -s "$log" ] && [ -n "$filed" ] \
+       && grep -q "\"p\":\"$filed\"" "$log" 2>/dev/null; then
       ok "$w: the logger has run there"
       # And it takes the 20-second snapshots itself, so the session can be
       # replayed. That recorder used to be a script somebody started by hand, and
@@ -920,6 +927,33 @@ with open(path, "w") as handle:
     json.dump(settings, handle, indent=2)
     handle.write("\n")
 PROFILE_PY
+  # The assistant's own first-run questions, answered here rather than in front
+  # of a participant. A fresh config directory asks three things before it will
+  # draw a prompt: pick a theme, pick a login, and do you trust this folder. The
+  # first two are settings we already made; the third is the folder this script
+  # just unpacked into the participant's own home, for a study they consented to,
+  # and it is the same pre-approval the MCP server above gets and for the same
+  # reason. Left unanswered, the trust dialog appears the moment the participant
+  # takes over from the recording, which is the worst moment in the session for a
+  # question nobody warned them about.
+  WS="$d" STATE="$profile/.claude.json" python3 - <<'STATE_PY'
+import json, os
+path = os.environ["STATE"]
+try:
+    with open(path) as handle:
+        state = json.load(handle)
+except Exception:
+    state = {}
+state.setdefault("theme", "light")
+state["hasCompletedOnboarding"] = True
+projects = state.setdefault("projects", {})
+here = projects.setdefault(os.path.realpath(os.environ["WS"]), {})
+here["hasTrustDialogAccepted"] = True
+here.setdefault("projectOnboardingSeenCount", 1)
+with open(path, "w") as handle:
+    json.dump(state, handle, indent=2)
+    handle.write("\n")
+STATE_PY
 }
 
 for name in $PROJECTS; do
@@ -1103,7 +1137,9 @@ for name in $PROJECTS; do
      && [ -s "$d/.claude-study/welcome.ansi" ]; then
     ok "$name: the assistant's opening screen"
   else
-    warn "$name: could not record the opening screen, so a plain one is used"
+    warn "$name: could not record the opening screen. Tell the researcher; the"
+    echo  "          session still runs, with a plain welcome instead of this"
+    echo  "          machine's own."
   fi
 done
 

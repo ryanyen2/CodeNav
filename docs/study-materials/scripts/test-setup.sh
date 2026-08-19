@@ -139,6 +139,22 @@ if keys_block "$TMP"; then
   [ "$n" = 2 ] && ok "both workspaces carry the Anthropic key" \
     || bad "only $n of 2 workspaces carry the Anthropic key"
 
+  # The first-run answers, as a file rather than as a line in setup.sh. A fresh
+  # config directory asks about a theme, a login and whether the folder is
+  # trusted, and every one of those is a question in front of a participant at
+  # the worst possible moment.
+  STATE="$TMP/scribe/.claude-study/.claude.json"
+  [ "$(read_json "$STATE" hasCompletedOnboarding)" = "True" ] \
+    && ok "the profile answers the theme and login questions" \
+    || bad "a fresh profile would stop to ask about a theme"
+  [ "$(python3 -c "
+import json,sys,os
+d=json.load(open(sys.argv[1]))
+print(d['projects'][os.path.realpath(sys.argv[2])]['hasTrustDialogAccepted'])" \
+      "$STATE" "$TMP/scribe" 2>/dev/null)" = "True" ] \
+    && ok "and the folder is trusted ahead of the session" \
+    || bad "the trust dialog would appear when the participant takes over"
+
   PROFILE="$TMP/scribe/.claude-study/settings.json"
   # Through a helper rather than ANTHROPIC_API_KEY: setting the variable makes
   # Claude Code ask once whether to trust the key, mid-session, for no benefit.
@@ -697,7 +713,13 @@ git -C "$SN/codoc-study/scribe" init -q -b main . 2>/dev/null
 echo x > "$SN/codoc-study/scribe/a.py"
 git -C "$SN/codoc-study/scribe" add a.py >/dev/null 2>&1
 git -C "$SN/codoc-study/scribe" -c user.email=a@b -c user.name=a commit -qm f >/dev/null 2>&1
-echo '{"ev":"session"}' > "$SN/codoc-study/session-logs/interaction-scribe.jsonl"
+# Filed under a code, and a log that carries the same one. Both halves matter:
+# the log lives outside the workspace and survives it being deleted and set up
+# again, so a log from an earlier pilot must NOT make this folder look opened.
+printf '{"codocStudyLogger.participant":"p04"}\n' \
+  > "$SN/codoc-study/scribe/.vscode/settings.json"
+echo '{"ev":"session","p":"p04","ws":"scribe"}' \
+  > "$SN/codoc-study/session-logs/interaction-scribe.jsonl"
 
 out="$(HOME="$SN" bash "$SETUP" --check 2>&1)"
 if printf '%s' "$out" | grep -q 'nothing is snapshotting it'; then
@@ -714,6 +736,18 @@ if printf '%s' "$out" | grep -q 'it is being snapshotted'; then
   ok "and a workspace that is being recorded passes"
 else
   bad "a recorded workspace is still reported as not being snapshotted"
+fi
+
+# A log left behind by an earlier participant says nothing about this folder.
+# Read as if it did, it reported that the logger had run in a workspace nobody
+# had opened, and then failed the snapshot check underneath it.
+printf '{"codocStudyLogger.participant":"p09"}\n' \
+  > "$SN/codoc-study/scribe/.vscode/settings.json"
+out="$(HOME="$SN" bash "$SETUP" --check 2>&1)"
+if printf '%s' "$out" | grep -q 'scribe: the logger has run there'; then
+  bad "a log from an earlier code is read as this folder having been opened"
+else
+  ok "a log from an earlier code is not read as this folder having been opened"
 fi
 rm -rf "$SN"
 
@@ -773,10 +807,27 @@ esac
 
 # And the profile setup.sh writes actually carries it, which is the thing that
 # makes the check pass on a real machine rather than only in this test.
-prof="$(awk '/^write_profile\(\) \{/,/^\}/' "$SETUP")"
+# `^\}$`, not `^\}`. The loose pattern stopped at the `})` that closes the
+# settings dictionary, so everything write_profile does after that was outside
+# what this test could see, and an assertion about it passed by never running.
+prof="$(awk '/^write_profile\(\) \{/,/^\}$/' "$SETUP")"
 case "$prof" in
   *enabledMcpjsonServers*) ok "and the profile setup writes carries the approval" ;;
   *) bad "setup writes a profile that would still ask the participant" ;;
+esac
+
+# The assistant's own first-run questions, answered in the profile rather than in
+# front of a participant. A fresh config directory asks three before it will draw
+# a prompt: a theme, a login, and whether this folder is trusted. The first two
+# broke the opening-screen capture at setup; the third would have appeared at the
+# moment the participant takes over from the recording.
+case "$prof" in
+  *hasCompletedOnboarding*) ok "the theme and login questions are answered ahead" ;;
+  *) bad "the first run would stop to ask about a theme, so no welcome is captured" ;;
+esac
+case "$prof" in
+  *hasTrustDialogAccepted*) ok "and so is the folder trust question" ;;
+  *) bad "the trust dialog would appear when the participant takes over" ;;
 esac
 rm -rf "$CM"
 
