@@ -149,10 +149,24 @@ EOF
 
 stop() {
   step "Stopping the watcher"
-  pidfile="$WORK/$project-$arm-watch.pid"
+  # SIGTERM rather than SIGINT, and then check. A job started with `nohup ... &`
+  # from a script inherits SIGINT set to ignore, so `kill -INT` did nothing here
+  # and reported success. The watcher it failed to stop then ran alongside the
+  # next one and silently destroyed a recording.
+  #
+  # The raw directory's own pid file is the authority, because it is written by
+  # the watcher itself rather than by whoever started it.
+  pidfile="$raw/watcher.pid"
+  [ -f "$pidfile" ] || pidfile="$WORK/$project-$arm-watch.pid"
   if [ -f "$pidfile" ]; then
-    kill -INT "$(cat "$pidfile")" 2>/dev/null && sleep 2
-    rm -f "$pidfile"; ok "watcher stopped"
+    pid="$(cat "$pidfile")"
+    kill -TERM "$pid" 2>/dev/null
+    for _ in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+    if kill -0 "$pid" 2>/dev/null; then
+      bad "watcher $pid is still running. Stop it before recording anything else."
+      exit 1
+    fi
+    rm -f "$WORK/$project-$arm-watch.pid"; ok "watcher stopped"
   else
     bad "no watcher pid file, the snapshots may be short"
   fi

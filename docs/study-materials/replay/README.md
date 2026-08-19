@@ -82,6 +82,23 @@ code edit and the tree reacting to it therefore survives playback in proportion,
 rather than collapsing to nothing and making codoc look instant. Report the
 factor.
 
+One thing is removed rather than scaled. A recording is made by a person sending
+the agent a follow-up once the last one has landed, and the pause between them is
+that person reading, deciding and typing, which is not the agent working. Gaps
+longer than two minutes are clipped to two minutes, so every lag that is actually
+about the tools survives untouched while the dead air does not. The manifest
+records how much was taken out and it is reported next to the factor. Without it
+the first tally recording spent more of its timeline waiting for the experimenter
+than watching the agent.
+
+Only one watcher may record into a raw directory at a time, and it takes
+ownership with a pid file. Two of them destroy a recording in a way the round trip
+does not catch: each keeps its own counter and its own idea of what changed last,
+so they overwrite each other's snapshots and each records half the diff. The end
+state still replays, because the last frame and the final copy carry it, while the
+middle of the recording runs backwards. `build` refuses a recording whose clock
+goes back and says which snapshot to look at.
+
 The change is left uncommitted in the working tree, so `git diff` shows the whole
 change. Reading the diff is an honest way to review, both conditions have it, and
 we want to know who chooses it.

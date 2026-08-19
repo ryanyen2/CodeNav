@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -108,6 +109,21 @@ NEUTRALISED = re.compile(r"\.codoc|\.claude|\.mcp\.json|CLAUDE\.md", re.I)
 # long command, because a path cut at eighty characters cannot be matched and
 # replaced afterwards, while a cut placeholder is harmless.
 WORKSPACE_TOKEN = "{{WORKSPACE}}"
+
+# The longest gap between two snapshots that is kept as it was recorded.
+#
+# A recording is made by a person sending the agent a follow-up when the last one
+# lands, and the pause between them is that person reading, deciding and typing.
+# It is not the agent working, and the participant is told they are watching one
+# session that ran while they were at lunch. Left alone it is dead air: on the
+# first tally recording the gaps between turns were minutes long and made up more
+# of the timeline than the work did.
+#
+# Only gaps longer than this are clipped, so every lag that is actually about the
+# tools survives untouched and in proportion, including the one the study cares
+# about, which is how long codoc takes to react to an edit. The manifest records
+# how much was removed and it is meant to be reported alongside the factor.
+IDLE_CAP_S = 120.0
 RESIDUAL = re.compile(r"codoc|\.mcp\.json|CLAUDE\.md", re.I)
 
 
@@ -216,6 +232,12 @@ def watch(workspace: Path, raw: Path, interval: float) -> int:
             "first, because two watchers overwrite each other's snapshots and the "
             "round trip will not catch it.")
     (raw / "watcher.pid").write_text(str(os.getpid()))
+    # A job started with `nohup ... &` from a script inherits SIGINT set to
+    # ignore, so the `kill -INT` that used to stop the watcher did nothing and
+    # said it had worked. Answering SIGTERM the same way Ctrl-C is answered means
+    # one stop path for a person and for a script, and the pid file goes either
+    # way because the cleanup is in the same `finally`.
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     previous = scan(workspace)
     (raw / "base.json").write_text(json.dumps(previous, indent=2, sort_keys=True))
     base = raw / "base"
@@ -378,10 +400,19 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
               file=sys.stderr)
         return 1
     real_duration = meta[-1]["at_s"] or 1.0
+    # Gaps first, because the factor has to be computed against the timeline that
+    # is actually going to be played.
+    gaps, previous = [], 0.0
+    for entry in meta:
+        gaps.append(max(entry["at_s"] - previous, 0.0))
+        previous = entry["at_s"]
+    kept = [min(g, IDLE_CAP_S) for g in gaps]
+    idle_removed = round(sum(gaps) - sum(kept), 1)
+    played_duration = sum(kept) or 1.0
     # Never below one. A recording shorter than the target would otherwise be
     # stretched, and a replay slower than the session it came from would show a
     # tree reacting more slowly than codoc really reacts.
-    speed = max(1.0, real_duration / seconds) if seconds > 0 else 1.0
+    speed = max(1.0, played_duration / seconds) if seconds > 0 else 1.0
 
     root = recorded_root(transcript)
     text_lines = render_transcript(transcript, root) if transcript and transcript.exists() else []
@@ -404,7 +435,7 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
         (frames / name).write_bytes(body)
     shutil.copytree(raw / "base", frames / "base")
 
-    out_frames, previous_at, cursor = [], 0.0, 0
+    out_frames, cursor = [], 0
     for i, entry in enumerate(meta, start=1):
         src = raw / f"{entry['n']:04d}"
         dest = frames / f"{i:04d}"
@@ -417,12 +448,11 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
         out_frames.append({
             "n": i,
             "at_s": entry["at_s"],
-            "delay_s": round(max(entry["at_s"] - previous_at, 0.0) / speed, 3),
+            "delay_s": round(kept[i - 1] / speed, 3),
             "writes": entry["writes"],
             "deletes": entry["deletes"],
             "terminal": "\n".join(chunk),
         })
-        previous_at = entry["at_s"]
 
     tail = raw / "final"
     if tail.exists():
@@ -434,11 +464,14 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "recorded_root": root,
         "real_duration_s": round(real_duration, 1),
+        "idle_removed_s": idle_removed,
+        "idle_cap_s": IDLE_CAP_S,
         "playback_duration_s": round(sum(f["delay_s"] for f in out_frames), 1),
         "speed": round(speed, 2),
         "frames": out_frames,
     }, indent=2))
     print(f"{len(out_frames)} frames, {round(real_duration)}s recorded, "
+          f"{round(idle_removed)}s of it waiting between turns, "
           f"{round(sum(f['delay_s'] for f in out_frames))}s of playback, {speed:.1f}x")
     return 0
 

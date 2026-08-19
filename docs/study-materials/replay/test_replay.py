@@ -375,6 +375,42 @@ class TranscriptTest(unittest.TestCase):
             self.assertEqual(lines[2][0] - lines[0][0], 5.0)
 
 
+class IdleTest(unittest.TestCase):
+    """The pause between turns is the experimenter, not the agent."""
+
+    def test_a_long_wait_between_turns_is_clipped_and_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, frames = tmp / "raw", tmp / "frames"
+            fake_recording(raw, [
+                {"at_s": 0.0, "files": {"a.py": "start"}},
+                {"at_s": 10.0, "files": {"a.py": "one"}},
+                {"at_s": 910.0, "files": {"a.py": "two"}},   # 900s of somebody thinking
+                {"at_s": 920.0, "files": {"a.py": "three"}},
+            ])
+            self.assertEqual(record.build(raw, None, frames, 60.0), 0)
+            manifest = json.loads((frames / "manifest.json").read_text())
+            self.assertEqual(manifest["idle_removed_s"], 900.0 - record.IDLE_CAP_S)
+            self.assertEqual(manifest["real_duration_s"], 920.0)
+
+    def test_the_lag_that_matters_survives_untouched(self):
+        """Every gap short enough to be about the tools is kept in proportion,
+        including how long codoc takes to react to an edit."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, frames = tmp / "raw", tmp / "frames"
+            fake_recording(raw, [
+                {"at_s": 0.0, "files": {"a.py": "start"}},
+                {"at_s": 10.0, "files": {"a.py": "one"}},
+                {"at_s": 40.0, "files": {"a.py": "two"}},
+            ])
+            self.assertEqual(record.build(raw, None, frames, 25.0), 0)
+            manifest = json.loads((frames / "manifest.json").read_text())
+            self.assertEqual(manifest["idle_removed_s"], 0.0)
+            one, two = manifest["frames"][0]["delay_s"], manifest["frames"][1]["delay_s"]
+            self.assertAlmostEqual(two / one, 3.0, places=2)
+
+
 class OneWatcherTest(unittest.TestCase):
     """Two watchers on one raw directory destroy a recording silently.
 
@@ -401,6 +437,36 @@ class OneWatcherTest(unittest.TestCase):
             raw.mkdir()
             (raw / "watcher.pid").write_text("999999")
             self.assertIsNone(record.owning_watcher(raw))
+
+    def test_a_watcher_stops_on_the_signal_a_script_sends_and_cleans_up(self):
+        """`kill -INT` on a `nohup ... &` job does nothing, because such a job
+        inherits SIGINT set to ignore. That is how two watchers ended up on one
+        directory: the stop said it had worked and had not."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            ws, raw = tmp / "ws", tmp / "raw"
+            ws.mkdir()
+            (ws / "a.py").write_text("start")
+            proc = subprocess.Popen(
+                [sys.executable, str(HERE / "record.py"), "watch",
+                 str(ws), str(raw), "--interval", "0.2"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid)
+            try:
+                for _ in range(50):
+                    if (raw / "watcher.pid").exists():
+                        break
+                    time.sleep(0.1)
+                self.assertTrue((raw / "watcher.pid").exists(), "no pid file was taken")
+                proc.terminate()
+                proc.wait(timeout=10)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+            self.assertFalse((raw / "watcher.pid").exists(),
+                             "the watcher left its pid file behind, so the next "
+                             "recording would refuse to start")
 
     def test_build_refuses_a_recording_whose_clock_runs_backwards(self):
         with tempfile.TemporaryDirectory() as tmp:
