@@ -402,3 +402,71 @@ def test_an_anchor_straddling_a_bold_boundary_declines_rather_than_guessing(repo
     t = store.comments_for_feature(fid)[0]
     assert (t.anchor_start, t.anchor_end) == (0, 0)
     assert t.anchor_text == "files, at most 5"
+
+
+def test_a_landed_thread_gets_an_answer_naming_the_code(repo):
+    """A comment that only ever changed colour left the author to find out elsewhere
+    whether their note had been acted on. The reply is built from the ledger — the ops
+    that cite the directive, and the files they bound — so it is a claim codoc can stand
+    behind rather than a second telling of work nobody recorded."""
+    from codoc.model.binding import Binding
+
+    _root, codoc_dir, store = repo
+    fid = _feature(store)
+    edits_channel.append_steer(codoc_dir, edits_channel.Steer(
+        feature_id=fid, text="cap it", comment_id="cm-1", body="cap it"))
+    run_loop_b(str(_root), str(codoc_dir))
+    did = store.comments_for_feature(fid)[0].directive_id
+
+    # The agent implements and reflects, citing the directive.
+    apply_op(NodeOp(kind=NodeOpKind.ATTACH, feature_id=fid,
+                    bindings=[("upload.py", "upload.py::handle")]),
+             store, source="loop_a_agent", applied=True, actor="claude-code",
+             mode="auto", caused_by=did)
+    edits_channel.log_realized(codoc_dir, [
+        edits_channel.Directive(id=did, feature_id=fid, kind="steer", text="x")])
+    run_loop_b(str(_root), str(codoc_dir))
+
+    t = store.comments_for_feature(fid)[0]
+    assert t.status is CommentStatus.RESOLVED
+    assert len(t.replies) == 1
+    assert t.replies[0].author == "claude-code"
+    assert "upload.py" in t.replies[0].body
+
+
+def test_a_reply_does_not_claim_files_that_were_never_recorded(repo):
+    _root, codoc_dir, store = repo
+    fid = _feature(store)
+    edits_channel.append_steer(codoc_dir, edits_channel.Steer(
+        feature_id=fid, text="note", comment_id="cm-1", body="note"))
+    run_loop_b(str(_root), str(codoc_dir))
+    did = store.comments_for_feature(fid)[0].directive_id
+    edits_channel.log_realized(codoc_dir, [
+        edits_channel.Directive(id=did, feature_id=fid, kind="steer", text="x")])
+    run_loop_b(str(_root), str(codoc_dir))
+
+    [reply] = store.comments_for_feature(fid)[0].replies
+    assert "no code was bound" in reply.body
+
+
+def test_replies_survive_a_re_sent_steer(repo):
+    """Editing the note re-sends the steer, which carries no replies — blanking them
+    would erase the answers the thread already has."""
+    from codoc.model.annotation import CommentReply
+
+    _root, codoc_dir, store = repo
+    fid = _feature(store)
+    edits_channel.append_steer(codoc_dir, edits_channel.Steer(
+        feature_id=fid, text="v1", comment_id="cm-1", body="v1"))
+    run_loop_b(str(_root), str(codoc_dir))
+    t = store.comments_for_feature(fid)[0]
+    t.replies = [CommentReply(author="claude-code", body="Done — changed a.py.")]
+    store.upsert_comment(t)
+
+    edits_channel.append_steer(codoc_dir, edits_channel.Steer(
+        feature_id=fid, text="v2", comment_id="cm-1", body="v2"))
+    run_loop_b(str(_root), str(codoc_dir))
+
+    again = store.comments_for_feature(fid)[0]
+    assert again.body == "v2"
+    assert [r.body for r in again.replies] == ["Done — changed a.py."]

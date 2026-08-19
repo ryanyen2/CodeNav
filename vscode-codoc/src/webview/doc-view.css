@@ -1452,8 +1452,13 @@ body.vscode-using-screen-reader .ce-verdict.waiting .ce-icon { animation: none; 
 
 /* comment composer chrome (a quiet amber left edge) — the fixed fallback geometry; the
    in-margin override above repositions it into the right margin beside the anchored text. */
+/* The composer is ABSOLUTE inside the scroll surface, always — so it travels with the
+   sentence it is about. It used to be `fixed`, i.e. pinned to the viewport: scrolling
+   left it hanging over unrelated prose, still claiming to be a note on text that had
+   moved away. `.in-margin` below only changes WHERE in the surface it sits (the
+   whitespace, when there is whitespace); it no longer changes whether it scrolls. */
 .ce-cmt-composer {
-    position: fixed; z-index: 75; width: 264px; max-width: calc(100vw - 16px);
+    position: absolute; z-index: 75; width: 264px; max-width: calc(100% - 16px);
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
     border-left: 2px solid color-mix(in srgb, var(--accent-amend) 55%, transparent);
@@ -2729,3 +2734,46 @@ body.vscode-high-contrast .ce-cmt-card.resolved { border-left-color: var(--vscod
    conversation that asked for it — so they sit on one line rather than stacking. */
 .ce-tl-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ce-tl-actions .ce-tl-diff { margin-top: 0; }
+
+/* ── the comment marker (W10) ─────────────────────────────────────────────────
+   A note has to be findable at every window width. The margin card only renders where
+   the whitespace can hold one, which on most real windows it cannot — so for most
+   readers this marker IS the comment surface, and the sent note was simply invisible
+   without it. Hover reads the thread; click keeps it open.
+
+   Sized and coloured like a footnote reference, not like a control: it sits inside
+   running prose and must not out-shout the sentence it is attached to. */
+.ce-cmt-anchor-mark {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 13px; height: 13px; padding: 0 3px; margin: 0 1px 0 2px;
+    vertical-align: 2px;
+    font: 9.5px/1 var(--font-mono); font-variant-numeric: tabular-nums;
+    color: var(--accent-amend);
+    background: color-mix(in srgb, var(--accent-amend) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-amend) 45%, transparent);
+    border-radius: 999px; cursor: pointer;
+    transition: background var(--dur-fast) var(--ease);
+}
+.ce-cmt-anchor-mark::before { content: '❝'; font-size: 8.5px; opacity: 0.9; }
+/* A reply count replaces the quote glyph — the thread has an answer, and that is the
+   more useful thing for the marker to say. */
+.ce-cmt-anchor-mark:not(:empty)::before { content: none; }
+.ce-cmt-anchor-mark:hover {
+    background: color-mix(in srgb, var(--accent-amend) 30%, transparent);
+}
+/* Resolved threads recede: the conversation is over, the marker is a record. */
+.ce-cmt-anchor-mark.resolved {
+    color: var(--ce-staged);
+    background: color-mix(in srgb, var(--ce-staged) 14%, transparent);
+    border-color: color-mix(in srgb, var(--ce-staged) 40%, transparent);
+}
+body.vscode-high-contrast .ce-cmt-anchor-mark { border-color: var(--vscode-contrastBorder); }
+
+/* Replies inside the thread card. Indented under the note they answer, so the card
+   reads as a conversation rather than a list of unrelated lines. */
+.ce-cmt-reply {
+    margin-top: 7px; padding-left: 8px;
+    border-left: 2px solid color-mix(in srgb, var(--ce-staged) 45%, transparent);
+}
+.ce-cmt-reply-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 2px; }
+.ce-cmt-reply-body { font: 11.5px/1.5 var(--font-doc); color: var(--fg-body); }

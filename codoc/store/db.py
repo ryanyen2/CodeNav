@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from codoc.model.annotation import (
-    CommentScope, CommentStatus, CommentThread, Mark, MarkKind,
+    CommentReply, CommentScope, CommentStatus, CommentThread, Mark, MarkKind,
 )
 from codoc.model.binding import Binding
 from codoc.model.block import Block, BlockLifecycle, Provenance
@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS comments (
     code_refs    TEXT NOT NULL DEFAULT '[]',
     scope        TEXT NOT NULL DEFAULT 'code',
     directive_id TEXT NOT NULL DEFAULT '',
+    replies      TEXT NOT NULL DEFAULT '[]',
     media_ref    TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
@@ -372,7 +373,8 @@ class Store:
         for col, decl in (("anchor_text", "TEXT NOT NULL DEFAULT ''"),
                           ("code_refs", "TEXT NOT NULL DEFAULT '[]'"),
                           ("scope", "TEXT NOT NULL DEFAULT 'code'"),
-                          ("directive_id", "TEXT NOT NULL DEFAULT ''")):
+                          ("directive_id", "TEXT NOT NULL DEFAULT ''"),
+                          ("replies", "TEXT NOT NULL DEFAULT '[]'")):
             self._add_column("comments", col, decl)
         # Blame index (v3): the feature an event touched, lifted out of the op_json
         # payload so per-feature history is a single indexed lookup instead of a
@@ -889,9 +891,9 @@ class Store:
         self.conn.execute(
             """
             INSERT INTO comments (id, feature_id, body, author, status, anchor_start, anchor_end,
-                                  anchor_text, code_refs, scope, directive_id, media_ref,
-                                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  anchor_text, code_refs, scope, directive_id, replies,
+                                  media_ref, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 feature_id=excluded.feature_id,
                 body=excluded.body,
@@ -907,6 +909,10 @@ class Store:
                 -- minted would orphan the thread from the work it caused.
                 directive_id=CASE WHEN excluded.directive_id != '' THEN excluded.directive_id
                                   ELSE comments.directive_id END,
+                -- Same rule as directive_id: a re-sent steer carries no replies, and
+                -- blanking them would erase the answers the thread already got.
+                replies=CASE WHEN excluded.replies != '[]' THEN excluded.replies
+                             ELSE comments.replies END,
                 media_ref=excluded.media_ref,
                 updated_at=excluded.updated_at
             """,
@@ -914,6 +920,7 @@ class Store:
                 c.id, c.feature_id, c.body, c.author.value, c.status.value,
                 c.anchor_start, c.anchor_end, c.anchor_text,
                 json.dumps(c.code_refs, ensure_ascii=False), c.scope.value, c.directive_id,
+                json.dumps([r.model_dump(mode="json") for r in c.replies], ensure_ascii=False),
                 c.media_ref, c.created_at.to_str(), c.updated_at.to_str(),
             ),
         )
@@ -1236,10 +1243,32 @@ def _row_to_comment(r: sqlite3.Row) -> CommentThread:
         code_refs=_json_list(r["code_refs"]) if "code_refs" in keys else [],
         scope=CommentScope(r["scope"]) if "scope" in keys and r["scope"] else CommentScope.CODE,
         directive_id=(r["directive_id"] if "directive_id" in keys else ""),
+        replies=_replies(r["replies"]) if "replies" in keys else [],
         media_ref=r["media_ref"],
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )
+
+
+def _replies(raw) -> list[CommentReply]:
+    """A JSON column read as replies; anything unreadable reads as none.
+
+    Never raises: a corrupt cell costs the thread its answers, which is a degraded read
+    rather than a failed one for the whole tree."""
+    try:
+        rows = json.loads(raw) if isinstance(raw, str) and raw else []
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    out: list[CommentReply] = []
+    for row in rows:
+        if isinstance(row, dict):
+            try:
+                out.append(CommentReply.model_validate(row))
+            except Exception:  # noqa: BLE001 — one bad reply must not lose the rest
+                continue
+    return out
 
 
 def _json_list(raw) -> list[str]:

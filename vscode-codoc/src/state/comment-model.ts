@@ -70,6 +70,19 @@ export interface CommentThread {
     /** The realize directive this note became, stamped by the daemon. Its presence is
      *  what lets a thread say "this landed" and offer the code it produced. */
     directiveId?: string;
+    /** What came back. A comment asks for work, and until this existed nothing ever
+     *  answered on the same surface — the author had to go and find out elsewhere whether
+     *  their note had been acted on. */
+    replies?: CommentReply[];
+}
+
+/** One answer on a thread: written by the agent that did the work, or by codoc when the
+ *  thread's directive landed. */
+export interface CommentReply {
+    author: string;
+    body: string;
+    /** HLC string; `0`-ish when unparseable — the UI falls back to no relative time. */
+    at: string;
 }
 
 const ANCHOR_MAX = 60;
@@ -392,6 +405,15 @@ export function storedThreads(sidecar: { comments?: Record<string, unknown[]> })
                 codeRefs: Array.isArray(r.code_refs) ? r.code_refs.map(String) : undefined,
                 scope: r.scope === 'both' ? 'both' : undefined,
                 directiveId: typeof r.directive_id === 'string' ? r.directive_id : undefined,
+                replies: Array.isArray(r.replies)
+                    ? (r.replies as Record<string, unknown>[])
+                        .filter(x => x && typeof x.body === 'string')
+                        .map(x => ({
+                            author: typeof x.author === 'string' ? x.author : 'claude-code',
+                            body: String(x.body),
+                            at: typeof x.at === 'string' ? x.at : '',
+                        }))
+                    : undefined,
                 media: typeof r.media_ref === 'string' && r.media_ref
                     ? { kind: 'screenshot', ref: r.media_ref } : undefined,
             });
@@ -429,6 +451,9 @@ export function mergeThreads(stored: CommentThread[], local: CommentThread[]): C
                 status: prior.status === 'resolved' ? 'resolved' : t.status,
                 directiveId: t.directiveId ?? prior.directiveId,
                 codeRefs: t.codeRefs?.length ? t.codeRefs : prior.codeRefs,
+                // Replies only ever come from the store — the local copy has none, and
+                // preferring it would drop the answers the thread has already received.
+                replies: t.replies?.length ? t.replies : prior.replies,
                 scope: t.scope ?? prior.scope,
                 createdAt: prior.createdAt || t.createdAt,
             }

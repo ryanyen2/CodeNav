@@ -65,6 +65,17 @@ export interface ActivityData {
 // `last_seen` with no schema change — every hook write touches the file.
 export const EPOCH_UI_TTL_MS = 90_000;
 
+// The same lease, read for a decision about STARTING something rather than about
+// what to draw — parity with Python `watch.EPOCH_STALE_SECONDS` (900), which
+// `autorealize._epoch_open` uses to decide whether anybody else may run the realize
+// queue. Hooks renew activity.json only on tool calls, so a live session in a long
+// inference / Bash stretch — or one parked inside the blocking `codoc_await_verdicts`
+// waiting for the very verdict being cast — goes silent well past 90 s. Reading the
+// display tier for a spawn decision would declare it dead and put a second agent on
+// its queue; the cost of the two mistakes is not symmetric, so the spawn side waits
+// far longer before believing a session is gone.
+export const EPOCH_SPAWN_TTL_MS = 900_000;
+
 // Same failure mode at feature granularity: `features[fid].phase` is only
 // cleared by the `Stop` hook resetting the whole block, so an interrupted
 // session leaves a feature's skeleton/"editing" animation stuck forever.
@@ -149,11 +160,17 @@ export function agentRole(data: ActivityData): string {
  * no lease info, e.g. most existing unit tests) this falls back to trusting
  * the raw flag, matching the pre-lease behavior — production callers should
  * always pass it (see `WorkspaceState.activityMtimeMs`).
+ *
+ * `ttlMs` picks which tier of the SAME signal to read: the display default, or
+ * `EPOCH_SPAWN_TTL_MS` when the answer decides whether to start another agent.
  */
-export function isAgentActive(data: ActivityData, mtimeMs?: number, nowMs: number = Date.now()): boolean {
+export function isAgentActive(
+    data: ActivityData, mtimeMs?: number, nowMs: number = Date.now(),
+    ttlMs: number = EPOCH_UI_TTL_MS,
+): boolean {
     if (data.epoch?.open !== true) return false;
     if (mtimeMs === undefined) return true;
-    return (nowMs - mtimeMs) <= EPOCH_UI_TTL_MS;
+    return (nowMs - mtimeMs) <= ttlMs;
 }
 
 /**

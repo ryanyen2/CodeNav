@@ -53,7 +53,9 @@ from codoc.loop.fsio import atomic_write_json, atomic_write_text
 from codoc.loop.locks import loop_lock
 from codoc.loop.merge3 import merge3
 from codoc.model.block import Block, BlockLifecycle, Provenance
-from codoc.model.event import NodeOp, NodeOpKind, default_provenance, outranks
+from codoc.model.event import (
+    DEFAULT_AGENT_ACTOR, NodeOp, NodeOpKind, default_provenance, outranks,
+)
 from codoc.model.hlc import HLC
 from codoc.model.ids import new_directive_id
 from codoc.store.db import Store, open_store
@@ -659,11 +661,49 @@ def _close_landed_comments(store: Store, codoc_dir: str | Path) -> None:
             return
         for c in store.all_comments():
             if c.status is CommentStatus.SENT and c.directive_id and c.directive_id in done:
+                # Answer the thread where it was asked. A comment that only ever changed
+                # colour left the author to go and find out elsewhere whether their note
+                # had been acted on — which is what makes a request feel like it went into
+                # a void. The reply says what the work actually touched.
+                c.replies = [*c.replies, _landed_reply(store, c.directive_id)]
                 c.status = CommentStatus.RESOLVED
                 c.updated_at = HLC.now()
                 store.upsert_comment(c)
     except Exception:  # noqa: BLE001 — advisory record; never fail a pass
         pass
+
+
+def _landed_reply(store: Store, directive_id: str):
+    """The agent's answer on a thread whose directive just landed.
+
+    Built from the ledger rather than from prose: every op the realization applied cites
+    the directive (`caused_by`), and the bindings on those ops name the code it touched.
+    That is a claim codoc can actually stand behind — unlike a summary, which would be a
+    second telling of work nobody recorded.
+    """
+    from codoc.model.annotation import CommentReply
+
+    files: list[str] = []
+    actor = DEFAULT_AGENT_ACTOR
+    try:
+        for e in store.recent_events(300):
+            if e.caused_by != directive_id or not e.applied:
+                continue
+            if e.actor:
+                actor = e.actor
+            for file, _sym in e.op.bindings:
+                if file and file not in files:
+                    files.append(file)
+    except Exception:  # noqa: BLE001 — a reply is a courtesy, never a correctness path
+        pass
+    if files:
+        shown = ", ".join(files[:4]) + (f" (+{len(files) - 4} more)" if len(files) > 4 else "")
+        body = f"Done — changed {shown}."
+    else:
+        # Landed, but nothing bound code to this feature. Say exactly that rather than
+        # claiming files that were never recorded.
+        body = "Done — no code was bound to this feature by the change."
+    return CommentReply(author=actor, body=body)
 
 
 def _stamp_comment_directives(store: Store, comment_ids: list[str],

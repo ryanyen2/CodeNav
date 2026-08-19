@@ -658,6 +658,9 @@ def _comments_map(store: Store) -> dict[str, list[dict]]:
                 row[key] = val
         if c.code_refs:
             row["code_refs"] = list(c.code_refs)
+        if c.replies:
+            row["replies"] = [{"author": r.author, "body": r.body, "at": r.at.to_str()}
+                              for r in c.replies]
         out.setdefault(c.feature_id, []).append(row)
     for rows in out.values():
         rows.sort(key=lambda r: (r["anchor_start"], r["created_at"]))

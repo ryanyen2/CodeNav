@@ -47,7 +47,7 @@ describe('statusBarView', () => {
     it('warns (background) only on awaiting_impl', () => {
         const awaiting = statusBarView(base({ state: 'awaiting_impl', pending: 2 }));
         expect(awaiting.warn).toBe(true);
-        expect(awaiting.text).toContain('2 to implement');
+        expect(awaiting.text).toContain('2 queued, not running');
 
         for (const state of ['in_sync', 'code_drift', 'tree_dirty', 'realizing'] as const) {
             expect(statusBarView(base({ state, pending: 1 })).warn).toBe(false);

@@ -54,7 +54,7 @@ import {
     rebaseCaptured, settledPendingFids, type FeatureText,
 } from './captured-decorations';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
-import { AskDecorations, ASK_UPDATED, featureQuoteBlocks, quoteRange } from './ask-decorations';
+import { AskDecorations, ASK_UPDATED } from './ask-decorations';
 import { FindDecorations, FIND_UPDATED, searchBlocks } from './find-decorations';
 import {
     DEFAULT_FIND_OPTIONS, findInBlocks, replacementFor, stepIndexFrom, wrapIndex,
@@ -62,10 +62,12 @@ import {
 } from '../find';
 import type { AskStep, AskWalkthrough } from '../../state/ask-model';
 import { resetCommentDecorations, showCard } from './comment-decorations';
+import { CommentAnchors, COMMENT_ANCHORS_UPDATED } from './comment-anchor';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { gateProjection, shouldDeferProjection } from '../doc-gate';
 import { codeRefsIn, mintCommentId, CommentThread } from '../../state/comment-model';
+import { hlcWallMs } from '../../state/blame-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
@@ -414,6 +416,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 // or handed off) is contested — the strip says so rather than letting
                 // Accept look like a formality that costs them nothing.
                 getLocallyEdited: () => new Set([...currentDrafts, ...currentHeld]),
+            }),
+            // The comment marker: a note has to be findable at every window width, and the
+            // margin card only exists where the whitespace fits one.
+            CommentAnchors.configure({
+                getThreads: () => currentComments,
+                handlers: {
+                    peek: (thread, at) => openThreadCard(thread, at, false),
+                    open: (thread, at) => openThreadCard(thread, at, true),
+                    close: dismissThreadCard,
+                },
             }),
             AutoEditDecorations.configure({
                 getUnseen: () => currentAutoEdits,
@@ -1524,10 +1536,25 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     surface.addEventListener('click', ev => {
         const span = (ev.target as HTMLElement)?.closest?.('.codoc-comment') as HTMLElement | null;
         const id = span?.dataset.threadId;
-        if (!id || marginFits()) return;   // a visible card already answers the click
+        if (!id) return;
         const thread = currentComments.find(t => t.id === id);
-        if (thread) showCard(span as HTMLElement, buildMarginCard(thread), { pinned: true });
+        if (thread) openThreadCard(thread, span as HTMLElement, true);
     });
+
+    /** Show one thread beside its words — transient on hover, pinned on click.
+     *
+     *  The margin card is not a substitute for this: it only renders where the whitespace
+     *  can hold one, which on most window widths it cannot, so for most readers the
+     *  marker IS the comment surface. */
+    let closeThreadCard: (() => void) | null = null;
+    function openThreadCard(thread: CommentThread, at: HTMLElement, pinned: boolean): void {
+        closeThreadCard?.();
+        closeThreadCard = showCard(at, buildMarginCard(thread), { pinned });
+    }
+    function dismissThreadCard(): void {
+        closeThreadCard?.();
+        closeThreadCard = null;
+    }
 
     function commentMarkRange(threadId: string): { from: number; to: number } | null {
         let found: { from: number; to: number } | null = null;
@@ -1673,6 +1700,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         return gap >= CMT_MIN_MARGIN;
     }
     function relTime(ts: number): string {
+        if (!Number.isFinite(ts) || ts <= 0) return '';
         const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
         if (s < 45) return 'just now';
         const m = Math.round(s / 60);
@@ -1730,6 +1758,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 ? 'The agent may edit this code, and will update this description to match'
                 : 'The agent may edit only this code';
             card.append(scope);
+        }
+        // What came back. A thread that could only ever change colour left the author to
+        // find out elsewhere whether their note had been acted on.
+        for (const reply of t.replies ?? []) {
+            const r = elc('div', 'ce-cmt-reply');
+            const head2 = elc('div', 'ce-cmt-reply-head');
+            head2.append(elc('span', 'ce-cmt-who', reply.author));
+            const when = relTime(hlcWallMs(reply.at));
+            if (when) head2.append(elc('span', 'ce-cmt-time', when));
+            r.append(head2, elc('div', 'ce-cmt-reply-body', reply.body));
+            card.append(r);
         }
         const foot = elc('div', 'ce-cmt-foot');
         if (t.status === 'open') foot.append(cardAction('Edit', () => openComposerForEdit(t)));
@@ -1803,25 +1842,31 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         if (top != null) composer.style.top = `${Math.round(top)}px`;
     }
 
-    /** Float the composer just under the text it is about, clamped on screen — the
-     *  narrow-window path, where there is no margin to sit in. */
+    /** Place the composer just under the text it is about — the narrow-window path, where
+     *  there is no margin to sit in.
+     *
+     *  Coordinates are in the surface's SCROLL space, not the viewport, because the
+     *  composer is absolutely positioned inside the surface: it has to travel with the
+     *  sentence. Positioning it in viewport coordinates is what left it hanging over
+     *  unrelated prose the moment the reader scrolled. */
     function positionComposerAtSelection(box: HTMLElement): void {
         if (!composeRange) return;
         const rect = coordsRect(composeRange.from, composeRange.to);
         if (!rect) return;
-        const w = box.offsetWidth || 296;
-        box.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - w - 8))}px`;
-        box.style.top = `${Math.round(rect.bottom + 8)}px`;
+        const surf = surface.getBoundingClientRect();
+        const w = box.offsetWidth || 264;
+        const left = Math.max(8, Math.min(rect.left - surf.left,
+                                          surface.clientWidth - w - 8));
+        box.style.left = `${Math.round(left)}px`;
+        box.style.right = 'auto';
+        box.style.top = `${Math.round(rect.bottom - surf.top + surface.scrollTop + 8)}px`;
     }
 
-    // ── /codoc:ask margin notes ───────────────────────────────────────────────
-    // The walkthrough's per-stop notes render as cards in the SAME right whitespace
-    // the comment cards use, anchored to each stop's quote (or its heading), so the
-    // note sits beside the sentence it is about — like a comment. Deliberately does
-    // NOT set `.has-comments`: a walkthrough is a reading order OVER the document and
-    // must not reflow it, so the cards hang in the existing whitespace rather than
-    // reserving a column that slides the prose left. Read-only (a reading path), so
-    // no edit/resolve — clicking a card just steps the walkthrough to it.
+    // ── /codoc:ask notes ──────────────────────────────────────────────────────
+    // The per-stop note is the SAME card it always was — read-only (a reading path, so
+    // no edit/resolve; clicking it steps the walkthrough there) — but it is no longer
+    // hung in the margin. It is built on demand and shown beside the ordinal chip that
+    // summoned it; see `renderAskMargin` for why the persistent version had to go.
     function clearAskCards(): void {
         surface.querySelectorAll('.ce-ask-mcard').forEach(n => n.remove());
     }
@@ -1859,29 +1904,66 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
     /** Lay out the ask cards: anchor each to its quote (else its heading), sort by
      *  top, push down to de-overlap — the same stacking the comment margin uses. */
+    /**
+     * The walkthrough's notes are ON DEMAND — there is no persistent note card.
+     *
+     * They used to be drawn at a fixed right inset regardless of how much whitespace
+     * existed, so on any window narrower than card-plus-measure they sat ON TOP of the
+     * prose: a reading aid covering the thing it was helping you read. Reserving the
+     * column instead would mean shifting the document, which is the mistake the comment
+     * margin already made.
+     *
+     * What stays on the page is the ordinal chip beside each heading — durable, in the
+     * margin, costing no prose — plus the quote wash on the sentence a stop points at.
+     * The note itself is one hover away (`bindAskBadgeHovers`). This function now only
+     * clears cards a previous build left behind.
+     */
     function renderAskMargin(): void {
         clearAskCards();
-        const walk = currentAsk;
-        if (!walk) return;
-        const blocks = featureQuoteBlocks(editor.state.doc);
-        const items: { card: HTMLElement; top: number }[] = [];
-        for (const step of walk.steps) {
-            if (!step.note && !step.file) continue;   // nothing to say → no card
-            const heading = headingPosForFid(editor, step.feature_id);
-            if (heading == null) continue;            // feature not in this doc
-            const q = step.quote ? quoteRange(blocks.get(step.feature_id) ?? [], step.quote) : null;
-            const top = anchorTopInContent(q ? q.from : heading + 1);
-            if (top == null) continue;
-            items.push({ card: buildAskCard(step, step.feature_id === currentAskFid), top });
-        }
-        items.sort((a, b) => a.top - b.top);
-        let cursor = -Infinity;
-        for (const it of items) {
-            surface.appendChild(it.card);             // append first so offsetHeight is real
-            const top = Math.max(it.top, cursor);
-            it.card.style.top = `${Math.round(top)}px`;
-            cursor = top + it.card.offsetHeight + CMT_STACK_GAP;
-        }
+    }
+
+    /** The step behind a heading's ordinal chip, if this feature is a walkthrough stop. */
+    function askStepFor(fid: string): AskStep | null {
+        return currentAsk?.steps.find(s => s.feature_id === fid) ?? null;
+    }
+
+    /**
+     * Hovering the ordinal chip shows that stop's note.
+     *
+     * The chip is a CSS `::before` on the heading, so it has no element of its own to
+     * bind to — the pointer position is tested against the heading's box instead, on the
+     * margin side where the chip is drawn. Delegated from the surface so it survives every
+     * decoration rebuild without re-binding.
+     */
+    // How far left of the heading the chip's hover target reaches (it is drawn at
+    // `right: calc(100% + 8px)`, so it lives just outside the heading's own box).
+    const ASK_CHIP_REACH = 44;
+    let askHoverFid = '';
+    let closeAskNote: (() => void) | null = null;
+
+    function bindAskBadgeHovers(): void {
+        const dismiss = (): void => {
+            askHoverFid = '';
+            closeAskNote?.();
+            closeAskNote = null;
+        };
+        surface.addEventListener('mousemove', ev => {
+            if (!currentAsk) return;
+            const head = (ev.target as HTMLElement)?.closest?.('.ce-ask-head') as HTMLElement | null;
+            if (!head) { if (askHoverFid) dismiss(); return; }
+            const box = head.getBoundingClientRect();
+            const onChip = ev.clientX < box.left + 4 && ev.clientX > box.left - ASK_CHIP_REACH;
+            if (!onChip) { if (askHoverFid) dismiss(); return; }
+            const fid = head.getAttribute('data-fid') ?? '';
+            if (!fid || fid === askHoverFid) return;
+            const step = askStepFor(fid);
+            if (!step) return;
+            closeAskNote?.();
+            askHoverFid = fid;
+            closeAskNote = showCard(head, buildAskCard(step, fid === currentAskFid),
+                                    { pinned: false });
+        });
+        surface.addEventListener('mouseleave', () => { if (askHoverFid) dismiss(); });
     }
     /** Both margin layers re-lay-out together — a width or doc change moves the
      *  anchors both read from. */
@@ -1898,6 +1980,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // Reposition / dismiss the bubble + composer as the surface scrolls or blurs.
     let blurTimer = 0;
     surface.addEventListener('scroll', () => { if (bubble.style.display !== 'none') updateBubble(); }, { passive: true });
+    bindAskBadgeHovers();
     editor.view.dom.addEventListener('blur', () => {
         if (blurTimer) clearTimeout(blurTimer);
         blurTimer = window.setTimeout(() => {
@@ -2070,6 +2153,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setComments: (comments: CommentThread[]) => {
             currentComments = comments;
+            // Re-place the inline markers: a thread arriving, resolving, or gaining a
+            // reply changes what each one says.
+            editor.view.dispatch(editor.state.tr.setMeta(COMMENT_ANCHORS_UPDATED, true));
             // A comment appearing or leaving changes which cards hang in the margin, and
             // both layers share that whitespace — so re-lay-out both. The PROSE does not
             // move for this any more, so nothing here re-wraps the document.
