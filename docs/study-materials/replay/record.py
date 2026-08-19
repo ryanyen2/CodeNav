@@ -183,9 +183,39 @@ def scan(root: Path, with_index: bool = False) -> dict[str, str]:
     return out
 
 
+def owning_watcher(raw: Path) -> int | None:
+    """The pid of a live watcher already writing here, if there is one."""
+    pidfile = raw / "watcher.pid"
+    if not pidfile.exists():
+        return None
+    try:
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)
+    except (ValueError, OSError):
+        return None
+    return pid
+
+
 def watch(workspace: Path, raw: Path, interval: float) -> int:
-    """Copy what changed, about once a second, until interrupted."""
+    """Copy what changed, about once a second, until interrupted.
+
+    Two watchers on one raw directory silently destroy a recording, and the
+    damage does not show up in the round trip. Each keeps its own counter and its
+    own idea of what changed last, so they overwrite each other's numbered
+    snapshots and each records only its own half of the diff. The end state still
+    replays correctly, because the last frame and the final copy carry it, while
+    the middle of the recording runs backwards: on the tally recording the
+    timeline stepped back ten times in sixty-six frames, which a participant would
+    see as code appearing and then reverting.
+    """
     raw.mkdir(parents=True, exist_ok=True)
+    owner = owning_watcher(raw)
+    if owner:
+        raise SystemExit(
+            f"a watcher is already recording into {raw} as pid {owner}. Stop it "
+            "first, because two watchers overwrite each other's snapshots and the "
+            "round trip will not catch it.")
+    (raw / "watcher.pid").write_text(str(os.getpid()))
     previous = scan(workspace)
     (raw / "base.json").write_text(json.dumps(previous, indent=2, sort_keys=True))
     base = raw / "base"
@@ -196,6 +226,15 @@ def watch(workspace: Path, raw: Path, interval: float) -> int:
     print(f"base: {len(previous)} files. Watching. Ctrl-C when the agent is done.")
 
     n, started = 0, time.time()
+    try:
+        return _watch_loop(workspace, raw, interval, previous, started)
+    finally:
+        (raw / "watcher.pid").unlink(missing_ok=True)
+
+
+def _watch_loop(workspace: Path, raw: Path, interval: float,
+                previous: dict, started: float) -> int:
+    n = 0
     try:
         while True:
             time.sleep(interval)
@@ -326,6 +365,18 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
         print("no snapshots in", raw, file=sys.stderr)
         return 1
     meta = [json.loads(p.read_text()) for p in snapshots]
+    # A recording whose clock runs backwards was watched by two watchers at once,
+    # and the round trip does not catch it: the end state still replays, while the
+    # middle shows code appearing and then reverting. Refuse rather than ship it.
+    backwards = [(i, meta[i - 1]["at_s"], meta[i]["at_s"])
+                 for i in range(1, len(meta)) if meta[i]["at_s"] < meta[i - 1]["at_s"]]
+    if backwards:
+        first = backwards[0]
+        print(f"the recording's clock runs backwards {len(backwards)} time(s), "
+              f"first at snapshot {first[0] + 1} ({first[1]}s then {first[2]}s). "
+              f"Two watchers wrote into {raw}. Record it again with one.",
+              file=sys.stderr)
+        return 1
     real_duration = meta[-1]["at_s"] or 1.0
     # Never below one. A recording shorter than the target would otherwise be
     # stretched, and a replay slower than the session it came from would show a

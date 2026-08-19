@@ -1,0 +1,171 @@
+# tally's policy knobs.
+#
+# Everything in this file is a decision about what the tool should conclude,
+# rather than about how it goes about it. Editing this file changes the answers
+# without touching code. If a value belongs in here the test for it is: could a
+# reasonable person want it different, on the same statements?
+#
+# A broken file here stops the run rather than falling back to something
+# built in. Quietly summarising against different rules than the ones you can
+# see would produce a wrong answer that looks entirely fine.
+
+
+[periods]
+# Which date decides the period a transaction lands in, per grouping.
+#
+#   "made"     the date the transaction happened. Matches what you remember
+#              doing, and is the honest answer to "what did I spend in January".
+#   "posted"   the date it reached the account. Matches the statement the bank
+#              sends you, and is the answer you need if you are reconciling
+#              against the bank rather than against your memory.
+#
+# These are set per grouping on purpose, because they answer different
+# questions. A card payment made on the 31st that posts on the 2nd is January
+# spending to you and February to the bank; the monthly view is the one you read
+# to see where the money went, and the weekly view is the one held next to a
+# statement. Setting them the same is perfectly reasonable if you only ever ask
+# one of those questions.
+#
+# An export with no posting date column falls back to the transaction date, so
+# "posted" is safe on a bank that does not tell you.
+month = "made"
+week = "posted"
+
+
+[duplicates]
+# What makes two rows the same row, so that the second is dropped.
+#
+# Fields: "date" (the transaction date), "posted" (the posting date), "amount",
+# and "description".
+#
+# Leaving "description" out is what you want if your bank writes the same shop
+# more than one way, because then one purchase exported three times under three
+# spellings collapses to one. The cost is real and worth understanding: two
+# genuinely separate purchases of the same amount on the same day -- two coffees
+# at 3.40, two 10.00 top ups -- become one, and the money quietly goes missing.
+# The count of what was dropped is on the line every run prints, which is the
+# only way to notice.
+#
+# Transfers are exempt from all of this whatever is listed here, because both
+# legs of a transfer are meant to survive. dedupe.py says why.
+match = ["date", "amount"]
+
+
+[recurring]
+# How many distinct months a payment has to appear in before it counts as
+# recurring. Two is a coincidence often enough to be annoying; three is not.
+months = 3
+
+
+[money]
+# How much of a file has to be positive before it is treated as an export that
+# puts spending in as positive, and every sign is flipped. Above this share, the
+# file is assumed to be the other kind.
+#
+# Guessing is uncomfortable and the alternative -- refuse and ask -- is safer.
+# It is done this way because the tool is for one person's own statements, and
+# stopping to ask about a convention that never changes for them is worse than
+# being wrong once on a file they would notice immediately.
+positive_share = 0.8
+
+
+[transfers]
+# Wording that means money moved between the account holder's own accounts.
+# Matched as a substring, against the description folded to lowercase.
+words = [
+    "transfer",
+    "to savings",
+    "from savings",
+    "own account",
+    "xfer",
+]
+
+# What to do with the rows that match those words.
+#
+#   "show"   report what was moved beside each period's spending, and outside
+#            its total. Money moved to savings is not spending -- it is still
+#            yours -- but it is not nothing either, and a summary that drops it
+#            silently cannot account for where the month went.
+#
+#   "hide"   leave them out of the summary altogether, as though the rows were
+#            not in the file. Quieter, and wrong if you have ever wondered where
+#            the difference between your income and your outgoings went.
+#
+# What is deliberately NOT offered is a mode that counts transfers as spending.
+# On an export covering both accounts that double counts every move, once
+# leaving the current account and once arriving in the savings one, and makes a
+# month of shuffling money look like a month of buying things. If money leaving
+# to an account you do not track really is spending to you, take the word out of
+# the list above and let it be categorised like anything else.
+handling = "show"
+
+
+[categories]
+# What to do with a description that matches none of the rules below.
+#
+#   "stop"     refuse to write the summary, and name every merchant that did
+#              not match so they can be added in one go. Nothing is filed
+#              anywhere until the list below covers everything in the file.
+#   "bucket"   file it under "uncategorised" and carry on. The line is visible
+#              in the output, but it is a line you have to remember to read.
+#
+# "stop" is the stricter reading and it costs something: a summary you cannot
+# have at all until every merchant is accounted for, including the one-off from
+# a shop you will never visit again. That is the trade being made deliberately.
+unmatched = "stop"
+
+
+# ── merchant rules ───────────────────────────────────────────────────────────
+#
+# Merchant patterns to categories. Each is a regular expression, matched against
+# the description without regard to case.
+#
+# THE ORDER MATTERS AND IT IS THE FIRST MATCH THAT WINS, which is why the
+# specific ones are above the general ones: "shell energy" is a utility and
+# "shell" is fuel, and a list in the other order would put the electricity bill
+# in the car. They are written as a list of [[rule]] entries rather than one
+# table of category = pattern so that the order is a property of the file and
+# not something that survives only as long as nobody alphabetises it.
+#
+# The alternative is to require exactly one match and refuse when two apply.
+# That is stricter and it is what an accounting system should do; here it would
+# stop the month's summary over one ambiguous coffee shop.
+#
+# Patterns are written in 'single quotes' so backslashes mean what they mean in
+# a regular expression, rather than being read as TOML escapes.
+
+[[rule]]
+pattern = 'shell energy|british gas|octopus energy'
+category = "utilities"
+
+[[rule]]
+pattern = 'shell|bp\b|esso|texaco'
+category = "fuel"
+
+[[rule]]
+pattern = 'tesco|sainsbury|aldi|lidl|co-?op'
+category = "groceries"
+
+[[rule]]
+pattern = 'pret|greggs|costa|starbucks|caf[eé]'
+category = "eating out"
+
+[[rule]]
+pattern = 'tfl|trainline|uber|citymapper'
+category = "transport"
+
+[[rule]]
+pattern = 'netflix|spotify|patreon'
+category = "subscriptions"
+
+[[rule]]
+pattern = 'boots|pharmacy|nhs'
+category = "health"
+
+[[rule]]
+pattern = 'rent|landlord'
+category = "housing"
+
+[[rule]]
+pattern = 'salary|payroll'
+category = "income"

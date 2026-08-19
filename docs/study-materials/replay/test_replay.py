@@ -375,6 +375,46 @@ class TranscriptTest(unittest.TestCase):
             self.assertEqual(lines[2][0] - lines[0][0], 5.0)
 
 
+class OneWatcherTest(unittest.TestCase):
+    """Two watchers on one raw directory destroy a recording silently.
+
+    Each keeps its own counter and its own idea of what changed last, so they
+    overwrite each other's numbered snapshots and each records half the diff. The
+    round trip still passes, because the end state is carried by the last frame
+    and the final copy, while the middle of the recording runs backwards. It
+    happened once, to the tally recording, ten times in sixty-six frames.
+    """
+
+    def test_a_second_watcher_refuses_to_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw"
+            raw.mkdir()
+            (raw / "watcher.pid").write_text(str(os.getpid()))
+            self.assertEqual(record.owning_watcher(raw), os.getpid())
+            with self.assertRaises(SystemExit) as caught:
+                record.watch(Path(tmp), raw, 0.1)
+            self.assertIn("already recording", str(caught.exception))
+
+    def test_a_dead_watcher_does_not_block_the_next_recording(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw"
+            raw.mkdir()
+            (raw / "watcher.pid").write_text("999999")
+            self.assertIsNone(record.owning_watcher(raw))
+
+    def test_build_refuses_a_recording_whose_clock_runs_backwards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, frames = tmp / "raw", tmp / "frames"
+            fake_recording(raw, [
+                {"at_s": 0.0, "files": {"a.py": "start"}},
+                {"at_s": 10.0, "files": {"a.py": "one"}},
+                {"at_s": 4.0, "files": {"a.py": "two"}},
+            ])
+            self.assertEqual(record.build(raw, None, frames, 30.0), 1)
+            self.assertFalse((frames / "manifest.json").exists())
+
+
 class NeutralityTest(unittest.TestCase):
     """The recording must not name either tool in what a participant reads.
 

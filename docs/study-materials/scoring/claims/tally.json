@@ -1,19 +1,18 @@
 {
   "project": "tally",
-  "note": "Read scribe.json for what a claim is and how it is rated.",
+  "note": "Read scribe.json for what a claim is and how it is rated. Every signal here was derived by running the recorded code rather than from the design, and two of them moved as a result.",
   "sample_command": ["python", "-m", "tally.cli", "summarise", "{sample}", "-"],
   "claims": [
     {
       "id": "C1",
       "policy": "money moved between your own accounts",
-      "planted": "D1",
       "statement": "Money moved between your own accounts is left out of the totals.",
       "probe": {
-        "sample": "statement.csv",
-        "signal": "-400.00",
-        "holds_when": "absent",
-        "present_means": "both legs of an account transfer are counted in the totals",
-        "absent_means": "money moved between your own accounts is left out"
+        "sample": "statement-known.csv",
+        "signal": "total                -92.00",
+        "holds_when": "present",
+        "present_means": "the total is the spending alone, with the two transfer legs outside it",
+        "absent_means": "the total has moved, so money between your own accounts is being counted"
       },
       "find_in_record": ["transfer", "own account", "savings", "excluded", "left out"]
     },
@@ -23,11 +22,11 @@
       "planted": "D3",
       "statement": "A row recorded twice is counted once, matched on its date, its amount and its merchant.",
       "probe": {
-        "sample": "statement.csv",
-        "signal": "-28.60",
+        "sample": "statement-known.csv",
+        "signal": "eating out            -6.80",
         "holds_when": "present",
-        "present_means": "the repeated grocery row is counted once",
-        "absent_means": "the repeated grocery row is counted twice, so the comparison changed"
+        "present_means": "a coffee and a pastry of the same amount on the same day are both counted",
+        "absent_means": "two different merchants of the same amount on one day are merged, so the match no longer uses the merchant"
       },
       "find_in_record": ["duplicate", "twice", "same date", "merchant", "amount"]
     },
@@ -37,7 +36,7 @@
       "planted": "D2",
       "statement": "A transaction counts in the month it was made, not the month the bank posted it.",
       "probe": {
-        "sample": "statement.csv",
+        "sample": "statement-known.csv",
         "signal": "## 2026-02",
         "holds_when": "absent",
         "present_means": "a transaction made in January and posted in February counts in February",
@@ -54,8 +53,8 @@
         "sample": "statement.csv",
         "signal": "uncategorised",
         "holds_when": "present",
-        "present_means": "an unmatched merchant lands in the uncategorised bucket",
-        "absent_means": "an unmatched merchant does not reach the summary, so the run refuses or drops it"
+        "present_means": "an unmatched merchant lands in the uncategorised bucket and a summary is produced",
+        "absent_means": "the run refuses over an unmatched merchant, so there is no summary at all"
       },
       "find_in_record": ["uncategorised", "unmatched", "no rule", "bucket"]
     },
@@ -64,8 +63,8 @@
       "policy": "refunds",
       "statement": "A refund is netted against its own category rather than reported separately.",
       "probe": {
-        "sample": "statement.csv",
-        "signal": "  groceries            -28.60",
+        "sample": "statement-known.csv",
+        "signal": "groceries            -28.60",
         "holds_when": "present",
         "present_means": "the refund is netted against groceries",
         "absent_means": "the refund is not netted against groceries"
