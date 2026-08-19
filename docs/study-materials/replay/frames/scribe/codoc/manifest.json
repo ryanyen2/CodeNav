@@ -11,7 +11,6 @@
       "at_s": 159.78,
       "delay_s": 26.285,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
         ".codoc/tree.codoc",
@@ -26,7 +25,6 @@
       "at_s": 167.88,
       "delay_s": 1.332,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         "scribe/settings.py"
       ],
@@ -50,7 +48,6 @@
       "at_s": 199.25,
       "delay_s": 2.828,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
@@ -83,7 +80,6 @@
       "at_s": 232.65,
       "delay_s": 3.492,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
@@ -100,7 +96,6 @@
       "at_s": 280.25,
       "delay_s": 7.83,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -117,7 +112,6 @@
       "at_s": 305.55,
       "delay_s": 4.162,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
         ".codoc/tree.codoc",
@@ -155,7 +149,6 @@
       "at_s": 376.56,
       "delay_s": 8.51,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -185,7 +178,6 @@
       "at_s": 385.67,
       "delay_s": 1.0,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         "scribe/report.py"
       ],
@@ -209,7 +201,6 @@
       "at_s": 457.65,
       "delay_s": 2.833,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
         ".codoc/tree.codoc",
@@ -224,7 +215,6 @@
       "at_s": 471.84,
       "delay_s": 2.334,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         "tests/test_settings.py"
       ],
@@ -270,7 +260,6 @@
       "at_s": 529.58,
       "delay_s": 0.665,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -290,7 +279,6 @@
       "at_s": 584.13,
       "delay_s": 8.974,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -330,7 +318,6 @@
       "at_s": 720.41,
       "delay_s": 21.59,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/drift.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -345,7 +332,6 @@
       "at_s": 723.44,
       "delay_s": 0.498,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         "scribe/settings.py"
       ],
@@ -358,7 +344,6 @@
       "at_s": 727.48,
       "delay_s": 0.665,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         "scribe/settings.py"
       ],
@@ -382,7 +367,6 @@
       "at_s": 753.75,
       "delay_s": 3.488,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -411,7 +395,6 @@
       "at_s": 789.07,
       "delay_s": 3.32,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -427,7 +410,6 @@
       "at_s": 810.27,
       "delay_s": 3.488,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/drift.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -443,7 +425,6 @@
       "at_s": 960.87,
       "delay_s": 24.774,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
@@ -460,7 +441,6 @@
       "at_s": 963.9,
       "delay_s": 0.498,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/status.json",
         "scribe/settings.py"
       ],
@@ -506,7 +486,6 @@
       "at_s": 987.14,
       "delay_s": 0.832,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/drift.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -532,7 +511,6 @@
       "at_s": 1022.47,
       "delay_s": 4.317,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -549,7 +527,6 @@
       "at_s": 1076.0,
       "delay_s": 8.806,
       "writes": [
-        ".codoc/codoc.db",
         ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
