@@ -46,9 +46,15 @@ start() {
   step "Unpacking a clean $project workspace for the $arm condition"
   mkdir -p "$WORK" "$raw"
   tar xzf "$tarball" -C "$WORK"
-  mv "$WORK/$tarball_name" "$ws"
+  # The codoc arm's archive is called `scribe` and the baseline's is called
+  # `scribe-baseline`, so one needs renaming into place and the other is already
+  # there. Renaming a folder onto itself fails, and it used to fail after the
+  # unpack had already happened, which left a workspace that looked fine.
+  [ "$WORK/$tarball_name" = "$ws" ] || mv "$WORK/$tarball_name" "$ws"
+  [ -f "$ws/pyproject.toml" ] || { bad "$ws is not a workspace after unpacking"; exit 1; }
   ( cd "$ws" && uv venv --quiet .venv >/dev/null 2>&1 && \
     .venv/bin/python -m pip install -q -e . >/dev/null 2>&1 )
+  [ -x "$ws/.venv/bin/python" ] || { bad "the environment in $ws did not build"; exit 1; }
   ok "$ws"
 
   if [ "$arm" = codoc ]; then

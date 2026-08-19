@@ -109,6 +109,15 @@ class BuildTest(unittest.TestCase):
             self.assertAlmostEqual(manifest["playback_duration_s"], 30.0, places=0)
             self.assertAlmostEqual(manifest["speed"], 200 / 30, places=2)
 
+    def test_a_short_recording_is_not_stretched(self):
+        # Asking for 180 seconds of playback from a 200-second session compresses
+        # it. Asking for 180 from a 30-second one must not slow it down, or the
+        # replay would show codoc reacting more slowly than it really does.
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self.build(Path(tmp), seconds=1000.0)
+            self.assertEqual(manifest["speed"], 1.0)
+            self.assertAlmostEqual(manifest["playback_duration_s"], 200.0, places=0)
+
     def test_the_recorded_lag_survives_in_proportion(self):
         # Frame 2 waited 50s of the 200s session and frame 3 waited 110s, so
         # after compression frame 3 still waits 2.2 times as long as frame 2.

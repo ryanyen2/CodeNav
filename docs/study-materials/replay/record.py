@@ -207,7 +207,10 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
         return 1
     meta = [json.loads(p.read_text()) for p in snapshots]
     real_duration = meta[-1]["at_s"] or 1.0
-    speed = real_duration / seconds if seconds > 0 else 1.0
+    # Never below one. A recording shorter than the target would otherwise be
+    # stretched, and a replay slower than the session it came from would show a
+    # tree reacting more slowly than codoc really reacts.
+    speed = max(1.0, real_duration / seconds) if seconds > 0 else 1.0
 
     text_lines = render_transcript(transcript) if transcript and transcript.exists() else []
     if text_lines:
