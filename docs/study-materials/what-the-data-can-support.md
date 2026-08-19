@@ -36,6 +36,32 @@ alarm count is new and it is there so that a difference in detection cannot be
 claimed without checking that the participant did not simply call everything
 wrong.
 
+**Both conditions' machinery keeps the record true, and that was measured, not
+assumed.** The scribe recording was derived through both conditions and each
+condition's own record pass was run over it. The baseline's maintenance skill
+produced a `CLAUDE.md` that states the changes plainly: "repeat_share moved from
+0.6 to 0.5, and keep_hyphen starts empty rather than listing twelve prefixes",
+and "a line counts as furniture when the same text repeats on at least half the
+pages, and on no fewer than two of them whichever way the share falls". Both are
+accurate. The agent that made the questionable choices then described them
+correctly.
+
+So **record truth may not separate the conditions at all**, and the study should
+not be built on the expectation that it will. What is left that can separate them
+is worth stating before any data arrives:
+
+- **Finding.** The baseline states the change inside 163 lines of prose that also
+  describe everything else. codoc states it as amended features plus three
+  proposals attached to the parts of the tree they belong to.
+- **Being made to decide.** A codoc proposal is a verdict somebody has to give:
+  it sits in the tree until it is accepted or rejected, and the ledger records
+  which. Nothing in the baseline demands a decision, so "the agent did it and they
+  never noticed" and "they read it and agreed" look identical afterwards.
+
+The second of those is the one to lead with, because it is the difference the
+tool actually makes and it is recorded rather than rated. Report record truth
+either way, including the likely result that both conditions keep it.
+
 **One thing the replay adds and one thing it costs.** It adds comparability,
 because everybody reviews the same change, so detection counts can be pooled at
 all. It costs realism, because nobody watched their own agent work and the
