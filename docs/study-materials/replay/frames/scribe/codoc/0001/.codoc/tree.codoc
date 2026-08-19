@@ -63,6 +63,6 @@
 - Package identity metadata  ⟨f-837b6393⟩
     Names the package and its version: scribe turns text pulled out of a PDF into clean Markdown.
 
-+ - Per-document conversion settings  ⟨e-a808cf7a⟩
-+     Lets each document use conversion-rule settings suited to its own layout instead of hard-coded values. It loads defaults and optional per-document overrides from the document's nearby scribe.toml, and only that directory is searched so unrelated parent configuration cannot silently change output.
-+     code drift · The new settings module lets conversion rules load defaults and per-document overrides, so no existing feature covers this configuration behavior.
++ - Conversion configuration settings  ⟨e-6775fbd3⟩
++     Lets each conversion rule use document-specific settings instead of requiring source changes for unusual documents. Groups one dataclass of plain data per rule and preserves the existing behavior through matching defaults, so rules must continue receiving the complete settings object when configuration is added or changed.
++     code drift · The new configuration module gathers rule settings, defaults, and configuration errors so conversions can be adjusted without editing source code.

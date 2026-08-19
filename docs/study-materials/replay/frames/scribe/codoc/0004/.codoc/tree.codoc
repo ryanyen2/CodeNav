@@ -9,7 +9,7 @@
   - Page furniture removal  ⟨f-79828ae5⟩
       Drops the running header, the footer, and the page number.
 
-      A line counts as furniture when it sits near the top or bottom of a page with enough lines and the same text repeats on at least 60% of pages. Repetition is the only signal available, which has two consequences worth knowing: a one-page letter can never show it, so its header stays; and a real heading that happens to repeat is thrown away with the furniture. This runs before headings are looked for, so nothing later can rescue it.
+      A line counts as furniture when it sits near the top or bottom of a page and the same text repeats on at least 60% of pages. Repetition is the only signal available, which has two consequences worth knowing: a one-page letter can never show it, so its header stays; and a real heading that happens to repeat is thrown away with the furniture. This runs before headings are looked for, so nothing later can rescue it.
 
 - Turning extracted text into clean Markdown  ⟨f-99aa3f37⟩
     Once the furniture is gone, what is left is prose that has been through a typesetter: paragraphs broken into lines, words split at the margin, footnotes stranded at the bottom of the page, and quotation marks that are not the ones on your keyboard. These features put it back together as Markdown.
@@ -63,6 +63,10 @@
 - Package identity metadata  ⟨f-837b6393⟩
     Names the package and its version: scribe turns text pulled out of a PDF into clean Markdown.
 
-+ - Per-document conversion settings  ⟨e-a808cf7a⟩
-+     Lets each document use conversion-rule settings suited to its own layout instead of hard-coded values. It loads defaults and optional per-document overrides from the document's nearby scribe.toml, and only that directory is searched so unrelated parent configuration cannot silently change output.
-+     code drift · The new settings module lets conversion rules load defaults and per-document overrides, so no existing feature covers this configuration behavior.
++ - Conversion configuration settings  ⟨e-6775fbd3⟩
++     Lets each conversion rule use document-specific settings instead of requiring source changes for unusual documents. Groups one dataclass of plain data per rule and preserves the existing behavior through matching defaults, so rules must continue receiving the complete settings object when configuration is added or changed.
++     code drift · The new configuration module gathers rule settings, defaults, and configuration errors so conversions can be adjusted without editing source code.
+
++ - Configuration discovery and parsing  ⟨e-c8b996d3⟩
++     Lets conversion runs find the nearest configuration file and turn its defaults and per-document overrides into validated settings. Matching uses document filenames and applies sections in order, while strict type and section checks report mistakes instead of guessing.
++     code drift · The new configuration module discovers nearby files, validates their settings, and resolves per-document overrides, so it needs a feature of its own.
