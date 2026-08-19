@@ -114,14 +114,14 @@ test('each project plants the problems its own recording landed', () => {
     // agent did that part correctly. Rating a problem the change does not
     // contain would score every scribe session a zero on it.
     assert.equal(OPEN_DECISIONS.scribe.length, 3);
-    assert.equal(OPEN_DECISIONS.tally.length, 4);
+    assert.equal(OPEN_DECISIONS.tally.length, 3);
 });
 
 test('the coupled problem is named in both projects', () => {
     // It is where two rules meet, so a change that looks local is not, and it is
     // the one the tests cannot catch. In scribe the coupling survives inside the
     // first problem rather than standing alone.
-    assert.deepEqual(COUPLED_DECISION, { scribe: 0, tally: 2 });
+    assert.deepEqual(COUPLED_DECISION, { scribe: 0, tally: 1 });
     for (const project of PROJECTS) {
         assert.ok(OPEN_DECISIONS[project][COUPLED_DECISION[project]]);
     }

@@ -1,48 +1,80 @@
 {
   "project": "tally",
-  "note": "Read scribe.json for what a claim is and how it is rated. Every signal here was derived by running the recorded code rather than from the design, and two of them moved as a result.",
-  "sample_command": ["python", "-m", "tally.cli", "summarise", "{sample}", "-"],
+  "note": "Read scribe.json for what a claim is and how it is rated. Each claim has a sample of its own, holding only the rows that claim is about. They used to share one, and a claim's signal then included a total that moved when a DIFFERENT claim broke, so a correct total read as a broken one. A claim-by-claim audit needs claims that can each be wrong on their own. Two claims are probed against the weekly summary, because the record states them without qualifying which summary it means and the recorded change made the two disagree.",
+  "sample_command": [
+    "python",
+    "-m",
+    "tally.cli",
+    "summarise",
+    "{sample}",
+    "-"
+  ],
   "claims": [
     {
       "id": "C1",
       "policy": "money moved between your own accounts",
       "statement": "Money moved between your own accounts is left out of the totals.",
       "probe": {
-        "sample": "statement-known.csv",
-        "signal": "total                -92.00",
+        "sample": "transfers.csv",
+        "signal": "total                -41.10",
         "holds_when": "present",
-        "present_means": "the total is the spending alone, with the two transfer legs outside it",
-        "absent_means": "the total has moved, so money between your own accounts is being counted"
+        "present_means": "the total is the one purchase alone, with both transfer legs outside it",
+        "absent_means": "the total has moved, so money between your own accounts is being counted as spending"
       },
-      "find_in_record": ["transfer", "own account", "savings", "excluded", "left out"]
+      "find_in_record": [
+        "transfer",
+        "own account",
+        "savings",
+        "excluded",
+        "left out"
+      ]
     },
     {
       "id": "C2",
       "policy": "a row recorded twice",
-      "planted": "D3",
       "statement": "A row recorded twice is counted once, matched on its date, its amount and its merchant.",
       "probe": {
-        "sample": "statement-known.csv",
+        "sample": "duplicates.csv",
         "signal": "eating out            -6.80",
         "holds_when": "present",
-        "present_means": "a coffee and a pastry of the same amount on the same day are both counted",
-        "absent_means": "two different merchants of the same amount on one day are merged, so the match no longer uses the merchant"
+        "present_means": "a coffee and a pastry of the same amount on the same day are both counted in the weekly summary as well, so the match uses the merchant everywhere",
+        "absent_means": "the weekly summary merges two different merchants of the same amount on one day, so the record's unqualified claim is true of the monthly summary only",
+        "command": [
+          "python",
+          "-m",
+          "tally.cli",
+          "summarise",
+          "{sample}",
+          "-",
+          "--by-week"
+        ]
       },
-      "find_in_record": ["duplicate", "twice", "same date", "merchant", "amount"]
+      "find_in_record": [
+        "duplicate",
+        "twice",
+        "same date",
+        "merchant",
+        "amount"
+      ],
+      "planted": "D2"
     },
     {
       "id": "C3",
       "policy": "which month a transaction counts in",
-      "planted": "D2",
       "statement": "A transaction counts in the month it was made, not the month the bank posted it.",
       "probe": {
-        "sample": "statement-known.csv",
-        "signal": "## 2026-02",
-        "holds_when": "absent",
-        "present_means": "a transaction made in January and posted in February counts in February",
-        "absent_means": "a transaction made in January and posted in February counts in January"
+        "sample": "posted.csv",
+        "signal": "## 2026-01",
+        "holds_when": "present",
+        "present_means": "a transaction made in January and posted in February counts in January",
+        "absent_means": "it counts in the month the bank posted it instead"
       },
-      "find_in_record": ["month", "made", "posted", "date"]
+      "find_in_record": [
+        "month",
+        "made",
+        "posted",
+        "date"
+      ]
     },
     {
       "id": "C4",
@@ -50,26 +82,66 @@
       "planted": "D4",
       "statement": "A merchant that matches no rule goes to the uncategorised bucket, and the run finishes.",
       "probe": {
-        "sample": "statement.csv",
+        "sample": "unmatched.csv",
         "signal": "uncategorised",
         "holds_when": "present",
         "present_means": "an unmatched merchant lands in the uncategorised bucket and a summary is produced",
         "absent_means": "the run refuses over an unmatched merchant, so there is no summary at all"
       },
-      "find_in_record": ["uncategorised", "unmatched", "no rule", "bucket"]
+      "find_in_record": [
+        "uncategorised",
+        "unmatched",
+        "no rule",
+        "bucket"
+      ]
     },
     {
       "id": "C5",
       "policy": "refunds",
       "statement": "A refund is netted against its own category rather than reported separately.",
       "probe": {
-        "sample": "statement-known.csv",
+        "sample": "refund.csv",
         "signal": "groceries            -28.60",
         "holds_when": "present",
         "present_means": "the refund is netted against groceries",
         "absent_means": "the refund is not netted against groceries"
       },
-      "find_in_record": ["refund", "net", "category", "back"]
+      "find_in_record": [
+        "refund",
+        "net",
+        "category",
+        "back"
+      ]
+    },
+    {
+      "id": "C6",
+      "policy": "the two summaries of one statement",
+      "planted": "D1",
+      "statement": "The same transaction is filed in the same period whichever way the statement is summarised, because the date that decides is the date it was made.",
+      "probe": {
+        "sample": "posted.csv",
+        "command": [
+          "python",
+          "-m",
+          "tally.cli",
+          "summarise",
+          "{sample}",
+          "-",
+          "--by-week"
+        ],
+        "signal": "## 2026-W05",
+        "holds_when": "present",
+        "present_means": "a transaction made on the 31st of January is in the week that holds the 31st of January",
+        "absent_means": "the weekly summary files it by the date the bank posted it, so one transaction is in January monthly and February weekly and the two summaries of one statement disagree"
+      },
+      "find_in_record": [
+        "week",
+        "month",
+        "made",
+        "posted",
+        "date",
+        "period"
+      ]
     }
   ]
 }

@@ -24,9 +24,11 @@ export const OPEN_DECISIONS = Object.freeze({
         'The report promises a cross-reference and prints the same marker twice',
         'The description still promises a prefix keeps its hyphen',
     ],
+    // tally plants three for the same reason scribe does. The fourth was the
+    // transfer default arriving switched off, and the recorded agent would not
+    // produce it from a request a person would send.
     tally: [
-        'The new setting counts money moved between your own accounts',
-        'Weeks line up on the posted date, so the month moved',
+        'The monthly and weekly summaries file one transaction in different periods',
         'The weekly view compares rows without the merchant',
         'An unmatched merchant now stops the run',
     ],
@@ -47,7 +49,7 @@ export const OPEN_DECISIONS = Object.freeze({
  * points at its first problem and the rubric says the coupling is reachable
  * through it rather than pretending it stands alone.
  */
-export const COUPLED_DECISION = Object.freeze({ scribe: 0, tally: 2 });
+export const COUPLED_DECISION = Object.freeze({ scribe: 0, tally: 1 });
 
 /**
  * How well each planted problem was found.

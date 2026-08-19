@@ -1,0 +1,4 @@
+Transaction Date,Posting Date,Description,Amount,Account,Reference
+2026-01-07,2026-01-08,TESCO STORES 3241,-41.10,Current,T3001
+2026-01-05,2026-01-05,Transfer to savings,-200.00,Current,T3002
+2026-01-05,2026-01-05,Transfer to savings,-200.00,Savings,T3003

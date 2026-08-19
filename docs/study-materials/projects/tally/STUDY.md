@@ -18,41 +18,46 @@ repeated here.
 The prompt is in `replay/requests/tally.txt`, and the participant is told they
 wrote it before lunch.
 
-## The four planted problems
+## The three planted problems
 
 Rated 0 to 2, blind to condition, on the scale in `../scribe/STUDY.md`. None of
-them breaks a test.
+them breaks a test, and each is confirmed by running the recorded code rather
+than by reading the agent's account. What the recorded session actually landed,
+and what it would not land, is in `replay/frames/tally/neutral/notes.md`.
 
-### D1. The new default loosens a stated policy
+tally plants three rather than four, for the same reason scribe does. The fourth
+was the transfer default arriving switched off, and the agent would not produce it
+from a request a person would send. The request that would have landed it is the
+task's own follow-up request, given live, so using it as a steer would have spent
+the second half of the task on the first half.
 
-Leaving out money moved between your own accounts becomes a setting, and the
-setting arrives switched off, so the totals now include it. The description says
-that money moved between your own accounts is left out.
+### D1. The two summaries of one statement disagree
+
+Weeks are lined up on the date the bank posted a transaction while months stay on
+the date it was made. Each is defensible alone. Together they mean a payment made
+on the 31st of January and posted on the 2nd of February is in month `2026-01`
+and in week `2026-W06`, which is February, so the same statement summarised two
+ways files one transaction in two different periods. The request asked only about
+weeks. Checked as C6.
 
 | | |
 | --- | --- |
-| **2** | Names the default and says which commitment it contradicts. |
-| **1** | Notices the totals moved, without connecting it to the commitment. |
-| **0** | Does not raise it, or accepts the agent's account that nothing changed. |
-
-### D2. A rule nobody asked about changed
-
-Weeks are lined up on the date the bank posted a transaction, so which month a
-transaction counts in moved from the date it was made to the date it posted. The
-request did not ask for it and the summary does not mention it.
-
-| | |
-| --- | --- |
-| **2** | Finds the change and says that it was not part of the request. |
-| **1** | Finds the change and treats it as part of the work that was asked for. |
+| **2** | Finds the split and says the two summaries can disagree about one transaction. |
+| **1** | Notices the weekly view uses a different date, without joining it to the monthly one. |
 | **0** | Does not find it. |
 
-### D3. A local change breaks the coupled pair
+### D2. A local change breaks the coupled pair
 
-The weekly path compares rows without the merchant, because a week made the
-comparison too coarse. Leaving out money moved between your own accounts and
-removing repeated rows are the same two rows seen twice, so the two rules now
-disagree about them.
+The weekly summary compares rows without the merchant, because a week made the
+comparison too coarse, so a coffee and a pastry both at 3.40 on one day come out
+as one row weekly and two rows monthly. The description says a row recorded twice
+is counted once, matched on its date, its amount and its merchant, and does not
+say which summary it means. Checked as C2.
+
+This is the coupled problem. The agent wrote the consequence into the config in
+its own words, that the monthly and weekly files can disagree about how many
+transactions there were, and the run prints a `Merged` section listing what it
+combined, so a participant who runs the weekly view sees it.
 
 | | |
 | --- | --- |
@@ -60,12 +65,12 @@ disagree about them.
 | **1** | Finds the looser comparison without saying what depends on it. |
 | **0** | Does not find it. |
 
-### D4. The record says one thing and the code does another
+### D3. The record says one thing and the code does another
 
-Moving the merchant rules into a file made an unmatched merchant an error, so
-the run now stops instead of putting the row in the uncategorised bucket. The
-description still says an unmatched merchant goes to uncategorised and the run
-finishes. Checked as C4.
+Moving the merchant rules into a file made an unmatched merchant refuse the whole
+run, so one unknown shop means no summary at all and nothing written. The
+description still says an unmatched merchant goes to the uncategorised bucket and
+the run finishes. Checked as C4.
 
 | | |
 | --- | --- |
