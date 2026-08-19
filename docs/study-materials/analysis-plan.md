@@ -38,11 +38,18 @@ transcript, which the participant is told about.
 
 ## A note on the numbering
 
-RQ1 and RQ2 below are the CURRENT questions (`docs/plans/2026-08-16-001-task-redesign.md`):
-**RQ1 — understanding** (can codoc help somebody build a theory of the program)
-and **RQ2 — authored modification** (do the consequential decisions pass through
-the person). The section headings that follow kept the wording of the abandoned
-three-question design, so read the heading as a topic and the RQ tag as the claim.
+RQ1 and RQ2 below are **RQ1 — understanding** (can codoc help somebody build a
+theory of the program) and **RQ2 — authored modification** (do the consequential
+decisions pass through the person). The section headings kept the wording of an
+earlier three-question design, so read the heading as a topic and the RQ tag as
+the claim.
+
+What is confirmatory and what is exploratory is settled in
+`pre-registration.md`, and it does not follow the RQ tags. Detection coverage and
+a durable written trace are the two confirmatory predictions. Record truth is
+measured and reported, and it is pre-registered as predicted NOT to differ.
+Everything else in this file is exploratory and has to be labelled that way when
+it is reported.
 
 ## Who writes what  (serves RQ2)
 
@@ -102,10 +109,13 @@ question sets, and none between participants.
 
 ## What they found in the agent's change  (serves RQ1 and RQ2)
 
-Every participant reviews the same recorded change, which carries four planted
-problems and one decoy. The problems and their rubrics are in each project's
+Every participant reviews the same recorded change, which carries a decoy and as
+many planted problems as the recorded session actually landed. That is three for
+scribe rather than the four the design assumed, because one of them needed a
+request nobody would send. The problems and their rubrics are in each project's
 `STUDY.md`, and each is checked by a probe in `scoring/claims/<project>.json` that
-runs the participant's final code and looks for one signal.
+runs the participant's final code and looks for one signal. Coverage is reported
+as a proportion of that project's maximum, so the two projects can be pooled.
 
 | Measure | Computed from |
 | --- | --- |
@@ -115,6 +125,7 @@ runs the participant's final code and looks for one signal.
 | Who settled each problem | Directed by the participant, accepted deliberately, or standing and never noticed. The merged stream and the codoc ledger. |
 | **Which route they took, per problem** | Found by reading the agent's own account, or found by reviewing the change. The recorded agent mentions all three planted problems somewhere in 54 blocks and 14,235 characters of its own prose, and both conditions get that text in the scrollback. The two are different abilities and only the second is what codoc is for, so they are coded separately rather than added together. |
 | Whether they found it and shipped it anyway | A distinct outcome from never finding it, which is why who-settled-it sits beside detection rather than folded into it. |
+| **A durable written trace, per problem** | Whether the record they finished with says what was decided about it. In codoc that is an accept or a reject in the change ledger, or an authored change to the feature's description, in both cases after the handover stamp. In the baseline it is a line in `CLAUDE.md`. Either side may have authored the words, because the claim is that decisions persist rather than that typing happens in a particular pane. From `scoring/ledger-actions.py` and the merged stream. |
 
 ## Is the record true at the end  (serves RQ2, and it is the headline)
 

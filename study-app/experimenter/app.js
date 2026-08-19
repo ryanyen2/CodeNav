@@ -844,12 +844,12 @@ function renderForms() {
 
       <div class="form-block">
         <h4>What they found, and who settled it</h4>
-        <p class="hint">The four problems planted in the change the agent made.
-        Rate detection first, then who settled it. The third one in each project is
-        the coupled one, where a change that looks local is not.</p>
+        <p class="hint">The problems planted in the change the agent made. Rate
+        detection first, then who settled it. The one marked with a diamond is the
+        coupled one, where a change that looks local is not.</p>
         ${(OPEN_DECISIONS[state.project] || []).map((d, n) => `
           <div class="row">
-            <span class="row-label wide">${n === COUPLED_DECISION ? '◆ ' : ''}${esc(d)}</span>
+            <span class="row-label wide">${n === COUPLED_DECISION[state.project] ? '\u25c6 ' : ''}${esc(d)}</span>
             <div class="choices" data-detected="${esc(d)}">${CONSISTENCY.map((s, i) => `
               <button data-v="${i}" title="${esc(s)}"
                 aria-pressed="${String((a.consistency || {})[d] === i)}">${i}</button>`).join('')}</div>
@@ -857,9 +857,9 @@ function renderForms() {
               <button data-s="${esc(s)}" title="${esc(s)}"
                 aria-pressed="${String((a.decisions || {})[d] === s)}">${i + 1}</button>`).join('')}</div>
           </div>`).join('')}
-        <p class="hint">Detection: 0 not found · 1 found · 2 found and tied to what
-        it contradicts. Settled by: 1 they directed it · 2 they accepted a proposal
-        deliberately · 3 it stands and they never noticed.</p>
+        <p class="hint">Detection: 0 not found, 1 found, 2 found and tied to what
+        it contradicts. Settled by: 1 they directed it, 2 they accepted a proposal
+        deliberately, 3 it stands and they never noticed.</p>
       </div>
 
       <div class="form-block">

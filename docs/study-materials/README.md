@@ -129,8 +129,8 @@ missing.
   the rest of their setup is wasted.
 - Run `setup.sh` yourself on a spare machine or a fresh account. It is the
   participant's entire experience of setup, so it is worth feeling once.
-- Pre-register the design and the scoring. The two question sheets and their
-  scoring tables are fixed from then on.
+- Post `pre-registration.md` to OSF. It is written and its thresholds are frozen,
+  and the two question sheets and their scoring tables are fixed from then on.
 - Run the three pilot sessions with the full protocol.
 - Build the two missing logs described in section 10 of the design doc, so what
   people open and click is recorded in both conditions, not only in the codoc

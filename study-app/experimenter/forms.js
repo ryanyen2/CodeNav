@@ -13,10 +13,15 @@ import afterQuestions from './after-questions.json' with { type: 'json' };
  * project's STUDY.md, which is the answer key.
  */
 export const OPEN_DECISIONS = Object.freeze({
+    // scribe plants three rather than four. The fourth needed a request nobody
+    // would send: the recorded agent was asked the one thing most likely to move
+    // where the settings are read, and it did that correctly. Asking a rater to
+    // score a problem the change does not contain would score every scribe
+    // session a zero on it and make the two projects' coverage incomparable.
+    // `replay/frames/scribe/neutral/notes.md` has the whole account.
     scribe: [
         'The new default loosens the repeated-line rule',
-        'The notes were renumbered without being asked',
-        'The settings are read after furniture, so the order flipped',
+        'The report promises a cross-reference and prints the same marker twice',
         'The description still promises a prefix keeps its hyphen',
     ],
     tally: [
@@ -28,14 +33,21 @@ export const OPEN_DECISIONS = Object.freeze({
 });
 
 /**
- * The third problem in each list is the coupled one, where two rules meet.
+ * Which problem is the coupled one, where a change that looks local is not.
  *
- * In scribe the furniture rule and the heading rule now run in the opposite
- * order. In tally, leaving out money moved between your own accounts and
- * removing a row recorded twice are the same pair of rows seen differently. Both
- * are where a change that looks local is not, and both leave the tests passing.
+ * In tally, leaving out money moved between your own accounts and removing a row
+ * recorded twice are the same pair of rows seen differently, and the weekly view
+ * compares them differently from the monthly one.
+ *
+ * In scribe the coupled problem is not separate. It was going to be the settings
+ * being read after the furniture rule, and the recorded agent did that part
+ * correctly, so what survives of the coupling lives inside the first problem: at
+ * a share of 0.5 a real heading repeating on three pages of five is removed
+ * before the heading rule ever sees it, where at 0.6 it survived. So scribe
+ * points at its first problem and the rubric says the coupling is reachable
+ * through it rather than pretending it stands alone.
  */
-export const COUPLED_DECISION = 2;
+export const COUPLED_DECISION = Object.freeze({ scribe: 0, tally: 2 });
 
 /**
  * How well each planted problem was found.

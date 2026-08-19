@@ -632,8 +632,9 @@ tasks, and everything the analysis needs is recorded in both conditions.
 
 The remaining work is about the process, not the materials.
 
-- Pre-register the design and the scoring. The two question sheets, their scoring
-  tables, and the measure list in `analysis-plan.md` are fixed from that point on.
+- Post `pre-registration.md` to OSF. It is written, and from that point the two
+  question sheets, their scoring tables, and the measure list in
+  `analysis-plan.md` are fixed.
 - Run the three pilot sessions with the full protocol, and run
   `check-session-complete.py` on each one. The pilots tell you whether 105
   minutes is enough, whether the questions make sense, and whether any log is
@@ -650,5 +651,5 @@ solves both tasks correctly no matter what it is asked, so almost everyone will
 finish with working code in both conditions. The difference the study is looking
 for is in the people, not in the code. Specifically: what they can explain
 afterwards, which decisions they made themselves, how much of the change they
-actually looked at, and what their confidence rested on. State this in the
-pre-registration rather than discovering it in the results.
+actually looked at, and what their confidence rested on. `pre-registration.md`
+states it, rather than leaving it to be discovered in the results.

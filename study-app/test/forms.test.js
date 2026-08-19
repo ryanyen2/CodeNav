@@ -103,18 +103,27 @@ test('every open decision has a consistency rating beside it', () => {
     // somebody made themselves can still contradict the codebase.
     for (const project of PROJECTS) {
         const a = emptyAssessment(project);
-        assert.equal(Object.keys(a.decisions).length, 4);
+        assert.equal(Object.keys(a.decisions).length, OPEN_DECISIONS[project].length);
         assert.deepEqual(Object.keys(a.consistency), Object.keys(a.decisions));
     }
 });
 
+test('each project plants the problems its own recording landed', () => {
+    // Pinned to the recordings rather than to the design. scribe plants three,
+    // because the fourth needed a request nobody would send and the recorded
+    // agent did that part correctly. Rating a problem the change does not
+    // contain would score every scribe session a zero on it.
+    assert.equal(OPEN_DECISIONS.scribe.length, 3);
+    assert.equal(OPEN_DECISIONS.tally.length, 4);
+});
+
 test('the coupled problem is named in both projects', () => {
     // It is where two rules meet, so a change that looks local is not, and it is
-    // the one the tests cannot catch. Third in both lists.
-    assert.equal(COUPLED_DECISION, 2);
+    // the one the tests cannot catch. In scribe the coupling survives inside the
+    // first problem rather than standing alone.
+    assert.deepEqual(COUPLED_DECISION, { scribe: 0, tally: 2 });
     for (const project of PROJECTS) {
-        assert.equal(OPEN_DECISIONS[project].length, 4);
-        assert.ok(OPEN_DECISIONS[project][COUPLED_DECISION]);
+        assert.ok(OPEN_DECISIONS[project][COUPLED_DECISION[project]]);
     }
 });
 
