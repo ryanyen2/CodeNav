@@ -315,7 +315,16 @@ def _codoc_quiet_for(workspace: Path, seconds: float) -> bool:
 
 
 def derive(frames: Path, workspace: Path, out: Path, settle: float,
-           timeout: float) -> int:
+           timeout: float, settle_every: int = 1) -> int:
+    """Replay the neutral recording into one condition and record its response.
+
+    `settle_every` is how many code frames go in before the daemon is given time
+    to catch up. The daemon coalesces rapid saves into one pass anyway, so
+    pausing at every frame buys nothing except one LLM call per frame, and it
+    makes the tree flicker through twenty updates during a three-minute replay.
+    Pausing every few frames gives the participant a handful of moments where the
+    description visibly catches up with the code, which is what there is to see.
+    """
     manifest = json.loads((frames / "manifest.json").read_text())
     if out.exists():
         shutil.rmtree(out)
@@ -345,7 +354,8 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
             (workspace / rel).unlink(missing_ok=True)
 
         waited = 0.0
-        if watching:
+        last = frame is manifest["frames"][-1]
+        if watching and (last or frame["n"] % settle_every == 0):
             while waited < timeout and not _codoc_quiet_for(workspace, settle):
                 time.sleep(1.0)
                 waited += 1.0
@@ -411,12 +421,15 @@ def main(argv: list[str]) -> int:
                    help="seconds of quiet under .codoc that count as settled")
     d.add_argument("--timeout", type=float, default=300.0,
                    help="how long to wait for one Loop A pass before moving on")
+    d.add_argument("--settle-every", type=int, default=1,
+                   help="how many frames go in before the daemon is given time")
 
     args = parser.parse_args(argv)
     if args.command == "watch":
         return watch(args.workspace, args.raw, args.interval)
     if args.command == "derive":
-        return derive(args.frames, args.workspace, args.out, args.settle, args.timeout)
+        return derive(args.frames, args.workspace, args.out, args.settle,
+                      args.timeout, max(1, args.settle_every))
     return build(args.raw, args.transcript, args.frames, args.seconds)
 
 
