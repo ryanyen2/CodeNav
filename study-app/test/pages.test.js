@@ -164,7 +164,8 @@ test('creating a participant does not throw', async () => {
     // Selecting one renders the whole detail pane, including the forms, which is
     // where the undefined helper was used.
     assert.match(document.body.textContent, /Their sign-off/, 'the forms rendered');
-    assert.match(document.body.textContent, /Who settled what/);
+    assert.match(document.body.textContent, /What they found, and who settled it/);
+    assert.match(document.body.textContent, /False alarms/);
     assert.match(document.body.textContent, /The questions/);
 });
 
@@ -278,8 +279,8 @@ test('the forms show the questions for the right project', async () => {
     });
     // codoc-first pairs the codoc condition with scribe, so scribe's decisions
     // are the ones on screen and tally's are not.
-    assert.match(document.body.textContent, /What marks a quote in extracted text/);
-    assert.ok(!document.body.textContent.includes('How a split is written'));
+    assert.match(document.body.textContent, /loosens the repeated-line rule/);
+    assert.ok(!document.body.textContent.includes('money moved between your own accounts'));
 });
 
 // ── the participant page ─────────────────────────────────────────────────────
@@ -686,10 +687,10 @@ test('the study instruction and the clock are on the page, not on the card', asy
     const text = document.querySelector('#stage').textContent.toLowerCase();
 
     assert.ok(text.includes('yours to decide'), 'the invitation to decide is on the page');
-    assert.ok(text.includes('17 minutes'), 'the time is on the page');
+    assert.ok(text.includes('30 minutes'), 'the time is on the page');
     for (const card of Object.values(TASK_CARDS)) {
         const onCard = [...card.lines, ...(card.example?.lines ?? [])].join(' ').toLowerCase();
-        assert.ok(!onCard.includes('17 minutes') && !onCard.includes('decide anything'),
+        assert.ok(!onCard.includes('30 minutes') && !onCard.includes('decide anything'),
             'the card carries the task and nothing else');
     }
 });

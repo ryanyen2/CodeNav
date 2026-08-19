@@ -1,68 +1,99 @@
 # tally, as a study instrument
 
-Not shipped to participants. Matched to `scribe/STUDY.md` in shape: one task, four
-open decisions rated 0–2, one coupled pair, twelve quiz questions in four bands.
+Not shipped to participants. Matched to scribe one for one. The reasoning for
+both is written out once, in `../scribe/STUDY.md`, and only what differs is
+repeated here.
 
 ## The task card
 
-> **Support split transactions.**
+> **Review what the agent did**
 >
-> One purchase sometimes belongs in two categories: a supermarket trip that was
-> half groceries and half a birthday present. Let a transaction be split.
+> You asked for the merchant rules to move into a file you can edit, a weekly
+> view beside the monthly one, and a tidy-up of how the rules get their settings.
 >
-> Decide anything this card does not specify, and be ready to explain your
-> decisions.
+> The agent has finished and the tests pass. Decide what to keep, and ship it.
 
-## The four open decisions
+## What the recorded agent was asked for
 
-Rated for **consistency with what tally already does**, blind to condition. The
-rating is about consistency, not correctness. None of these has a single right
-answer. There are only answers that fit the codebase and answers that contradict
-it.
+The prompt is in `replay/requests/tally.txt`, and the participant is told they
+wrote it before lunch.
 
-### 1. How a split is written in the CSV
+## The four planted problems
 
-| | |
-| --- | --- |
-| **2, consistent** | Extra rows sharing a reference, or an extra column, recognised loosely the way `COLUMNS` recognises everything else. `rows.py` already assumes banks disagree and matches headers against a list of things they actually call each field. |
-| **1, defensible** | A fixed new column name, required exactly. Stricter than the rest of the reader, but not in conflict with it. |
-| **0, contradicts** | A separate file, or an argument on the command line. Every other fact about a transaction comes from its row, and a split held elsewhere could not survive re-exporting the statement. |
+Rated 0 to 2, blind to condition, on the scale in `../scribe/STUDY.md`. None of
+them breaks a test.
 
-### 2. One transaction or two
+### D1. The new default loosens a stated policy
+
+Leaving out money moved between your own accounts becomes a setting, and the
+setting arrives switched off, so the totals now include it. The description says
+that money moved between your own accounts is left out.
 
 | | |
 | --- | --- |
-| **2** | One. The person made one purchase, and `transactions` counts what happened rather than how it was recorded. |
-| **1** | Two, said out loud, on the argument that each half is separately categorised. |
-| **0** | Two, with the count left to fall out of the loop by accident. The number is in the output; nobody deciding on purpose would let it be decided by an implementation detail. |
+| **2** | Names the default and says which commitment it contradicts. |
+| **1** | Notices the totals moved, without connecting it to the commitment. |
+| **0** | Does not raise it, or accepts the agent's account that nothing changed. |
 
-### 3. Does the duplicate rule see the halves as duplicates
+### D2. A rule nobody asked about changed
 
-**A split of £40 into two £20 halves on one day at one merchant has exactly the
-same shape as what `dedupe.key` matches.**
-
-| | |
-| --- | --- |
-| **2** | Exempted, the way transfers already are, and for the same stated reason. |
-| **1** | Avoided by making the key finer, e.g. by including the reference. Works, and quietly changes duplicate detection for every ordinary transaction too. |
-| **0** | Not considered. Half of every even split silently disappears. |
-
-### 4. A half that matches no category rule
-
-**The coupled decision.** `categorise` sends anything unmatched to
-`uncategorised`, and `summary` counts that bucket. A split where one half matches
-a rule and the other does not has to decide what happens to the whole
-transaction.
+Weeks are lined up on the date the bank posted a transaction, so which month a
+transaction counts in moved from the date it was made to the date it posted. The
+request did not ask for it and the summary does not mention it.
 
 | | |
 | --- | --- |
-| **2** | Each half categorised on its own, so the matched half lands correctly and only the other half is uncategorised. Consistent with the bucket being visible rather than fatal. |
-| **1** | The whole transaction goes to `uncategorised`, said out loud as a choice. |
-| **0** | The whole thing takes the first half's category, so money silently lands somewhere nobody chose. |
+| **2** | Finds the change and says that it was not part of the request. |
+| **1** | Finds the change and treats it as part of the work that was asked for. |
+| **0** | Does not find it. |
 
-**Also recorded per decision:** who settled it. The three possibilities are: they
-decided, the agent proposed and they accepted, or the agent did it and they never
-noticed.
+### D3. A local change breaks the coupled pair
+
+The weekly path compares rows without the merchant, because a week made the
+comparison too coarse. Leaving out money moved between your own accounts and
+removing repeated rows are the same two rows seen twice, so the two rules now
+disagree about them.
+
+| | |
+| --- | --- |
+| **2** | Finds the looser comparison and says what depends on it. |
+| **1** | Finds the looser comparison without saying what depends on it. |
+| **0** | Does not find it. |
+
+### D4. The record says one thing and the code does another
+
+Moving the merchant rules into a file made an unmatched merchant an error, so
+the run now stops instead of putting the row in the uncategorised bucket. The
+description still says an unmatched merchant goes to uncategorised and the run
+finishes. Checked as C4.
+
+| | |
+| --- | --- |
+| **2** | Finds the false claim, and corrects the record rather than only the code. |
+| **1** | Finds the false claim and leaves the record as it is. |
+| **0** | Does not find it. |
+
+### D0. The decoy
+
+The loop that tries each merchant rule in turn is replaced by a prepared ordered
+mapping. It reads like a change to which rule wins and it is not one.
+
+## The follow-up request
+
+Given after the review, and read aloud:
+
+> Include the money I move into savings in the totals. I want to see everything
+> that left the account.
+
+Money moved between your own accounts is two rows that look like one row
+recorded twice, so counting it and removing repeats cannot both be done the naive
+way. The obvious implementation runs into a commitment the record already holds.
+
+## What else is recorded per problem
+
+The same as scribe. Who settled it, the time to the first correct detection,
+coverage at fifteen minutes, and whether the record is true at the end against
+`scoring/claims/tally.json`.
 
 ## The quiz
 
@@ -141,41 +172,41 @@ band for band and level for level. The reasoning for both is written out once, i
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) Your change lets one purchase be split across two categories. Where does a split have to be written down?**
-- a) In a separate file the run is pointed at
-- b) **In the transaction's own row or rows, because that is where every other fact about it lives** ✓
-- c) On the command line, as an argument
-- d) In the summary, after the fact
+**Q1. (easy) You had the merchant rules moved into a file you can edit. What does tally now do with money moved between your own accounts?**
+- a) Leaves it out of the totals, as it did before
+- b) **Counts it in the totals, because the new setting arrives switched off** ✓
+- c) Lists it separately at the bottom of the summary
+- d) Refuses to run until you say which you want
 
 ### Rationale: why that way and not the other
 
-**Q2. (medium) A purchase that your change splits in two. Which existing rule most likely treats it differently now?**
-- a) The month it is counted in
-- b) Whether it is recognised as a recurring payment
-- c) **Duplicate removal, because two equal halves on one day at one merchant is exactly the shape it matches** ✓
-- d) The sign convention applied to its amount
+**Q2. (medium) You had a weekly view added beside the monthly one. What does the weekly view no longer look at when it decides two rows are the same row twice?**
+- a) The date
+- b) The amount
+- c) **The merchant** ✓
+- d) The category
 
-**Q4. (hard) After your change, one half of a split matches a category rule and the other half matches none. What happens?**
-- a) The whole transaction is dropped, because it is ambiguous
-- b) The whole transaction goes to the uncategorised bucket, because any doubt sends it there
-- c) **Each half is categorised on its own, so only the unmatched half lands in that bucket** ✓
-- d) The run stops and asks which category to use
+**Q4. (hard) Your change leaves two rules disagreeing about the same pair of rows. Which two?**
+- a) Recurring payments and refunds
+- b) **Leaving out money moved between your own accounts, and removing a row recorded twice** ✓
+- c) Categorising and rounding
+- d) Month attribution and the sign convention
 
 ### Change: what it cost, and what it touched
 
-**Q3. (medium) Your change decides whether a split counts as one transaction or two. Why is that a decision rather than a detail?**
-- a) It changes how the rows are stored on disk
-- b) It changes which month the halves land in
-- c) **The number of transactions is in the summary somebody reads, so a loop that settles it by accident still publishes it** ✓
-- d) It changes whether the duplicate rule fires
+**Q3. (medium) Besides the three things you had asked for, the agent changed one more rule. Which one?**
+- a) The rule that decides what counts as recurring
+- b) **The rule that decides which month a transaction belongs to** ✓
+- c) The rule that nets refunds against a category
+- d) Nothing else changed
 
 ### Extension: what a next person needs
 
-**Q5. (hard) Suppose you had made the duplicate check finer — adding a reference — so the two halves stopped matching. What else would that have changed?**
-- a) Nothing: that check is only used for splits
-- b) Transfers would stop being left out
-- c) **Duplicate detection would loosen for every ordinary transaction, not only for splits** ✓
-- d) The months would all be recomputed
+**Q5. (hard) Someone picks this up tomorrow and wants the weekly view to agree with the monthly one again. What do they have to settle first?**
+- a) Which file the weekly code lives in
+- b) Whether weeks start on Monday or Sunday
+- c) **Which date a transaction belongs to, because the two views answer that differently now** ✓
+- d) Whether to add a sample file for it
 
 ## Where it does not match scribe, and by how much
 

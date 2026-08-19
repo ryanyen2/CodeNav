@@ -780,5 +780,33 @@ case "$prof" in
 esac
 rm -rf "$CM"
 
+# ── the recorded session reaches the machine ─────────────────────────────────
+#
+# The participant reviews a change that was recorded in advance. If setup stops
+# unpacking it, or the bundle stops carrying it, the session looks normal right
+# up to the point where there is nothing to replay and no task to do.
+printf '\n\033[1m%s\033[0m\n' "The recorded session"
+case "$(cat "$SETUP")" in
+  *'cp -R "$HERE/replay" "$WORK/replay"'*) ok "setup unpacks the recorded session" ;;
+  *) bad "setup no longer unpacks the recorded session" ;;
+esac
+case "$(cat "$SETUP")" in
+  *'carries no recorded session'*) ok "and says so when the bundle has none" ;;
+  *) bad "a bundle with no recording would unpack silently" ;;
+esac
+BUNDLE="$HERE/build-participant-bundle.sh"
+case "$(cat "$BUNDLE")" in
+  *'replay/play.py'*) ok "the bundle carries the player" ;;
+  *) bad "the bundle no longer carries the player" ;;
+esac
+case "$(cat "$BUNDLE")" in
+  *'replay BROKEN'*) ok "and refuses frames that do not replay to the recorded state" ;;
+  *) bad "the bundle would ship frames nobody checked" ;;
+esac
+case "$(cat "$BUNDLE")" in
+  *'replay/test_replay.py'*) ok "and runs the replay tests before building" ;;
+  *) bad "the replay tests are no longer a build gate" ;;
+esac
+
 if [ "$FAIL" = 0 ]; then printf '\033[32m%s passed\033[0m\n' "$PASS"; else printf '\033[31m%s failed, %s passed\033[0m\n' "$FAIL" "$PASS"; fi
 exit "$FAIL"

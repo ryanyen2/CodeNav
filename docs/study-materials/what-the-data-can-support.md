@@ -1,12 +1,47 @@
 # What the data can support, read against the thesis
 
-Written 2026-08-18, after the first pilot came back and before the run. Read it
-with `analysis-plan.md` (which measure comes from where) and
-`docs/plans/2026-08-16-001-task-redesign.md` (RQ1 understanding, RQ2 authored
-modification).
+Written 2026-08-18 after the first pilot came back, and revised 2026-08-19 when
+the task was redesigned. Read it with `analysis-plan.md`, which says where each
+measure comes from, and with
+`docs/plans/2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`, which
+replaces the task half of the 2026-08-16 design.
 
 The point of this file is to say, in advance, which claims the collected data can
 carry and which it cannot — so the answer is not discovered while writing results.
+
+## The task changed on 2026-08-19, and so did what is claimable
+
+The participant now reviews a change an agent already made, rather than making
+one. The reasoning is in
+`docs/plans/2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`. What
+follows below about the pilot, the three measurement faults and the parity fix all
+still holds. What the arms are compared on has moved.
+
+**The claim is no longer that codoc helps you read code.** It is that codoc is
+where a person decides and reviews. The better the models get, the less anyone
+reads code, which makes a surface outside the code more necessary rather than
+less. Say it that way, because "helps you understand the codebase" invites the
+objection that comprehension aids are a shrinking market.
+
+**The new primary outcomes are detection coverage and record truth.** Detection
+coverage is how many of four planted problems a participant found and correctly
+attributed, out of a change every participant sees identically. Record truth is
+whether each claim in the description they finished with is true of the code they
+finished with, measured by probe and rated blind. Both are new, neither is
+calibrated yet, and a pilot has to run before the thresholds are written down.
+
+**What the change does not fix.** It is still a bundle against a bundle at twelve
+participants, still one session, and still silent about the week scale. The false
+alarm count is new and it is there so that a difference in detection cannot be
+claimed without checking that the participant did not simply call everything
+wrong.
+
+**One thing the replay adds and one thing it costs.** It adds comparability,
+because everybody reviews the same change, so detection counts can be pooled at
+all. It costs realism, because nobody watched their own agent work and the
+compression factor is not one. Report the factor from the manifest, and say that
+the lag between an edit and the tree reacting was preserved in proportion rather
+than removed.
 
 ## What the pilot actually showed
 

@@ -8,51 +8,63 @@ import questions from './questions.json' with { type: 'json' };
 import afterQuestions from './after-questions.json' with { type: 'json' };
 
 /**
- * What each task deliberately leaves open, and the three ways one can be
- * settled. Kept short because it is read while listening to somebody.
+ * The four problems planted in the recorded change, kept short because the list
+ * is read while listening to somebody. The rating guide for each is in the
+ * project's STUDY.md, which is the answer key.
  */
 export const OPEN_DECISIONS = Object.freeze({
     scribe: [
-        'What marks a quote in extracted text',
-        'Whether de-hyphenation applies inside a quote',
-        'Whether a quote ends the paragraph before it',
-        'What happens to a quote running across a page break',
+        'The new default loosens the repeated-line rule',
+        'The notes were renumbered without being asked',
+        'The settings are read after furniture, so the order flipped',
+        'The description still promises a prefix keeps its hyphen',
     ],
     tally: [
-        'How a split is written in the CSV',
-        'Whether a split counts as one transaction or two',
-        'Whether the duplicate rule sees the halves as duplicates',
-        'What happens when one half matches no category rule',
+        'The new setting counts money moved between your own accounts',
+        'Weeks line up on the posted date, so the month moved',
+        'The weekly view compares rows without the merchant',
+        'An unmatched merchant now stops the run',
     ],
 });
 
 /**
- * The last decision in each list is the coupled one, where two rules meet.
+ * The third problem in each list is the coupled one, where two rules meet.
  *
- * scribe strips page furniture before it looks for quotes; tally recognises
- * transfers before it drops duplicates. Both are reached by deciding rather than
- * by tripping over them, and both are where somebody can produce working code
- * that contradicts the codebase.
+ * In scribe the furniture rule and the heading rule now run in the opposite
+ * order. In tally, leaving out money moved between your own accounts and
+ * removing a row recorded twice are the same pair of rows seen differently. Both
+ * are where a change that looks local is not, and both leave the tests passing.
  */
-export const COUPLED_DECISION = 3;
+export const COUPLED_DECISION = 2;
 
 /**
- * How consistent each decision is with what the codebase already believes.
+ * How well each planted problem was found.
  *
- * Consistency rather than correctness. There is no single right answer to any of
- * these; there are answers that fit and answers that contradict, and the rating
- * guide for each one is in the project's STUDY.md.
+ * Attribution is what separates 1 from 2. Somebody who says "this looks wrong"
+ * has noticed; somebody who says which commitment it contradicts has understood
+ * the change, and only the second is what the description is supposed to buy.
  */
 export const CONSISTENCY = Object.freeze([
-    '0 — contradicts what the codebase already does',
-    '1 — defensible, but not what this codebase would do',
-    '2 — consistent with the existing intent',
+    '0, not found, or found and waved through',
+    '1, found, but not tied to what it contradicts',
+    '2, found and tied to the commitment it contradicts',
 ]);
 
+/**
+ * The decoy, and anything else correct they called wrong.
+ *
+ * A surface that makes everything look suspicious is not an improvement, and
+ * without this nothing in the analysis would catch that.
+ */
+export const FALSE_ALARMS = Object.freeze({
+    scribe: ['The character replacements became standard normalisation (the decoy)'],
+    tally: ['The rule loop became a prepared ordered mapping (the decoy)'],
+});
+
 export const SETTLED_BY = Object.freeze([
-    'They decided, before the agent acted',
-    'The agent proposed it, they accepted',
-    'The agent did it, they never noticed',
+    'They found it and directed the fix',
+    'The agent proposed it, they accepted deliberately',
+    'It stands, and they never noticed',
 ]);
 
 /**
@@ -104,8 +116,8 @@ export function emptyAssessment(project) {
             answers[`q${q.n}-${sitting}`] = null;
         }
     }
-    // Consistency with the codebase's existing intent, per open decision. This
-    // is the primary outcome, so it is stored beside who settled it rather than
+    // How well each planted problem was found, and who settled it. Detection is
+    // the primary outcome, so it is stored beside who settled it rather than
     // folded into one number.
     const decisions = {};
     const consistency = {};
@@ -116,6 +128,11 @@ export function emptyAssessment(project) {
     return {
         decisions,
         consistency,
+        // Correct parts of the change the participant called wrong, including the
+        // decoy. Null rather than zero, because "none" and "not asked" are
+        // different and only one of them is a result.
+        falseAlarms: null,
+        falseAlarmNotes: '',
         answers,
         updatedAt: null,
     };
@@ -140,12 +157,16 @@ export function outstanding(assessment, project) {
     const a = assessment || {};
     const gaps = [];
     const undecided = Object.entries(a.decisions || {}).filter(([, v]) => !v).length;
-    if (undecided) gaps.push(`${undecided} open decision${undecided > 1 ? 's' : ''} unattributed`);
+    if (undecided) gaps.push(`${undecided} problem${undecided > 1 ? 's' : ''} unattributed`);
 
-    // Consistency is the primary outcome, and it is the one thing here that
-    // cannot be recovered afterwards: it depends on having watched them decide.
+    // Detection is the primary outcome, and it is the one thing here that cannot
+    // be recovered afterwards, because it depends on having watched them look.
     const unrated = Object.entries(a.consistency || {}).filter(([, v]) => v == null).length;
-    if (unrated) gaps.push(`${unrated} decision${unrated > 1 ? 's' : ''} unrated for consistency`);
+    if (unrated) gaps.push(`${unrated} problem${unrated > 1 ? 's' : ''} unrated for detection`);
+
+    // A session with no false alarms is a result. A session where nobody wrote
+    // the number down is not, and the two look the same a week later.
+    if (a.falseAlarms == null) gaps.push('false alarms not recorded');
 
     // The quiz is not listed. The participant answers it themselves, so a gap
     // there is theirs to close and appears on their own page, not here.

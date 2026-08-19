@@ -233,11 +233,14 @@ function render() {
         drawCard(section.querySelector('.card-wrap'), {
             title: t(`card.${step.project}.title`, card.title),
             lines: (t(`card.${step.project}.lines`, card.lines.join('\n'))).split('\n'),
-            // The sample stays in the language the OUTPUT is in — it is what the
-            // program prints, not prose written to be read in translation.
+            // The sample used to stay in the language the OUTPUT is in, because
+            // it was what the program prints. Since the task became a review it
+            // is a sentence about what finished means, so it is prose and it is
+            // translated like the rest of the card.
             example: card.example && {
                 label: t(`card.${step.project}.example.label`, card.example.label),
-                lines: card.example.lines,
+                lines: (t(`card.${step.project}.example.lines`,
+                    card.example.lines.join('\n'))).split('\n'),
             },
         }, { dark: false });
     }
@@ -435,8 +438,8 @@ const VIEWS = {
     task: () => `
         <h1>${esc(t('ui.task.h', 'Your task'))}</h1>
         <div class="card-wrap"></div>
-        <p>${esc(t('ui.task.p', 'Anything the card does not say is yours to decide, and we will ask you about those decisions, so make them on purpose.'))}</p>
-        <p class="note">${esc(t('ui.task.time', 'About 17 minutes. Work as you normally would.'))}</p>`,
+        <p>${esc(t('ui.task.p', 'The agent has already done the work. What is left is yours to decide, and we will ask you about those decisions, so make them on purpose.'))}</p>
+        <p class="note">${esc(t('ui.task.time', 'About 30 minutes. Work as you normally would.'))}</p>`,
 
     // Grouped by what each block measures, with the groups named. An unbroken
     // column of twenty-five identical rows is answered by pattern rather than by

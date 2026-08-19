@@ -1,0 +1,76 @@
+{
+  "project": "scribe",
+  "note": "Each claim is something the description says the program does. The probe decides what the participant's FINAL code actually does, by running the program on a sample and looking for one signal, so the ground truth is measured rather than assumed. A rater then reads the participant's final description and marks the claim true, contradicted, or missing.",
+  "sample_command": ["python", "-m", "scribe.cli", "convert", "{sample}", "-"],
+  "claims": [
+    {
+      "id": "C1",
+      "policy": "page furniture",
+      "planted": "D1",
+      "statement": "A line is removed as page furniture only when it repeats across most of the document.",
+      "probe": {
+        "sample": "document.txt",
+        "signal": "Quarterly Filing Review",
+        "holds_when": "present",
+        "present_means": "a line near the top of two pages out of five survives",
+        "absent_means": "a line near the top of two pages out of five is removed, so the threshold has been loosened"
+      },
+      "find_in_record": ["furniture", "running header", "repeats", "every page", "most pages"]
+    },
+    {
+      "id": "C2",
+      "policy": "notes",
+      "planted": "D2",
+      "statement": "A note keeps the number the page gave it, so two pages can each carry a note numbered one.",
+      "probe": {
+        "sample": "notes.txt",
+        "signal": "[^2]",
+        "holds_when": "absent",
+        "present_means": "notes are renumbered across the whole document",
+        "absent_means": "notes keep the number their own page gave them"
+      },
+      "find_in_record": ["note", "footnote", "number", "collected", "end"]
+    },
+    {
+      "id": "C3",
+      "policy": "the order of the stages",
+      "planted": "D3",
+      "statement": "Page furniture is removed before anything looks for headings, so a real heading that repeats across the document is gone before the heading rule sees it.",
+      "probe": {
+        "sample": "document.txt",
+        "signal": "3. Filing",
+        "holds_when": "absent",
+        "present_means": "a numbered heading repeating on every page survives, so furniture no longer runs first",
+        "absent_means": "a numbered heading repeating on every page is removed, so furniture still runs first"
+      },
+      "find_in_record": ["order", "before", "furniture", "heading", "stage"]
+    },
+    {
+      "id": "C4",
+      "policy": "page numbers",
+      "statement": "A line that is only a page number is removed.",
+      "probe": {
+        "sample": "document.txt",
+        "signal": "\n4\n",
+        "holds_when": "absent",
+        "present_means": "a bare page number survives into the output",
+        "absent_means": "a bare page number is removed"
+      },
+      "find_in_record": ["page number", "number", "removed", "foot"]
+    },
+    {
+      "id": "C5",
+      "policy": "words broken at a line end",
+      "planted": "D4",
+      "statement": "A word broken at a line end is rejoined, and a short list of prefixes keeps its hyphen.",
+      "probe": {
+        "sample": "document.txt",
+        "signal": "well-being",
+        "holds_when": "present",
+        "present_means": "a prefix on the list keeps its hyphen when the word is rejoined",
+        "absent_means": "the hyphen is dropped, so the prefix list is empty or is no longer consulted"
+      },
+      "find_in_record": ["hyphen", "prefix", "rejoin", "line end", "broken"]
+    }
+  ]
+}

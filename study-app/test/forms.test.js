@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseQuiz } from '../scripts/extract-questions.mjs';
 import {
-    OPEN_DECISIONS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
+    OPEN_DECISIONS, FALSE_ALARMS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
     BANDS, SITTINGS, questionsFor, bandsFor, score,
     emptyAssessment, outstanding,
 } from '../experimenter/forms.js';
@@ -108,10 +108,10 @@ test('every open decision has a consistency rating beside it', () => {
     }
 });
 
-test('the coupled decision is the last one in both projects', () => {
-    // It is where two rules meet, and it is reached by deciding rather than by
-    // tripping over it. Both task cards are built so it comes last.
-    assert.equal(COUPLED_DECISION, 3);
+test('the coupled problem is named in both projects', () => {
+    // It is where two rules meet, so a change that looks local is not, and it is
+    // the one the tests cannot catch. Third in both lists.
+    assert.equal(COUPLED_DECISION, 2);
     for (const project of PROJECTS) {
         assert.equal(OPEN_DECISIONS[project].length, 4);
         assert.ok(OPEN_DECISIONS[project][COUPLED_DECISION]);
@@ -123,9 +123,17 @@ test('consistency is rated nought to two, and says what each means', () => {
     for (const label of CONSISTENCY) assert.ok(label.length > 20, label);
 });
 
-test('the ways a decision can be settled are the three that matter', () => {
+test('the ways a problem can be settled are the three that matter', () => {
     assert.equal(SETTLED_BY.length, 3);
     assert.match(SETTLED_BY[2], /never noticed/);
+});
+
+test('every project has a decoy to price its false alarms against', () => {
+    // Without this, a condition that made everything look suspicious would score
+    // as a condition that found more.
+    for (const project of PROJECTS) {
+        assert.ok(FALSE_ALARMS[project]?.length, `${project} has no decoy listed`);
+    }
 });
 
 test('the sign-off is no longer something this form collects', () => {
@@ -140,15 +148,19 @@ test('the sign-off is no longer something this form collects', () => {
 test('gaps are named while the call is still on', () => {
     const gaps = outstanding(emptyAssessment('scribe'), 'scribe');
     assert.ok(gaps.length, 'a blank record has gaps');
-    assert.ok(gaps.some((g) => /consistency/.test(g)),
+    assert.ok(gaps.some((g) => /detection/.test(g)),
         'the rating that cannot be recovered afterwards is the one named');
 });
 
-test('a filled record has no gaps', () => {
+test('a session with no false alarms still has to say so', () => {
+    // None and not-asked look the same a week later, and only one of them is a
+    // result, so a blank counts as a gap and a zero does not.
     const a = emptyAssessment('scribe');
     for (const d of Object.keys(a.decisions)) {
         a.decisions[d] = 1;
         a.consistency[d] = 2;
     }
+    assert.ok(outstanding(a, 'scribe').some((g) => /false alarms/.test(g)));
+    a.falseAlarms = 0;
     assert.deepEqual(outstanding(a, 'scribe'), []);
 });

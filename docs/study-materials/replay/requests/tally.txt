@@ -1,0 +1,4 @@
+Move the merchant rules out into rules.toml so I can edit them without touching
+code. Also add a --by-week mode next to the monthly summary. While you are in
+there, tidy up how the rules get their settings, because at the moment they read
+module constants directly.

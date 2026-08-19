@@ -118,7 +118,7 @@ export const PROJECTS = Object.freeze({ scribe: SCRIBE, tally: TALLY });
 /** Said once per condition, and identical in both, which is the point. */
 export const RESPONSIBILITY = Object.freeze([
     'Work however you normally would, and use the coding agent as much or as little as you like.',
-    'The task card is short on purpose. Anything it does not say is yours to decide, and we will ask you about those decisions afterwards, so make them on purpose.',
+    'The agent has already done the work the card describes. What is left is yours to decide: keep what is right, change what is not, and leave the written description saying what the code does. We will ask you about those decisions afterwards, so make them on purpose.',
     'We will also ask you to explain the code: what it does, why it is built that way, and what you would change to extend it.',
 ]);
 

@@ -26,7 +26,7 @@ import { toLetters } from '../shared/actions.js';
 import { comparableEpisodes, letters } from '../analysis/sequences.js';
 import { score } from '../analysis/ngrams.js';
 import {
-    OPEN_DECISIONS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
+    OPEN_DECISIONS, FALSE_ALARMS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
     questionsFor, afterFor, bandsFor, score as quizScore, emptyAssessment, outstanding,
 } from './forms.js';
 // The interview is asked from the dashboard now, so its questions come from the
@@ -843,17 +843,37 @@ function renderForms() {
       </div>
 
       <div class="form-block">
-        <h4>Who settled what</h4>
-        <p class="hint">The four things the card leaves open.</p>
-        ${(OPEN_DECISIONS[state.project] || []).map((d) => `
+        <h4>What they found, and who settled it</h4>
+        <p class="hint">The four problems planted in the change the agent made.
+        Rate detection first, then who settled it. The third one in each project is
+        the coupled one, where a change that looks local is not.</p>
+        ${(OPEN_DECISIONS[state.project] || []).map((d, n) => `
           <div class="row">
-            <span class="row-label wide">${esc(d)}</span>
+            <span class="row-label wide">${n === COUPLED_DECISION ? '◆ ' : ''}${esc(d)}</span>
+            <div class="choices" data-detected="${esc(d)}">${CONSISTENCY.map((s, i) => `
+              <button data-v="${i}" title="${esc(s)}"
+                aria-pressed="${String((a.consistency || {})[d] === i)}">${i}</button>`).join('')}</div>
             <div class="choices" data-decision="${esc(d)}">${SETTLED_BY.map((s, i) => `
               <button data-s="${esc(s)}" title="${esc(s)}"
                 aria-pressed="${String((a.decisions || {})[d] === s)}">${i + 1}</button>`).join('')}</div>
           </div>`).join('')}
-        <p class="hint">1 they decided first · 2 the agent proposed and they accepted ·
-        3 the agent did it and they never noticed</p>
+        <p class="hint">Detection: 0 not found · 1 found · 2 found and tied to what
+        it contradicts. Settled by: 1 they directed it · 2 they accepted a proposal
+        deliberately · 3 it stands and they never noticed.</p>
+      </div>
+
+      <div class="form-block">
+        <h4>False alarms</h4>
+        <p class="hint">Correct parts of the change they called wrong, including
+        the decoy: ${esc((FALSE_ALARMS[state.project] || []).join('; '))}. Write 0
+        if there were none, because none and not-asked are different answers.</p>
+        <div class="row">
+          <span class="row-label wide">How many</span>
+          <input id="false-alarms" type="number" min="0" step="1"
+            value="${a.falseAlarms == null ? '' : String(a.falseAlarms)}">
+        </div>
+        <textarea id="false-alarm-notes" rows="2"
+          placeholder="What they called wrong, in their words">${esc(a.falseAlarmNotes || '')}</textarea>
       </div>
 
       <div class="form-block">
@@ -1054,6 +1074,32 @@ function wireForms() {
           <p><b>${esc(sign.correct || '—')}</b>, confidence ${esc(String(sign.confidence ?? '—'))}/5</p>
           <p class="hint">Resting on: ${esc((sign.grounds || []).join(', ') || 'nothing selected')}</p>
           ${sign.unsure ? `<p class="quote">${esc(sign.unsure)}</p>` : ''}`;
+    }
+
+    const alarms = $('#false-alarms');
+    if (alarms) {
+        alarms.onchange = () => {
+            a.falseAlarms = alarms.value === '' ? null : Number(alarms.value);
+            saveAssessment();
+        };
+    }
+    const alarmNotes = $('#false-alarm-notes');
+    if (alarmNotes) {
+        alarmNotes.onchange = () => { a.falseAlarmNotes = alarmNotes.value; saveAssessment(); };
+    }
+
+    for (const group of document.querySelectorAll('[data-detected]')) {
+        for (const b of group.querySelectorAll('button')) {
+            b.onclick = () => {
+                a.consistency = a.consistency || {};
+                a.consistency[group.dataset.detected] = Number(b.dataset.v);
+                for (const s of group.querySelectorAll('button')) {
+                    s.setAttribute('aria-pressed', String(s === b));
+                }
+                saveAssessment();
+                renderGaps();
+            };
+        }
     }
 
     for (const group of document.querySelectorAll('[data-decision]')) {

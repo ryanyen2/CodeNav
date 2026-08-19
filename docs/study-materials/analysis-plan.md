@@ -16,6 +16,7 @@ same list against what actually arrived.
 | **The codoc ledger** | `scoring/ledger-actions.py` over the collected `.codoc/` | The codoc arm's own description edits and verdicts. The tree is edited in a custom editor, so no text document changes and the interaction log records nothing — the baseline's `CLAUDE.md` edits WERE recorded, so before this the comparison counted one arm and not the other, against codoc. Seeding (bootstrap, translate) is excluded; on the pilot that was 57 of 68 events. |
 | Claude Code transcript | `codoc-study/<workspace>/.claude-study/projects/`, collected at the end | Every prompt the participant wrote and every action the agent took, timestamped |
 | Project snapshots | The logger extension, every 20 seconds | The whole project, replayable commit by commit on `refs/study/<code>-<workspace>`, plus the description and codoc's own state files each time they change. Taken automatically: this used to be a script somebody started by hand, and on the first pilot nobody did, in either condition |
+| **The recorded session** | `replay/frames/<project>/<condition>/` | The change every participant reviews, played back in about three minutes instead of run live. The manifest carries the speed it was compressed by, and `notes.md` says which planted problems the agent produced on its own. Participants share it, so detection is comparable across them. |
 | Final projects | Collected at the end | What they finished with, for scoring and for a blind rater |
 | Your notes and forms | The dashboard, during the session | Sign-off, who settled what, the answers to the questions |
 | Questionnaires | The participant page | Background, both after-condition blocks, and which they would pick |
@@ -80,10 +81,11 @@ answers to questions whose value is in the follow-up, at the end of two hours,
 and nothing comparable between participants. The follow-up now happens out loud
 in the closing interview, where it belongs.
 
-Every one of the five turns on a consequence of the participant's own change
-meeting a rule that was already in the codebase, so the two ways to get it right
-are to have understood the codebase or to have made the decision and watched what
-it did. A question answerable from the project briefing would measure reading.
+Four of the five turn on a planted problem in the agent's session, and the fifth
+on what a next person would have to settle. The two ways to get one right are to
+have found the problem or to have read the whole change carefully. A question
+answerable from the project briefing would measure reading, and somebody who
+shipped without looking will have neither route.
 
 **The quiz is no longer asked twice.** It used to be the same twelve before and
 after, with the change between them as the measure. Both sittings asked about the
@@ -97,6 +99,28 @@ The comparison is **within participant, between conditions**: each person does
 one project each way, so their after-task score with codoc is compared against
 their own after-task score without it. There is no comparison between the two
 question sets, and none between participants.
+
+## What they found in the agent's change  (serves RQ1 and RQ2)
+
+Every participant reviews the same recorded change, which carries four planted
+problems and one decoy. The problems and their rubrics are in each project's
+`STUDY.md`, and each is checked by a probe in `scoring/claims/<project>.json` that
+runs the participant's final code and looks for one signal.
+
+| Measure | Computed from |
+| --- | --- |
+| **Detection coverage** | Each of the four problems rated 0 to 2 in the dashboard during the session, and again afterwards by a rater who does not know the condition. 0 not found, 1 found, 2 found and correctly attributed to the commitment it contradicts. The two ratings are compared rather than merged. |
+| Time to the first correct detection, and coverage at fifteen minutes | The interaction log and the transcript, against the replay's handover time in `.codoc/replay.stamp`. |
+| **False alarms** | The count and the notes in the dashboard. The decoy, plus any correct part of the change the participant called wrong. A blank is a gap the dashboard names before the call ends, because none and not-asked are different answers. |
+| Who settled each problem | Directed by the participant, accepted deliberately, or standing and never noticed. The merged stream and the codoc ledger. |
+| Which route they took | Whether they read the transcript, the diff, the description or the code first. Both conditions have the transcript in the scrollback and the change uncommitted, so both routes are available in both. |
+
+## Is the record true at the end  (serves RQ2, and it is the headline)
+
+| Measure | Computed from |
+| --- | --- |
+| **Each claim true, contradicted, or missing** | `scoring/score-record-truth.py`. The probe measures what the participant's final code does, and a rater reads the final description against it, blind. The codoc description is exported to Markdown first, so a rater cannot tell the conditions apart. |
+| **Does the record still work as the agent's memory** | `scoring/transfer-probe.py`, run after all the sessions. The participant's final description goes into a clean copy of the project as `CLAUDE.md`, an agent is given a further task, and the same claim probes say how many commitments survived. It concedes a world where no human reads the description and measures the difference anyway. |
 
 ## Did the work get done
 

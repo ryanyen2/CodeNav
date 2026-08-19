@@ -1,0 +1,4 @@
+Add a config file so the rules can be changed per document. Also write a short
+report.md next to the Markdown saying what the conversion did. While you are in
+there, tidy up how the rules get their settings, because at the moment they read
+module constants directly.

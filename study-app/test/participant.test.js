@@ -324,11 +324,13 @@ test('both cards leave the open decisions open', () => {
         // page beside the card rather than inside the picture of the task.
         assert.ok(!text.includes('decide anything'),
             `${name}'s card still carries the study's instruction; that belongs on the page`);
-        // The card must not settle any of the four open decisions, because
-        // whether the participant settles them is the measure. This is why the
-        // example shows the OUTPUT and never the input encoding.
+        // The card must not point at any of the planted problems, because
+        // whether the participant finds them is the measure. The words below are
+        // either a policy a planted problem changes or the name of the rule it
+        // changed it in, so a card carrying one would hand over a detection.
         for (const giveaway of ['indent', 'hyphen', 'paragraph', 'page break',
-            'duplicate', 'transfer', 'uncategorised', 'reference']) {
+            'duplicate', 'transfer', 'uncategorised', 'reference',
+            'furniture', 'footnote', 'rounding', 'posted']) {
             assert.ok(!text.includes(giveaway),
                 `the ${name} card mentions "${giveaway}", which is one of its open decisions`);
         }

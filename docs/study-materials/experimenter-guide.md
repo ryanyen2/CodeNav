@@ -34,6 +34,12 @@ that description is kept.
 There are two projects, scribe and tally, with matched tasks. Each participant
 does one project each way, so nobody solves the same problem twice.
 
+The task in both is to review a change an agent has already made and to decide
+what to keep. The change is recorded once, in advance, and replayed to every
+participant, so everybody reviews the same thing and nobody spends forty minutes
+watching code get written. What is being compared is what a person can see and
+change about a decision an agent made for them.
+
 Within a project, the two copies hold identical source and tests and the same 12
 commits, so reading the history tells you the same things either way. The only
 differences are the ones above.
@@ -349,63 +355,84 @@ demonstration of something the participant will not have is its own confound.
 ## Part 5. The task
 
 Each project has one task card, in `projects/<name>/STUDY.md`. It is on their own
-page as a picture, so there is no text to paste at the agent.
+page as a picture, so there is no text to paste at the agent. Since 2026-08-19 the
+task is to review a change an agent already made, rather than to make one.
 
-- **scribe:** support block quotes.
-- **tally:** support split transactions.
+- **scribe:** review the config file, the report and the settings tidy-up.
+- **tally:** review the rules file, the weekly view and the settings tidy-up.
 
-The agent writes either one in about a minute, and this is deliberate. The task
-is easy to implement and hard to decide. What the participant has to supply is
-judgement, not code.
+The change is recorded in advance and replayed, so every participant reviews the
+same change and nobody waits forty minutes for code that is not what we are
+measuring.
 
-### What the card deliberately leaves out
+### Playing the recorded session
 
-Each task has four things left unspecified, and those four are the measurement.
-They are listed with their rating guide in the project's `STUDY.md`, which is the
-answer key. Do not open it in front of a participant.
+Do this after they have read the card and said what they expect, and before they
+touch anything. Stop the codoc daemon first, because the player writes the files
+the daemon owns and it refuses to start while the daemon is running.
 
-For scribe: what marks a quote, whether de-hyphenation applies inside one,
-whether a quote ends the paragraph before it, and what happens to a quote running
-across a page break.
+```
+~/codoc-study/replay/play.py ~/codoc-study/scribe \
+    ~/codoc-study/replay/frames/scribe/codoc
+```
 
-For tally: how a split is written in the CSV, whether it counts as one
-transaction or two, whether the duplicate rule sees the halves as duplicates, and
-what happens when one half matches no category rule.
+It takes about three minutes. The terminal prints what the agent printed, the
+files change under it, and in the codoc condition the tree fills in as the daemon
+did during the recording. Let them watch. Start the daemon again when it finishes.
 
-**The last decision in each list is the coupled one.** It involves two rules
-interacting, and a participant has to understand the codebase well enough to
-reach it on purpose. In scribe, page furniture is stripped before quotes are
-found, so a running header sits between the two halves of a quote that crosses a
-page. In tally, a split of forty pounds into two twenties has the same shape the
-duplicate rule matches.
+Everything after their first prompt is live. The recorded session is installed
+where `claude --resume` finds it, so their first prompt continues the session that
+made the change, with the agent's own context.
 
-Do not hint at any of this. If they ask whether something matters, say:
+If the player refuses or stalls, the fallback is in Part 9.
+
+### What is planted in the change
+
+Four problems and one decoy, listed with their rating guides in the project's
+`STUDY.md`, which is the answer key. Do not open it in front of a participant.
+None of them breaks a test, so the suite passing tells the participant nothing
+about whether the change is right.
+
+**Do not hint at any of it.** If they ask whether something is deliberate, say:
 
 > Work from what the card says and what you find in the project.
 
+The card says the agent finished and the tests pass. It does not say anything is
+wrong and it does not say everything is fine.
+
 ### What is scored
 
-**The gate.** The change runs and the existing tests pass. A session that fails
-the gate has no decisions worth rating, so it is not reported as a result.
+**The gate.** The change runs and the existing tests pass at the end. It is not
+reported as a result.
 
-**The primary outcome.** Each of the four decisions is rated **0 to 2 for
-consistency with what the codebase already does**. The rating is about
-consistency, not correctness. None of the four has a single right answer. There
-are only answers that fit the codebase and answers that contradict it. The rating
-guide for each decision is in `STUDY.md`.
+**The primary outcome.** Each of the four planted problems is rated **0 to 2**. 0
+is not found, 1 is found, and 2 is found and correctly attributed to the
+commitment it contradicts. The rating guide for each is in `STUDY.md`.
 
-A participant can produce working code that contradicts the codebase. The
-description is supposed to prevent exactly this, so finding it is the result.
+**The false alarms.** Record every correct part of the change the participant
+called wrong, including the decoy. A surface that makes everything look suspicious
+is not an improvement, and nothing else in the analysis would catch that.
 
 Rate it during the session, in the dashboard, while you can still remember what
-they said. Alongside it, record **who settled each decision**: they decided, the
-agent proposed and they accepted, or the agent did it and they never noticed.
+they said. Alongside it, record **who settled each problem**: they directed it,
+they accepted a proposal deliberately, or it stands and they never noticed.
+
+### The follow-up request
+
+After the review, read the follow-up out loud. It is in the project's `STUDY.md`
+and it is not on the card. Its obvious implementation runs into a commitment the
+description already holds, and what is recorded is whether they noticed the
+conflict and which way they settled it.
 
 ### Timing
 
-Thirty-five minutes per task. Say so at the start. If they finish early, the
-time is recorded as part of the result. If they are still going at forty minutes,
-ask them to stop where they are.
+Thirty minutes per task, on top of the three minutes the replay takes. About
+fifteen for the review and about twelve for the follow-up, and say so at the
+start. If they finish early, the time is recorded as part of the result. If they
+are still going at thirty-five minutes, ask them to stop where they are.
+
+The time to their first correct detection is a measure, so note the clock when
+they first name something as wrong, and note whether they were right.
 
 ### The sign-off
 
@@ -518,14 +545,35 @@ The gate is mechanical. The four decision ratings are the reported outcome.
 Every existing test must still pass and the project must still run over all three
 sample inputs. A change that breaks either is a session with nothing to rate.
 
-**The four decisions**, rated 0 to 2 against the guide in the project's
+**The four planted problems**, rated 0 to 2 against the guide in the project's
 `STUDY.md`. Have someone who does not know which condition a folder came from read
 the diff and rate it. The ratings you typed during the session are your own record
 of what was said and are separate from the rated outcome. The two are compared,
 not merged.
 
-The diff is the only evidence for rating. Read it against what the codebase
-already does, not against what you would have written.
+**Whether the description is still true**, which is the headline outcome:
+
+```
+python3 scoring/score-record-truth.py <their finished project>
+```
+
+It runs their finished code on a sample to find out what the code actually does,
+and pulls the sentences from their finished description that talk about the same
+policy. Mark each claim true, contradicted, or missing. The sheet does not say
+which condition it came from, and the codoc description is exported to Markdown
+first, so the two read alike.
+
+**Whether the description still works as the agent's memory**, after every
+session has been run:
+
+```
+python3 scoring/transfer-probe.py prepare <their finished project> <a probe folder>
+python3 scoring/transfer-probe.py run   <a probe folder>
+python3 scoring/transfer-probe.py score <a probe folder>
+```
+
+It gives their description to a fresh agent with a further task in a clean copy of
+the project, and counts how many commitments the agent's change kept.
 
 ## Part 9. When something goes wrong
 
@@ -537,6 +585,17 @@ Watch for the banner across the top of the window when they open each folder, an
 have them click "Yes, I trust the authors" before anything else. Their page tells
 them this too. To confirm afterwards, `./setup.sh --check` reports whether the
 logger has ever run in each workspace.
+
+**The replay refuses to start.** It says the daemon is running. Stop the
+`codoc watch` terminal and run it again. The player will not write into a
+workspace a live daemon owns, because the two would race for the same files.
+
+**The replay stopped partway.** Run it again. It restores the starting state
+first, so a half-finished replay is safe to repeat, and the participant has seen
+nothing that a second run does not show them again. If it fails twice, put the
+recorded end state in place by hand with `--speed 1000`, tell the participant the
+agent finished while they were away, and note it on the session sheet, because
+that participant did not see the change arrive.
 
 **Nothing is updating.** The status bar is stuck and no proposals appear. Check
 that the `codoc watch` terminal is still open. It is easy to close accidentally

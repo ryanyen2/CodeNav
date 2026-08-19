@@ -52,6 +52,7 @@ run node "$MAT/logger/test-scope.js"
 run node "$MAT/logger/test-transcript.js"
 run node "$MAT/logger/test-snapshot.js"
 run node --test "$MAT/logger/test-composition.js"
+run python3 "$MAT/replay/test_replay.py"
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
     --allow-missing-repository --skip-license --no-dependencies --out "$OUT/" )
 LOGGER="$(ls -t "$OUT"/codoc-study-logger-*.vsix | head -1)"
@@ -124,6 +125,42 @@ cp "$MAT"/scripts/session-log.sh "$STAGE/"
 cp "$MAT"/scripts/collect.sh "$STAGE/"
 cp "$MAT"/participant-before-the-session.md "$STAGE/README.md"
 chmod +x "$STAGE"/setup.sh "$STAGE"/session-log.sh "$STAGE"/collect.sh
+
+# The recorded agent session, which is the change every participant reviews.
+#
+# Both frame sets have to be here and both have to replay into the state the
+# recording ended in. A bundle that shipped one condition's frames would give one
+# arm a change to review and the other nothing, and a bundle whose frames replay
+# to a different end state would rate participants against a change they never
+# saw. Missing frames are a warning rather than a failure only until the first
+# recording exists; after that this is the gate that keeps them honest.
+mkdir -p "$STAGE/replay"
+cp "$MAT"/replay/play.py "$MAT"/replay/record.py "$STAGE/replay/"
+chmod +x "$STAGE"/replay/play.py
+MISSING=0
+for project in scribe tally; do
+  for arm in codoc baseline; do
+    frames="$MAT/replay/frames/$project/$arm"
+    if [ -f "$frames/manifest.json" ]; then
+      mkdir -p "$STAGE/replay/frames/$project"
+      cp -R "$frames" "$STAGE/replay/frames/$project/$arm"
+      scratch="$(mktemp -d)"
+      if python3 "$MAT/replay/play.py" "$scratch" "$frames" --speed 1000 \
+           --no-transcript >/dev/null 2>&1; then
+        echo "  replay ok      $project/$arm"
+      else
+        echo "  replay BROKEN  $project/$arm"; rm -rf "$scratch"; exit 1
+      fi
+      rm -rf "$scratch"
+    else
+      echo "  no recording yet for $project/$arm"
+      MISSING=1
+    fi
+  done
+done
+if [ "$MISSING" = 1 ]; then
+  echo "  (record them with replay/record-session.sh before a real session)"
+fi
 
 ( cd "$OUT" && rm -f codoc-study-bundle.zip && zip -qr codoc-study-bundle.zip codoc-study-bundle )
 rm -rf "$STAGE"
