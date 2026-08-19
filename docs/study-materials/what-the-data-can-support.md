@@ -1,12 +1,152 @@
 # What the data can support, read against the thesis
 
-Written 2026-08-18, after the first pilot came back and before the run. Read it
-with `analysis-plan.md` (which measure comes from where) and
-`docs/plans/2026-08-16-001-task-redesign.md` (RQ1 understanding, RQ2 authored
-modification).
+Written 2026-08-18 after the first pilot came back, and revised 2026-08-19 when
+the task was redesigned. Read it with `analysis-plan.md`, which says where each
+measure comes from, and with
+`docs/plans/2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`, which
+replaces the task half of the 2026-08-16 design.
 
 The point of this file is to say, in advance, which claims the collected data can
 carry and which it cannot — so the answer is not discovered while writing results.
+
+## The task changed on 2026-08-19, and so did what is claimable
+
+The participant now reviews a change an agent already made, rather than making
+one. The reasoning is in
+`docs/plans/2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`. What
+follows below about the pilot, the three measurement faults and the parity fix all
+still holds. What the arms are compared on has moved.
+
+**The claim is no longer that codoc helps you read code.** It is that codoc is
+where a person decides and reviews. The better the models get, the less anyone
+reads code, which makes a surface outside the code more necessary rather than
+less. Say it that way, because "helps you understand the codebase" invites the
+objection that comprehension aids are a shrinking market.
+
+**The new primary outcomes are detection coverage and a durable written trace.**
+Detection coverage is how many of the planted problems a participant found and
+correctly attributed, out of a change every participant sees identically. A
+project plants as many as its recorded session actually landed, which is three
+for scribe rather than the four the design assumed. A durable written trace is
+whether the record the participant finished with says what was decided about each
+problem. Record truth is measured too, by probe and rated blind, and it is
+pre-registered as predicted NOT to differ for the reason below. The thresholds
+are frozen in `pre-registration.md`.
+
+**What the change does not fix.** It is still a bundle against a bundle at twelve
+participants, still one session, and still silent about the week scale. The false
+alarm count is new and it is there so that a difference in detection cannot be
+claimed without checking that the participant did not simply call everything
+wrong.
+
+## What each condition hands the participant, measured on both projects
+
+Both projects were derived through both conditions and each condition's own
+record pass was run over the result. The two projects did not behave the same
+way, and the difference matters more than either result on its own.
+
+**Both baselines end true, and both argue for the change.** scribe's `CLAUDE.md`
+says "The share is 0.4, lowered from 0.6 because a running header that starts
+after a title page or stops before the appendices appears on two pages of five",
+and states the cost on long documents. tally's grew from 149 lines to 235 and
+gained a section headed "Unknown merchants stop the run", with a paragraph on why
+a bucket is worse than stopping. Every word of both is accurate. The maintenance
+skill does its job.
+
+**codoc ended the two projects differently, and we do not know why.** On scribe
+its tree kept the sentences the change contradicts, still saying furniture
+repeats on "at least 60% of pages" and that "a short list of prefixes keeps
+theirs", and reported `code_drift` with seven proposals waiting for a verdict. On
+tally its tree amended to match the code on nearly everything, including the
+month and week split and the unmatched merchant stopping the run, and left two
+proposals and one stale line about a test.
+
+The obvious explanation is the amend gate, which is meant to preserve
+human-authored prose more strictly than prose a loop wrote. It is NOT established:
+`feature_writers` is unset on the features involved in both projects, so whatever
+produced the difference, it was not that field. **Do not report a mechanism here.**
+Report the two observations, say they differ, and say the cause was not
+identified.
+
+What this does to the measures is the same either way, and it is the part to act
+on.
+
+**Record truth at the end cannot be read on its own**, because the two conditions
+do not start it from the same place. A baseline begins the review already true and
+can stay true with the participant doing nothing. codoc began stale on scribe and
+close to true on tally. So record truth is reported as a pair, the state at
+handover and the state at the end, and the reading is the change between them
+rather than the final value. Report the handover state per project, because it
+differs per project.
+
+**A record can be true and worthless.** In the baseline, "true" means the agent's
+account of the agent's own decision, written over the sentence a person had
+written, so nothing anywhere records that anyone ever chose the old value or that
+anything changed. That is what the study means by asking whether the person
+decided, and it is why the durable written trace and who-settled-it are the
+measures to lead with rather than record truth.
+
+**Where a condition normalises the contradiction away, detection gets harder**
+without any information being hidden. On scribe's baseline the record no longer
+holds the commitment the change contradicts, so a participant cannot find the
+conflict by reading the record at all: they have to find it in the diff, the
+transcript, or the README. Whether codoc's arm is easier depends on whether its
+tree kept the conflict, which on this evidence it does sometimes and not always.
+That is a real limit on the mechanism claim and the paper has to state it.
+
+**Both conditions' machinery keeps the record current, and that was measured, not
+assumed.** The scribe recording was derived through both conditions and each
+condition's own record pass was run over it. The baseline's maintenance skill
+produced a `CLAUDE.md` that states the changes plainly: "repeat_share moved from
+0.6 to 0.5, and keep_hyphen starts empty rather than listing twelve prefixes",
+and "a line counts as furniture when the same text repeats on at least half the
+pages, and on no fewer than two of them whichever way the share falls". Both are
+accurate. The agent that made the questionable choices then described them
+correctly.
+
+So **record truth may not separate the conditions at all**, and the study should
+not be built on the expectation that it will. What is left that can separate them
+is worth stating before any data arrives:
+
+- **Finding.** The baseline states the change inside 163 lines of prose that also
+  describe everything else. codoc states it as amended features plus three
+  proposals attached to the parts of the tree they belong to.
+- **Being made to decide.** A codoc proposal is a verdict somebody has to give:
+  it sits in the tree until it is accepted or rejected, and the ledger records
+  which. Nothing in the baseline demands a decision, so "the agent did it and they
+  never noticed" and "they read it and agreed" look identical afterwards.
+
+The second of those is the one to lead with, because it is the difference the
+tool actually makes and it is recorded rather than rated. Report record truth
+either way, including the likely result that both conditions keep it.
+
+**The agent rewrites the project's own README, in both conditions, and nobody
+asked it to.** Observed on both projects while recording. In tally it added 77
+lines describing the new settings file, the ordering rule, and what the transfer
+setting does, all of it accurate. In scribe it added 51 lines describing the
+config file and the report.
+
+That is a third record, and it is present identically in both conditions, so it
+does not bias the comparison. What it does is compress the effect, because a
+participant who reads the README diff has read an account of the change whether
+or not their condition has a maintained description. Reading it is a legitimate
+route and it has to be a strategy code of its own, beside reading the agent's
+account and reviewing the change.
+
+The README is not reliably true, which is the more useful half. scribe's says the
+notes are listed "each against the `[^n]` to search for", which is precisely the
+cross-reference that does not work, so the agent wrote the false promise into the
+README as well as into the report. So a participant can catch the problem there,
+and a participant who corrects only the description has left a second record
+saying the wrong thing. Score record truth against the record the condition owns,
+and note the README separately rather than folding it in.
+
+**One thing the replay adds and one thing it costs.** It adds comparability,
+because everybody reviews the same change, so detection counts can be pooled at
+all. It costs realism, because nobody watched their own agent work and the
+compression factor is not one. Report the factor from the manifest, and say that
+the lag between an edit and the tree reacting was preserved in proportion rather
+than removed.
 
 ## What the pilot actually showed
 
@@ -88,8 +228,10 @@ how fast somebody can find the answer in a bound, navigable tree with search and
 about FINDING, not about CONTENT.** State it that way or a reviewer will say the
 arms differed in their documents, which they no longer do.
 
-**RQ2 — authored modification.** The primary outcome is four decisions per
-session, rated 0–2 blind, plus who settled each one. That is hand-rated and
+**RQ2 — authored modification.** The primary outcome is one rating per planted
+problem, 0 to 2 and blind, plus who settled each one. A project plants as many as
+its recorded session landed, so coverage is reported as a proportion of that
+project's own maximum. That is hand-rated and
 unaffected by the instrumentation faults. What the fixes add is the *evidence* for
 the who-settled-it coding: with the merged stream you can say, per decision,
 whether the person read the relevant file before the agent changed it, whether
@@ -121,10 +263,15 @@ accept events only exist in the ledger.
 
 ## Two things still open, and they are decisions rather than work
 
-1. **Pre-registration has not happened**, and the one frozen threshold in the v2
-   design is written against the abandoned RQ1 and a codebase that is no longer
-   used. It needs restating against RQ1-understanding and RQ2-authored-modification
-   before participant 1, or the study is exploratory and should say so.
+1. **Pre-registration is written and is `pre-registration.md`.** The v2 design's
+   one frozen threshold was written against an abandoned research question and a
+   codebase no longer used, so it has been restated in the units the redesigned
+   task actually produces. Detection coverage and a durable written trace are the
+   two confirmatory predictions, each with a sign test over the twelve paired
+   participants. Record truth is pre-registered as predicted NOT to differ, which
+   is what the measurement above found and what honesty requires writing down
+   before the data rather than after. Everything else in the analysis plan is
+   labelled exploratory. It still has to be posted to OSF.
 2. **The session snapshots did not run on the pilot** (`session-log.sh` had to be
    started by hand and was not), so no 20-second history exists and "what kind of
    edits people make to the description" has no data for that session. FIXED for

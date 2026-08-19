@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""What happens after the replay hands the workspace over.
+
+    python3 test_handover.py ~/codoc-recording/scribe-codoc
+
+The replay ends and the participant takes over. From that point the study is
+measuring what they can do about the change: accept part of it, reject part of
+it, correct the description, or ask for the code to follow. Each of those has to
+set off the right next thing, or the participant does the work and nothing
+happens, which looks identical to a participant who did nothing.
+
+This drives the real store through each of them, using `codoc sync` rather than
+the daemon so that nothing depends on timing. It is destructive, so it runs on a
+copy of a workspace and never on one a participant is using.
+
+What it checks, in order:
+
+    accepting a proposal      applies it, and the proposal stops being pending
+    rejecting a proposal      drops it, and the feature keeps the words it had
+    editing a description     lands in the store and is what the tree exports
+    commenting on a feature   becomes a directive an agent can act on
+    the queued work           is visible in status, not only in a file
+    committing                keeps the edit they made rather than reverting it
+
+It exits non-zero on the first failure and says which of the four broke.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+PASS, FAIL = "\033[32mok\033[0m", "\033[31mfail\033[0m"
+
+
+class Broken(Exception):
+    pass
+
+
+def ok(message: str) -> None:
+    print(f"  {PASS}    {message}")
+
+
+def sync(workspace: Path) -> None:
+    done = subprocess.run(["codoc", "sync"], cwd=workspace, capture_output=True,
+                          text=True, timeout=600)
+    if done.returncode != 0:
+        raise Broken(f"codoc sync failed: {done.stderr.strip()[:300]}")
+
+
+def sidecar(workspace: Path) -> dict:
+    # tree.bindings.json, not tree.index.json. The latter is the bindings
+    # registry and carries no proposals at all, so reading it reported every
+    # recording as having none and skipped the two checks that matter most.
+    path = workspace / ".codoc" / "tree.bindings.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def pending(workspace: Path) -> dict:
+    """Every pending proposal, keyed by event id.
+
+    RETIRE and AMEND are keyed by feature and ADD and MOVE by event, because a
+    feature can only carry one of the first pair while a parent can carry several
+    of the second. Both are verdicts a participant gives, so both are here.
+    """
+    props = (sidecar(workspace).get("proposals") or {})
+    out = {}
+    for fid, p in (props.get("by_feature") or {}).items():
+        if p.get("event_id"):
+            out[p["event_id"]] = {**p, "feature_id": fid}
+    for eid, p in (props.get("by_event") or {}).items():
+        out[eid] = {**p, "event_id": eid}
+    return out
+
+
+def store(workspace: Path):
+    from codoc.store.db import open_store
+    return open_store(str(workspace / ".codoc"))
+
+
+def description_of(workspace: Path, fid: str) -> str:
+    s = store(workspace)
+    try:
+        feature = s.get_feature(fid)
+        return (feature.description or "") if feature else ""
+    finally:
+        s.close()
+
+
+def any_feature(workspace: Path) -> str:
+    s = store(workspace)
+    try:
+        features = s.list_features()
+        if not features:
+            raise Broken("the store holds no live feature")
+        # The deepest one, because a leaf owns code and a theme near the root may
+        # own none, and an edit to a feature with no bindings cannot ask for code
+        # to follow.
+        return sorted(features, key=lambda f: len(getattr(f, "path", "") or ""))[-1].id
+    finally:
+        s.close()
+
+
+def append_command(workspace: Path, command: dict) -> None:
+    from codoc.loop.edits import append_host_op
+    append_host_op(str(workspace / ".codoc"), "appendCommand", command)
+
+
+def verdict(workspace: Path, event_id: str, accept: bool) -> None:
+    from codoc.loop.inbox import host_verdicts_path
+    path = Path(host_verdicts_path(str(workspace / ".codoc")))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"event_id": event_id, "accept": accept}) + "\n")
+
+
+def check_accept(workspace: Path) -> None:
+    before = pending(workspace)
+    if not before:
+        print("  (this recording left no proposal, so accept and reject are untested)")
+        return
+    event_id = sorted(before)[0]
+    titles_before = titles(workspace)
+    verdict(workspace, event_id, True)
+    sync(workspace)
+    if event_id in pending(workspace):
+        raise Broken(f"accepting {event_id} left it pending, so the click did nothing")
+    kind = before[event_id].get("op")
+    if kind == "add" and len(titles(workspace)) <= len(titles_before):
+        raise Broken(f"accepting the add {event_id} did not put a feature in the tree")
+    ok(f"accepting a proposal applies it and clears it ({event_id}, {kind})")
+
+
+def titles(workspace: Path) -> set[str]:
+    s = store(workspace)
+    try:
+        return {f.title for f in s.list_features()}
+    finally:
+        s.close()
+
+
+def check_reject(workspace: Path) -> None:
+    before = pending(workspace)
+    if not before:
+        print("  (no second proposal, so the reject path is untested)")
+        return
+    event_id = sorted(before)[0]
+    was = titles(workspace)
+    verdict(workspace, event_id, False)
+    sync(workspace)
+    if event_id in pending(workspace):
+        raise Broken(f"rejecting {event_id} left it pending")
+    if titles(workspace) != was:
+        raise Broken(f"rejecting {event_id} changed the tree anyway")
+    ok(f"rejecting a proposal drops it and changes nothing ({event_id})")
+
+
+def check_edit(workspace: Path) -> None:
+    fid = any_feature(workspace)
+    was = description_of(workspace, fid)
+    now = (was + "\n\nThe reviewer added this sentence.").strip()
+    append_command(workspace, {
+        "id": "handover-edit-1", "kind": "set_description", "feature_id": fid,
+        "base_text": was, "payload": {"description": now},
+    })
+    sync(workspace)
+    stored = description_of(workspace, fid)
+    if "The reviewer added this sentence." not in stored:
+        raise Broken(f"the edit to {fid} never reached the store")
+    exported = (workspace / ".codoc" / "tree.codoc").read_text()
+    if "The reviewer added this sentence." not in exported:
+        raise Broken("the edit reached the store but not the tree the reader sees")
+    ok(f"an edit reaches the store and the exported tree ({fid})")
+
+    # Replaying the same command must not apply twice. The daemon can re-drain a
+    # command after a crash, and a doubled description is the shape that would
+    # show up in a participant's tree with nobody having typed it.
+    append_command(workspace, {
+        "id": "handover-edit-1", "kind": "set_description", "feature_id": fid,
+        "base_text": was, "payload": {"description": now + " Again."},
+    })
+    sync(workspace)
+    if "Again." in description_of(workspace, fid):
+        raise Broken("a replayed command applied a second time")
+    ok("and replaying the same command changes nothing")
+
+
+def check_comment(workspace: Path) -> None:
+    from codoc.loop.edits import append_host_op
+    fid = any_feature(workspace)
+    append_host_op(str(workspace / ".codoc"), "appendSteer", {
+        "feature_id": fid, "comment_id": "handover-comment-1",
+        "text": "This is not what the description promises. Make the code match.",
+        "anchor_text": "", "scope": "code",
+    })
+    sync(workspace)
+    realize = workspace / ".codoc" / "realize.md"
+    text = realize.read_text() if realize.exists() else ""
+    if "Make the code match" not in text:
+        raise Broken("a comment produced no directive an agent could act on")
+    ok("a comment becomes a directive in the realize queue")
+
+
+def check_queue_is_visible(workspace: Path) -> None:
+    """The queued work has to be visible somewhere the participant looks.
+
+    A directive sitting in a file nobody surfaces is the same to a participant as
+    no directive at all, and the study would record them as having asked for
+    something and got nothing.
+    """
+    done = subprocess.run(["codoc", "status"], cwd=workspace, capture_output=True,
+                          text=True, timeout=300)
+    if done.returncode != 0:
+        raise Broken(f"codoc status failed: {done.stderr.strip()[:200]}")
+    report = (done.stdout + done.stderr).lower()
+    if "realiz" not in report and "pending" not in report and "await" not in report:
+        raise Broken("status says nothing about the work the comment queued:\n"
+                     + done.stdout.strip()[:400])
+    state = json.loads((workspace / ".codoc" / "status.json").read_text()).get("state")
+    ok(f"the queued work is visible in status (state {state!r})")
+
+
+def check_commit_leaves_them_consistent(workspace: Path) -> None:
+    """Committing is how a participant finishes, and it must not undo anything.
+
+    The tree is a derived export the daemon owns, so a commit that ran a reflect
+    pass and reverted the participant's own edit would be the worst possible
+    ending: their work is gone and the git history says they did it.
+    """
+    subprocess.run(["git", "add", "-A"], cwd=workspace, capture_output=True, timeout=120)
+    done = subprocess.run(["git", "commit", "-q", "-m", "Ship the reviewed change"],
+                          cwd=workspace, capture_output=True, text=True, timeout=120)
+    if done.returncode != 0 and "nothing to commit" not in (done.stdout + done.stderr):
+        raise Broken(f"the commit failed: {(done.stdout + done.stderr).strip()[:200]}")
+    sync(workspace)
+    exported = (workspace / ".codoc" / "tree.codoc").read_text()
+    if "The reviewer added this sentence." not in exported:
+        raise Broken("committing and syncing lost the participant's own edit")
+    ok("committing and syncing keeps the edit they made")
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        print(__doc__)
+        return 2
+    source = Path(argv[0]).expanduser().resolve()
+    if not (source / ".codoc").is_dir():
+        print(f"{source} is not a codoc workspace", file=sys.stderr)
+        return 2
+
+    scratch = Path(tempfile.mkdtemp(prefix="handover-"))
+    workspace = scratch / source.name
+    shutil.copytree(source, workspace, symlinks=True)
+    print(f"driving a copy of {source.name}")
+    try:
+        for check in (check_accept, check_reject, check_edit, check_comment,
+                      check_queue_is_visible, check_commit_leaves_them_consistent):
+            check(workspace)
+    except Broken as error:
+        print(f"  {FAIL}  {error}")
+        print(f"\nthe copy is left at {workspace} so the state can be read")
+        return 1
+    shutil.rmtree(scratch, ignore_errors=True)
+    print("every action after the handover set off the next one")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

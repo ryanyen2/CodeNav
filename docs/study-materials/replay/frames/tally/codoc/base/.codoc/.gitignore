@@ -1,0 +1,8 @@
+# codoc-managed derived state — not for version control.
+# The feature tree lives in tree.codoc / tree.doc.json, and the authoring
+# settings in config.json (all kept tracked below).
+*
+!.gitignore
+!tree.codoc
+!tree.doc.json
+!config.json

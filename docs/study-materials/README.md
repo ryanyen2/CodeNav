@@ -36,7 +36,7 @@ them each way, so most files come as a pair.
 | `participant-before-the-session.md` | Sent days ahead. What the study is and how to set up their machine. Also goes in the bundle as `README.md`. |
 | `projects/scribe/ABOUT.md` | What a participant reads at the start of a scribe condition. Also on their own page. |
 | `projects/tally/ABOUT.md` | The same, for tally. |
-| `projects/<name>/STUDY.md` | **The answer key.** The task card, the four rated decisions, the five-question quiz. Never shown to a participant. |
+| `projects/<name>/STUDY.md` | **The answer key.** The task card, the planted problems and their rating guides, the follow-up request, and both five-question sets. A project plants as many as its recorded session actually landed, which is three for scribe. Never shown to a participant. |
 | `projects/<name>/CLAUDE.md` | The description both arms start from. The baseline gets it as a file; the codoc arm gets the same content as a feature tree. |
 
 **The projects and the tools**
@@ -44,8 +44,9 @@ them each way, so most files come as a pair.
 | File | What it is |
 | --- | --- |
 | `workspaces/` | The four project copies, packed as archives, with notes on what is in them |
+| `replay/` | The recorded agent session every participant reviews, and the tools that record and play it |
 | `scripts/` | Four scripts, described below |
-| `scoring/` | Two scripts, described below |
+| `scoring/` | The scorers, described below |
 | `logger/` | The study logger extension, installed in both conditions |
 | `baseline/doc-maintenance/SKILL.md` | The instructions given to the agent in the condition without codoc. Nobody reads this during a session. Edit it here and the bundle picks it up. |
 
@@ -80,14 +81,25 @@ send back. Also on their machine, also in the bundle.
 
 ## The scoring scripts
 
-There is no automatic scorer for the task, and this is the design rather than an
-omission. The old scorer checked three fixed behaviours. The outcome now is
-whether four open decisions are consistent with what the codebase already does,
-and no script can read a diff for that. The rating guide is in each project's
-`STUDY.md`, and the rating is done by hand, blind to condition.
+Detection is rated by hand, blind to condition, against the guide in each
+project's `STUDY.md`. No script can read a diff and say whether somebody
+understood what was wrong with it.
 
-What is mechanical is the gate: the existing tests still pass and the project
-still runs over all three sample inputs. Two commands, in Part 8 of the guide.
+The two outcomes that are mechanical, or half mechanical, have scripts:
+
+`scoring/score-record-truth.py` asks whether the description a participant
+finished with is true of the code they finished with. It runs their code on a
+sample to find out what the code does, which is the half a person would get
+wrong, and hands the rest to a blind rater as a sheet.
+
+`scoring/transfer-probe.py` asks whether that description still works as the
+agent's memory. It gives the description to a fresh agent with a further task in a
+clean copy of the project, and counts how many commitments the agent's change
+kept. Run it after every session, not during one.
+
+What is fully mechanical is the gate: the existing tests still pass and the
+project still runs over all three sample inputs. Two commands, in Part 8 of the
+guide.
 
 `scoring/check-descriptions-match.py` confirms both conditions still carry the
 same words. Run it before every session, and after any change to either description.
@@ -117,8 +129,8 @@ missing.
   the rest of their setup is wasted.
 - Run `setup.sh` yourself on a spare machine or a fresh account. It is the
   participant's entire experience of setup, so it is worth feeling once.
-- Pre-register the design and the scoring. The two question sheets and their
-  scoring tables are fixed from then on.
+- Post `pre-registration.md` to OSF. It is written and its thresholds are frozen,
+  and the two question sheets and their scoring tables are fixed from then on.
 - Run the three pilot sessions with the full protocol.
 - Build the two missing logs described in section 10 of the design doc, so what
   people open and click is recorded in both conditions, not only in the codoc

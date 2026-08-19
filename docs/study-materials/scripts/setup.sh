@@ -481,6 +481,21 @@ mkdir -p "$WORK"
 # shell the participant already has open.
 ln -sf "$CODOC" "$WORK/codoc"
 ok "made a launcher at $WORK/codoc"
+
+# The recorded agent session the participant reviews. The researcher plays it
+# during the session; nothing here starts it, and a bundle built before the
+# recording exists simply has no frames yet.
+if [ -d "$HERE/replay" ]; then
+  rm -rf "$WORK/replay"
+  cp -R "$HERE/replay" "$WORK/replay"
+  chmod +x "$WORK/replay/play.py" 2>/dev/null || true
+  frames="$(find "$WORK/replay/frames" -name manifest.json 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$frames" -gt 0 ]; then
+    ok "unpacked the recorded session ($frames to choose from)"
+  else
+    warn "the bundle carries no recorded session, so there is nothing to replay"
+  fi
+fi
 for name in $PROJECTS; do
   arc="$(archive_for "$name")"
   src="$HERE/$arc$SUFFIX.tar.gz"

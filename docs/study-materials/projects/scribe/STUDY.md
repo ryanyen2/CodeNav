@@ -1,73 +1,166 @@
 # scribe, as a study instrument
 
-Not shipped to participants. This is what the task is, what is being rated, and
-why each question has the answer it has.
+Not shipped to participants. What the task is, what is being rated, and why each
+question has the answer it has.
+
+The task changed on 2026-08-19. The participant now reviews a change an agent
+already made, rather than making one, and the reasoning is in
+`docs/plans/2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`. The
+quiz further down is unchanged, because it asks what the codebase already commits
+to, and a reviewer has to know that either way.
 
 ## The task card
 
-> **Support block quotes.**
+> **Review what the agent did**
 >
-> Some of the sample documents quote another document. Those passages should come
-> out as Markdown block quotes.
+> Before you left you asked for: a config file, a short report next to the
+> output, and a tidy-up of how the rules get their settings.
 >
-> Decide anything this card does not specify, and be ready to explain your
-> decisions.
+> Decide what to keep, and ship it.
+>
+> Finished means: the code does what you meant, and the description says what the
+> code does.
 
-`report.txt` has one that runs across a page break, and `memo.txt` has one that
-does not, so both cases are reachable from the fixtures rather than hypothetical.
+The card is the request and the decision. What happened while they were away,
+what arrives in their terminal, that the tests pass, and how long they have are
+on the page around the card rather than in the picture, because a participant
+meeting the card cold could not tell which part was the job.
 
-The card no longer says the quotes arrive indented. It used to, which answered
-the first decision before the participant reached it.
+The card does not say that anything is wrong, and it does not say that nothing
+is. Whether the participant looks at all is one of the outcomes, so the card asks
+for a decision and leaves the rest to them.
 
-The agent implements this in about a minute. Everything below is what the card
-leaves open, and the open decisions are the measurement.
+## What the recorded agent was asked for
 
-## The four open decisions
+The prompt is in `replay/requests/scribe.txt`, and the participant is told they
+wrote it before lunch. Three things are asked for at once, so no run of the
+transcript is about a single intent and no file carries only one intent. The
+prompt says nothing about defaults, which is the ordinary case, and the choices
+the agent makes to fill that silence are what the study is about.
 
-Each is rated **0 to 2 for consistency with what scribe already does**, blind to
-condition. The rating is about consistency, not correctness. None of these has a
-single right answer. There are only answers that fit the codebase and answers
-that contradict it.
+The session is recorded once and replayed to each participant in about three
+minutes, because watching an agent write code for forty minutes is not what we
+are measuring and the quality of that code is not what we are rating. How the
+recording works, and what keeps it honest, is in `replay/README.md`.
 
-### 1. What marks a quote
+## The three planted problems
+
+Each is rated 0 to 2, blind to condition. 0 is not found, 1 is found, and 2 is
+found and correctly attributed to the commitment it contradicts. None of them
+breaks a test, because a problem the suite catches measures nothing. All 98 tests
+pass at the end of the recording, up from 54 at the start, and the original 54
+were not edited.
+
+**Three rather than four, and the reason is in the recording.** The fourth was
+going to be D3, the coupled one, where a change looks local and is not. The agent
+built per-document settings correctly in its first pass, so the request that was
+meant to produce it was never needed. A problem the agent will not produce from a
+request a person would actually send is not nudged into existence with a request
+nobody would send. Some of the coupled class survives inside D1, as a consequence
+of it rather than as a problem of its own, and D1 says so. The labels below keep
+the gap at D3 so that they match `scoring/claims/scribe.json` and the recording
+notes.
+
+`replay/frames/scribe/neutral/notes.md` records what the agent produced unsteered
+and what each steer was. The first request produced none of the three: it kept
+every original test passing untouched and checked its own converted Markdown byte
+identical against the original. That is why the stimulus is constructed, and the
+paper says it is.
+
+### D1. The new default loosens a stated policy
+
+Asked to make the repeat threshold a setting and pick a default that catches a
+header appearing on two pages out of five, the agent found that the threshold was
+two things and only one of them was a setting. It exposed the hardcoded floor as
+`min_repeats` and moved the share from 0.6 to **0.4**, having laid the thresholds
+out in a table and rejected 0.5 because 0.5 catches a five-page document only
+through truncation and a six-page one would still slip through.
+
+The description says a running header is a line that repeats on at least 60% of
+the pages, and the code used 0.6 from the day it was written. The sample documents
+have enough pages that no test moves. Checked as C1.
+
+The coupling lives here. At 0.4 a real heading repeating on 16 pages of 40 is
+removed before the heading rule can see it, where at 0.6 it survived, and
+`furniture.py` warns that a heading eaten this way is gone before anything can
+rescue it. The agent wrote that cost down in its own reply.
 
 | | |
 | --- | --- |
-| **2, consistent** | Indentation, with a threshold, and the threshold named as a constant beside `EDGE` and `MAX_HEADING_WORDS`. Every other rule in scribe recognises structure from the text's own shape and puts its threshold in a named constant. |
-| **1, defensible** | A leading character such as `>`, which the extracted text will not contain but which is cheap to check for. |
-| **0, contradicts** | Anything requiring information scribe does not have: font, colour, position on the page. `lines.py` deliberately keeps only text, page and index, and a rule needing more would have to change what the program is. |
+| **2** | Names the loosened default and says which commitment it contradicts, which is that repetition across most of the pages is the entire signal the rule has. |
+| **1** | Notices that the default is not what the program used to do, without connecting it to the commitment. |
+| **0** | Does not raise it, or raises it and then accepts the agent's account that nothing changes without a config file. |
 
-### 2. Does de-hyphenation apply inside a quote
+### D2. The report promises a cross-reference that does not work
 
-| | |
-| --- | --- |
-| **2** | Yes. A quote is prose, it was typeset in the same column, and its words were broken by the same hyphenation. `paragraphs.py` exists to undo typesetting, and a quote was typeset. |
-| **1** | Yes but with the prefix list disabled, on the argument that quoted material should be altered as little as possible. |
-| **0** | No, on the argument that a quote is verbatim. Verbatim would also mean keeping the line breaks, which nobody proposes, so this is inconsistent with itself. |
+The report lists the notes in document order, numbers them by position, and
+prints beside each the marker the note actually carries. On a document that
+numbers its notes per page that produces two lines both marked `[^1]`, so the
+cross-reference the request asked for cannot be followed. Checked as C2.
 
-### 3. Does a quote end the paragraph before it
-
-| | |
-| --- | --- |
-| **2** | Yes. Headings and bullets both flush the run before them in `convert.py`; a quote is a block and behaves like the other blocks. |
-| **1** | Yes, and the paragraph after it too, which is stricter than the others but not in conflict with them. |
-| **0** | No. The quote joins the paragraph, which is the one thing no other block does. |
-
-### 4. A quote that runs across a page break
-
-**The coupled decision.** `furniture.strip` runs before anything else and removes
-the running header, which sits between the two halves of the quote. A change that
-does not account for the ordering will silently drop or split the quote.
+The agent half saw it. The report now says in its own text that the marker is
+"the source's own numbering" and "is not always the same", so a participant has
+two places to catch this, the report itself and the record's promise. Reading the
+report is a route worth coding separately.
 
 | | |
 | --- | --- |
-| **2** | The two halves join, because furniture is already gone by the time quotes are found. Said out loud, in the description or in a comment: the order is what makes it work. |
-| **1** | The halves join, apparently by luck, with nothing showing the author knew why. |
-| **0** | The halves are kept apart, or a new rule is added ahead of `furniture.strip` to handle it, which reintroduces the problem the ordering solved. |
+| **2** | Finds that the cross-reference does not work and says what the record promises. |
+| **1** | Finds the repeated marker and treats it as cosmetic. |
+| **0** | Does not find it. |
 
-**Also recorded per decision:** who settled it. The three possibilities are: they
-decided, the agent proposed and they accepted, or the agent did it and they never
-noticed.
+### D4. The record says one thing and the code does another
+
+The list of prefixes that keep their hyphen when a word broken at a line end is
+rejoined now comes from the configuration, and the default is empty, so every
+broken word loses its hyphen unless a document opts back in. `well-` and `being`
+come back as `wellbeing`. The old twelve prefixes survive in `scribe.toml` on a
+commented line framed as somewhere to start, which is what makes this hard to see:
+the words are still there. The description still says a short list of prefixes
+keeps its hyphen. Checked as C5.
+
+| | |
+| --- | --- |
+| **2** | Finds the false claim, and corrects the record rather than only the code. |
+| **1** | Finds the false claim and leaves the record as it is. |
+| **0** | Does not find it. |
+
+### D0. The decoy
+
+In the table of typesetting characters, the non-breaking space and the zero-width
+space were written as the characters themselves and are now written as `\u00a0`
+and `\u200b`. The diff line reads like a change to which characters get stripped.
+It is the same two characters and the same mapping, written so that a reader can
+see which ones they are.
+
+Flagging D0 as wrong counts as a false alarm, and so does flagging any other
+correct part of the change. A surface that makes everything look suspicious is
+not an improvement, and the false alarm count is what says so.
+
+## The follow-up request
+
+Given after the review, and read aloud rather than put on the card:
+
+> Keep the document's title line at the top of the output.
+
+The title line is the line that repeats on every page, so the obvious
+implementation runs into a commitment the record already holds. The participant
+has to notice the conflict and settle it deliberately, either by changing the
+commitment and saying so, or by keeping it and constraining the request. Whether
+they notice at all is recorded, and so is which way they went.
+
+## What else is recorded per problem
+
+Who settled it. The three possibilities are that the participant directed it,
+that the participant accepted a proposal deliberately, or that it stands and they
+never noticed. The merged event stream and the codoc ledger supply the evidence.
+
+Time to the first correct detection, and how many of the four were found within
+fifteen minutes.
+
+Whether the record is true at the end. The claims are listed in
+`scoring/claims/scribe.json`, and each is scored against the participant's final
+description as true, contradicted, or missing.
 
 ## The quiz
 
@@ -179,52 +272,46 @@ pre-registration rather than discovering them in the results.
 ## The after-task questions
 
 Five questions, four options, one right, asked straight after the task with the
-code, the description and the agent CLOSED. Never shown to a participant before
-they have done the task.
+code, the description and the agent CLOSED. Never shown before the task.
 
-They used to be four boxes to type in. Freeform got short answers to questions
-whose value is in the follow-up, at the end of two hours, and nothing that could
-be scored the same way twice. These have right answers.
+**Every one of them is about the agent's session and what the participant did
+with it.** A question answerable by somebody who read the project page and did
+nothing is a question that measures reading. Four of the five turn on a planted
+problem, so the two ways to get one right are to have found the problem or to
+have read the whole change carefully. Somebody who shipped without looking will
+have neither.
 
-**Every one of them is about the change they just made, and none can be answered
-from the briefing.** That is the whole design: a question answerable by somebody
-who read the project page and did nothing is a question that measures reading.
-Each turns on a consequence of block quotes meeting a rule that was already
-there, so the two ways to get it right are to have understood the codebase or to
-have made the decision yourself and watched what it did. Somebody who let the
-agent write it and did not look will not have either.
-
-They are matched to tally's set one for one, band for band.
+They are matched to tally's set one for one, band for band and level for level.
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) Your change decides which passages become block quotes. What does scribe know about a line that a rule could be based on?**
-- a) Its font and size, which the extracted text records
-- b) **Its text, which page it came from, and where it sat on that page — nothing else** ✓
-- c) Its colour and how far it was indented in the PDF
-- d) Where it ends up in the finished Markdown
+**Q1. (easy) You had a config file added. What does scribe now do when it runs with no config file at all?**
+- a) It refuses to run until a config file exists
+- b) **It converts as before, except that a line repeated on two pages is now removed** ✓
+- c) It writes out a config file with the current settings and stops
+- d) It converts exactly as it did before, with nothing changed
 
 ### Rationale: why that way and not the other
 
-**Q2. (medium) A line that your change now puts inside a quote used to be joined into the paragraph around it. Which existing behaviour most likely treats it differently now?**
-- a) The characters in it, which are tidied separately
-- b) **Rejoining paragraphs, because a quote is a block and the prose around it stops flowing into it** ✓
-- c) Which page it is recorded on
-- d) Whether it counted towards the repeated-line threshold
+**Q2. (medium) You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?**
+- a) It keeps its hyphen, exactly as before
+- b) **It loses its hyphen, because the list of prefixes that keep one is now empty by default** ✓
+- c) The line break is kept along with the hyphen
+- d) The run refuses until the document says which it wants
 
-**Q4. (hard) Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?**
-- a) Nothing: the two are independent
-- b) Quotes would lose their indentation
-- c) **A quote crossing a page break would have the running header sitting inside it** ✓
-- d) Headings would stop being recognised
+**Q4. (hard) Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?**
+- a) Nothing; furniture and headings never look at the same lines
+- b) Page numbers can no longer be used to order the sections
+- c) **A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents** ✓
+- d) The first page loses its heading, because there is nothing before it to compare against
 
 ### Change: what it cost, and what it touched
 
-**Q3. (medium) The running header is removed before your change runs. For a quote that carries on across a page break, what does that ordering do?**
-- a) It splits the quote, because the header lands between the two halves
-- b) **It lets the halves join, because the header is gone before quotes are looked for** ✓
-- c) It drops the quote, because removing the header takes the whole block
-- d) Nothing: the two never see the same lines
+**Q3. (medium) The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?**
+- a) `[^1]` and `[^2]`, which is what the Markdown holds
+- b) **`[^1]` beside both, so the marker does not tell them apart** ✓
+- c) No markers at all, only the text of each note
+- d) One entry, because the two notes are treated as the same note
 
 ### Extension: what a next person needs
 

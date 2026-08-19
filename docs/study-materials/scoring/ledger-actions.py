@@ -32,6 +32,12 @@ the ledger — on the pilot, 57 of 68 events were `bootstrap` and `translate`,
 written days before the participant sat down. Counting those would swamp the
 handful of events the session actually produced. Anything sourced from bootstrap
 or translate is dropped, and so is anything stamped before the session began.
+
+THE RECORDED SESSION IS EXCLUDED THE SAME WAY. Since the task redesign the
+workspace also ships the ledger of the agent session the participant reviews,
+stamped when the recording ran. `replay/play.py` writes `.codoc/replay.stamp` at
+the moment it hands the workspace over, and everything older than the handover is
+dropped, so what is left is what the participant did.
 """
 from __future__ import annotations
 
@@ -42,6 +48,21 @@ from pathlib import Path
 
 # Written before the participant ever saw the workspace.
 SEEDING_SOURCES = {"bootstrap", "translate"}
+
+# The recorded session leaves its own ledger events in the shipped store, stamped
+# when the recording ran. `play.py` writes `.codoc/replay.stamp` when it hands the
+# workspace over, so anything older than the handover is either seeding or the
+# recording, and only what comes after it is the participant's.
+
+
+def handover_ms(codoc_dir: Path) -> int:
+    stamp = codoc_dir / "replay.stamp"
+    if not stamp.exists():
+        return 0
+    try:
+        return int(json.loads(stamp.read_text())["handover_ms"])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return 0
 
 # The op kinds that are a change to what the description SAYS. attach/detach/
 # refresh are bookkeeping — the vocabulary drops them too, and for the same
@@ -69,6 +90,8 @@ def events_for_workspace(codoc_dir: Path, ws: str, participant: str,
     from codoc.store.db import open_store
 
     out: list[dict] = []
+    since_ms = since_ms or handover_ms(codoc_dir)
+    unstamped = 0
     store = open_store(str(codoc_dir))
     try:
         for e in store.recent_events(5000):
@@ -76,6 +99,8 @@ def events_for_workspace(codoc_dir: Path, ws: str, participant: str,
                 continue
             kind = e.op.kind.value
             t = _ms(e.at) if hasattr(e, "at") else 0
+            if since_ms and not t:
+                unstamped += 1
             if since_ms and t and t < since_ms:
                 continue
             actor = (getattr(e, "actor", "") or "").lower()
@@ -90,15 +115,23 @@ def events_for_workspace(codoc_dir: Path, ws: str, participant: str,
         # Verdicts: an accept leaves an applied event citing the proposal it came
         # from, which is how `codoc_await_verdicts` recovers them too.
         for e in store.recent_events(5000):
+            if e.source in SEEDING_SOURCES:
+                continue
             caused = getattr(e, "caused_by", "") or ""
-            if caused.startswith("e-"):
-                out.append({
-                    "t": _ms(e.at) if hasattr(e, "at") else 0,
-                    "p": participant, "ws": ws, "ev": "codoc",
-                    "kind": "verdict", "accept": True, "eventId": caused,
-                })
+            if not caused.startswith("e-"):
+                continue
+            t = _ms(e.at) if hasattr(e, "at") else 0
+            if since_ms and t and t < since_ms:
+                continue
+            out.append({
+                "t": t, "p": participant, "ws": ws, "ev": "codoc",
+                "kind": "verdict", "accept": True, "eventId": caused,
+            })
     finally:
         store.close()
+    if unstamped:
+        print(f"  warning: {unstamped} event(s) in {ws} carry no readable timestamp, "
+              "so the handover watermark could not be applied to them", file=sys.stderr)
     out.sort(key=lambda r: r["t"])
     return out
 

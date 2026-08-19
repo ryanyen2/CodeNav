@@ -192,6 +192,24 @@ export function activate(context: vscode.ExtensionContext): void {
         }
     }));
 
+    // ── The stalled realize queue → offer to run it ───────────────────────────
+    // Accepting a plan queues code work and, outside the agent's blocking
+    // `codoc_await_verdicts` window, nothing runs it: the status bar said "N to
+    // implement" and the queue sat there until the human typed something into Claude
+    // Code purely to trip the UserPromptSubmit hook. So make the offer instead of
+    // leaving a silent queue.
+    //
+    // Non-modal, and it starts nothing on its own. `codoc realize` is the one action
+    // that lets an agent write to the user's source files, which is the same reason
+    // daemon-manager refuses to pass `--auto-realize` (KTD6) — the difference between
+    // this and that is the click, so the click has to stay.
+    context.subscriptions.push(state.onDidStallRealize(offer => {
+        void vscode.window.showInformationMessage(offer.message, offer.action)
+            .then(pick => {
+                if (pick === offer.action) void vscode.commands.executeCommand('codoc.realize');
+            });
+    }));
+
     // ── codoc.setup — one-click provision → init → daemon ─────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.setup', () => runSetup(context, state)),

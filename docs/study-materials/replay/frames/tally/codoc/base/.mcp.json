@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codoc": {
+      "type": "stdio",
+      "command": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/.venv/bin/codoc-mcp",
+      "args": []
+    }
+  }
+}

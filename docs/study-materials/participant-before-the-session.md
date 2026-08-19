@@ -10,11 +10,16 @@ The link carries your participant code, and nothing here works without it.
 
 ## What the session is
 
-You will do two short programming tasks, one after the other, on two small
-codebases you have not seen before. In each task a coding agent is available and
-you can use it as much or as little as you like. We are studying how people and
-coding agents share the written description of a codebase, so we are interested
-in how you work, not in how fast you are.
+You will do two short tasks, one after the other, on two small codebases you
+have not seen before. In each one, a coding agent has already made a change and
+your job is to look at what it did, decide what to keep, and finish the work. A
+coding agent is available throughout and you can use it as much or as little as
+you like. We are studying how people and coding agents share the written
+description of a codebase, so we are interested in how you work, not in how fast
+you are.
+
+You do not need to know either codebase in advance, and you will not be asked to
+write much code.
 
 The session runs for about 105 minutes on a video call. We will ask you to think
 out loud while you work, and we will ask you questions about the code afterwards.

@@ -7,8 +7,8 @@
  * Status bar reflects .codoc/status.json's lifecycle state:
  *   $(loading~spin) implementing…   – realizing  (agent writing code)
  *   $(pencil) applying tree edits…  – tree_dirty (codoc edited, code pending)
- *   $(play) N to implement          – awaiting_impl (accepted edits queued in
- *                                      .codoc/realize.md for the live session)
+ *   $(play) N queued, not running   – awaiting_impl (accepted edits queued in
+ *                                      .codoc/realize.md with nothing draining them)
  *   $(bell) N proposals             – code_drift (code changed, review pending)
  *   $(check) N                      – in_sync
  *   $(sync) not initialized         – no .codoc dir
@@ -21,9 +21,10 @@ import { parseTreeCodoc, ParsedFeature, ProposalHunk } from './tree-model';
 import { SidecarData, emptySidecar, featureAdjacency } from './bindings-model';
 import { RegistryData } from './registry-model';
 import { loadRegistry } from './registry-loader';
-import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines, EPOCH_UI_TTL_MS } from './activity-model';
+import { ActivityData, parseActivity, isAgentActive, computeActiveFeatureLines, EPOCH_UI_TTL_MS, EPOCH_SPAWN_TTL_MS } from './activity-model';
 import { parseRealize, pendingCodeByFile, PendingChange, parseRealizedLog, newOutcomes, RealizedOutcome } from './realize-model';
-import { statusBarView } from './status-presentation';
+import { statusBarView, queuesCodeWork, realizeOffer, verdictConsequences, RealizeOffer } from './status-presentation';
+import type { Consequence } from './grammar';
 import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS, daemonUnresponsive, HOST_LOG_GRACE_MS } from './status-model';
 import { parseTranslateProgress } from './translate-model';
 import { parseAsk, ASK_TTL_MS, type AskWalkthrough } from './ask-model';
@@ -37,6 +38,14 @@ export interface CodocStatus {
     pending: number;
     detail: string;
 }
+
+// How long a code-implying accept stays armed waiting for the daemon to actually
+// write the queue (see `_offerStalledQueue`). Loop B has to merge the host verdict
+// log, apply, mint the directive and re-render before `awaiting_impl` appears, and a
+// pass that also re-indexes is not instant — but past a couple of minutes the accept
+// is no longer the thing the author is looking at, so a late offer would arrive as a
+// non-sequitur.
+const VERDICT_QUEUE_WINDOW_MS = 120_000;
 
 export class WorkspaceState {
     readonly statusBar: vscode.StatusBarItem;
@@ -84,6 +93,16 @@ export class WorkspaceState {
      *  extension.ts turns these into completion notifications. */
     private _onDidRealize = new vscode.EventEmitter<RealizedOutcome[]>();
     readonly onDidRealize = this._onDidRealize.event;
+
+    /** Fires once when an accept that hands code work to the agent has landed in the
+     *  realize queue and no agent session is there to drain it. extension.ts turns it
+     *  into the "Run it now" offer. */
+    private _onDidStallRealize = new vscode.EventEmitter<RealizeOffer>();
+    readonly onDidStallRealize = this._onDidStallRealize.event;
+
+    // A code-implying accept this host wrote, waiting for the queue to appear.
+    // Null whenever there is nothing to offer (see `_offerStalledQueue`).
+    private _queuedByVerdict: { consequences: Consequence[]; until: number } | null = null;
 
     constructor(private context: vscode.ExtensionContext) {
         this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -283,6 +302,44 @@ export class WorkspaceState {
         this._onDidChange.fire();
         this._scheduleLeaseExpiry();
         this._surfaceRealized();
+        this._offerStalledQueue();
+    }
+
+    /**
+     * Offer to run the realize queue once an accept has landed in it and nothing is
+     * going to drain it.
+     *
+     * Armed by {@link writeVerdict}, fired HERE rather than at the click, because at
+     * click time the queue does not exist yet: the verdict is still an unread line in
+     * `inbox.host.jsonl`, and `codoc realize` would have answered "Nothing queued".
+     * Waiting for the daemon's own `awaiting_impl` also means we never offer over an
+     * accept it deferred, dropped as stale, or never saw at all — a dead daemon has
+     * its own pill and starting an agent would be the wrong answer there.
+     *
+     * A live session leaves the arming in place rather than clearing it: it is the
+     * right party to implement the queue, but if it dies inside the window the offer
+     * is still owed.
+     */
+    private _offerStalledQueue(nowMs: number = Date.now()): void {
+        const armed = this._queuedByVerdict;
+        if (!armed) return;
+        if (nowMs > armed.until) { this._queuedByVerdict = null; return; }
+        if (this._status.state !== 'awaiting_impl' || this._status.pending <= 0) return;
+        const offer = realizeOffer({
+            accept: true,
+            consequences: armed.consequences,
+            sessionLive: this._sessionOwnsRepo(nowMs),
+        });
+        if (!offer) return;
+        this._queuedByVerdict = null;
+        this._onDidStallRealize.fire(offer);
+    }
+
+    /** Liveness at SPAWN grade — `epoch.open` on the 15-minute lease, the tier
+     *  `autorealize._epoch_open` reads on the Python side for the same question. See
+     *  EPOCH_SPAWN_TTL_MS for why the 90 s display lease is the wrong clock here. */
+    private _sessionOwnsRepo(nowMs: number = Date.now()): boolean {
+        return isAgentActive(this._activity, this._activityMtimeMs, nowMs, EPOCH_SPAWN_TTL_MS);
     }
 
     /** Diff realized.jsonl against the persisted seen-id set and fire the delta.
@@ -411,6 +468,14 @@ export class WorkspaceState {
         const lines = eventIds.map(id =>
             JSON.stringify({ event_id: id, accept, ...extra }) + '\n').join('');
         fs.appendFileSync(this._codocPath('inbox.host.jsonl'), lines);
+        // Arm the stalled-queue offer. Read the consequences from the sidecar NOW,
+        // while it still describes the proposals the buttons were drawn from — the
+        // accept deletes those rows, so by the time the queue appears there is
+        // nothing left to ask what the click meant.
+        const consequences = verdictConsequences(this._sidecar.proposals, eventIds);
+        if (queuesCodeWork(accept, consequences)) {
+            this._queuedByVerdict = { consequences, until: Date.now() + VERDICT_QUEUE_WINDOW_MS };
+        }
     }
 
     get rootDir(): string | null { return this._rootDir; }

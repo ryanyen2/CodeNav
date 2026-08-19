@@ -15,41 +15,57 @@ export {
 export { PROJECTS, RESPONSIBILITY, HOW_TO_START } from './content.js';
 export { QUIZZES, AFTER_QUIZZES } from './quiz.js';
 
-/** The task cards. Drawn as pictures, never as text anyone can copy. */
+/**
+ * The task cards. Drawn as pictures, never as text anyone can copy.
+ *
+ * Since the 2026-08-19 redesign the task is to review a change an agent already
+ * made, so the card restates the request the participant is told they left, and
+ * then asks for a decision. It does not say that anything is wrong. A card that
+ * said so would prime the measure, and a card that said nothing at all would let
+ * a participant ship without looking, which is itself one of the outcomes.
+ *
+ * The card is the REQUEST and the decision, and nothing else. What happened while
+ * they were away, what arrives in the terminal and how long it all takes are on
+ * the page around it. A card carrying that too was a picture of the task and of
+ * the session's stage directions read as one thing, and a participant meeting it
+ * cold could not tell which part was the job.
+ */
 export const TASK_CARDS = Object.freeze({
     scribe: {
-        title: 'Support block quotes',
+        title: 'Review what the agent did',
         lines: [
-            'Some of the sample documents quote another document.',
-            'Those passages should come out as Markdown block',
-            'quotes.',
+            'Before you left you asked for:',
+            '',
+            'a config file,',
+            'a short report next to the output,',
+            'and a tidy-up of how the rules get their settings.',
+            '',
+            'Decide what to keep, and ship it.',
         ],
-        // What the finished thing should LOOK like, so "Markdown block quote" is
-        // concrete for somebody who does not write Markdown daily.
-        //
-        // Deliberately the OUTPUT and not the input. How a quote is recognised in
-        // the extracted text is one of the decisions being rated, and an example
-        // showing the input would answer it before they started.
+        // What finished looks like, stated as the end state rather than as a
+        // list of things to check. Naming what to check would hand over the
+        // detection that is being measured.
         example: {
-            label: 'What that looks like',
-            lines: ['> The committee found no evidence', '> of tampering.'],
+            label: 'Finished means',
+            lines: ['The code does what you meant, and',
+                'the description says what the code does.'],
         },
     },
     tally: {
-        title: 'Support split transactions',
+        title: 'Review what the agent did',
         lines: [
-            'One purchase sometimes belongs in two categories: a',
-            'supermarket trip that was half groceries and half a',
-            'birthday present.',
+            'Before you left you asked for:',
             '',
-            'Let a transaction be split.',
+            'the merchant rules moved into a file you can edit,',
+            'a weekly view beside the monthly one,',
+            'and a tidy-up of how the rules get their settings.',
+            '',
+            'Decide what to keep, and ship it.',
         ],
-        // Again the outcome, not the encoding: how a split is written down is a
-        // decision being rated, so the example shows only what the summary should
-        // end up saying.
         example: {
-            label: 'What that looks like',
-            lines: ['Groceries      60.00', 'Gifts          24.20'],
+            label: 'Finished means',
+            lines: ['The code does what you meant, and',
+                'the description says what the code does.'],
         },
     },
 });

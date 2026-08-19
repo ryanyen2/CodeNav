@@ -1,0 +1,205 @@
+# Recording and replaying the agent session
+
+The study asks a participant to review a change an agent made, so every
+participant has to see the same change. Waiting forty minutes for an agent to
+write code is not part of what we are testing, and the quality of that code is
+not what we are measuring, so the session is recorded once and replayed in about
+three minutes.
+
+Replay is cheap because of how codoc is built. The local extension is file based,
+with no server and no port, and everything the participant sees comes from files
+under `.codoc/`, which the extension watches and reparses when they change. The
+webview draws `tree.doc.json`, the status bar reads `status.json`, and the
+proposals come from the control files. Writing recorded copies of those files
+back into the workspace drives the whole interface, and codoc needs no changes at
+all.
+
+## What is honest about it
+
+The change under review is a constructed stimulus. An agent asked to add a
+configuration layer is careful by default and lands none of the planted problems
+on its own, so the recording is steered until it does, and every steer is written
+into `notes.md` beside the frames. Every participant reviewing the same change is
+what makes their detection counts comparable at all.
+
+What is never authored is codoc's response. Every frame under `.codoc/` was
+written by a real daemon during the recording, and nobody edits one by hand. If
+Loop A failed to surface a planted problem, participants see it fail and the
+paper reports that codoc failed to surface it. Writing the tree ourselves would
+make the faithfulness claim circular, and faithfulness is the claim the study
+rests on. The stimulus is ours; the record of it is codoc's.
+
+## The recording has to be neutral, and that is checked rather than assumed
+
+Both conditions read the recorded transcript as their terminal scrollback, so it
+must not name either tool. A baseline participant who finds `.codoc/tree.codoc`
+in their own scrollback has been told which tool the study is about, and a codoc
+participant who finds `CLAUDE.md` has been told there is another condition.
+
+The first scribe recording failed this in two ways, and both were the harness
+rather than the agent. The neutral workspace is made neutral by deleting the tool
+files and folding the deletion into the last commit, and when that last commit
+holds nothing but the tool files, git refuses to amend it into an empty commit.
+The failure was not checked, so the agent began in a tree holding eight staged
+deletions, ran `git status`, and wrote their names into the transcript. Separately,
+Claude Code prints absolute paths, and the recording workspace is
+`~/codoc-recording/<project>-neutral`, so every `Read(...)` line named the tool
+and announced that a recording was being made.
+
+Three things now stand between that and a participant. `strip_tools` drops the
+commit when amending it would leave it empty, so the tree is genuinely clean.
+`build` writes the recording's own directory into the terminal text as
+`{{WORKSPACE}}` before anything truncates a long line, and the player expands it
+to the participant's own path. And the player refuses to run at all if either
+tool is still named after that, because what the harness put there is already
+gone, so what is left is the agent having said it, and that is a recording to
+make again rather than a line to quietly delete.
+
+The check runs with the participant's own path taken out, because their workspace
+is `~/codoc-study/<project>` and they see it all session in both conditions.
+
+`record.py retext <frames-dir>` renders a finished recording's scrollback again
+from its own transcript, without touching the frames. It exists because the
+scrollback is cheap to regenerate and the frames cost an hour of daemon time, so
+a fault in what the participant reads should not mean deriving both conditions
+again.
+
+## The code is recorded once, with neither tool present
+
+The session runs in a workspace with no `.codoc`, no `CLAUDE.md`, and no agent
+configuration, and `derive` then replays it into each condition and records what
+that condition's own machinery did in response.
+
+Both conditions have to review the same code, or a detection count cannot be
+compared between them, and two separate agent runs never produce the same code.
+The transcript is read by participants in both conditions, so it must not mention
+either tool: an agent left in a codoc workspace explores it, finds
+`.codoc/tree.codoc` and the codoc skill, and says so in its own output. That was
+found by running it.
+
+Delays are scaled by one factor, which the manifest records. The lag between a
+code edit and the tree reacting to it therefore survives playback in proportion,
+rather than collapsing to nothing and making codoc look instant. Report the
+factor.
+
+One thing is removed rather than scaled. A recording is made by a person sending
+the agent a follow-up once the last one has landed, and the pause between them is
+that person reading, deciding and typing, which is not the agent working. Gaps
+longer than two minutes are clipped to two minutes, so every lag that is actually
+about the tools survives untouched while the dead air does not. The manifest
+records how much was taken out and it is reported next to the factor. Without it
+the first tally recording spent more of its timeline waiting for the experimenter
+than watching the agent.
+
+Only one watcher may record into a raw directory at a time, and it takes
+ownership with a pid file. Two of them destroy a recording in a way the round trip
+does not catch: each keeps its own counter and its own idea of what changed last,
+so they overwrite each other's snapshots and each records half the diff. The end
+state still replays, because the last frame and the final copy carry it, while the
+middle of the recording runs backwards. `build` refuses a recording whose clock
+goes back and says which snapshot to look at.
+
+The change is left uncommitted in the working tree, so `git diff` shows the whole
+change. Reading the diff is an honest way to review, both conditions have it, and
+we want to know who chooses it.
+
+## Recording, in three steps
+
+Recording happens once per project, on the experimenter's machine, and it needs
+an API key. It has three steps, because the code is recorded once and each
+condition's record is derived from it.
+
+**First, record the code.** `record-session.sh start scribe neutral` unpacks a
+workspace with no codoc, no description and no agent configuration, folds the
+removal into the last commit so the agent does not begin in a tree that is
+already dirty, hides the editable install's build output in `.git/info/exclude`
+so the agent does not write a filter to work around it, and starts the watcher.
+Then run the agent in that folder with the request in `requests/scribe.txt`. It
+needs `--allowedTools` naming Bash, because an agent that cannot run the tests
+stops and asks questions instead of working. Steer it until it lands the planted
+problems and write every steer into `notes.md`. `record-session.sh stop scribe
+neutral` turns the snapshots into frames and copies the transcript next to them.
+
+**Second, derive each condition.** With the daemon running in a clean codoc
+workspace:
+
+    python3 record.py derive frames/scribe/neutral ~/codoc-recording/scribe-codoc \
+        frames/scribe/codoc --pace --settle-every 4
+
+It replays each code frame into that workspace, waits for the daemon to finish
+reacting, and records what moved under `.codoc/`. Use `--pace`: without it the
+frames go in as fast as the disk allows, the daemon coalesces the lot into one
+pass, and the description moves once at the very end, so a participant watches
+nothing happen and then everything happen at once.
+
+The baseline's record is written by an agent at the end of a session rather than
+by a daemon as it goes, so it derives with `--after` naming a command that runs
+the maintenance skill once after the last frame. Export the API key into the
+environment first and leave it out of the command string, because `--after` is a
+shell line that ends up in logs:
+
+    python3 record.py derive frames/scribe/neutral ~/codoc-recording/scribe-baseline \
+        frames/scribe/baseline --after "…run the maintenance skill…"
+
+Both conditions then hold the same code and the same transcript, and differ only
+in the record beside it.
+
+**Third, check.** `record-session.sh check scribe codoc` replays the frames into
+an empty directory and compares the result against the workspace the recording
+ended in, file by file. A recording that does not pass `check` is not shipped.
+
+What the scribe recording actually contains, as a worked example: 48 frames,
+1,389 seconds of real session of which 212 was the experimenter waiting between
+turns, compressed to 180 of playback at 6.5x. The description visibly catches up
+with the code 16 times during the replay, leaving seven ADD proposals pending as
+ghost rows. The round trip reproduces the recorded end state across 21 files in
+the neutral recording and 37 in the codoc condition.
+
+Two more gates run against a finished recording. `test_handover.py` drives a copy
+of the derived workspace through accepting a proposal, rejecting one, editing a
+description and leaving a comment, and fails if any of them sets off nothing. The
+extension's `recorded-frames.test.ts` reads every frame the way the webview does
+and fails if the daemon's own document renders differently from the daemon's own
+export, which would make the webview emit commands nobody typed.
+
+## Replaying
+
+    docs/study-materials/replay/play.py ~/codoc-study/scribe \
+        docs/study-materials/replay/frames/scribe/codoc
+
+The player restores the starting state, prints the recorded terminal text, writes
+the recorded files, and installs the recorded session where `claude --resume`
+will find it. The participant's first prompt then continues the session that
+produced the change, with the agent's own context intact, and the recorded
+transcript is also the terminal scrollback.
+
+The daemon has to be stopped while the player runs, and the player refuses to
+start if a live daemon owns the workspace. Start the daemon again once the replay
+has finished, because everything after the participant's first prompt is live.
+
+Useful options: `--speed 2` plays twice as fast, `--step` waits for Enter between
+frames for a dry run, and `--no-reset` leaves the current state alone.
+
+## Files
+
+`record.py` holds the watcher and the frame builder. `play.py` is the player.
+`record-session.sh` drives a recording end to end. `requests/` holds the prompt
+each recorded agent was given. `frames/<project>/<condition>/` holds the frames,
+the manifest, the transcript and the notes.
+
+Run the tests with `python3 docs/study-materials/replay/test_replay.py`. The test
+that matters is the round trip, because a participant reviews the replayed state
+while the planted problems are rated against the recorded one, so the two have to
+be the same state.
+
+## What the replay must not corrupt
+
+The interaction logger records what the participant does, so replayed writes must
+not count as the participant's work. The logger already keeps an editor edit only
+when the file is active and focused, and the shipped transcript owns the agent's
+actions, so the player's writes land as agent actions, which is what they are.
+
+The codoc change ledger needs the same care. Seeding events are already excluded
+in `scoring/ledger-actions.py`, and the recorded session's events have to be
+excluded the same way, or a participant's own accepts and amends are buried under
+the recording's.

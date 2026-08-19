@@ -85,6 +85,21 @@ class CommentScope(str, Enum):
     BOTH = "both"   # change the code AND update the description to match
 
 
+class CommentReply(BaseModel):
+    """One answer on a comment thread.
+
+    A comment asks for work; until now nothing ever came back on the same surface. The
+    author had to go and find out elsewhere whether their note had been acted on, which
+    is the whole reason a request feels like it went into a void. A reply is how the
+    thread reports what happened to it — written by the agent that did the work, or by
+    codoc when a directive lands.
+    """
+
+    author: str = "claude-code"   # who is answering ("claude-code" | "loop" | "human")
+    body: str = ""
+    at: HLC = Field(default_factory=HLC.now)
+
+
 class CommentThread(BaseModel):
     """An inline comment thread anchored to a feature's description span.
 
@@ -121,6 +136,9 @@ class CommentThread(BaseModel):
     code_refs: list[str] = Field(default_factory=list)
     scope: CommentScope = CommentScope.CODE
     directive_id: str = ""
+    # What came back. Appended when the thread's directive lands (see
+    # loop_b._close_landed_comments); the author reads the outcome where they asked.
+    replies: list[CommentReply] = Field(default_factory=list)
     media_ref: str = ""
     created_at: HLC = Field(default_factory=HLC.now)
     updated_at: HLC = Field(default_factory=HLC.now)

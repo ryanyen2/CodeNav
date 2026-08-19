@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.7
+
+Fixes reported from using 0.2.6, and the study instrument that goes with them.
+
+### Fixed
+
+- **A comment you sent was invisible.** The thread's card only rendered where the right
+  margin happened to be wide enough to hold one, which at most real window widths it is
+  not, so the usual outcome of commenting was a highlighted phrase with nothing behind
+  it. The only tooltip in reach belonged to the hold rail, which read as though the note
+  had been swallowed by the queue. The anchored span now carries a marker of its own.
+  Hover it to read the thread, click to keep it open. The marker is the surface and the
+  margin card is the optional part.
+
+- **A thread can answer now.** When its directive lands, the agent's reply is appended to
+  it and names the files the work actually touched, built from the ops that cite the
+  directive rather than from a summary, so it is a claim the ledger can stand behind.
+  Before this a comment could only change colour, and the author had to go elsewhere to
+  learn whether their note had been acted on.
+
+- **The `/codoc:ask` notes covered the text they were helping you read.** They were drawn
+  at a fixed right inset whatever the window width. The ordinal chip beside each heading
+  is already the durable signal that a stop is there, so the note behind it is one hover
+  away and never occupies the page.
+
+- **The comment composer stayed pinned while the document scrolled underneath**, still
+  claiming to annotate text that had moved away. It is positioned in the surface's scroll
+  space now, so it travels with its sentence.
+
+- **Accepting a plan no longer queues work with nobody assigned to it.** An accept with no
+  live session offers to run it, and the status bar says "queued, not running" rather than
+  implying something is already under way.
+
 ## 0.2.6
 
 The tree can now show you its own past — and several controls stopped lying about what

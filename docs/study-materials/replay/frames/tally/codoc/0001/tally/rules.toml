@@ -1,0 +1,87 @@
+# The rules, as data. Edit this file rather than the code.
+#
+# This is the only place the values live. There are no defaults hidden in the
+# modules to fall back on: two copies of one policy drift apart, and the copy
+# that loses is always the one somebody edited.
+#
+# A mistake here stops the run with a message naming this file and the rule, so
+# a bad pattern is never quietly treated as "matches nothing".
+
+[categories]
+# What an unmatched transaction is called. It appears in the summary under this
+# name, so it is visible rather than silently dropped.
+uncategorised = "uncategorised"
+
+# Merchant patterns to categories, in order. The FIRST match wins, which is why
+# the specific ones are above the general ones: "shell energy" is a utility and
+# "shell" is fuel, and a list in the other order would put the electricity bill
+# in the car. Order in this file is the order they are tried in.
+#
+# Patterns are regular expressions and are matched case-insensitively against
+# the description, anywhere in it.
+#
+# The alternative is to require exactly one match and refuse when two apply.
+# That is stricter and it is what an accounting system should do; here it would
+# stop the month's summary over one ambiguous coffee shop.
+
+[[categories.rules]]
+match = "shell energy|british gas|octopus energy"
+category = "utilities"
+
+[[categories.rules]]
+match = "shell|bp\\b|esso|texaco"
+category = "fuel"
+
+[[categories.rules]]
+match = "tesco|sainsbury|aldi|lidl|co-?op"
+category = "groceries"
+
+[[categories.rules]]
+match = "pret|greggs|costa|starbucks|caf[eé]"
+category = "eating out"
+
+[[categories.rules]]
+match = "tfl|trainline|uber|citymapper"
+category = "transport"
+
+[[categories.rules]]
+match = "netflix|spotify|patreon"
+category = "subscriptions"
+
+[[categories.rules]]
+match = "boots|pharmacy|nhs"
+category = "health"
+
+[[categories.rules]]
+match = "rent|landlord"
+category = "housing"
+
+[[categories.rules]]
+match = "salary|payroll"
+category = "income"
+
+[transfers]
+# Money moved between the account holder's own accounts, recognised by wording.
+# Matched case-insensitively, anywhere in the description.
+#
+# These rows are left out of the spending, because nothing was spent: the money
+# is still theirs. They are also exempt from the duplicate rule, because a
+# transfer exports as two rows that look exactly like a duplicate.
+words = ["transfer", "to savings", "from savings", "own account", "xfer"]
+
+[recurring]
+# How many months a payment has to appear in before it counts as recurring. Two
+# is a coincidence often enough to be annoying; three is not.
+#
+# Counted in months even when the summary is by week: a fixed commitment is a
+# monthly thing, and a weekly window would call nothing recurring.
+months = 3
+
+[money]
+# Most exports put spending in as negative. Some put it in as positive, and the
+# direction is guessed from the data: if more than this share of the rows are
+# positive, the export is one of the other kind and every sign is flipped.
+#
+# 0.8 rather than 0.5 because an ordinary statement carries a salary and the odd
+# refund, and those are money in on a file that needs no flipping.
+flip_when_positive_share_above = 0.8

@@ -4,23 +4,23 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "Your change decides which passages become block quotes. What does scribe know about a line that a rule could be based on?",
+      "question": "You had a config file added. What does scribe now do when it runs with no config file at all?",
       "options": [
         {
           "letter": "a",
-          "text": "Its font and size, which the extracted text records"
+          "text": "It refuses to run until a config file exists"
         },
         {
           "letter": "b",
-          "text": "Its text, which page it came from, and where it sat on that page — nothing else"
+          "text": "It converts as before, except that a line repeated on two pages is now removed"
         },
         {
           "letter": "c",
-          "text": "Its colour and how far it was indented in the PDF"
+          "text": "It writes out a config file with the current settings and stops"
         },
         {
           "letter": "d",
-          "text": "Where it ends up in the finished Markdown"
+          "text": "It converts exactly as it did before, with nothing changed"
         }
       ],
       "answer": "b"
@@ -29,23 +29,23 @@
       "n": 2,
       "band": "Rationale",
       "difficulty": "medium",
-      "question": "A line that your change now puts inside a quote used to be joined into the paragraph around it. Which existing behaviour most likely treats it differently now?",
+      "question": "You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?",
       "options": [
         {
           "letter": "a",
-          "text": "The characters in it, which are tidied separately"
+          "text": "It keeps its hyphen, exactly as before"
         },
         {
           "letter": "b",
-          "text": "Rejoining paragraphs, because a quote is a block and the prose around it stops flowing into it"
+          "text": "It loses its hyphen, because the list of prefixes that keep one is now empty by default"
         },
         {
           "letter": "c",
-          "text": "Which page it is recorded on"
+          "text": "The line break is kept along with the hyphen"
         },
         {
           "letter": "d",
-          "text": "Whether it counted towards the repeated-line threshold"
+          "text": "The run refuses until the document says which it wants"
         }
       ],
       "answer": "b"
@@ -54,23 +54,23 @@
       "n": 3,
       "band": "Change",
       "difficulty": "medium",
-      "question": "The running header is removed before your change runs. For a quote that carries on across a page break, what does that ordering do?",
+      "question": "The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?",
       "options": [
         {
           "letter": "a",
-          "text": "It splits the quote, because the header lands between the two halves"
+          "text": "`[^1]` and `[^2]`, which is what the Markdown holds"
         },
         {
           "letter": "b",
-          "text": "It lets the halves join, because the header is gone before quotes are looked for"
+          "text": "`[^1]` beside both, so the marker does not tell them apart"
         },
         {
           "letter": "c",
-          "text": "It drops the quote, because removing the header takes the whole block"
+          "text": "No markers at all, only the text of each note"
         },
         {
           "letter": "d",
-          "text": "Nothing: the two never see the same lines"
+          "text": "One entry, because the two notes are treated as the same note"
         }
       ],
       "answer": "b"
@@ -79,23 +79,23 @@
       "n": 4,
       "band": "Rationale",
       "difficulty": "hard",
-      "question": "Suppose you had looked for quotes BEFORE the running header was removed. What would have started going wrong?",
+      "question": "Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?",
       "options": [
         {
           "letter": "a",
-          "text": "Nothing: the two are independent"
+          "text": "Nothing; furniture and headings never look at the same lines"
         },
         {
           "letter": "b",
-          "text": "Quotes would lose their indentation"
+          "text": "Page numbers can no longer be used to order the sections"
         },
         {
           "letter": "c",
-          "text": "A quote crossing a page break would have the running header sitting inside it"
+          "text": "A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents"
         },
         {
           "letter": "d",
-          "text": "Headings would stop being recognised"
+          "text": "The first page loses its heading, because there is nothing before it to compare against"
         }
       ],
       "answer": "c"
@@ -131,23 +131,23 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "Your change lets one purchase be split across two categories. Where does a split have to be written down?",
+      "question": "You had the merchant rules moved into a file you can edit. What does tally now do with money moved between your own accounts?",
       "options": [
         {
           "letter": "a",
-          "text": "In a separate file the run is pointed at"
+          "text": "Leaves it out of the totals, as it did before"
         },
         {
           "letter": "b",
-          "text": "In the transaction's own row or rows, because that is where every other fact about it lives"
+          "text": "Counts it in the totals, because the new setting arrives switched off"
         },
         {
           "letter": "c",
-          "text": "On the command line, as an argument"
+          "text": "Lists it separately at the bottom of the summary"
         },
         {
           "letter": "d",
-          "text": "In the summary, after the fact"
+          "text": "Refuses to run until you say which you want"
         }
       ],
       "answer": "b"
@@ -156,23 +156,23 @@
       "n": 2,
       "band": "Rationale",
       "difficulty": "medium",
-      "question": "A purchase that your change splits in two. Which existing rule most likely treats it differently now?",
+      "question": "You had a weekly view added beside the monthly one. What does the weekly view no longer look at when it decides two rows are the same row twice?",
       "options": [
         {
           "letter": "a",
-          "text": "The month it is counted in"
+          "text": "The date"
         },
         {
           "letter": "b",
-          "text": "Whether it is recognised as a recurring payment"
+          "text": "The amount"
         },
         {
           "letter": "c",
-          "text": "Duplicate removal, because two equal halves on one day at one merchant is exactly the shape it matches"
+          "text": "The merchant"
         },
         {
           "letter": "d",
-          "text": "The sign convention applied to its amount"
+          "text": "The category"
         }
       ],
       "answer": "c"
@@ -181,73 +181,73 @@
       "n": 3,
       "band": "Change",
       "difficulty": "medium",
-      "question": "Your change decides whether a split counts as one transaction or two. Why is that a decision rather than a detail?",
+      "question": "Besides the three things you had asked for, the agent changed one more rule. Which one?",
       "options": [
         {
           "letter": "a",
-          "text": "It changes how the rows are stored on disk"
+          "text": "The rule that decides what counts as recurring"
         },
         {
           "letter": "b",
-          "text": "It changes which month the halves land in"
+          "text": "The rule that decides which month a transaction belongs to"
         },
         {
           "letter": "c",
-          "text": "The number of transactions is in the summary somebody reads, so a loop that settles it by accident still publishes it"
+          "text": "The rule that nets refunds against a category"
         },
         {
           "letter": "d",
-          "text": "It changes whether the duplicate rule fires"
+          "text": "Nothing else changed"
         }
       ],
-      "answer": "c"
+      "answer": "b"
     },
     {
       "n": 4,
       "band": "Rationale",
       "difficulty": "hard",
-      "question": "After your change, one half of a split matches a category rule and the other half matches none. What happens?",
+      "question": "Your change leaves two rules disagreeing about the same pair of rows. Which two?",
       "options": [
         {
           "letter": "a",
-          "text": "The whole transaction is dropped, because it is ambiguous"
+          "text": "Recurring payments and refunds"
         },
         {
           "letter": "b",
-          "text": "The whole transaction goes to the uncategorised bucket, because any doubt sends it there"
+          "text": "Leaving out money moved between your own accounts, and removing a row recorded twice"
         },
         {
           "letter": "c",
-          "text": "Each half is categorised on its own, so only the unmatched half lands in that bucket"
+          "text": "Categorising and rounding"
         },
         {
           "letter": "d",
-          "text": "The run stops and asks which category to use"
+          "text": "Month attribution and the sign convention"
         }
       ],
-      "answer": "c"
+      "answer": "b"
     },
     {
       "n": 5,
       "band": "Extension",
       "difficulty": "hard",
-      "question": "Suppose you had made the duplicate check finer — adding a reference — so the two halves stopped matching. What else would that have changed?",
+      "question": "Someone picks this up tomorrow and wants the weekly view to agree with the monthly one again. What do they have to settle first?",
       "options": [
         {
           "letter": "a",
-          "text": "Nothing: that check is only used for splits"
+          "text": "Which file the weekly code lives in"
         },
         {
           "letter": "b",
-          "text": "Transfers would stop being left out"
+          "text": "Whether weeks start on Monday or Sunday"
         },
         {
           "letter": "c",
-          "text": "Duplicate detection would loosen for every ordinary transaction, not only for splits"
+          "text": "Which date a transaction belongs to, because the two views answer that differently now"
         },
         {
           "letter": "d",
-          "text": "The months would all be recomputed"
+          "text": "Whether to add a sample file for it"
         }
       ],
       "answer": "c"
