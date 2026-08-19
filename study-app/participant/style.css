@@ -464,3 +464,12 @@ figure.shot.hero { margin-bottom: 22px; }
     display: block; margin-top: 2px;
     font-size: 13px; color: var(--ink-faint);
 }
+
+/* One column, for a sample whose lines are the point.
+ *
+ * The task page shows the top line of each page of a document and then says how
+ * many pages share one. In two columns each of those lines wrapped onto a second
+ * visual line, so five pages read as ten rows and the sentence above it stopped
+ * being true of what was on screen. */
+.ba.stack { grid-template-columns: 1fr; }
+@media (min-width: 720px) { .ba.stack { grid-template-columns: 1fr; } }

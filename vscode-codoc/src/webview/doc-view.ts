@@ -1885,12 +1885,34 @@ function setSelected(id: string | null, scrollDoc: boolean): void {
         // re-center is driven separately by the scroll-spy via centerTreeRow.
         if (!syncingFromEditor) { cancelCenter(); rowEl.scrollIntoView({ block: 'nearest' }); }
     }
-    // Scroll the editor to this feature — unless the selection came from the editor's
-    // own caret (avoid fighting it) or the id is a pending ghost (no live heading).
-    if (scrollDoc && !syncingFromEditor && wholeEditor && id.startsWith('f-')) {
-        wholeEditor.scrollToFeature(id);
+    // Scroll the editor to whatever this row points at — unless the selection came
+    // from the editor's own caret, in which case scrolling would fight it.
+    //
+    // A pending proposal is not a feature and has no heading to scroll to, so this
+    // used to skip it and the row selected without the document moving, which reads
+    // as a broken row rather than as a deliberate nothing. It IS on screen though:
+    // `suggestion-decorations` draws the ghost where the feature will live, tagged
+    // with the same event id the tree row carries. So scroll to that instead.
+    if (scrollDoc && !syncingFromEditor && wholeEditor) {
+        if (id.startsWith('f-')) wholeEditor.scrollToFeature(id);
+        else scrollToGhost(id);
     }
     persistUiState();
+}
+
+/**
+ * Bring a pending proposal's ghost into view.
+ *
+ * The ghost is a widget decoration rather than a document node, so the editor's own
+ * feature index does not know about it and `scrollToFeature` cannot find it. It does
+ * carry the proposal's event id, which is the same id the tree row is keyed by, so
+ * the element is addressable directly. A proposal that has scrolled out of the
+ * rendered range simply is not there, and doing nothing is the honest outcome.
+ */
+function scrollToGhost(id: string): void {
+    const ghost = document.querySelector<HTMLElement>(
+        '[data-suggestion="' + cssEsc(id) + '"]');
+    if (ghost) ghost.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 /** Expand every ancestor of `id` so its tree row becomes visible. */

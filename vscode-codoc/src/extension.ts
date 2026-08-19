@@ -236,6 +236,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!vscode.workspace.isTrusted) return;
         const rootDir = state.rootDir;
         if (!rootDir) return;
+        // Something outside the editor is writing the files the daemon owns, and
+        // the two must not write them at once. See the watcher below.
+        if (fs.existsSync(path.join(rootDir, '.codoc', 'replay.lock'))) return;
         const execs = cachedExecutables(context);
         if (!execs) return;
         reapStaleLock(rootDir);
@@ -245,6 +248,26 @@ export function activate(context: vscode.ExtensionContext): void {
     // Trust may be granted after activation — start the daemon then.
     context.subscriptions.push(
         vscode.workspace.onDidGrantWorkspaceTrust(() => maybeStartDaemon()),
+    );
+
+    // ── Handing the workspace to another writer, and taking it back ───────────
+    //
+    // The daemon is started here and not by the author (KTD3), which is right up
+    // until something else needs to write `.codoc/` for a while: a recorded
+    // session being played back into the workspace writes exactly the files the
+    // daemon owns. Killing the daemon from outside leaves this extension believing
+    // it still has one, and starting a second one behind its back gives the
+    // workspace two writers, which is how a tree fills with proposals nobody asked
+    // for.
+    //
+    // So the other writer declares itself with `.codoc/replay.lock` and this
+    // stands down for as long as it is there. One owner throughout, and the
+    // handover is a file rather than a race.
+    const replayLock = vscode.workspace.createFileSystemWatcher('**/.codoc/replay.lock');
+    context.subscriptions.push(
+        replayLock,
+        replayLock.onDidCreate(() => stopDaemon()),
+        replayLock.onDidDelete(() => maybeStartDaemon()),
     );
 
     // ── Secrets: OpenAI key change → re-mirror .env + restart the daemon ───────

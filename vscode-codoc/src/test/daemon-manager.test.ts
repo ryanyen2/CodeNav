@@ -11,6 +11,8 @@
  *   • shouldSpawn: no lock → spawn, stale lock → spawn, live lock → defer.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import {
     WatchLock, isStaleLock, parseLock, serializeLock, shouldSpawn,
 } from '../daemon/lockfile';
@@ -103,5 +105,33 @@ describe('shouldSpawn', () => {
         // so its watch.pid carries owner "serve". A window opening the repo while
         // the hub runs must defer, not double-spawn (plan U1).
         expect(shouldSpawn({ pid: 55, owner: 'serve', startedAt: 0 }, 'me', alive)).toBe(false);
+    });
+});
+
+describe('one writer at a time', () => {
+    // The daemon is started by the extension and not by the author (KTD3), which
+    // is right until something else needs to write `.codoc/` for a while. A
+    // recorded session played back into the workspace writes exactly the files the
+    // daemon owns. Killing it from outside left this extension believing it still
+    // had one, and letting the player start its own gave the workspace two
+    // writers, which is how a participant's tree filled with proposals nobody
+    // asked for.
+    const src = readFileSync(resolve(__dirname, '../extension.ts'), 'utf8');
+
+    it('stands the daemon down while another writer holds the workspace', () => {
+        expect(src).toMatch(/replay\.lock/);
+        expect(src).toMatch(/onDidCreate\(\(\) => stopDaemon\(\)\)/);
+    });
+
+    it('starts one again when the lock goes', () => {
+        expect(src).toMatch(/onDidDelete\(\(\) => maybeStartDaemon\(\)\)/);
+    });
+
+    it('and never starts one while the lock is still there', () => {
+        // Activation and the trust grant both go through maybeStartDaemon, so the
+        // guard belongs in it rather than at each call site.
+        const fn = src.slice(src.indexOf('const maybeStartDaemon'),
+                             src.indexOf('maybeStartDaemon();'));
+        expect(fn).toMatch(/replay\.lock/);
     });
 });

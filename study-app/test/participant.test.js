@@ -563,8 +563,12 @@ test('the page names the launcher that setup actually writes', async () => {
     // study is about.
     assert.ok(!named.some((c) => /codoc watch/.test(c)),
         'a participant is still starting the daemon by hand');
-    assert.match(setup, /--codoc-bin/,
-        'and nothing starts it for them once the recording has played');
+    // Nor does anything else start one. The editor extension owns the daemon; the
+    // player stands it down with a lock file and lets the extension bring it back.
+    // Two writers on the same files is how a tree fills with proposals nobody
+    // asked for, and that reached a participant.
+    assert.ok(!/--codoc-bin/.test(setup),
+        'the launcher starts a daemon of its own, behind the extension');
 });
 
 // ── copying a command ────────────────────────────────────────────────────────

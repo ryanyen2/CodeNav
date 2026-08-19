@@ -130,7 +130,7 @@ def test_a_missing_recording_is_refused_rather_than_half_played(tmp_path):
     # A workspace with no frames would otherwise draw the welcome, take the
     # request and then fail, with the participant having asked for something
     # that never arrives.
-    assert agent.first_turn(tmp_path, tmp_path / "nothing", None, 1.0) == 2
+    assert agent.first_turn(tmp_path, tmp_path / "nothing", 1.0) == 2
 
 
 def test_stopping_a_daemon_that_is_not_running_is_not_a_failure(tmp_path):
@@ -138,8 +138,32 @@ def test_stopping_a_daemon_that_is_not_running_is_not_a_failure(tmp_path):
     assert agent.stop_daemon(tmp_path) is False
 
 
-def test_the_daemon_is_not_started_without_something_to_start(tmp_path):
-    assert agent.start_daemon(tmp_path, tmp_path / "no-such-codoc") is None
+def test_the_workspace_is_claimed_and_given_back(tmp_path):
+    # The daemon is the editor's to run, not ours. Killing it from outside left
+    # the extension believing it still had one and starting our own behind its
+    # back gave the workspace two writers, which is how a tree fills with
+    # proposals nobody asked for. The lock is the whole protocol.
+    (tmp_path / ".codoc").mkdir()
+    lock = agent.hand_over(tmp_path, timeout=0.5)
+    assert lock.exists()
+    agent.hand_back(tmp_path)
+    assert not lock.exists()
+
+
+def test_giving_it_back_twice_is_not_a_failure(tmp_path):
+    (tmp_path / ".codoc").mkdir()
+    agent.hand_back(tmp_path)
+    agent.hand_back(tmp_path)
+
+
+def test_the_lock_is_never_recorded_into_a_frame(tmp_path):
+    # `reset()` deletes what the base state does not have, so a lock the scan
+    # could see would be deleted mid-replay and the daemon would come back while
+    # the player was still writing.
+    import record
+    (tmp_path / ".codoc").mkdir()
+    (tmp_path / ".codoc" / agent.LOCK).write_text("{}")
+    assert ".codoc/" + agent.LOCK not in record.scan(tmp_path)
 
 
 @pytest.mark.parametrize("arm", ["codoc", "baseline"])

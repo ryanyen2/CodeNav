@@ -37,6 +37,19 @@ run() { "$@" >>"$LOG" 2>&1 || { echo "failed: $*"; echo "see $LOG"; tail -20 "$L
 VSIX="$(ls -t "$OUT"/codoc-*.vsix | head -1)"
 echo "Built $(basename "$VSIX")"
 
+# The extension is BUILT at the top of this script and PACKAGED a few lines later,
+# so an edit made in between ships as the previous build under the new version
+# number, and nothing says so. It happened once: a fix was verified by grepping the
+# vsix for a string the older build also contained. Compare the bytes instead.
+PACKED="$(mktemp -d)"
+( cd "$PACKED" && unzip -qo "$VSIX" extension/dist/extension.js )
+if ! cmp -s "$PACKED/extension/dist/extension.js" "$EXT/dist/extension.js"; then
+  echo "the packaged extension is not the one just built."
+  echo "Something changed under the build. Run this again."
+  rm -rf "$PACKED"; exit 1
+fi
+rm -rf "$PACKED"
+
 # The study logger. A separate extension on purpose: it installs in BOTH
 # conditions, so navigation is measured the same way in each. Its tests run here
 # because a file sorted into the wrong surface changes a reported number.

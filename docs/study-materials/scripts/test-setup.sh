@@ -852,6 +852,15 @@ case "$(cat "$HERE/build-participant-bundle.sh")" in
   *'> "$STAGE/bundle.stamp"'*) ok "and the builder writes one into the bundle" ;;
   *) bad "the bundle carries no stamp, so setup can never print one" ;;
 esac
+# The extension is built at the top of that script and packaged near the end, so
+# an edit in between ships as the previous build under the new version number. It
+# happened once, and was nearly missed because the check was a grep for a string
+# the older build also contained.
+case "$(cat "$HERE/build-participant-bundle.sh")" in
+  *'the packaged extension is not the one just built'*)
+    ok "and refuses to ship an extension it did not just build" ;;
+  *) bad "a stale extension build would ship under a fresh version number" ;;
+esac
 
 printf '\n\033[1m%s\033[0m\n' "The recorded session"
 case "$(cat "$SETUP")" in
@@ -900,8 +909,20 @@ case "$(cat "$SETUP")" in
   *) bad "the live half would start a conversation with no context" ;;
 esac
 case "$(cat "$SETUP")" in
-  *'--codoc-bin'*) ok "and the daemon is started for them, not by them" ;;
-  *) bad "the participant is back to typing the daemon command" ;;
+  *'codoc watch'*) bad "the participant is back to typing the daemon command" ;;
+  *) ok "and no daemon command is ever put in front of them" ;;
+esac
+# The daemon belongs to the editor extension, which starts it on activation. The
+# player must not start one too: two writers on the same files is how a tree
+# fills with proposals nobody asked for.
+AGENT="$HERE/../replay/agent.py"
+case "$(cat "$AGENT")" in
+  *'replay.lock'*) ok "the player hands the workspace over rather than killing it" ;;
+  *) bad "the player takes the daemon down with nothing to hand it back" ;;
+esac
+case "$(cat "$AGENT")" in
+  *'subprocess.Popen'*) bad "the player still spawns a daemon of its own" ;;
+  *) ok "and never starts a second one behind the editor's back" ;;
 esac
 case "$(cat "$SETUP")" in
   *'agent.py" capture'*) ok "the opening screen is this machine's own" ;;

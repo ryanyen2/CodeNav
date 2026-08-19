@@ -209,3 +209,16 @@ describe('U3/U4/U5 — the captured→pending→resolving lifecycle is one cohes
         expect(css).toMatch(/vscode-high-contrast\s+\.ce-captured-del/);
     });
 });
+
+describe('a proposal row points somewhere', () => {
+    it('the ghost carries the same id the tree row is keyed by', () => {
+        // The tree row for a pending proposal is keyed by the store event id, and
+        // so is the ghost the editor draws for it. Selecting the row scrolls to
+        // that element; if these two ever stop agreeing, the row silently selects
+        // and the document does not move.
+        expect(sugg).toMatch(/setAttribute\('data-suggestion', s\.id\)/);
+        const view = readFileSync(resolve(__dirname, '../webview/doc-view.ts'), 'utf8');
+        expect(view).toMatch(/data-suggestion="/);
+        expect(view).toMatch(/scrollToGhost/);
+    });
+});

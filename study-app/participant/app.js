@@ -424,7 +424,7 @@ const VIEWS = {
         <h2>${esc(t('ui.task.problem', 'One thing {project} gets wrong')
         .replace('{project}', step.project))}</h2>
         <p>${esc(t(`project.${step.project}.failure.lead`, p.failure.lead))}</p>
-        <div class="ba">
+        <div class="ba stack">
           <div><span class="ba-label">${esc(t('ui.task.in', 'In'))}</span>
                <pre class="sample">${esc(p.failure.input)}</pre></div>
           <div><span class="ba-label">${esc(t('ui.task.out', 'Out'))}</span>

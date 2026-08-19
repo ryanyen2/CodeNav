@@ -291,13 +291,48 @@ def _set_size(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
-# ── the daemon around the replay ─────────────────────────────────────────────
+# ── handing the workspace over, and back ─────────────────────────────────────
 #
-# The player refuses to write while a live daemon owns the same files, and the
-# participant should not be running commands to stop and start one. So this does
-# it: quiet before the replay, running again the moment they take over.
+# The player writes the files the daemon owns, so the two must not run at once.
+# The daemon is NOT ours to start: the extension starts it on activation and keeps
+# a lock naming the process it owns. Killing it from outside left the extension
+# believing it still had one, and starting our own behind its back gave the
+# workspace two writers, which is how a participant's tree filled with proposals
+# nobody asked for.
+#
+# So this declares itself instead. `.codoc/replay.lock` means "somebody else is
+# writing here"; the extension stops its daemon while it exists and starts one
+# again when it goes. Scanning skips `.lock`, so the file is never recorded into a
+# frame and never deleted by the reset.
+
+LOCK = "replay.lock"
+
+
+def hand_over(workspace: Path, timeout: float = 10.0) -> Path:
+    """Claim the workspace, and wait for the daemon to let go of it."""
+    codoc = workspace / ".codoc"
+    codoc.mkdir(exist_ok=True)
+    lock = codoc / LOCK
+    lock.write_text(json.dumps({"by": "replay", "pid": os.getpid()}) + "\n")
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if player.daemon_pid(workspace) is None:
+            return lock
+        time.sleep(0.25)
+    # It did not stand down, so either no editor is watching this workspace or its
+    # watcher never fired. Stopping it directly is worse than not replaying at all
+    # only if something else then restarts it, and the lock is what stops that.
+    stop_daemon(workspace)
+    return lock
+
+
+def hand_back(workspace: Path) -> None:
+    (workspace / ".codoc" / LOCK).unlink(missing_ok=True)
+
 
 def stop_daemon(workspace: Path, timeout: float = 10.0) -> bool:
+    """Last resort, when nothing answered the lock."""
     pid = player.daemon_pid(workspace)
     if not pid:
         return False
@@ -317,30 +352,9 @@ def stop_daemon(workspace: Path, timeout: float = 10.0) -> bool:
     return True
 
 
-def start_daemon(workspace: Path, codoc_bin: Path) -> int | None:
-    """Start the daemon behind the session, with its output in a log.
-
-    Behind, because a participant watching a terminal print index passes is
-    watching the tool work rather than reviewing their project, and because the
-    only reason it was ever in front of them was that somebody had to type the
-    command.
-    """
-    if not codoc_bin or not Path(codoc_bin).exists():
-        return None
-    logs = workspace / ".codoc"
-    logs.mkdir(exist_ok=True)
-    handle = open(logs / "watch.log", "ab", buffering=0)
-    proc = subprocess.Popen(
-        [str(codoc_bin), "watch", "--root", str(workspace)],
-        stdout=handle, stderr=handle, stdin=subprocess.DEVNULL,
-        start_new_session=True)
-    return proc.pid
-
-
 # ── the first turn ───────────────────────────────────────────────────────────
 
-def first_turn(workspace: Path, frames: Path, codoc_bin: Path | None,
-               speed: float) -> int:
+def first_turn(workspace: Path, frames: Path, speed: float) -> int:
     if not (frames / "manifest.json").exists():
         print(f"no recorded session in {frames}", file=sys.stderr)
         return 2
@@ -352,13 +366,18 @@ def first_turn(workspace: Path, frames: Path, codoc_bin: Path | None,
     if not request:
         return 130
 
-    stop_daemon(workspace)
+    hand_over(workspace)
     # The recorded frames carry the request as the agent's own first line, so
     # nothing is echoed here. A participant who mistyped their paste still sees
     # the request the change was made from, which is also the one the assistant
     # is resumed on.
-    code = player.play(workspace, frames, speed=speed, step=False,
-                       do_reset=True, do_transcript=True)
+    try:
+        code = player.play(workspace, frames, speed=speed, step=False,
+                           do_reset=True, do_transcript=True)
+    finally:
+        # Whatever happened, give the workspace back. A lock left behind is a
+        # workspace whose daemon never returns, and nothing on screen says so.
+        hand_back(workspace)
     if code:
         return code
 
@@ -372,8 +391,6 @@ def first_turn(workspace: Path, frames: Path, codoc_bin: Path | None,
         "session_id": session or "",
     }, indent=2) + "\n")
 
-    if codoc_bin:
-        start_daemon(workspace, Path(codoc_bin))
     return 0
 
 
@@ -398,8 +415,6 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("play", help="take the first turn and play the recording")
     p.add_argument("workspace", type=Path)
     p.add_argument("frames", type=Path)
-    p.add_argument("--codoc-bin", type=Path, default=None,
-                   help="start this daemon again once the recording has played")
     p.add_argument("--speed", type=float, default=1.0)
 
     c = sub.add_parser("capture", help="keep this machine's own opening screen")
@@ -410,7 +425,7 @@ def main(argv: list[str]) -> int:
         return capture(args.workspace.expanduser().resolve())
     try:
         return first_turn(args.workspace.expanduser().resolve(), args.frames,
-                          args.codoc_bin, args.speed)
+                          args.speed)
     except player.Leaked as leak:
         print(f"\nthis recording is not neutral, so it is not being replayed.\n{leak}",
               file=sys.stderr)

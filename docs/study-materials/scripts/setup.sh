@@ -996,8 +996,6 @@ for name in $PROJECTS; do
   #   --disallowedTools Task  no sub-agents: they add minutes and their work lands
   #                         with no trace in the transcript the analysis reads
   frames_dir="$WORK/replay/frames/$name/$(condition_for "$name")"
-  watcher=""
-  [ "$(condition_for "$name")" = codoc ] && watcher="$WORK/codoc"
   cat > "$d/claude-study" <<LAUNCHER
 #!/usr/bin/env bash
 # Start the assistant for this study. Use this, not plain \`claude\`.
@@ -1014,7 +1012,7 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
 # this that check would play the session's one recording into the workspace days
 # before anybody sat down.
 if [ \$# -eq 0 ] && [ ! -f "$d/.claude-study/handover.json" ] && [ -f "$frames_dir/manifest.json" ]; then
-  python3 "$WORK/replay/agent.py" play "$d" "$frames_dir" ${watcher:+--codoc-bin "$watcher"} || exit \$?
+  python3 "$WORK/replay/agent.py" play "$d" "$frames_dir" || exit \$?
 fi
 
 # Unquoted on purpose: empty expands to no argument at all, and an empty array
