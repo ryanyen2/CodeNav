@@ -8,10 +8,19 @@ repeated here.
 
 > **Review what the agent did**
 >
-> You asked for the merchant rules to move into a file you can edit, a weekly
-> view beside the monthly one, and a tidy-up of how the rules get their settings.
+> Before you left you asked for: the merchant rules moved into a file you can
+> edit, a weekly view beside the monthly one, and a tidy-up of how the rules get
+> their settings.
 >
-> The agent has finished and the tests pass. Decide what to keep, and ship it.
+> Decide what to keep, and ship it.
+>
+> Finished means: the code does what you meant, and the description says what the
+> code does.
+
+The card is the request and the decision. What happened while they were away,
+what arrives in their terminal, that the tests pass, and how long they have are
+on the page around the card rather than in the picture, because a participant
+meeting the card cold could not tell which part was the job.
 
 ## What the recorded agent was asked for
 

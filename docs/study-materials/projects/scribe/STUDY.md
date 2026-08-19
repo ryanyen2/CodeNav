@@ -13,10 +13,18 @@ to, and a reviewer has to know that either way.
 
 > **Review what the agent did**
 >
-> You asked for a config file, a short report next to the output, and a tidy-up
-> of how the rules get their settings.
+> Before you left you asked for: a config file, a short report next to the
+> output, and a tidy-up of how the rules get their settings.
 >
-> The agent has finished and the tests pass. Decide what to keep, and ship it.
+> Decide what to keep, and ship it.
+>
+> Finished means: the code does what you meant, and the description says what the
+> code does.
+
+The card is the request and the decision. What happened while they were away,
+what arrives in their terminal, that the tests pass, and how long they have are
+on the page around the card rather than in the picture, because a participant
+meeting the card cold could not tell which part was the job.
 
 The card does not say that anything is wrong, and it does not say that nothing
 is. Whether the participant looks at all is one of the outcomes, so the card asks
