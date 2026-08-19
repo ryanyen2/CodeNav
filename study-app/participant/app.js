@@ -447,13 +447,19 @@ const VIEWS = {
           <li>${esc(t('ui.task.send.3', 'Watch it work. It takes a few minutes.'))}</li>
         </ol>
 
-        <h2>${esc(t('ui.task.then', 'Then'))}</h2>
+        <h2>${esc(t('ui.task.then', 'What happens then'))}</h2>
         <ol class="do">
-          <li>${esc(t('ui.task.stage1', TASK.stage1))}
-            <span class="mins">${esc(t('ui.task.mins1', 'about ten minutes'))}</span></li>
-          <li>${esc(t('ui.task.stage2', TASK.stage2))}
-            <span class="mins">${esc(t('ui.task.mins2', 'about ten minutes'))}</span></li>
+          <li>${esc(t('ui.task.stage1', TASK.stage1))}</li>
+          <li>${esc(t('ui.task.stage2', TASK.stage2))}</li>
+          <li>${esc(t('ui.task.stage3', TASK.stage3))}</li>
         </ol>
+
+        <h2>${esc(t('ui.task.check', 'Seeing what it did'))}</h2>
+        <p>${esc(t(`project.${step.project}.repl.lead`, p.repl.lead))}</p>
+        ${cmd(p.repl.command)}
+        <pre class="sample">${esc(p.repl.before)}</pre>
+        <p class="fine">${esc(t(`project.${step.project}.repl.caption`, p.repl.caption))}</p>
+
         <p class="rule">${esc(t('ui.task.clock',
         'Twenty minutes in all. There is no clock on this page. The researcher will '
         + 'tell you when time is nearly up.'))}</p>`;

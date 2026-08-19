@@ -152,6 +152,10 @@ test('every briefing, start instruction and page string is translated', () => {
         t(`project.${name}.failure.lead`, project.failure.lead);
         t(`project.${name}.failure.caption`, project.failure.caption);
         project.ask.forEach((line, i) => t(`project.${name}.ask.${i}`, line));
+        // The debugging surface: the one command that shows a rule change moving
+        // something it should not have, and what it prints before anything moves.
+        t(`project.${name}.repl.lead`, project.repl.lead);
+        t(`project.${name}.repl.caption`, project.repl.caption);
     }
     // The request itself is NOT translated. It is pasted into an agent working
     // in a codebase whose identifiers are English, and a translated request

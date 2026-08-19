@@ -67,12 +67,23 @@ Appendix A: Site Photographs            Marine Institute`,
     }),
 
     ask: Object.freeze([
-        'Add a settings file, so different documents can use different rules.',
-        'Write a short report beside the Markdown, saying what the program did to the text.',
-        'Tidy up how the rules get their settings, because at the moment each rule reads a fixed value written into its own file.',
+        'Let each document be converted with its own rules, without editing the code.',
+        'And tell me what the conversion did, so I can see which rules fired on which document.',
     ]),
 
-    prompt: 'Add a config file so the rules can be changed per document. Also write a short report.md next to the Markdown saying what the conversion did. While you are in there, tidy up how the rules get their settings, because at the moment they read module constants directly.',
+    // What a run prints today, so a number that moves is visible without anybody
+    // having to remember what it used to be. This is the whole debugging surface:
+    // one command, three documents, one line each.
+    repl: Object.freeze({
+        lead: 'Converting all three sample documents prints one line each. This is what they print now, before anything changes.',
+        command: '.venv/bin/scribe check fixtures/',
+        before: `handbook.txt: 4 pages, 9 headings, 10 paragraphs, 3 bullets, 0 notes, 12 lines of furniture
+memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furniture
+report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture`,
+        caption: 'Furniture is the project\'s word for a repeated page title or a page number. A rule that starts removing more of it removes it from somewhere.',
+    }),
+
+    prompt: 'Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.',
 });
 
 const TALLY = Object.freeze({
@@ -136,18 +147,30 @@ const TALLY = Object.freeze({
     }),
 
     ask: Object.freeze([
-        'Move the list of shop names into a file I can edit without touching code.',
-        'Add a way to see the same summary by week, next to the monthly one.',
-        'Tidy up how the rules get their settings, because at the moment each rule reads a fixed value written into its own file.',
+        'Let me manage the list of shop names myself, without editing the code.',
+        'And show spending at a finer grain than a whole month.',
     ]),
 
-    prompt: 'Move the merchant rules out into rules.toml so I can edit them without touching code. Also add a --by-week mode next to the monthly summary. While you are in there, tidy up how the rules get their settings, because at the moment they read module constants directly.',
+    repl: Object.freeze({
+        lead: 'Summarising all three sample exports prints one line each. This is what they print now, before anything changes.',
+        command: '.venv/bin/tally check fixtures/',
+        before: `boundary.csv: 7 rows, 3 months, 0 duplicates, 0 transfers, 0 uncategorised, 0 recurring
+current.csv: 37 rows, 3 months, 1 duplicates, 4 transfers, 1 uncategorised, 3 recurring
+other-bank.csv: 13 rows, 3 months, 0 duplicates, 0 transfers, 3 uncategorised, 1 recurring`,
+        caption: 'boundary.csv is the awkward one: every payment in it was made at the end of one month and processed at the start of the next.',
+    }),
+
+    prompt: 'I want to manage the categories myself without touching the source, and I want to see spending at a finer grain than a whole month. Make that work.',
 });
 
 const TASK = Object.freeze({
     lead: 'You asked your coding agent for the following, and it is about to work on it.',
-    stage1: 'First, work out what the agent changed, and how the project works now.',
-    stage2: 'Then decide what you want to keep, and leave the project in the state you would be happy to ship.',
+    // Three, because the session now has three moments in it rather than two: the
+    // agent stops to ask before it builds anything, and what it builds has to be
+    // run rather than only read.
+    stage1: 'It reads the project and comes back with what it intends to do. Answer it.',
+    stage2: 'It makes the change. Watch what moves, and read what it says it did.',
+    stage3: 'Then satisfy yourself that it worked, and leave the project in a state you would be happy to ship.',
 });
 
 export const COPY = Object.freeze({
