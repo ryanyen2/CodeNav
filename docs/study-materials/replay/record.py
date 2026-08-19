@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 import signal
 import subprocess
 import sys
@@ -730,6 +731,154 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Writing the agent's half instead of recording it
+# ---------------------------------------------------------------------------
+#
+# Recording a real session cost an API key, forty minutes, and a lot of steering,
+# because an agent asked to make a change is careful by default and lands none of
+# the problems the study is about. Every one of those problems ended up steered in
+# anyway, so what was being recorded was already an authored stimulus with a real
+# agent typing it.
+#
+# So the agent's half is written down: what it says, what it writes, and when. What
+# is NOT written down is codoc's half. `derive` still replays these frames into a
+# live workspace and records what the daemon actually did, so the faithfulness
+# claim is untouched — the stimulus is ours, the record of it is codoc's, exactly
+# as before. The only thing that changed is where the agent's keystrokes come from.
+#
+# A script is a directory:
+#
+#     session.json      the steps, in order
+#     files/…           the file contents a step writes
+#
+# and each step is `{say: [...], delay_s: n, write: {path: source}, delete: [...]}`.
+
+SIM_MODEL = "claude-sonnet-5"
+SIM_VERSION = "2.1.222"
+
+
+def _sim_transcript(script: dict, workspace: Path, steps: list[dict]) -> list[str]:
+    """A session file the live agent can be resumed on.
+
+    The participant's first turn continues this, so it has to hold the request and
+    what the agent said back. Tool calls are not reconstructed: the terminal text
+    already shows them, and inventing tool_use blocks with fabricated results would
+    put words in the agent's mouth about files it never read.
+    """
+    session = script.get("session_id") or str(uuid.uuid4())
+    stamp = script.get("recorded_at") or datetime.now(timezone.utc).isoformat()
+    common = {
+        "isSidechain": False, "userType": "external", "cwd": str(workspace),
+        "sessionId": session, "version": SIM_VERSION, "gitBranch": "main",
+        "entrypoint": "sdk-cli",
+    }
+    out, parent = [], None
+    first = str(uuid.uuid4())
+    out.append(json.dumps({
+        **common, "parentUuid": None, "type": "user", "uuid": first,
+        "timestamp": stamp, "permissionMode": "acceptEdits", "promptSource": "sdk",
+        "promptId": str(uuid.uuid4()),
+        "message": {"role": "user", "content": script["request"]},
+    }))
+    parent = first
+    for step in steps:
+        text = "\n".join(ln for ln in step.get("say", []) if ln.strip())
+        if not text:
+            continue
+        uid = str(uuid.uuid4())
+        out.append(json.dumps({
+            **common, "parentUuid": parent, "type": "assistant", "uuid": uid,
+            "timestamp": stamp,
+            "message": {
+                "role": "assistant", "type": "message", "model": SIM_MODEL,
+                "id": "msg_" + uid.replace("-", "")[:24],
+                "content": [{"type": "text", "text": text}],
+                "stop_reason": "end_turn", "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            },
+        }))
+        parent = uid
+    return out
+
+
+def simulate(script_dir: Path, workspace: Path, out: Path) -> int:
+    script = json.loads((script_dir / "session.json").read_text())
+    steps = script["steps"]
+
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+
+    previous = scan(workspace)
+    base = out / "base"
+    for rel in previous:
+        dest = base / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(workspace / rel, dest)
+
+    frames, at = [], 0.0
+    for i, step in enumerate(steps, start=1):
+        for rel, src in (step.get("write") or {}).items():
+            body = (script_dir / src).read_bytes()
+            dest = workspace / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(body)
+        for rel in step.get("delete") or []:
+            (workspace / rel).unlink(missing_ok=True)
+
+        current = scan(workspace)
+        writes = [r for r, h in current.items() if previous.get(r) != h]
+        deletes = [r for r in previous if r not in current]
+        snap = out / f"{i:04d}"
+        for rel in writes:
+            dest = snap / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(workspace / rel, dest)
+        delay = float(step.get("delay_s", 2.0))
+        at += delay
+        terminal = "\n".join(step.get("say", []))
+        check_no_leak(terminal, "", f"step {i} of the script")
+        frames.append({
+            "n": i, "at_s": round(at, 3), "delay_s": round(delay, 3),
+            "writes": sorted(writes), "deletes": sorted(deletes),
+            "terminal": terminal,
+        })
+        previous = current
+        print(f"  step {i:>3}  +{len(writes)} -{len(deletes)}  {delay:.1f}s")
+
+    (out / "transcript.jsonl").write_text(
+        "\n".join(_sim_transcript(script, workspace, steps)) + "\n")
+
+    manifest = {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "recorded_root": WORKSPACE_TOKEN,
+        "authored": True,
+        "real_duration_s": round(at, 1),
+        "idle_removed_s": 0.0,
+        "idle_cap_s": IDLE_CAP_S,
+        "playback_duration_s": round(at, 1),
+        "speed": 1.0,
+        "frames": frames,
+    }
+    for key in ("checkpoints", "checkpoint_says"):
+        if script.get(key):
+            manifest[key] = script[key]
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+    notes = out / "notes.md"
+    if not notes.exists():
+        notes.write_text(
+            "This session was written, not recorded. The agent's half — what it "
+            "says, what it writes and when — comes from the script beside it. "
+            "codoc's half is not authored: `derive` replays these frames into a "
+            "live workspace and records what the daemon actually did.\n\n"
+            f"Script: {script_dir}\n")
+
+    print(f"{len(frames)} frames, {round(at)}s of playback, from {script_dir}")
+    return 0
+
+
 def checkpoint(frames: Path, at: list[int], says: str) -> int:
     """Cut a finished recording at the points the agent stops to ask.
 
@@ -824,6 +973,12 @@ def main(argv: list[str]) -> int:
                        help="render an existing recording's scrollback again")
     r.add_argument("frames", type=Path)
 
+    m = sub.add_parser("simulate",
+                       help="build frames from a written session instead of a recorded one")
+    m.add_argument("script", type=Path)
+    m.add_argument("workspace", type=Path)
+    m.add_argument("out", type=Path)
+
     c = sub.add_parser("checkpoint",
                        help="mark the frame the agent stops at to ask")
     c.add_argument("frames", type=Path)
@@ -855,6 +1010,8 @@ def main(argv: list[str]) -> int:
         return watch(args.workspace, args.raw, args.interval)
     if args.command == "retext":
         return retext(args.frames)
+    if args.command == "simulate":
+        return simulate(args.script, args.workspace, args.out)
     if args.command == "checkpoint":
         return checkpoint(args.frames, args.at, args.says)
     if args.command == "derive":

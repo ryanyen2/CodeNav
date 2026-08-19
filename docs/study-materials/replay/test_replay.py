@@ -653,3 +653,90 @@ class WatchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SimulateTest(unittest.TestCase):
+    """The agent's half, written instead of recorded.
+
+    Recording one cost a key, forty minutes and a lot of steering, and every
+    planted problem was steered in anyway — so what was being recorded was
+    already an authored stimulus with a real agent typing it. codoc's half is
+    still not authored: `derive` replays these frames into a live workspace.
+    """
+
+    def script(self, root: Path, steps: list, **extra) -> Path:
+        d = root / "script"
+        (d / "files").mkdir(parents=True)
+        (d / "files" / "new.py").write_text("VALUE = 2\n")
+        (d / "session.json").write_text(json.dumps(
+            {"request": "make it configurable", "steps": steps, **extra}))
+        return d
+
+    def test_frames_replay_to_the_state_the_script_left(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ws = root / "ws"
+            ws.mkdir()
+            (ws / "a.py").write_text("VALUE = 1\n")
+            script = self.script(root, [
+                {"say": ["● reading"], "delay_s": 1},
+                {"say": ["  Write(a.py)"], "delay_s": 1, "write": {"a.py": "files/new.py"}},
+            ])
+            out = root / "frames"
+            self.assertEqual(record.simulate(script, ws, out), 0)
+
+            played = root / "played"
+            played.mkdir()
+            play.play(played, out, speed=1000, step=False,
+                      do_reset=True, do_transcript=False)
+            self.assertEqual(record.scan(played), record.scan(ws))
+
+    def test_the_session_it_writes_can_be_resumed(self):
+        # The participant's first turn continues this file, so it has to carry the
+        # request and what the agent said back.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ws = root / "ws"
+            ws.mkdir()
+            (ws / "a.py").write_text("VALUE = 1\n")
+            script = self.script(root, [{"say": ["● reading"], "delay_s": 1}],
+                                 session_id="abc-123")
+            out = root / "frames"
+            record.simulate(script, ws, out)
+            lines = (out / "transcript.jsonl").read_text().splitlines()
+            first = json.loads(lines[0])
+            self.assertEqual(first["type"], "user")
+            self.assertEqual(first["sessionId"], "abc-123")
+            self.assertEqual(first["message"]["content"], "make it configurable")
+            self.assertEqual(json.loads(lines[1])["type"], "assistant")
+
+    def test_a_checkpoint_in_the_script_reaches_the_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ws = root / "ws"
+            ws.mkdir()
+            (ws / "a.py").write_text("VALUE = 1\n")
+            script = self.script(root, [
+                {"say": ["● one"], "delay_s": 1},
+                {"say": ["● two"], "delay_s": 1},
+            ], checkpoints=[1], checkpoint_says="accept the plan")
+            out = root / "frames"
+            record.simulate(script, ws, out)
+            manifest = json.loads((out / "manifest.json").read_text())
+            self.assertEqual(manifest["checkpoints"], [1])
+            self.assertEqual(manifest["checkpoint_says"], "accept the plan")
+            self.assertTrue(manifest["authored"])
+
+    def test_a_script_that_names_a_tool_is_refused(self):
+        # The scrollback is read by BOTH arms, so it cannot mention either tool.
+        # Authoring it makes that easier to get wrong, not harder.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ws = root / "ws"
+            ws.mkdir()
+            (ws / "a.py").write_text("VALUE = 1\n")
+            script = self.script(root, [
+                {"say": ["  Read(.codoc/tree.codoc)"], "delay_s": 1},
+            ])
+            with self.assertRaises(record.Leaked):
+                record.simulate(script, ws, root / "frames")

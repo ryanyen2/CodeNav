@@ -280,6 +280,40 @@ excluded the same way, or a participant's own accepts and amends are buried unde
 the recording's.
 
 
+## Writing the session instead of recording it
+
+Recording a real one cost an API key, forty minutes and a lot of steering. An
+agent asked to make a change is careful by default and lands none of the problems
+the study is about, so every one of them was steered in — which means what was
+being recorded was already an authored stimulus with a real agent typing it.
+
+So the agent's half is written down. What is NOT written down is codoc's half:
+`derive` still replays the frames into a live workspace and records what the
+daemon actually did. The stimulus is ours and the record of it is codoc's, exactly
+as before. The only thing that changed is where the agent's keystrokes come from.
+
+A script is a directory:
+
+```
+script/scribe/
+  session.json      the steps, in order
+  files/…           the file contents a step writes
+```
+
+and each step is `{"say": [...], "delay_s": n, "write": {path: source}, "delete": [...]}`.
+`{{WORKSPACE}}` in a `say` line becomes the participant's own path when it plays.
+`checkpoints` and `checkpoint_says` go at the top level, so a written session
+declares where it stops rather than being cut afterwards.
+
+```
+python3 record.py simulate script/scribe <a clean workspace> frames/scribe/neutral
+python3 record.py derive frames/scribe/neutral <codoc workspace> frames/scribe/codoc --pace
+```
+
+The same gate applies as to a recorded one: the scrollback is read by BOTH arms,
+so a script that names either tool is refused rather than shipped, and the round
+trip still has to reproduce the state the script left.
+
 ## Recording a session the participant works THROUGH
 
 A recording used to play start to finish and hand over a finished change. The part
