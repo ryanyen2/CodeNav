@@ -329,12 +329,20 @@ def _codoc_newest(workspace: Path) -> float:
     return newest
 
 
+# The daemon has one state that means work is under way and several that mean it
+# has finished and is waiting for a person. `code_drift` is the important one: it
+# says a pass ran and left proposals for somebody to accept, which is exactly the
+# state a participant reviews. Treating it as busy made the derivation sit out its
+# whole timeout at every settle point after the first proposal appeared.
+RESTING_STATES = {"in_sync", "idle", "code_drift", "tree_dirty", "awaiting_impl", ""}
+
+
 def _codoc_busy(workspace: Path) -> bool:
     try:
         state = json.loads((workspace / ".codoc" / "status.json").read_text()).get("state", "")
     except (OSError, ValueError):
         return True
-    return state not in {"in_sync", "idle", ""}
+    return state not in RESTING_STATES
 
 
 def _wait_for_daemon(workspace: Path, mark: float, settle: float, timeout: float) -> float:
