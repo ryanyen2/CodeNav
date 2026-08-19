@@ -670,7 +670,12 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
         # shows the participant a tree with none of the plan in it.
         current = scan(workspace, with_index=at_stop)
         writes = [r for r, h in current.items() if previous.get(r) != h]
-        deletes = [r for r in previous if r not in current]
+        # A file carried only at a checkpoint is not gone at the next frame, it is
+        # simply not scanned again. Counting it as a delete made the player remove
+        # the store one frame after handing it over, which is the frame the daemon
+        # has just been given it for.
+        deletes = [r for r in previous
+                   if r not in current and not _final_only(r)]
         dest_dir = out / f"{frame['n']:04d}"
         for rel in writes:
             dest = dest_dir / rel
@@ -678,7 +683,9 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
             shutil.copy2(workspace / rel, dest)
         derived.append({**frame, "writes": sorted(writes), "deletes": sorted(deletes),
                         "settled_after_s": round(waited, 1)})
-        previous = current
+        # Keep what a checkpoint carried in the picture of "what is there", so the
+        # next frame compares against reality rather than re-writing it.
+        previous = {**{k: v for k, v in previous.items() if _final_only(k)}, **current}
         moved = [w for w in writes if w.startswith(".codoc/")]
         print(f"  frame {frame['n']:>3}  +{len(writes)} -{len(deletes)}"
               f"  {len(moved)} under .codoc  settled in {waited:.0f}s")

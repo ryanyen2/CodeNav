@@ -756,3 +756,29 @@ class SimulateTest(unittest.TestCase):
             ])
             with self.assertRaises(record.Leaked):
                 record.simulate(script, ws, root / "frames")
+
+
+class CheckpointCarryTest(unittest.TestCase):
+    """What a checkpoint carries must not look deleted one frame later.
+
+    The store is carried at a stop because the daemon restarts there and projects
+    the tree from it. Comparing the next frame against a scan that did not include
+    it counted it as gone, so the player deleted the store one frame after handing
+    it over — the frame the daemon has just been given it for.
+    """
+
+    def test_a_final_only_file_is_never_a_delete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            previous = {".codoc/codoc.db": "h1", "a.py": "h2"}
+            current = {"a.py": "h2"}
+            deletes = [r for r in previous
+                       if r not in current and not record._final_only(r)]
+            self.assertEqual(deletes, [])
+
+    def test_an_ordinary_file_still_is(self):
+        previous = {"gone.py": "h1", "a.py": "h2"}
+        current = {"a.py": "h2"}
+        deletes = [r for r in previous
+                   if r not in current and not record._final_only(r)]
+        self.assertEqual(deletes, ["gone.py"])
