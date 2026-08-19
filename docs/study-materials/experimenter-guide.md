@@ -405,7 +405,7 @@ wrong and it does not say everything is fine.
 **The gate.** The change runs and the existing tests pass at the end. It is not
 reported as a result.
 
-**The primary outcome.** Each of the four planted problems is rated **0 to 2**. 0
+**The primary outcome.** Each planted problem is rated **0 to 2**. 0
 is not found, 1 is found, and 2 is found and correctly attributed to the
 commitment it contradicts. The rating guide for each is in `STUDY.md`.
 
@@ -545,7 +545,7 @@ The gate is mechanical. The four decision ratings are the reported outcome.
 Every existing test must still pass and the project must still run over all three
 sample inputs. A change that breaks either is a session with nothing to rate.
 
-**The four planted problems**, rated 0 to 2 against the guide in the project's
+**The planted problems**, rated 0 to 2 against the guide in the project's
 `STUDY.md`. Have someone who does not know which condition a folder came from read
 the diff and rate it. The ratings you typed during the session are your own record
 of what was said and are separate from the rated outcome. The two are compared,

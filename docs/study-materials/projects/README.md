@@ -17,7 +17,7 @@ Each project holds four documents:
 
 - `README.md`: what a developer opening the folder reads
 - `ABOUT.md`: what the participant reads, two minutes, no assumed knowledge
-- `STUDY.md`: the task card, the four planted problems and their rating guides, the follow-up request, and both five-question sets
+- `STUDY.md`: the task card, the planted problems and their rating guides, the follow-up request, and both five-question sets. A project plants as many as its recorded session landed, which is three for scribe
 - the code, the fixtures and the tests
 
 `STUDY.md` is never shipped to a participant.

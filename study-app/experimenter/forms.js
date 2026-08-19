@@ -8,7 +8,7 @@ import questions from './questions.json' with { type: 'json' };
 import afterQuestions from './after-questions.json' with { type: 'json' };
 
 /**
- * The four problems planted in the recorded change, kept short because the list
+ * The problems planted in the recorded change, kept short because the list
  * is read while listening to somebody. The rating guide for each is in the
  * project's STUDY.md, which is the answer key.
  */

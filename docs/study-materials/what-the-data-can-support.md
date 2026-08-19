@@ -152,8 +152,10 @@ how fast somebody can find the answer in a bound, navigable tree with search and
 about FINDING, not about CONTENT.** State it that way or a reviewer will say the
 arms differed in their documents, which they no longer do.
 
-**RQ2 — authored modification.** The primary outcome is four decisions per
-session, rated 0–2 blind, plus who settled each one. That is hand-rated and
+**RQ2 — authored modification.** The primary outcome is one rating per planted
+problem, 0 to 2 and blind, plus who settled each one. A project plants as many as
+its recorded session landed, so coverage is reported as a proportion of that
+project's own maximum. That is hand-rated and
 unaffected by the instrumentation faults. What the fixes add is the *evidence* for
 the who-settled-it coding: with the merged stream you can say, per decision,
 whether the person read the relevant file before the agent changed it, whether

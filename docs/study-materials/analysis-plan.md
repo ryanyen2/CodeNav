@@ -119,7 +119,7 @@ as a proportion of that project's maximum, so the two projects can be pooled.
 
 | Measure | Computed from |
 | --- | --- |
-| **Detection coverage** | Each of the four problems rated 0 to 2 in the dashboard during the session, and again afterwards by a rater who does not know the condition. 0 not found, 1 found, 2 found and correctly attributed to the commitment it contradicts. The two ratings are compared rather than merged. |
+| **Detection coverage** | Each planted problem rated 0 to 2 in the dashboard during the session, and again afterwards by a rater who does not know the condition. 0 not found, 1 found, 2 found and correctly attributed to the commitment it contradicts. The two ratings are compared rather than merged. |
 | Time to the first correct detection, and coverage at fifteen minutes | The interaction log and the transcript, against the replay's handover time in `.codoc/replay.stamp`. |
 | **False alarms** | The count and the notes in the dashboard. The decoy, plus any correct part of the change the participant called wrong. A blank is a gap the dashboard names before the call ends, because none and not-asked are different answers. |
 | Who settled each problem | Directed by the participant, accepted deliberately, or standing and never noticed. The merged stream and the codoc ledger. |
