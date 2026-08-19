@@ -69,11 +69,21 @@ turns the snapshots into frames and copies the transcript next to them.
 workspace:
 
     python3 record.py derive frames/scribe/neutral ~/codoc-recording/scribe-codoc \
-        frames/scribe/codoc
+        frames/scribe/codoc --pace --settle-every 4
 
 It replays each code frame into that workspace, waits for the daemon to finish
-reacting, and records what moved under `.codoc/`. The same command against a
-baseline workspace with the maintenance skill produces that condition's frames.
+reacting, and records what moved under `.codoc/`. Use `--pace`: without it the
+frames go in as fast as the disk allows, the daemon coalesces the lot into one
+pass, and the description moves once at the very end, so a participant watches
+nothing happen and then everything happen at once.
+
+The baseline's record is written by an agent at the end of a session rather than
+by a daemon as it goes, so it derives with `--after` naming a command that runs
+the maintenance skill once after the last frame:
+
+    python3 record.py derive frames/scribe/neutral ~/codoc-recording/scribe-baseline \
+        frames/scribe/baseline --after "…run the maintenance skill…"
+
 Both conditions then hold the same code and the same transcript, and differ only
 in the record beside it.
 
