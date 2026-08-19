@@ -191,3 +191,45 @@ class TestFallbackTitles:
 
         (add,) = [op for op in res.proposed if op.kind is NodeOpKind.ADD_NODE]
         assert (add.title or "").lower() != "standalone"
+
+
+class TestFileOwnerAttach:
+    """An orphan in a file the tree already describes goes to that feature.
+
+    A participant reviewing a real change met four proposals titled `SETTINGS`,
+    `Notes`, `Paragraphs` and `Text`, each one chunk in a file an existing feature
+    already owned, each with an empty description. There is nothing in a proposal
+    like that to agree or disagree with.
+    """
+
+    def test_an_orphan_joins_the_feature_that_owns_its_file(self, store):
+        from codoc.model import NodeOp, NodeOpKind
+        from codoc.loop.apply import apply_op
+        from codoc.loop.diff import ChangeSet, ChunkRef
+        from codoc.loop.loop_a import apply_changeset
+
+        apply_op(NodeOp(kind=NodeOpKind.ADD_NODE, title="Footnotes",
+                        description="notes at the foot of a page",
+                        bindings=[("notes.py", "notes.py::gather")]),
+                 store, source="user", applied=True)
+        fid = next(f.id for f in store.list_features() if f.title == "Footnotes")
+
+        res = apply_changeset(
+            ChangeSet(added=[ChunkRef("notes.py", "notes.py::MARKER", "h", "MARKER = 1")]),
+            store, propose=lambda *a, **k: [])
+
+        assert store.binding_at("notes.py", "notes.py::MARKER").feature_id == fid
+        assert not [op for op in res.proposed if op.kind is NodeOpKind.ADD_NODE], \
+            "the file already had a feature; a second one says nothing"
+
+    def test_a_file_nobody_describes_still_becomes_a_proposal(self, store):
+        from codoc.model import NodeOpKind
+        from codoc.loop.diff import ChangeSet, ChunkRef
+        from codoc.loop.loop_a import apply_changeset
+
+        res = apply_changeset(
+            ChangeSet(added=[ChunkRef("brand-new.py", "brand-new.py::run", "h", "def run(): ...")]),
+            store, propose=lambda *a, **k: [])
+
+        assert any(op.kind is NodeOpKind.ADD_NODE for op in res.proposed), \
+            "code no feature covers must still be asked about"

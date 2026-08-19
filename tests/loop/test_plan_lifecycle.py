@@ -67,13 +67,22 @@ def test_unplanned_work_surfaces_while_planned_node_is_not_reproposed(codoc_dir)
             ChunkRef("ui/theme.py", "ui/theme.py::toggle", "h1", "def toggle(): ..."),
             ChunkRef("ui/theme.py", "ui/theme.py::_persist", "h2", "def _persist(): ..."),
         ])
-        # LLM places nothing → the coverage net must still surface the unplanned one.
+        # LLM places nothing → the coverage net must still account for the
+        # unplanned one. It goes to the feature that already describes that FILE
+        # rather than becoming a node of its own: a private helper beside the
+        # toggle it supports is part of dark mode, and minting a second feature
+        # for it produced a node titled after the symbol with an empty
+        # description, which a reviewer has no way to answer.
         res = apply_changeset(cs, s, propose=_propose([]))
 
         # The planned, already-bound chunk is NOT re-proposed.
         assert all("toggle" not in (op.title or "") for op in res.proposed)
-        # The unplanned helper surfaces as a proposal.
-        assert any(op.kind is NodeOpKind.ADD_NODE for op in res.proposed)
+        # And the unplanned helper is not lost: the changeset only carries a chunk
+        # on the pass that adds it, so anything left unplaced here is never asked
+        # about again.
+        assert s.binding_at("ui/theme.py", "ui/theme.py::_persist").feature_id == node.id
+        assert not any(op.kind is NodeOpKind.ADD_NODE for op in res.proposed), \
+            "a file the tree already describes should not gain a second feature"
         assert s.binding_at("ui/theme.py", "ui/theme.py::toggle").feature_id == node.id
     finally:
         s.close()

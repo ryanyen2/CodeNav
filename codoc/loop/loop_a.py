@@ -957,6 +957,28 @@ def apply_changeset(
     return result
 
 
+def _file_owners(store: Store, files: set[str]) -> dict[str, str]:
+    """For each file, the live feature that describes most of it.
+
+    Ownership of a FILE is much better evidence than a graph neighbour: it is what
+    the tree already says about this code rather than a guess about what calls it.
+    Ties go to the feature holding the most chunks there, and a retired feature
+    owns nothing, because attaching to one would hide the chunk behind a node
+    nobody reads.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    for b in store.bindings_in_files(files):
+        counts.setdefault(b.file, {})
+        counts[b.file][b.feature_id] = counts[b.file].get(b.feature_id, 0) + 1
+    owners: dict[str, str] = {}
+    for file, per_feature in counts.items():
+        live = [(n, fid) for fid, n in per_feature.items()
+                if (f := store.get_feature(fid)) and not f.retired]
+        if live:
+            owners[file] = max(live)[1]
+    return owners
+
+
 def _fallback_title(file: str, chunks: list, taken: set[str]) -> str:
     """A name for a coverage proposal that is not already somebody else's name.
 
@@ -1028,6 +1050,12 @@ def _cover_uncovered_adds(
     # writes is built from a real `ChunkRef` out of the changeset, so it names a
     # chunk by construction. The check exists for pairs a MODEL supplied, where
     # the two elements are independent guesses.
+    # Taken BEFORE this pass attaches anything, so a file does not become "already
+    # described" because the neighbour net just put five chunks there. Without
+    # that, one feature reached ownership of a file and then swallowed the rest of
+    # it, which is the exact thing the budget below exists to prevent.
+    owners_before = _file_owners(store, {a.file for a in added_unbound})
+
     for a in added_unbound:
         if (a.file, a.symbol_path) in covered_by_ops:
             continue  # placed by an LLM op (applied or pending proposal)
@@ -1069,6 +1097,48 @@ def _cover_uncovered_adds(
     # only becomes the better name once several chunks share it.
     minted: set[str] = {(f.title or "").strip().lower() for f in store.list_features()
                         if not f.retired}
+    # An orphan in a file the tree ALREADY describes goes to whichever feature
+    # describes it, rather than becoming a feature of its own.
+    #
+    # The graph neighbour above is a guess about what calls what. Living in a file
+    # a feature already owns is not a guess: `notes.py` belongs to the footnote
+    # feature, so a new symbol in `notes.py` belongs there too. Minting instead
+    # gave that file a second node titled `Notes` with an empty description, next
+    # to the feature that already owned it. A reviewer cannot answer a proposal
+    # like that, because there is nothing in it to agree or disagree with, and a
+    # participant reviewing a real change met four of them.
+    #
+    # Attaching rather than skipping, because the changeset only carries a chunk
+    # on the pass that ADDS it: a chunk left unbound here is not offered again,
+    # so skipping would be a silent loss of coverage rather than a deferral.
+    # Under the same budget as the neighbour net. Owning the file is better
+    # evidence, but it is not a licence to absorb a package: past the budget the
+    # chunk goes to a proposal, where an unplaced chunk is visible rather than
+    # filed under a feature that has quietly become everything.
+    for file in list(leftover_by_file):
+        owner = owners_before.get(file)
+        if not owner:
+            continue
+        keep = []
+        for a in leftover_by_file[file]:
+            if absorbed.get(owner, 0) >= _COVERAGE_ATTACH_BUDGET:
+                keep.append(a)
+                continue
+            absorbed[owner] = absorbed.get(owner, 0) + 1
+            op = NodeOp(
+                kind=NodeOpKind.ATTACH,
+                feature_id=owner,
+                bindings=[(a.file, a.symbol_path)],
+                rationale="coverage: attached to the feature that already describes this file",
+            )
+            apply_op(op, store, source=source, applied=True, fp_lookup=fp, th_lookup=th,
+                     caused_by=cause(op))
+            result.auto["attach"] = result.auto.get("attach", 0) + 1
+        if keep:
+            leftover_by_file[file] = keep
+        else:
+            del leftover_by_file[file]
+
     for file, chunks in sorted(leftover_by_file.items()):
         title = _fallback_title(file, chunks, minted)
         minted.add(title.strip().lower())

@@ -354,6 +354,80 @@ def stop_daemon(workspace: Path, timeout: float = 10.0) -> bool:
 
 # ── the first turn ───────────────────────────────────────────────────────────
 
+# ── the session, in stages ───────────────────────────────────────────────────
+#
+# A recording used to play start to finish and then hand over a finished change.
+# The part of the session codoc is FOR — a plan arriving as nodes, somebody
+# answering it, a description moving when the code moves — went past read only,
+# and a participant who tried to accept a proposal during it was told the verdict
+# was not picked up, because the daemon was stopped for the whole run.
+#
+# So the recording is cut at the point the agent stops to ask. Playback runs to
+# the checkpoint, gives the workspace back so the editor is live, and waits for an
+# answer. The next segment was recorded AFTER the same answer, so a participant
+# who accepts puts their store into the state it expects and playback continues
+# consistently. A participant who REJECTS has diverged, which is the most
+# interesting thing they can do: the recording stops there and they carry on with
+# the live agent.
+
+WAIT_POLL_S = 1.0
+WAIT_TIMEOUT_S = 900.0
+
+
+def pending_proposals(workspace: Path) -> int:
+    """How many proposals are waiting for a verdict, as the editor counts them."""
+    path = workspace / ".codoc" / "tree.bindings.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return 0
+    return len(data.get("by_event") or {})
+
+
+def wait_for_an_answer(workspace: Path, asked: str,
+                       timeout: float = WAIT_TIMEOUT_S) -> bool:
+    """Hold until the proposals raised by the last segment have been answered.
+
+    Returns False if nothing was answered before the timeout, which is treated as
+    "carry on": a session that stalls forever because somebody did not click is
+    worse than one that continues without the answer.
+    """
+    before = pending_proposals(workspace)
+    if not before:
+        return True
+    print(f"\n{asked}", flush=True)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pending_proposals(workspace) < before:
+            return True
+        time.sleep(WAIT_POLL_S)
+    return False
+
+
+def play_staged(workspace: Path, frames: Path, speed: float) -> int:
+    manifest = json.loads((frames / "manifest.json").read_text())
+    spans = player.segments(manifest)
+    asked = manifest.get("checkpoint_says") or (
+        "I have sketched this as a plan in the tree. Accept the parts you want and "
+        "I will build them.")
+    for i, span in enumerate(spans):
+        last = i == len(spans) - 1
+        hand_over(workspace)
+        try:
+            code = player.play(workspace, frames, speed=speed, step=False,
+                               do_reset=(i == 0), do_transcript=(i == 0),
+                               span=span, tail=last)
+        finally:
+            # Whatever happened, give the workspace back. A lock left behind is a
+            # workspace whose daemon never returns, and nothing on screen says so.
+            hand_back(workspace)
+        if code:
+            return code
+        if not last:
+            wait_for_an_answer(workspace, asked)
+    return 0
+
+
 def first_turn(workspace: Path, frames: Path, speed: float) -> int:
     if not (frames / "manifest.json").exists():
         print(f"no recorded session in {frames}", file=sys.stderr)
@@ -366,18 +440,11 @@ def first_turn(workspace: Path, frames: Path, speed: float) -> int:
     if not request:
         return 130
 
-    hand_over(workspace)
     # The recorded frames carry the request as the agent's own first line, so
     # nothing is echoed here. A participant who mistyped their paste still sees
     # the request the change was made from, which is also the one the assistant
     # is resumed on.
-    try:
-        code = player.play(workspace, frames, speed=speed, step=False,
-                           do_reset=True, do_transcript=True)
-    finally:
-        # Whatever happened, give the workspace back. A lock left behind is a
-        # workspace whose daemon never returns, and nothing on screen says so.
-        hand_back(workspace)
+    code = play_staged(workspace, frames, speed)
     if code:
         return code
 

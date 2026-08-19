@@ -32,7 +32,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import { nextDecorations } from './decoration-policy';
 import { alignParas, mdDisplayText, paraDisplayText, ATOM_CHAR } from './display-text';
-import { wordDiff } from '../../state/doc-diff';
+import { sentenceDiff } from '../../state/doc-diff';
 import { displacedHuman } from '../../state/auto-edits';
 import type { AutoEdit } from '../../state/bindings-model';
 
@@ -76,7 +76,12 @@ export function reviewDiffSpans(base: string, current: string, contentStart: num
     const spans: ReviewSpan[] = [];
     if (base === current) return spans;
     let curOff = 0;
-    for (const run of wordDiff(base, current)) {
+    // Sentences, not words. A rewrite by the loop is a rewrite of a CLAIM, and a
+    // word-level diff of one shreds both versions into alternating fragments: the
+    // reader has to reassemble two sentences in their head before they can decide
+    // whether they agree with either. The unit of the decision is the sentence, so
+    // that is the unit shown, struck whole and replaced whole.
+    for (const run of sentenceDiff(base, current)) {
         if (run.t === 'same') {
             curOff += run.s.length;
         } else if (run.t === 'ins') {
@@ -155,6 +160,17 @@ function verdictStrip(
 /** Build the marks for every unresolved rewrite present in this doc. Exported
  *  headless so the anchoring can be tested without a view (the widget factories
  *  only run on render). */
+/**
+ * What each unresolved rewrite looked like when it first reached the screen,
+ * keyed `fid@at`. Module-scoped for the same reason `ghostDrafts` is: it belongs
+ * to the surface rather than to any one transaction, and it is cleared as soon as
+ * the rewrite is answered.
+ */
+const arrivedAs = new Map<string, string>();
+
+/** Test seam: forget every remembered arrival. */
+export function resetAutoEditMemo(): void { arrivedAs.clear(); }
+
 export function buildAutoEditDecorations(
     doc: PMModelNode, unseen: Record<string, AutoEdit>,
     handlers?: AutoEditHandlers,
@@ -186,6 +202,13 @@ export function buildAutoEditDecorations(
         if (g && node.type.name === 'paragraph') g.paras.push({ node, pos });
     });
 
+    // Forget the rewrites that have since been answered, so the memo below stays
+    // the size of what is actually owed.
+    for (const key of [...arrivedAs.keys()]) {
+        const [fid, at] = key.split('@');
+        if (unseen[fid]?.at !== at) arrivedAs.delete(key);
+    }
+
     for (const grp of groups) {
         const edit = unseen[grp.fid];
         const mine = displacedHuman(edit);
@@ -200,6 +223,29 @@ export function buildAutoEditDecorations(
 
         const baseDisplay = prevParas(edit.prev).map(mdDisplayText);
         const curDisplay = grp.paras.map(p => paraDisplayText(p.node));
+
+        // Stand down the moment the author types into it, without waiting for the
+        // edit to be classified as a draft.
+        //
+        // The diff drawn here is `what it said before` against `what is on screen`,
+        // and that is only the loop's rewrite while the screen still holds the
+        // loop's words. Once the author edits the same paragraph, their words are
+        // inside `current`, so the underline claims the loop wrote them and the
+        // strikethrough offers to restore a version two revisions old. The
+        // `locallyEdited` gate above says exactly this, but it is fed from the
+        // draft and held sets, which arrive after a settle — so between the first
+        // keystroke and that settle the surface was drawing the author's own
+        // sentence back at them as somebody else's.
+        //
+        // What the rewrite looked like when it ARRIVED is the only baseline that
+        // can tell the two apart, and nothing upstream records it, so the first
+        // render of each unresolved rewrite remembers it here.
+        const key = grp.fid + '@' + edit.at;
+        const shown = curDisplay.join('\n');
+        const arrived = arrivedAs.get(key);
+        if (arrived === undefined) arrivedAs.set(key, shown);
+        else if (arrived !== shown) continue;
+
         const pairing = alignParas(baseDisplay, curDisplay);
         grp.paras.forEach((p, k) => {
             if (p.node.content.size === 0) return;

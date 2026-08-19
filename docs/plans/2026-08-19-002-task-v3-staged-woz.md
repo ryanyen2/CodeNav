@@ -1,0 +1,193 @@
+# Task v3: a staged session the participant works through
+
+Written 2026-08-19, after a pilot run of the v2 replay showed what was wrong with
+it. Supersedes the TASK and REPLAY halves of
+`2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`. The instrument,
+the projects, the scorers and the bundle survive unchanged.
+
+## What went wrong with v2
+
+The v2 session played a recorded change from start to finish and then asked the
+participant to review the end state. Three things followed from that, and all
+three showed up in the first run.
+
+The participant never interacted with codoc during the part codoc is for. They
+watched three minutes of output and then met a finished change. Accepting a
+proposal mid playback failed, because the daemon was stopped for the whole
+playback. So the arm that is supposed to demonstrate deciding and reviewing spent
+its most interesting three minutes read only.
+
+The request was a list. "Add a config file, write a report, tidy up how the rules
+get their settings" is three instructions, and an agent that carries out three
+instructions leaves nothing to interpret. The interesting failure in agent work is
+not a typo, it is a reasonable reading of an ambiguous ask that turns out to be
+the wrong one, and a numbered list has no ambiguity to get wrong.
+
+There was nothing to debug. The planted problems were all detectable by reading,
+which measures reading. A person who works with agents finds this class of
+problem by running the thing and looking at the output, and the session gave them
+no reason or means to do that.
+
+## The shape of v3
+
+Five stages. The first two are reading, the last three are work. Twenty minutes on
+the work, which the researcher calls.
+
+1. **Understand the project.** High level down to the rules, on the page, worked
+   example first. Then they open the project and look around with whichever
+   description their arm has.
+2. **Meet the problem.** One concrete case where the program is wrong, with the
+   input, the output it gives, and the output it should give. Stated as a
+   problem, not as a task.
+3. **Ask for the fix.** They paste one request. It says what they want to be
+   true, not what to do.
+4. **Watch it work, and answer it.** The agent reads, plans, and stops to ask.
+   The plan arrives in codoc as nodes. They accept or reject. Then it implements.
+5. **Find out whether it worked.** It did not, quite. They debug it live.
+
+Stage 4 and 5 are the twenty minutes. Roughly ten and ten, and the split is not
+enforced, because a person who spots the problem early should get on with it.
+
+## The problem, and why it is the right one
+
+`scribe` drops a line that repeats near the top of enough pages, on the theory
+that a line printed on every page is furniture rather than writing. "Enough" is a
+share of the pages, and a document whose appendix has its own header defeats it:
+the appendix header covers two pages of five, does not reach the share, and
+survives into the middle of the prose.
+
+That is a real behaviour of the shipped code, it is visible in one run, and it is
+not a bug in the sense of a mistake. Somebody chose a threshold. It is the kind of
+thing you find out by using a program on a document its author did not have.
+
+The participant is shown:
+
+```
+in    page 1   Coastal Erosion Survey 2026     Marine Institute
+      page 2   Coastal Erosion Survey 2026     Marine Institute
+      page 3   Coastal Erosion Survey 2026     Marine Institute
+      page 4   Appendix A: Site Photographs    Marine Institute
+      page 5   Appendix A: Site Photographs    Marine Institute
+
+out   ...within measurement error of no change at all.
+
+      Appendix A: Site Photographs            Marine Institute   ← still here
+```
+
+## The request
+
+One sentence, in the participant's voice, describing the state they want rather
+than the steps to get there:
+
+> Different documents need different rules, and I should not have to edit the
+> source to convert one. Make that configurable, and tell me what the conversion
+> actually did.
+
+Two things are deliberately open in it. "Configurable" does not say what is
+configurable, and "tell me what it did" does not say where. A capable agent will
+make both calls, and one of them will be wrong in a way that only shows up in the
+output.
+
+## The planted misinterpretation
+
+The agent reads "different documents need different rules" as licence to change
+the default, and lowers the share so that the appendix header is caught too. That
+does fix the document in front of it. It also means a real heading that repeats
+across a long document is now removed before the heading rule ever sees it, so a
+report loses its section titles.
+
+This is the misinterpretation the study is built on, and it has the properties
+that matter:
+
+- It is a defensible reading of the request. Nobody has to believe the agent was
+  careless.
+- The tests still pass, because no test pins the default.
+- It is invisible by reading and obvious by running. The participant has to
+  convert the second fixture and look.
+- The description codoc surfaces says what the code now does, so the codoc arm
+  has a route to it that the other arm has to find by running.
+
+## What the participant needs in order to debug
+
+A person cannot debug a program they cannot run, and cannot bisect a rule they
+cannot see the effect of. The task page carries, and the workspace contains:
+
+- the three fixtures, with one line saying what each is for;
+- the command that converts one and prints it, so a run is one paste;
+- the command that converts all three and prints a summary line each, which is
+  the cheapest way to see a rule change move something it should not have;
+- the expected summary line for each fixture BEFORE the change, so a changed
+  number is visible without remembering what it used to be.
+
+That last one is the difference between "something feels off" and "the handbook
+lost six headings".
+
+## The staged replay
+
+The recording is cut into segments with a checkpoint between them. At a checkpoint
+the player stops, hands the workspace back so the daemon runs and the editor is
+live, and waits. The participant does the thing the checkpoint is for. Then the
+next segment plays.
+
+```
+segment 1   the agent reads the codebase          (terminal + codoc activity)
+            ↓
+checkpoint  the plan arrives as nodes in codoc
+            the participant accepts or rejects
+            ↓
+segment 2   the agent implements                  (code lands, tests run)
+            ↓
+checkpoint  codoc surfaces the description changes as diffs
+            the participant reviews, accepts, rejects, edits
+            ↓
+live        the participant runs it, finds the appendix case is fixed
+            and the handbook has lost its headings, and works with a
+            REAL agent from here
+```
+
+### Why the accept can stick
+
+The obvious objection to interleaving is that a later frame overwrites what the
+participant did. It does not, because of where the cut is.
+
+The recording is made in the same shape: the agent proposes a plan, the plan is
+ACCEPTED, and then it implements. Segment 2 was therefore recorded against a store
+in which those nodes are live. A participant who accepts puts their store into the
+state segment 2 expects, and playback continues consistently.
+
+A participant who rejects has diverged, and that is the point at which the
+recording stops being usable for them. That is not a failure case to suppress: it
+is the most interesting thing a participant can do, and from there they work with
+the live agent. The session records which way they went.
+
+### What must be true of the recording
+
+- It is made with the plan step, so the plan exists as nodes rather than as
+  prose in the terminal.
+- The terminal shows the reads and the edits. A participant who cannot see the
+  agent working has nothing to compare codoc against.
+- Loop A must not mint coverage proposals for files the tree already describes.
+  Fixed in `loop_a._cover_uncovered_adds`; the previous recording carried four
+  (`SETTINGS`, `Notes`, `Paragraphs`, `Text`), each one chunk in a file an
+  existing feature already owned, each with an empty description, and a reviewer
+  has nothing to answer in a proposal like that.
+
+## Where the arms differ, and where they must not
+
+The baseline arm gets the same five stages, the same request, the same recording,
+the same fixtures and the same twenty minutes. What it does not get is the plan as
+nodes or the description diff, because CLAUDE.md has neither. Its checkpoint is
+the agent asking in the terminal and the participant answering there.
+
+That difference IS the manipulation, so nothing else may differ: not the length of
+the reading pages, not the number of steps to start, not the time.
+
+## Open, and to be decided before recording
+
+- Whether the plan checkpoint has a wrong node in it as well, so that accepting
+  the plan wholesale is itself a decision with a cost. Argument for: it makes the
+  plan step a real review rather than a click. Argument against: two planted
+  problems in one session may be one too many to attribute cleanly.
+- Whether `tally` gets the same shape or a different misinterpretation. It should
+  be the same shape, since the projects are matched, but its ambiguity has to be
+  found in its own domain.

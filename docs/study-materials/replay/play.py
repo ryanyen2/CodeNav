@@ -162,8 +162,30 @@ def _scrub_record(value, recorded_root: str, target_root: str):
     return value
 
 
+def segments(manifest: dict) -> list[tuple[int, int]]:
+    """The frame ranges between checkpoints, as [start, end) over frame NUMBERS.
+
+    A recording without `checkpoints` is one segment, which is what every existing
+    recording is, so nothing has to be re-cut to keep working.
+
+    A checkpoint is the frame after which the agent stops and waits for an answer:
+    it has proposed a plan and cannot implement until somebody says yes. Playing
+    straight through it was the whole trouble with the first design, because the
+    part of the session codoc exists for went past read only.
+    """
+    total = len(manifest["frames"])
+    stops = sorted({int(n) for n in manifest.get("checkpoints", []) if 0 < int(n) < total})
+    out, start = [], 0
+    for n in stops:
+        out.append((start, n))
+        start = n
+    out.append((start, total))
+    return [(a, b) for a, b in out if b > a]
+
+
 def play(workspace: Path, frames: Path, speed: float, step: bool,
-         do_reset: bool, do_transcript: bool) -> int:
+         do_reset: bool, do_transcript: bool,
+         span: tuple[int, int] | None = None, tail: bool = True) -> int:
     # The guard comes first, because writing recorded files into a workspace a
     # live daemon owns would race the daemon's own writes.
     pid = daemon_pid(workspace)
@@ -186,8 +208,9 @@ def play(workspace: Path, frames: Path, speed: float, step: bool,
         if installed:
             print(f"{DIM}session installed at {installed}{RESET}")
 
-    total = len(manifest["frames"])
-    for frame in manifest["frames"]:
+    chosen = manifest["frames"][span[0]:span[1]] if span else manifest["frames"]
+    total = len(chosen)
+    for frame in chosen:
         delay = frame["delay_s"] / speed if speed else 0.0
         text = scrub(frame.get("terminal") or "", recorded, target_root)
         check_no_leak(text, target_root, f"the terminal text of frame {frame['n']}")
@@ -210,9 +233,11 @@ def play(workspace: Path, frames: Path, speed: float, step: bool,
         elif remaining > 0:
             time.sleep(remaining)
 
-    tail = frames / "final"
-    if tail.exists():
-        copy_tree(tail, workspace)
+    if not tail:
+        return 0
+    end = frames / "final"
+    if end.exists():
+        copy_tree(end, workspace)
     write_handover_stamp(workspace, frames, manifest)
 
     print(f"\n{DIM}The agent has finished. The tests pass.{RESET}")

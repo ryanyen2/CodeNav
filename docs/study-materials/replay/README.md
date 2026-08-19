@@ -278,3 +278,56 @@ The codoc change ledger needs the same care. Seeding events are already excluded
 in `scoring/ledger-actions.py`, and the recorded session's events have to be
 excluded the same way, or a participant's own accepts and amends are buried under
 the recording's.
+
+
+## Recording a session the participant works THROUGH
+
+A recording used to play start to finish and hand over a finished change. The part
+of the session codoc is for went past read only, and a participant who tried to
+accept a proposal during it was told the verdict was not picked up, because the
+daemon was stopped for the whole run.
+
+A recording is now cut at the point the agent stops to ask, and playback waits
+there for an answer.
+
+### Make it in the shape it will be played in
+
+1. Record neutrally, as before, but drive the agent so it **plans first**: it
+   reads the codebase, sketches what it intends as feature nodes, and stops.
+2. **Accept the plan** while recording. Everything after the cut is recorded
+   against a store in which those nodes are live, which is what lets a
+   participant's own accept put their store into the state the next segment
+   expects.
+3. Let it implement, run the tests, and finish.
+4. `derive` into each condition as before.
+
+### Cut it
+
+```
+python3 record.py checkpoint frames/scribe/codoc 23 \
+  --says "I have sketched this as a plan in the tree. Accept the parts you want
+          and I will build them."
+```
+
+The frame number is a judgement about the session, not something to infer from
+file writes: it is the frame after the plan has landed and before the first edit
+of the implementation. Watch the recording back and pick it. Run the same command
+on the baseline frames with the same number, so the two arms pause at the same
+point in the same work.
+
+`checkpoint` with no frame numbers clears them, and a recording with none plays
+straight through exactly as it always did.
+
+### What happens at the checkpoint
+
+The player stops writing, deletes `.codoc/replay.lock` so the editor's daemon
+comes back, prints what the agent "says", and waits until one of the pending
+proposals has been answered. Then it takes the workspace back and plays on.
+
+A participant who REJECTS has diverged from the recording, and that is the most
+interesting thing they can do rather than a failure to handle: the session
+continues with the live agent from there, and which way they went is recorded.
+
+If nobody answers within fifteen minutes the player carries on regardless. A
+session that hangs because somebody did not click is worse than one that
+continues without the answer.

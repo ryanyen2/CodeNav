@@ -175,3 +175,59 @@ def test_both_arms_have_a_recording_to_play(arm):
     for project in ("scribe", "tally"):
         assert (root / project / arm / "manifest.json").exists(), (
             f"{project}/{arm} has no recording")
+
+
+# ── the session, in stages ───────────────────────────────────────────────────
+
+def test_a_recording_with_no_checkpoints_is_one_segment():
+    # Every recording made before this existed has none, and they must keep
+    # playing exactly as they did.
+    assert player.segments({"frames": [{}] * 10}) == [(0, 10)]
+
+
+def test_checkpoints_cut_the_frames_into_segments():
+    assert player.segments({"frames": [{}] * 10, "checkpoints": [4, 7]}) \
+        == [(0, 4), (4, 7), (7, 10)]
+
+
+def test_a_checkpoint_outside_the_recording_is_ignored():
+    # 0 would make an empty first segment and 10 an empty last one, and an empty
+    # segment is a pause with nothing on either side of it.
+    assert player.segments({"frames": [{}] * 10, "checkpoints": [0, 10, 4]}) \
+        == [(0, 4), (4, 10)]
+
+
+def test_waiting_ends_when_a_proposal_is_answered(tmp_path, monkeypatch):
+    codoc = tmp_path / ".codoc"
+    codoc.mkdir()
+    bindings = codoc / "tree.bindings.json"
+    bindings.write_text(json.dumps({"by_event": {"e-1": {}, "e-2": {}}}))
+    assert agent.pending_proposals(tmp_path) == 2
+
+    # One answered is enough: the participant has engaged with the plan, which is
+    # what the checkpoint is for. Holding out for ALL of them would stall on a
+    # proposal somebody deliberately left alone.
+    calls = {"n": 0}
+
+    def answer_after_one_poll(_s: float) -> None:
+        calls["n"] += 1
+        bindings.write_text(json.dumps({"by_event": {"e-2": {}}}))
+
+    monkeypatch.setattr(agent.time, "sleep", answer_after_one_poll)
+    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=5.0) is True
+    assert calls["n"] == 1
+
+
+def test_nothing_pending_means_nothing_to_wait_for(tmp_path):
+    (tmp_path / ".codoc").mkdir()
+    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.1) is True
+
+
+def test_a_session_that_is_never_answered_carries_on(tmp_path, monkeypatch):
+    # A study that hangs forever because somebody did not click is worse than one
+    # that goes on without the answer.
+    codoc = tmp_path / ".codoc"
+    codoc.mkdir()
+    (codoc / "tree.bindings.json").write_text(json.dumps({"by_event": {"e-1": {}}}))
+    monkeypatch.setattr(agent.time, "sleep", lambda _s: None)
+    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.01) is False

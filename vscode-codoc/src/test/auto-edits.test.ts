@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import {
     displacedHuman, editKey, unseenEdits, pruneSeen, catchUpLabel,
     keepAllLabel, keepAllVerdicts,
@@ -172,5 +174,32 @@ describe('the rewrite surface stands down once the reader has edited the feature
         const doc = await docWith('f-1', 'the new wording here');
         const edited = new Set(['f-other']);
         expect(buildAutoEditDecorations(doc, unseen, undefined, edited).find().length).toBeGreaterThan(0);
+    });
+});
+
+describe('the loop diff stands down when the author types', () => {
+    // The diff drawn on a rewritten description is "what it said before" against
+    // "what is on screen", which is only the loop's rewrite while the screen still
+    // holds the loop's words. Once the author edits the same paragraph their words
+    // are inside `current`, so the underline claims the loop wrote them and the
+    // strikethrough offers to restore a version two revisions old. A participant
+    // hit exactly that.
+    it('the diff is the sentence, not the word', async () => {
+        const src = readFileSync(
+            resolve(__dirname, '../webview/tiptap/auto-edit-decorations.ts'), 'utf8');
+        // A word diff of a rewritten claim shreds both versions into alternating
+        // fragments and the reader has to reassemble two sentences before they can
+        // agree with either. The unit of the decision is the sentence.
+        expect(src).toMatch(/sentenceDiff/);
+        expect(src).not.toMatch(/\bwordDiff\b/);
+    });
+
+    it('remembers what the rewrite looked like when it arrived', () => {
+        const src = readFileSync(
+            resolve(__dirname, '../webview/tiptap/auto-edit-decorations.ts'), 'utf8');
+        expect(src).toMatch(/arrivedAs/);
+        // And forgets it once the rewrite has been answered, so the memo stays the
+        // size of what is owed rather than of everything ever seen.
+        expect(src).toMatch(/arrivedAs\.delete/);
     });
 });

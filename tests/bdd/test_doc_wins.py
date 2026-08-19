@@ -127,8 +127,14 @@ def test_realize_queue_stamps_caused_by_on_loop_a_ops(world):
     ])
 
     # The implementing agent's code lands; the epoch-close Loop A pass reflects
-    # it. The new helper attaches to a graph-neighbor-less location → coverage
-    # ADD proposal; the modified bound chunk refreshes.
+    # it. The new helper goes to the feature that already describes `r.py` and the
+    # modified bound chunk refreshes. Both are maintenance the directive caused,
+    # which is what this is about.
+    #
+    # It used to become a coverage ADD proposal instead, titled after the symbol
+    # with an empty description. A helper beside the function it supports, in a
+    # file one feature already owns, is part of that feature; proposing a second
+    # node for it gave a reviewer something with nothing in it to answer.
     world.when_code_changes(
         added=[chunk("r.py", "r.py::burst_window", tok="fp2", src="def burst_window(): ...")],
         modified=[chunk("r.py", "r.py::limit", tok="fp1b", src="def limit(): ...")],
@@ -139,9 +145,11 @@ def test_realize_queue_stamps_caused_by_on_loop_a_ops(world):
     with world._store() as s:
         evs = s.recent_events(10)
         refresh = [e for e in evs if e.op.kind is NodeOpKind.REFRESH]
-        adds = [e for e in evs if e.op.kind is NodeOpKind.ADD_NODE and not e.applied]
+        attach = [e for e in evs if e.op.kind is NodeOpKind.ATTACH]
         assert refresh and refresh[0].caused_by == "d-11aa22bb", \
             "binding maintenance during the realize window carries the directive id"
-        assert adds and adds[0].caused_by == "d-11aa22bb", \
-            "the surfaced-back (underspecified) ADD is grouped under the directive"
-    world.then_proposal_count(1)
+        assert attach and attach[0].caused_by == "d-11aa22bb", \
+            "and so does the new chunk it placed"
+        assert attach[0].op.feature_id == fid, \
+            "the helper belongs to the feature whose file it lives in"
+    world.then_proposal_count(0)

@@ -718,6 +718,35 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     return 0
 
 
+def checkpoint(frames: Path, at: list[int], says: str) -> int:
+    """Cut a finished recording at the points the agent stops to ask.
+
+    Kept out of `build` on purpose. Where the agent paused is a judgement about
+    the SESSION — the frame after the plan lands and before the implementation
+    starts — and it is made by watching the recording back, not by a heuristic
+    over file writes. Marking it afterwards also means an existing recording can
+    be staged without being made again.
+    """
+    path = frames / "manifest.json"
+    manifest = json.loads(path.read_text())
+    total = len(manifest["frames"])
+    bad = [n for n in at if not 0 < n < total]
+    if bad:
+        print(f"outside this recording (1..{total - 1}): {bad}", file=sys.stderr)
+        return 2
+    if at:
+        manifest["checkpoints"] = sorted(set(at))
+        if says:
+            manifest["checkpoint_says"] = says
+    else:
+        manifest.pop("checkpoints", None)
+        manifest.pop("checkpoint_says", None)
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    stops = manifest.get("checkpoints") or []
+    print(f"{frames}: {len(stops) + 1} segment(s), stopping after {stops or 'nothing'}")
+    return 0
+
+
 def retext(frames: Path) -> int:
     """Render a finished recording's scrollback again, from its own transcript.
 
@@ -783,6 +812,14 @@ def main(argv: list[str]) -> int:
                        help="render an existing recording's scrollback again")
     r.add_argument("frames", type=Path)
 
+    c = sub.add_parser("checkpoint",
+                       help="mark the frame the agent stops at to ask")
+    c.add_argument("frames", type=Path)
+    c.add_argument("at", type=int, nargs="*",
+                   help="frame numbers; none clears the checkpoints")
+    c.add_argument("--says", default="",
+                   help="what the agent says while it waits for the answer")
+
     d = sub.add_parser("derive", help="replay a neutral recording into one condition")
     d.add_argument("frames", type=Path)
     d.add_argument("workspace", type=Path)
@@ -806,6 +843,8 @@ def main(argv: list[str]) -> int:
         return watch(args.workspace, args.raw, args.interval)
     if args.command == "retext":
         return retext(args.frames)
+    if args.command == "checkpoint":
+        return checkpoint(args.frames, args.at, args.says)
     if args.command == "derive":
         return derive(args.frames, args.workspace, args.out, args.settle,
                       args.timeout, max(1, args.settle_every), args.after, args.pace)
