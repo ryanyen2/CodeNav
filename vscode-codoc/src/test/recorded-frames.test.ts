@@ -30,7 +30,11 @@ import { descriptionBlocksForFid, blocksToDescriptionText } from '../state/pm-do
 import { renderTreeFromDoc } from '../state/doc-serialize';
 import type { PMNode } from '../state/pm-doc';
 
-const FRAMES = resolve(__dirname, '../../../docs/study-materials/replay/frames');
+// `CODOC_FRAMES` points this at a recording somewhere else, which is how a
+// recording is checked while it is being made rather than after it ships.
+const FRAMES = process.env.CODOC_FRAMES
+    ? resolve(process.env.CODOC_FRAMES)
+    : resolve(__dirname, '../../../docs/study-materials/replay/frames');
 
 type Frame = { dir: string; docJson: string; treeCodoc: string | null; sidecar: string | null };
 
