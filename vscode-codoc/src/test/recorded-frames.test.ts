@@ -53,7 +53,11 @@ function recordedFrames(): { name: string; frames: Frame[] }[] {
                 const docJson = join(dir, '.codoc', 'tree.doc.json');
                 if (!existsSync(docJson)) continue;
                 const treeCodoc = join(dir, '.codoc', 'tree.codoc');
-                const sidecar = join(dir, '.codoc', 'tree.index.json');
+                // The proposals ride in tree.bindings.json, not tree.index.json.
+                // Reading the wrong one made this test pass while checking
+                // nothing: tree.index.json has no proposals key at all, so the
+                // count was always zero and the assertion never ran.
+                const sidecar = join(dir, '.codoc', 'tree.bindings.json');
                 frames.push({
                     dir: `${project}/${arm}/${entry}`,
                     docJson,
@@ -78,6 +82,30 @@ function headingsOf(doc: PMNode): Map<string, string> {
     return out;
 }
 
+/**
+ * The export without the ghost hunks a pending proposal draws.
+ *
+ * `tree.codoc` overlays ADD and MOVE proposals as `+` rows carrying an event id,
+ * and `tree.doc.json` is the store projection, which has no proposal in it. So
+ * the two agree on the live tree and differ by exactly the overlay, and comparing
+ * them without stripping it reports a mismatch on every recording that has a
+ * proposal in it, which is every interesting one.
+ */
+function withoutGhosts(text: string): string {
+    const lines = text.split('\n');
+    const out: string[] = [];
+    for (let i = 0; i < lines.length;) {
+        if (lines[i].trimStart().startsWith('+')) {
+            while (i < lines.length && lines[i].trimStart().startsWith('+')) i++;
+            if (i < lines.length && !lines[i].trim()) i++;   // the blank line after the hunk
+            continue;
+        }
+        out.push(lines[i]);
+        i++;
+    }
+    return out.join('\n');
+}
+
 const RECORDINGS = recordedFrames();
 
 describe.skipIf(RECORDINGS.length === 0)('the recorded session, as the extension reads it', () => {
@@ -97,9 +125,32 @@ describe.skipIf(RECORDINGS.length === 0)('the recorded session, as the extension
                 if (!frame.treeCodoc) continue;
                 const parsed = parseDocFile(JSON.parse(readFileSync(frame.docJson, 'utf8')))!;
                 const ours = renderTreeFromDoc(parsed.doc);
-                const theirs = readFileSync(frame.treeCodoc, 'utf8');
+                const theirs = withoutGhosts(readFileSync(frame.treeCodoc, 'utf8'));
                 expect(ours.trimEnd(), `${frame.dir} renders differently from the daemon`)
                     .toBe(theirs.trimEnd());
+            }
+        });
+
+        it(`${recording.name}: a ghost row in the export has a proposal behind it`, () => {
+            // The export draws ADD and MOVE proposals as ghost rows carrying an
+            // event id. A row with no proposal behind it is a change the
+            // participant can see and cannot act on, which in a study about
+            // reviewing an agent's work is the measurement going missing.
+            for (const frame of recording.frames) {
+                if (!frame.treeCodoc || !frame.sidecar) continue;
+                const text = readFileSync(frame.treeCodoc, 'utf8');
+                const drawn = [...text.matchAll(/⟨(e-[0-9a-f]+)⟩/g)].map((m) => m[1]);
+                if (!drawn.length) continue;
+                const sidecar = JSON.parse(readFileSync(frame.sidecar, 'utf8'));
+                const known = new Set([
+                    ...Object.keys(sidecar?.proposals?.by_event ?? {}),
+                    ...Object.values(sidecar?.proposals?.by_feature ?? {})
+                        .map((p: any) => p?.event_id).filter(Boolean),
+                ]);
+                for (const id of drawn) {
+                    expect(known.has(id), `${frame.dir} draws ${id} with no proposal behind it`)
+                        .toBe(true);
+                }
             }
         });
 
@@ -109,9 +160,9 @@ describe.skipIf(RECORDINGS.length === 0)('the recorded session, as the extension
                 if (!frame.sidecar) continue;
                 const parsed = parseDocFile(JSON.parse(readFileSync(frame.docJson, 'utf8')))!;
                 const sidecar = JSON.parse(readFileSync(frame.sidecar, 'utf8'));
-                const byFeature = sidecar?.proposals?.by_feature ?? {};
-                const count = Object.keys(byFeature).length
-                    + (sidecar?.proposals?.adds ?? []).length;
+                const proposals = sidecar?.proposals ?? {};
+                const count = Object.keys(proposals.by_feature ?? {}).length
+                    + Object.keys(proposals.by_event ?? {}).length;
                 if (!count) continue;
                 const headings = headingsOf(parsed.doc);
                 const titleOf = (fid: string) => headings.get(fid) ?? '';
