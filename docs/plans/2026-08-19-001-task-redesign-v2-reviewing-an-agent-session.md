@@ -277,6 +277,39 @@ than every page, so the loosened default is a share of 0.4 against 0.6, and the
 false claim in `scribe` is now about the prefix list that keeps a hyphen, which
 can be checked by running the program.
 
+### The transcript says everything, and that is the condition under test
+
+The recorded agent mentions all three planted problems somewhere in its own
+output. It reported that lowering the repeat share to 0.5 with a `min_repeats`
+floor would catch a header on two pages of five. It reported that a document
+numbering its notes per page produces two notes both called `[^1]`, where only
+the ordinal tells them apart. It reported that starting the hyphen list empty
+turns `well-being` into `wellbeing`, and called it "precisely the failure the
+original code's comment warned about".
+
+The first instinct is to record a quieter agent. That would be a strawman, and it
+would test the wrong thing. Capable agents narrate, and the information being
+technically present is the normal situation, not a flaw in this recording.
+
+The numbers are the point. Fifty-four blocks of assistant prose, 14,235
+characters, with the three admissions scattered through them among everything
+else it said, including the parts where it corrected its own wrong assertions and
+pushed back on one of the requests. Both conditions get exactly that text, in the
+scrollback, and reading it is a route both can take.
+
+So the study is not asking whether the information exists. It is asking whether a
+person ends up knowing what was decided and able to act on it. If codoc helps, it
+helps by making findable what is already present, which is the claim the last
+pilot analysis concluded was the only honest one available: **about finding, not
+about content.**
+
+Two things follow for the analysis. Strategy coding has to separate a problem
+found by reading the transcript from one found by reviewing the change, because
+those are different abilities and only the second is what codoc is for. And a
+participant who finds a problem and ships it anyway is a distinct outcome from
+one who never found it, which is why who-settled-it is recorded next to
+detection rather than folded into it.
+
 ### What the replay must not corrupt
 
 The interaction logger records what the participant does, so replayed writes must

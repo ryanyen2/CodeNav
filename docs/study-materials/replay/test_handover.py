@@ -53,15 +53,27 @@ def sync(workspace: Path) -> None:
 
 
 def sidecar(workspace: Path) -> dict:
-    path = workspace / ".codoc" / "tree.index.json"
+    # tree.bindings.json, not tree.index.json. The latter is the bindings
+    # registry and carries no proposals at all, so reading it reported every
+    # recording as having none and skipped the two checks that matter most.
+    path = workspace / ".codoc" / "tree.bindings.json"
     return json.loads(path.read_text()) if path.exists() else {}
 
 
 def pending(workspace: Path) -> dict:
+    """Every pending proposal, keyed by event id.
+
+    RETIRE and AMEND are keyed by feature and ADD and MOVE by event, because a
+    feature can only carry one of the first pair while a parent can carry several
+    of the second. Both are verdicts a participant gives, so both are here.
+    """
     props = (sidecar(workspace).get("proposals") or {})
-    out = dict(props.get("by_feature") or {})
-    for add in props.get("adds") or []:
-        out[f"add:{add.get('event_id')}"] = add
+    out = {}
+    for fid, p in (props.get("by_feature") or {}).items():
+        if p.get("event_id"):
+            out[p["event_id"]] = {**p, "feature_id": fid}
+    for eid, p in (props.get("by_event") or {}).items():
+        out[eid] = {**p, "event_id": eid}
     return out
 
 
@@ -98,43 +110,53 @@ def append_command(workspace: Path, command: dict) -> None:
     append_host_op(str(workspace / ".codoc"), "appendCommand", command)
 
 
-def check_accept(workspace: Path) -> None:
+def verdict(workspace: Path, event_id: str, accept: bool) -> None:
     from codoc.loop.inbox import host_verdicts_path
-    before = pending(workspace)
-    target = next((k for k in before if not k.startswith("add:")), None)
-    if target is None:
-        print("  (no proposal to accept in this recording, so the accept path is untested)")
-        return
-    event_id = before[target].get("event_id")
     path = Path(host_verdicts_path(str(workspace / ".codoc")))
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"event_id": event_id, "accept": True}) + "\n")
+        f.write(json.dumps({"event_id": event_id, "accept": accept}) + "\n")
+
+
+def check_accept(workspace: Path) -> None:
+    before = pending(workspace)
+    if not before:
+        print("  (this recording left no proposal, so accept and reject are untested)")
+        return
+    event_id = sorted(before)[0]
+    titles_before = titles(workspace)
+    verdict(workspace, event_id, True)
     sync(workspace)
-    after = pending(workspace)
-    if target in after and after[target].get("event_id") == event_id:
+    if event_id in pending(workspace):
         raise Broken(f"accepting {event_id} left it pending, so the click did nothing")
-    ok(f"accepting a proposal applies it and clears it ({event_id})")
+    kind = before[event_id].get("op")
+    if kind == "add" and len(titles(workspace)) <= len(titles_before):
+        raise Broken(f"accepting the add {event_id} did not put a feature in the tree")
+    ok(f"accepting a proposal applies it and clears it ({event_id}, {kind})")
+
+
+def titles(workspace: Path) -> set[str]:
+    s = store(workspace)
+    try:
+        return {f.title for f in s.list_features()}
+    finally:
+        s.close()
 
 
 def check_reject(workspace: Path) -> None:
-    from codoc.loop.inbox import host_verdicts_path
     before = pending(workspace)
-    target = next((k for k in before if not k.startswith("add:")), None)
-    if target is None:
+    if not before:
         print("  (no second proposal, so the reject path is untested)")
         return
-    event_id = before[target].get("event_id")
-    words = description_of(workspace, target)
-    path = Path(host_verdicts_path(str(workspace / ".codoc")))
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"event_id": event_id, "accept": False}) + "\n")
+    event_id = sorted(before)[0]
+    was = titles(workspace)
+    verdict(workspace, event_id, False)
     sync(workspace)
-    if target in pending(workspace):
+    if event_id in pending(workspace):
         raise Broken(f"rejecting {event_id} left it pending")
-    if description_of(workspace, target) != words:
-        raise Broken(f"rejecting {event_id} changed the feature anyway")
-    ok(f"rejecting a proposal drops it and leaves the words alone ({event_id})")
+    if titles(workspace) != was:
+        raise Broken(f"rejecting {event_id} changed the tree anyway")
+    ok(f"rejecting a proposal drops it and changes nothing ({event_id})")
 
 
 def check_edit(workspace: Path) -> None:
@@ -142,8 +164,8 @@ def check_edit(workspace: Path) -> None:
     was = description_of(workspace, fid)
     now = (was + "\n\nThe reviewer added this sentence.").strip()
     append_command(workspace, {
-        "id": "handover-edit-1", "kind": "set_description", "fid": fid,
-        "baseRev": "", "base_text": was, "payload": {"description": now},
+        "id": "handover-edit-1", "kind": "set_description", "feature_id": fid,
+        "base_text": was, "payload": {"description": now},
     })
     sync(workspace)
     stored = description_of(workspace, fid)
@@ -158,8 +180,8 @@ def check_edit(workspace: Path) -> None:
     # command after a crash, and a doubled description is the shape that would
     # show up in a participant's tree with nobody having typed it.
     append_command(workspace, {
-        "id": "handover-edit-1", "kind": "set_description", "fid": fid,
-        "baseRev": "", "base_text": was, "payload": {"description": now + " Again."},
+        "id": "handover-edit-1", "kind": "set_description", "feature_id": fid,
+        "base_text": was, "payload": {"description": now + " Again."},
     })
     sync(workspace)
     if "Again." in description_of(workspace, fid):

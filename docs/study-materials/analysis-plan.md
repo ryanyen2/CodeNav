@@ -113,7 +113,8 @@ runs the participant's final code and looks for one signal.
 | Time to the first correct detection, and coverage at fifteen minutes | The interaction log and the transcript, against the replay's handover time in `.codoc/replay.stamp`. |
 | **False alarms** | The count and the notes in the dashboard. The decoy, plus any correct part of the change the participant called wrong. A blank is a gap the dashboard names before the call ends, because none and not-asked are different answers. |
 | Who settled each problem | Directed by the participant, accepted deliberately, or standing and never noticed. The merged stream and the codoc ledger. |
-| Which route they took | Whether they read the transcript, the diff, the description or the code first. Both conditions have the transcript in the scrollback and the change uncommitted, so both routes are available in both. |
+| **Which route they took, per problem** | Found by reading the agent's own account, or found by reviewing the change. The recorded agent mentions all three planted problems somewhere in 54 blocks and 14,235 characters of its own prose, and both conditions get that text in the scrollback. The two are different abilities and only the second is what codoc is for, so they are coded separately rather than added together. |
+| Whether they found it and shipped it anyway | A distinct outcome from never finding it, which is why who-settled-it sits beside detection rather than folded into it. |
 
 ## Is the record true at the end  (serves RQ2, and it is the headline)
 

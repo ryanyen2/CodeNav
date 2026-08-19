@@ -100,3 +100,21 @@ own, and the rubric says that rather than pretending it is separate.
 | D0 | The decoy, see the project's STUDY.md | unsteered |
 
 None of the three breaks a test. All 100 tests pass at the end of the recording.
+
+## The transcript discloses all three, on purpose
+
+The agent mentions every planted problem somewhere in its own output: the 0.5
+share and the `min_repeats` floor, the two notes both called `[^1]` with only the
+ordinal telling them apart, and `well-being` becoming `wellbeing` with the hyphen
+list empty, which it called "precisely the failure the original code's comment
+warned about".
+
+This is not being recorded again with a quieter agent. Capable agents narrate,
+and a recording of one that did not would test something that does not happen.
+Fifty-four blocks of assistant prose, 14,235 characters, with the three
+admissions scattered among everything else it said. Both conditions get that
+text in the scrollback.
+
+The study therefore asks whether a person ends up knowing what was decided, not
+whether the information exists. Strategy coding has to separate a problem found
+by reading the transcript from one found by reviewing the change.

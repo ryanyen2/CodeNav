@@ -271,57 +271,57 @@ export const AFTER_QUIZZES = Object.freeze({
         {
             "n": 2,
             "band": "Rationale",
-            "question": "You had the settings threaded through the rules instead of read from module constants. Which rule ended up running at a different point because of it?",
+            "question": "You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The one that tidies up characters"
+                    "text": "It keeps its hyphen, exactly as before"
                 },
                 {
                     "letter": "b",
-                    "text": "The one that removes what repeats across pages"
+                    "text": "It loses its hyphen, because the list of prefixes that keep one is now empty by default"
                 },
                 {
                     "letter": "c",
-                    "text": "The one that joins a word broken at the end of a line"
+                    "text": "The line break is kept along with the hyphen"
                 },
                 {
                     "letter": "d",
-                    "text": "None of them; moving settings around cannot change when a rule runs"
+                    "text": "The run refuses until the document says which it wants"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Change",
-            "question": "Besides the three things you had asked for, the agent changed one more rule. Which one?",
+            "question": "The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The rule that decides what counts as a heading"
+                    "text": "`[^1]` and `[^2]`, which is what the Markdown holds"
                 },
                 {
                     "letter": "b",
-                    "text": "The rule that numbers the notes collected at the end"
+                    "text": "`[^1]` beside both, so the marker does not tell them apart"
                 },
                 {
                     "letter": "c",
-                    "text": "The rule that collapses runs of blank lines"
+                    "text": "No markers at all, only the text of each note"
                 },
                 {
                     "letter": "d",
-                    "text": "Nothing else changed"
+                    "text": "One entry, because the two notes are treated as the same note"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Rationale",
-            "question": "Your change leaves one pair of rules running in the opposite order for a document that has a config file. What does the new order cost?",
+            "question": "Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Nothing; the two rules never look at the same lines"
+                    "text": "Nothing; furniture and headings never look at the same lines"
                 },
                 {
                     "letter": "b",
@@ -329,7 +329,7 @@ export const AFTER_QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "c",
-                    "text": "A real heading that repeats on most pages is removed before the heading rule can see it"
+                    "text": "A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents"
                 },
                 {
                     "letter": "d",

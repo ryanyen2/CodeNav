@@ -35,16 +35,25 @@ minutes, because watching an agent write code for forty minutes is not what we
 are measuring and the quality of that code is not what we are rating. How the
 recording works, and what keeps it honest, is in `replay/README.md`.
 
-## The four planted problems
+## The three planted problems
 
 Each is rated 0 to 2, blind to condition. 0 is not found, 1 is found, and 2 is
 found and correctly attributed to the commitment it contradicts. None of them
-breaks a test, because a problem the suite catches measures nothing.
+breaks a test, because a problem the suite catches measures nothing. All 100
+tests pass at the end of the recording, up from 54 at the start.
 
-`replay/frames/scribe/*/notes.md` records which problems the agent produced on
-its own and which it had to be steered into. A problem it produced on its own is
-stronger evidence than one it was steered into, and the paper reports which is
-which.
+**Three rather than four, and the reason is in the recording.** The fourth was
+going to be the coupled one, where a change looks local and is not. The request
+most likely to produce it was carried out correctly, and a problem the agent will
+not produce from a request a person would actually send is not nudged into
+existence with a request nobody would send. Some of the coupled class survives
+inside D1, as a consequence of it rather than as a problem of its own, and D3
+below says so.
+
+`replay/frames/scribe/neutral/notes.md` records what the agent produced unsteered
+and what each steer was. The first request produced none of the three: it checked
+its own output against the old output and reported it byte identical. That is why
+the stimulus is constructed, and the paper says it is.
 
 ### D1. The new default loosens a stated policy
 
@@ -267,25 +276,25 @@ They are matched to tally's set one for one, band for band and level for level.
 
 ### Rationale: why that way and not the other
 
-**Q2. (medium) You had the settings threaded through the rules instead of read from module constants. Which rule ended up running at a different point because of it?**
-- a) The one that tidies up characters
-- b) **The one that removes what repeats across pages** ✓
-- c) The one that joins a word broken at the end of a line
-- d) None of them; moving settings around cannot change when a rule runs
+**Q2. (medium) You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?**
+- a) It keeps its hyphen, exactly as before
+- b) **It loses its hyphen, because the list of prefixes that keep one is now empty by default** ✓
+- c) The line break is kept along with the hyphen
+- d) The run refuses until the document says which it wants
 
-**Q4. (hard) Your change leaves one pair of rules running in the opposite order for a document that has a config file. What does the new order cost?**
-- a) Nothing; the two rules never look at the same lines
+**Q4. (hard) Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?**
+- a) Nothing; furniture and headings never look at the same lines
 - b) Page numbers can no longer be used to order the sections
-- c) **A real heading that repeats on most pages is removed before the heading rule can see it** ✓
+- c) **A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents** ✓
 - d) The first page loses its heading, because there is nothing before it to compare against
 
 ### Change: what it cost, and what it touched
 
-**Q3. (medium) Besides the three things you had asked for, the agent changed one more rule. Which one?**
-- a) The rule that decides what counts as a heading
-- b) **The rule that numbers the notes collected at the end** ✓
-- c) The rule that collapses runs of blank lines
-- d) Nothing else changed
+**Q3. (medium) The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?**
+- a) `[^1]` and `[^2]`, which is what the Markdown holds
+- b) **`[^1]` beside both, so the marker does not tell them apart** ✓
+- c) No markers at all, only the text of each note
+- d) One entry, because the two notes are treated as the same note
 
 ### Extension: what a next person needs
 
