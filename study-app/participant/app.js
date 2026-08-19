@@ -102,8 +102,8 @@ async function start() {
     // experimenter previewing a page can read it), so this read failing is the
     // normal case and says nothing about being online. It must not share the
     // try above: when it did, the guaranteed permission-denied marked every
-    // participant's page offline, and every browser-side answer — prestudy,
-    // quizzes, questionnaires, task timings — stayed in localStorage and never
+    // participant's page offline, and every browser-side answer, prestudy,
+    // quizzes, questionnaires, task timings, stayed in localStorage and never
     // reached the study.
     try {
         const snap = await getDoc(doc(db, `participants/${state.code}`));
@@ -128,7 +128,7 @@ async function start() {
 
     // Upload everything this browser already holds. This is both the recovery
     // path for a session that ran while saving was broken (the answers are all
-    // still in localStorage — reopening the same link on the same browser sends
+    // still in localStorage, reopening the same link on the same browser sends
     // them), and the catch-up for one that genuinely lost its connection for a
     // while. Merge-writes of the same values are idempotent, so re-sending on
     // every load costs nothing.
@@ -212,8 +212,8 @@ function render() {
 
     const section = document.createElement('section');
     section.className = 'step';
-    // The questions are not copyable. They are open book — read the description,
-    // read the code, ask the agent about the PROJECT — but pasting the question
+    // The questions are not copyable. They are open book, read the description,
+    // read the code, ask the agent about the PROJECT, but pasting the question
     // itself into the agent measures the agent instead of the pair. Blocking the
     // copy is not a security boundary and is not meant to be; it removes the
     // thoughtless path, which is the one people actually take.
@@ -247,7 +247,7 @@ function render() {
     wire(section, step);
     wireCopy(section);
     if (step.kind === 'quiz') startQuizTimer(step);
-    // The task has no clock on screen — it is not timed against them — but the
+    // The task has no clock on screen, it is not timed against them, but the
     // instant it opened is recorded, because that is where the interaction log
     // stops being a record of working the codebase out and starts being a record
     // of changing it.
@@ -298,7 +298,7 @@ function complete(step) {
         // most of what a wrong answer tells us.
         //
         // Unless the clock ran out, which is the one case where a blank means
-        // something on its own — and holding somebody on a step they are out of
+        // something on its own, and holding somebody on a step they are out of
         // time for would make the button, not the timer, the thing in charge.
         return timedOutAllowsAdvance({
             answered: (QUIZZES[step.project] || []).every((q) => given(`q${q.n}`)),
@@ -375,6 +375,10 @@ const VIEWS = {
         ? t('ui.intro.first', 'The first way of working')
         : t('ui.intro.second', 'The second way of working'))}</h1>
         <p class="lead">${esc(t(`start.${step.condition}.title`, how.title))}.</p>
+        <p>${esc(t('ui.intro.shape',
+        'First you get the project open, which is what the steps below are for. Then you answer a '
+        + 'few questions about the project. Then you look at a change your coding agent has '
+        + 'already made to it, and you decide what to keep.'))}</p>
         <ol class="do">
           ${how.steps.map(([text, c], i) => `<li>${esc(t(`start.${step.condition}.step.${i}`, text))}
             ${c ? cmd(c.replace('{folder}', how.folder(step.project))) : ''}
@@ -435,11 +439,41 @@ const VIEWS = {
         <div class="note">${RESPONSIBILITY.map((line, i) => `<p>${esc(t(`responsibility.${i}`, line))}</p>`).join('')}</div>`;
     },
 
-    task: () => `
+    // The card is the request they left. Everything a person needs in order to
+    // read it is on the page around it: who did what while they were away, what
+    // is about to happen in their terminal, what they are being asked to decide,
+    // and how long it takes. A participant meeting the card cold could not answer
+    // any of those, and asked the researcher instead, which made the framing
+    // depend on how it was improvised on the day.
+    task: (step) => `
         <h1>${esc(t('ui.task.h', 'Your task'))}</h1>
+        <p class="lead">${esc(t('ui.task.lead',
+        'Earlier today you asked your coding agent for some changes to {project}, and then you '
+        + 'went out. It worked while you were away, and it has finished. The card below is the '
+        + 'request you left.').replace('{project}', step.project))}</p>
         <div class="card-wrap"></div>
-        <p>${esc(t('ui.task.p', 'The agent has already done the work. What is left is yours to decide, and we will ask you about those decisions, so make them on purpose.'))}</p>
-        <p class="note">${esc(t('ui.task.time', 'About 30 minutes. Work as you normally would.'))}</p>`,
+
+        <h2>${esc(t('ui.task.arrive.h', 'What happens next'))}</h2>
+        <p>${esc(t('ui.task.arrive.p',
+        'The researcher starts the agent\'s work in your terminal, and it runs for about three '
+        + 'minutes. Your files change while it runs, and the agent prints what it is doing. Watch '
+        + 'it, and leave the keyboard alone until it stops.'))}</p>
+        <p>${esc(t('ui.task.arrive.after',
+        'When it stops, the change is sitting in your project with nothing committed, and the '
+        + 'tests pass. Everything the agent said stays in the terminal, so you can scroll back and '
+        + 'read it. Your first message carries on the same conversation, so you can ask the agent '
+        + 'about anything it did.'))}</p>
+
+        <h2>${esc(t('ui.task.decide.h', 'What is left to you'))}</h2>
+        <p>${esc(t('ui.task.decide.p',
+        'The agent has already done the work. What is left is yours to decide. Keep what you '
+        + 'want, change what you do not, and leave the written description saying what the code '
+        + 'does. We ask you about those decisions afterwards, with the code and the agent closed, '
+        + 'so make them on purpose.'))}</p>
+        <p class="note">${esc(t('ui.task.time',
+        'About 30 minutes in all. Roughly half of that goes on the change the agent has made, and '
+        + 'the rest on one more request the researcher reads out to you partway through. Work as '
+        + 'you normally would.'))}</p>`,
 
     // Grouped by what each block measures, with the groups named. An unbroken
     // column of twenty-five identical rows is answered by pattern rather than by
@@ -564,7 +598,7 @@ const VIEWS = {
 
     // Closed book, about the change they just made.
     //
-    // Nothing enforces the closed book — the files are still on their machine and
+    // Nothing enforces the closed book, the files are still on their machine and
     // the researcher is watching the screen. Saying so plainly is what makes it
     // work, and it is said as a reason rather than as a rule, because somebody
     // who understands why will not go and look.
@@ -644,7 +678,7 @@ function startQuizTimer(step) {
             clearInterval(quizTick);
             el.textContent = t('ui.quiz.timeup', 'Time is up.');
             el.classList.add('out');
-            // The clock RUNS OUT — it does not merely say so. Letting somebody
+            // The clock RUNS OUT, it does not merely say so. Letting somebody
             // carry on past it meant the sitting was not timed at all, and how
             // long they took is half of what this measures: a score reached in
             // fourteen minutes is not the same result as the same score in ten.
@@ -675,7 +709,7 @@ function startQuizTimer(step) {
  * The clock reached zero: stamp it and move on.
  *
  * `timedOut` is recorded so the analysis can tell an unanswered question that RAN
- * OUT from one somebody chose to leave — they are different findings, and without
+ * OUT from one somebody chose to leave, they are different findings, and without
  * the flag both arrive as the same blank.
  */
 function timeUp(step, answers) {
@@ -761,7 +795,7 @@ function scaleRow(q, value) {
     // The subscale's name and its full definition, for the block that has them.
     // Lee et al. found the six TLX subscales correlate far more strongly in HCI
     // studies than in the original validation, and that showing only the short
-    // question is one of the reasons — four of the six read alike without their
+    // question is one of the reasons, four of the six read alike without their
     // definitions.
     const head = q.title
         ? `<span class="label"><b>${esc(q.title)}</b> — ${esc(q.text)}</span>
@@ -837,7 +871,7 @@ function wire(section, step) {
 // Two controls, shown only to a `pilot-` code: fill this step in and move on,
 // and jump straight to a step by name. Piloting the interview meant answering
 // twenty-five scales and two quizzes first, so in practice the last steps were
-// piloted least — which is the wrong way round, since they are the ones nobody
+// piloted least, which is the wrong way round, since they are the ones nobody
 // has walked through before.
 
 /** Fill a step in and record that a machine did it. */
@@ -871,7 +905,7 @@ function pilotBar() {
     });
 
     // Jumping fills in everything skipped over, so the step landed on behaves
-    // the way it would have if the session had reached it — a questionnaire that
+    // the way it would have if the session had reached it, a questionnaire that
     // reads an earlier answer gets one, and the dashboard sees a session at that
     // point rather than one that answered nothing and then answered the end.
     jump.addEventListener('change', () => {

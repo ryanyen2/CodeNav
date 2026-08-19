@@ -132,7 +132,7 @@ test('names of things are not translated', () => {
 });
 
 test('every briefing, start instruction and page string is translated', () => {
-    // The templated keys — project.<name>.does.<i>.term and friends — cannot be
+    // The templated keys, project.<name>.does.<i>.term and friends, cannot be
     // found by reading the source, so they are walked here the way the page walks
     // them. This is what catches a project gaining a bullet that nobody
     // translated, which would show as one English line inside a Chinese briefing.
@@ -181,6 +181,37 @@ test('every quiz question and every option is translated', () => {
         }
     }
     assert.deepEqual(missingKeys(), [], 'these would render in English among Chinese options');
+});
+
+test('every page string and every task card is translated', async () => {
+    // The page's own strings are written inline at the call site, so unlike the
+    // instrument there is no list of them to walk. They are read out of the
+    // source instead, because the failure they produce is invisible: a key added
+    // without a translation renders as one English sentence in a Chinese page,
+    // and nothing at run time reports it.
+    const { readFileSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(here, '..', 'participant', 'app.js'), 'utf8');
+    const { ZH_HANS } = await import('../participant/i18n/zh-Hans.js');
+    const { TASK_CARDS } = await import('../participant/steps.js');
+
+    const asked = [...new Set(
+        [...src.matchAll(/\bt\(\s*'(ui\.[a-zA-Z0-9._]+)'/g)].map((m) => m[1]))];
+    assert.ok(asked.length > 40, `the page asks for very few strings: ${asked.length}`);
+
+    // The card's keys are built from the project name, so they are walked the way
+    // the page builds them rather than read out of the source.
+    for (const name of Object.keys(TASK_CARDS)) {
+        asked.push(`card.${name}.title`, `card.${name}.lines`);
+        if (TASK_CARDS[name].example) {
+            asked.push(`card.${name}.example.label`, `card.${name}.example.lines`);
+        }
+    }
+
+    assert.deepEqual(asked.filter((k) => !(k in ZH_HANS)), [],
+        'these would render in English inside a Chinese page');
 });
 
 test('a missing key shows English rather than the key', () => {

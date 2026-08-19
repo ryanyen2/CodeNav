@@ -235,11 +235,15 @@ and the end of a setup run prints which folder is the codoc one.
 
 ### Starting a codoc condition
 
+The order to do things in is the checklist in Part 5, and the dashboard shows the
+same steps with this participant's folders already in them. What follows is the
+reasoning behind the two steps that surprise people.
+
 They open the codoc folder from the table above in VS Code, then open a terminal
 inside VS Code and run:
 
 ```
-~/codoc-study/codoc watch
+~/codoc-study/codoc watch --root ~/codoc-study/scribe
 ```
 
 Leave it running for the whole condition. Someone has to start it by hand. The
@@ -296,16 +300,17 @@ the measures come from nowhere else, and `analysis-plan.md` says which five.
 
 ## Part 4. The shape of the session
 
-About 105 minutes. The middle block runs twice, once for each condition.
+About two and a half hours. The middle block runs twice, once for each condition.
 
 | Part | Minutes | What happens |
 | --- | --- | --- |
 | Introduction | 5 | The words are below |
 | Walkthrough and warm-up | 6 | The same in both conditions |
 | Getting oriented | 6 | They explore, thinking out loud |
-| First round of questions | 6 | From the question sheet |
-| The task | 17 | Thinking out loud, stop at 20 |
-| Sign-off and second round of questions | 6 | The sign-off first |
+| The questions about the project | 6 | On their own page, open book, timed there |
+| The agent's work plays | 3 | They watch it, and touch nothing |
+| The task | 30 | Reviewing, then the follow-up you read out |
+| Sign-off and the closed-book questions | 6 | The sign-off first |
 | Questionnaires | 5 | The workload block has a definition under each item; let them read it |
 | Break | 3 | |
 | Which would you pick, and the interview | 14 | At the end, with both conditions done |
@@ -314,15 +319,18 @@ About 105 minutes. The middle block runs twice, once for each condition.
 
 Read this out, and use the same words with everyone.
 
-> Today you will try two ways of working with a coding agent. Both are set up
-> already. Each time you will get oriented in a small project, answer a few
-> questions about it, make a change to it, and answer a few more questions.
+> Today you will try two ways of working with a coding agent. Both are set up on
+> your machine already.
+>
+> The two halves have the same shape. You get to know a small project, you answer
+> a few questions about it, and then you look at a change your coding agent has
+> already made to it and decide what to keep. A few more questions follow.
 >
 > Both times there is a written description of the project. It is yours to keep
 > current, and the questions afterwards are based on it.
 >
-> You are responsible for the result being correct, not only for the tests
-> passing. I will ask you to explain the code afterwards.
+> You are responsible for the result being correct, and I will ask you to explain
+> the code afterwards.
 >
 > Please think out loud. If you go quiet I will ask what you are thinking, and
 > that is the only thing I will interrupt for.
@@ -361,44 +369,117 @@ task is to review a change an agent already made, rather than to make one.
 - **scribe:** review the config file, the report and the settings tidy-up.
 - **tally:** review the rules file, the weekly view and the settings tidy-up.
 
+The card is the request they are told they left, and the decision they are being
+asked for. Everything else a person needs in order to read it is on the page
+around the card, so you do not have to supply it on the call. The page tells them:
+
+- they asked for the change earlier and then went out, and the agent worked on it
+  while they were away
+- you will start its work in their terminal, and it takes about three minutes
+- the change will be sitting uncommitted, with the tests passing
+- their first message carries on the agent's own session
+
+Read the card out anyway, because hearing it is what gets them to say what they
+expect.
+
 The change is recorded in advance and replayed, so every participant reviews the
 same change and nobody waits forty minutes for code that is not what we are
 measuring.
 
-### Playing the recorded session
+### Starting a condition, step by step
 
-Do this after they have read the card and said what they expect, and before they
-touch anything. Stop the codoc daemon first, because the player writes the files
-the daemon owns and it refuses to start while the daemon is running.
+The same steps are on the participant's page in the dashboard, under **Starting
+the condition**, with their own folder and their own frames already written into
+each command. Copy them from there rather than retyping, because the folder and
+the frames differ by participant and by condition.
 
-```
-~/codoc-study/replay/play.py ~/codoc-study/scribe \
-    ~/codoc-study/replay/frames/scribe/codoc
-```
+The steps below use `scribe` in the codoc condition as the worked example. Which
+folder carries codoc for this participant is in the table in Part 3.
 
-It takes about three minutes. The terminal prints what the agent printed, the
-files change under it, and in the codoc condition the tree fills in as the daemon
-did during the recording. Let them watch. Start the daemon again when it finishes.
+1. They open `~/codoc-study/scribe` in VS Code and answer the trust prompt with
+   "Yes, I trust the authors".
 
-Everything after their first prompt is live. The recorded session is installed
-where `claude --resume` finds it, so their first prompt continues the session that
-made the change, with the agent's own context.
+2. Codoc only. They open a terminal inside VS Code, start the daemon, and leave
+   it running for the whole condition.
+
+   ```
+   ~/codoc-study/codoc watch --root ~/codoc-study/scribe
+   ```
+
+3. Codoc only. They open the description with Cmd+Shift+P and "codoc: Open",
+   start the agent with `./claude-study` in a second terminal, and open a third
+   for running the project. Without codoc there is no daemon and no description
+   to open, so they need `./claude-study` and one spare terminal.
+
+4. They run "Study logger: show what is being recorded" from Cmd+Shift+P and read
+   you the snapshot count. Anything above zero is fine, and a zero is the one
+   fault that cannot be repaired afterwards.
+
+5. They work through their own page as far as the task card. You read the card
+   out and ask what they expect the agent to have done.
+
+6. Codoc only. They stop the daemon with Ctrl+C in its terminal. The player
+   refuses to run while a live daemon owns the workspace, because the two would
+   write the same files.
+
+7. They run the player and watch it. It takes about three minutes.
+
+   ```
+   python3 ~/codoc-study/replay/play.py ~/codoc-study/scribe ~/codoc-study/replay/frames/scribe/codoc
+   ```
+
+8. Codoc only. They start the daemon again with the command from step 2.
+   Everything after their first prompt is live.
+
+The last argument is named for the project and the condition, so it is
+`~/codoc-study/replay/frames/<project>/codoc` in one condition and
+`.../<project>/baseline` in the other. Playing one condition's frames gives the
+other condition somebody else's change to review.
+
+While the player runs, the terminal prints what the agent printed and the files
+change under it, and in the codoc condition the tree fills in as the daemon did
+during the recording. Let them watch. The recorded session is installed where
+`claude --resume` finds it, so their first prompt continues the session that made
+the change, with the agent's own context.
 
 If the player refuses or stalls, the fallback is in Part 9.
 
+#### What to say while it plays
+
+> You asked for this before you went out, and the agent worked on it while you
+> were away. Here is what it did. Watch it come in, and when it stops, decide
+> what to keep.
+
+Do not call it a recording during the session, and do not say whether anything in
+the change is right or wrong.
+
+#### Rehearsing it on your own machine
+
+The same player is in the repo and takes the same two arguments, so a dry run
+needs no bundle.
+
+```
+python3 docs/study-materials/replay/play.py <a scratch folder> docs/study-materials/replay/frames/scribe/codoc
+```
+
+`--speed 2` plays it faster, `--step` waits for Enter between frames, and
+`--no-reset` leaves the current state alone. Use them for a rehearsal and not in
+a session. `docs/study-materials/replay/README.md` explains how a recording is
+made and what keeps it honest.
+
 ### What is planted in the change
 
-Four problems and one decoy, listed with their rating guides in the project's
-`STUDY.md`, which is the answer key. Do not open it in front of a participant.
-None of them breaks a test, so the suite passing tells the participant nothing
-about whether the change is right.
+Three problems and one decoy per project, listed with their rating guides in the
+project's `STUDY.md`, which is the answer key. Do not open it in front of a
+participant. None of them breaks a test, so the suite passing tells the
+participant nothing about whether the change is right.
 
 **Do not hint at any of it.** If they ask whether something is deliberate, say:
 
 > Work from what the card says and what you find in the project.
 
-The card says the agent finished and the tests pass. It does not say anything is
-wrong and it does not say everything is fine.
+Their page says the agent has finished and the tests pass. Nothing they read says
+anything is wrong, and nothing says everything is fine.
 
 ### What is scored
 
@@ -533,7 +614,7 @@ machine and they cannot accidentally end up in the study twice.
 
 ## Part 8. Scoring the code
 
-The gate is mechanical. The four decision ratings are the reported outcome.
+The gate is mechanical. The three detection ratings are the reported outcome.
 
 **The gate.** From inside their finished project:
 

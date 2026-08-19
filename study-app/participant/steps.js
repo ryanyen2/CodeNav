@@ -23,16 +23,23 @@ export { QUIZZES, AFTER_QUIZZES } from './quiz.js';
  * then asks for a decision. It does not say that anything is wrong. A card that
  * said so would prime the measure, and a card that said nothing at all would let
  * a participant ship without looking, which is itself one of the outcomes.
+ *
+ * The card is the REQUEST and the decision, and nothing else. What happened while
+ * they were away, what arrives in the terminal and how long it all takes are on
+ * the page around it. A card carrying that too was a picture of the task and of
+ * the session's stage directions read as one thing, and a participant meeting it
+ * cold could not tell which part was the job.
  */
 export const TASK_CARDS = Object.freeze({
     scribe: {
         title: 'Review what the agent did',
         lines: [
-            'You asked for a config file, a short report next to',
-            'the output, and a tidy-up of how the rules get their',
-            'settings.',
+            'Before you left you asked for:',
             '',
-            'The agent has finished and the tests pass.',
+            'a config file,',
+            'a short report next to the output,',
+            'and a tidy-up of how the rules get their settings.',
+            '',
             'Decide what to keep, and ship it.',
         ],
         // What finished looks like, stated as the end state rather than as a
@@ -47,11 +54,12 @@ export const TASK_CARDS = Object.freeze({
     tally: {
         title: 'Review what the agent did',
         lines: [
-            'You asked for the merchant rules to move into a file',
-            'you can edit, a weekly view beside the monthly one,',
+            'Before you left you asked for:',
+            '',
+            'the merchant rules moved into a file you can edit,',
+            'a weekly view beside the monthly one,',
             'and a tidy-up of how the rules get their settings.',
             '',
-            'The agent has finished and the tests pass.',
             'Decide what to keep, and ship it.',
         ],
         example: {

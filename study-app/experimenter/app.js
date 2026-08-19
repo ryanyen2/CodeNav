@@ -453,6 +453,7 @@ function renderDetail() {
       <div class="card handoff" id="handoff"></div>
       <div class="card manage" id="manage"></div>
       <div class="tabs" id="tabs"></div>
+      <div class="card run" id="running"></div>
       <div class="stats" id="stats"></div>
       <div class="card">
         <h3>The session</h3>
@@ -485,6 +486,7 @@ function renderDetail() {
     legend($('#legend'));
     renderManage();
     renderHandoff();
+    renderRunning();
     renderForms();
     renderInterview();
     renderSession();
@@ -642,7 +644,7 @@ async function deleteParticipant(code) {
  * The slot is claimed once, on purpose: it is what stops a stray copy of the code
  * writing into somebody's session. But a participant who changes machine or
  * reinstalls is then locked out, and the message their editor shows tells them to
- * ask the experimenter — who, until now, had no way to do it. The pilot hit this
+ * ask the experimenter, who, until now, had no way to do it. The pilot hit this
  * and it took a hand-written REST call to clear, which is not something to be
  * doing on a call.
  */
@@ -738,6 +740,11 @@ function renderOpenHandoff(el, p, browser, mirror) {
     const release = el.querySelector('#release');
     if (release) release.onclick = () => void releaseCode(p.code);
 
+    wireCopy(el);
+}
+
+/** Make every copy button inside `el` work. */
+function wireCopy(el) {
     for (const b of el.querySelectorAll('[data-copy]')) {
         b.onclick = async () => {
             try {
@@ -755,6 +762,89 @@ function renderOpenHandoff(el, p, browser, mirror) {
             setTimeout(() => { b.textContent = 'Copy'; }, 1600);
         };
     }
+}
+
+// ── starting a condition ─────────────────────────────────────────────────────
+
+/**
+ * The steps for starting the condition on screen, with the commands filled in.
+ *
+ * The player's command was written down in the guide alone, which is a file
+ * nobody opens while a participant is waiting. Worse, the two things that make it
+ * work, stopping the daemon first and starting it again afterwards, were a
+ * sentence in the middle of a paragraph, so the failure they prevent (the player
+ * refusing to run, or the daemon never coming back for the live half) turned up
+ * mid-session. The folder and the frames differ per participant, so the commands
+ * are built here rather than copied by hand from a fixed example.
+ */
+function renderRunning() {
+    const el = $('#running');
+    if (!el) return;
+    const p = state.participants.find((x) => x.code === state.selected);
+    if (!p) return;
+
+    const codoc = state.condition === 'codoc';
+    const project = projectFor(p, state.condition);
+    const folder = `~/codoc-study/${project}`;
+    const watch = `~/codoc-study/codoc watch --root ${folder}`;
+    const player = `python3 ~/codoc-study/replay/play.py ${folder} `
+        + `~/codoc-study/replay/frames/${project}/${state.condition}`;
+
+    const line = (text, command) => `<li>${text}${command ? `
+        <div class="give-row">
+          <code>${esc(command)}</code>
+          <button data-copy="${esc(command)}">Copy</button>
+        </div>` : ''}</li>`;
+
+    const steps = [
+        line(`They open <code>${esc(folder)}</code> in VS Code and answer the trust
+              prompt with "Yes, I trust the authors". Until they do, VS Code turns
+              every extension off and the session records nothing.`),
+        codoc ? line('They open a terminal inside VS Code, start the daemon, and leave '
+            + 'it running for the whole condition.', watch) : null,
+        codoc
+            ? line('They open the description with Cmd+Shift+P and "codoc: Open", start '
+                + 'the agent with <code>./claude-study</code> in a second terminal, and '
+                + 'open a third for running the project.')
+            : line('They start the agent with <code>./claude-study</code> in a terminal '
+                + 'inside VS Code, and open a second for running the project. '
+                + '<code>CLAUDE.md</code> is picked up on its own.'),
+        line('They run "Study logger: show what is being recorded" from Cmd+Shift+P, '
+            + 'and read you the snapshot count. Anything above zero is fine. A zero '
+            + 'here is the one fault that cannot be repaired afterwards.'),
+        line('They work through their own page as far as the task card. You read the '
+            + 'card out and ask what they expect the agent to have done.'),
+        codoc ? line('They stop the daemon with Ctrl+C in its terminal. The player '
+            + 'refuses to run while a live daemon owns the workspace, because the two '
+            + 'would write the same files.') : null,
+        line('They run the player and watch. It takes about three minutes.', player),
+        codoc ? line('They start the daemon again in the same terminal, with the command '
+            + 'from step 2. Everything after their first prompt is live.', watch) : null,
+    ].filter(Boolean);
+
+    el.innerHTML = `
+      <h3>Starting the condition ${codoc ? 'with codoc' : 'without codoc'}</h3>
+      <p class="hint">Their project for this half is <strong>${esc(project)}</strong>,
+      so every command below names that folder. They type them, on the screen you
+      are watching.</p>
+      <ol class="do">${steps.join('')}</ol>
+
+      <div class="say">
+        <h4>What to say while it plays</h4>
+        <p class="quote">You asked for this before you went out, and the agent worked
+        on it while you were away. Here is what it did. Watch it come in, and when it
+        stops, decide what to keep.</p>
+        <p class="hint">Do not call it a recording during the session, and do not say
+        whether anything in the change is right or wrong. If they ask, tell them to
+        work from the card and what they find in the project.</p>
+      </div>
+
+      <p class="hint">If the player says the daemon is running, the Ctrl+C did not
+      land. If it stops partway, run it again, because it restores the starting state
+      first. For a dry run of your own, <code>--speed 2</code> plays it faster and
+      <code>--step</code> waits for Enter between frames.</p>`;
+
+    wireCopy(el);
 }
 
 // ── the forms ────────────────────────────────────────────────────────────────
@@ -968,7 +1058,7 @@ function projectFor(p, condition) {
  * What the participant answered, and how long it took them.
  *
  * Read only. The quiz is multiple choice and they answer it themselves, so
- * there is nothing to mark by hand — and a researcher marking during a session
+ * there is nothing to mark by hand, and a researcher marking during a session
  * would be scoring while listening, which is how a score ends up reflecting how
  * well somebody explained rather than what they knew.
  *

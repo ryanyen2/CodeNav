@@ -102,14 +102,14 @@ export const BANDS = Object.freeze(['Purpose', 'Rationale', 'Change', 'Extension
  * The whole quiz, asked twice: once before the task and once after.
  *
  * Asking the same twelve both times is the point. Neither answer on its own says
- * much — somebody may know the domain, or may guess well — and the CHANGE
+ * much, somebody may know the domain, or may guess well, and the CHANGE
  * between them is what a session did to their understanding. Splitting the
  * questions across the two sittings would make the two scores incomparable.
  */
 // One sitting. The quiz used to be asked again after the task, and the change
 // between the two was the measure; both sittings asked about the CODEBASE. What
 // comes after the task now is a different set, closed book and in their own
-// words, about the change they themselves made — see REFLECTION in the
+// words, about the change they themselves made, see REFLECTION in the
 // instrument. It has no answer key, so it is not scored here.
 export const SITTINGS = Object.freeze(['before']);
 

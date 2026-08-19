@@ -46,7 +46,7 @@ export const deleteDoc = async (ref) => {
 export const getDoc = async (ref) => {
   // The participant document is unreadable by a participant in production
   // (rules: isExperimenter only), so the stub denies it the same way. Every
-  // page test then runs through the denial the page actually gets — the old
+  // page test then runs through the denial the page actually gets, the old
   // always-succeeding stub is how "denied read marks the page offline and no
   // answer is ever saved" passed sixteen tests.
   const path = (ref && ref.path) || '';
@@ -95,7 +95,7 @@ async function loadPage(page, storage, code = 'p-abcdefghjkmn') {
     for (const [k, v] of Object.entries(storage || {})) dom.window.localStorage.setItem(k, v);
 
     // jsdom ships no canvas, so without this every page test took the task
-    // card's no-canvas fallback — the branch that writes the words into the DOM
+    // card's no-canvas fallback, the branch that writes the words into the DOM
     // as text. The branch a participant actually gets was the one never
     // exercised, which is the wrong way round for the control that stops them
     // pasting the card at the agent. It records nothing; it only has to exist.
@@ -128,8 +128,8 @@ async function loadPage(page, storage, code = 'p-abcdefghjkmn') {
     }
     // Every window this file makes, so they can all be shut at the end.
     //
-    // A page is allowed to run a repeating timer — the question round shows a
-    // countdown — and a jsdom window with a pending timer keeps Node's event
+    // A page is allowed to run a repeating timer, the question round shows a
+    // countdown, and a jsdom window with a pending timer keeps Node's event
     // loop alive. Left open, this file ran every assertion, passed, and then
     // never exited, which reads exactly like a hung test.
     OPEN.push(dom);
@@ -178,7 +178,11 @@ test('the dashboard hands over a link and a command, both carrying the code', as
         docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'baseline-first' }) }],
     });
 
-    const shown = [...document.querySelectorAll('.give-row code')].map((c) => c.textContent);
+    // Scoped to the handoff card. The starting checklist further down the page
+    // draws its commands in the same rows, and an unscoped query would count
+    // those too.
+    const shown = [...document.querySelectorAll('#handoff .give-row code')]
+        .map((c) => c.textContent);
     assert.equal(shown.length, 2, 'a link and a command');
     // The order AND the language have to ride in the link: a participant cannot
     // read their own record, so anything missing from the link is a session run
@@ -197,8 +201,52 @@ test('a participant created in another language gets it on their link', async ()
         docs: [{ id: 'p-abcdefghjkmn',
             data: () => ({ createdAt: 1, order: 'codoc-first', lang: 'zh-Hans' }) }],
     });
-    const shown = [...document.querySelectorAll('.give-row code')].map((c) => c.textContent);
+    const shown = [...document.querySelectorAll('#handoff .give-row code')]
+        .map((c) => c.textContent);
     assert.match(shown[0], /&lang=zh-Hans$/);
+});
+
+test('the dashboard carries the commands for starting the condition on screen', async () => {
+    // The player's command lived in the guide alone, which nobody opens while a
+    // participant is waiting, and the two steps that make it work, stopping the
+    // daemon first and starting it again for the live half, were a sentence in
+    // the middle of a paragraph. Both folder and frames differ per participant,
+    // so a fixed example in a document is also a command to be edited by hand.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+
+    const run = document.querySelector('#running');
+    assert.ok(run, 'the checklist is on the participant page');
+    const copyable = [...run.querySelectorAll('[data-copy]')].map((b) => b.dataset.copy);
+    // codoc-first means scribe is the codoc project, and the tab opens on codoc.
+    assert.ok(copyable.includes(
+        'python3 ~/codoc-study/replay/play.py ~/codoc-study/scribe'
+        + ' ~/codoc-study/replay/frames/scribe/codoc'),
+    `the player command is copyable, got: ${copyable.join(' | ')}`);
+    assert.ok(copyable.includes('~/codoc-study/codoc watch --root ~/codoc-study/scribe'),
+        'and so is the daemon, which has to be stopped and started around it');
+
+    const said = run.textContent.replace(/\s+/g, ' ');
+    assert.match(said, /stop the daemon with Ctrl\+C/i, 'the player will not run otherwise');
+    assert.match(said, /start the daemon again/i, 'and the live half needs it back');
+    const script = run.querySelector('.say .quote').textContent;
+    assert.ok(!/record(ed|ing)/i.test(script),
+        'the words to say out loud do not give the design away');
+    assert.match(said, /do not call it a recording/i, 'and the card says so in as many words');
+
+    // The other condition is a different project, so its commands must move with
+    // the tab. A checklist naming the wrong folder replays somebody else's change.
+    const tabs = [...document.querySelectorAll('#tabs button')];
+    tabs.find((b) => b.textContent === 'Without codoc').click();
+    const other = [...document.querySelectorAll('#running [data-copy]')]
+        .map((b) => b.dataset.copy);
+    assert.ok(other.some((c) => c.includes('frames/tally/baseline')),
+        `the other condition names its own frames, got: ${other.join(' | ')}`);
+    assert.ok(!other.some((c) => c.includes('codoc watch')),
+        'and there is no daemon to start in the condition without one');
 });
 
 test('it says which half of the handoff has not landed', async () => {
@@ -611,7 +659,7 @@ async function participantAt(at, code = 'p-abcdefghjkmn') {
 test('every step in the session renders', async () => {
     // Two steps had no view at all. `buildSteps` emitted `break` and
     // `scenarios`, `VIEWS` defined neither, and reaching either threw
-    // "VIEWS[step.kind] is not a function" — halfway through a session, on a
+    // "VIEWS[step.kind] is not a function", halfway through a session, on a
     // call. Every other test passed: they checked the ORDER of the steps and
     // the CONTENT of the views, and nothing had ever walked one into the other.
     const { buildSteps } = await import('../participant/steps.js');
@@ -695,6 +743,32 @@ test('the study instruction and the clock are on the page, not on the card', asy
     }
 });
 
+test('the task page answers what a person walking in cold would ask', async () => {
+    // The card on its own reads as a request with no author and no occasion. Who
+    // made the change, what is about to happen in the terminal, and what counts
+    // as finished were all things the researcher improvised on the call, which
+    // made the framing differ between participants.
+    const { buildSteps } = await import('../participant/steps.js');
+    const steps = buildSteps('codoc-first');
+    const at = steps.findIndex((s) => s.kind === 'task');
+    const { document } = await participantAt(at);
+    const text = document.querySelector('#stage').textContent.replace(/\s+/g, ' ');
+
+    assert.match(text, /you asked your coding agent/i, 'who asked for the change');
+    assert.match(text, new RegExp(steps[at].project), 'and which project it is about');
+    assert.match(text, /worked while you were away/i, 'who did it, and when');
+    assert.match(text, /about three minutes/i, 'how long the change takes to arrive');
+    assert.match(text, /leave the keyboard alone/i, 'and what to do while it does');
+    assert.match(text, /nothing committed/i, 'what they are then looking at');
+    assert.match(text, /carries on the same conversation/i, 'and that the agent is still there');
+
+    // Two things that must never be on it. Naming the recording gives the design
+    // away, and saying anything is wrong hands over the detection being measured.
+    assert.ok(!/record(ed|ing)/i.test(text), 'the page does not say it was recorded');
+    assert.ok(!/(mistake|bug|wrong|broken|defect|error)/i.test(text),
+        'and nothing suggests there is anything to find');
+});
+
 test('the setup step offers the download rather than naming a file nobody has', async () => {
     const { buildSteps } = await import('../participant/steps.js');
     const at = buildSteps('codoc-first').findIndex((s) => s.kind === 'setup');
@@ -759,7 +833,7 @@ test('a pilot can jump to a step, and everything skipped is filled and marked', 
 test('the denied participant read does not take the page offline', async () => {
     // The rules deny a participant their own participant document, by design.
     // That read used to share a try/catch with sign-in, so its guaranteed
-    // permission-denied set online=false — and every browser-side answer of a
+    // permission-denied set online=false, and every browser-side answer of a
     // whole cohort stayed in localStorage, while the dashboard read n=0. The
     // stub now denies that read the way production does; this asserts an
     // answered step still reaches the server.
