@@ -30,6 +30,7 @@ import { createAskBar, type AskBarHandle } from './ask-bar';
 import { stepsByFid, type AskStep } from '../state/ask-model';
 import { createFindView, type FindViewHandle } from './find-view';
 import { createTimelineBar, type HistoryIndex, type TimelineBarHandle } from './timeline-bar';
+import { isHumanActor } from '../state/history-claims';
 import { renderRevisionPage } from './revision-view';
 import {
     buildTimeline, changesAt, liveSnapshot, snapshotAt, type Moment, type Timeline,
@@ -465,6 +466,8 @@ function renderHistory(): void {
     const after = snapshotAt(live, timeline, historyIndex as number);
     const before = snapshotAt(live, timeline, (historyIndex as number) - 1);
     const page = renderRevisionPage(before, after, changesAt(live, timeline, historyIndex as number), {
+        // Which channel the moment's diff is drawn in — see revision-view.runNodes.
+        human: isHumanActor(timeline.moments[historyIndex as number]?.actor ?? ''),
         onOpenRef: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
         onSelect: fid => setSelected(fid, false),
     });
@@ -660,12 +663,18 @@ function flashAccept(row: HTMLElement | null): void {
     window.setTimeout(() => row.classList.remove('ce-accept-flash'), 120);
 }
 
-/** The ⌘S save-shimmer (§C.3): EVERY captured rail in view recolours blue→green staggered
- *  top-to-bottom — the doc margin shimmers green on one keystroke. Fired from `onCommit`, so
+/** The ⌘S save-shimmer (§C.3): every unsent marker in view recolours staggered top-to-bottom
+ *  — the doc margin acknowledges the whole commit on one keystroke. Fired from `onCommit`, so
  *  it covers BOTH commit paths (⌘S inside the editor and the toolbar button). Gated in
- *  motion.ts (reduced motion → no shimmer; the rails still graduate to pending on reconcile). */
+ *  motion.ts (reduced motion → no shimmer; the markers still graduate on the next payload).
+ *
+ *  It used to sweep `.ce-captured-rail`, the margin rail of a decoration family that no
+ *  longer exists — the settlement redesign replaced it with the node marker, whose
+ *  `open` dot carries exactly the state the shimmer is acknowledging. A selector that
+ *  matches nothing fails silently, which is the whole reason to re-point it rather than
+ *  leave it. */
 function fireSaveShimmer(): void {
-    saveShimmer([...document.querySelectorAll<HTMLElement>('.ce-captured-rail')]);
+    saveShimmer([...document.querySelectorAll<HTMLElement>('.ce-mark .st-human.open')]);
 }
 
 /** Toolbar Commit & send (§C.3): the plane launches "sent" (the shimmer rides `onCommit`).
@@ -961,6 +970,7 @@ function reconcile(): void {
         wholeEditor.setPhases(payload.sync.phase ?? {});
         wholeEditor.setSteps(payload.sync.steps ?? {});
         wholeEditor.setAutoEdits(payload.autoEdits ?? {});
+        wholeEditor.setStages(payload.stages ?? {});
         wholeEditor.setBusy(busyByFid);   // skeleton shimmer + per-section edit guard
         wholeEditor.setSessionLive(payload.sync.sessionLive ?? false);
         wholeEditor.setHistory(payload.history ?? {});   // W2 blame data
@@ -1750,6 +1760,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setPhases(payload.sync.phase ?? {});
     wholeEditor.setSteps(payload.sync.steps ?? {});
     wholeEditor.setAutoEdits(payload.autoEdits ?? {});
+    wholeEditor.setStages(payload.stages ?? {});
     wholeEditor.setBusy(busyByFid);   // skeleton shimmer + per-section edit guard
     wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
     wholeEditor.setDrafts(payload.drafts ?? []);

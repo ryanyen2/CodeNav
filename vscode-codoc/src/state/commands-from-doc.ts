@@ -22,6 +22,14 @@
  * STAYS in the doc, flagged. This is the robustness fix for the accidental-retire class
  * (see docs/plans/2026-08-01-002-doc-attribution-robustness-plan.md).
  *
+ * PLANNED NODES ARE NOT THE HUMAN'S. An agent's proposed ADD is materialized into the
+ * document (state/agent-proposals.ts) so it can be read where it will land rather than in
+ * a widget beside it — and the moment it is in the document, this module would otherwise
+ * see a heading with a localId and no fid and emit `add`, authoring the machine's proposal
+ * as the reader's own edit the next time anything settled. The `proposed` attr is the
+ * signal: a unit carrying one is skipped entirely, in both passes. It leaves the document
+ * the way it arrived, by verdict.
+ *
  * This is NOT the lossy text→doc reconcile that dropped localId (deleted with
  * doc-reconcile.ts, R18): the comparison is identity-keyed, so no node is re-minted
  * and no delete resurrects. Pure + side-effect-free so vitest pins the contract; the
@@ -68,6 +76,7 @@ function headingAttrs(node: PMNode): FeatureHeadingAttrs {
         fid: a.fid ?? null,
         level: typeof a.level === 'number' ? a.level : 0,
         retired: !!a.retired,
+        proposed: (a as { proposed?: string | null }).proposed ?? null,
         realized: a.realized !== false,
         localId: (a as { localId?: string | null }).localId ?? null,
     };
@@ -91,7 +100,7 @@ export function featureUnits(doc: PMNode): FeatureUnit[] {
     // Pass 1 — headings → their identity + parent (level stack) + a bucket for prose.
     interface Head { fid: string | null; localId: string | null; selfId: string | null;
                      title: string; parentId: string | null; retired: boolean;
-                     realized: boolean; desc: PMNode[]; }
+                     realized: boolean; proposed: string | null; desc: PMNode[]; }
     const heads: Head[] = [];
     const indexBySelfId = new Map<string, number>();  // identity → its heading's index (first wins)
     const stack: Array<{ depth: number; id: string | null }> = [];
@@ -109,7 +118,8 @@ export function featureUnits(doc: PMNode): FeatureUnit[] {
         stack.push({ depth, id: selfId });
         if (selfId && !indexBySelfId.has(selfId)) indexBySelfId.set(selfId, heads.length);
         heads.push({ fid, localId, selfId, title: inlineRunsToText(b.content).trim(),
-                     parentId, retired: attrs.retired, realized: attrs.realized, desc: [] });
+                     parentId, retired: attrs.retired, realized: attrs.realized,
+                     proposed: attrs.proposed ?? null, desc: [] });
     }
 
     // Pass 2 — route each paragraph to a feature: its ownerId if that names a live
@@ -125,7 +135,10 @@ export function featureUnits(doc: PMNode): FeatureUnit[] {
         if (idx >= 0) heads[idx].desc.push(b);
     }
 
-    return heads.map(h => ({
+    // A planned node is dropped here rather than filtered at each call site: every
+    // consumer of `featureUnits` is asking "what has the author got?", and a proposal
+    // is not part of that answer anywhere.
+    return heads.filter(h => !h.proposed).map(h => ({
         fid: h.fid, localId: h.localId, title: h.title, parentId: h.parentId,
         retired: h.retired, realized: h.realized,
         description: blocksToDescriptionText(h.desc),

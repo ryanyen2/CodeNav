@@ -244,18 +244,7 @@ body.vscode-high-contrast .row.selected {
     box-shadow: inset -2px 0 0 0 var(--vscode-contrastBorder, var(--vscode-foreground));
 }
 /* HC floor for the captured family (U3): the faint --accent fills wash out under high
-   contrast → pin them to the foreground so "recorded, not sent" stays legible. The lifecycle
-   glyphs (P0) fill with currentColor, so pin the icon-bearing badges + the heading dot via
-   `color`; the gutter rail stays a background. */
-body.vscode-high-contrast .ce-captured-dot,
-body.vscode-high-contrast .ce-pending-dot,
-body.vscode-high-contrast .badge.staged,
-body.vscode-high-contrast .badge.sent,
-body.vscode-high-contrast .badge.proposed { color: var(--vscode-foreground); }
-body.vscode-high-contrast .ce-captured-rail::before { background: var(--vscode-foreground); }
 /* the deletion caret stays vivid in HC (pin to the contrast border); the add underline to fg */
-body.vscode-high-contrast .ce-captured-del { background: var(--vscode-contrastBorder, #d1483f); }
-body.vscode-high-contrast .ce-captured-add { text-decoration-color: var(--vscode-foreground); }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -699,36 +688,24 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 }
 
 /* ── tracked changes (vendored engine: <ins>/<del>) ──────────────────────────
-   Kind = shape (insert underlines, delete strikes — colourblind-safe); the author
-   rides the engine's `--author-color` CSS var (set per mark, falling back to the
-   neutral foreground). Calm by design: no heavy fills. These render agent-authored
-   changes "awaiting your review" (U4) and divergent realizations (U5); a human's own
-   committed edit carries no tracked marks (KTD2). Reduced-motion/HC gates are global. */
-ins[data-change-id] {
-    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px;
-    text-decoration-color: var(--author-color, var(--vscode-foreground));
-    color: color-mix(in srgb, var(--author-color, var(--vscode-foreground)) 80%, var(--vscode-foreground));
+   STRUCTURAL ONLY. These marks still do essential work — they are what keeps a
+   proposal's words out of `tree.codoc` (`inlineRunsToText` drops insertion-marked
+   runs) and what a reject deletes — but they no longer PAINT anything.
+
+   They used to, in a per-author tint, and that was one of the three underlines the
+   settlement redesign collapsed: an agent's proposal was ink-coloured here, the
+   author's own edit was underlined by captured-decorations, and the loop's rewrite
+   was underlined again by auto-edit-decorations, in three hues with no shared
+   grammar. The plan channel now owns ONE axis — opacity — and paints from the model
+   (`.ce-settle.plan`), so styling the same characters here would double the mark and
+   put the two encodings in a fight the reader has to arbitrate.
+
+   Author identity did not vanish with the tint; it moved to where it can be read
+   rather than decoded — the provenance card and the node marker's hover. */
+ins[data-change-id], del[data-change-id], span[data-change-id] {
+    text-decoration: none;
+    color: inherit;
 }
-del[data-change-id] {
-    text-decoration: line-through; text-decoration-color: var(--author-color, var(--fg-muted));
-    color: var(--fg-muted);
-}
-/* Per-agent tint (F7): the engine marks carry the author role in data-author-id; map
-   each to its --ink-* so two agents' proposals read as distinct ink. Themeable here
-   (the mark's authorColor attr is left blank so this CSS, not an inline style, drives
-   the hue). ONE human case produces these marks: a deferred edit of the reader's own
-   (loop_b._resolve_content), which inks in the human's neutral --ink-human — the same
-   "the human is the default author, no hue" rule .codoc-role-human follows. Without a
-   rule it fell through to the generic foreground and read as nobody's. */
-ins[data-author-id="human"],       del[data-author-id="human"]       { --author-color: var(--ink-human); }
-ins[data-author-id="claude-code"], del[data-author-id="claude-code"] { --author-color: var(--ink-claude); }
-ins[data-author-id="codex"],       del[data-author-id="codex"]       { --author-color: var(--ink-codex); }
-ins[data-author-id="gemini"],      del[data-author-id="gemini"]      { --author-color: var(--ink-gemini); }
-ins[data-author-id="cursor"],      del[data-author-id="cursor"]      { --author-color: var(--ink-cursor); }
-ins[data-author-id="loop"],        del[data-author-id="loop"]        { --author-color: var(--ink-claude); }
-/* a pure formatting change (no text add/del) — a quiet dotted underline in author tint */
-[data-change-id].codoc-format-change,
-span[data-change-id] { text-decoration-style: solid; }
 
 /* authorship (U6): opacity = commitment mode, tint + dotted underline = role.
    pen = solid baseline (human-authored, no decoration); pencil = tentative. */
@@ -1017,88 +994,16 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
     text-decoration: underline dotted color-mix(in srgb, var(--ce-staged) 70%, transparent);
     text-decoration-thickness: 1px; text-underline-offset: 3px;
 }
-
-/* "Captured" (U3) = lifecycle phase 1: EVERY user edit, recorded & staged LOCALLY but
-   NOT yet sent. The calmest member of the rail family — a DOTTED accent rail + a small
-   solid faint dot — softer than pending (dashed, breathing) and resolving (pulsing), so
-   the progression captured → pending → resolving reads as intensifying. Static (the
-   appearance is the recognition; nothing to gate). Save / Commit (hand-off) graduates a
-   captured feature to pending; a prose edit clears once the daemon renders it back.
-
-   The rail draws from a `--shimmer` colour (default = the captured/editing hue): on ⌘S /
-   Commit, motion.ts tweens that var blue→green top-to-bottom (the §C.3 save-shimmer), so the
-   whole doc margin sweeps to the staged hue in one keystroke. Reduced motion skips the tween;
-   the rails simply graduate to pending on the next reconcile. */
-.ce-captured-rail { position: relative; --shimmer: var(--ce-editing); }
-.ce-captured-rail::before {
-    content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
-    width: 2px; border-radius: 1px;
-    background: repeating-linear-gradient(to bottom,
-        color-mix(in srgb, var(--shimmer) 55%, transparent) 0 2.5px, transparent 2.5px 5px);
-}
-.ce-captured-dot {
-    display: inline-flex; align-items: center;
-    margin-left: 10px; vertical-align: middle; user-select: none;
-    color: color-mix(in srgb, var(--ce-editing) 80%, transparent);
-}
 /* (the tree-row twin .badge.staged now hosts a circle-dashed glyph — see the badges block) */
-
-/* ── the loop rewrote this while you weren't looking (v6, auto-edit-decorations) ─
-   Same SHAPE as your own uncommitted edit — a gutter rail plus an underline on the
-   words that moved — because "something changed here, and here is what" is one idea
-   and should not need a second visual language depending on who did it. What differs
-   is the INK: your edits are the editing hue, the loop's are neutral foreground,
-   since this is not a phase of your work and borrowing a lifecycle colour would
-   imply it was. Solid rail vs the captured rail's dashes: dashed has meant "yours,
-   provisional, not sent" throughout, and this is neither yours nor provisional —
-   it already landed. */
-.ce-autoedit { position: relative; }
-.ce-autoedit::before {
-    content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
-    width: 2px; border-radius: 1px;
-    background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
-}
-/* it displaced YOUR sentences — the one case worth more than a neutral rail */
-.ce-autoedit.mine::before { background: color-mix(in srgb, var(--ce-del) 65%, transparent); }
-.ce-autoedit-add {
-    text-decoration: underline dotted color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
-    text-decoration-thickness: 1.5px; text-underline-offset: 3px;
-}
-.ce-autoedit.mine .ce-autoedit-add {
-    text-decoration-color: color-mix(in srgb, var(--ce-del) 70%, transparent);
-}
-/* (the v6 heading chip is gone — the WHY now rides the Keep/Restore strip's origin
-   label, `.ce-verdict.autoedit .ce-tc-dir`, see the v7 block at the end) */
-/* Arrival only, and only if you are looking at it: the rail draws down. There is no
-   catch-up animation for marks that were already there when you scrolled to them —
-   replaying changes you missed reads as the UI talking to itself. */
-@keyframes ce-autoedit-in { from { transform: scaleY(0); } to { transform: scaleY(1); } }
-.ce-autoedit::before { transform-origin: top; animation: ce-autoedit-in 220ms var(--ease-out); }
-@media (prefers-reduced-motion: reduce) { .ce-autoedit::before { animation: none; } }
-body.vscode-reduce-motion .ce-autoedit::before,
-body.vscode-using-screen-reader .ce-autoedit::before { animation: none; }
-body.vscode-high-contrast .ce-autoedit::before { background: var(--vscode-foreground); }
-body.vscode-high-contrast .ce-autoedit-add { text-decoration-color: var(--vscode-foreground); }
+/* The loop-rewrite margin rail and its in-prose diff are gone: that IS the settlement
+   model's code channel now (`.ce-settle.code`, a green/red ground), so the only thing
+   left on this surface is the Keep / Restore verdict and the toolbar line that counts
+   what is owed. The WHY rides the strip's origin label, `.ce-verdict.autoedit .ce-tc-dir`. */
 /* the toolbar catch-up line — present only while something is owed */
 .toolbar .toggle.autoedits { color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent); }
 .toolbar .toggle.autoedits .ce-icon { width: 11px; height: 11px; vertical-align: -1px; }
 /* glance mode hides prose, so the in-prose marks go with it; the toolbar line stays */
 body.glance .ce-whole-surface .ce-verdict.autoedit { display: none; }
-
-/* In-situ captured DIFF (the user's own live edit, vs the last-committed baseline):
-   ADDED words get a solid accent underline; DELETED text — which has no glyph left to
-   mark — gets a thin orange-red caret at the gap ("I don't think" → "I| think"). Both
-   persist until ⌘S/Commit. Static (no motion). The deletion caret is the one place a
-   removal hue is warranted: there is no text to carry the signal, so colour does. */
-.ce-captured-add {
-    text-decoration: underline solid color-mix(in srgb, var(--ce-editing) 85%, transparent);
-    text-decoration-thickness: 1.5px; text-underline-offset: 3px;
-}
-.ce-captured-del {
-    display: inline-block; width: 2px; height: 1.05em; margin: 0 -1px; border-radius: 1px;
-    vertical-align: text-bottom; user-select: none;
-    background: var(--ce-del);
-}
 
 .codoc-feature-heading[data-level="0"] { font-size: 1.6rem;  font-weight: 750; margin: 1.9em 0 0.5em; }
 .codoc-feature-heading[data-level="1"] { font-size: 1.24rem; font-weight: 680; margin: 1.5em 0 0.4em; }
@@ -2179,25 +2084,12 @@ body.vscode-high-contrast .ce-tick.st-rewritten,
 body.vscode-high-contrast .ce-tick.st-sent,
 body.vscode-high-contrast .ce-tick.st-working,
 body.vscode-high-contrast .ce-tick.st-busy { background: var(--vscode-foreground); animation: none; }
-
-/* ── the loop's rewrite as a REVIEW surface (v7, auto-edit-decorations) ────────
-   The other half of the diff: the displaced words, struck through where they
-   stood. Amber (--ce-del) is already the "something was taken away" hue. */
-.ce-autoedit-del {
-    text-decoration: line-through;
-    text-decoration-color: color-mix(in srgb, var(--ce-del) 80%, transparent);
-    text-decoration-thickness: 1.5px;
-    color: color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
-    user-select: none; padding: 0 1px;
-}
-.ce-autoedit-del.mine { color: color-mix(in srgb, var(--ce-del) 70%, var(--vscode-foreground) 30%); }
 /* An unresolved rewrite is a decision owed, not an ornament: its strip stays
    readable WITHOUT hover (same standing the code-writing verdicts earn), and full
    strength when it displaced the reader's own words. */
 .ce-verdict.autoedit { opacity: 0.75; }
 .ce-verdict.autoedit.mine { opacity: 1; }
 .ce-verdict.autoedit .ce-tc-dir { color: color-mix(in srgb, var(--ce-del) 60%, var(--fg-muted)); }
-body.vscode-high-contrast .ce-autoedit-del { color: var(--vscode-foreground); }
 
 /* ── editable ghosts (suggestion-decorations): a proposal is a draft, not a
    take-it-or-leave-it block ──────────────────────────────────────────────────── */
@@ -2666,19 +2558,14 @@ body.history .tree { opacity: 0.55; }
 /* The diff itself: added words underlined, removed words struck where they stood.
    Same grammar as the loop-rewrite review surface, so a reader who has learned one has
    learned both. */
-.ce-past-add {
-    text-decoration: underline;
-    text-decoration-color: color-mix(in srgb, var(--ce-staged) 85%, transparent);
-    text-decoration-thickness: 1.5px; text-underline-offset: 3px;
-    color: var(--fg-strong);
-}
-.ce-past-del {
-    text-decoration: line-through;
-    text-decoration-color: color-mix(in srgb, var(--ce-del) 85%, transparent);
-    text-decoration-thickness: 1.5px;
-    color: var(--fg-faint);
-}
+/* The moment's own diff is drawn by the SETTLEMENT grammar (`.ce-settle`, in the
+   channel of whoever made the change), not by a private past-only encoding. The two
+   rules the past adds are about being the past, not about being a diff: the whole page
+   is tinted and non-interactive, and a section that was removed recedes. */
 .ce-past-gone { opacity: 0.75; }
+/* Nothing in a reconstruction is live, so the one animated state in the grammar is
+   inert here — a pulse means "⌘S sends this", and there is nothing to send in Tuesday. */
+.ce-past-doc .ce-settle.human.open { animation: none; }
 
 /* The honest failure, stated in the reader's own page rather than swallowed. */
 .ce-past-unresolved {
@@ -2691,8 +2578,6 @@ body.history .tree { opacity: 0.55; }
 
 /* High-contrast floors: every cue above rests on a tint, which washes out under HC. */
 body.vscode-high-contrast .ce-past-feature.changed::before { background: var(--vscode-contrastBorder); }
-body.vscode-high-contrast .ce-past-add { text-decoration-color: var(--vscode-contrastBorder); }
-body.vscode-high-contrast .ce-past-del { text-decoration-color: var(--vscode-contrastBorder); }
 body.vscode-high-contrast .ce-tl-tick { background: var(--vscode-contrastBorder); }
 body.vscode-high-contrast .ce-tl-now,
 body.vscode-high-contrast .ce-tl-diff { border: 1px solid var(--vscode-contrastBorder); }
@@ -2777,3 +2662,162 @@ body.vscode-high-contrast .ce-cmt-anchor-mark { border-color: var(--vscode-contr
 }
 .ce-cmt-reply-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 2px; }
 .ce-cmt-reply-body { font: 11.5px/1.5 var(--font-doc); color: var(--fg-body); }
+
+/* ══ Settlement: one axis per channel ══════════════════════════════════════════
+   The three channels (state/settlement.ts) each own a DIFFERENT property of the
+   text, and that is the whole reason the surface needs no legend:
+
+     human → the INK       blue, because it is the one channel you can still act on
+     plan  → the OPACITY   faded, because nothing has been built
+     code  → the GROUND    green / red, because a background is what a diff wears
+
+   A span carrying two claims therefore shows both. Planned wording that the build
+   cut back reads as the plan's own faded words over a red ground — no rule had to
+   be written for that combination, and none should be: composition is the design.
+
+   What is NOT here is as deliberate. No underlines: the old surface spent that one
+   axis three times over (captured add, agent insertion, blame authorship) in hues
+   whose meanings were not guessable and which vanished when stacked. No per-channel
+   badge in the prose either — the margin marker (node-status.ts) is where a node's
+   state is reported, and reporting it twice teaches the reader to trust neither. */
+:root {
+    --st-human: var(--ce-editing);              /* the author's ink — calm blue      */
+    --st-plan:  var(--vscode-foreground);       /* plan text is the doc's own ink,    */
+                                                /*   distinguished by opacity alone   */
+    --st-code-add: #6f9e78;   /* muted garden green — the codebase added this        */
+    --st-code-del: #c07b7b;   /* dusty rose — the codebase no longer says this        */
+    /* Opacity is the plan channel's only axis, so its two stages are the two values
+       here and nothing else changes between them: proposed is barely there, accepted
+       has been agreed to and reads closer to ordinary prose — while still not being it. */
+    --st-plan-proposed: 0.42;
+    --st-plan-accepted: 0.66;
+    /* Grounds stay low: a diff background has to sit UNDER body text without
+       competing with it, and these are read across a whole paragraph, not a chip. */
+    --st-ground: 16%;
+    --st-ground-hc: 34%;
+}
+
+/* ── human: the ink ──────────────────────────────────────────────────────────── */
+.ce-settle.human { color: var(--st-human); }
+/* Committed text keeps the ink and drops the motion — it is still yours, there is
+   just nothing left to do about it. */
+.ce-settle.human.committed { color: color-mix(in srgb, var(--st-human) 82%, var(--vscode-foreground)); }
+
+/* The ONLY motion in the settlement grammar, on the ONLY state with an action
+   attached (⌘S). It breathes on the colour rather than on size or position, so it
+   never reflows a line of prose the reader is in the middle of. */
+@keyframes ce-settle-breathe {
+    0%, 100% { color: var(--st-human); }
+    50%      { color: color-mix(in srgb, var(--st-human) 62%, var(--vscode-foreground)); }
+}
+.ce-settle.human.open { animation: ce-settle-breathe 2.6s var(--ease) infinite; }
+@media (prefers-reduced-motion: reduce) { .ce-settle.human.open { animation: none; } }
+body.vscode-reduce-motion .ce-settle.human.open,
+body.vscode-using-screen-reader .ce-settle.human.open { animation: none; }
+
+/* ── plan: the opacity ───────────────────────────────────────────────────────── */
+.ce-settle.plan { color: var(--st-plan); opacity: var(--st-plan-proposed); }
+.ce-settle.plan.accepted { opacity: var(--st-plan-accepted); }
+/* Accepting is the one transition worth animating besides the pulse, because it is a
+   thing the reader just DID and the feedback confirms it landed. */
+.ce-settle.plan { transition: opacity var(--dur-slow, 260ms) var(--ease); }
+
+/* ── code: the ground ────────────────────────────────────────────────────────── */
+.ce-settle.code.add {
+    background: color-mix(in srgb, var(--st-code-add) var(--st-ground), transparent);
+    /* Line-level, so the ground runs to the edges of the words rather than boxing
+       each one: padding + a shared radius makes a run of adjacent spans read as one
+       highlighted line instead of a row of separate chips. */
+    padding: 0.08em 0; border-radius: 2px;
+    box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+
+/* ── deletions: the words, not a caret ───────────────────────────────────────── */
+/* A caret says something went and withholds the one fact you need to decide whether
+   you mind. The removed words are the message, struck where they stood. */
+.ce-settle-ghost {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+    opacity: 0.72;
+    padding: 0.08em 0.15em; border-radius: 2px;
+    /* Never editable, never selectable-into: it is a report, not text. */
+    user-select: none; cursor: default;
+}
+.ce-settle-ghost.code {
+    background: color-mix(in srgb, var(--st-code-del) var(--st-ground), transparent);
+    text-decoration-color: color-mix(in srgb, var(--st-code-del) 70%, transparent);
+}
+.ce-settle-ghost.human { color: var(--st-human); text-decoration-color: var(--st-human); }
+.ce-settle-ghost.plan { opacity: calc(var(--st-plan-proposed) * 0.9); }
+
+/* High contrast: hues carry no meaning that is not also carried by ink weight or the
+   strike, but the grounds must still be visible, so they are pinned up rather than
+   dropped — and the pulse goes, since HC users routinely have motion off too. */
+body.vscode-high-contrast .ce-settle.code.add {
+    background: color-mix(in srgb, var(--st-code-add) var(--st-ground-hc), transparent);
+    outline: 1px solid var(--vscode-contrastBorder);
+}
+body.vscode-high-contrast .ce-settle-ghost.code {
+    background: color-mix(in srgb, var(--st-code-del) var(--st-ground-hc), transparent);
+}
+body.vscode-high-contrast .ce-settle.human { color: var(--vscode-foreground); font-weight: 600; }
+body.vscode-high-contrast .ce-settle.plan { opacity: 1; font-style: italic; }
+
+/* ══ The node marker (state/node-status.ts) ════════════════════════════════════
+   Up to three glyphs, each answering a different question, each in the ink its
+   channel already owns in the prose: whose it is, whether it was planned, whether
+   the build drifted. A settled feature draws none — which is most of the document,
+   and is what keeps the margin quiet enough for the exceptions to register. */
+.ce-mark { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; vertical-align: middle; }
+.ce-mark > span { display: inline-block; }
+
+/* An outline is a promise; a fill is a fact. Both rings fill on the same event —
+   the claim reached the code — so the one rule is learned once and read twice. */
+.ce-mark .st-human, .ce-mark .st-plan {
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid currentColor; background: transparent;
+}
+.ce-mark .st-human { color: var(--st-human); }
+.ce-mark .st-plan  { color: color-mix(in srgb, var(--vscode-foreground) 46%, transparent); }
+.ce-mark .st-plan.accepted { color: color-mix(in srgb, var(--vscode-foreground) 68%, transparent); }
+.ce-mark .st-human.fulfilled, .ce-mark .st-plan.fulfilled { background: currentColor; }
+
+/* The same breathe as the prose, on the same state, for the same reason. */
+@keyframes ce-mark-breathe {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.42; }
+}
+.ce-mark .st-human.open { animation: ce-mark-breathe 2.6s var(--ease) infinite; }
+@media (prefers-reduced-motion: reduce) { .ce-mark .st-human.open { animation: none; } }
+body.vscode-reduce-motion .ce-mark .st-human.open,
+body.vscode-using-screen-reader .ce-mark .st-human.open { animation: none; }
+
+/* The drift sign is a glyph and not a dot, because it reports a QUANTITY of change
+   in a direction — which a dot cannot do, and which is exactly what the accumulated
+   marker exists to say. */
+.ce-mark .st-diff {
+    font: 10px/1 var(--font-mono); font-weight: 700;
+    color: color-mix(in srgb, var(--vscode-foreground) 62%, transparent);
+}
+.ce-mark .st-diff.add { color: var(--st-code-add); }
+.ce-mark .st-diff.del { color: var(--st-code-del); }
+
+body.vscode-high-contrast .ce-mark .st-human,
+body.vscode-high-contrast .ce-mark .st-plan { border-color: var(--vscode-contrastBorder); }
+body.vscode-high-contrast .ce-mark .st-diff { color: var(--vscode-foreground); }
+
+/* A CUT: words that are still on screen and are proposed to GO — a plan's displaced
+   sentence, or a whole node it proposes to retire. Struck in place, in the plan's own
+   faded ink, because the reader is being asked to compare it with what would replace
+   it. (A `del`, by contrast, is text already gone, so it has to be re-printed as a
+   ghost; there is nothing on screen to strike.) */
+.ce-settle.cut {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+}
+.ce-settle.plan.cut { opacity: calc(var(--st-plan-proposed) * 0.85); }
+.ce-settle.plan.accepted.cut { opacity: calc(var(--st-plan-accepted) * 0.85); }
+body.vscode-high-contrast .ce-settle.cut {
+    text-decoration-color: var(--vscode-foreground);
+}

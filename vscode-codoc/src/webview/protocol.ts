@@ -9,6 +9,7 @@
 import type { FeaturePhase } from '../state/doc-layout';
 import type { PMNode } from '../state/pm-doc';
 import type { Suggestion } from '../state/suggestion-model';
+import type { FeatureStages } from '../state/settlement-stages';
 import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
 import type { HoldDetail, HistoryEntry } from '../state/bindings-model';
@@ -208,6 +209,14 @@ export interface DocPayload {
      *  (human → agent, awaiting implementation). Rendered as persistent inline
      *  word-level diffs that only clear on resolution by the correct party. */
     suggestions?: Suggestion[];
+    /** The settlement model's host half: per feature, the text at each earlier stage
+     *  (state/settlement-stages.ts). The editor adds `live` from the document it holds
+     *  and `committed` from its own hand-off set, then draws every unsettled span from
+     *  the one model. A settled feature is absent, so a settled tree ships nothing.
+     *
+     *  `doc` above ALREADY has the plan materialized into it — `stages` describes what
+     *  that doc is showing; it does not ask the editor to compute it a second time. */
+    stages?: Record<string, FeatureStages>;
     /** Per-feature unified dependency threads (reads / used-by / code refs) for the
      *  inline threads line under each heading + the on-demand peek (U4). */
     threads?: Record<string, ThreadsData>;

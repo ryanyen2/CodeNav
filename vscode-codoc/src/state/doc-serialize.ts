@@ -38,6 +38,7 @@ function headingAttrs(node: PMNode): FeatureHeadingAttrs {
         level: typeof a.level === 'number' ? a.level : 0,
         retired: a.retired === true,
         realized: a.realized !== false,
+        proposed: a.proposed ?? null,
     };
 }
 
@@ -80,6 +81,16 @@ export function renderTreeFromDoc(doc: PMNode): string {
             continue;
         }
         const attrs = headingAttrs(b);
+        // A PLANNED node and its prose are the agent's proposal, materialized into the
+        // document so it can be read where it will land. `tree.codoc` is the authored
+        // tree — exporting a proposal into it would make an unanswered suggestion
+        // indistinguishable from a decision. Skip the heading AND its paragraphs, and
+        // do not let it move `prevDepth`: it is not part of the depth sequence.
+        if (attrs.proposed) {
+            i++;
+            while (i < blocks.length && blocks[i].type !== NODE_FEATURE_HEADING) i++;
+            continue;
+        }
         const depth = Math.max(0, Math.min(attrs.level, prevDepth + 1));
         prevDepth = depth;
         const indent = '  '.repeat(depth);

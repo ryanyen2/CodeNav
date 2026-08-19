@@ -1,30 +1,42 @@
 /**
- * auto-edit-decorations.ts — "codoc rewrote this while you weren't looking",
- * as an IN-SITU reviewable diff with an explicit verdict.
+ * auto-edit-decorations.ts — the VERDICT on an unasked rewrite. Just the verdict.
  *
  * Loop A applies safe ops without asking, and exactly one of them changes what the
- * document SAYS: a small AMEND rewrites a description in place. Everything else the
- * loop does automatically is index machinery and is deliberately never shown (the
- * triage is in `render._auto_edits`).
+ * document SAYS: a small AMEND rewrites a description in place. Nobody is prompted, so
+ * unless the author happens to reread that paragraph they never learn it moved.
  *
- * This used to clear itself when the reader dwelled on the section — and that was
- * the complaint: the one record of "the AI changed your document" evaporated the
- * moment you looked at it, with no way to disagree. It is now the same review
- * surface every other agent change gets: the change drawn as a tracked-change diff
- * IN the prose (old words struck where they stood, new words underlined), plus a
- * quiet Keep / Restore pair on the heading. Nothing clears on its own.
+ * This module used to answer that with a whole review surface of its own — a margin
+ * rail, an underline on the added words, a strikethrough ghost of the displaced ones,
+ * and the Keep / Restore pair. The diff half has moved to `state/settlement.ts`, whose
+ * CODE channel is exactly this fact ("the codebase already says this") drawn in the
+ * grammar every other channel shares. What is left here is the part that was always
+ * this module's own: the decision.
  *
- * The CONSEQUENCE asymmetry with a planned proposal is stated, not implied: this
- * rewrite happened because the CODE already changed. Keep costs nothing (the doc
- * already says this). Restore is a real edit — it re-asserts a claim the code may
- * no longer honor, so it goes back through the authored-command channel where the
- * daemon classifies it and, if it implies code work, holds it for hand-off like any
- * other code-implying edit. The strip's hover text says exactly that.
+ * TWO WORKAROUNDS WENT WITH THE DIFF, and it is worth saying why they are not missed,
+ * because both were compensating for the same structural flaw:
  *
- * Decorations only — the diff is never materialized as engine marks here, because
- * an auto-edit is ALREADY APPLIED: the doc's canonical text is the NEW text, and
- * the baseline-aware serializer (insertions excluded, deletions kept) would render
- * marked prose back to the PREVIOUS text — a phantom revert on the next settle.
+ *   • `locallyEdited` — the layer stood down entirely on a feature the reader had since
+ *     edited, because its diff ran "what it said before" against "what is on screen",
+ *     and once the author typed there, their words sat inside `current` and the
+ *     underline claimed the loop had written them.
+ *   • `arrivedAs` — a module-level memo of what each rewrite looked like on its FIRST
+ *     render, because `locallyEdited` is fed from the draft and held sets, which only
+ *     arrive after a settle; between the first keystroke and that settle the surface
+ *     was drawing the author's own sentence back at them as somebody else's.
+ *
+ * Both existed because the diff had no way to tell the loop's words from the author's
+ * once they shared a paragraph. The settlement model does: code claims are computed
+ * against the projection and carried forward through the author's own diff, and a claim
+ * whose sentence the author has edited is void by construction. So the stale-baseline
+ * problem is answered where it arises instead of being fenced off with two heuristics
+ * that had to agree.
+ *
+ * The verdict keeps its own asymmetry, which is real and is stated in the buttons: this
+ * rewrite happened because the CODE already changed. Keep costs nothing — the document
+ * already says this. Restore is a real edit; it re-asserts a claim the code may no
+ * longer honor, so it goes back through the authored-command channel where the daemon
+ * classifies it and, if it implies code work, holds it for hand-off like any other
+ * code-implying edit.
  */
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
@@ -57,54 +69,6 @@ export interface AutoEditDecorationsOptions {
     handlers?: AutoEditHandlers;
 }
 
-/** The loop's prose is stored as one string with blank-line paragraph breaks — the
- *  same split `_description_lines` round-trips through. */
-function prevParas(prev: string): string[] {
-    return prev.split(/\n{2,}/).map(s => s.trim());
-}
-
-/** A review-diff span: an `add` range to underline in the live text, or a `del`
- *  point carrying the removed text to draw struck-through where it stood. Unlike
- *  captured-decorations' blockDiffSpans, deletions adjacent to insertions are NOT
- *  suppressed — this is a review surface, and "what did it say before" is exactly
- *  the question a replacement raises. */
-export type ReviewSpan =
-    | { kind: 'add'; from: number; to: number }
-    | { kind: 'del'; at: number; text: string };
-
-export function reviewDiffSpans(base: string, current: string, contentStart: number): ReviewSpan[] {
-    const spans: ReviewSpan[] = [];
-    if (base === current) return spans;
-    let curOff = 0;
-    // Sentences, not words. A rewrite by the loop is a rewrite of a CLAIM, and a
-    // word-level diff of one shreds both versions into alternating fragments: the
-    // reader has to reassemble two sentences in their head before they can decide
-    // whether they agree with either. The unit of the decision is the sentence, so
-    // that is the unit shown, struck whole and replaced whole.
-    for (const run of sentenceDiff(base, current)) {
-        if (run.t === 'same') {
-            curOff += run.s.length;
-        } else if (run.t === 'ins') {
-            spans.push({ kind: 'add', from: contentStart + curOff, to: contentStart + curOff + run.s.length });
-            curOff += run.s.length;
-        } else {
-            spans.push({ kind: 'del', at: contentStart + curOff, text: run.s });
-        }
-    }
-    return spans;
-}
-
-function delWidget(at: number, text: string, mine: boolean, key: string): Decoration {
-    const shown = text.replace(new RegExp(ATOM_CHAR, 'g'), '⟦ref⟧');
-    return Decoration.widget(at, () => {
-        const el = document.createElement('del');
-        el.className = 'ce-autoedit-del' + (mine ? ' mine' : '');
-        el.contentEditable = 'false';
-        el.textContent = shown;
-        el.title = 'What this said before codoc rewrote it.';
-        return el;
-    }, { side: -1, key });
-}
 
 /** The verdict strip: origin in plain words, the loop's own recorded WHY, and the
  *  Keep / Restore pair with their consequences spelled out. Mirrors the shape of
@@ -160,17 +124,6 @@ function verdictStrip(
 /** Build the marks for every unresolved rewrite present in this doc. Exported
  *  headless so the anchoring can be tested without a view (the widget factories
  *  only run on render). */
-/**
- * What each unresolved rewrite looked like when it first reached the screen,
- * keyed `fid@at`. Module-scoped for the same reason `ghostDrafts` is: it belongs
- * to the surface rather than to any one transaction, and it is cleared as soon as
- * the rewrite is answered.
- */
-const arrivedAs = new Map<string, string>();
-
-/** Test seam: forget every remembered arrival. */
-export function resetAutoEditMemo(): void { arrivedAs.clear(); }
-
 export function buildAutoEditDecorations(
     doc: PMModelNode, unseen: Record<string, AutoEdit>,
     handlers?: AutoEditHandlers,
@@ -178,8 +131,7 @@ export function buildAutoEditDecorations(
 ): DecorationSet {
     if (!Object.keys(unseen).length) return DecorationSet.empty;
     const decos: Decoration[] = [];
-    interface Para { node: PMModelNode; pos: number }
-    interface Group { fid: string; headNode: PMModelNode; headPos: number; paras: Para[] }
+    interface Group { fid: string; headNode: PMModelNode; headPos: number }
     const groups: Group[] = [];
     let g: Group | null = null;
     doc.forEach((node, pos) => {
@@ -187,81 +139,26 @@ export function buildAutoEditDecorations(
             const fid = node.attrs.fid as string | null;
             // Stand down on a feature the reader has since rewritten themselves.
             //
-            // Not decluttering — correctness. This surface offers "Restore mine", which
-            // re-authors the wording the loop displaced; once the author has edited the
-            // same feature, that wording is two revisions stale and restoring it would
-            // discard their newer text. The verdict is on words that are no longer there.
-            //
-            // It also ends a rail collision: the captured layer draws its own margin rail
-            // on exactly these features, and the two were claiming one `::before`.
+            // Still correctness, and still this module's own concern rather than the
+            // diff's: "Restore mine" re-authors the wording the loop displaced, and once
+            // the author has edited the same feature that wording is two revisions stale
+            // — restoring it would discard their newer text. The verdict is on words
+            // that are no longer there.
             const owed = !!fid && !!unseen[fid] && !locallyEdited?.has(fid);
-            g = owed && fid ? { fid, headNode: node, headPos: pos, paras: [] } : null;
+            g = owed && fid ? { fid, headNode: node, headPos: pos } : null;
             if (g) groups.push(g);
-            return;
         }
-        if (g && node.type.name === 'paragraph') g.paras.push({ node, pos });
     });
-
-    // Forget the rewrites that have since been answered, so the memo below stays
-    // the size of what is actually owed.
-    for (const key of [...arrivedAs.keys()]) {
-        const [fid, at] = key.split('@');
-        if (unseen[fid]?.at !== at) arrivedAs.delete(key);
-    }
 
     for (const grp of groups) {
         const edit = unseen[grp.fid];
-        const mine = displacedHuman(edit);
-        const cls = 'ce-autoedit' + (mine ? ' mine' : '');
-        decos.push(Decoration.node(grp.headPos, grp.headPos + grp.headNode.nodeSize,
-                                   { class: 'ce-autoedit-head' }));
-        // ONE resolution surface per feature, on the feature — same rule as every
-        // other proposal (suggestion-decorations rule 2).
+        // ONE resolution surface per feature, on the feature — the same rule every
+        // other proposal follows (suggestion-decorations rule 2). The DIFF it is a
+        // verdict on is drawn by the settlement layer's code channel; this is only
+        // the decision.
         decos.push(Decoration.widget(grp.headPos + 1 + grp.headNode.content.size,
             () => verdictStrip(grp.fid, edit, handlers),
             { side: 1, key: 'auto-v-' + grp.fid + '@' + edit.at }));
-
-        const baseDisplay = prevParas(edit.prev).map(mdDisplayText);
-        const curDisplay = grp.paras.map(p => paraDisplayText(p.node));
-
-        // Stand down the moment the author types into it, without waiting for the
-        // edit to be classified as a draft.
-        //
-        // The diff drawn here is `what it said before` against `what is on screen`,
-        // and that is only the loop's rewrite while the screen still holds the
-        // loop's words. Once the author edits the same paragraph, their words are
-        // inside `current`, so the underline claims the loop wrote them and the
-        // strikethrough offers to restore a version two revisions old. The
-        // `locallyEdited` gate above says exactly this, but it is fed from the
-        // draft and held sets, which arrive after a settle — so between the first
-        // keystroke and that settle the surface was drawing the author's own
-        // sentence back at them as somebody else's.
-        //
-        // What the rewrite looked like when it ARRIVED is the only baseline that
-        // can tell the two apart, and nothing upstream records it, so the first
-        // render of each unresolved rewrite remembers it here.
-        const key = grp.fid + '@' + edit.at;
-        const shown = curDisplay.join('\n');
-        const arrived = arrivedAs.get(key);
-        if (arrived === undefined) arrivedAs.set(key, shown);
-        else if (arrived !== shown) continue;
-
-        const pairing = alignParas(baseDisplay, curDisplay);
-        grp.paras.forEach((p, k) => {
-            if (p.node.content.size === 0) return;
-            decos.push(Decoration.node(p.pos, p.pos + p.node.nodeSize, { class: cls }));
-            const bi = pairing[k];
-            const spans = reviewDiffSpans(bi == null ? '' : baseDisplay[bi], curDisplay[k], p.pos + 1);
-            spans.forEach((sp, j) => {
-                if (sp.kind === 'add') {
-                    decos.push(Decoration.inline(sp.from, sp.to, { class: 'ce-autoedit-add' + (mine ? ' mine' : '') }));
-                } else if (sp.text.trim()) {
-                    // The old words, struck through where they stood — the other half
-                    // of the diff the underline alone couldn't say.
-                    decos.push(delWidget(sp.at, sp.text, mine, `auto-d-${grp.fid}-${k}-${j}@${edit.at}`));
-                }
-            });
-        });
     }
     return DecorationSet.create(doc, decos);
 }

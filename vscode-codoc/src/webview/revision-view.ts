@@ -98,6 +98,10 @@ export interface RevisionViewOptions {
     onOpenRef?: (file: string, symbol: string) => void;
     /** The reader clicked a feature; the caller syncs its own selection. */
     onSelect?: (fid: string) => void;
+    /** Whether the viewed moment was the AUTHOR's, from the ledger's `actor`. It picks
+     *  the channel the moment's diff is drawn in, so the past reads in the same grammar
+     *  as the live page instead of a private one of its own (see `runNodes`). */
+    human?: boolean;
 }
 
 /** Render one plain-text run, turning `[label](codoc:file#symbol)` into the same chip
@@ -127,13 +131,29 @@ function textRun(text: string, opts: RevisionViewOptions): (Node)[] {
     return out;
 }
 
+/**
+ * A moment's diff runs, in the settlement grammar.
+ *
+ * The past used to have a private encoding — `ce-past-add` / `ce-past-del`, an underline
+ * and a strike in nobody's ink — and that was a second visual language for the same fact
+ * the live document already spends three channels saying. A reader dragging the scrubber
+ * had to translate: on the live page blue means "yours" and a green ground means "the
+ * code says this", and on the past page both were the same grey underline.
+ *
+ * So a past run is drawn in the CHANNEL OF WHOEVER MADE IT, which the ledger already
+ * records as the moment's `actor`. The stage is fixed: everything in history is settled
+ * by definition, so a human moment is `committed` (never `open` — there are no unsent
+ * edits in the past, and the pulse would be a prompt to act on something finished) and a
+ * machine moment is `landed`.
+ */
 function runNodes(runs: DiffRun[], opts: RevisionViewOptions): Node[] {
+    const channel = opts.human ? 'human committed' : 'code landed';
     const out: Node[] = [];
     for (const r of runs) {
         if (!r.s) continue;
         if (r.t === 'same') { out.push(...textRun(r.s, opts)); continue; }
         const el = document.createElement(r.t === 'ins' ? 'ins' : 'del');
-        el.className = r.t === 'ins' ? 'ce-past-add' : 'ce-past-del';
+        el.className = 'ce-settle ' + channel + (r.t === 'ins' ? ' add' : ' cut');
         el.append(...textRun(r.s, opts));
         out.push(el);
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-    claimsFor, forwardMap, droppedLayers, rebase, LOCAL_EDIT_LAYER,
+    claimsFor, forwardMap, mapSpan, LOCAL_EDIT_LAYER, AFTER, BEFORE,
     type FeatureLayers, type FeatureText, type Claim,
 } from '../state/settlement';
 import { wordDiff, sentenceDiff } from '../state/doc-diff';
@@ -13,11 +13,13 @@ function of(claims: Claim[], channel: Claim['channel']): [string, number, number
         .map(c => [c.edit, c.start, c.end, c.removed] as [string, number, number, string?]);
 }
 
-describe('forwardMap — carrying a span across an edit that happened after it', () => {
-    it('shifts an offset by the insertions before it', () => {
+describe('forwardMap — carrying a point across an edit that happened after it', () => {
+    it('puts a point on the side of an insertion that assoc asks for', () => {
         const map = forwardMap(wordDiff('a c', 'a b c'));
-        // "c" starts at 2 in the old text, at 4 in the new.
-        expect(map(2)).toBe(4);
+        // "c" is at 2 in the old text. A span STARTING there wants to be after the
+        // inserted "b " (4); a span ENDING there wants to stop before it (2).
+        expect(map(2, AFTER)).toBe(4);
+        expect(map(2, BEFORE)).toBe(2);
     });
 
     it('collapses an offset inside deleted text to where the deletion happened', () => {
@@ -27,15 +29,36 @@ describe('forwardMap — carrying a span across an edit that happened after it',
         expect(at).toBeLessThanOrEqual(2);
     });
 
-    it('pins the ends', () => {
+    it('pins the ends, on the side asked for', () => {
         const map = forwardMap(wordDiff('one two', 'one two three'));
         expect(map(0)).toBe(0);
-        expect(map('one two'.length)).toBe('one two three'.length);
+        expect(map('one two'.length, AFTER)).toBe('one two three'.length);
+        expect(map('one two'.length, BEFORE)).toBe('one two'.length);
     });
 
     it('is identity when nothing changed', () => {
         const map = forwardMap(wordDiff('same text', 'same text'));
         for (const i of [0, 3, 5, 9]) expect(map(i)).toBe(i);
+    });
+});
+
+describe('mapSpan — keeping only what survived', () => {
+    it('returns an untouched span in one piece', () => {
+        expect(mapSpan(wordDiff('a b c', 'a b c'), 2, 5)).toEqual([{ start: 2, end: 5 }]);
+    });
+
+    it('splits around text somebody else inserted in the middle', () => {
+        // "one two" → "one NEW two": a span over the whole original comes back as the
+        // two surviving halves, so the mark never covers the inserted words.
+        const spans = mapSpan(wordDiff('one two', 'one NEW two'), 0, 'one two'.length);
+        expect(spans.length).toBe(2);
+        const text = 'one NEW two';
+        expect(spans.map(s => text.slice(s.start, s.end)).join('|')).not.toContain('NEW');
+    });
+
+    it('drops the part that was deleted', () => {
+        const spans = mapSpan(wordDiff('keep drop', 'keep'), 0, 'keep drop'.length);
+        expect(spans.map(s => 'keep'.slice(s.start, s.end)).join('')).toBe('keep');
     });
 });
 
@@ -58,17 +81,19 @@ describe('claimsFor — the human channel', () => {
         expect(dels[0][3]).toContain('do not');
     });
 
-    it('diffs a title by word and a paragraph by sentence', () => {
+    it('marks the author\'s own edits word by word, not sentence by sentence', () => {
         const titleClaims = claimsFor({ projected: ft('Retry policy'), live: ft('Retry budget') });
         expect(of(titleClaims, 'human').some(c => c[0] === 'add')).toBe(true);
-        // A one-word fix inside a two-sentence paragraph still strikes the sentence,
-        // because the sentence is the unit of the claim being made.
-        const p = claimsFor({
-            projected: ft('T', 'It retries twice. It then gives up.'),
-            live: ft('T', 'It retries five times. It then gives up.'),
-        });
-        const adds = of(p, 'human').filter(c => c[0] === 'add');
-        expect(adds.length).toBe(1);
+        // Your own typing is shown at the granularity you did it in — the sentence is
+        // the review unit for somebody ELSE's change, not for your own keystrokes.
+        const live = ft('T', 'It retries five times. It then gives up.');
+        const p = claimsFor({ projected: ft('T', 'It retries twice. It then gives up.'), live });
+        const adds = p.filter(c => c.channel === 'human' && c.edit === 'add');
+        const marked = adds.map(a => live.paras[0].slice(a.start, a.end)).join('');
+        expect(marked).toContain('five');
+        expect(marked).toContain('times');
+        expect(marked).not.toContain('gives up');   // the untouched sentence stays unmarked
+        expect(marked.length).toBeLessThan(live.paras[0].length / 2);
     });
 });
 
@@ -181,19 +206,137 @@ describe('claimsFor — the three channels on one paragraph', () => {
     });
 });
 
+describe('paragraphs are paired by content, never by number', () => {
+    it('does not report the whole node as rewritten when one paragraph is inserted on top', () => {
+        const projected = ft('T', 'First claim.', 'Second claim.', 'Third claim.');
+        const live = ft('T', 'A new opening.', 'First claim.', 'Second claim.', 'Third claim.');
+        const claims = claimsFor({ projected, live });
+        // Exactly the inserted paragraph is marked; the three that merely moved down
+        // are untouched, which an index-paired diff could not say.
+        const marked = claims.filter(c => c.edit === 'add')
+            .map(c => (c.block as { index: number }).index);
+        expect(new Set(marked)).toEqual(new Set([0]));
+    });
+
+    it('anchors a code claim to the paragraph that now holds it, not the one that shares its old number', () => {
+        const claims = claimsFor({
+            code: { layerId: 'e-1', prev: ft('T', 'Untouched.', 'It retries twice.') },
+            projected: ft('T', 'Untouched.', 'It retries five times.'),
+            live: ft('T', 'A new opening.', 'Untouched.', 'It retries five times.'),
+        });
+        const add = claims.find(c => c.channel === 'code' && c.edit === 'add')!;
+        expect((add.block as { index: number }).index).toBe(2);
+    });
+
+    it('reports a paragraph deleted outright, which no surviving block\'s diff can', () => {
+        const claims = claimsFor({
+            projected: ft('T', 'Keep this.', 'Delete this whole paragraph.', 'Keep this too.'),
+            live: ft('T', 'Keep this.', 'Keep this too.'),
+        });
+        const del = claims.find(c => c.edit === 'del' && c.removed?.includes('Delete this whole'));
+        expect(del).toBeDefined();
+        expect(del!.start).toBe(del!.end);
+        // Anchored on the block that now stands where it stood.
+        expect((del!.block as { index: number }).index).toBe(1);
+    });
+
+    it('anchors a trailing deletion at the end of the last block', () => {
+        const live = ft('T', 'Only this survives.');
+        const claims = claimsFor({ projected: ft('T', 'Only this survives.', 'Gone.'), live });
+        const del = claims.find(c => c.removed === 'Gone.')!;
+        expect(del.start).toBe(live.paras[0].length);
+    });
+});
+
 describe('the drop rules', () => {
-    it('retires a layer the daemon has stopped offering', () => {
-        expect(droppedLayers(new Set(['e-1', 'e-2']), new Set(['e-2'])))
-            .toEqual(new Set(['e-1']));
+    it('files the author\'s own spans under the local layer, which no payload can withdraw', () => {
+        const claims = claimsFor({ projected: ft('T', 'a'), live: ft('T', 'a b') });
+        expect(claims.every(c => c.layerId === LOCAL_EDIT_LAYER)).toBe(true);
     });
 
-    it('never retires the local edit layer — it is not the daemon\'s to withdraw', () => {
-        expect(droppedLayers(new Set([LOCAL_EDIT_LAYER]), new Set())).toEqual(new Set());
+    it('lets an unanswered proposal go when the daemon stops offering it', () => {
+        // No forced verdict, and no mechanism needed for the absence of one: claims are
+        // derived, so a proposal that is no longer on offer simply stops producing them.
+        const live = ft('T', 'the wording as it now reads');
+        expect(claimsFor({ projected: live, live })).toEqual([]);
     });
 
-    it('rebases onto what is on screen, so an unanswered claim reads as accepted', () => {
-        const live = ft('T', 'planned words the author never answered');
-        const next = rebase(live);
-        expect(claimsFor({ projected: next, live })).toEqual([]);
+    it('computes a REPLACEMENT proposal fresh, with no trace of the unanswered one', () => {
+        const projected = ft('T', 'It retries twice.');
+        const planned = ft('T', 'It retries twice. It backs off.');
+        const claims = claimsFor({
+            projected, planned, live: planned,
+            plan: { layerId: 'e-second', stage: 'proposed', runs: [
+                { block: { kind: 'para', index: 0 }, runs: sentenceDiff(projected.paras[0], planned.paras[0]) },
+            ] },
+        });
+        // Only the live layer is represented; the earlier one left with the sidecar.
+        expect(new Set(claims.map(c => c.layerId))).toEqual(new Set(['e-second']));
+    });
+
+    it('keeps unanswered TYPING marked — the base moves only on adoption', () => {
+        // The one place the "assume they meant what is on screen" reading has teeth,
+        // and the one place getting it wrong loses work rather than just redrawing.
+        const live = ft('T', 'the retry is capped at five');
+        const claims = claimsFor({
+            projected: live,                       // the daemon has echoed it back…
+            live,
+            humanBase: ft('T', 'the retry is capped'),   // …but the code has not caught up
+        });
+        expect(claims.some(c => c.channel === 'human')).toBe(true);
+    });
+});
+
+describe('a committed edit stays yours until the code catches up', () => {
+    it('keeps the mark after the daemon echoes the edit straight back', () => {
+        // The regression this exists to prevent: ⌘S, the daemon applies and reprojects,
+        // so `projected` now EQUALS what you typed — and a human diff taken against it
+        // is empty. The ink would vanish at the moment it starts being true.
+        const typed = ft('T', 'It retries five times.');
+        const claims = claimsFor({
+            projected: typed,                                   // the echo
+            live: typed,
+            humanBase: ft('T', 'It retries twice.'),            // what the CODE agreed with
+            committed: true,
+        });
+        const human = claims.filter(c => c.channel === 'human');
+        expect(human.length).toBeGreaterThan(0);
+        expect(human.every(c => c.stage === 'committed')).toBe(true);
+        expect(human.some(c => c.edit === 'add'
+            && typed.paras[0].slice(c.start, c.end).includes('five times'))).toBe(true);
+    });
+
+    it('clears once the code agrees — nothing is left to say', () => {
+        const settled = ft('T', 'It retries five times.');
+        expect(claimsFor({ projected: settled, live: settled, humanBase: settled })).toEqual([]);
+    });
+
+    it('still carries plan and code spans through the real text, not through that base', () => {
+        // humanBase is a SIBLING of projected, not an ancestor: positions must follow
+        // the text the document actually underwent, or the other channels mis-anchor.
+        const projected = ft('T', 'It retries five times.');
+        const live = ft('T', 'It retries five times. Measure it.');
+        const claims = claimsFor({
+            code: { layerId: 'e-1', prev: ft('T', 'It retries twice.') },
+            projected, live, humanBase: projected,
+        });
+        const add = claims.find(c => c.channel === 'code' && c.edit === 'add')!;
+        expect(live.paras[0].slice(add.start, add.end)).toContain('five times');
+        expect(live.paras[0].slice(add.start, add.end)).not.toContain('Measure');
+    });
+});
+
+describe('a node whose prose is gone entirely', () => {
+    it('still reports the description it lost — there is no surviving block to carry it', () => {
+        // The gap this closes: an orphaned paragraph anchors to the block that now
+        // stands where it stood, and when the node has NO paragraphs left there is no
+        // such block. The whole description would drop out of the model silently.
+        const claims = claimsFor({
+            projected: ft('Backoff', 'It waits longer each time.'),
+            live: ft('Backoff'),
+        });
+        const del = claims.find(c => c.removed?.includes('waits longer'));
+        expect(del).toBeDefined();
+        expect(del!.block.kind).toBe('title');
     });
 });

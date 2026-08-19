@@ -8,7 +8,7 @@
  *   4. feature-state.railState — the minimap's ordered projection.
  *   5. auto-edit reviewDiffSpans — both halves of the in-situ diff (adds AND the
  *      struck old words; replacements are NOT suppressed like the captured caret).
- *   6. ghostEditsFor — accept-time edits ride the verdict only when they differ.
+ *   6. nodeEditsFor — accept-time edits ride the verdict only when they differ.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Node as PMModelNode } from '@tiptap/pm/model';
@@ -22,9 +22,10 @@ import {
     busyRanges, touchesBusy, buildBusyDecorations, type BusyInfo,
 } from '../webview/tiptap/busy-decorations';
 import { railState } from '../state/feature-state';
-import { reviewDiffSpans, buildAutoEditDecorations } from '../webview/tiptap/auto-edit-decorations';
+import { buildAutoEditDecorations } from '../webview/tiptap/auto-edit-decorations';
+import { claimsFor } from '../state/settlement';
 import {
-    ghostEditsFor, resetGhostDrafts, setGhostDraft,
+    nodeEditsFor,
 } from '../webview/tiptap/suggestion-decorations';
 import type { Suggestion } from '../state/suggestion-model';
 
@@ -175,70 +176,102 @@ describe('feature-state: the minimap projection (first match wins)', () => {
     });
 });
 
-// ── 5. the auto-edit review diff ──────────────────────────────────────────────
+// ── 5. the auto-edit review diff — now the settlement model's CODE channel ────
+//
+// This module used to own both halves: the diff of what the loop rewrote AND the
+// verdict on it. The diff moved to `state/settlement.ts`, where it is one of three
+// channels sharing a grammar instead of a fourth encoding of its own; what these
+// tests guarded is guarded there (settlement.test.ts, "claimsFor — the code channel"),
+// including the half a captured caret could not say: the words that were displaced.
 
-describe('auto-edit reviewDiffSpans: both halves of the diff', () => {
-    it('maps an insertion to an underline range in the live text', () => {
-        const spans = reviewDiffSpans('parses files', 'parses and caches files', 10);
-        const adds = spans.filter(s => s.kind === 'add');
-        expect(adds.length).toBeGreaterThan(0);
+describe('the code channel says both halves of the rewrite', () => {
+    const ft = (title: string, ...paras: string[]) => ({ title, paras });
+
+    it('marks what the codebase now says, and keeps the words it displaced', () => {
+        const projected = ft('T', 'uses LanceDB for search');
+        const claims = claimsFor({
+            code: { layerId: 'e-1', prev: ft('T', 'uses FAISS for search') },
+            projected, live: projected,
+        });
+        const add = claims.find(c => c.channel === 'code' && c.edit === 'add')!;
+        expect(projected.paras[0].slice(add.start, add.end)).toContain('LanceDB');
+        expect(claims.some(c => c.channel === 'code' && c.removed?.includes('FAISS'))).toBe(true);
     });
-    it('keeps the deleted words — including in a REPLACEMENT (unlike the captured caret)', () => {
-        const spans = reviewDiffSpans('uses FAISS for search', 'uses LanceDB for search', 0);
-        const dels = spans.filter(s => s.kind === 'del');
-        expect(dels.map(d => (d as { text: string }).text).join('')).toContain('FAISS');
-        expect(spans.some(s => s.kind === 'add')).toBe(true);
-    });
-    it('returns nothing when the text is unchanged', () => {
-        expect(reviewDiffSpans('same', 'same', 0)).toEqual([]);
+
+    it('says nothing when the text is unchanged', () => {
+        const same = ft('T', 'same');
+        expect(claimsFor({ code: { layerId: 'e-1', prev: same }, projected: same, live: same }))
+            .toEqual([]);
     });
 });
 
-describe('auto-edit decorations: verdict strip anchored per rewritten feature', () => {
-    it('marks the heading, the body, and one verdict widget per unresolved rewrite', () => {
+describe('auto-edit decorations: the verdict, and only the verdict', () => {
+    it('anchors one verdict widget per unresolved rewrite', () => {
         const doc = modelDoc();
-        const set = buildAutoEditDecorations(doc, {
+        const found = buildAutoEditDecorations(doc, {
             'f-a': { at: 'hlc-1', prev: 'Old login prose.', written_by: 'human', rationale: 'code moved' },
-        });
-        const found = set.find();
-        // heading node deco + verdict widget + paragraph node deco + inline/del marks ≥ 3
-        expect(found.length).toBeGreaterThanOrEqual(3);
-        // and nothing bleeds onto f-b
+        }).find();
+        // Exactly one decoration now: the diff it is a verdict on is drawn by the
+        // settlement layer, so this module no longer paints the prose at all.
+        expect(found).toHaveLength(1);
+        // …and nothing bleeds onto f-b.
         let bPos = -1;
         doc.forEach((n, pos) => { if (n.attrs?.fid === 'f-b') bPos = pos; });
         expect(found.every(d => d.from <= bPos)).toBe(true);
     });
+
     it('draws nothing when every rewrite is resolved', () => {
         expect(buildAutoEditDecorations(modelDoc(), {}).find()).toHaveLength(0);
     });
 });
 
-// ── 6. ghost accept-time edits ────────────────────────────────────────────────
 
-describe('ghostEditsFor: edits ride the verdict only when they differ', () => {
-    const ghost: Suggestion = {
+// ── 6. accept-time edits, read off the node itself ───────────────────────────
+//
+// A proposed ADD is materialized into the document now (state/plan-materialize.ts), so
+// "edit it before accepting" is just editing the document. The module-level draft store
+// this used to need — keyed by suggestion id, pruned on rebuild, guarded against leaking
+// onto a later proposal that reused nothing but memory — is gone with the widget it
+// served.
+
+describe('nodeEditsFor: edits ride the verdict only when they differ', () => {
+    const proposal: Suggestion = {
         id: 'e-1', direction: 'code-ahead', kind: 'add', featureId: null,
         originRole: 'claude-code', titleNew: 'Theme system', descNew: 'A switcher.',
     };
-    beforeEach(() => resetGhostDrafts());
-
-    it('untouched ghost → no edits payload (accept exactly as proposed)', () => {
-        expect(ghostEditsFor(ghost)).toBeUndefined();
-    });
-    it('a reshaped title/description rides the accept', () => {
-        setGhostDraft('e-1', 'title', 'Theme + contrast system');
-        setGhostDraft('e-1', 'description', 'A better switcher.');
-        expect(ghostEditsFor(ghost)).toEqual({
-            title: 'Theme + contrast system', description: 'A better switcher.',
+    /** The materialized node as it stands in the document, built through the real
+     *  schema — the accept payload is read off actual nodes, so a hand-rolled stand-in
+     *  would be testing a shape the production path never sees. */
+    const node = (title: string, ...paras: string[]) => {
+        const doc = codocSchema().nodeFromJSON({
+            type: 'doc',
+            content: [
+                { type: 'featureHeading', attrs: { fid: null, level: 0, proposed: 'e-1' },
+                  content: title ? [{ type: 'text', text: title }] : [] },
+                ...paras.map(t => ({ type: 'paragraph', content: t ? [{ type: 'text', text: t }] : [] })),
+            ],
         });
+        const body: { node: PMModelNode }[] = [];
+        doc.forEach(n => { if (n.type.name === 'paragraph') body.push({ node: n }); });
+        return { heading: doc.child(0), body };
+    };
+
+    it('an untouched node sends nothing — accept exactly as proposed', () => {
+        expect(nodeEditsFor(node('Theme system', 'A switcher.'), proposal)).toBeUndefined();
     });
-    it('typing the proposal back verbatim sends nothing', () => {
-        setGhostDraft('e-1', 'title', 'Theme system');
-        expect(ghostEditsFor(ghost)).toBeUndefined();
+
+    it('a reshaped title and description ride the accept', () => {
+        expect(nodeEditsFor(node('Theme + contrast system', 'A better switcher.'), proposal))
+            .toEqual({ title: 'Theme + contrast system', description: 'A better switcher.' });
     });
-    it('a blanked title never rides (an empty title would blank the node)', () => {
-        setGhostDraft('e-1', 'title', '   ');
-        expect(ghostEditsFor(ghost)).toBeUndefined();
+
+    it('a blanked title never rides — an empty title would blank the node', () => {
+        const edits = nodeEditsFor(node('   ', 'A switcher.'), proposal);
+        expect(edits?.title).toBeUndefined();
+    });
+
+    it('a cleared description DOES ride — emptying it is a real decision', () => {
+        expect(nodeEditsFor(node('Theme system'), proposal)).toEqual({ description: '' });
     });
 });
 

@@ -150,11 +150,51 @@ describe('U6 — lifecycle/stage indicator is orthogonal to the change-mark diff
         expect(m![0]).toContain('--ce-staged');           // staged & sent = green phase
         expect(m![0]).not.toContain('--dir-review');       // NOT the agent-review (code-ahead) hue
     });
-    it('the diff is a separate concern (ins/del marks keyed on --author-color), not the dot', () => {
-        const ins = css.match(/ins\[data-change-id\]\s*\{[^}]*\}/);
-        expect(ins).not.toBeNull();
-        expect(ins![0]).toContain('--author-color');
-        expect(css).toMatch(/del\[data-change-id\]/);
+    it('the engine\'s ins/del marks are STRUCTURAL only — the plan channel paints them', () => {
+        // They used to carry a per-author tint, and that was one of three competing
+        // underlines the settlement redesign collapsed. The marks still do their real
+        // job (keeping a proposal out of tree.codoc, and being what a reject deletes),
+        // but painting them here would double the mark the model already draws.
+        const rule = css.match(/ins\[data-change-id\][^{]*\{[^}]*\}/);
+        expect(rule).not.toBeNull();
+        expect(rule![0]).toContain('text-decoration: none');
+        expect(css).not.toMatch(/ins\[data-author-id="claude-code"\]/);
+    });
+});
+
+describe('settlement — one visual axis per channel, so claims compose', () => {
+    it('gives each channel its own property: ink, opacity, ground', () => {
+        expect(css).toMatch(/\.ce-settle\.human\s*\{[^}]*color:/);
+        expect(css).toMatch(/\.ce-settle\.plan\s*\{[^}]*opacity:/);
+        expect(css).toMatch(/\.ce-settle\.code\.add\s*\{[^}]*background:/);
+    });
+
+    it('spends motion only on the one state with an action attached', () => {
+        expect(css).toMatch(/\.ce-settle\.human\.open\s*\{[^}]*animation:/);
+        // Nothing else in the family animates — a condition that moves spends the
+        // reader's attention on something they cannot act on.
+        for (const cls of ['\\.ce-settle\\.human\\.committed', '\\.ce-settle\\.plan\\.accepted', '\\.ce-settle\\.code\\.add']) {
+            const m = css.match(new RegExp(cls + '\\s*\\{[^}]*\\}'));
+            if (m) expect(m[0]).not.toContain('animation:');
+        }
+    });
+
+    it('drops the pulse under the VS Code reduced-motion body class, not only the media query', () => {
+        expect(css).toMatch(/body\.vscode-reduce-motion \.ce-settle\.human\.open/);
+        expect(css).toMatch(/body\.vscode-reduce-motion \.ce-mark \.st-human\.open/);
+    });
+
+    it('pins the diff grounds up in high contrast rather than dropping them', () => {
+        expect(css).toMatch(/body\.vscode-high-contrast \.ce-settle\.code\.add/);
+        expect(css).toMatch(/--st-ground-hc/);
+    });
+
+    it('strikes a CUT in place — it is still on screen, unlike a deletion', () => {
+        expect(css).toMatch(/\.ce-settle\.cut\s*\{[^}]*line-through/);
+    });
+
+    it('fills a node marker\'s ring to mean the claim reached the code, in both channels', () => {
+        expect(css).toMatch(/\.ce-mark \.st-human\.fulfilled,\s*\.ce-mark \.st-plan\.fulfilled\s*\{[^}]*background:/);
     });
 });
 
@@ -169,13 +209,7 @@ describe('U6 — one direction hue, no per-op rainbow (cohesion R7)', () => {
     });
 });
 
-describe('U3/U4/U5 — the captured→pending→resolving lifecycle is one cohesive ramp', () => {
-    it('the captured family (phase 1) has CSS rules: body rail, heading dot, tree badge', () => {
-        expect(css).toMatch(/\.ce-captured-rail::before\s*\{/);
-        expect(css).toMatch(/\.ce-captured-dot\s*\{/);
-        expect(css).toMatch(/\.badge\.staged\s*\{/);
-    });
-
+describe('the edit lifecycle is one cohesive ramp', () => {
     it('the three lifecycle PHASE colours are defined as tokens (editing/del/staged)', () => {
         // P1/§E.2 retuned these toward pastel (calmer blue / softer amber / sage) — still the
         // three distinct phases (editing = blue-ish, del = amber, staged = green), just desaturated.
@@ -184,29 +218,27 @@ describe('U3/U4/U5 — the captured→pending→resolving lifecycle is one cohes
         expect(css).toMatch(/--ce-staged:\s*#6fae74/);   // staged & sent = sage
     });
 
-    it('captured (editing) keys off --ce-editing; pending (staged) off --ce-staged — distinct phases', () => {
-        const cap = css.match(/\.ce-captured-dot\s*\{[^}]*\}/)?.[0] ?? '';
-        expect(cap).toContain('--ce-editing');
+    it('the human channel inherits the editing phase colour rather than minting a hue', () => {
+        // The captured family's rail, dot and caret are gone — their state is the
+        // settlement model's human channel now — but the PHASE colour is the same one,
+        // so a reader who learned the old surface has not been retrained for nothing.
+        expect(css).toMatch(/--st-human:\s*var\(--ce-editing\)/);
+    });
+
+    it('pending (staged) still keys off --ce-staged — a distinct phase from editing', () => {
         const pend = css.match(/\.ce-pending-dot\s*\{[^}]*\}/)?.[0] ?? '';
         expect(pend).toContain('--ce-staged');
         expect(pend).not.toContain('--ce-editing');
     });
 
-    it('the deletion caret rides the amber --ce-del (the one warranted removal hue)', () => {
-        // match the MAIN rule (the one carrying var(--ce-del)), not the earlier HC floor rule
-        expect(css).toMatch(/\.ce-captured-del\s*\{[^}]*var\(--ce-del\)/);
-    });
-
-    it('intensity ramps: captured is STATIC, pending BREATHES, resolving PULSES', () => {
-        const cap = css.match(/\.ce-captured-dot\s*\{[^}]*\}/)?.[0] ?? '';
-        expect(cap).not.toContain('animation');
-        expect(css.match(/\.ce-pending-dot\s*\{[^}]*\}/)?.[0] ?? '').toContain('breathe');
-        expect(css).toMatch(/ce-phase-editing[\s\S]{0,120}pulse/);
-    });
-
-    it('the captured family has high-contrast floors so the phases survive HC themes', () => {
-        expect(css).toMatch(/vscode-high-contrast\s+\.ce-captured-dot/);
-        expect(css).toMatch(/vscode-high-contrast\s+\.ce-captured-del/);
+    it('intensity ramps: unsent BREATHES, everything settled is static', () => {
+        // The ramp inverted deliberately. It used to be captured=static, pending=breathe:
+        // motion marked how far along the machine was. Motion now marks the one state
+        // with an ACTION attached, which is the unsent edit — the reader can press ⌘S,
+        // and cannot do anything about a directive already in flight.
+        expect(css).toMatch(/\.ce-mark \.st-human\.open\s*\{[^}]*animation:/);
+        const committed = css.match(/\.ce-settle\.human\.committed\s*\{[^}]*\}/)?.[0] ?? '';
+        expect(committed).not.toContain('animation');
     });
 });
 

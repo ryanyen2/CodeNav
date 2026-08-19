@@ -57,15 +57,26 @@
  * ## Nobody has to decide
  *
  * There is no forced verdict and there must not be one — an author who ignores a
- * proposal has still told you something. A claim is SUPERSEDED when a newer change
- * to the same feature arrives on top of it: the newer layer's base is the document as
- * it now reads, plan text and all, which is exactly "assume they accepted what is on
- * screen". `rebase()` is that rule, and it is the only drop rule that needs to fire
- * without a click. The explicit ones (accept, reject, commit, realize) are ordinary.
+ * proposal has still told you something. Every claim here is DERIVED, never stored, so
+ * "what happens if they never answer" needs no mechanism of its own: the next payload
+ * recomputes from whatever is true then. Three consequences, and they are the whole of
+ * the drop policy:
+ *
+ *   • A proposal the daemon stops offering simply stops producing claims — it is not in
+ *     `plan` any more. Superseded, withdrawn and applied all look the same from here,
+ *     which is correct: none of them is still a question.
+ *   • A REPLACEMENT proposal is computed against the store's current text, because that
+ *     is what the daemon proposed against. Its diff is therefore fresh, and no trace of
+ *     the unanswered one survives to be mixed into it.
+ *   • Unanswered TYPING keeps its marks, because `humanBase` moves only when the feature
+ *     adopts a projection (`state/edit-baseline.rebaseCaptured`). This is the one place
+ *     the "assume they meant what is on screen" reading has teeth, and it is also the
+ *     one place getting it wrong loses work rather than just redrawing.
  *
  * Pure — no DOM, no TipTap, no vscode. `settlement.test.ts` drives it directly.
  */
 import { wordDiff, sentenceDiff, type DiffRun } from './doc-diff';
+import { alignParas, orphans } from './para-align';
 
 // ── the vocabulary ───────────────────────────────────────────────────────────
 
@@ -89,9 +100,20 @@ export type Stage =
     /** code: this is what the code actually says. */
     | 'landed';
 
-/** What the claim did to the text. A `del` has no live text to cover, so it is drawn
- *  at a point, carrying the words it removed. */
-export type Edit = 'add' | 'del';
+/**
+ * What the claim did to the text. Three, not two, and the third is not a refinement —
+ * it is a different situation:
+ *
+ *   add  — a range. This channel put these words here.
+ *   cut  — a range. The words are STILL HERE and this channel proposes they go.
+ *   del  — a point, carrying the words. They are already gone; there is nothing to cover.
+ *
+ * `cut` exists because a proposal is materialized as old-AND-new (the tracked-change
+ * engine keeps the displaced sentence in the document so the reader can compare), so
+ * the text a plan wants removed is on screen. Drawing that as a `del` point would print
+ * the sentence a second time, beside the copy already there.
+ */
+export type Edit = 'add' | 'cut' | 'del';
 
 /** Which editable block of a feature a claim sits in. Offsets are into that block's
  *  DISPLAY text, which is what the decoration layer maps onto doc positions. */
@@ -135,6 +157,23 @@ export interface FeatureLayers {
     /** The doc as it read once the plan was materialized but before anyone typed.
      *  Absent ⇒ no plan is materialized, so it is `projected`. */
     planned?: FeatureText;
+    /**
+     * The last text the CODE agreed with — what the author's own edits are measured
+     * against. Absent ⇒ `planned`, which is right only while nothing is committed.
+     *
+     * It has to be separate from `projected`, and the case that forces it is the
+     * ordinary one: you edit, you press ⌘S, the daemon applies the edit and projects
+     * it straight back. `projected` now EQUALS what you typed, so a human diff taken
+     * against it is empty — and the blue ink saying "this is yours, the code has not
+     * caught up" vanishes at the exact moment it starts being true. The daemon ships
+     * the pre-edit text for precisely this (`hold_detail.baseline`); before hand-off
+     * the editor's own frozen baseline plays the same role.
+     *
+     * Note this is the base for the human CLAIMS only. Carrying the plan and code
+     * spans forward still walks `planned → live`, because that is the transformation
+     * the text actually underwent and positions have to follow the text.
+     */
+    humanBase?: FeatureText;
     /** The loop rewrote this description on its own authority; `prev` is what it
      *  displaced. The rewrite is ALREADY in `projected`. */
     code?: { layerId: string; prev: FeatureText };
@@ -252,36 +291,137 @@ function covered(spans: readonly Span[]): number {
 
 // ── building claims ──────────────────────────────────────────────────────────
 
+interface Span0 { edit: Edit; start: number; end: number; removed?: string }
+
 /**
- * Spans of a diff, in NEW coordinates.
+ * Spans of a diff, in NEW coordinates — where the deleted text is NOT present.
  *
  * A deletion becomes a zero-width point carrying its words, because there is nothing
- * left to underline — "I don't think" → "I| think" is the case that taught this.
- * Insertions carry their range.
+ * left to underline: "I don't think" → "I| think" is the case that taught this.
+ *
+ * `ownWork` suppresses the deletion beside a REPLACEMENT, and it is set only for the
+ * human channel. "the cat" → "the dog" is one act of editing, and the reader performed
+ * it; printing a ghost of "cat" next to their own "dog" tells them something they just
+ * did. For the other two channels the same shape means the opposite — somebody else
+ * replaced your sentence, and the words they took out are the whole point — so there it
+ * is kept. A PURE deletion (no insertion beside it) is reported in every channel: that
+ * one leaves nothing on screen to notice at all.
  */
-function spansOf(runs: readonly DiffRun[]): { edit: Edit; start: number; end: number; removed?: string }[] {
-    const out: { edit: Edit; start: number; end: number; removed?: string }[] = [];
+function spansOf(runs: readonly DiffRun[], ownWork = false): Span0[] {
+    const out: Span0[] = [];
+    let at = 0;
+    runs.forEach((run, i) => {
+        if (run.t === 'same') { at += run.s.length; return; }
+        if (run.t === 'ins') { out.push({ edit: 'add', start: at, end: at + run.s.length }); at += run.s.length; return; }
+        const replacement = runs[i - 1]?.t === 'ins' || runs[i + 1]?.t === 'ins';
+        if (ownWork && replacement) return;
+        out.push({ edit: 'del', start: at, end: at, removed: run.s });
+    });
+    return out;
+}
+
+/**
+ * Spans of a diff, in MATERIALIZED coordinates — where BOTH sides are present.
+ *
+ * This is the plan channel's geometry and it is genuinely different: the tracked-change
+ * engine writes the displaced sentence into the document alongside the replacement, so
+ * every run occupies real characters and offsets advance through all three kinds. A
+ * removal is therefore a `cut` over text that is on screen, not a point standing in for
+ * text that is not.
+ */
+function materializedSpans(runs: readonly DiffRun[]): Span0[] {
+    const out: Span0[] = [];
     let at = 0;
     for (const run of runs) {
-        if (run.t === 'same') { at += run.s.length; continue; }
-        if (run.t === 'ins') { out.push({ edit: 'add', start: at, end: at + run.s.length }); at += run.s.length; continue; }
-        out.push({ edit: 'del', start: at, end: at, removed: run.s });
+        const end = at + run.s.length;
+        if (run.t === 'ins') out.push({ edit: 'add', start: at, end });
+        else if (run.t === 'del') out.push({ edit: 'cut', start: at, end, removed: run.s });
+        at = end;
     }
     return out;
 }
 
-/** Blocks a feature's two texts share, aligned by index. A block that exists on one
- *  side only still yields a pair (the missing side is ''), so a whole added or removed
- *  paragraph produces claims instead of being silently skipped. */
-function alignedBlocks(a: FeatureText, b: FeatureText): { block: BlockRef; a: string; b: string }[] {
-    const out: { block: BlockRef; a: string; b: string }[] = [
-        { block: { kind: 'title' }, a: a.title, b: b.title },
-    ];
-    const n = Math.max(a.paras.length, b.paras.length);
-    for (let i = 0; i < n; i++) {
-        out.push({ block: { kind: 'para', index: i }, a: a.paras[i] ?? '', b: b.paras[i] ?? '' });
+/**
+ * Every live block, carrying the same text as each earlier stage held it.
+ *
+ * All four stages are resolved into LIVE coordinates up front, by chaining the
+ * content-based pairings backwards (live ← planned ← projected ← prev). Everything
+ * downstream then works inside one block, and no claim can be computed in one
+ * paragraph's coordinates and drawn in another's — the failure a per-stage index
+ * walk invites, because a single paragraph inserted at the top of a description
+ * shifts every index under it.
+ */
+interface BlockStages {
+    block: BlockRef;
+    prev: string;
+    projected: string;
+    planned: string;
+    /** The last wording the code agreed with — see `FeatureLayers.humanBase`. */
+    humanBase: string;
+    live: string;
+}
+
+/** A paragraph that existed at an earlier stage and has no live counterpart. Its
+ *  removal survives in no block's diff, so it is carried out separately and drawn as
+ *  a deletion point on the block that now stands where it stood. */
+interface Orphan {
+    channel: Channel;
+    text: string;
+    /** Live block to anchor on; `null` ⇒ the end of the last live block. */
+    anchor: BlockRef | null;
+    layerId: string;
+    stage: Stage;
+}
+
+function paraRef(index: number): BlockRef { return { kind: 'para', index }; }
+
+function blockStages(f: FeatureLayers): BlockStages[] {
+    const planned = f.planned ?? f.projected;
+    const prev = f.code?.prev ?? f.projected;
+    const humanBase = f.humanBase ?? planned;
+    const toPlanned = alignParas(planned.paras, f.live.paras);
+    const plannedToProjected = alignParas(f.projected.paras, planned.paras);
+    const projectedToPrev = alignParas(prev.paras, f.projected.paras);
+    // Paired to LIVE directly, not through the chain: the human base is a sibling of
+    // `projected`, not an ancestor of it — it is what the code last agreed with, which
+    // may be older than anything the daemon has since projected.
+    const toHumanBase = alignParas(humanBase.paras, f.live.paras);
+
+    const out: BlockStages[] = [{
+        block: { kind: 'title' },
+        prev: prev.title, projected: f.projected.title, planned: planned.title,
+        humanBase: humanBase.title, live: f.live.title,
+    }];
+    for (let i = 0; i < f.live.paras.length; i++) {
+        const p = toPlanned[i];
+        const j = p === null ? null : plannedToProjected[p] ?? null;
+        const k = j === null ? null : projectedToPrev[j] ?? null;
+        const h = toHumanBase[i];
+        out.push({
+            block: paraRef(i),
+            live: f.live.paras[i],
+            planned: p === null ? '' : planned.paras[p] ?? '',
+            projected: j === null ? '' : f.projected.paras[j] ?? '',
+            prev: k === null ? '' : prev.paras[k] ?? '',
+            humanBase: h === null ? '' : humanBase.paras[h] ?? '',
+        });
     }
     return out;
+}
+
+/** Whole paragraphs dropped between two stages, with the live block they now belong to. */
+function orphansBetween(
+    base: string[], cur: string[], toLive: (curIndex: number) => number | null,
+    channel: Channel, layerId: string, stage: Stage,
+): Orphan[] {
+    const pairing = alignParas(base, cur);
+    return orphans(base, cur, pairing).map(o => {
+        const live = o.anchorIndex === null ? null : toLive(o.anchorIndex);
+        return {
+            channel, text: base[o.baseIndex], layerId, stage,
+            anchor: live === null ? null : paraRef(live),
+        };
+    });
 }
 
 /** The diff granularity for a block. Titles are short — a sentence diff of one would
@@ -301,112 +441,110 @@ function diffFor(block: BlockRef, channel: Channel): (o: string, n: string) => D
  * the visual grammar assumes (background, then opacity, then colour).
  */
 export function claimsFor(f: FeatureLayers): Claim[] {
-    const planned = f.planned ?? f.projected;
     const out: Claim[] = [];
+    const humanStage: Stage = f.committed ? 'committed' : 'open';
+    const planRunsFor = new Map<string, DiffRun[]>();
+    if (f.plan) for (const b of f.plan.runs) planRunsFor.set(keyOf(b.block), b.runs);
 
-    // ── code: computed against `projected`, carried forward into live ────────
-    if (f.code) {
-        // The two hops between `projected` and `live`: materializing the plan, then
-        // the author typing. Compose them so a code span lands where its words are now.
-        for (const { block, a: prev, b: proj } of alignedBlocks(f.code.prev, f.projected)) {
-            if (prev === proj) continue;
-            const spans = spansOf(diffFor(block, 'code')(prev, proj));
-            if (!spans.length) continue;
-            const planRuns = diffFor(block, 'plan')(textAt(f.projected, block), textAt(planned, block));
-            const humanRuns = diffFor(block, 'human')(textAt(planned, block), textAt(f.live, block));
+    for (const st of blockStages(f)) {
+        const planRuns = diffFor(st.block, 'plan')(st.projected, st.planned);
+        const humanRuns = diffFor(st.block, 'human')(st.planned, st.live);
+        const toLive = forwardMap(humanRuns);
+
+        // ── code: computed against `projected`, carried forward into live ────
+        if (f.code && st.prev !== st.projected) {
             const point = (off: number): number =>
-                forwardMap(humanRuns)(forwardMap(planRuns)(off, BEFORE), BEFORE);
-            for (const s of spans) {
+                toLive(forwardMap(planRuns)(off, BEFORE), BEFORE);
+            for (const s of spansOf(diffFor(st.block, 'code')(st.prev, st.projected))) {
                 if (s.edit === 'del') {
-                    out.push({ channel: 'code', stage: 'landed', edit: 'del', block, start: point(s.start), end: point(s.start), removed: s.removed, layerId: f.code.layerId });
+                    const at = point(s.start);
+                    out.push({ channel: 'code', stage: 'landed', edit: 'del', block: st.block, start: at, end: at, removed: s.removed, layerId: f.code.layerId });
                     continue;
                 }
                 // ALL OR NOTHING, and deliberately so. The code channel reports what
                 // the codebase says, at the granularity of a sentence. The moment the
                 // author edits inside that sentence it is no longer the sentence the
                 // report was about, and marking the surviving fragment green would
-                // point at words ("The uploader ") that carry none of the claim. A
-                // plan gets the opposite treatment below, for the opposite reason.
+                // point at words ("The uploader ") that carry none of the claim. The
+                // plan channel gets the opposite treatment, for the opposite reason.
                 const hops = mapSpan(planRuns, s.start, s.end)
                     .flatMap(x => mapSpan(humanRuns, x.start, x.end));
                 if (covered(hops) !== s.end - s.start) continue;
                 for (const h of hops) {
-                    out.push({ channel: 'code', stage: 'landed', edit: 'add', block, start: h.start, end: h.end, layerId: f.code.layerId });
+                    out.push({ channel: 'code', stage: 'landed', edit: 'add', block: st.block, start: h.start, end: h.end, layerId: f.code.layerId });
                 }
             }
         }
-    }
 
-    // ── plan: the materialized proposal's own runs, carried through typing ───
-    if (f.plan) {
-        for (const { block, runs } of f.plan.runs) {
-            const humanRuns = diffFor(block, 'human')(textAt(planned, block), textAt(f.live, block));
-            const toLive = forwardMap(humanRuns);
-            for (const s of spansOf(runs)) {
-                if (s.edit === 'del') {
-                    const at = toLive(s.start, BEFORE);
-                    out.push({ channel: 'plan', stage: f.plan.stage, edit: 'del', block, start: at, end: at, removed: s.removed, layerId: f.plan.layerId });
-                    continue;
-                }
+        // ── plan: the materialized proposal's own runs, carried through typing ─
+        const runs = planRunsFor.get(keyOf(st.block));
+        if (f.plan && runs) {
+            for (const s of materializedSpans(runs)) {
                 // SPLIT, never voided. A proposal is text you are meant to edit in
                 // place before accepting it, so typing inside one is ordinary use —
                 // and the mark has to survive that, tightened around the author's
                 // words rather than swallowing them or vanishing.
                 for (const h of mapSpan(humanRuns, s.start, s.end)) {
                     if (h.start >= h.end) continue;
-                    out.push({ channel: 'plan', stage: f.plan.stage, edit: 'add', block, start: h.start, end: h.end, layerId: f.plan.layerId });
+                    out.push({ channel: 'plan', stage: f.plan.stage, edit: s.edit, block: st.block, start: h.start, end: h.end, removed: s.removed, layerId: f.plan.layerId });
                 }
+            }
+        }
+
+        // ── human: everything between what the code agreed with and what is on screen ─
+        if (st.humanBase !== st.live) {
+            for (const s of spansOf(diffFor(st.block, 'human')(st.humanBase, st.live), true)) {
+                out.push({ channel: 'human', stage: humanStage, edit: s.edit, block: st.block, start: s.start, end: s.end, removed: s.removed, layerId: LOCAL_EDIT_LAYER });
             }
         }
     }
 
-    // ── human: everything between the planned document and what is on screen ─
-    const stage: Stage = f.committed ? 'committed' : 'open';
-    for (const { block, a: base, b: live } of alignedBlocks(planned, f.live)) {
-        if (base === live) continue;
-        for (const s of spansOf(diffFor(block, 'human')(base, live))) {
-            out.push({ channel: 'human', stage, edit: s.edit, block, start: s.start, end: s.end, removed: s.removed, layerId: LOCAL_EDIT_LAYER });
-        }
+    // ── paragraphs that vanished entirely, which no block's diff can report ──
+    const planned = f.planned ?? f.projected;
+    // Where a trailing removal hangs when it has no following block to anchor to: the
+    // last live paragraph, or — when the node has NO live paragraphs left — the heading
+    // itself. That last case is a whole node being removed, and without the fallback its
+    // entire description would be dropped silently: there is no surviving block to carry
+    // it, so the one change nobody could miss on the page became the one the model did
+    // not report.
+    const lastLive: BlockRef = f.live.paras.length
+        ? paraRef(f.live.paras.length - 1) : { kind: 'title' };
+    const lastLen = lastLive.kind === 'para'
+        ? (f.live.paras[lastLive.index] ?? '').length : f.live.title.length;
+    const dropped: Orphan[] = [
+        ...orphansBetween((f.humanBase ?? planned).paras, f.live.paras, i => i, 'human', LOCAL_EDIT_LAYER, humanStage),
+        ...(f.code ? orphansBetween(f.code.prev.paras, f.projected.paras, projectedToLive(f), 'code', f.code.layerId, 'landed') : []),
+    ];
+    for (const o of dropped) {
+        const block = o.anchor ?? lastLive;
+        const at = o.anchor ? 0 : lastLen;
+        out.push({ channel: o.channel, stage: o.stage, edit: 'del', block, start: at, end: at, removed: o.text, layerId: o.layerId });
     }
 
-    return out;
+    // Stacking order — background, then opacity, then ink — so a consumer that draws
+    // them in the order given gets code under plan under human without sorting.
+    const rank: Record<Channel, number> = { code: 0, plan: 1, human: 2 };
+    return out.sort((a, b) => rank[a.channel] - rank[b.channel]);
 }
 
-/** A block's text out of a FeatureText. */
-function textAt(t: FeatureText, block: BlockRef): string {
-    return block.kind === 'title' ? t.title : (t.paras[block.index] ?? '');
+/** Where a projected paragraph index ends up in the live document, via the same
+ *  content pairings `blockStages` walks — so an orphan is anchored to the block that
+ *  now stands where it stood, not to whatever shares its old number. */
+function projectedToLive(f: FeatureLayers): (projectedIndex: number) => number | null {
+    const planned = f.planned ?? f.projected;
+    const toPlanned = alignParas(planned.paras, f.live.paras);
+    const plannedToProjected = alignParas(f.projected.paras, planned.paras);
+    return (j: number): number | null => {
+        for (let i = 0; i < f.live.paras.length; i++) {
+            const p = toPlanned[i];
+            if (p !== null && plannedToProjected[p] === j) return i;
+        }
+        return null;
+    };
+}
+
+function keyOf(b: BlockRef): string {
+    return b.kind === 'title' ? 'title' : 'p' + b.index;
 }
 
 // ── superseding: the drop rule nobody has to click ───────────────────────────
-
-/**
- * Fold every claim into the text as it now reads and start over.
- *
- * This is what happens when the author does not answer. They kept typing, or the loop
- * ran again, or the agent came back with something else — and any of those is a
- * statement about the old claim: it is no longer the thing being decided. The next
- * round's baseline is the document ON SCREEN, plan text and all.
- *
- * Modelled as data rather than as a mutation so the caller can hold the two baselines
- * (what the daemon last wrote, what the author was last shown) without this module
- * knowing where either is stored.
- */
-export function rebase(live: FeatureText): FeatureText {
-    return { title: live.title, paras: [...live.paras] };
-}
-
-/**
- * Which layers a new payload retires.
- *
- * A layer is dropped when its own resolution arrives (accepted / rejected / realized),
- * OR when it is no longer offered — the daemon stopped shipping it, which is how a
- * proposal that got applied, withdrawn, or superseded by a later pass disappears. The
- * caller passes what is still on offer; everything else is history.
- */
-export function droppedLayers(
-    known: ReadonlySet<string>, stillOffered: ReadonlySet<string>,
-): Set<string> {
-    const out = new Set<string>();
-    for (const id of known) if (id !== LOCAL_EDIT_LAYER && !stillOffered.has(id)) out.add(id);
-    return out;
-}

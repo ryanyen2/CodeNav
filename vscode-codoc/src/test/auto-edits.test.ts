@@ -177,29 +177,54 @@ describe('the rewrite surface stands down once the reader has edited the feature
     });
 });
 
-describe('the loop diff stands down when the author types', () => {
-    // The diff drawn on a rewritten description is "what it said before" against
-    // "what is on screen", which is only the loop's rewrite while the screen still
-    // holds the loop's words. Once the author edits the same paragraph their words
-    // are inside `current`, so the underline claims the loop wrote them and the
-    // strikethrough offers to restore a version two revisions old. A participant
-    // hit exactly that.
-    it('the diff is the sentence, not the word', async () => {
+describe('the loop diff no longer needs to stand down — the model separates the words', () => {
+    // The diff used to be "what it said before" against "what is on screen", which is
+    // only the loop's rewrite while the screen still holds the loop's words. Once the
+    // author edited the same paragraph their words sat inside `current`, so the
+    // underline claimed the loop had written them and the strikethrough offered to
+    // restore a version two revisions old. A participant hit exactly that.
+    //
+    // Two heuristics fenced it off — a `locallyEdited` stand-down and an `arrivedAs`
+    // memo of the first render — and both are gone, because the settlement model
+    // answers the question they were approximating: a code claim is computed against
+    // the projection, carried forward through the author's own diff, and voided when
+    // the author has edited inside the sentence it reports.
+
+    it('does not carry the diff, or the workarounds it needed', () => {
+        // Comments stripped first: the module's header names both by way of explaining
+        // what went and why, and a source grep that cannot tell an explanation from a
+        // call would fail on the documentation of its own fix.
         const src = readFileSync(
-            resolve(__dirname, '../webview/tiptap/auto-edit-decorations.ts'), 'utf8');
-        // A word diff of a rewritten claim shreds both versions into alternating
-        // fragments and the reader has to reassemble two sentences before they can
-        // agree with either. The unit of the decision is the sentence.
-        expect(src).toMatch(/sentenceDiff/);
-        expect(src).not.toMatch(/\bwordDiff\b/);
+            resolve(__dirname, '../webview/tiptap/auto-edit-decorations.ts'), 'utf8')
+            .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+        expect(src).not.toMatch(/arrivedAs/);
+        expect(src).not.toMatch(/reviewDiffSpans/);
+        expect(src).not.toMatch(/ce-autoedit-add/);
     });
 
-    it('remembers what the rewrite looked like when it arrived', () => {
-        const src = readFileSync(
-            resolve(__dirname, '../webview/tiptap/auto-edit-decorations.ts'), 'utf8');
-        expect(src).toMatch(/arrivedAs/);
-        // And forgets it once the rewrite has been answered, so the memo stays the
-        // size of what is owed rather than of everything ever seen.
-        expect(src).toMatch(/arrivedAs\.delete/);
+    it('voids a code claim on a sentence the author has rewritten', async () => {
+        const { claimsFor } = await import('../state/settlement');
+        const claims = claimsFor({
+            code: { layerId: 'e-1', prev: { title: 'T', paras: ['the old wording here'] } },
+            projected: { title: 'T', paras: ['the new wording here'] },
+            live: { title: 'T', paras: ['something the author typed instead'] },
+        });
+        expect(claims.some(c => c.channel === 'code' && c.edit === 'add')).toBe(false);
+    });
+
+    it('still reports the diff at the SENTENCE, which is the unit of the decision', async () => {
+        // A word diff of a rewritten claim shreds both versions into alternating
+        // fragments and the reader has to reassemble two sentences before they can
+        // agree with either.
+        const { claimsFor } = await import('../state/settlement');
+        const live = { title: 'T', paras: ['It uses LanceDB. It caches results.'] };
+        const claims = claimsFor({
+            code: { layerId: 'e-1', prev: { title: 'T', paras: ['It uses FAISS. It caches results.'] } },
+            projected: live, live,
+        });
+        const add = claims.find(c => c.channel === 'code' && c.edit === 'add')!;
+        const marked = live.paras[0].slice(add.start, add.end);
+        expect(marked).toContain('It uses LanceDB.');      // the whole sentence
+        expect(marked).not.toContain('caches');            // and not its neighbour
     });
 });

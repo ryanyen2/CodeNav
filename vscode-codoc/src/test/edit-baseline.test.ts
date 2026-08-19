@@ -1,20 +1,26 @@
 /**
- * captured-decorations.test.ts — U3 guard for the "recorded, not sent" phase.
+ * edit-baseline.test.ts — what the author's own edits are measured against, and what
+ * they look like once measured.
  *
- * Pure helpers only (the vitest node env has no DOM/editor): the feature-block projection,
- * the captured-set partition, and the add/del span positioning. The visual rail/dot/caret
- * and its place in the lifecycle ramp are the EDH gate. Load-bearing rules pinned here:
+ * The baseline bookkeeping half (`state/edit-baseline.ts`) is what survived the
+ * settlement redesign intact: deciding WHICH text a human diff runs against was never
+ * about decorations. The marks themselves moved to `state/settlement.ts`, and the
+ * span-positioning tests moved with them — they are at the bottom of this file, now
+ * asked of `claimsFor`, because the rules they pin are the same rules.
+ *
+ * Load-bearing rules pinned here:
  *   - EVERY changed feature is captured (no size/code-implying threshold).
  *   - a held draft stays captured even after the daemon renders its prose back.
  *   - a handed-off (staged & sent) feature is NEVER captured — pending takes over.
  *   - whitespace-only edits don't register (ftKey matches the renderer's normalization).
- *   - additions map to an underline range; deletions map to a caret AT the gap (no text).
+ *   - a baseline moves only for a feature that ADOPTED the projection.
  */
 import { describe, it, expect } from 'vitest';
 import {
-    featureBlocks, ftKey, capturedFids, blockDiffSpans, rebaseCaptured, settledPendingFids,
+    featureBlocks, ftKey, capturedFids, rebaseCaptured, settledPendingFids,
     type FeatureText,
-} from '../webview/tiptap/captured-decorations';
+} from '../state/edit-baseline';
+import { claimsFor } from '../state/settlement';
 import { makeDoc, featureHeadingNode, paragraphNode, textToInlineRuns, type PMNode } from '../state/pm-doc';
 
 function feat(fid: string, title: string, desc: string): PMNode[] {
@@ -87,45 +93,55 @@ describe('U3: capturedFids', () => {
     });
 });
 
-describe('U3: blockDiffSpans (add underline range + deletion caret position)', () => {
-    // contentStart = 1 (first inline position inside a textblock)
-    it('an addition yields an underline range over the inserted words', () => {
-        const spans = blockDiffSpans('Login.', 'Login and OAuth.', 1);
-        const add = spans.find(s => s.kind === 'add');
-        expect(add).toBeTruthy();
-        // "Login" (5) stays same; the insertion range covers the added " and OAuth" tail
-        expect(add).toMatchObject({ kind: 'add' });
-        if (add && add.kind === 'add') expect(add.to).toBeGreaterThan(add.from);
+describe('the human channel: what your own editing looks like', () => {
+    // These moved here with the marks themselves. `blockDiffSpans` computed them for a
+    // decoration layer that no longer exists; `claimsFor` computes them for all three
+    // channels at once, so the rules below are stated once instead of per-layer.
+    const ft = (title: string, ...paras: string[]) => ({ title, paras });
+    const spans = (base: string, cur: string) =>
+        claimsFor({ projected: ft('T', base), live: ft('T', cur) })
+            .filter(c => c.channel === 'human');
+
+    it('an addition covers the words you inserted', () => {
+        const cur = 'Login and OAuth.';
+        const add = spans('Login.', cur).find(c => c.edit === 'add')!;
+        expect(add.end).toBeGreaterThan(add.start);
+        expect(cur.slice(add.start, add.end)).toContain('OAuth');
     });
 
-    it('a deletion yields a caret AT the gap, not an underline ("I don\'t think" → "I think")', () => {
-        const spans = blockDiffSpans('I don\'t think', 'I think', 1);
-        const del = spans.find(s => s.kind === 'del');
-        expect(del).toBeTruthy();
-        if (del && del.kind === 'del') {
-            expect(del.text).toContain("don't");
-            // caret sits after "I " (offset 2) + contentStart(1) = position 3, i.e. "I |think"
-            expect(del.at).toBe(3);
-        }
-        expect(spans.some(s => s.kind === 'add')).toBe(false); // pure deletion → no underline
+    it('a pure deletion is reported at the gap — there is nothing left to cover', () => {
+        const del = spans("I don't think", 'I think').find(c => c.edit === 'del')!;
+        expect(del.removed).toContain("don't");
+        expect(del.start).toBe(del.end);
+        expect(spans("I don't think", 'I think').some(c => c.edit === 'add')).toBe(false);
     });
 
-    it('a word REPLACEMENT (select-delete-retype) is editing → underline only, NO caret', () => {
-        // "the cat" → "the dog": del("cat") is adjacent to ins("dog") ⇒ replacement.
-        const spans = blockDiffSpans('the cat', 'the dog', 1);
-        expect(spans.some(s => s.kind === 'add')).toBe(true);  // the new word is underlined
-        expect(spans.some(s => s.kind === 'del')).toBe(false); // no deletion caret
+    it('a word REPLACEMENT shows only the new word — you just did that', () => {
+        // "the cat" → "the dog" is one act of editing, and the reader performed it;
+        // a ghost of "cat" beside their own "dog" reports back what they just typed.
+        const out = spans('the cat', 'the dog');
+        expect(out.some(c => c.edit === 'add')).toBe(true);
+        expect(out.some(c => c.edit === 'del')).toBe(false);
     });
 
-    it('a pure deletion alongside a SEPARATE addition still carets the deletion', () => {
-        // "alpha beta gamma" → "alpha gamma delta": "beta" removed (pure), "delta" added.
-        const spans = blockDiffSpans('alpha beta gamma', 'alpha gamma delta', 1);
-        expect(spans.some(s => s.kind === 'del')).toBe(true);  // "beta" deletion → caret
-        expect(spans.some(s => s.kind === 'add')).toBe(true);  // "delta" addition → underline
+    it('…but the SAME shape from the code channel keeps the removed words', () => {
+        // There it means somebody else replaced your sentence, and what they took out
+        // is the whole point.
+        const projected = ft('T', 'the dog');
+        const claims = claimsFor({
+            code: { layerId: 'e-1', prev: ft('T', 'the cat') }, projected, live: projected,
+        });
+        expect(claims.some(c => c.channel === 'code' && c.removed?.includes('cat'))).toBe(true);
     });
 
-    it('no change → no spans', () => {
-        expect(blockDiffSpans('same', 'same', 1)).toEqual([]);
+    it('a pure deletion alongside a SEPARATE addition is still reported', () => {
+        const out = spans('alpha beta gamma', 'alpha gamma delta');
+        expect(out.some(c => c.edit === 'del')).toBe(true);
+        expect(out.some(c => c.edit === 'add')).toBe(true);
+    });
+
+    it('no change → nothing', () => {
+        expect(spans('same', 'same')).toEqual([]);
     });
 });
 
@@ -253,45 +269,29 @@ describe('the underline survives a settle, and stops at CJK boundaries', () => {
         expect('the quicker brown fox'.slice(r!.start, r!.end)).toBe('quicker');
     });
 
-    it('a held draft keeps its word diff after the local baseline adopts', async () => {
-        // The vanishing underline: settle → daemon renders the new text back →
-        // the feature adopts → the local baseline equals the current text → diff
-        // empty. The DIRECTIVE kept the pre-edit text, and the captured build now
-        // falls back to it, so the author's change stays underlined until they
-        // press Commit & send.
-        const { buildCapturedDecorations } = await import('../webview/tiptap/captured-decorations');
-        const { Schema } = await import('@tiptap/pm/model');
-        const schema = new Schema({
-            nodes: {
-                doc: { content: 'block+' },
-                featureHeading: {
-                    group: 'block', content: 'inline*',
-                    attrs: { fid: { default: null }, localId: { default: null } },
-                },
-                paragraph: { group: 'block', content: 'inline*' },
-                text: { group: 'inline' },
-            },
-        });
-        const doc = schema.node('doc', null, [
-            schema.node('featureHeading', { fid: 'f-1' }, [schema.text('Summary total rounding')]),
-            schema.node('paragraph', null, [schema.text('Rounds once at the summary so I would like to remove this feature.')]),
-        ]);
-        // Local baseline has ADOPTED the settled text (equal to current) …
-        const baseline = new Map([['f-1', {
+    it('a held draft keeps its diff after the local baseline adopts', () => {
+        // The vanishing underline: settle → the daemon renders the new text back → the
+        // feature adopts → the local baseline equals the current text → the diff is
+        // empty, and the mark saying "this is yours, the code has not caught up" clears
+        // at the exact moment it starts being true.
+        //
+        // The DIRECTIVE still knows what the edit displaced, and the settlement model
+        // takes that as `humanBase` — see settlement.ts, which is where this rule now
+        // lives. Held here too because it is a property of the BASELINE choice, which is
+        // this module's subject.
+        const current = {
             title: 'Summary total rounding',
             paras: ['Rounds once at the summary so I would like to remove this feature.'],
-        }]]);
-        // … but the directive still knows what the edit displaced.
-        const detail = { 'f-1': {
-            kind: 'amend', intent: 'update the summary rounding',
-            baseline: 'Rounds once at the summary',
-        } };
-        const withFallback = buildCapturedDecorations(doc, new Set(['f-1']), baseline, detail);
-        const without = buildCapturedDecorations(doc, new Set(['f-1']), baseline, {});
-        const adds = (set: import('@tiptap/pm/view').DecorationSet): number =>
-            set.find().filter(d => (d as unknown as { type: { attrs: { class?: string } } })
-                .type.attrs?.class === 'ce-captured-add').length;
-        expect(adds(without)).toBe(0);
-        expect(adds(withFallback)).toBeGreaterThan(0);
+        };
+        // Adopted: `projected` already equals what the author typed.
+        const withoutFallback = claimsFor({ projected: current, live: current });
+        expect(withoutFallback).toEqual([]);
+
+        // …but the directive kept the pre-edit text, so the mark survives.
+        const withFallback = claimsFor({
+            projected: current, live: current, committed: true,
+            humanBase: { title: current.title, paras: ['Rounds once at the summary'] },
+        });
+        expect(withFallback.some(c => c.channel === 'human' && c.edit === 'add')).toBe(true);
     });
 });

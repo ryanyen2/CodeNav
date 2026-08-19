@@ -12,7 +12,7 @@
  * the tree into one article):
  *
  *   doc
- *     ├─ featureHeading { fid, level, retired, realized }  → title inline runs
+ *     ├─ featureHeading { fid, level, retired, realized, proposed }  → title inline runs
  *     ├─ paragraph                                         → a description paragraph
  *     ├─ paragraph                                         → (blank-line-separated)
  *     ├─ featureHeading { … }                              → next feature
@@ -72,6 +72,17 @@ export interface FeatureHeadingAttrs {
      *  diff keys on it (Step 3) and the uniqueness plugin (Step 5) keeps it distinct per
      *  live node. Optional in the model type — only authored headings carry one. */
     localId?: string | null;
+    /** The proposal event id when this node is PLANNED rather than real — an agent's
+     *  proposed ADD, materialized into the document so it can be read in place instead
+     *  of in a widget beside it (state/agent-proposals.ts).
+     *
+     *  It is the same device as `retired`: a flag on a node that is really in the doc,
+     *  and it exists for the same reason — the alternative is inferring intent from
+     *  presence, which is invariant I1's whole complaint. Everything that projects the
+     *  doc back to authored state MUST skip these nodes; they are the agent's words,
+     *  and emitting a command for one would author the machine's proposal as the
+     *  human's edit. Absent/null on every node the human owns. */
+    proposed?: string | null;
 }
 
 export interface CodeRefAttrs {

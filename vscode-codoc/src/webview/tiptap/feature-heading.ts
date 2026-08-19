@@ -61,6 +61,15 @@ export const FeatureHeading = Node.create<FeatureHeadingOptions>({
                 parseHTML: el => (el as HTMLElement).getAttribute('data-realized') !== 'false',
                 renderHTML: attrs => (attrs.realized === false ? { 'data-realized': 'false' } : {}),
             },
+            // A PLANNED node: an agent's proposed ADD, materialized in place (see
+            // FeatureHeadingAttrs.proposed). Carries the proposal's event id, so the
+            // verdict affordance on the heading knows what it is accepting and the
+            // command path knows to leave the node alone.
+            proposed: {
+                default: null,
+                parseHTML: el => (el as HTMLElement).getAttribute('data-proposed') || null,
+                renderHTML: attrs => (attrs.proposed ? { 'data-proposed': String(attrs.proposed) } : {}),
+            },
         };
     },
 

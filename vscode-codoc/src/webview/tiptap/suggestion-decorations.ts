@@ -81,41 +81,33 @@ function isPlanned(s: Suggestion): boolean {
     return s.direction === 'code-ahead' && consequenceOf(s.writesCode, s.tag) === 'build';
 }
 
-// ── ghost drafts: the author's in-place edits to a not-yet-accepted proposal ──
-// Keyed by suggestion id, module-level so they survive decoration rebuilds (every
-// payload dispatches SUGGESTIONS_UPDATED) and position moves. Pruned on build to
-// the suggestions still alive, so a resolved ghost's draft can't leak onto a
-// future proposal that reuses nothing but memory.
-const ghostDrafts = new Map<string, { title?: string; description?: string }>();
-
-function pruneGhostDrafts(alive: ReadonlySet<string>): void {
-    for (const id of [...ghostDrafts.keys()]) if (!alive.has(id)) ghostDrafts.delete(id);
-}
-
-/** The accept-time edits for a ghost: only fields that actually differ from the
- *  proposal ride the verdict, so an untouched ghost accepts exactly as proposed. */
-export function ghostEditsFor(s: Suggestion): { title?: string; description?: string } | undefined {
-    const d = ghostDrafts.get(s.id);
-    if (!d) return undefined;
+/**
+ * The accept-time edits for a materialized ADD: what the node SAYS now, when that
+ * differs from what was proposed.
+ *
+ * This replaced a module-level draft store keyed by suggestion id, and the store is not
+ * missed. It existed because the proposal lived in a widget outside the document, so
+ * anything the author typed into it had nowhere to be except a side map that had to be
+ * pruned, survive decoration rebuilds, and never leak onto a later proposal reusing the
+ * memory. A materialized node has somewhere to be: the document. Reading it back is one
+ * function with no lifetime of its own.
+ */
+export function nodeEditsFor(
+    l: { heading: PMModelNode; body: { node: PMModelNode }[] }, s: Suggestion,
+): { title?: string; description?: string } | undefined {
     const out: { title?: string; description?: string } = {};
-    const t = d.title?.trim();
-    const b = d.description?.trim();
-    if (t && t !== (s.titleNew ?? '').trim()) out.title = t;
-    if (b !== undefined && b !== (s.descNew ?? '').trim()) out.description = b;
+    const title = headingText(l.heading).trim();
+    const desc = l.body.map(b => textOfBlock(b.node)).filter(t => t.trim()).join('\n\n');
+    if (title && title !== (s.titleNew ?? '').trim()) out.title = title;
+    if (desc !== (s.descNew ?? '').trim()) out.description = desc;
     return out.title || out.description !== undefined ? out : undefined;
 }
 
-/** (tests) reset the module-level draft store. */
-export function resetGhostDrafts(): void { ghostDrafts.clear(); }
-
-/** Record an in-place ghost edit. The DOM field handler calls this on input;
- *  exported so the accept-payload rule is testable without a DOM. */
-export function setGhostDraft(
-    id: string, field: 'title' | 'description', value: string,
-): void {
-    const d = ghostDrafts.get(id) ?? {};
-    d[field] = value;
-    ghostDrafts.set(id, d);
+/** A block's text as the reader sees it — the same projection the heading uses. */
+function textOfBlock(node: PMModelNode): string {
+    let t = '';
+    node.forEach(child => { t += child.isText ? (child.text ?? '') : ''; });
+    return t;
 }
 
 /**
@@ -229,30 +221,6 @@ function verdictStrip(
     return row;
 }
 
-/** Make a ghost field editable-in-place: plaintext editing wired into the module
- *  draft store, so what the author types survives decoration rebuilds and rides the
- *  eventual Accept. Editable ghosts are the point (a proposal is a starting draft,
- *  not a take-it-or-leave-it block); the widget wrapper is contentEditable=false, so
- *  each field opts back IN. */
-function editableGhostField(
-    el2: HTMLElement, s: Suggestion, field: 'title' | 'description',
-): void {
-    // plaintext-only keeps paste from smuggling markup into a plain string; the
-    // fallback is fine — the value is read back via textContent either way.
-    try { el2.contentEditable = 'plaintext-only'; } catch { el2.contentEditable = 'true'; }
-    el2.spellcheck = true;
-    const saved = ghostDrafts.get(s.id)?.[field];
-    if (saved !== undefined) el2.textContent = saved;
-    el2.addEventListener('input', () => {
-        setGhostDraft(s.id, field, el2.textContent ?? '');
-        // The author is shaping the proposal — say so where the eye already is.
-        el2.closest('.ce-ghost-feature')?.classList.add('edited');
-    });
-    // Keystrokes inside the field belong to the field — not to the surrounding
-    // ProseMirror editor, whose keymap would otherwise swallow Enter/Backspace.
-    el2.addEventListener('keydown', ev => ev.stopPropagation());
-    el2.addEventListener('mousedown', ev => ev.stopPropagation());
-}
 
 /**
  * A proposed node, drawn where it will live: a dimmed title at the child level plus
@@ -272,8 +240,6 @@ function ghostFeatureDom(
     wrap.contentEditable = 'false';
     wrap.dataset.level = String(level);
     wrap.setAttribute('data-suggestion', s.id);
-    if (ghostDrafts.has(s.id)) wrap.classList.add('edited');
-    const editable = s.kind === 'add';
     const title = elc('div', 'ce-ghost-title', label || '(untitled)');
     title.title = s.kind === 'move'
         ? 'The agent proposes moving this feature here. Nothing has moved yet.'
@@ -283,19 +249,8 @@ function ghostFeatureDom(
     // A move's description is already on screen at the node's current home — repeating
     // it here would read as a second copy of the feature rather than as its destination.
     const desc = s.kind === 'move' ? '' : (s.descNew ?? '').trim();
-    let descEl: HTMLElement | null = null;
-    if (desc || editable) {
-        descEl = elc('div', 'ce-ghost-desc', desc);
-        wrap.append(descEl);
-    }
-    if (editable && !s.verdictPending) {
-        editableGhostField(title, s, 'title');
-        if (descEl) {
-            editableGhostField(descEl, s, 'description');
-            descEl.dataset.placeholder = 'Describe the intent — edit freely before accepting…';
-        }
-    }
-    wrap.append(verdictStrip(s, handlers, false, editable ? () => ghostEditsFor(s) : undefined));
+    if (desc) wrap.append(elc('div', 'ce-ghost-desc', desc));
+    wrap.append(verdictStrip(s, handlers, false));
     return wrap;
 }
 
@@ -338,7 +293,12 @@ export function locateFeatures(doc: PMModelNode): Map<string, FeatureLoc> {
         for (let j = i + 1; j < heads.length; j++) {
             if (heads[j].level <= h.level) { subtreeEnd = heads[j].pos; break; }
         }
-        const fid = h.node.attrs.fid as string | null;
+        // Keyed by `fid`, else by the proposal that put the node there. A materialized
+        // plan node has no fid — the store has not minted one and must not appear to
+        // have — so without the second rung its own verdict strip would have nothing to
+        // anchor to and the reader would see the proposed node with no way to answer it.
+        const attrs = h.node.attrs as { fid?: string | null; proposed?: string | null };
+        const fid = attrs.fid ?? attrs.proposed ?? null;
         if (!fid) return;
         const body = blocks.filter(b => b.pos > h.pos && b.pos < bodyEnd);
         loc.set(fid, { headingPos: h.pos, heading: h.node, level: h.level, bodyEnd, subtreeEnd, body });
@@ -350,12 +310,17 @@ function buildDecorations(
     doc: PMModelNode, suggestions: Suggestion[], handlers: SuggestionHandlers,
     locallyEdited: ReadonlySet<string> = new Set(),
 ): DecorationSet {
-    pruneGhostDrafts(new Set(suggestions.map(s => s.id))); // resolved ghosts drop their drafts
     const loc = locateFeatures(doc);
     const docEnd = doc.content.size;
     const decos: Decoration[] = [];
     for (const s of suggestions) {
-        if (s.kind === 'add' || s.kind === 'move') {
+        // An ADD is no longer a widget beside the document: `plan-materialize` puts the
+        // proposed node IN the tree, at the rank it will take, drawn in the plan
+        // channel's faded ink. So it resolves exactly like an amend or a retire — one
+        // verdict strip on the node itself — and the "edit it before accepting" affordance
+        // is now just editing the document, which is both less machinery and a truer
+        // preview than a pair of fields in a card.
+        if (s.kind === 'move') {
             // The placeholder lands where the node itself will: last child of the
             // destination parent, i.e. the end of that parent's subtree. Anchoring it
             // right under the parent's heading (the old behaviour) put it between the
@@ -372,8 +337,11 @@ function buildDecorations(
             const before = !after && s.beforeId ? loc.get(s.beforeId) : null;
             if (after) { at = after.subtreeEnd; level = after.level; }
             else if (before) { at = before.headingPos; level = before.level; side = -1; }
+            // A MOVE keeps its ghost: nothing is materialized for it, because the node
+            // itself stays where it is until the verdict lands — so both ends of the
+            // move have to be visible at once, the live node and its destination.
             let label = s.titleNew ?? '';
-            if (s.kind === 'move' && s.featureId) {
+            if (s.featureId) {
                 const src = loc.get(s.featureId);
                 if (src) {
                     label = label || headingText(src.heading);
@@ -385,7 +353,10 @@ function buildDecorations(
                                          { side, key: 'sug-' + s.id }));
             continue;
         }
-        const l = s.featureId ? loc.get(s.featureId) : null;
+        // An add is filed under its own proposal id (see `locateFeatures`); everything
+        // else under the feature it targets.
+        const key = s.kind === 'add' ? s.id : s.featureId;
+        const l = key ? loc.get(key) : null;
         if (!l) continue;
         // retire — the strike on the heading IS the proposal; amend — the tracked-change
         // ins/del marks the host materialized in the prose are. Either way the only thing
@@ -406,7 +377,13 @@ function buildDecorations(
             }
         }
         decos.push(Decoration.widget(l.headingPos + 1 + l.heading.content.size,
-                                     () => verdictStrip(s, handlers, locallyEdited.has(s.featureId ?? '')),
+                                     () => verdictStrip(
+                                         s, handlers, locallyEdited.has(s.featureId ?? ''),
+                                         // An ADD is editable where it stands, because it
+                                         // IS the document now — so the accept carries
+                                         // whatever the author reshaped, read back off the
+                                         // node rather than out of a parallel draft store.
+                                         s.kind === 'add' ? () => nodeEditsFor(l, s) : undefined),
                                      { side: 1, key: 'sug-' + s.id + (locallyEdited.has(s.featureId ?? '') ? ':edited' : '') }));
     }
     return DecorationSet.create(doc, decos);

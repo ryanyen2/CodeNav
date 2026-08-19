@@ -25,6 +25,8 @@ import { editKey, pruneSeen } from '../state/auto-edits';
 import { PMNode } from '../state/pm-doc';
 import { DocFile, parseDocFile, buildSuggestions, insertAtAnchor, Suggestion } from '../state/suggestion-model';
 import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
+import { materializePlan } from '../state/plan-materialize';
+import { buildStages, planNodesFrom, stagedProposals } from '../state/settlement-stages';
 import { moveCommand, featureUnits } from '../state/commands-from-doc';
 import { EditProvenance } from '../state/edit-provenance';
 import {
@@ -882,12 +884,36 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             pitches[fid] = (meta.pitch && meta.pitch.trim()) ? meta.pitch : meta.title;
         }
 
-        // Agent → human (U4): materialize each code-ahead AMEND as the engine's
-        // tracked-change marks in the PAYLOAD doc only. tree.doc.json (docFile.doc,
-        // persisted above) stays the clean human baseline; the baseline-aware
-        // serializer renders the marked doc back to the same tree.codoc. add/move/
-        // retire stay compact widgets (suggestion-decorations.ts).
-        const docForPayload = applyAgentProposals(doc, agentAmendsFrom(suggestions));
+        // Agent → human: materialize every pending proposal into the PAYLOAD doc, so a
+        // plan is read where it will land rather than in a widget beside it. An AMEND
+        // becomes tracked-change marks on the prose it changes; an ADD becomes a real
+        // node at the rank it will take, flagged `proposed`; a RETIRE strikes the words
+        // it proposes to remove.
+        //
+        // tree.doc.json (docFile.doc, persisted above) stays the clean human baseline,
+        // and three paths keep it that way: the baseline-aware serializer excludes
+        // insertion-marked runs, and `featureUnits` / `renderTreeFromDoc` both skip
+        // `proposed` nodes. Without those a settle would author the machine's proposal
+        // as the reader's own edit (see state/plan-materialize.ts).
+        const staged = stagedProposals(suggestions);
+        const docForPayload = materializePlan(
+            applyAgentProposals(doc, agentAmendsFrom(suggestions)),
+            planNodesFrom(staged, key => {
+                // Matched on the same key `stagedProposals` files under — the event id for
+                // an add, the feature id for anything else. Deriving it a second time by a
+                // different rule is how the anchors and the stages drift apart.
+                const s = suggestions.find(x =>
+                    (x.kind === 'add' ? (x.eventId ?? x.id) : x.featureId) === key);
+                return {
+                    parentId: s?.parentId ?? null, afterId: s?.afterId ?? null,
+                    beforeId: s?.beforeId ?? null, featureId: s?.featureId ?? null,
+                    authorId: s?.originRole || 'claude-code',
+                };
+            }),
+        );
+        // The settlement model's host half, built from the CLEAN doc — `projected` means
+        // "what the daemon last wrote", which is exactly the doc before any of the above.
+        const stages = buildStages(doc, staged, this.unseenAutoEdits(sidecar), sidecar.hold_detail ?? {});
         const held = heldFeatures(sidecar);  // hold set — reused for awaitingAI + the draft gate
 
         // v6: per-feature typed-media blocks for the webview to render below each
@@ -913,6 +939,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             pendingEventIds,
             baselineId,
             doc: docForPayload,
+            stages,
             symbols: this.buildSymbols(sidecar),
             // v6: what the loop rewrote on its own authority (auto AMENDs only —
             // the sidecar already excludes refresh/attach/detach as machinery).

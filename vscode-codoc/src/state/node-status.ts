@@ -83,18 +83,27 @@ export const FULFILMENT_TTL_MS = 30 * 60 * 1000;
  * failure mode of every badge that is computed from its own inputs.
  */
 export function nodeStatus(
-    claims: readonly Claim[], fulfilment: Fulfilment | null, now: number,
+    claims: readonly Claim[], fulfilments: readonly Fulfilment[] | Fulfilment | null, now: number,
 ): NodeStatus {
+    // A feature can have BOTH slots land — a plan that was built, carrying an edit of
+    // yours that was built with it — so this takes a list. The single-value form is
+    // accepted because most callers have exactly one and threading an array through
+    // them would be ceremony.
+    const landed: readonly Fulfilment[] = Array.isArray(fulfilments) ? fulfilments
+        : fulfilments ? [fulfilments] : [];
     let human: HumanMark = 'none';
     let plan: PlanMark = 'none';
     let add = false, del = false;
 
     for (const c of claims) {
         if (c.channel === 'human') {
-            // `committed` outranks `open`: a feature with both has already been handed
-            // off, and the marker's job is to say whether anything is still yours to send.
-            if (c.stage === 'committed' && human === 'none') human = 'committed';
-            else if (c.stage === 'open') human = 'open';
+            // `open` outranks `committed`, because the slot answers "is any of this
+            // still yours to send?" — and while one span is unsent the answer is yes,
+            // however much of the feature has already gone. The pulse is the prompt
+            // for ⌘S; suppressing it because a NEIGHBOURING span was already handed
+            // off would hide the one thing left to do.
+            if (c.stage === 'open') human = 'open';
+            else if (c.stage === 'committed' && human === 'none') human = 'committed';
         } else if (c.channel === 'plan') {
             if (c.stage === 'accepted' && plan === 'none') plan = 'accepted';
             else if (c.stage === 'proposed') plan = 'proposed';
@@ -103,11 +112,12 @@ export function nodeStatus(
         }
     }
 
-    if (fulfilment && now - fulfilment.at < FULFILMENT_TTL_MS) {
-        if (fulfilment.channel === 'human' && human === 'none') human = 'fulfilled';
-        if (fulfilment.channel === 'plan' && plan === 'none') plan = 'fulfilled';
-        if (fulfilment.diverged === 'add' || fulfilment.diverged === 'both') add = true;
-        if (fulfilment.diverged === 'del' || fulfilment.diverged === 'both') del = true;
+    for (const f of landed) {
+        if (now - f.at >= FULFILMENT_TTL_MS) continue;
+        if (f.channel === 'human' && human === 'none') human = 'fulfilled';
+        if (f.channel === 'plan' && plan === 'none') plan = 'fulfilled';
+        if (f.diverged === 'add' || f.diverged === 'both') add = true;
+        if (f.diverged === 'del' || f.diverged === 'both') del = true;
     }
 
     const diff: DiffMark = add && del ? 'both' : add ? 'add' : del ? 'del' : 'none';

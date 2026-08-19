@@ -15,7 +15,8 @@ import { Node as PMModelNode } from '@tiptap/pm/model';
 import { codocSchema } from '../webview/tiptap/schema';
 import { ATOM_CHAR, alignParas, mdDisplayText, paraDisplayText } from '../webview/tiptap/display-text';
 import { buildHoldDecorations } from '../webview/tiptap/hold-decorations';
-import { buildCapturedDecorations, featureBlocks } from '../webview/tiptap/captured-decorations';
+import { featureBlocks } from '../state/edit-baseline';
+import { buildSettlementDecorations } from '../webview/tiptap/settlement-decorations';
 import type { PMNode } from '../state/pm-doc';
 
 const schema = codocSchema();
@@ -107,44 +108,53 @@ describe('hold underline — chip paragraphs diff precisely (formerly blacked ou
     });
 });
 
-describe('captured diff — chips + alignment in the recorded-not-sent underline', () => {
-    it('underlines an added word in a chip paragraph (formerly no underline at all)', () => {
+describe('the human channel — chips and alignment, through the real decoration layer', () => {
+    /** The host half of the stages, from a baseline doc: `projected` in DISPLAY space,
+     *  which is the whole point of the contract these tests guard. */
+    const stagesOf = (baseJson: PMNode) => {
+        const out = new Map<string, { projected: { title: string; paras: string[] } }>();
+        for (const [fid, ft] of featureBlocks(baseJson)) {
+            out.set(fid, { projected: { title: mdDisplayText(ft.title), paras: ft.paras.map(mdDisplayText) } });
+        }
+        return out;
+    };
+    const humanAdds = (doc: PMModelNode, baseJson: PMNode): string[] =>
+        buildSettlementDecorations(doc, stagesOf(baseJson)).find()
+            .filter(d => (attrsOf(d)?.class ?? '').includes('human'))
+            .map(d => doc.textBetween(d.from, d.to, ' ', '¤'));
+
+    it('marks an added word in a paragraph that cites code (a chip is ONE position)', () => {
+        // The bug class this pins: a chip contributes zero chars via textContent and
+        // ~30 via its markdown, so a diff run in either space mis-anchors — or, with the
+        // old defence, was dropped entirely and the paragraph showed no mark at all.
         const baseJson = { type: 'doc', content: [
             heading('f-a', 'Fan-out'),
             para(text('See '), chip, text(' for fan-out.')),
         ] } as PMNode;
-        const baseline = featureBlocks(baseJson);
         const doc = docOf(
             heading('f-a', 'Fan-out'),
             para(text('See '), chip, text(' for resilient fan-out.')),
         );
-        const set = buildCapturedDecorations(doc, new Set(['f-a']), baseline);
-        const adds = set.find()
-            .filter(d => attrsOf(d)?.class === 'ce-captured-add')
-            .map(d => doc.textBetween(d.from, d.to, ' ', '¤'));
-        expect(adds).toContain('resilient ');
+        expect(humanAdds(doc, baseJson)).toContain('resilient ');
     });
 
-    it('keeps the add-underline anchored when a paragraph is inserted above', () => {
+    it('keeps the mark anchored when a paragraph is inserted above', () => {
         const baseJson = { type: 'doc', content: [
             heading('f-a', 'Fan-out'),
             para(text('Alpha beta.')),
             para(text('Gamma delta.')),
         ] } as PMNode;
-        const baseline = featureBlocks(baseJson);
         const doc = docOf(
             heading('f-a', 'Fan-out'),
             para(text('Alpha beta.')),
             para(text('Fresh thought.')),
             para(text('Gamma delta plus.')),
         );
-        const set = buildCapturedDecorations(doc, new Set(['f-a']), baseline);
-        const adds = set.find()
-            .filter(d => attrsOf(d)?.class === 'ce-captured-add')
-            .map(d => doc.textBetween(d.from, d.to, ' ', '¤'));
+        const adds = humanAdds(doc, baseJson);
         expect(adds.some(s => s.includes('plus'))).toBe(true);
         expect(adds.some(s => s.includes('Fresh thought.'))).toBe(true);
-        // The unchanged first paragraph must carry no add-underline.
+        // The unchanged first paragraph carries nothing — paragraphs pair by CONTENT,
+        // so an insertion above does not shift every later diff onto its neighbour.
         expect(adds.some(s => s.includes('Alpha'))).toBe(false);
     });
 });

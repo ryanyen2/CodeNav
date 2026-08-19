@@ -36,6 +36,14 @@ import {
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { AutoEditDecorations, AUTO_EDITS_UPDATED } from './auto-edit-decorations';
+import { SettlementDecorations, SETTLEMENT_UPDATED } from './settlement-decorations';
+import { NodeMarkers, MARKERS_UPDATED } from './node-marker';
+import { liveFeatures } from './settlement-decorations';
+import { claimsFor } from '../../state/settlement';
+import { fulfilments, mergeFulfilments, emptySnapshot, type Snapshot } from '../../state/fulfilment';
+import { FULFILMENT_TTL_MS, type Fulfilment } from '../../state/node-status';
+import { mdDisplayText } from './display-text';
+import type { FeatureStages } from '../../state/settlement-stages';
 import { BusyDecorations, BUSY_UPDATED, type BusyInfo } from './busy-decorations';
 import { railState, RAIL_STATE_LABEL, type RailSignals } from '../../state/feature-state';
 import type { AutoEditInfo } from '../protocol';
@@ -50,9 +58,9 @@ import { BlockDecorations, BLOCKS_UPDATED, type BlockEditMsg } from './block-dec
 import { BlockSuggestion } from './block-suggestion';
 import type { UIBlock } from '../protocol';
 import {
-    CapturedDecorations, CAPTURED_UPDATED, featureBlocks, ftKey,
+    featureBlocks, ftKey,
     rebaseCaptured, settledPendingFids, type FeatureText,
-} from './captured-decorations';
+} from '../../state/edit-baseline';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
 import { AskDecorations, ASK_UPDATED } from './ask-decorations';
 import { FindDecorations, FIND_UPDATED, searchBlocks } from './find-decorations';
@@ -165,6 +173,8 @@ export interface WholeDocEditorHandle {
     setSteps: (steps: Record<string, AgentStep[]>) => void;
     /** v6: the unasked loop rewrites still owed attention (already seen-filtered). */
     setAutoEdits: (edits: Record<string, AutoEditInfo>) => void;
+    /** The settlement model's host half — see the implementation. */
+    setStages: (stages: Record<string, FeatureStages>) => void;
     /** Sections being rewritten under the reader RIGHT NOW (translation batches
      *  pending / the agent applying) — draws the skeleton shimmer and blocks user
      *  edits inside those sections until they land (busy-decorations.ts). */
@@ -355,6 +365,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // as of the LAST COMMIT (or last external reload) — frozen across the daemon's
     // self-echo round-trip so a captured edit (add OR delete) persists until ⌘S/Commit.
     let capturedBaseline = new Map<string, FeatureText>();
+    // The settlement model's host half (state/settlement-stages.ts): per feature, the
+    // text at each earlier stage. Absent for a settled feature, which is most of them.
+    let currentStages: Record<string, FeatureStages> = {};
+    // Claims that reached the code and have not been acknowledged yet. Not derivable
+    // from the page — a fulfilment IS the moment the difference disappears, so without
+    // this the only thing the surface could show for a realized edit is its mark
+    // silently ceasing to be drawn (state/fulfilment.ts).
+    let currentFulfilments = new Map<string, readonly Fulfilment[]>();
+    let lastSettlementSnapshot: Snapshot = emptySnapshot();
     let currentDrafts = new Set<string>();
     let currentBlocks: Record<string, UIBlock[]> = {};  // v6 typed-media blocks per feature
     let currentMintedByLocalId: Record<string, string> = {};  // v6 localId→minted fid (exact reconcile)
@@ -487,16 +506,22 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 onCreate: edit => opts.onBlockEdit?.(edit),
                 char: '/',
             }),
-            CapturedDecorations.configure({
-                // Phase 1 of the lifecycle: every user edit gets the "recorded, not sent"
-                // mark — client-side, so it never waits on the daemon's classification.
-                getBaseline: () => capturedBaseline,
-                getDrafts: () => currentDrafts,
-                getHandedOff: () => currentHeld, // handed-off features show pending, not captured
-                // The daemon's pre-edit baseline for a held draft — what the diff
-                // falls back to once the local baseline has adopted the settled
-                // text, so the underline survives from keystroke to Commit & send.
-                getDetail: () => currentHoldDetail,
+            // The ONE layer that draws unsettled text (state/settlement.ts). It replaced
+            // three that each owned a slice of the same question with its own baseline,
+            // its own granularity and its own hue — and so could not compose when a
+            // feature was in more than one of those states, which is the interesting case.
+            SettlementDecorations.configure({
+                getStages: () => settlementStages(),
+                // Hand-off is the EDITOR's fact, not the daemon's: it changes on ⌘S,
+                // before any payload comes back, and the ink has to stop pulsing then.
+                getCommitted: () => currentHeld,
+            }),
+            // The margin summary of the same claims — read from one source so the dot
+            // and the prose under it can never tell different stories.
+            NodeMarkers.configure({
+                getStages: () => settlementStages(),
+                getCommitted: () => currentHeld,
+                getFulfilments: () => currentFulfilments,
             }),
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
@@ -690,6 +715,83 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
      *  the latest keystroke isn't lost) and hands the staged code-implying edits to the
      *  agent. A no-op-ish call when nothing is staged (the host's settle short-circuits and
      *  hand-off clears an empty draft set). */
+
+    /**
+     * The stages the settlement layer reads: the daemon's, plus the LOCAL base for a
+     * feature the author is still editing.
+     *
+     * The daemon can only ship `humanBase` for an edit it has already been handed
+     * (`hold_detail.baseline`). Before ⌘S it has never heard of the edit, and the base
+     * lives here — the frozen per-feature baseline captured at the last commit or the
+     * last adopted projection. So: local baseline while the edit is yours, the daemon's
+     * once it is not, and the ink is continuous across the hand-off instead of blinking
+     * out during the round trip.
+     *
+     * The conversion is not incidental. `capturedBaseline` holds the SERIALIZED text
+     * (`inlineRunsToText`, where a citation is ~30 chars) and the live side is read as
+     * nodes (`paraDisplayText`, where it is one). Diffing across those two spaces is the
+     * whole family of mis-anchored-underline bugs display-space exists to close, so the
+     * baseline is projected into it here, at the one place the two meet.
+     */
+    function settlementStages(): ReadonlyMap<string, FeatureStages> {
+        const out = new Map<string, FeatureStages>();
+        for (const [key, st] of Object.entries(currentStages)) out.set(key, st);
+        for (const [key, base] of capturedBaseline) {
+            if (currentHeld.has(key)) continue;          // handed off — the daemon owns the base
+            const st = out.get(key) ?? { projected: displaySpace(base) };
+            out.set(key, { ...st, humanBase: displaySpace(base) });
+        }
+        return out;
+    }
+
+    /**
+     * Notice what LANDED between the last payload and this one.
+     *
+     * Every other marker state is read off the page; this one cannot be, because it is
+     * the moment the difference disappears. A feature leaving the hold set means its
+     * queued directive was built; a plan layer that stops being offered while its node
+     * is still in the tree was accepted and applied, rather than rejected — a rejected
+     * node leaves with its proposal, which is how the two are told apart without a new
+     * signal from the daemon.
+     *
+     * The comparison runs BEFORE `currentStages` is consulted for claims, so the
+     * divergence it records is the code channel's reading at the moment of landing —
+     * which is exactly the question "was it built as asked?".
+     */
+    function noteFulfilments(next: Record<string, FeatureStages>): void {
+        const now = Date.now();
+        const snapshot: Snapshot = {
+            held: new Set(currentHeld),
+            planLayers: new Map(Object.entries(next)
+                .filter(([, st]) => !!st.plan)
+                .map(([key, st]) => [key, st.plan!.layerId])),
+            present: new Set(featureBlocks(editor.getJSON() as unknown as PMNode).keys()),
+        };
+        const landed = fulfilments(
+            lastSettlementSnapshot, snapshot,
+            key => {
+                const st = next[key];
+                return st ? claimsFor({ ...st, live: liveTextFor(key) }) : [];
+            },
+            now,
+        );
+        lastSettlementSnapshot = snapshot;
+        if (landed.size || currentFulfilments.size) {
+            currentFulfilments = mergeFulfilments(currentFulfilments, landed, now, FULFILMENT_TTL_MS);
+        }
+    }
+
+    /** One feature's text as the editor currently holds it, in display space. */
+    function liveTextFor(key: string): FeatureText {
+        for (const f of liveFeatures(editor.state.doc)) if (f.key === key) return f.text;
+        return { title: '', paras: [] };
+    }
+
+    /** A serialized FeatureText projected into display space (see above). */
+    function displaySpace(t: FeatureText): FeatureText {
+        return { title: mdDisplayText(t.title), paras: t.paras.map(mdDisplayText) };
+    }
+
     function commitNow(): void {
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = 0; }
         dirty = false;
@@ -698,7 +800,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         // code edit graduates to pending once the host's repost marks it handed-off. This is
         // the SECOND re-baseline point (the other is a real reload in setDoc).
         capturedBaseline = featureBlocks(doc);
-        editor.view.dispatch(editor.state.tr.setMeta(CAPTURED_UPDATED, true));
+        // The human channel's base just moved, so both surfaces drawn from it repaint:
+        // the ink in the prose and the marker summarising it.
+        editor.view.dispatch(editor.state.tr
+            .setMeta(SETTLEMENT_UPDATED, true).setMeta(MARKERS_UPDATED, true));
         opts.onCommit?.(doc, adoptedBaselineId);
         markSaving('sent');
     }
@@ -2182,6 +2287,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             editor.view.dispatch(editor.state.tr.setMeta(AUTO_EDITS_UPDATED, true));
             scheduleRail();   // the minimap shows `rewritten`
         },
+        /** The settlement model's host half. Arrives with the doc it describes — the
+         *  payload's `doc` ALREADY has the plan materialized into it, so these stages
+         *  explain what is on screen rather than asking the editor to derive it again. */
+        setStages: (stages: Record<string, FeatureStages>) => {
+            currentStages = stages;
+            noteFulfilments(stages);
+            editor.view.dispatch(editor.state.tr
+                .setMeta(SETTLEMENT_UPDATED, true).setMeta(MARKERS_UPDATED, true));
+            scheduleRail();
+        },
         setBusy: (busy: Record<string, BusyInfo>) => {
             currentBusy = new Map(Object.entries(busy));
             editor.view.dispatch(editor.state.tr.setMeta(BUSY_UPDATED, true));
@@ -2194,10 +2309,12 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         setHeld: (fids: string[], detail?: Record<string, HoldDetail>) => {
             currentHeld = new Set(fids);   // the HANDED-OFF set (staged & sent) → pending badge
             currentHoldDetail = detail ?? {};
-            // Held changes also move the captured set (handed-off suppresses captured), so
-            // recompute both families in one transaction.
+            // Hand-off moves the human channel from `open` to `committed` — the ink
+            // stops pulsing and the marker's ring changes — so every surface drawn from
+            // it repaints in one transaction.
             editor.view.dispatch(editor.state.tr.setMeta(HOLDS_UPDATED, true)
-                .setMeta(CAPTURED_UPDATED, true).setMeta(SUGGESTIONS_UPDATED, true));
+                .setMeta(SETTLEMENT_UPDATED, true).setMeta(MARKERS_UPDATED, true)
+                .setMeta(SUGGESTIONS_UPDATED, true));
             scheduleRail();   // the minimap shows `sent`
         },
         setSessionLive: (live: boolean) => {
@@ -2227,7 +2344,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             // Also re-run the suggestion layer: the draft set feeds its "you edited this"
             // contest note, so a new draft on a proposed feature must repaint the strip.
             editor.view.dispatch(editor.state.tr
-                .setMeta(CAPTURED_UPDATED, true).setMeta(SUGGESTIONS_UPDATED, true));
+                .setMeta(SETTLEMENT_UPDATED, true).setMeta(MARKERS_UPDATED, true)
+                .setMeta(SUGGESTIONS_UPDATED, true));
             scheduleRail();   // the minimap shows `staged`
         },
         setBlocks: (blocks: Record<string, UIBlock[]>) => {
