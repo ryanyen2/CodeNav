@@ -441,8 +441,13 @@ figure.shot.hero { margin-bottom: 22px; }
     display: inline-block; padding: 1px 8px; border-radius: 4px;
     font-size: 12px; margin-right: 4px;
 }
-.mark.orange { background: #f5d9b8; color: #6b4a1c; }
 .mark.blue { background: #cfe0ef; color: #234a68; }
+/* The description's three channels, as the page names them: your ink, a proposal's
+   fading, and the highlight that says what the code itself now does or does not say.
+   Orange is gone with the per-author tint it stood for. */
+.mark.grey { background: #e2e2e2; color: #555; }
+.mark.green { background: #cfe6d3; color: #24512f; }
+.mark.red { background: #f0d3d3; color: #6b2b2b; }
 
 .tour { list-style: none; margin: 0; padding: 0; counter-reset: tour; }
 .tour > li {

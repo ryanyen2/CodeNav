@@ -112,7 +112,7 @@ extension only; a hub contributor has no working tree to run against.
   titles and descriptions (the raw `tree.codoc` is a read-only export, so this is the
   only place to search/rename the tree).
 - The **History** toolbar stance answers two questions in place: **who wrote this
-  sentence** (inline authorship, underlined per span — not per node; see below) and
+  sentence** (inline authorship, marked per span — not per node; see below) and
   **what did this page say before** (a **timeline scrubber** above the document; dragging
   it left renders the tree as it read then, with that moment's change marked in the prose
   where it happened). See "Reading the tree's own past".
@@ -282,8 +282,33 @@ The local extension is file-based: no HTTP server, no port. `WorkspaceState`
 watches the `.codoc/*` control files, reparses on change, and drives the status
 bar off `status.json`. The **`Codoc Tree` webview** (`providers/tree-editor.ts`)
 is the default editor for `tree.codoc`; both it and the raw-text editor render
-**every** proposal type inline (ADD/MOVE ghost rows, RETIRE strike, AMEND
-word-level diff) with inline `✓`/`✗` Accept/Reject.
+**every** proposal type inline, with `✓`/`✗` Accept/Reject on the node itself. An
+ADD is MATERIALIZED into the document at the rank it would take (not a widget
+beside it) so the reader can judge how the tree would READ with it in; a RETIRE
+strikes the words it proposes to remove; an AMEND shows old and new together. Only
+a MOVE keeps a ghost, because the node itself stays put until the verdict lands and
+both ends have to be visible at once.
+
+**Three channels, one grammar** (`state/settlement.ts`; design doc
+`docs/plans/2026-08-19-003-settlement-three-channels.md`). Every unsettled span is
+a *claim* — a range, a channel, a stage — and each channel owns a different
+property of the text, so they stack on the same words without a legend:
+
+- **human → the INK.** Blue; pulsing while it is still yours to send, steady once
+  handed off. Its base is what the CODE last agreed with, never the last
+  projection — after ⌘S the daemon echoes your edit back, and a diff against that
+  is empty exactly when the mark becomes true.
+- **plan → the OPACITY.** Faded gray, solider once accepted. Materialized into the
+  doc, so a `proposed` node attr guards three paths that would otherwise author the
+  agent's words as yours: `featureUnits`, `renderTreeFromDoc`, `inlineRunsToText`.
+- **code → the GROUND.** Green behind what the codebase added, red behind what it
+  cut, at sentence granularity.
+
+Nothing forces a verdict: claims are DERIVED, never stored, so an unanswered
+proposal simply stops being offered. The margin marker (`state/node-status.ts`)
+ACCUMULATES along fixed slots rather than ranking — a node that was planned, then
+built, and built differently carries three facts a rank would reduce to one — and
+is computed from the same claims as the prose, so the two cannot disagree.
 
 Store-authoritative editing model (2026-06 refactor — see
 `docs/plans/2026-06-26-001-refactor-store-authoritative-coordination-plan.md`):

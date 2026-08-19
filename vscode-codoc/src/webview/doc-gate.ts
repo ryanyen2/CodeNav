@@ -37,6 +37,26 @@ export function headingFid(heading: PMNode): string | null {
     return typeof f === 'string' && f ? f : null;
 }
 
+/** The proposal that put this heading in the document, if it is a materialized plan
+ *  node (`state/plan-materialize.ts`) rather than a real feature. */
+export function headingProposed(heading: PMNode): string | null {
+    const p = (heading.attrs as { proposed?: unknown } | undefined)?.proposed;
+    return typeof p === 'string' && p ? p : null;
+}
+
+/**
+ * The identity the gate matches a slice by.
+ *
+ * `fid` for a real feature; the PROPOSAL id for a materialized plan node, which has no
+ * fid and must not appear to have one. Without the second rung a plan node matched
+ * nothing on either side, so the projection's copy was placed in position AND the local
+ * copy appended at the end — a duplicate per payload, compounding, because the next
+ * payload's `local` already held both.
+ */
+export function sliceKey(heading: PMNode): string | null {
+    return headingFid(heading) ?? headingProposed(heading);
+}
+
 /**
  * Per-feature adopt decision (KTD4). `incomingVersion` is the projected feature's HLC;
  * `localVersion` is the version we last adopted for it (or '' if never); `hasPendingEdit`
@@ -93,7 +113,12 @@ export function shouldDeferProjection(conditions: DeferConditions): boolean {
 /** A feature's slice of the flat doc: its heading + the body blocks that follow it
  *  (until the next heading). */
 interface FeatureSlice {
+    /** Match identity: `fid`, else the proposal id. Null only for a not-yet-minted
+     *  authored heading (which has a localId) or a synthetic lead slice. */
+    key: string | null;
     fid: string | null;
+    /** Set ⇒ this slice is an agent's proposal, not a feature. */
+    proposed: string | null;
     version: string;
     blocks: PMNode[];   // heading first, then its body blocks
 }
@@ -106,12 +131,15 @@ function slices(doc: PMNode): FeatureSlice[] {
     let cur: FeatureSlice | null = null;
     for (const block of doc.content ?? []) {
         if (block.type === NODE_FEATURE_HEADING) {
-            cur = { fid: headingFid(block), version: headingVersion(block), blocks: [block] };
+            cur = {
+                key: sliceKey(block), fid: headingFid(block), proposed: headingProposed(block),
+                version: headingVersion(block), blocks: [block],
+            };
             out.push(cur);
         } else if (cur) {
             cur.blocks.push(block);
         } else {
-            cur = { fid: null, version: '', blocks: [block] };
+            cur = { key: null, fid: null, proposed: null, version: '', blocks: [block] };
             out.push(cur);
         }
     }
@@ -155,29 +183,35 @@ export interface GateResult {
 export function gateProjection(input: GateInput): GateResult {
     const { incoming, local, localVersions, pendingFids } = input;
     const localSlices = slices(local);
-    const localByFid = new Map<string, FeatureSlice>();
-    for (const s of localSlices) if (s.fid) localByFid.set(s.fid, s);
+    const localByKey = new Map<string, FeatureSlice>();
+    for (const s of localSlices) if (s.key) localByKey.set(s.key, s);
 
     const content: PMNode[] = [];
     const adopted = new Map<string, string>();
-    const placedFids = new Set<string>();
+    const placedKeys = new Set<string>();
 
     for (const inc of slices(incoming)) {
-        const fid = inc.fid;
-        if (!fid) {
-            // A projected heading with no fid is unusual (the store always has one);
-            // take it as-is — there's no local identity to compare against.
+        const key = inc.key;
+        if (!key) {
+            // A projected heading with neither a fid nor a proposal id is unusual (the
+            // store always has one, and a materialized plan node always carries the
+            // other); take it as-is — there's no local identity to compare against.
             content.push(...inc.blocks);
             continue;
         }
-        placedFids.add(fid);
-        const localSlice = localByFid.get(fid);
-        const hasPending = pendingFids.has(fid);
-        const localVersion = localVersions.get(fid) ?? '';
+        placedKeys.add(key);
+        const localSlice = localByKey.get(key);
+        const hasPending = pendingFids.has(key);
+        const localVersion = localVersions.get(key) ?? '';
         // No local copy of this feature → nothing to clobber; adopt.
+        //
+        // A PROPOSAL carries no HLC (it is not in the store), so both versions are ''
+        // and `shouldAdopt` reduces to "adopt unless there is a pending local edit" —
+        // which is the rule that matters for one: a participant may reshape a proposal
+        // before accepting it, and re-materializing over their words would erase them.
         if (!localSlice || shouldAdopt(inc.version, localVersion, hasPending)) {
             content.push(...inc.blocks);
-            adopted.set(fid, inc.version);
+            if (inc.fid) adopted.set(inc.fid, inc.version);
         } else {
             // Keep the optimistic local edit at the projection's structural position.
             content.push(...localSlice.blocks);
@@ -185,11 +219,18 @@ export function gateProjection(input: GateInput): GateResult {
     }
 
     // Local features the projection doesn't carry yet: keep those with a pending edit
-    // (optimistic add / rename racing the daemon) and any null-fid authored heading
-    // (mid-mint — patchMintedIds fills its fid). A clean local-only feature with no
+    // (optimistic add / rename racing the daemon) and any not-yet-minted authored
+    // heading (patchMintedIds fills its fid). A clean local-only feature with no
     // pending edit and a fid the projection dropped is a deletion → let it go.
+    //
+    // A PROPOSAL the projection has dropped is always let go, pending edit or not: the
+    // reader accepted it (it comes back as a real node), or rejected it, or the daemon
+    // withdrew it. Keeping it would leave a ghost of a decision already made — and
+    // keeping one the reader had typed into would leave their words attached to a node
+    // that no longer has any way to be accepted.
     for (const s of localSlices) {
-        if (s.fid && placedFids.has(s.fid)) continue;
+        if (s.key && placedKeys.has(s.key)) continue;
+        if (s.proposed) continue;
         if (s.fid === null || pendingFids.has(s.fid ?? '')) content.push(...s.blocks);
     }
 

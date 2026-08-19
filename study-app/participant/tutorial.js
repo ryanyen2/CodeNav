@@ -69,20 +69,23 @@ const CODOC = {
         {
             title: 'See what changed',
             points: [
-                'When the code changes, the description proposes its own change to match.',
-                'A rewritten paragraph shows the new wording with "Keep" and "Restore mine" buttons beside it.',
-                'A new feature appears as a suggestion waiting for you to accept or reject it.',
-                'Nothing is applied until you say so.',
+                'When the code changes, the description updates to match, and the changed '
+                    + 'words are highlighted where they are.',
+                'A rewritten paragraph shows "Keep" and "Restore mine" beside it.',
+                'What the agent only PROPOSES is written in grey, where it would go — '
+                    + 'accept or reject it on its heading.',
+                'Nothing grey has been built, and you do not have to answer it.',
             ],
             figure: {
-                todo: 'A rewritten description with Keep and Restore mine visible, and a proposed '
-                    + 'new feature below it.',
+                todo: 'A description with a highlighted rewritten sentence, Keep and Restore mine '
+                    + 'beside it, and a greyed proposed feature in place below.',
             },
         },
         {
             title: 'Change it',
             points: [
                 'The text is yours to edit. Type into it like any document.',
+                'What you type turns blue until the code catches up with it.',
                 'Select a sentence and leave a comment on it to tell the agent what to change.',
                 'Click "Build it" in the comment box to make the agent carry out your request.',
             ],
@@ -91,11 +94,19 @@ const CODOC = {
             },
         },
     ],
-    // Two colours appear on the page and mean different things. Said plainly
-    // because a reader who has not been told reads both as damage.
+    // The description marks THREE different things, and a reader who has not been
+    // told reads all three as damage. Each is a different property of the text —
+    // colour, fading, highlight — so they can appear on the same words at once;
+    // said plainly here because that is not guessable.
+    //
+    // Four lines rather than three because green and red are one channel split by
+    // direction, and a participant reading "green or red" has to hold a compound
+    // where four short lines cost nothing.
     marks: [
-        ['Orange', 'written by the agent'],
-        ['Blue', 'written by you'],
+        ['Blue', 'you wrote it, and the code has not caught up yet'],
+        ['Grey', 'the agent proposes it, and nothing has been built'],
+        ['Green', 'the code now says this'],
+        ['Red', 'the code no longer says this'],
     ],
 };
 

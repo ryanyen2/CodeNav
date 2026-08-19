@@ -578,9 +578,9 @@ wrong loses text in silence rather than loudly:
   `base_text` taken from one of those equals the store's current text — which reads as a
   clean continuation, so the daemon applies over the other party with no merge and no
   record. When a citation cannot be resolved at all, the OLDEST retained baseline is used:
-  under-claiming the base makes the daemon cautious, over-claiming makes it blind. Human edits surface **in situ** as a derived `changedRange`
-underline against a stable per-episode baseline; agent→human changes surface via
-the vendored MIT track-changes engine's marks (`webview/tiptap/track-changes/`). A
+  under-claiming the base makes the daemon cautious, over-claiming makes it blind. Every unsettled span — the author's, an agent's proposal,
+and what the codebase itself now says — surfaces through ONE model, the
+**settlement** model (`state/settlement.ts`; see the section below). A
 **draft / hand-off** gate keeps code-implying edits safe-by-default: the host marks
 pending edits as `drafts` in `edits.json`, the daemon holds their directives, and
 "Hand to agent" clears the drafts → queues `realize.md`. Marks (tracked-change
@@ -597,6 +597,94 @@ command and nothing re-ran it on upgrade, so a workspace wired before
 was in the package, the docs and the MCP, and absent for everybody who had already
 installed codoc. Adds only, and only where `.claude/commands/codoc/` already
 exists; a workspace without one never asked for the plugin.
+
+**Settlement — the three channels (2026-08).** Six decoration families used to
+answer the same question about the same character range (*whose claim is this, and
+how far along is it?*), each with its own baseline, granularity and hue — so they
+could not compose, and "which one wins" was decided by z-index plus stand-down
+flags. They are now ONE model. Design doc:
+`docs/plans/2026-08-19-003-settlement-three-channels.md`.
+
+A **claim** is a range + a CHANNEL (who is ahead) + a STAGE (how far along). The
+three channels are orthogonal and each owns a *different property of the text*,
+which is what lets them stack on the same words without a legend:
+
+| channel | axis | meaning |
+|---|---|---|
+| `human` | INK — blue | you wrote it; the code does not say it yet. Pulsing while unsent (`open`), steady once handed off (`committed`). |
+| `plan` | OPACITY — faded | an agent proposes it; nothing is built. Solider once `accepted`. |
+| `code` | GROUND — green / red | it surfaced back from code that exists (`landed`), at sentence granularity. |
+
+Modules: `state/settlement.ts` (the model, pure), `state/settlement-stages.ts`
+(the host half that rides the payload as `stages`), `webview/tiptap/settlement-
+decorations.ts` (draws it), `state/node-status.ts` +
+`webview/tiptap/node-marker.ts` (the margin marker, which ACCUMULATES rather than
+ranking — see below), `state/fulfilment.ts`, `state/history-claims.ts`,
+`state/edit-baseline.ts`, `state/plan-materialize.ts`, `state/display-space.ts`,
+`state/para-align.ts`.
+
+Load-bearing details:
+
+- **Coordinates.** The channels share an ORIGIN (`projected`, what the daemon
+  wrote), not a baseline: `code.prev →(code)→ projected →(plan)→ planned
+  →(human)→ live`. Everything resolves into LIVE block coordinates up front by
+  chaining content-based paragraph pairings backwards (`state/para-align.ts`), so
+  a claim computed in one paragraph's coordinates can never be drawn in
+  another's. Offsets are in **display space** (`state/display-space.ts`).
+- **`humanBase` is not `projected`.** After ⌘S the daemon applies the edit and
+  projects it straight back, so a human diff against `projected` is empty and the
+  blue ink would vanish at the exact moment it becomes true. The base is
+  `hold_detail.baseline` once held, the editor's frozen baseline before that.
+- **Opposite drop rules, opposite reasons.** A `code` claim is ALL-OR-NOTHING: it
+  reports what the codebase says at sentence granularity, so once the author edits
+  inside that sentence it is not the sentence the report was about. A `plan` claim
+  SPLITS around the author's typing: a proposal is text you are meant to edit in
+  place before accepting.
+- **A third edit kind, `cut`.** A proposal is materialized as old-AND-new (the
+  engine keeps the displaced sentence so the reader can compare), so plan-removed
+  text is ON SCREEN — a range to strike, not a `del` point, which would print the
+  sentence a second time beside the copy already there.
+- **Nobody has to decide.** Claims are derived, never stored, so an unanswered
+  proposal needs no mechanism: it stops being offered and stops producing claims.
+  A replacement proposal is computed against the store's current text. Unanswered
+  TYPING keeps its marks, because `humanBase` moves only on adoption.
+- **Fulfilment is the exception** (`state/fulfilment.ts`) and structurally so: it
+  is the moment the difference DISAPPEARS, so a pure function of the claims could
+  only ever show a realized edit's mark silently ceasing to be drawn. Watched as a
+  transition (a feature leaving the hold set; a plan layer no longer offered while
+  its node stands) and remembered for 30 minutes. *Known gap:* an accepted ADD
+  produces no marker — its event id leaves the document whether accepted or
+  rejected, and telling them apart needs the ledger's `caused_by`, which the
+  sidecar records but the payload does not yet carry to the webview.
+
+**A plan is written INTO the document** (`state/plan-materialize.ts`). A proposed
+ADD used to be a widget beside the doc: honest about being a proposal, dishonest
+about how the tree would READ with it in, which is the only question a verdict
+asks. Now the node goes where it will go, flagged `proposed`, drawn in the plan
+channel's opacity; a RETIRE strikes the words it proposes to remove. **The safety
+rule:** the moment an agent's words are in the document, every path projecting the
+document back to authored state can author them as the human's. Three call sites
+honour the flag — `featureUnits` (no commands), `renderTreeFromDoc` (not exported
+to `tree.codoc`), and the baseline-aware `inlineRunsToText`. A plan node may only
+be inserted at a HEADING BOUNDARY: prose routes by `ownerId` where stamped and by
+POSITION where not, so a node dropped mid-description captures the paragraphs below
+it, and a planned node's contents are discarded — silent prose loss from a
+rendering decision.
+
+**The node marker accumulates** (`state/node-status.ts`). `feature-state.ts` ranks
+a lifecycle and picks one state, and for what it models that is right. The
+settlement channels are not stages of each other: a node that was planned, then
+built, and built DIFFERENTLY carries three facts a rank reduces to one, dropping
+precisely the two that make the reader look. Fixed slots, at most three glyphs —
+`●` whose it is (blue), `○` whether it was planned (gray), `±` whether it drifted.
+Both rings fill on the same event: the claim reached the code. Computed from the
+SAME claims as the prose, so the margin cannot disagree with the page.
+
+**The past reads in the same grammar** (`state/history-claims.ts`). A moment's
+changes go through the same `claimsFor` at the same sub-sentence granularity, in
+the channel of the ledger's `actor` — the author's moments are `human`/`committed`
+(never `open`: a pulse is a prompt to act on something finished), everything else
+`code`/`landed`. It still refuses to diff against words the ledger never recorded.
 
 **Workflow-legibility surfaces (v7).** Four surfaces make the messy, non-linear
 workflow readable in place:
@@ -622,18 +710,13 @@ workflow readable in place:
   as the viewport indicator, and a legend pinned under the ticks. Tick titles name
   the state in words (`RAIL_STATE_LABEL`) so nothing rests on hue alone.
 - **Loop rewrites as a review surface** (`webview/tiptap/auto-edit-decorations.ts`):
-  an unasked Loop-A AMEND renders as an in-situ tracked-change diff (old words
-  struck where they stood via `reviewDiffSpans`, new words underlined) with an
-  explicit **Keep / Restore** verdict — the v6 dwell-to-clear model is retired
-  (a record that evaporates when looked at cannot be disagreed with). Keep
-  acknowledges; Restore re-authors the previous wording through the ordinary
-  command channel (`tree-editor.resolveAutoEdit` → `set_description`), where the
-  daemon classifies it and, if code-implying, HOLDS it for hand-off like any
-  other edit. Decorations only, never engine marks: the rewrite is already
-  applied, and marked prose would serialize back to the previous text (a phantom
-  revert on the next settle). Ghost ADD proposals are additionally **editable in
-  place** (`suggestion-decorations.editableGhostField`; drafts survive rebuilds in
-  a module store) — the edited text rides the verdict as accept-time edits.
+  an unasked Loop-A AMEND carries an explicit **Keep / Restore** verdict — the v6
+  dwell-to-clear model is retired (a record that evaporates when looked at cannot
+  be disagreed with). Keep acknowledges; Restore re-authors the previous wording
+  through the ordinary command channel (`tree-editor.resolveAutoEdit` →
+  `set_description`), where the daemon classifies it and, if code-implying, HOLDS
+  it for hand-off like any other edit. The DIFF it is a verdict on is the
+  settlement model's code channel (below); this module draws only the decision.
 - **The `/codoc:ask` walkthrough** (`webview/tiptap/ask-decorations.ts` +
   `webview/ask-bar.ts`, state in `state/ask-model.ts`): a numbered reading path over
   existing features, read from `.codoc/ask.json`. Deliberately the one layer with

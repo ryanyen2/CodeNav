@@ -563,7 +563,13 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             const editedFid = activeFid();
             // U5 version gate: this feature now has an un-acked local edit, so a returning
             // projection must not clobber it unless its per-feature version is newer.
-            if (editedFid) pendingFids.add(editedFid);
+            //
+            // Keyed by `activeSliceKey`, not `activeFid`, because a materialized PROPOSAL
+            // has no fid — and a participant reshaping a proposal before accepting it is
+            // ordinary use. Without this the next payload re-materializes the agent's
+            // wording straight over their words, with nothing to say it happened.
+            const editedKey = activeSliceKey();
+            if (editedKey) pendingFids.add(editedKey);
             opts.onEditFeature?.(editedFid);
             // P2 fix 2: editing the feature means the user is now reviewing it → clear its
             // code-touched tick (it has served its purpose).
@@ -593,6 +599,32 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         const from = Math.max(0, Math.min(cand.from, max));
         const to = Math.max(0, Math.min(cand.to, max));
         return to > from ? { from, to } : null;
+    }
+
+    /**
+     * The identity the projection gate matches this selection's slice by: the feature's
+     * `fid`, else the id of the proposal that put the node there.
+     *
+     * Deliberately separate from `activeFid`, which feeds the doc→code bridge, the
+     * block composer and the touch tick — all of which want a REAL feature and would
+     * misbehave given a proposal id (a block authored against a feature that does not
+     * exist yet). Only the gate wants the wider identity.
+     */
+    function activeSliceKey(): string | null {
+        const { $from } = editor.state.selection;
+        const keyOf = (node: { attrs: Record<string, unknown> }): string | null =>
+            ((node.attrs.fid as string) || (node.attrs.proposed as string) || null);
+        for (let d = $from.depth; d >= 0; d--) {
+            const node = $from.node(d);
+            if (node.type.name === 'featureHeading') return keyOf(node);
+        }
+        if ($from.depth < 1) return null;
+        let key: string | null = null;
+        const here = $from.before(1);
+        editor.state.doc.forEach((node, offset) => {
+            if (node.type.name === 'featureHeading' && offset <= here) key = keyOf(node);
+        });
+        return key;
     }
 
     function activeFid(): string | null {
