@@ -174,12 +174,23 @@ Every planted problem is checked by a probe in `scoring/claims/<project>.json`,
 which runs the participant's final code on a sample and looks for one signal, so
 what the code does is measured rather than assumed.
 
-One rule keeps the design honest. The experimenter does not author the codoc
-condition's post-session tree. The recording is a real session with the daemon
-running, and whatever Loop A produces is what ships to participants. If the tree
-fails to surface D2, the paper reports that codoc failed to surface D2. Hand
-authoring the tree would make the faithfulness claim circular, and faithfulness
-is the claim the phrase "shared representation" depends on.
+One rule keeps the design honest, and it is worth stating precisely because the
+first attempt at it was stated too broadly.
+
+The change under review is a **constructed stimulus**. An agent asked to add a
+configuration layer is careful by default, checks its own output against the old
+output, and lands none of the planted problems, so the recording is steered until
+it does. Every steer is written into `notes.md` beside the frames, and the paper
+says the change was constructed. Constructing the stimulus is what makes twelve
+participants comparable at all.
+
+**What is never authored is codoc's response to it.** The recording runs with the
+daemon live, and whatever Loop A produces over that code is what ships. If the
+tree fails to surface a planted problem, participants see it fail and the paper
+reports that codoc failed to surface it. Writing the tree ourselves would make
+the faithfulness claim circular, and faithfulness is the claim the phrase "shared
+representation" depends on. The distinction is the whole design: the stimulus is
+ours, the record of it is codoc's.
 
 ## Recording and replay
 

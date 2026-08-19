@@ -38,8 +38,12 @@ from pathlib import Path
 # copied once into the last frame rather than into every frame.
 SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
-    ".claude-study", ".ruff_cache", ".mypy_cache",
+    ".claude-study", ".ruff_cache", ".mypy_cache", "build", "dist",
 }
+# Editable installs leave one of these behind, named for the package. It is build
+# output, it differs by machine, and replaying it would overwrite the install in
+# the participant's own workspace.
+SKIP_DIR_SUFFIXES = (".egg-info",)
 INDEX_DIRS = {".codoc/lancedb", ".codoc/cocoindex.db"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 # The player writes this when it hands the workspace over, so it exists after a
@@ -48,12 +52,27 @@ SKIP_SUFFIXES = {".pyc", ".pyo"}
 # timestamp, so two correct replays would also disagree with each other.
 SKIP_FILES = {".codoc/replay.stamp"}
 
+# Never snapshotted, whatever else changes. A recording is copied into every
+# participant's workspace and then collected back, so a key that got into a frame
+# would be handed to twelve people and travel home again. The study has been close
+# to this once already, when `git add -A` in a workspace with no .gitignore took
+# `.claude-study/api-key` and `.env` into a commit that would have gone home
+# inside the history.
+SECRET_NAMES = {".env", ".env.local", "api-key", ".netrc", "credentials",
+                "id_rsa", ".npmrc", ".pypirc"}
+SECRET_SUFFIXES = {".pem", ".key"}
+
 
 def _skip(rel: str, with_index: bool) -> bool:
     if rel in SKIP_FILES:
         return True
+    name = Path(rel).name
+    if name in SECRET_NAMES or Path(rel).suffix in SECRET_SUFFIXES:
+        return True
     parts = Path(rel).parts
     if any(p in SKIP_DIRS for p in parts):
+        return True
+    if any(p.endswith(SKIP_DIR_SUFFIXES) for p in parts):
         return True
     if Path(rel).suffix in SKIP_SUFFIXES:
         return True
@@ -66,7 +85,8 @@ def scan(root: Path, with_index: bool = False) -> dict[str, str]:
     """Every included file under root, as a map of relative path to sha256."""
     out: dict[str, str] = {}
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not d.endswith(SKIP_DIR_SUFFIXES)]
         for name in filenames:
             full = Path(dirpath) / name
             rel = str(full.relative_to(root))
@@ -260,6 +280,113 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Deriving one condition's frames from the neutral code recording
+# ---------------------------------------------------------------------------
+#
+# The code session is recorded once, in a workspace with no codoc and no
+# description, for two reasons. Both conditions have to review the same code, or
+# a detection count cannot be compared across them. And the transcript is read by
+# participants in both conditions, so it must not mention either tool: an agent
+# left in a codoc workspace explores it, finds `.codoc/tree.codoc` and the codoc
+# skill, and says so in its own output.
+#
+# `derive` replays that neutral recording into one condition's workspace and
+# records what the condition's own machinery did in response. For codoc that is
+# the daemon, running live, one Loop A pass per frame. Nothing is authored.
+
+
+def _codoc_quiet_for(workspace: Path, seconds: float) -> bool:
+    """Whether the daemon has finished reacting to the last write."""
+    codoc = workspace / ".codoc"
+    status = codoc / "status.json"
+    try:
+        state = json.loads(status.read_text()).get("state", "")
+    except (OSError, ValueError):
+        return False
+    if state not in {"in_sync", "idle", ""}:
+        return False
+    newest = 0.0
+    for path in codoc.rglob("*"):
+        if path.is_file() and not any(
+                str(path).startswith(str(codoc / d.split("/", 1)[1])) for d in INDEX_DIRS):
+            newest = max(newest, path.stat().st_mtime)
+    return (time.time() - newest) >= seconds
+
+
+def derive(frames: Path, workspace: Path, out: Path, settle: float,
+           timeout: float) -> int:
+    manifest = json.loads((frames / "manifest.json").read_text())
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+
+    base = scan(workspace)
+    tail = out / "base"
+    for rel in base:
+        dest = tail / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(workspace / rel, dest)
+
+    watching = (workspace / ".codoc").is_dir()
+    previous = base
+    derived = []
+    for frame in manifest["frames"]:
+        src = frames / f"{frame['n']:04d}"
+        if src.exists():
+            for path in src.rglob("*"):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(src)
+                dest = workspace / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dest)
+        for rel in frame.get("deletes", []):
+            (workspace / rel).unlink(missing_ok=True)
+
+        waited = 0.0
+        if watching:
+            while waited < timeout and not _codoc_quiet_for(workspace, settle):
+                time.sleep(1.0)
+                waited += 1.0
+
+        current = scan(workspace)
+        writes = [r for r, h in current.items() if previous.get(r) != h]
+        deletes = [r for r in previous if r not in current]
+        dest_dir = out / f"{frame['n']:04d}"
+        for rel in writes:
+            dest = dest_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(workspace / rel, dest)
+        derived.append({**frame, "writes": sorted(writes), "deletes": sorted(deletes),
+                        "settled_after_s": round(waited, 1)})
+        previous = current
+        moved = [w for w in writes if w.startswith(".codoc/")]
+        print(f"  frame {frame['n']:>3}  +{len(writes)} -{len(deletes)}"
+              f"  {len(moved)} under .codoc  settled in {waited:.0f}s")
+
+    final = scan(workspace, with_index=True)
+    last = out / "final"
+    for rel in final:
+        if not any(rel.startswith(d + os.sep) for d in INDEX_DIRS):
+            continue
+        dest = last / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(workspace / rel, dest)
+
+    (out / "manifest.json").write_text(json.dumps({
+        **{k: v for k, v in manifest.items() if k != "frames"},
+        "derived_from": str(frames),
+        "derived_at": datetime.now(timezone.utc).isoformat(),
+        "frames": derived,
+    }, indent=2))
+    if (frames / "transcript.jsonl").exists():
+        shutil.copy2(frames / "transcript.jsonl", out / "transcript.jsonl")
+    touched = sum(1 for f in derived if any(w.startswith(".codoc/") for w in f["writes"]))
+    print(f"{len(derived)} frames, the description moved in {touched} of them")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -276,9 +403,20 @@ def main(argv: list[str]) -> int:
     b.add_argument("--seconds", type=float, default=180.0,
                    help="how long the replay should take, default 180")
 
+    d = sub.add_parser("derive", help="replay a neutral recording into one condition")
+    d.add_argument("frames", type=Path)
+    d.add_argument("workspace", type=Path)
+    d.add_argument("out", type=Path)
+    d.add_argument("--settle", type=float, default=4.0,
+                   help="seconds of quiet under .codoc that count as settled")
+    d.add_argument("--timeout", type=float, default=300.0,
+                   help="how long to wait for one Loop A pass before moving on")
+
     args = parser.parse_args(argv)
     if args.command == "watch":
         return watch(args.workspace, args.raw, args.interval)
+    if args.command == "derive":
+        return derive(args.frames, args.workspace, args.out, args.settle, args.timeout)
     return build(args.raw, args.transcript, args.frames, args.seconds)
 
 

@@ -53,6 +53,9 @@ run node "$MAT/logger/test-transcript.js"
 run node "$MAT/logger/test-snapshot.js"
 run node --test "$MAT/logger/test-composition.js"
 run python3 "$MAT/replay/test_replay.py"
+# The extension reads every recorded frame the way the webview does. It skips
+# when no recording is present, so it costs nothing until there is one.
+( cd "$REPO/vscode-codoc" && run npx vitest run src/test/recorded-frames.test.ts )
 ( cd "$MAT/logger" && run npx --yes @vscode/vsce package \
     --allow-missing-repository --skip-license --no-dependencies --out "$OUT/" )
 LOGGER="$(ls -t "$OUT"/codoc-study-logger-*.vsix | head -1)"

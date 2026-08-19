@@ -16,11 +16,31 @@ all.
 
 ## What is honest about it
 
-Every frame under `.codoc/` was written by a real daemon during the recording,
-and nobody edits a frame by hand. If Loop A failed to surface one of the planted
-problems during the recording, participants see it fail, and the paper reports
-that codoc failed to surface it. Authoring the tree ourselves would make the
-faithfulness claim circular, and faithfulness is the claim the study rests on.
+The change under review is a constructed stimulus. An agent asked to add a
+configuration layer is careful by default and lands none of the planted problems
+on its own, so the recording is steered until it does, and every steer is written
+into `notes.md` beside the frames. Every participant reviewing the same change is
+what makes their detection counts comparable at all.
+
+What is never authored is codoc's response. Every frame under `.codoc/` was
+written by a real daemon during the recording, and nobody edits one by hand. If
+Loop A failed to surface a planted problem, participants see it fail and the
+paper reports that codoc failed to surface it. Writing the tree ourselves would
+make the faithfulness claim circular, and faithfulness is the claim the study
+rests on. The stimulus is ours; the record of it is codoc's.
+
+## The code is recorded once, with neither tool present
+
+The session runs in a workspace with no `.codoc`, no `CLAUDE.md`, and no agent
+configuration, and `derive` then replays it into each condition and records what
+that condition's own machinery did in response.
+
+Both conditions have to review the same code, or a detection count cannot be
+compared between them, and two separate agent runs never produce the same code.
+The transcript is read by participants in both conditions, so it must not mention
+either tool: an agent left in a codoc workspace explores it, finds
+`.codoc/tree.codoc` and the codoc skill, and says so in its own output. That was
+found by running it.
 
 Delays are scaled by one factor, which the manifest records. The lag between a
 code edit and the tree reacting to it therefore survives playback in proportion,
@@ -31,29 +51,42 @@ The change is left uncommitted in the working tree, so `git diff` shows the whol
 change. Reading the diff is an honest way to review, both conditions have it, and
 we want to know who chooses it.
 
-## Recording
+## Recording, in three steps
 
-Recording happens once per project and per condition, on the experimenter's
-machine, and it needs an API key.
+Recording happens once per project, on the experimenter's machine, and it needs
+an API key. It has three steps, because the code is recorded once and each
+condition's record is derived from it.
 
-    docs/study-materials/replay/record-session.sh start scribe codoc
+**First, record the code.** `record-session.sh start scribe neutral` unpacks a
+workspace with no codoc, no description and no agent configuration, folds the
+removal into the last commit so the agent does not begin in a tree that is
+already dirty, and starts the watcher. Then run the agent in that folder with the
+request in `requests/scribe.txt`. Steer it until it lands the planted problems
+and write every steer into `notes.md`. `record-session.sh stop scribe neutral`
+turns the snapshots into frames and copies the transcript next to them.
 
-The script unpacks a clean workspace, starts the daemon for the codoc condition,
-starts the watcher, and prints the request to paste. Run `claude` yourself in a
-second terminal, because the session may need nudging before it lands the planted
-problems, and every nudge has to be written into `notes.md` next to the frames. A
-problem the agent produced on its own is stronger evidence than one it was steered
-into, and the paper reports which is which.
+**Second, derive each condition.** With the daemon running in a clean codoc
+workspace:
 
-When the agent has finished and the tests pass:
+    python3 record.py derive frames/scribe/neutral ~/codoc-recording/scribe-codoc \
+        frames/scribe/codoc
 
-    docs/study-materials/replay/record-session.sh stop  scribe codoc
-    docs/study-materials/replay/record-session.sh check scribe codoc
+It replays each code frame into that workspace, waits for the daemon to finish
+reacting, and records what moved under `.codoc/`. The same command against a
+baseline workspace with the maintenance skill produces that condition's frames.
+Both conditions then hold the same code and the same transcript, and differ only
+in the record beside it.
 
-`stop` turns the snapshots into frames and copies the session transcript next to
-them. `check` replays the frames into an empty directory and compares the result
-against the workspace the recording ended in, file by file. A recording that does
-not pass `check` is not shipped.
+**Third, check.** `record-session.sh check scribe codoc` replays the frames into
+an empty directory and compares the result against the workspace the recording
+ended in, file by file. A recording that does not pass `check` is not shipped.
+
+Two more gates run against a finished recording. `test_handover.py` drives a copy
+of the derived workspace through accepting a proposal, rejecting one, editing a
+description and leaving a comment, and fails if any of them sets off nothing. The
+extension's `recorded-frames.test.ts` reads every frame the way the webview does
+and fails if the daemon's own document renders differently from the daemon's own
+export, which would make the webview emit commands nobody typed.
 
 ## Replaying
 

@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from record import SKIP_DIRS, scan  # noqa: E402
+from record import SKIP_DIRS, SKIP_DIR_SUFFIXES, scan  # noqa: E402
 
 DIM, RESET = "\033[2m", "\033[0m"
 
@@ -56,7 +56,8 @@ def daemon_pid(workspace: Path) -> int | None:
 def copy_tree(src: Path, workspace: Path) -> list[str]:
     written = []
     for dirpath, dirnames, filenames in os.walk(src):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not d.endswith(SKIP_DIR_SUFFIXES)]
         for name in filenames:
             full = Path(dirpath) / name
             rel = full.relative_to(src)

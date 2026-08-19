@@ -95,6 +95,20 @@ class ScanTest(unittest.TestCase):
             self.assertEqual(len(record.scan(root, with_index=True)), 2)
 
 
+class SecretTest(unittest.TestCase):
+    def test_no_key_file_can_reach_a_frame(self):
+        # A recording is copied into every participant's workspace and collected
+        # back, so a key in a frame is handed out twelve times and returns.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(root, "scribe/lines.py", "code\n")
+            write(root, ".env", "ANTHROPIC_API_KEY=sk-secret\n")
+            write(root, ".claude-study/api-key", "sk-also-secret\n")
+            write(root, "certs/server.pem", "-----BEGIN\n")
+            self.assertEqual(sorted(record.scan(root)), ["scribe/lines.py"])
+            self.assertEqual(sorted(record.scan(root, with_index=True)), ["scribe/lines.py"])
+
+
 class BuildTest(unittest.TestCase):
     def build(self, tmp: Path, seconds: float = 30.0) -> dict:
         raw, frames = tmp / "raw", tmp / "frames"
@@ -158,6 +172,55 @@ class RoundTripTest(unittest.TestCase):
             first = record.scan(ws)
             play.play(ws, frames, 1000.0, False, True, False)
             self.assertEqual(record.scan(ws), first)
+
+
+class DeriveTest(unittest.TestCase):
+    def test_deriving_carries_the_code_and_records_what_the_condition_added(self):
+        # `derive` replays the neutral code recording into one condition's
+        # workspace and records what that condition's own machinery did. Here
+        # there is no daemon, so what it must still get right is the code: the
+        # derived frames have to reproduce the same end state, plus whatever the
+        # workspace already had that the recording never touched.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, neutral, ws, out = tmp / "raw", tmp / "neutral", tmp / "ws", tmp / "out"
+            fake_recording(raw, SESSION)
+            record.build(raw, None, neutral, seconds=0.01)
+
+            # The condition's workspace starts from the same code and carries a
+            # description the neutral recording knows nothing about.
+            ws.mkdir()
+            play.play(ws, neutral, 1000.0, False, True, False)
+            play.reset(ws, neutral)
+            write(ws, "CLAUDE.md", "the description this condition keeps\n")
+
+            self.assertEqual(record.derive(neutral, ws, out, settle=0.0, timeout=0.0), 0)
+
+            replayed = tmp / "replayed"
+            replayed.mkdir()
+            play.play(replayed, out, 1000.0, False, True, False)
+            self.assertEqual(record.scan(replayed), record.scan(ws))
+            self.assertEqual((replayed / "scribe" / "notes.py").read_text(), "renumbered\n")
+            self.assertTrue((replayed / "CLAUDE.md").exists(),
+                            "the condition's own description has to survive the derivation")
+
+    def test_the_derived_manifest_keeps_the_pacing_and_says_where_it_came_from(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, neutral, ws, out = tmp / "raw", tmp / "neutral", tmp / "ws", tmp / "out"
+            fake_recording(raw, SESSION)
+            record.build(raw, None, neutral, seconds=30.0)
+            ws.mkdir()
+            play.play(ws, neutral, 1000.0, False, True, False)
+            play.reset(ws, neutral)
+            record.derive(neutral, ws, out, settle=0.0, timeout=0.0)
+
+            before = json.loads((neutral / "manifest.json").read_text())
+            after = json.loads((out / "manifest.json").read_text())
+            self.assertEqual([f["delay_s"] for f in after["frames"]],
+                             [f["delay_s"] for f in before["frames"]])
+            self.assertEqual(after["speed"], before["speed"])
+            self.assertIn("derived_from", after)
 
 
 class HandoverTest(unittest.TestCase):

@@ -35,6 +35,49 @@ tarball="$REPO/docs/study-materials/workspaces/$tarball_name.tar.gz"
 
 request_file="$REPLAY/requests/$project.txt"
 
+# The code session is recorded in a workspace with no codoc, no description and
+# no agent configuration in it. Two reasons, and both are load bearing.
+#
+# Both conditions have to review the SAME code, or a detection count cannot be
+# compared between them, and two separate agent runs never produce the same code.
+#
+# The transcript is read by participants in both conditions, so it must not
+# mention either tool. An agent left in a codoc workspace explores it, finds
+# `.codoc/tree.codoc` and the codoc skill, and says so in its own output, which
+# was found by running exactly that and reading what it wrote.
+#
+# The removal is folded into the last commit rather than left uncommitted, so the
+# agent does not start work in a tree that is already dirty for reasons nobody
+# can explain to it, and so the history stays the same twelve commits both
+# conditions have.
+neutral() {
+  local ws="$WORK/$project-neutral"
+  [ -d "$ws" ] && { bad "$ws already exists. Move it aside."; exit 1; }
+  step "Unpacking a neutral $project workspace, with no codoc and no description"
+  mkdir -p "$WORK"
+  tar xzf "$REPO/docs/study-materials/workspaces/$project.tar.gz" -C "$WORK"
+  mv "$WORK/$project" "$ws"
+  ( cd "$ws" && rm -rf .codoc .claude .mcp.json CLAUDE.md \
+      && git add -A >/dev/null 2>&1 \
+      && git commit -q --amend --no-edit >/dev/null 2>&1 )
+  if [ -n "$( cd "$ws" && git status --porcelain )" ]; then
+    bad "the neutral workspace is not clean, so the agent would start in a dirty tree"
+    exit 1
+  fi
+  build_env "$ws"
+  ok "$ws"
+  echo "$ws"
+}
+
+build_env() {
+  local ws="$1"
+  ( cd "$ws" && uv venv --quiet .venv >/dev/null 2>&1 )
+  uv pip install --quiet --python "$ws/.venv/bin/python" -e "$ws" pytest >/dev/null 2>&1
+  if ! ( cd "$ws" && .venv/bin/python -c "import $project" >/dev/null 2>&1 ); then
+    bad "the environment in $ws did not build"; exit 1
+  fi
+}
+
 start() {
   [ -f "$tarball" ] || { bad "no workspace tarball at $tarball"; exit 1; }
   [ -f "$request_file" ] || { bad "no request at $request_file"; exit 1; }
@@ -52,9 +95,16 @@ start() {
   # unpack had already happened, which left a workspace that looked fine.
   [ "$WORK/$tarball_name" = "$ws" ] || mv "$WORK/$tarball_name" "$ws"
   [ -f "$ws/pyproject.toml" ] || { bad "$ws is not a workspace after unpacking"; exit 1; }
-  ( cd "$ws" && uv venv --quiet .venv >/dev/null 2>&1 && \
-    .venv/bin/python -m pip install -q -e . >/dev/null 2>&1 )
-  [ -x "$ws/.venv/bin/python" ] || { bad "the environment in $ws did not build"; exit 1; }
+  # `uv venv` makes an environment with no pip in it, so the old
+  # `.venv/bin/python -m pip install` failed silently behind its redirect and
+  # left a workspace whose tests could not run. The check below is on the import
+  # rather than on the interpreter, because the interpreter existing was exactly
+  # what made the failure invisible.
+  ( cd "$ws" && uv venv --quiet .venv >/dev/null 2>&1 )
+  uv pip install --quiet --python "$ws/.venv/bin/python" -e "$ws" pytest >/dev/null 2>&1
+  if ! ( cd "$ws" && .venv/bin/python -c "import $project" >/dev/null 2>&1 ); then
+    bad "the environment in $ws did not build"; exit 1
+  fi
   ok "$ws"
 
   if [ "$arm" = codoc ]; then
