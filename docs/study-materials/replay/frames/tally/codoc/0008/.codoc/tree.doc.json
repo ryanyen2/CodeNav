@@ -370,7 +370,7 @@
       "attrs": {
         "fid": "f-7298ca42",
         "localId": "",
-        "version": "00000001787153450633-00000000000000000000-default",
+        "version": "00000001787155161152-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -386,7 +386,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured minimum number of different months."
+          "text": "Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured number of different months."
         }
       ],
       "attrs": {
@@ -398,7 +398,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured minimum keeps a coincidence from becoming a commitment."
+          "text": "Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured month threshold keeps a coincidence from becoming a commitment."
         }
       ],
       "attrs": {

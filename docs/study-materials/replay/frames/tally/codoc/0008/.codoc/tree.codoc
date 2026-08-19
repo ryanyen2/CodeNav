@@ -43,9 +43,13 @@
       A £40 refund on a £100 coat leaves £60 of clothing, not £100 of clothing and £40 of income. Refunds are recognised by their positive sign, so income has to be excluded by category before this runs, or a salary would look like a refund of something.
 
   - Recurring payment detection  ⟨f-7298ca42⟩
-      Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured minimum number of different months.
+      Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured number of different months.
 
-      Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured minimum keeps a coincidence from becoming a commitment.
+      Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured month threshold keeps a coincidence from becoming a commitment.
+
++   - Loading transaction rule settings  ⟨e-adc89881⟩
++       Gives transaction rules one validated set of settings from rules.toml, so the same statement can be run with different rule sets. It reads the file once at the edge, keeps the resulting settings immutable, and stops with a clear error when values are missing or invalid instead of supplying defaults.
++       code drift · The new settings module loads and validates all transaction-rule values from rules.toml, which is a distinct capability under transaction policy application.
 
 - Producing a monthly spending summary  ⟨f-007dec9d⟩
     What comes out at the end: totals per category per month, and the ways to ask for them.
@@ -84,7 +88,3 @@
 
 - Package identity metadata  ⟨f-80e81830⟩
     Identifies the Tally package and records its current version so tools and users can recognize the installed release. The module also states that Tally turns bank exports into a monthly summary.
-
-+ - Loading rule settings  ⟨e-3f02bb9e⟩
-+     Gives every transaction rule one validated set of values from rules.toml instead of hidden module constants. The settings are read once and kept immutable, while missing or invalid values stop the run rather than silently changing how transactions are classified.
-+     code drift · The new settings module loads and validates all rule values from rules.toml, so the codebase now has a distinct feature for shared rule configuration.

@@ -7,7 +7,7 @@
   "playback_duration_s": 180.0,
   "speed": 7.82,
   "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/tally/neutral",
-  "derived_at": "2026-08-19T15:35:08.928854+00:00",
+  "derived_at": "2026-08-19T16:03:21.509317+00:00",
   "frames": [
     {
       "n": 1,
@@ -56,7 +56,7 @@
       ],
       "deletes": [],
       "terminal": "",
-      "settled_after_s": 5.0
+      "settled_after_s": 10.0
     },
     {
       "n": 5,
@@ -87,6 +87,11 @@
       "at_s": 299.21,
       "delay_s": 1.954,
       "writes": [
+        ".codoc/drift.json",
+        ".codoc/revisions.json",
+        ".codoc/status.json",
+        ".codoc/tree.bindings.json",
+        ".codoc/tree.index.json",
         "tally/periods.py"
       ],
       "deletes": [],
@@ -98,18 +103,13 @@
       "at_s": 328.44,
       "delay_s": 3.739,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
         ".codoc/tree.codoc",
         ".codoc/tree.doc.json",
-        ".codoc/tree.index.json",
         "tally/summary.py"
       ],
       "deletes": [],
       "terminal": "I left a stray artifact line in that file \u2014 let me fix it properly by resolving the period once, up front:\n  Edit({{WORKSPACE}}/tally/periods.py)\n  Edit({{WORKSPACE}}/tally/summary.py)\n  Edit({{WORKSPACE}}/tally/summary.py)\nNow the CLI, which loads the rules once at the edge and gains the flag:\n  Bash(cat > {{WORKSPACE}}/tally/cli.py <<'PY'\n\"\"\"The command.\n\n    tally summarise fix)",
-      "settled_after_s": 4.0
+      "settled_after_s": 1.0
     },
     {
       "n": 9,
@@ -204,7 +204,7 @@
       ],
       "deletes": [],
       "terminal": "  Bash(cat > {{WORKSPACE}}/tests/test_settings.py <<'PY'\n\"\"\"The rules file, and what ha)\n  Bash(.venv/bin/python -c \"\nfrom datetime import date\nfor d in ['2026-01-01','2025-12-)\n  Edit({{WORKSPACE}}/tests/test_rules.py)\n  Edit({{WORKSPACE}}/tests/test_statements.py)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -25)",
-      "settled_after_s": 3.0
+      "settled_after_s": 1.0
     },
     {
       "n": 17,
@@ -245,6 +245,17 @@
       "at_s": 504.07,
       "delay_s": 2.195,
       "writes": [
+        "README.md"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cd /tmp && /tmp/tally-install-check/bin/tally summarise {{WORKSPACE}}/fixtures/c)\n  Bash(R=/tmp/tally-install-check/lib/python3.12/site-packages/tally/rules.toml; cp $R )",
+      "settled_after_s": 6.0
+    },
+    {
+      "n": 21,
+      "at_s": 588.84,
+      "delay_s": 10.842,
+      "writes": [
         ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
@@ -252,17 +263,6 @@
         ".codoc/tree.codoc",
         ".codoc/tree.doc.json",
         ".codoc/tree.index.json",
-        "README.md"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(cd /tmp && /tmp/tally-install-check/bin/tally summarise {{WORKSPACE}}/fixtures/c)\n  Bash(R=/tmp/tally-install-check/lib/python3.12/site-packages/tally/rules.toml; cp $R )",
-      "settled_after_s": 10.0
-    },
-    {
-      "n": 21,
-      "at_s": 588.84,
-      "delay_s": 10.842,
-      "writes": [
         "tally/recurring.py",
         "tally/settings.py",
         "tests/test_settings.py"
@@ -298,18 +298,11 @@
       "at_s": 608.12,
       "delay_s": 0.778,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.codoc",
-        ".codoc/tree.doc.json",
-        ".codoc/tree.index.json",
         "tally/cli.py"
       ],
       "deletes": [],
       "terminal": "",
-      "settled_after_s": 7.0
+      "settled_after_s": 6.0
     },
     {
       "n": 25,
@@ -331,6 +324,8 @@
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
+        ".codoc/tree.codoc",
+        ".codoc/tree.doc.json",
         ".codoc/tree.index.json",
         "tally/rules.toml"
       ],
@@ -376,12 +371,6 @@
       "at_s": 815.64,
       "delay_s": 0.771,
       "writes": [
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.codoc",
-        ".codoc/tree.doc.json",
-        ".codoc/tree.index.json",
         "tally/settings.py"
       ],
       "deletes": [],
@@ -393,6 +382,13 @@
       "at_s": 822.98,
       "delay_s": 0.939,
       "writes": [
+        ".codoc/drift.json",
+        ".codoc/revisions.json",
+        ".codoc/status.json",
+        ".codoc/tree.bindings.json",
+        ".codoc/tree.codoc",
+        ".codoc/tree.doc.json",
+        ".codoc/tree.index.json",
         "tally/summary.py"
       ],
       "deletes": [],
@@ -404,10 +400,6 @@
       "at_s": 826.0,
       "delay_s": 0.386,
       "writes": [
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.index.json",
         "tally/summary.py"
       ],
       "deletes": [],
@@ -441,9 +433,6 @@
       "at_s": 868.65,
       "delay_s": 2.869,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
         "tests/test_settings.py"
       ],
       "deletes": [],
@@ -455,21 +444,29 @@
       "at_s": 878.75,
       "delay_s": 1.292,
       "writes": [
+        ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
+        ".codoc/tree.codoc",
+        ".codoc/tree.doc.json",
         ".codoc/tree.index.json",
         "tests/test_statements.py"
       ],
       "deletes": [],
       "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )\nNow the settings-level tests for the new keys:",
-      "settled_after_s": 10.0
+      "settled_after_s": 4.0
     },
     {
       "n": 37,
       "at_s": 907.99,
       "delay_s": 3.74,
       "writes": [
+        ".codoc/drift.json",
+        ".codoc/revisions.json",
+        ".codoc/status.json",
+        ".codoc/tree.bindings.json",
+        ".codoc/tree.index.json",
         "tests/test_statements.py"
       ],
       "deletes": [],
@@ -481,11 +478,6 @@
       "at_s": 917.05,
       "delay_s": 1.159,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.index.json",
         "tests/test_settings.py"
       ],
       "deletes": [],
@@ -508,10 +500,6 @@
       "at_s": 933.15,
       "delay_s": 0.643,
       "writes": [
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.index.json",
         "tally/summary.py"
       ],
       "deletes": [],
@@ -523,6 +511,12 @@
       "at_s": 942.21,
       "delay_s": 1.159,
       "writes": [
+        ".codoc/revisions.json",
+        ".codoc/status.json",
+        ".codoc/tree.bindings.json",
+        ".codoc/tree.codoc",
+        ".codoc/tree.doc.json",
+        ".codoc/tree.index.json",
         "README.md"
       ],
       "deletes": [],
@@ -545,12 +539,6 @@
       "at_s": 1020.7,
       "delay_s": 9.396,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.codoc",
-        ".codoc/tree.doc.json",
         "tally/summary.py"
       ],
       "deletes": [],
@@ -562,11 +550,16 @@
       "at_s": 1028.75,
       "delay_s": 1.03,
       "writes": [
+        ".codoc/drift.json",
+        ".codoc/revisions.json",
+        ".codoc/status.json",
+        ".codoc/tree.bindings.json",
+        ".codoc/tree.index.json",
         "tally/summary.py"
       ],
       "deletes": [],
       "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_rules.py\"); t = p)",
-      "settled_after_s": 6.0
+      "settled_after_s": 7.0
     },
     {
       "n": 45,
@@ -584,12 +577,6 @@
       "at_s": 1048.88,
       "delay_s": 1.803,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.codoc",
-        ".codoc/tree.doc.json",
         "README.md",
         "tests/test_statements.py"
       ],
@@ -617,7 +604,8 @@
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
-        ".codoc/tree.index.json",
+        ".codoc/tree.codoc",
+        ".codoc/tree.doc.json",
         "tally/periods.py"
       ],
       "deletes": [],
@@ -640,6 +628,11 @@
       "at_s": 1352.56,
       "delay_s": 2.194,
       "writes": [
+        ".codoc/drift.json",
+        ".codoc/revisions.json",
+        ".codoc/status.json",
+        ".codoc/tree.bindings.json",
+        ".codoc/tree.index.json",
         "tally/settings.py"
       ],
       "deletes": [],
@@ -651,11 +644,6 @@
       "at_s": 1372.8,
       "delay_s": 2.589,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.index.json",
         "tally/dedupe.py"
       ],
       "deletes": [],
@@ -712,23 +700,24 @@
       "at_s": 1487.87,
       "delay_s": 8.003,
       "writes": [
-        "tests/test_statements.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(.venv/bin/python - <<'PY'\nfrom dataclasses import replace\nfrom tally import sett)\nAll three interact correctly. Now the test suite \u2014 let me see the damage and work through it:\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -25)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\n\n# ---- test_statements.py: the fixtur)\nMy assertion was wrong \u2014 W05 still exists (Aldi posted the 30th). Let me make the test say what I actually mean:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )\nNow `test_rules.py`, where the period functions changed signature:",
-      "settled_after_s": 6.0
-    },
-    {
-      "n": 57,
-      "at_s": 1502.0,
-      "delay_s": 1.807,
-      "writes": [
+        ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
         ".codoc/tree.codoc",
         ".codoc/tree.doc.json",
         ".codoc/tree.index.json",
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(.venv/bin/python - <<'PY'\nfrom dataclasses import replace\nfrom tally import sett)\nAll three interact correctly. Now the test suite \u2014 let me see the damage and work through it:\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -25)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\n\n# ---- test_statements.py: the fixtur)\nMy assertion was wrong \u2014 W05 still exists (Aldi posted the 30th). Let me make the test say what I actually mean:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )\nNow `test_rules.py`, where the period functions changed signature:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 57,
+      "at_s": 1502.0,
+      "delay_s": 1.807,
+      "writes": [
         "tests/test_statements.py"
       ],
       "deletes": [],
@@ -806,17 +795,6 @@
       "at_s": 1616.27,
       "delay_s": 1.81,
       "writes": [
-        "tests/test_statements.py"
-      ],
-      "deletes": [],
-      "terminal": "The quick-start examples now point at a fixture that stops. Let me fix that:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"README.md\"); t = p.read_text)\nLet me do a full verification pass \u2014 line lengths, a clean install, and the error paths:",
-      "settled_after_s": 6.0
-    },
-    {
-      "n": 65,
-      "at_s": 1635.49,
-      "delay_s": 2.458,
-      "writes": [
         ".codoc/drift.json",
         ".codoc/revisions.json",
         ".codoc/status.json",
@@ -824,6 +802,17 @@
         ".codoc/tree.codoc",
         ".codoc/tree.doc.json",
         ".codoc/tree.index.json",
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "The quick-start examples now point at a fixture that stops. Let me fix that:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"README.md\"); t = p.read_text)\nLet me do a full verification pass \u2014 line lengths, a clean install, and the error paths:",
+      "settled_after_s": 8.0
+    },
+    {
+      "n": 65,
+      "at_s": 1635.49,
+      "delay_s": 2.458,
+      "writes": [
         "README.md"
       ],
       "deletes": [],
@@ -868,19 +857,12 @@
       "at_s": 1712.34,
       "delay_s": 2.069,
       "writes": [
-        ".codoc/drift.json",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.codoc",
-        ".codoc/tree.doc.json",
-        ".codoc/tree.index.json",
         "tally/rules.toml",
         "tally/summary.py"
       ],
       "deletes": [],
       "terminal": "",
-      "settled_after_s": 9.0
+      "settled_after_s": 6.0
     }
   ]
 }

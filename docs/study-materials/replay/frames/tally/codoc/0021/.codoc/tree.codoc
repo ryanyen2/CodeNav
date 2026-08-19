@@ -22,8 +22,8 @@
 - Applying transaction policies  ⟨f-4958abff⟩
     With the rows in one shape, these are the rules that decide what actually counts as spending: which month it lands in, what is really a duplicate, what is a transfer rather than a purchase, and which category it belongs to.
 
-  - Transaction month assignment  ⟨f-edbdedcc⟩
-      Counts a transaction in the month it was made, not the month the bank posted it.
+  - Transaction period assignment  ⟨f-edbdedcc⟩
+      Counts a transaction in the month it was made, not the month the bank posted it, and uses that made date when grouping by ISO week.
 
       A card payment on the 31st that posts on the 2nd belongs to the month you remember spending it in. The alternative — posting dates — would make the summary agree with the bank statement instead, which is a different thing to want.
 
@@ -43,24 +43,28 @@
       A £40 refund on a £100 coat leaves £60 of clothing, not £100 of clothing and £40 of income. Refunds are recognised by their positive sign, so income has to be excluded by category before this runs, or a salary would look like a refund of something.
 
   - Recurring payment detection  ⟨f-7298ca42⟩
-      Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in at least three different months.
+      Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured number of different months.
 
-      Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. Three months rather than two, so a coincidence does not become a commitment.
+      Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured month threshold keeps a coincidence from becoming a commitment.
 
 +   - Loading transaction rule settings  ⟨e-adc89881⟩
 +       Gives transaction rules one validated set of settings from rules.toml, so the same statement can be run with different rule sets. It reads the file once at the edge, keeps the resulting settings immutable, and stops with a clear error when values are missing or invalid instead of supplying defaults.
 +       code drift · The new settings module loads and validates all transaction-rule values from rules.toml, which is a distinct capability under transaction policy application.
 
++   - Configurable transaction rules  ⟨e-71fb8ed7⟩
++       Lets users change category, transfer, recurring-payment, and money-sign rules without changing code. The settings loader rejects missing sections, malformed values, and invalid patterns before a run can silently produce misleading totals, and the loaded rules cannot be changed afterward.
++       code drift · The new settings tests cover loading configurable transaction policies and rejecting settings that could otherwise make rules fail silently.
+
 - Producing a monthly spending summary  ⟨f-007dec9d⟩
     What comes out at the end: totals per category per month, and the ways to ask for them.
 
-  - Monthly spending summary  ⟨f-b62f4884⟩
-      Adds the transactions up into monthly category totals, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring.
+  - Period spending summary  ⟨f-b62f4884⟩
+      Adds the transactions up into monthly or weekly category totals, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring.
 
       The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers.
 
   - Command-line summary interface  ⟨f-ebd24159⟩
-      `tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it.
+      `tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it. It loads the transaction rules from rules.toml before running and reports invalid settings without processing the statement.
 
 - Checking statements  ⟨f-19871689⟩
     These features verify that statement reading, transaction policies, and monthly summaries continue to behave correctly across focused rule cases and complete sample statements.

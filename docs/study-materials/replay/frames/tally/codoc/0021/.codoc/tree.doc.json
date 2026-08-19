@@ -210,7 +210,7 @@
       "attrs": {
         "fid": "f-edbdedcc",
         "localId": "",
-        "version": "00000001787153492177-00000000000000000000-default",
+        "version": "00000001787155181917-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -226,7 +226,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Counts a transaction in the month or ISO week it was made, not the period the bank posted it."
+          "text": "Counts a transaction in the month it was made, not the month the bank posted it, and uses that made date when grouping by ISO week."
         }
       ],
       "attrs": {
@@ -238,7 +238,7 @@
       "content": [
         {
           "type": "text",
-          "text": "A card payment on the 31st that posts on the 2nd belongs to the period you remember spending it in. The alternative — posting dates — would make the summary agree with the bank statement instead, which is a different thing to want. Available period labels are checked before rows are read, so an unknown period fails even for an empty statement."
+          "text": "A card payment on the 31st that posts on the 2nd belongs to the month you remember spending it in. The alternative — posting dates — would make the summary agree with the bank statement instead, which is a different thing to want."
         }
       ],
       "attrs": {
@@ -370,7 +370,7 @@
       "attrs": {
         "fid": "f-7298ca42",
         "localId": "",
-        "version": "00000001787153450633-00000000000000000000-default",
+        "version": "00000001787155161152-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -386,7 +386,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured minimum number of different months."
+          "text": "Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured number of different months."
         }
       ],
       "attrs": {
@@ -398,7 +398,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured minimum keeps a coincidence from becoming a commitment."
+          "text": "Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured month threshold keeps a coincidence from becoming a commitment."
         }
       ],
       "attrs": {
@@ -410,14 +410,14 @@
       "attrs": {
         "fid": "f-007dec9d",
         "localId": "",
-        "version": "00000001787153473860-00000000000000000000-default",
+        "version": "00000001787026352354-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
       "content": [
         {
           "type": "text",
-          "text": "Producing a spending summary"
+          "text": "Producing a monthly spending summary"
         }
       ]
     },
@@ -426,7 +426,7 @@
       "content": [
         {
           "type": "text",
-          "text": "What comes out at the end: totals per category per month or week, and the ways to ask for them."
+          "text": "What comes out at the end: totals per category per month, and the ways to ask for them."
         }
       ],
       "attrs": {
@@ -438,7 +438,7 @@
       "attrs": {
         "fid": "f-b62f4884",
         "localId": "",
-        "version": "00000001787153492181-00000000000000000000-default",
+        "version": "00000001787155181921-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -454,7 +454,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Adds the transactions up into category totals by month or week, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring."
+          "text": "Adds the transactions up into monthly or weekly category totals, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring."
         }
       ],
       "attrs": {
@@ -466,7 +466,7 @@
       "content": [
         {
           "type": "text",
-          "text": "The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers. It also rejects an unknown grouping before reading rows, including an empty statement."
+          "text": "The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers."
         }
       ],
       "attrs": {
@@ -478,7 +478,7 @@
       "attrs": {
         "fid": "f-ebd24159",
         "localId": "",
-        "version": "00000001787026352355-00000000000000000000-default",
+        "version": "00000001787155204074-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -494,7 +494,7 @@
       "content": [
         {
           "type": "text",
-          "text": "`tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it."
+          "text": "`tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it. It loads the transaction rules from rules.toml before running and reports invalid settings without processing the statement."
         }
       ],
       "attrs": {

@@ -20,17 +20,17 @@
         One bank writes a £12 coffee as `-12.00`; another writes `12.00` and puts the direction in a separate column. If almost every amount in the file is positive, that is taken as the second convention and every sign is flipped. It is a guess, made rather than asked about, so that every rule after this sees one convention.
 
 - Applying transaction policies  ⟨f-4958abff⟩
-    With the rows in one shape, these are the rules that decide what actually counts as spending: which month it lands in, what is really a duplicate, what is a transfer rather than a purchase, how transfers are shown, and which category it belongs to.
+    With the rows in one shape, these are the rules that decide what actually counts as spending: which month it lands in, what is really a duplicate, what is a transfer rather than a purchase, and which category it belongs to.
 
   - Transaction period assignment  ⟨f-edbdedcc⟩
-      Counts a transaction in the month or ISO week it was made, not the period the bank posted it.
+      Counts a transaction in the month it was made, not the month the bank posted it, and uses that made date when grouping by ISO week.
 
-      A card payment on the 31st that posts on the 2nd belongs to the period you remember spending it in. The alternative — posting dates — would make the summary agree with the bank statement instead, which is a different thing to want. Available period labels are checked before rows are read, so an unknown period fails even for an empty statement.
+      A card payment on the 31st that posts on the 2nd belongs to the month you remember spending it in. The alternative — posting dates — would make the summary agree with the bank statement instead, which is a different thing to want.
 
   - Transfer-aware duplicate filtering  ⟨f-6257cf6a⟩
       Drops repeated rows so they do not inflate the totals.
 
-      Same made date, same amount, same description (ignoring case) counts as one. Nothing in a row says whether it was sent twice or bought twice, so buying the same coffee twice in one day is counted once — the cost of not double-counting everything else. Transfers are the exception: moving £500 from current to savings shows up as two rows that look exactly like a duplicate, and dropping one would leave a £500 payment that never happened. Transfer wording comes from the settings because exports use different descriptions. Whether transfers are left out of spending is set in the rules, because the money is still yours.
+      Same made date, same amount, same description (ignoring case) counts as one. Nothing in a row says whether it was sent twice or bought twice, so buying the same coffee twice in one day is counted once — the cost of not double-counting everything else. Transfers are the exception: moving £500 from current to savings shows up as two rows that look exactly like a duplicate, and dropping one would leave a £500 payment that never happened. Transfers are also left out of spending, because the money is still yours.
 
   - Merchant category assignment  ⟨f-0bb3f871⟩
       Puts each transaction in a category by matching its description against an ordered list of patterns.
@@ -43,30 +43,34 @@
       A £40 refund on a £100 coat leaves £60 of clothing, not £100 of clothing and £40 of income. Refunds are recognised by their positive sign, so income has to be excluded by category before this runs, or a salary would look like a refund of something.
 
   - Recurring payment detection  ⟨f-7298ca42⟩
-      Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured minimum number of different months.
+      Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in the configured number of different months.
 
-      Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured minimum keeps a coincidence from becoming a commitment.
+      Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. The configured month threshold keeps a coincidence from becoming a commitment.
 
-+   - Transaction rule configuration  ⟨e-7d1549d1⟩
-+       Lets the statement pipeline take its transaction rules from rules.toml and stops malformed or incomplete settings before they silently change a summary. The loaded configuration preserves rule order and thresholds while remaining fixed during processing, so policy stays in the file rather than being changed by a rule.
-+       code drift · The new settings tests cover loading transaction policies from rules.toml and rejecting invalid, missing, or mutable configuration, which no existing feature covers.
++   - Loading transaction rule settings  ⟨e-adc89881⟩
++       Gives transaction rules one validated set of settings from rules.toml, so the same statement can be run with different rule sets. It reads the file once at the edge, keeps the resulting settings immutable, and stops with a clear error when values are missing or invalid instead of supplying defaults.
++       code drift · The new settings module loads and validates all transaction-rule values from rules.toml, which is a distinct capability under transaction policy application.
 
-- Producing a spending summary  ⟨f-007dec9d⟩
-    What comes out at the end: totals per category per month or week, and the ways to ask for them.
++   - Configurable transaction rules  ⟨e-71fb8ed7⟩
++       Lets users change category, transfer, recurring-payment, and money-sign rules without changing code. The settings loader rejects missing sections, malformed values, and invalid patterns before a run can silently produce misleading totals, and the loaded rules cannot be changed afterward.
++       code drift · The new settings tests cover loading configurable transaction policies and rejecting settings that could otherwise make rules fail silently.
+
+- Producing a monthly spending summary  ⟨f-007dec9d⟩
+    What comes out at the end: totals per category per month, and the ways to ask for them.
 
   - Period spending summary  ⟨f-b62f4884⟩
-      Adds the transactions up into category totals by month or week, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring.
+      Adds the transactions up into monthly or weekly category totals, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring.
 
-      The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers. It also rejects an unknown grouping before reading rows, including an empty statement.
+      The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers.
 
   - Command-line summary interface  ⟨f-ebd24159⟩
-      `tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it, and `--by-week` writes a separate weekly summary beside the monthly one. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it.
+      `tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it. It loads the transaction rules from rules.toml before running, reports invalid settings without processing the statement, and rejects unknown options instead of treating them as file names.
 
 - Checking statements  ⟨f-19871689⟩
     These features verify that statement reading, transaction policies, and monthly summaries continue to behave correctly across focused rule cases and complete sample statements.
 
   - Rule contract test suite  ⟨f-ab426731⟩
-      Keeps the behavior of each transaction rule explicit, including the cases where one policy can change another policy’s result. The suite uses small common rows so changes to parsing, normalization, period assignment, categorization, and summaries fail at the rule boundary instead of being hidden in a larger end-to-end example.
+      Keeps the behavior of each transaction rule explicit, including the cases where one policy can change another policy’s result. The suite uses small common rows so changes to parsing, normalization, categorization, and summaries fail at the rule boundary instead of being hidden in a larger end-to-end example.
 
     - Imported transaction contracts  ⟨f-049a2cad⟩
         Checks that bank-exported values become usable transactions without guessing when a row is unreadable, and that spending signs and dates have the expected meaning afterward. Made dates determine the spending month even when posting happens later, while a transaction date takes precedence when both dates are exported so month-end spending is not shifted.
@@ -84,11 +88,7 @@
         Checks that monetary totals are rounded once after the amounts have been added together. Rounding each row first could make several fractions total a penny more than the true sum.
 
   - End-to-end statement summarization checks  ⟨f-5c762fd7⟩
-      Protects the complete statement-to-monthly and weekly summary behavior across the sample banks, including empty input, differing columns, made-date boundaries, sign conversion, transfers, duplicates, refunds, recurring payments, uncategorised transactions, and stable output. The fixtures keep these cases together because each statement exercises a different part of the real summarization flow, so changing the pipeline without preserving its policy order or visible results will fail here.
+      Protects the complete statement-to-monthly-summary behavior across the sample banks, including empty input, differing columns, made-date boundaries, sign conversion, transfers, duplicates, refunds, recurring payments, uncategorised transactions, and stable output. The fixtures keep these cases together because each statement exercises a different part of the real summarization flow, so changing the pipeline without preserving its policy order or visible results will fail here.
 
 - Package identity metadata  ⟨f-80e81830⟩
     Identifies the Tally package and records its current version so tools and users can recognize the installed release. The module also states that Tally turns bank exports into a monthly summary.
-
-+ - Loading rule settings  ⟨e-3f02bb9e⟩
-+     Gives every transaction rule one validated set of values from rules.toml instead of hidden module constants. The settings are read once and kept immutable, while missing or invalid values stop the run rather than silently changing how transactions are classified.
-+     code drift · The new settings module loads and validates all rule values from rules.toml, so the codebase now has a distinct feature for shared rule configuration.

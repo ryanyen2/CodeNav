@@ -42,9 +42,13 @@ type Frame = { dir: string; docJson: string; treeCodoc: string | null; sidecar: 
 function recordedFrames(): { name: string; frames: Frame[] }[] {
     if (!existsSync(FRAMES)) return [];
     const out: { name: string; frames: Frame[] }[] = [];
-    for (const project of readdirSync(FRAMES)) {
-        for (const arm of readdirSync(join(FRAMES, project))) {
-            const root = join(FRAMES, project, arm);
+    // `withFileTypes` because the frames root can hold a file as well as the
+    // project folders, and reading one as a directory throws ENOTDIR and takes
+    // the whole suite with it rather than skipping the entry.
+    for (const project of readdirSync(FRAMES, { withFileTypes: true })) {
+        if (!project.isDirectory()) continue;
+        for (const arm of readdirSync(join(FRAMES, project.name))) {
+            const root = join(FRAMES, project.name, arm);
             if (!existsSync(join(root, 'manifest.json'))) continue;
             const frames: Frame[] = [];
             for (const entry of readdirSync(root).sort()) {
@@ -65,7 +69,7 @@ function recordedFrames(): { name: string; frames: Frame[] }[] {
                     sidecar: existsSync(sidecar) ? sidecar : null,
                 });
             }
-            if (frames.length) out.push({ name: `${project}/${arm}`, frames });
+            if (frames.length) out.push({ name: `${project.name}/${arm}`, frames });
         }
     }
     return out;
