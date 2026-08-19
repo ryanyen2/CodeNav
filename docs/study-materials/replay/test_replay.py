@@ -375,6 +375,109 @@ class TranscriptTest(unittest.TestCase):
             self.assertEqual(lines[2][0] - lines[0][0], 5.0)
 
 
+class NeutralityTest(unittest.TestCase):
+    """The recording must not name either tool in what a participant reads.
+
+    The first scribe recording named both, and neither leak came from the agent.
+    A `git status` in a workspace made neutral by deleting the tool files listed
+    them as staged deletions, and Claude Code prints absolute paths, so every
+    Read line carried the recording directory's own name.
+    """
+
+    def test_the_harness_own_leaks_are_dropped(self):
+        text = "\n".join([
+            "  Read(/work/scribe/convert.py)",
+            "  Bash(git status --short)",
+            " D .claude/skills/codoc-intent/SKILL.md",
+            " D .codoc/tree.codoc",
+            " D .mcp.json",
+            " D CLAUDE.md",
+            " M scribe/convert.py",
+        ])
+        out = record.scrub(text, "/recorder/scribe", "/home/p/codoc-study/scribe")
+        self.assertIn("  Read(/work/scribe/convert.py)", out)
+        self.assertIn(" M scribe/convert.py", out)
+        for gone in (".claude", ".codoc", ".mcp.json", "CLAUDE.md"):
+            self.assertNotIn(gone, out)
+
+    def test_the_recorder_path_is_retargeted_at_the_participant(self):
+        out = record.scrub("  Read(/recorder/scribe/cli.py)", "/recorder/scribe",
+                           "/home/p/codoc-study/scribe")
+        self.assertEqual(out, "  Read(/home/p/codoc-study/scribe/cli.py)")
+
+    def test_a_truncated_path_still_survives_because_a_token_is_written_first(self):
+        """A long command is cut at eighty characters, and a path cut in the
+        middle cannot be matched and replaced afterwards. So the token goes in at
+        build time, before anything truncates, and a cut token names nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.jsonl"
+            long_command = "cd /recorder/scribe && " + "echo padding " * 12
+            path.write_text(json.dumps({
+                "timestamp": "2026-08-19T10:00:00Z", "type": "assistant", "cwd": "/recorder/scribe",
+                "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "name": "Bash", "input": {"command": long_command}}]}}))
+            rendered = record.render_transcript(path, "/recorder/scribe")[0][1]
+            self.assertNotIn("/recorder", rendered)
+            record.check_no_leak(record.scrub(rendered, "/recorder/scribe", "/p/codoc-study/scribe"),
+                                 "/p/codoc-study/scribe", "rendered")
+
+    def test_the_participant_own_path_is_not_mistaken_for_a_leak(self):
+        """Their workspace is `~/codoc-study/<project>` and they see it all
+        session in both conditions, so the check runs with it taken out."""
+        record.check_no_leak("  Read(/home/p/codoc-study/scribe/cli.py)",
+                             "/home/p/codoc-study/scribe", "rendered")
+
+    def test_the_player_refuses_a_recording_the_agent_made_non_neutral(self):
+        with self.assertRaises(record.Leaked):
+            record.check_no_leak("I looked at the codoc tree first.",
+                                 "/home/p/codoc-study/scribe", "rendered")
+
+    def test_a_leaking_transcript_is_never_installed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            frames, ws, home = tmp / "frames", tmp / "codoc-study/scribe", tmp / "home"
+            frames.mkdir(parents=True)
+            ws.mkdir(parents=True)
+            (frames / "transcript.jsonl").write_text("\n".join([
+                json.dumps({"sessionId": "abc", "cwd": "/recorder/scribe", "type": "user",
+                            "message": {"role": "user", "content": [
+                                {"type": "tool_result",
+                                 "content": "ok\n D .codoc/tree.codoc\n M scribe/cli.py"}]}}),
+                json.dumps({"sessionId": "abc", "cwd": "/recorder/scribe", "type": "assistant",
+                            "message": {"role": "assistant", "content": [
+                                {"type": "text", "text": "I read the codoc tree."}]}}),
+            ]))
+            original = Path.home
+            try:
+                Path.home = staticmethod(lambda: home)  # type: ignore[assignment]
+                with self.assertRaises(record.Leaked):
+                    play.install_transcript(ws, frames)
+            finally:
+                Path.home = original  # type: ignore[assignment]
+
+
+class RetextTest(unittest.TestCase):
+    def test_rendering_the_scrollback_again_leaves_the_frames_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frames = Path(tmp) / "frames"
+            (frames / "0001").mkdir(parents=True)
+            (frames / "0001" / "a.py").write_text("kept")
+            (frames / "transcript.jsonl").write_text(json.dumps({
+                "timestamp": "2026-08-19T10:00:00Z", "type": "assistant", "cwd": "/recorder/scribe",
+                "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "name": "Read",
+                     "input": {"file_path": "/recorder/scribe/a.py"}}]}}))
+            (frames / "manifest.json").write_text(json.dumps({
+                "recorded_at": "2026-08-19T00:00:00Z",
+                "frames": [{"n": 1, "at_s": 10.0, "delay_s": 1.0, "writes": ["a.py"],
+                            "deletes": [], "terminal": "stale"}]}))
+            self.assertEqual(record.retext(frames), 0)
+            manifest = json.loads((frames / "manifest.json").read_text())
+            self.assertEqual(manifest["recorded_root"], "/recorder/scribe")
+            self.assertIn(record.WORKSPACE_TOKEN, manifest["frames"][0]["terminal"])
+            self.assertEqual((frames / "0001" / "a.py").read_text(), "kept")
+
+
 class WatchTest(unittest.TestCase):
     def test_watch_records_what_changed_while_it_ran(self):
         with tempfile.TemporaryDirectory() as tmp:

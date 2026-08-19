@@ -29,6 +29,41 @@ paper reports that codoc failed to surface it. Writing the tree ourselves would
 make the faithfulness claim circular, and faithfulness is the claim the study
 rests on. The stimulus is ours; the record of it is codoc's.
 
+## The recording has to be neutral, and that is checked rather than assumed
+
+Both conditions read the recorded transcript as their terminal scrollback, so it
+must not name either tool. A baseline participant who finds `.codoc/tree.codoc`
+in their own scrollback has been told which tool the study is about, and a codoc
+participant who finds `CLAUDE.md` has been told there is another condition.
+
+The first scribe recording failed this in two ways, and both were the harness
+rather than the agent. The neutral workspace is made neutral by deleting the tool
+files and folding the deletion into the last commit, and when that last commit
+holds nothing but the tool files, git refuses to amend it into an empty commit.
+The failure was not checked, so the agent began in a tree holding eight staged
+deletions, ran `git status`, and wrote their names into the transcript. Separately,
+Claude Code prints absolute paths, and the recording workspace is
+`~/codoc-recording/<project>-neutral`, so every `Read(...)` line named the tool
+and announced that a recording was being made.
+
+Three things now stand between that and a participant. `strip_tools` drops the
+commit when amending it would leave it empty, so the tree is genuinely clean.
+`build` writes the recording's own directory into the terminal text as
+`{{WORKSPACE}}` before anything truncates a long line, and the player expands it
+to the participant's own path. And the player refuses to run at all if either
+tool is still named after that, because what the harness put there is already
+gone, so what is left is the agent having said it, and that is a recording to
+make again rather than a line to quietly delete.
+
+The check runs with the participant's own path taken out, because their workspace
+is `~/codoc-study/<project>` and they see it all session in both conditions.
+
+`record.py retext <frames-dir>` renders a finished recording's scrollback again
+from its own transcript, without touching the frames. It exists because the
+scrollback is cheap to regenerate and the frames cost an hour of daemon time, so
+a fault in what the participant reads should not mean deriving both conditions
+again.
+
 ## The code is recorded once, with neither tool present
 
 The session runs in a workspace with no `.codoc`, no `CLAUDE.md`, and no agent
@@ -60,10 +95,13 @@ condition's record is derived from it.
 **First, record the code.** `record-session.sh start scribe neutral` unpacks a
 workspace with no codoc, no description and no agent configuration, folds the
 removal into the last commit so the agent does not begin in a tree that is
-already dirty, and starts the watcher. Then run the agent in that folder with the
-request in `requests/scribe.txt`. Steer it until it lands the planted problems
-and write every steer into `notes.md`. `record-session.sh stop scribe neutral`
-turns the snapshots into frames and copies the transcript next to them.
+already dirty, hides the editable install's build output in `.git/info/exclude`
+so the agent does not write a filter to work around it, and starts the watcher.
+Then run the agent in that folder with the request in `requests/scribe.txt`. It
+needs `--allowedTools` naming Bash, because an agent that cannot run the tests
+stops and asks questions instead of working. Steer it until it lands the planted
+problems and write every steer into `notes.md`. `record-session.sh stop scribe
+neutral` turns the snapshots into frames and copies the transcript next to them.
 
 **Second, derive each condition.** With the daemon running in a clean codoc
 workspace:

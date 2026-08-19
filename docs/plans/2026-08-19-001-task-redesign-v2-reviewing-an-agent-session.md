@@ -393,11 +393,14 @@ files per project and per condition, the planted defect list per project, the
 claim list for the record truth audit, the transfer probe harness, and a replay
 end state check in the bundle build.
 
-Still open from before and now more urgent: the study is not pre-registered, and
-the one frozen threshold in the v2 design is written against a research question,
-a codebase and a task that have all been replaced. The threshold has to be
-restated against detection coverage and record truth before the first
-participant, or the study is exploratory and the paper has to say so.
+Settled since: the study is pre-registered in
+`docs/study-materials/pre-registration.md`. The v2 design's one frozen threshold
+was written against a research question, a codebase and a task that have all been
+replaced, so it is restated in the units this task produces. Detection coverage
+and a durable written trace are confirmatory, each with a sign test over twelve
+paired participants. Record truth is pre-registered as predicted not to differ,
+because the baseline's own maintenance skill was measured keeping its record true
+before any participant ran. Posting it to OSF is what remains.
 
 ## Decisions taken, so they are not reopened
 

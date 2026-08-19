@@ -23,12 +23,15 @@ reads code, which makes a surface outside the code more necessary rather than
 less. Say it that way, because "helps you understand the codebase" invites the
 objection that comprehension aids are a shrinking market.
 
-**The new primary outcomes are detection coverage and record truth.** Detection
-coverage is how many of four planted problems a participant found and correctly
-attributed, out of a change every participant sees identically. Record truth is
-whether each claim in the description they finished with is true of the code they
-finished with, measured by probe and rated blind. Both are new, neither is
-calibrated yet, and a pilot has to run before the thresholds are written down.
+**The new primary outcomes are detection coverage and a durable written trace.**
+Detection coverage is how many of the planted problems a participant found and
+correctly attributed, out of a change every participant sees identically. A
+project plants as many as its recorded session actually landed, which is three
+for scribe rather than the four the design assumed. A durable written trace is
+whether the record the participant finished with says what was decided about each
+problem. Record truth is measured too, by probe and rated blind, and it is
+pre-registered as predicted NOT to differ for the reason below. The thresholds
+are frozen in `pre-registration.md`.
 
 **What the change does not fix.** It is still a bundle against a bundle at twelve
 participants, still one session, and still silent about the week scale. The false
@@ -182,10 +185,15 @@ accept events only exist in the ledger.
 
 ## Two things still open, and they are decisions rather than work
 
-1. **Pre-registration has not happened**, and the one frozen threshold in the v2
-   design is written against the abandoned RQ1 and a codebase that is no longer
-   used. It needs restating against RQ1-understanding and RQ2-authored-modification
-   before participant 1, or the study is exploratory and should say so.
+1. **Pre-registration is written and is `pre-registration.md`.** The v2 design's
+   one frozen threshold was written against an abandoned research question and a
+   codebase no longer used, so it has been restated in the units the redesigned
+   task actually produces. Detection coverage and a durable written trace are the
+   two confirmatory predictions, each with a sign test over the twelve paired
+   participants. Record truth is pre-registered as predicted NOT to differ, which
+   is what the measurement above found and what honesty requires writing down
+   before the data rather than after. Everything else in the analysis plan is
+   labelled exploratory. It still has to be posted to OSF.
 2. **The session snapshots did not run on the pilot** (`session-log.sh` had to be
    started by hand and was not), so no 20-second history exists and "what kind of
    edits people make to the description" has no data for that session. FIXED for

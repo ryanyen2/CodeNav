@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -78,6 +79,64 @@ SKIP_FILE_SUFFIXES = (".db-wal", ".db-shm", ".db-journal", ".lock", ".pid", ".lo
 SECRET_NAMES = {".env", ".env.local", "api-key", ".netrc", "credentials",
                 "id_rsa", ".npmrc", ".pypirc"}
 SECRET_SUFFIXES = {".pem", ".key"}
+
+# Keeping the harness out of what the participant reads.
+#
+# The code session is recorded in a workspace with neither tool in it, so the
+# transcript both conditions read never names either one. Two things defeated
+# that on the first recording, and both were the harness rather than the agent.
+#
+# The recording workspace is `~/codoc-recording/<project>-neutral`, and Claude
+# Code prints absolute paths, so the scrollback said `codoc-recording` and
+# `-neutral` on every Read line. And the workspace is made neutral by deleting
+# the tool files, which leaves them staged as deletions, so a `git status` the
+# agent ran listed `.codoc/tree.codoc` and `.claude/skills/codoc-intent/SKILL.md`
+# by name. A baseline participant would have read codoc's own file names in their
+# own terminal history.
+#
+# Both are repaired at play time, because the participant's workspace path is
+# only known then. `NEUTRALISED` drops a line naming a file the neutral workspace
+# removed. `RESIDUAL` is the gate. If either tool is still named after that, the
+# harness cannot account for it, which means the agent said it, and that is a
+# recording to make again rather than a line to delete.
+# One entry per path `record-session.sh strip_tools` removes, so the two lists
+# can be read against each other.
+NEUTRALISED = re.compile(r"\.codoc|\.claude|\.mcp\.json|CLAUDE\.md", re.I)
+# Written into the terminal text at build time, in place of the directory the
+# recording was made in, and expanded to the participant's own workspace at
+# play time. The substitution has to happen before `_tool_line` truncates a
+# long command, because a path cut at eighty characters cannot be matched and
+# replaced afterwards, while a cut placeholder is harmless.
+WORKSPACE_TOKEN = "{{WORKSPACE}}"
+RESIDUAL = re.compile(r"codoc|\.mcp\.json|CLAUDE\.md", re.I)
+
+
+class Leaked(Exception):
+    """The recording names a tool somewhere the harness cannot account for."""
+
+
+def scrub(text: str, recorded_root: str, target_root: str) -> str:
+    """Retarget the recorder's paths, and drop the lines the harness leaked."""
+    if target_root:
+        text = text.replace(WORKSPACE_TOKEN, target_root)
+    if recorded_root and target_root and recorded_root != target_root:
+        text = text.replace(recorded_root, target_root)
+    return "\n".join(ln for ln in text.split("\n") if not NEUTRALISED.search(ln))
+
+
+def check_no_leak(text: str, target_root: str, where: str) -> None:
+    """Refuse to hand a participant a scrollback that names either tool.
+
+    The participant's own workspace is `~/codoc-study/<project>`, which contains
+    the word, and they see their own path all session in both conditions. So the
+    check runs with their path taken out, and what it is looking for is the
+    recording's path and the other condition's files.
+    """
+    left = text.replace(target_root, "") if target_root else text
+    for number, line in enumerate(left.split("\n"), start=1):
+        if RESIDUAL.search(line):
+            raise Leaked(f"{where}, line {number} names a tool the participant "
+                         f"must not see here:\n  {line.strip()[:200]}")
 
 
 def _skip(rel: str, with_index: bool) -> bool:
@@ -195,11 +254,27 @@ def _ts(entry: dict) -> float:
         return 0.0
 
 
-def render_transcript(path: Path) -> list[tuple[float, str]]:
+def recorded_root(transcript: Path | None) -> str:
+    """The directory the session was recorded in, as Claude Code wrote it down."""
+    if not transcript or not transcript.exists():
+        return ""
+    for raw in transcript.read_text(errors="replace").splitlines():
+        try:
+            cwd = json.loads(raw).get("cwd")
+        except json.JSONDecodeError:
+            continue
+        if cwd:
+            return str(cwd)
+    return ""
+
+
+def render_transcript(path: Path, root: str = "") -> list[tuple[float, str]]:
     """The session as a list of timestamped lines of terminal text."""
     lines: list[tuple[float, str]] = []
     for raw_line in path.read_text(errors="replace").splitlines():
         raw_line = raw_line.strip()
+        if root:
+            raw_line = raw_line.replace(root, WORKSPACE_TOKEN)
         if not raw_line:
             continue
         try:
@@ -257,7 +332,8 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
     # tree reacting more slowly than codoc really reacts.
     speed = max(1.0, real_duration / seconds) if seconds > 0 else 1.0
 
-    text_lines = render_transcript(transcript) if transcript and transcript.exists() else []
+    root = recorded_root(transcript)
+    text_lines = render_transcript(transcript, root) if transcript and transcript.exists() else []
     if text_lines:
         origin = text_lines[0][0]
         text_lines = [(t - origin, s) for t, s in text_lines]
@@ -305,6 +381,7 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
 
     (frames / "manifest.json").write_text(json.dumps({
         "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "recorded_root": root,
         "real_duration_s": round(real_duration, 1),
         "playback_duration_s": round(sum(f["delay_s"] for f in out_frames), 1),
         "speed": round(speed, 2),
@@ -502,6 +579,51 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     return 0
 
 
+def retext(frames: Path) -> int:
+    """Render a finished recording's scrollback again, from its own transcript.
+
+    The files in the frames are not touched, only the terminal text and the
+    recorded root in the manifest. It exists because the scrollback is derived
+    from the transcript while the frames cost an hour of daemon time to derive,
+    so a fault in what the participant reads should not mean deriving both
+    conditions again.
+    """
+    manifest_path = frames / "manifest.json"
+    transcript = frames / "transcript.jsonl"
+    if not manifest_path.exists() or not transcript.exists():
+        print(f"{frames} needs both a manifest and a transcript", file=sys.stderr)
+        return 1
+    manifest = json.loads(manifest_path.read_text())
+    root = recorded_root(transcript)
+    text_lines = render_transcript(transcript, root)
+    if text_lines:
+        origin = text_lines[0][0]
+        text_lines = [(t - origin, s) for t, s in text_lines]
+
+    cursor = 0
+    for frame in manifest["frames"]:
+        chunk = []
+        while cursor < len(text_lines) and text_lines[cursor][0] <= frame["at_s"]:
+            chunk.append(text_lines[cursor][1])
+            cursor += 1
+        frame["terminal"] = "\n".join(chunk)
+    if text_lines and cursor < len(text_lines):
+        manifest["frames"][-1]["terminal"] += "\n" + "\n".join(s for _, s in text_lines[cursor:])
+
+    out = {}
+    for key, value in manifest.items():
+        if key == "frames":
+            continue
+        out[key] = value
+        if key == "recorded_at":
+            out["recorded_root"] = root
+    out.setdefault("recorded_root", root)
+    out["frames"] = manifest["frames"]
+    manifest_path.write_text(json.dumps(out, indent=2))
+    print(f"{len(manifest['frames'])} frames re-rendered from {transcript.name}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -517,6 +639,10 @@ def main(argv: list[str]) -> int:
     b.add_argument("frames", type=Path)
     b.add_argument("--seconds", type=float, default=180.0,
                    help="how long the replay should take, default 180")
+
+    r = sub.add_parser("retext",
+                       help="render an existing recording's scrollback again")
+    r.add_argument("frames", type=Path)
 
     d = sub.add_parser("derive", help="replay a neutral recording into one condition")
     d.add_argument("frames", type=Path)
@@ -539,6 +665,8 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.command == "watch":
         return watch(args.workspace, args.raw, args.interval)
+    if args.command == "retext":
+        return retext(args.frames)
     if args.command == "derive":
         return derive(args.frames, args.workspace, args.out, args.settle,
                       args.timeout, max(1, args.settle_every), args.after, args.pace)

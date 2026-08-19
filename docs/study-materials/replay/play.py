@@ -32,7 +32,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from record import SKIP_DIRS, SKIP_DIR_SUFFIXES, scan  # noqa: E402
+from record import (SKIP_DIRS, SKIP_DIR_SUFFIXES, Leaked, check_no_leak,  # noqa: E402
+                    scan, scrub)
 
 DIM, RESET = "\033[2m", "\033[0m"
 
@@ -90,6 +91,12 @@ def install_transcript(workspace: Path, frames: Path) -> Path | None:
     The participant's first prompt then continues the session that produced the
     change, with the agent's own context intact, and the recorded transcript is
     also the terminal scrollback.
+
+    The recorder's own paths are retargeted at the participant's workspace and
+    the harness's leaked file names are dropped, for the reasons written above
+    `NEUTRALISED` in `record.py`. Scrubbing runs per JSON record and per string
+    inside it, because the leak is inside a tool result rather than at the top
+    level, and a record that stops being valid JSON would not load at all.
     """
     source = frames / "transcript.jsonl"
     if not source.exists():
@@ -113,11 +120,32 @@ def install_transcript(workspace: Path, frames: Path) -> Path | None:
     out_dir = Path.home() / ".claude" / "projects" / slug
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{session_id}.jsonl"
-    text = "\n".join(lines) + "\n"
-    if recorded_root and recorded_root != target_root:
-        text = text.replace(recorded_root, target_root)
-    out.write_text(text)
+
+    cleaned = []
+    for number, line in enumerate(lines, start=1):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            cleaned.append(line)
+            continue
+        entry = _scrub_record(entry, recorded_root or "", target_root)
+        line = json.dumps(entry)
+        check_no_leak(line, target_root, f"the recorded session, record {number}")
+        cleaned.append(line)
+    out.write_text("\n".join(cleaned) + "\n")
     return out
+
+
+def _scrub_record(value, recorded_root: str, target_root: str):
+    """Scrub every string in one transcript record, leaving its shape alone."""
+    if isinstance(value, str):
+        return scrub(value, recorded_root, target_root)
+    if isinstance(value, list):
+        return [_scrub_record(v, recorded_root, target_root) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub_record(v, recorded_root, target_root)
+                for k, v in value.items()}
+    return value
 
 
 def play(workspace: Path, frames: Path, speed: float, step: bool,
@@ -134,6 +162,8 @@ def play(workspace: Path, frames: Path, speed: float, step: bool,
     if not manifest_path.exists():
         raise SystemExit(f"no manifest in {frames}")
     manifest = json.loads(manifest_path.read_text())
+    target_root = str(workspace.resolve())
+    recorded = manifest.get("recorded_root") or ""
 
     if do_reset:
         reset(workspace, frames)
@@ -145,7 +175,8 @@ def play(workspace: Path, frames: Path, speed: float, step: bool,
     total = len(manifest["frames"])
     for frame in manifest["frames"]:
         delay = frame["delay_s"] / speed if speed else 0.0
-        text = frame.get("terminal") or ""
+        text = scrub(frame.get("terminal") or "", recorded, target_root)
+        check_no_leak(text, target_root, f"the terminal text of frame {frame['n']}")
         lines = [ln for ln in text.splitlines() if ln.strip()]
         per_line = min(delay / len(lines), 0.35) if lines and delay else 0.0
         for line in lines:
@@ -204,8 +235,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--no-reset", dest="reset", action="store_false")
     parser.add_argument("--no-transcript", dest="transcript", action="store_false")
     args = parser.parse_args(argv)
-    return play(args.workspace.expanduser(), args.frames, args.speed,
-                args.step, args.reset, args.transcript)
+    try:
+        return play(args.workspace.expanduser(), args.frames, args.speed,
+                    args.step, args.reset, args.transcript)
+    except Leaked as leak:
+        # Refusing is the whole point. Everything the harness put there is
+        # already dropped, so what is left is the agent having named a tool, and
+        # that is a recording to make again rather than a line to delete.
+        print(f"\nthis recording is not neutral, so it is not being replayed.\n{leak}",
+              file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

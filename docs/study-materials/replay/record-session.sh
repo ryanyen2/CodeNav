@@ -25,7 +25,10 @@ command="${1:-}"
 project="${2:-}"
 arm="${3:-}"
 case "$project" in scribe|tally) ;; *) bad "project must be scribe or tally"; exit 2 ;; esac
-case "$arm" in codoc|baseline) ;; *) bad "condition must be codoc or baseline"; exit 2 ;; esac
+# `neutral` is the workspace the code session is recorded in, with neither tool
+# present. It is a stage rather than a condition, but it goes through the same
+# start / stop / check, because the thing being recorded is the same thing.
+case "$arm" in codoc|baseline|neutral) ;; *) bad "condition must be codoc, baseline or neutral"; exit 2 ;; esac
 
 ws="$WORK/$project-$arm"
 raw="$WORK/raw/$project-$arm"
@@ -50,25 +53,40 @@ request_file="$REPLAY/requests/$project.txt"
 # agent does not start work in a tree that is already dirty for reasons nobody
 # can explain to it, and so the history stays the same twelve commits both
 # conditions have.
-neutral() {
-  local ws="$WORK/$project-neutral"
-  [ -d "$ws" ] && { bad "$ws already exists. Move it aside."; exit 1; }
-  step "Unpacking a neutral $project workspace, with no codoc and no description"
-  mkdir -p "$WORK"
-  tar xzf "$REPO/docs/study-materials/workspaces/$project.tar.gz" -C "$WORK"
-  mv "$WORK/$project" "$ws"
-  ( cd "$ws" && rm -rf .codoc .claude .mcp.json CLAUDE.md \
-      && git add -A >/dev/null 2>&1 \
-      && git commit -q --amend --no-edit >/dev/null 2>&1 )
+strip_tools() {
+  local ws="$1"
+  ( cd "$ws" && rm -rf .codoc .claude .mcp.json CLAUDE.md && git add -A >/dev/null 2>&1 )
+  # Folding the removal into the last commit keeps the history the same length
+  # and keeps its messages saying nothing about either tool. When the last commit
+  # was nothing but the tool files, amending it would leave it empty and git
+  # refuses, so the commit is dropped instead, which is the more neutral outcome
+  # anyway because the history then looks like the tool was never there.
+  #
+  # The failure used to be swallowed. The agent then began in a tree holding
+  # eight staged deletions, ran `git status`, and wrote `.codoc/tree.codoc` and
+  # `.claude/skills/codoc-intent/SKILL.md` into the transcript both conditions
+  # read as their scrollback.
+  if ! ( cd "$ws" && git commit -q --amend --no-edit >/dev/null 2>&1 ); then
+    ( cd "$ws" && git reset -q --hard HEAD^ >/dev/null 2>&1 )
+  fi
+  # The editable install leaves build output behind, and an agent that sees it in
+  # `git status` writes a filter to hide it. Excluding it locally keeps the
+  # recorded session about the agent's own work. `.git/info/exclude` is not a
+  # tracked file, so nothing about it reaches a participant.
+  printf '%s\n' '.venv/' '*.egg-info/' '__pycache__/' '.pytest_cache/' \
+    >> "$ws/.git/info/exclude"
   if [ -n "$( cd "$ws" && git status --porcelain )" ]; then
     bad "the neutral workspace is not clean, so the agent would start in a dirty tree"
     exit 1
   fi
-  build_env "$ws"
-  ok "$ws"
-  echo "$ws"
+  ok "no codoc, no description and no agent configuration in $ws"
 }
 
+# `uv venv` makes an environment with no pip in it, so an older
+# `.venv/bin/python -m pip install` failed silently behind its redirect and left
+# a workspace whose tests could not run. The check below is on the import rather
+# than on the interpreter, because the interpreter existing was exactly what made
+# the failure invisible.
 build_env() {
   local ws="$1"
   ( cd "$ws" && uv venv --quiet .venv >/dev/null 2>&1 )
@@ -95,16 +113,8 @@ start() {
   # unpack had already happened, which left a workspace that looked fine.
   [ "$WORK/$tarball_name" = "$ws" ] || mv "$WORK/$tarball_name" "$ws"
   [ -f "$ws/pyproject.toml" ] || { bad "$ws is not a workspace after unpacking"; exit 1; }
-  # `uv venv` makes an environment with no pip in it, so the old
-  # `.venv/bin/python -m pip install` failed silently behind its redirect and
-  # left a workspace whose tests could not run. The check below is on the import
-  # rather than on the interpreter, because the interpreter existing was exactly
-  # what made the failure invisible.
-  ( cd "$ws" && uv venv --quiet .venv >/dev/null 2>&1 )
-  uv pip install --quiet --python "$ws/.venv/bin/python" -e "$ws" pytest >/dev/null 2>&1
-  if ! ( cd "$ws" && .venv/bin/python -c "import $project" >/dev/null 2>&1 ); then
-    bad "the environment in $ws did not build"; exit 1
-  fi
+  [ "$arm" = neutral ] && strip_tools "$ws"
+  build_env "$ws"
   ok "$ws"
 
   if [ "$arm" = codoc ]; then
@@ -206,5 +216,5 @@ case "$command" in
   start) start ;;
   stop)  stop ;;
   check) check ;;
-  *) echo "usage: $0 {start|stop|check} {scribe|tally} {codoc|baseline}"; exit 2 ;;
+  *) echo "usage: $0 {start|stop|check} {scribe|tally} {neutral|codoc|baseline}"; exit 2 ;;
 esac
