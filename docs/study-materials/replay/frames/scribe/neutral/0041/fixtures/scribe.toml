@@ -1,0 +1,24 @@
+# Settings for the sample documents.
+#
+# A section per rule module — [furniture], [paragraphs], [blocks], [notes],
+# [text] — sets the default for every document in this directory. A
+# [documents."name.txt"] block overrides those for one document only. Anything
+# left out keeps the built-in default, so this file only says what is unusual.
+# Every key there is is listed in scribe/settings.py.
+#
+# A directory-wide section would look like this:
+#
+#     [furniture]
+#     repeat_share = 0.5
+
+# The memo breaks one word across a line: "part-" / "signed". No prefix keeps its
+# hyphen unless a document asks — keep_hyphen starts empty — so out of the box
+# the memo says "partsigned". Keeping every hyphen is the right trade for two
+# pages of prose containing exactly one hyphenated break; it would be the wrong
+# one for the report, which is justified and full of hyphens the typesetter put
+# in. A document with more of them would name the prefixes instead:
+#
+#     [documents."thesis.txt".paragraphs]
+#     keep_hyphen = ["co", "non", "pre", "re", "self", "well"]
+[documents."memo.txt".paragraphs]
+keep_all_hyphens = true

@@ -238,9 +238,19 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
         origin = text_lines[0][0]
         text_lines = [(t - origin, s) for t, s in text_lines]
 
+    # `notes.md` records what the agent was steered into and `transcript.jsonl` is
+    # the session itself. Both are written beside the frames and neither can be
+    # regenerated, so a rebuild keeps them. Rebuilding used to delete them.
+    keep = {}
+    for name in ("notes.md", "transcript.jsonl"):
+        path = frames / name
+        if path.exists():
+            keep[name] = path.read_bytes()
     if frames.exists():
         shutil.rmtree(frames)
     frames.mkdir(parents=True)
+    for name, body in keep.items():
+        (frames / name).write_bytes(body)
     shutil.copytree(raw / "base", frames / "base")
 
     out_frames, previous_at, cursor = [], 0.0, 0
@@ -297,22 +307,56 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
 # the daemon, running live, one Loop A pass per frame. Nothing is authored.
 
 
-def _codoc_quiet_for(workspace: Path, seconds: float) -> bool:
-    """Whether the daemon has finished reacting to the last write."""
+# The daemon debounces filesystem events by 600ms before it starts a pass
+# (`watch.DEBOUNCE_MS`), so for the first moment after a write it has not noticed
+# anything and looks exactly like a daemon that has finished. Waiting for quiet
+# without waiting for it to start first is what made the first derivation record
+# a description that moved once in forty-two frames: every frame was declared
+# settled before the daemon had woken up.
+NOTICE_GRACE_S = 6.0
+
+
+def _codoc_newest(workspace: Path) -> float:
     codoc = workspace / ".codoc"
-    status = codoc / "status.json"
-    try:
-        state = json.loads(status.read_text()).get("state", "")
-    except (OSError, ValueError):
-        return False
-    if state not in {"in_sync", "idle", ""}:
-        return False
     newest = 0.0
+    skip = tuple(str(codoc / d.split("/", 1)[1]) for d in INDEX_DIRS)
     for path in codoc.rglob("*"):
-        if path.is_file() and not any(
-                str(path).startswith(str(codoc / d.split("/", 1)[1])) for d in INDEX_DIRS):
-            newest = max(newest, path.stat().st_mtime)
-    return (time.time() - newest) >= seconds
+        if path.is_file() and not str(path).startswith(skip):
+            try:
+                newest = max(newest, path.stat().st_mtime)
+            except OSError:
+                continue
+    return newest
+
+
+def _codoc_busy(workspace: Path) -> bool:
+    try:
+        state = json.loads((workspace / ".codoc" / "status.json").read_text()).get("state", "")
+    except (OSError, ValueError):
+        return True
+    return state not in {"in_sync", "idle", ""}
+
+
+def _wait_for_daemon(workspace: Path, mark: float, settle: float, timeout: float) -> float:
+    """Wait for the daemon to notice the write, react to it, and go quiet again.
+
+    Returns the seconds waited. A daemon that never reacts is not an error: it
+    decided the change needed nothing, which is a fact about codoc that the study
+    reports rather than papers over.
+    """
+    waited = 0.0
+    noticed = False
+    while waited < timeout:
+        newest, busy = _codoc_newest(workspace), _codoc_busy(workspace)
+        if busy or newest > mark:
+            noticed = True
+        if noticed and not busy and (time.time() - newest) >= settle:
+            return waited
+        if not noticed and waited >= NOTICE_GRACE_S:
+            return waited
+        time.sleep(1.0)
+        waited += 1.0
+    return waited
 
 
 def derive(frames: Path, workspace: Path, out: Path, settle: float,
@@ -342,6 +386,7 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     previous = base
     derived = []
     for frame in manifest["frames"]:
+        mark = _codoc_newest(workspace) if watching else 0.0
         src = frames / f"{frame['n']:04d}"
         if src.exists():
             for path in src.rglob("*"):
@@ -357,9 +402,7 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
         waited = 0.0
         last = frame is manifest["frames"][-1]
         if watching and (last or frame["n"] % settle_every == 0):
-            while waited < timeout and not _codoc_quiet_for(workspace, settle):
-                time.sleep(1.0)
-                waited += 1.0
+            waited = _wait_for_daemon(workspace, mark, settle, timeout)
 
         current = scan(workspace)
         writes = [r for r, h in current.items() if previous.get(r) != h]

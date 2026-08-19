@@ -26,8 +26,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -40,15 +42,40 @@ def python_for(workspace: Path) -> str:
     return str(venv) if venv.exists() else sys.executable
 
 
-def run_probe(workspace: Path, command: list[str], sample: str) -> tuple[str, str]:
-    """Run the project on a sample and return its output and any error."""
-    argv = [python_for(workspace) if part == "python" else part for part in command]
-    argv = [part.replace("{sample}", str(SAMPLES / sample)) for part in argv]
+def run_probe(workspace: Path, command: list[str], sample: str,
+              reads: str = "") -> tuple[str, str]:
+    """Run the project on a sample and return what the probe should look at.
+
+    The sample is copied into a scratch directory first, because some of these
+    programs write their output beside their input and a probe must not leave
+    files in the repository it is checking.
+
+    `reads` names a file the program writes, relative to the copied sample, for a
+    probe about something the program puts in a file rather than on the screen.
+    Without it the probe looks at standard output. A probe that reads a written
+    file usually needs its own command too, because the command that prints to the
+    screen is often the one that writes nothing.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="probe-"))
     try:
-        done = subprocess.run(argv, cwd=workspace, capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return "", f"{type(error).__name__}: {error}"
-    return done.stdout, done.stderr.strip() if done.returncode else ""
+        local = scratch / Path(sample).name
+        shutil.copy2(SAMPLES / sample, local)
+        argv = [python_for(workspace) if part == "python" else part for part in command]
+        argv = [part.replace("{sample}", str(local)) for part in argv]
+        try:
+            done = subprocess.run(argv, cwd=workspace, capture_output=True,
+                                  text=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return "", f"{type(error).__name__}: {error}"
+        error = done.stderr.strip() if done.returncode else ""
+        if not reads:
+            return done.stdout, error
+        wanted = scratch / reads
+        if not wanted.exists():
+            return "", error or f"the program wrote no {reads}"
+        return wanted.read_text(errors="replace"), error
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def read_record(workspace: Path) -> tuple[str, str]:
@@ -117,7 +144,8 @@ def score(workspace: Path, out_dir: Path | None) -> int:
     rows = []
     for claim in spec["claims"]:
         probe = claim["probe"]
-        output, error = run_probe(workspace, spec["sample_command"], probe["sample"])
+        output, error = run_probe(workspace, probe.get("command") or spec["sample_command"],
+                                  probe["sample"], probe.get("reads", ""))
         signal = probe["signal"].encode().decode("unicode_escape")
         present = signal in output
         holds = present if probe["holds_when"] == "present" else not present

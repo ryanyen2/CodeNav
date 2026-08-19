@@ -1,7 +1,14 @@
 {
   "project": "scribe",
   "note": "Each claim is something the description says the program does. The probe decides what the participant's FINAL code actually does, by running the program on a sample and looking for one signal, so the ground truth is measured rather than assumed. A rater then reads the participant's final description and marks the claim true, contradicted, or missing.",
-  "sample_command": ["python", "-m", "scribe.cli", "convert", "{sample}", "-"],
+  "sample_command": [
+    "python",
+    "-m",
+    "scribe.cli",
+    "convert",
+    "{sample}",
+    "-"
+  ],
   "claims": [
     {
       "id": "C1",
@@ -15,21 +22,41 @@
         "present_means": "a line near the top of two pages out of five survives",
         "absent_means": "a line near the top of two pages out of five is removed, so the threshold has been loosened"
       },
-      "find_in_record": ["furniture", "running header", "repeats", "every page", "most pages"]
+      "find_in_record": [
+        "furniture",
+        "running header",
+        "repeats",
+        "every page",
+        "most pages"
+      ]
     },
     {
       "id": "C2",
-      "policy": "notes",
+      "policy": "the report's cross-reference to the notes",
       "planted": "D2",
-      "statement": "A note keeps the number the page gave it, so two pages can each carry a note numbered one.",
+      "statement": "The marker the report prints beside each note is the one to search for in the Markdown, so a reader can find the note the report is talking about.",
       "probe": {
         "sample": "notes.txt",
-        "signal": "[^2]",
+        "reads": "notes.report.md",
+        "signal": "1. `[^1]` A note about the backlog.\n2. `[^1]` A note about the queue.",
         "holds_when": "absent",
-        "present_means": "notes are renumbered across the whole document",
-        "absent_means": "notes keep the number their own page gave them"
+        "present_means": "the report numbers the notes 1 and 2 by position while printing the same marker for both, so the cross-reference it promises does not work",
+        "absent_means": "the report's markers tell the two notes apart",
+        "command": [
+          "python",
+          "-m",
+          "scribe.cli",
+          "convert",
+          "{sample}"
+        ]
       },
-      "find_in_record": ["note", "footnote", "number", "collected", "end"]
+      "find_in_record": [
+        "note",
+        "footnote",
+        "marker",
+        "report",
+        "cross-reference"
+      ]
     },
     {
       "id": "C3",
@@ -43,7 +70,13 @@
         "present_means": "a numbered heading repeating on every page survives, so furniture no longer runs first",
         "absent_means": "a numbered heading repeating on every page is removed, so furniture still runs first"
       },
-      "find_in_record": ["order", "before", "furniture", "heading", "stage"]
+      "find_in_record": [
+        "order",
+        "before",
+        "furniture",
+        "heading",
+        "stage"
+      ]
     },
     {
       "id": "C4",
@@ -56,7 +89,12 @@
         "present_means": "a bare page number survives into the output",
         "absent_means": "a bare page number is removed"
       },
-      "find_in_record": ["page number", "number", "removed", "foot"]
+      "find_in_record": [
+        "page number",
+        "number",
+        "removed",
+        "foot"
+      ]
     },
     {
       "id": "C5",
@@ -70,7 +108,13 @@
         "present_means": "a prefix on the list keeps its hyphen when the word is rejoined",
         "absent_means": "the hyphen is dropped, so the prefix list is empty or is no longer consulted"
       },
-      "find_in_record": ["hyphen", "prefix", "rejoin", "line end", "broken"]
+      "find_in_record": [
+        "hyphen",
+        "prefix",
+        "rejoin",
+        "line end",
+        "broken"
+      ]
     }
   ]
 }

@@ -246,6 +246,24 @@ class DeriveTest(unittest.TestCase):
             self.assertIn("derived_from", after)
 
 
+class RebuildTest(unittest.TestCase):
+    def test_rebuilding_keeps_what_was_written_by_hand(self):
+        # notes.md records what the agent was steered into and the transcript is
+        # the session itself. Neither can be regenerated, and rebuilding the
+        # frames used to delete both.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, frames = tmp / "raw", tmp / "frames"
+            fake_recording(raw, SESSION)
+            record.build(raw, None, frames, seconds=1.0)
+            (frames / "notes.md").write_text("steered into D1\n")
+            (frames / "transcript.jsonl").write_text('{"sessionId":"abc"}\n')
+
+            record.build(raw, None, frames, seconds=1.0)
+            self.assertEqual((frames / "notes.md").read_text(), "steered into D1\n")
+            self.assertIn("abc", (frames / "transcript.jsonl").read_text())
+
+
 class HandoverTest(unittest.TestCase):
     def test_the_handover_is_stamped_and_left_out_of_the_comparison(self):
         with tempfile.TemporaryDirectory() as tmp:

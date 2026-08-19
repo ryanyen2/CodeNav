@@ -1,0 +1,28 @@
+# Settings for the sample documents.
+#
+# A section per rule module sets the default for every document in this
+# directory. A [documents."name.txt"] block overrides those for one document.
+# Anything left out keeps the built-in default, so this file only ever needs to
+# say what is unusual.
+
+[furniture]
+# Two pages out of three is a running header; two out of forty is a coincidence.
+repeat_share = 0.6
+
+[paragraphs]
+# A line at or under this length that ends a sentence ends the paragraph.
+short_line = 60
+
+# The handbook numbers its safety rules, and those rules are written as full
+# sentences: "1. Entering water above the knee, whether or not you are wearing a
+# buoyancy aid". At the default of 12 words a few of them squeeze under the cut
+# and are promoted to headings. Tightening it here is the whole reason this file
+# takes per-document blocks.
+[documents."handbook.txt".blocks]
+max_heading_words = 8
+
+# The memo is two pages of prose with no furniture and no numbering. It is the
+# document that makes "keep the running header" a real alternative, so it is
+# also the one worth having the option on.
+[documents."memo.txt".furniture]
+min_pages = 3
