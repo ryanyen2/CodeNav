@@ -18,6 +18,11 @@ DRIFT_FILENAME = "drift.json"               # loop-computed per-feature drift/tr
 INTENT_FILENAME = "intent.jsonl"            # captured author prompts (UserPromptSubmit hook → Loop A context)
 REALIZED_LOG_FILENAME = "realized.jsonl"    # durable directive outcomes (queue drained → what happened)
 RESOLUTION_FILENAME = "resolution.json"     # loop-computed realize-divergence per target feature (U5)
+REVISIONS_FILENAME = "revisions.json"       # the timeline transport (W8): a bounded newest-first window of
+                                            # applied events carrying the TEXT each one displaced, plus the
+                                            # directives they cite. Derived + rebuildable like the sidecar;
+                                            # its own file because it is the one slice that carries prose,
+                                            # and the sidecar is re-read on every pass by everything.
 CONFIG_FILENAME = "config.json"             # authored workspace settings (doc_language) — TRACKED in git,
                                             # unlike every other file here: the authoring language must
                                             # travel with the repo or a contributor's daemon writes English

@@ -136,6 +136,15 @@ export interface CommandEntry {
         title?: string;
         description?: string;
         parent_id?: string | null;
+        /** `add` only: `false` = an authored PLAN node (the `◇ plan` gesture), which is
+         *  what makes the daemon mint a build directive for it
+         *  (classify.edit_mints_directive: ADD mints iff `realized is False`). Omitted
+         *  means realized — the NodeOp default — so an ordinary add is unchanged.
+         *
+         *  The field's absence is why the plan button was decorative: the flag lived on
+         *  the heading, never crossed this channel, and every authored node reached the
+         *  daemon as an ordinary feature. */
+        realized?: boolean;
         /** Sibling anchors for `move` and `add` — the features the node landed
          *  between. Omitted means no opinion about order (appends). */
         after_id?: string;

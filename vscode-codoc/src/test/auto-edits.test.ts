@@ -135,3 +135,42 @@ describe('keeping the lot at once', () => {
         expect(keepAllVerdicts([])).toEqual([]);
     });
 });
+
+describe('the rewrite surface stands down once the reader has edited the feature', () => {
+    const docWith = async (fid: string, text: string) => {
+        const { codocSchema } = await import('../webview/tiptap/schema');
+        return codocSchema().nodeFromJSON({
+            type: 'doc',
+            content: [
+                { type: 'featureHeading', attrs: { fid, level: 0, retired: false, realized: true },
+                  content: [{ type: 'text', text: 'Sessions' }] },
+                { type: 'paragraph', content: [{ type: 'text', text }] },
+            ],
+        });
+    };
+    const unseen = { 'f-1': edit({ prev: 'the old wording here' }) };
+
+    it('draws the Keep / Restore surface when the rewrite is the latest word', async () => {
+        const { buildAutoEditDecorations } = await import('../webview/tiptap/auto-edit-decorations');
+        const doc = await docWith('f-1', 'the new wording here');
+        expect(buildAutoEditDecorations(doc, unseen).find().length).toBeGreaterThan(0);
+    });
+
+    it('draws nothing once the reader has rewritten that feature themselves', async () => {
+        // Correctness, not decluttering: "Restore mine" re-authors the wording the loop
+        // displaced, and once the author has edited the same feature that wording is two
+        // revisions stale — restoring it would discard their newer text. The verdict
+        // would be on words that are no longer there.
+        const { buildAutoEditDecorations } = await import('../webview/tiptap/auto-edit-decorations');
+        const doc = await docWith('f-1', 'the new wording here');
+        const edited = new Set(['f-1']);
+        expect(buildAutoEditDecorations(doc, unseen, undefined, edited).find()).toEqual([]);
+    });
+
+    it('leaves other features alone', async () => {
+        const { buildAutoEditDecorations } = await import('../webview/tiptap/auto-edit-decorations');
+        const doc = await docWith('f-1', 'the new wording here');
+        const edited = new Set(['f-other']);
+        expect(buildAutoEditDecorations(doc, unseen, undefined, edited).find().length).toBeGreaterThan(0);
+    });
+});

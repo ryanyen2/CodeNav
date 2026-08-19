@@ -462,6 +462,20 @@ state** and is re-emitted on every pass even when the text render is held back
   so a restart never resurrects yesterday's question; `label` (`1a 1b / 2a`) is
   computed by the writer so an LLM cannot emit a broken sequence. It rides the hub
   payload read-only; only a HANDOFF viewer may dismiss it (`serve/dispatch.py`).
+- **`revisions.json`** — the TIMELINE transport (W8, `loop/revisions.py`): a bounded
+  newest-first window (150) of *applied* events, each carrying what it wrote AND what it
+  displaced (`prev_title` / `prev_description` / `prev_parent_id`, recorded at the
+  `apply_op` write boundary), plus a `directives` map joining every `caused_by` to its
+  request — `asked` (the captured author prompt), `session_id`, `base_sha`. Derived and
+  rebuildable like the sidecar, and written from the SAME `recent_events` scan
+  `write_sidecar` already does, so it costs one JSON dump rather than a database read;
+  it self-skips when the window has not moved, so an event-free pass writes nothing.
+  Its own file rather than a sidecar slice because it is the one view that carries
+  PROSE, and the sidecar is re-read on every pass by everything. `REFRESH` is excluded
+  (fingerprint churn a reader cannot see would bury everything that matters).
+  The editor reconstructs past states from it LOCALLY, backwards from the live
+  projection (`state/revision-model.ts`) — a scrubber cannot afford a round trip per
+  frame, and the webview has no request channel to the daemon.
 - **`tree.index.json`** — cross-reference registry (features/bindings/refs) for
   dead-ref flagging + hover; `refs[].resolved` is leaf-tolerant.
 - **`drift.json`** — `{fid: "questioned" | "binding-lost"}`, re-emitted as the
@@ -487,9 +501,13 @@ state** and is re-emitted on every pass even when the text render is held back
   identity-keyed add/set_title/set_description/move/retire Loop B applies), `edits`
   (authorship annotations), `intents`/`drafts` (live doc-ahead suggestions + held pending
   edits — the doc-wins hold set), `handoffs` (the one-shot positive realize signal),
-  `cancellations`/`steers`, and `block_edits` (v6 — typed-media block edits drained by
-  Loop B's `lower` dispatch). Read-modify-write is `filelock`-guarded (the hub is a second
-  writer).
+  `cancellations`/`steers`, `block_edits` (v6 — typed-media block edits drained by
+  Loop B's `lower` dispatch), and `comment_resolves` (W8 — threads the author closed;
+  its own one-shot channel because resolving queues no work, and routing it through
+  `steers` would mint a directive to do nothing). Read-modify-write is `filelock`-guarded
+  (the hub is a second writer). The set of channels is `_LISTS`, and the serializer
+  derives its optional-key loop FROM it — a hand-maintained second list beside it is how
+  a channel gets merged in memory and silently dropped on write.
 - **`edits.host.jsonl`** — the IDE→daemon **append-only op log**, and the only thing the
   extension host writes. It is a separate process that does not hold the `edits.json`
   lock, so a read-modify-write from there could clobber the daemon's or the hub's; instead
@@ -625,6 +643,77 @@ workflow readable in place:
   (suppressed on any feature already carrying a diff, so two highlights never
   overlap). It writes nothing and blocks nothing, which is why an ask is safe
   mid-edit. The header carries the answer + a stepper; dismiss deletes the file.
+- **The timeline — the tree's own past, in place** (W8). The History stance grows a
+  scrubber (`webview/timeline-bar.ts`) over every MOMENT the tree has been in — a run of
+  events by one author, for one cause, within two minutes, because a raw event list is
+  not a timeline (bootstrap alone mints dozens of adds in one second). Dragging back
+  renders `webview/revision-view.ts`: a READ-ONLY reconstruction, deliberately not the
+  live editor with old text in it. The editor is wired to a settle→command pipeline whose
+  job is to notice document changes and report them, so pushing a past revision through
+  it would record the author reverting the whole tree; a separate surface makes that
+  class of accident structurally impossible rather than carefully avoided. It is still
+  in situ — same pane, same measure, the editor's own classes — and `body.history` tints
+  it so it can never be mistaken for today.
+
+  `state/revision-model.ts` does the reconstruction, BACKWARDS from the live projection:
+  `liveSnapshot` reads the doc (depth on the heading → parent links), `snapshotAt` undoes
+  every entry newer than the chosen moment (newest first — two amends to one feature only
+  compose correctly unwound in reverse), and `changesAt` reports the before/after a reader
+  perceives rather than each intermediate step. What it cannot recover it says: an event
+  predating the `prev_*` fields lands in `Snapshot.unresolved`, and the page prints that
+  instead of diffing against invented words. Diffs are DECORATIONS/plain DOM built from
+  `wordDiff`, never engine marks — the same reason `auto-edit-decorations` gives: the text
+  is already applied, and marked prose serializes back to the previous text.
+
+  **Blame is per SPAN** (`state/inline-blame.ts`, W9). The stance used to label a whole
+  feature with its last editor, which answers a question nobody asks: a feature is several
+  paragraphs written by a person, a loop pass and an agent in turn, and the reader is
+  deciding whether to trust ONE claim. `blameDescription` replays the revision window's
+  word diffs oldest-first — each event's `prev_description → description` says which words
+  it introduced, and kept words carry their owner forward — so every surviving span is
+  attributed to the party that wrote it, from data already on the wire. Three refusals keep
+  it honest: a span the ledger cannot account for stays **unattributed** (crediting it to
+  the nearest editor is the exact error the per-node version made, and per word it would
+  multiply); a recorded `prev` that disagrees with the replay **drops** the attribution
+  rather than sliding every later offset by the difference; and where one author owns the
+  whole description **nothing is drawn**, because the heading's label already says so and
+  underlining every word to report it would be the node-level signal again.
+
+  This replaced the per-paragraph blame rail, which was also one of FOUR rails competing
+  for the same `::before` on a description block — so turning the stance on used to erase
+  the "recorded, not sent" and "queued for the agent" cues, and a reader asking who wrote
+  something lost the signals about work they owed.
+
+  **Provenance is one card** (`state/provenance.ts` + `webview/provenance-card.ts`),
+  reached from two ends — a moment on the timeline, or the History stance's per-feature
+  label (which became a BUTTON: a native `title` could show who and when and could never
+  be acted on). It walks the chain the ledger has always held and never displayed
+  together: change → directive → the prompt someone typed → the session → the commit the
+  work started from → **the code diff**, opened through the read-only `codoc-past:` scheme
+  (`providers/past-content.ts`, `git show <sha>:<path>`) against the working tree. Rows
+  with no value are omitted rather than shown empty; a cause whose directive has aged out
+  of the bounded logs says so, because "we know this had a reason and no longer have it"
+  is a different fact from "this had no reason".
+- **Comments as requested work** (W8). The document never moves for one: margin cards hang
+  in the whitespace that already exists and, where it cannot hold a card without covering
+  the prose (`marginFits` — the surface is not the viewport, so the old `max-width: 1100px`
+  media query keyed on the wrong box), the anchor opens the thread as a popover instead.
+  The prose-shifting column it replaces fired on ARRIVAL as well as authoring — somebody
+  else's comment yanked your page sideways mid-read — and three times over when you wrote
+  one; the `transition` meant to soften it named a property nothing ever changed, so all of
+  it landed as an unanimated jump, and at most real widths it was not a slide but a full
+  re-wrap. Cards are now REUSED across a re-layout (keyed by thread id) instead of rebuilt
+  per keystroke, so `top` finally has an element to animate on. Hovering either the
+  commented words or their card lights both — the tie that lets a card pushed down the
+  stack still name its sentence. A thread is durable (store `comments` table →
+  sidecar `comments` slice → `comment-model.storedThreads`, merged local-wins with this
+  host's un-drained ones); it scopes its directive to the `codoc:` citations inside the
+  span it is anchored to (`codeRefsIn` — no picker, because a description already cites
+  its code); it can ask for the prose to follow the code (`scope: both`); and it records
+  the directive it produced, reaching `resolved` when that directive lands so it can then
+  show the code it caused. **Build it** additionally runs `codoc realize` in a terminal
+  (`codoc.realize`) — visible and interruptible, because this is the one action that lets
+  an agent write to the user's source files. Extension only; the hub hides the verb.
 - **Find & replace** (`webview/find.ts` pure logic, `webview/find-view.ts` widget,
   `webview/tiptap/find-decorations.ts`): ⌘F / ⌘⌥F over the tree doc's titles and
   descriptions (`tree.codoc` is a read-only export the daemon overwrites, and a

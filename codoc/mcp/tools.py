@@ -437,6 +437,16 @@ def feature_history(codoc_dir: str, feature_id: str, limit: int = 20) -> dict:
                 entry["title"] = e.op.title
             if e.op.description is not None:
                 entry["description"] = e.op.description
+            # What the change DISPLACED. Both this tool's docstring and the CLI's have
+            # promised these since the field shipped, and neither emitted them — so an
+            # agent asking "what did this feature used to say?" got the current text back
+            # and no way to tell it apart from an answer.
+            if e.op.prev_title is not None:
+                entry["prev_title"] = e.op.prev_title
+            if e.op.prev_description is not None:
+                entry["prev_description"] = e.op.prev_description
+            if e.op.prev_parent_id is not None:
+                entry["prev_parent_id"] = e.op.prev_parent_id
             if e.op.bindings:
                 entry["bindings"] = [s for (_, s) in e.op.bindings]
             entries.append(entry)

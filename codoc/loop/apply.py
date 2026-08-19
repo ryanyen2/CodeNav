@@ -19,7 +19,8 @@ from codoc.doclang import clause_chars
 from codoc.loop.diff import ChangeSet
 from codoc.model.binding import Binding
 from codoc.model.event import (
-    ACTOR_HUMAN, SAFE_OPS, Event, NodeOp, NodeOpKind, default_provenance,
+    ACTOR_HUMAN, ACTOR_LOOP, MODE_AUTO, SAFE_OPS, Event, NodeOp, NodeOpKind,
+    default_provenance,
 )
 from codoc.model.feature import Feature, Lifecycle
 from codoc.store.db import Store
@@ -187,22 +188,20 @@ def apply_op(
     if op.kind is NodeOpKind.ADD_NODE and applied and not op.feature_id:
         from codoc.model.ids import new_feature_id
         op.feature_id = new_feature_id()
-    # Record what an applied AMEND displaces, before _mutate destroys it. This is the
-    # only moment the old wording and its authorship both exist; a safe auto-amend
-    # asks nobody, so without this the author cannot be shown what changed — only that
-    # the paragraph is different from the one they remember. Reading the writer here
-    # also matters: set_feature_writer below reassigns it to whoever is writing now.
-    if (op.kind is NodeOpKind.AMEND and applied and op.description is not None
-            and op.feature_id and op.prev_description is None):
-        prior = store.get_feature(op.feature_id)
-        if prior is not None and (prior.description or "") != op.description:
-            op.prev_description = prior.description or ""
-            op.prev_written_by = store.feature_writer_info(op.feature_id)[1]
+    # Record what an applied op displaces, before _mutate destroys it — this is the only
+    # moment the old value and its authorship both exist. A safe auto-amend asks nobody,
+    # so without this the author cannot be shown what changed, only that the paragraph is
+    # different from the one they remember; and the whole timeline (loop/revisions.py)
+    # reads backwards, so an unrecorded prior value is a hole nothing downstream can fill.
+    # Reading the writer here also matters: set_feature_writer below reassigns it to
+    # whoever is writing now.
+    if applied and op.feature_id:
+        _record_displaced(op, store)
     event = Event(source=source, op=op, applied=applied,
                   actor=actor or d_actor, mode=mode or d_mode, caused_by=caused_by)
     store.append_event(event)
     if applied:
-        _mutate(op, store, fp_lookup or {}, th_lookup or {}, index_keys)
+        _mutate(op, store, fp_lookup or {}, th_lookup or {}, index_keys, event=event)
         if op.feature_id and (op.title is not None or op.description is not None):
             # The event's actor doubles as the writer's ROLE. It is already
             # resolved here (explicit provenance, else derived from source), so
@@ -215,6 +214,83 @@ def apply_op(
             store.set_feature_writer(op.feature_id, writer or source, event.actor)
         store.mark_applied(event.id)  # stamp accepted_at for the audit log
     return event
+
+
+def _log_child_promotion(
+    store: Store, child_id: str, retiree_id: str,
+    new_parent_id: str | None, cause: Event | None,
+) -> None:
+    """Log the MOVE that retiring ``retiree_id`` forced on one of its children.
+
+    Applied directly (the mutation already happened in ``_mutate``) and stamped
+    ``caused_by`` the retire event, so the IDE groups the promotions under the retire
+    that caused them rather than showing a fleet of unexplained moves. Provenance is
+    INHERITED from the retire: whoever retired the parent is the author of its
+    consequences. A missing ``cause`` (a direct ``_mutate`` call in a test) still logs
+    the move — the causal link is the part that degrades, never the record itself.
+    """
+    store.append_event(Event(
+        source=cause.source if cause else "loop",
+        op=NodeOp(kind=NodeOpKind.MOVE_NODE, feature_id=child_id,
+                  parent_id=new_parent_id, prev_parent_id=retiree_id,
+                  rationale="promoted when its parent was retired"),
+        applied=True,
+        actor=cause.actor if cause else ACTOR_LOOP,
+        mode=MODE_AUTO,
+        caused_by=cause.id if cause else "",
+    ))
+
+
+def _record_displaced(op: NodeOp, store: Store) -> None:
+    """Stamp ``op.prev_*`` with the values this applied op is about to destroy.
+
+    ONE rule for every kind: record what the target feature held a moment ago. The
+    timeline reconstructs the past by walking the ledger BACKWARDS from the live tree,
+    so a field it cannot un-apply is a permanent hole — and the honest failure (a
+    revision reported as unreconstructible) still costs the reader the answer they came
+    for. Only the fields an op actually overwrites are captured, so an event stays as
+    small as the change it records:
+
+    * AMEND — title and/or description, whichever the op replaces and actually changes.
+    * RETIRE_NODE — title AND description unconditionally, because a retired feature
+      leaves the live projection entirely: without its text the timeline can show that
+      a node used to be there but not what it said, which is the one thing worth seeing.
+    * MOVE_NODE — the prior parent (``""`` for a root; see ``NodeOp.prev_parent_id``).
+
+    Never overwrites a value the caller already supplied: a re-applied op (an accepted
+    proposal, a crash-replayed command) carries the base it was computed against, and
+    the store's current value is no longer that base.
+    """
+    prior = store.get_feature(op.feature_id or "")
+    if prior is None:
+        return
+    if op.kind is NodeOpKind.AMEND:
+        if op.description is not None and op.prev_description is None \
+                and (prior.description or "") != op.description:
+            op.prev_description = prior.description or ""
+        if op.title is not None and op.prev_title is None and prior.title != op.title:
+            op.prev_title = prior.title
+        # Authorship of the displaced PROSE — weighted by the IDE (the loop revising its
+        # own bootstrap wording is housekeeping; the loop overwriting a person is not).
+        if (op.prev_description is not None or op.prev_title is not None) \
+                and not op.prev_written_by:
+            op.prev_written_by = store.feature_writer_info(op.feature_id or "")[1]
+    elif op.kind is NodeOpKind.RETIRE_NODE:
+        if op.prev_title is None:
+            op.prev_title = prior.title
+        if op.prev_description is None:
+            op.prev_description = prior.description or ""
+        # The retire leaves the parent alone, but the FEATURE leaves the live tree — so
+        # "where did it sit?" is unanswerable from the projection a moment later, and a
+        # timeline could show that a node used to exist without being able to put it back
+        # where it was.
+        if op.prev_parent_id is None:
+            op.prev_parent_id = prior.parent_id or ""
+        if not op.prev_written_by:
+            op.prev_written_by = store.feature_writer_info(op.feature_id or "")[1]
+    elif op.kind is NodeOpKind.MOVE_NODE:
+        if op.prev_parent_id is None:
+            op.prev_parent_id = prior.parent_id or ""
 
 
 def _live_parent_id(store: Store, parent_id: str | None) -> str | None:
@@ -290,7 +366,8 @@ def _bindable(
 
 def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
             th: dict[tuple[str, str], str],
-            index_keys: set[tuple[str, str]] | None = None) -> None:
+            index_keys: set[tuple[str, str]] | None = None,
+            *, event: Event | None = None) -> None:
     k = op.kind
     if k in (NodeOpKind.ATTACH, NodeOpKind.REFRESH):
         for file, symbol in _bindable(op, index_keys):
@@ -398,6 +475,13 @@ def _mutate(op: NodeOp, store: Store, fp: dict[tuple[str, str], str],
                     child.rank = store.rank_for_append(owner.parent_id)
                     child.updated_at = child.updated_at.advance()
                     store.upsert_feature(child)
+                    # This promotion is a real tree mutation and until now it was the one
+                    # the ledger did not record — a feature silently changed parents and
+                    # `codoc history` showed nothing, so a reader who noticed had no way
+                    # to learn why, and a backwards replay lost the subtree wholesale.
+                    # It is logged as what it is: a MOVE caused by this retire.
+                    _log_child_promotion(store, child.id, op.feature_id,
+                                         owner.parent_id, event)
             # Mark retired only. Binding detach is a PATH decision, not a property of
             # the op: an inbox/auto retire detaches (untrack — Loop B does it), while
             # a human `~` retire keeps its bindings so Loop B can build the code-removal

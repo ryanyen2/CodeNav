@@ -88,21 +88,26 @@ describe('buildBlameDecorations', () => {
         expect(buildBlameDecorations(docWith(['f-a']), false, history, NOW).find().length).toBe(0);
     });
 
-    it('decorates a feature-with-history: heading node + label widget + body rail', () => {
+    it('decorates a feature-with-history: heading node + label widget, and NO body rail', () => {
         const set = buildBlameDecorations(docWith(['f-a']), true, history, NOW);
         const all = set.find();
         const classes = all.map(d => attrsOf(d)?.class);
         expect(classes).toContain('ce-blame ce-blame-agent');       // heading node, last amender = agent
-        expect(classes).toContain('ce-blame-rail ce-blame-agent');  // body rail in the same hue
-        // node + widget label + rail = 3 (the widget's class lives on its DOM, not attrs).
-        expect(all.length).toBe(3);
+        // The per-paragraph rail is GONE (W9). It said "somebody edited this feature",
+        // which is not a question anyone asks — and it was one of four rails competing
+        // for the same `::before`, so turning this stance on erased the "recorded" and
+        // "queued" cues. Authorship is drawn per SPAN now, from the revision window;
+        // with no window (as here) the prose stays clean.
+        expect(classes.some(c => c?.includes('ce-blame-rail'))).toBe(false);
+        // node + widget label = 2 (the widget's class lives on its DOM, not attrs).
+        expect(all.length).toBe(2);
     });
 
     it('skips a feature with no recorded history', () => {
         const set = buildBlameDecorations(docWith(['f-a', 'f-b']), true, history, NOW);
-        // only f-a has history → its 3 decorations, none for f-b
+        // only f-a is decorated, and none of it names f-b
         expect(set.find().every(d => !attrsOf(d)?.class?.includes('f-b'))).toBe(true);
-        expect(set.find().length).toBe(3);
+        expect(set.find().length).toBe(2);
     });
 
     it('builds the full who·when·why hover trace (attached to the label widget)', () => {

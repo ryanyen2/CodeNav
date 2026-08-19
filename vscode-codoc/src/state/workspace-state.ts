@@ -27,6 +27,7 @@ import { statusBarView } from './status-presentation';
 import { leaseStatus, realizeQueueSize, REALIZING_LEASE_MS, daemonUnresponsive, HOST_LOG_GRACE_MS } from './status-model';
 import { parseTranslateProgress } from './translate-model';
 import { parseAsk, ASK_TTL_MS, type AskWalkthrough } from './ask-model';
+import type { RevisionsFile } from './revision-model';
 import type { TranslationProgress } from '../webview/protocol';
 
 export { ParsedFeature, SidecarData };
@@ -62,6 +63,10 @@ export class WorkspaceState {
     // is the only one that is purely a VIEW — nothing derives from it, so a corrupt
     // or absent ask.json costs the reader an overlay and nothing else.
     private _ask: AskWalkthrough | null = null;
+    // W8: the timeline window (`.codoc/revisions.json`). Read like every other derived
+    // control file — absent (a pre-W8 workspace, or a tree with no applied events) is a
+    // History stance with nothing to show, never an error.
+    private _revisions: RevisionsFile | null = null;
     private _provisioning = false;
     // One-shot timer that re-derives state when a TTL lease (realizing / agent
     // epoch) expires with no file event to trigger a reload — see
@@ -119,6 +124,8 @@ export class WorkspaceState {
             '**/.codoc/translate.json',  // `codoc translate` progress — per-batch skeleton updates
             '**/.codoc/ask.json',        // the /codoc:ask walkthrough overlay — a pure view,
                                          // written by the MCP tool and deleted to dismiss
+            '**/.codoc/revisions.json',  // W8: the timeline window — derived, rebuildable, and
+                                         // rewritten only when the event window actually moved
             '**/.codoc/edits.host.jsonl', // the IDE's own append log: its lifetime is the
                                           // daemon-liveness signal (status-model.daemonUnresponsive)
         ]) {
@@ -255,6 +262,22 @@ export class WorkspaceState {
             const age = Date.now() - fs.statSync(ap).mtimeMs;
             if (age <= ASK_TTL_MS) this._ask = parseAsk(JSON.parse(fs.readFileSync(ap, 'utf-8')));
         } catch { /* absent, corrupt, or unreadable → no overlay */ }
+
+        // `.codoc/revisions.json` — the timeline window. Not TTL'd, unlike ask.json:
+        // history does not expire, and an old window is exactly what a reader scrubbing
+        // back is looking for.
+        this._revisions = null;
+        try {
+            const parsed = JSON.parse(fs.readFileSync(this._codocPath('revisions.json'), 'utf-8'));
+            if (parsed && Array.isArray(parsed.revisions)) {
+                this._revisions = {
+                    version: Number(parsed.version) || 1,
+                    revisions: parsed.revisions,
+                    directives: parsed.directives ?? {},
+                    truncated: !!parsed.truncated,
+                };
+            }
+        } catch { /* absent or corrupt → no timeline */ }
 
         this._updateStatusBar();
         this._onDidChange.fire();
@@ -400,6 +423,7 @@ export class WorkspaceState {
     /** `codoc translate` progress (lease-guarded), or null when no run is in play. */
     get translation(): TranslationProgress | null { return this._translation; }
     get ask(): AskWalkthrough | null { return this._ask; }
+    get revisions(): RevisionsFile | null { return this._revisions; }
     /** activity.json's last-modified time — the epoch lease's `last_seen`. */
     get activityMtimeMs(): number | undefined { return this._activityMtimeMs; }
     get agentActive(): boolean { return isAgentActive(this._activity, this._activityMtimeMs); }

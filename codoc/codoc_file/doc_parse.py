@@ -30,6 +30,13 @@ from codoc.loop.filenames import DOC_FILENAME
 
 # Mark + node names — mirror pm-doc.ts / agent-proposals.ts (the TS side).
 _MARK_INSERTION = "insertion"
+_MARK_BOLD = "bold"
+
+
+def _bold_readable_back(text: str) -> bool:
+    """Would ``**text**`` be matched by :data:`parse._BOLD_RE` (and survive
+    ``extract_bold``)? The TS twin is ``pm-doc.boldReadableBack``."""
+    return bool(text.strip()) and "*" not in text and "\n" not in text
 
 
 def doc_path(codoc_dir: str | Path) -> Path:
@@ -40,25 +47,52 @@ def _inline_text(content: list | None) -> str:
     """Project inline runs to their plain-text form — the exact contract of
     ``pm-doc.inlineRunsToText``: text verbatim, ``codeRef`` → ``[label](codoc:…)``,
     ``hardBreak`` → newline; an uncommitted ``insertion``-marked run is EXCLUDED
-    (the baseline projection), a ``deletion``-marked run is kept as plain text."""
+    (the baseline projection), a ``deletion``-marked run is kept as plain text.
+
+    A maximal RUN of ``bold``-marked nodes is wrapped in ONE ``**…**``: bold is the
+    author's focus signal, not decoration, and ``extract_bold`` reads it back out of
+    this text. One wrapper per run, not per node — a bolded span covering a citation
+    arrives as text + codeRef + text, and wrapping each would bury ``**`` inside the
+    link target."""
     out: list[str] = []
+    bold_run: list[str] = []
+
+    def flush_bold() -> None:
+        text = "".join(bold_run)
+        bold_run.clear()
+        # An all-insertion bold run projects to nothing; wrapping it would emit ``****``.
+        out.append(f"**{text}**" if _bold_readable_back(text) else text)
+
     for n in content or []:
         if not isinstance(n, dict):
             continue
-        marks = n.get("marks") or []
-        if any(isinstance(m, dict) and m.get("type") == _MARK_INSERTION for m in marks):
+        marks = {m.get("type") for m in (n.get("marks") or []) if isinstance(m, dict)}
+        if _MARK_INSERTION in marks:
             continue  # uncommitted insertion — not part of the baseline
         kind = n.get("type")
         if kind == "text":
-            out.append(n.get("text") or "")
+            text = n.get("text") or ""
         elif kind == "codeRef":
             a = n.get("attrs") or {}
             file = a.get("file") or ""
             symbol = a.get("symbol")
             target = f"{file}#{symbol}" if symbol else file
-            out.append(f"[{a.get('label') or ''}](codoc:{target})")
+            text = f"[{a.get('label') or ''}](codoc:{target})"
         elif kind == "hardBreak":
+            # A hard break can never sit inside ``**…**`` (the regex stops at a
+            # newline), so it closes the run instead of poisoning it into markup the
+            # parser reads back as prose.
+            flush_bold()
             out.append("\n")
+            continue
+        else:
+            continue
+        if _MARK_BOLD in marks:
+            bold_run.append(text)
+            continue
+        flush_bold()
+        out.append(text)
+    flush_bold()
     return "".join(out)
 
 

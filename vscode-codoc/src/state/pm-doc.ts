@@ -32,6 +32,12 @@ export const NODE_CODE_REF = 'codeRef';
 export const NODE_HARD_BREAK = 'hardBreak';
 
 export const MARK_AUTHOR = 'author';
+// StarterKit's bold. NOT decoration: a bolded span is codoc's focus signal — the
+// daemon's `extract_bold` lifts it out of the description into the realize
+// directive's `Focus:` line. It survives the text projection as literal `**…**`
+// (see `inlineRunsToText`); before that it was silently dropped on every save, so
+// the one authoring signal the prompts document was unreachable from the editor.
+export const MARK_BOLD = 'bold';
 // Tracked-change marks (vendored track-changes engine). `insertion` wraps
 // not-yet-committed added text; `deletion` wraps text struck but still present in
 // the baseline. The canonical `tree.codoc` projection is the BASELINE — see
@@ -156,17 +162,47 @@ export function makeDoc(content: PMNode[]): PMNode {
  */
 export const REF_RE_SOURCE = '\\[([^\\]]*)\\]\\(codoc:([^)#]+)(?:#([^)]+))?\\)';
 
+/**
+ * `**bold**` — IDENTICAL to `parse._BOLD_RE` (codoc/codoc_file/parse.py), including
+ * the `[^*\n]+` content class. `extract_bold` is the only reader of the author's
+ * focus signal, so a `**…**` the editor emits that this regex would NOT match is a
+ * pair of asterisks in somebody's prose and nothing else.
+ */
+export const BOLD_RE_SOURCE = '\\*\\*([^*\\n]+)\\*\\*';
+
 /** Serialize one codeRef to its canonical `[label](codoc:file#symbol)` text. */
 export function codeRefToText(attrs: CodeRefAttrs): string {
     const target = attrs.symbol ? `${attrs.file}#${attrs.symbol}` : attrs.file;
     return `[${attrs.label}](codoc:${target})`;
 }
 
+/** The plain text one inline run projects to, before any mark handling. */
+function runText(n: PMNode): string {
+    if (n.type === NODE_TEXT) return n.text ?? '';
+    if (n.type === NODE_CODE_REF && n.attrs) return codeRefToText(n.attrs as unknown as CodeRefAttrs);
+    if (n.type === NODE_HARD_BREAK) return '\n';
+    return '';
+}
+
+/** Would `**s**` be read back as one bold span? Mirrors `BOLD_RE_SOURCE`'s content
+ *  class plus `extract_bold`'s strip-and-drop-empties: at least one non-space char,
+ *  no `*`, no newline. Text that fails this is emitted UNWRAPPED — asterisks the
+ *  daemon reads as prose are worse than a lost mark, because they change the stored
+ *  description while signalling nothing. */
+function boldReadableBack(s: string): boolean {
+    return /\S/.test(s) && !s.includes('*') && !s.includes('\n');
+}
+
 /**
  * Concatenate inline runs into their plain-text projection (what lands in
  * `tree.codoc`): text verbatim, codeRef → markdown link, hardBreak → "\n".
- * Marks (bold/italic/highlight/comment/author) are intentionally DROPPED — they
- * live only in `tree.doc.json`.
+ * Presentation marks (comment/author) are DROPPED — they live only in the store.
+ *
+ * `bold` is the exception, because it is not presentation: it is the author's focus
+ * signal, and the daemon reads it out of the description text with a regex. So a
+ * maximal RUN of bold-marked nodes is wrapped in one `**…**` — one wrapper per run,
+ * not per node, since a span covering a citation arrives as text + codeRef + text and
+ * wrapping each would bury `**` inside the link target.
  *
  * Tracked-change BASELINE projection: a run carrying an `insertion` mark is a
  * not-yet-accepted addition, so it is EXCLUDED (it must not leak into the committed
@@ -177,32 +213,109 @@ export function codeRefToText(attrs: CodeRefAttrs): string {
  */
 export function inlineRunsToText(content: PMNode[] | undefined): string {
     let s = '';
+    let boldRun = '';   // the current maximal run of bold-marked nodes
+    function flushBold(): void {
+        // An all-insertion bold run projects to nothing; wrapping it would emit `****`.
+        s += boldReadableBack(boldRun) ? `**${boldRun}**` : boldRun;
+        boldRun = '';
+    }
     for (const n of content ?? []) {
         if (n.marks?.some(m => m.type === MARK_INSERTION)) continue; // uncommitted insertion — excluded from baseline
-        if (n.type === NODE_TEXT) s += n.text ?? '';
-        else if (n.type === NODE_CODE_REF && n.attrs) s += codeRefToText(n.attrs as unknown as CodeRefAttrs);
-        else if (n.type === NODE_HARD_BREAK) s += '\n';
+        const t = runText(n);
+        // A hard break can never sit inside `**…**` (the regex stops at a newline), so
+        // it closes the run instead of poisoning it into unreadable markup.
+        if (n.type === NODE_HARD_BREAK) { flushBold(); s += t; continue; }
+        if (n.marks?.some(m => m.type === MARK_BOLD)) { boldRun += t; continue; }
+        flushBold();
+        s += t;
     }
+    flushBold();
     return s;
 }
 
+interface RefMatch { start: number; end: number; node: PMNode }
+
 /**
- * Split prose into inline runs at `[label](codoc:…)` boundaries — the inverse of
- * `inlineRunsToText`. Mirrors `doc-layout.weaveParagraph` but keeps the RAW label
- * (so an empty `[]` round-trips) and emits codeRef *nodes*. Empty text slices are
- * never emitted (ProseMirror forbids empty text nodes).
+ * The `**…**` spans a paragraph projects as a bold mark, as FULL match ranges
+ * (markers included), in document order. The skipped cases below are each a match
+ * that would NOT survive the trip back through `inlineRunsToText` — leaving them as
+ * prose keeps the text on disk byte-identical instead of drifting one asterisk at a
+ * time. Mirrored in `doc_render._bold_matches`.
+ */
+function boldMatches(text: string, refs: RefMatch[]): Array<{ start: number; end: number }> {
+    const out: Array<{ start: number; end: number }> = [];
+    const re = new RegExp(BOLD_RE_SOURCE, 'g');
+    let prevEnd = -1;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+        const start = m.index;
+        const end = start + m[0].length;
+        // `**  **` carries no focus at all — `extract_bold` strips it to nothing.
+        if (!/\S/.test(m[1])) continue;
+        // A `**` INSIDE a citation is part of its label (`[**x**](codoc:a.py)`), not
+        // markup: eating those asterisks would rewrite the link text. Bold that
+        // CONTAINS a whole citation is the normal case and stays.
+        const insideRef = (i: number): boolean => refs.some(r => i > r.start && i < r.end);
+        if (insideRef(start) || insideRef(end - 2)) continue;
+        // Two matches that touch (`**a****b**`) would project as adjacent bold runs,
+        // and the serializer emits ONE wrapper per run — so they would come back as
+        // `**ab**`: a phantom AMEND against text nobody edited. Leave the second prose.
+        if (start === prevEnd) continue;
+        out.push({ start, end });
+        prevEnd = end;
+    }
+    return out;
+}
+
+/**
+ * Split prose into inline runs at `[label](codoc:…)` and `**bold**` boundaries — the
+ * inverse of `inlineRunsToText`. Keeps the RAW label (so an empty `[]` round-trips)
+ * and emits codeRef *nodes*; the `**` markers are consumed into a `bold` mark so the
+ * author sees emphasis rather than asterisks. Empty text slices are never emitted
+ * (ProseMirror forbids empty text nodes).
  */
 export function textToInlineRuns(text: string): PMNode[] {
-    const runs: PMNode[] = [];
+    const refs: RefMatch[] = [];
     const re = new RegExp(REF_RE_SOURCE, 'g');
-    let last = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-        if (m.index > last) runs.push(textNode(text.slice(last, m.index)));
-        runs.push(codeRefNode({ label: m[1], file: m[2], symbol: m[3] ?? null }));
-        last = m.index + m[0].length;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+        refs.push({
+            start: m.index,
+            end: m.index + m[0].length,
+            node: codeRefNode({ label: m[1], file: m[2], symbol: m[3] ?? null }),
+        });
     }
-    if (last < text.length) runs.push(textNode(text.slice(last)));
+    const refAt = new Map(refs.map(r => [r.start, r]));
+    // Per-character classification rather than a cut list: the two structures can nest
+    // (bold around a citation) and reasoning about their boundaries pairwise is how an
+    // off-by-two lands a `**` inside a link target.
+    const marker = new Array<boolean>(text.length).fill(false);
+    const bold = new Array<boolean>(text.length).fill(false);
+    for (const b of boldMatches(text, refs)) {
+        for (let i = b.start; i < b.end; i++) bold[i] = true;
+        marker[b.start] = marker[b.start + 1] = marker[b.end - 2] = marker[b.end - 1] = true;
+    }
+    const boldMark = (): PMMark[] => [{ type: MARK_BOLD }];
+    const runs: PMNode[] = [];
+    let buf = '';
+    let bufStart = 0;
+    function flush(): void {
+        if (buf) runs.push(textNode(buf, bold[bufStart] ? boldMark() : undefined));
+        buf = '';
+    }
+    for (let i = 0; i < text.length;) {
+        const ref = refAt.get(i);
+        if (ref) {
+            flush();
+            runs.push(bold[i] ? { ...ref.node, marks: boldMark() } : ref.node);
+            i = ref.end;
+            continue;
+        }
+        if (marker[i]) { flush(); i++; continue; }
+        if (buf && bold[bufStart] !== bold[i]) flush();
+        if (!buf) bufStart = i;
+        buf += text[i];
+        i++;
+    }
+    flush();
     return runs;
 }
 
@@ -244,8 +357,8 @@ export function normalizeDescription(text: string): string {
  * Paragraph blocks → description string (inverse of `descriptionToBlocks`).
  * Empty paragraphs are dropped; the rest join with a blank line, then the result is
  * canonicalized (`normalizeDescription`) so the host's serialized text matches the
- * daemon's parser. Marks (bold, author, …) are projected away — only text + codeRef
- * markdown survive, matching what `tree.codoc` can carry.
+ * daemon's parser. Presentation marks (author, comment) are projected away; `bold`
+ * is written back as `**…**` because `tree.codoc` carries it — see `inlineRunsToText`.
  */
 export function blocksToDescriptionText(blocks: PMNode[]): string {
     return normalizeDescription(blocks

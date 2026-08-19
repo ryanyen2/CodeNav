@@ -54,6 +54,7 @@ from codoc.loop.locks import loop_lock
 from codoc.loop.merge3 import merge3
 from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import NodeOp, NodeOpKind, default_provenance, outranks
+from codoc.model.hlc import HLC
 from codoc.model.ids import new_directive_id
 from codoc.store.db import Store, open_store
 
@@ -248,9 +249,18 @@ def _command_to_op(cmd: "edits_channel.Command") -> NodeOp | None:
     if cmd.kind == "add":
         # after_id/before_id: same contract as move below — a node typed between
         # two siblings must land there, not at the end of its parent.
+        #
+        # ``realized`` is the authored PLAN flag (the `◇ plan` gesture) and is the ONLY
+        # thing that makes an ADD mint a build directive (classify.edit_mints_directive).
+        # Read strictly: only a literal ``False`` plans, so a payload without the key —
+        # every ordinary add, and every command written before the field existed — keeps
+        # the None default that means "realized". The webview used to set the flag on the
+        # heading and drop it here, so the plan button minted ordinary features and its
+        # tooltip's promise ("the agent implements it") was never kept.
         return NodeOp(kind=NodeOpKind.ADD_NODE, title=p.get("title") or "",
                       description=p.get("description") or "",
                       parent_id=p.get("parent_id"), local_id=cmd.local_id,
+                      realized=False if p.get("realized") is False else None,
                       after_id=str(p.get("after_id") or ""),
                       before_id=str(p.get("before_id") or ""))
     if cmd.kind == "set_title":
@@ -488,23 +498,206 @@ def build_directive(
     return ""
 
 
-def build_steer_directive(feature_id: str, comment: str, store: Store) -> str:
-    """An inline ``> …`` comment is an explicit note to the agent — imperative by
-    construction (the author addressed the agent, not the prose). It steers the
-    feature's code without rewriting its description: useful mid-generation,
-    when editing the description directly is the wrong tool."""
+def build_steer_directive(
+    feature_id: str, comment: str, store: Store,
+    *, code_refs: list[str] | None = None, anchor_text: str = "", scope: str = "code",
+) -> str:
+    """An inline comment is an explicit note to the agent — imperative by construction
+    (the author addressed the agent, not the prose).
+
+    Three things narrow it from "a note about this feature" to "this change, here":
+
+    * ``code_refs`` — ``file::symbol`` targets the author named (or that the commented
+      sentence cites). They REPLACE the feature's whole binding set as the ``Edit only:``
+      scope. Without them, "fix the retry in the uploader" licenses edits across every
+      file the feature touches, which is how a one-line note turns into a subsystem
+      rewrite. A comment that names nothing keeps the old, broad scope — that is what it
+      asked for.
+    * ``anchor_text`` — the sentence the note is attached to. A note reads as a reply
+      ("this should back off exponentially"); without the words it replies TO, the agent
+      has to guess which claim is being corrected.
+    * ``scope`` — ``"both"`` additionally asks for the description to be brought in line.
+      Default ``"code"`` keeps the historic behaviour: a steer changes code and leaves
+      the author's prose alone.
+    """
     f = store.get_feature(feature_id)
     if f is None:
         return ""
     loc, files = _bound_code(feature_id, store)
-    loc = loc or "(no bound code yet)"
-    scope = ", ".join(files) if files else "(none yet — create where it fits)"
+    named = _named_code(code_refs or [])
+    if named:
+        loc = ", ".join(named["symbols"]) or loc or "(no bound code yet)"
+        edit_scope = ", ".join(named["files"])
+    else:
+        loc = loc or "(no bound code yet)"
+        edit_scope = ", ".join(files) if files else "(none yet — create where it fits)"
     note = comment.replace("\n", "\n    ")
-    return (f'STEER FEATURE: "{f.title}"\n  Author note: {note}\n'
-            f'  Bound code: {loc}\n  Edit only: {scope}\n'
-            f'  Apply the note to this feature\'s code; where it conflicts with the '
-            f'description, the note wins.'
-            + _signal_lines(comment))
+    lines = [f'STEER FEATURE: "{f.title}"']
+    if anchor_text.strip():
+        lines.append(f'  About this line: "{anchor_text.strip()}"')
+    lines.append(f'  Author note: {note}')
+    lines.append(f'  Bound code: {loc}')
+    lines.append(f'  Edit only: {edit_scope}')
+    lines.append("  Apply the note to this feature's code; where it conflicts with the "
+                 "description, the note wins.")
+    if scope == "both":
+        lines.append("  Then update this feature's description to match what the code now "
+                     "does, and reflect it with codoc_reflect (an AMEND op) citing this "
+                     "directive — the author asked for the prose to follow.")
+    return "\n".join(lines) + _signal_lines(comment)
+
+
+def _named_code(code_refs: list[str]) -> dict | None:
+    """Split ``file::symbol`` / bare-``file`` targets into symbols + files, or ``None``.
+
+    ``None`` (rather than empty lists) when the author named nothing, so the caller can
+    tell "scope this to what I pointed at" from "scope this to the whole feature" — the
+    difference between a precise edit and a licensed rewrite."""
+    files: list[str] = []
+    symbols: list[str] = []
+    for ref in code_refs:
+        ref = (ref or "").strip()
+        if not ref:
+            continue
+        file = ref.split("::", 1)[0].split("#", 1)[0]
+        if file and file not in files:
+            files.append(file)
+        if "::" in ref or "#" in ref:
+            symbols.append(ref.replace("#", "::"))
+    if not files:
+        return None
+    return {"files": files, "symbols": symbols}
+
+
+def _persist_comment(store: Store, steer) -> None:
+    """Store the comment thread behind a drained steer (W8).
+
+    Best-effort: a thread that fails to persist costs the author their record of the
+    request, which is bad — but failing the pass would cost them the REQUEST, which is
+    worse, and the directive is already built by the time this runs.
+
+    ``status`` is SENT rather than OPEN because the steer reaching here IS the hand-off:
+    the note is in the queue the agent reads. The optimistic 'sent' the webview stamps at
+    create time becomes true exactly here.
+    """
+    from codoc.model.annotation import CommentScope, CommentStatus, CommentThread
+
+    def prior_prose(st: Store, fid: str) -> str:
+        f = st.get_feature(fid)
+        return (f.description or "") if f else ""
+
+    try:
+        prior = next((c for c in store.comments_for_feature(steer.feature_id)
+                      if c.id == steer.comment_id), None)
+        scope = CommentScope(steer.scope) if steer.scope in {"code", "both"} else CommentScope.CODE
+        # Locate the anchor by its WORDS. The webview knows the span as a ProseMirror
+        # range, which means nothing here, and shipping char offsets from there would
+        # have to survive the markdown-vs-display-space difference to be right. The
+        # quoted text is the durable locator: found, it gives real offsets; not found
+        # (the prose moved on), the thread falls back to the feature and says so by
+        # carrying no span, rather than silently anchoring at character zero.
+        prose = prior_prose(store, steer.feature_id)
+        at = prose.find(steer.anchor_text) if steer.anchor_text else -1
+        thread = CommentThread(
+            id=steer.comment_id,
+            feature_id=steer.feature_id,
+            body=steer.body or steer.text,
+            status=CommentStatus.SENT,
+            anchor_text=steer.anchor_text,
+            anchor_start=at if at >= 0 else 0,
+            anchor_end=(at + len(steer.anchor_text)) if at >= 0 else 0,
+            code_refs=list(steer.code_refs or []),
+            scope=scope,
+            media_ref=steer.media,
+            # An edit to an existing note keeps its birthday: the thread is the same
+            # conversation, and re-dating it would reorder the margin under the reader.
+            created_at=prior.created_at if prior else HLC.now(),
+        )
+        store.upsert_comment(thread)
+    except Exception:  # noqa: BLE001 — advisory record; never fail a realize queue
+        pass
+
+
+def _resolve_comment(store: Store, comment_id: str) -> None:
+    """Mark a thread resolved, keeping everything else it recorded.
+
+    Deliberately not a delete. A resolved comment is the durable answer to "why does this
+    code look like this" — the note, the code it named, and the directive it produced —
+    and deleting it on close would throw that away at the exact moment it became history.
+    """
+    from codoc.model.annotation import CommentStatus
+
+    try:
+        for c in store.all_comments():
+            if c.id == comment_id:
+                c.status = CommentStatus.RESOLVED
+                c.updated_at = HLC.now()
+                store.upsert_comment(c)
+                return
+    except Exception:  # noqa: BLE001 — advisory record; never fail a pass
+        pass
+
+
+# The realized-outcome log is capped at 200; scanning all of it costs one bounded read.
+_REALIZED_SCAN = 200
+
+
+def _close_landed_comments(store: Store, codoc_dir: str | Path) -> None:
+    """Resolve every SENT thread whose directive appears in ``realized.jsonl``.
+
+    Idempotent and cheap: one bounded log read, and threads already resolved are skipped.
+    """
+    from codoc.model.annotation import CommentStatus
+
+    try:
+        # Read the whole retained tail, not the default 50: between two Loop B passes an
+        # active session can close more directives than that, and a thread whose
+        # completion scrolled past would have stayed "sent" for good.
+        done = {str(e.get("id") or "")
+                for e in edits_channel.read_realized(codoc_dir, limit=_REALIZED_SCAN)}
+        if not done:
+            return
+        for c in store.all_comments():
+            if c.status is CommentStatus.SENT and c.directive_id and c.directive_id in done:
+                c.status = CommentStatus.RESOLVED
+                c.updated_at = HLC.now()
+                store.upsert_comment(c)
+    except Exception:  # noqa: BLE001 — advisory record; never fail a pass
+        pass
+
+
+def _stamp_comment_directives(store: Store, comment_ids: list[str],
+                              directives: list) -> None:
+    """Record on each thread the directive its steer produced (W8).
+
+    This is the join that closes the loop: thread → directive → the events it caused →
+    the commit it started from. Without it a comment can say "sent" and never "landed",
+    which is the state the surface has been stuck in since it shipped.
+
+    Matched by IDENTITY, not position: a steer directive is minted with
+    ``caused_by = <comment id>``, so the pairing is already recorded and does not have to
+    be re-derived from list order. It briefly was, and that was wrong — ``steered`` takes
+    every drained steer while only the ones with a thread id are tracked here, so one
+    comment-less steer (the CLI path) shifted the alignment and stamped a thread with
+    somebody else's directive. There is nothing to keep in sync now.
+    """
+    if not comment_ids:
+        return
+    try:
+        wanted = set(comment_ids)
+        by_cause = {d.caused_by: d for d in directives
+                    if d.kind == "steer" and d.caused_by in wanted}
+        if not by_cause:
+            return
+        for thread in store.all_comments():
+            directive = by_cause.get(thread.id)
+            if directive is None or thread.directive_id:
+                continue
+            thread.directive_id = directive.id
+            thread.updated_at = HLC.now()
+            store.upsert_comment(thread)
+    except Exception:  # noqa: BLE001 — advisory record; never fail a realize queue
+        pass
 
 
 def build_block_directive(feature_id: str, kind: str, intent_text: str, store: Store) -> str:
@@ -1376,9 +1569,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     #     no-realize pass leaves them queued by NOT draining (consuming without
     #     queueing would lose the note): a steer is a pure realize request, so it is
     #     deferred whenever realization is suppressed (dry_run OR not realize).
+    steered_threads: list[str] = []   # comment ids whose steer produced a directive
     if not dry_run and realize:
         for s in edits_channel.drain_steers(codoc_dir):
-            d = build_steer_directive(s.feature_id, s.text, store)
+            d = build_steer_directive(s.feature_id, s.text, store, code_refs=s.code_refs,
+                                      anchor_text=s.anchor_text, scope=s.scope)
             # A transient consult attachment (U6) — a bug screenshot — rides the
             # steer and is folded into its directive as a `Consult:` line, then
             # discarded (the steer is already drained-once). Never a stored block.
@@ -1386,7 +1581,20 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
                 d += _media_consult_line(s.media_kind or "screenshot", s.media, s.feature_id)
             if d:
                 steered.append((d, s.feature_id, s.comment_id or amend_cause.get(s.feature_id, "")))
+                # W8: the steer drains, the THREAD persists. This is where a comment
+                # stops being a note in extension-host memory (gone when the tab closes,
+                # leaving an anchor underline with nothing behind it) and becomes a
+                # durable record that can report what became of the work it asked for.
+                if s.comment_id:
+                    _persist_comment(store, s)
+                    steered_threads.append(s.comment_id)
     res.steered = len(steered)
+
+    # 2.85 Comment closures. Resolving is not a steer — it queues no work — so it rides
+    #      its own one-shot channel and only touches the thread's status.
+    if not dry_run:
+        for cid in edits_channel.drain_comment_resolves(codoc_dir):
+            _resolve_comment(store, cid)
 
     # 2.9 Typed-media block edits (U3) — the block→code (`lower`) direction. The host
     #     hands an edit to a diagram/latex/… block through edits.json (stable block
@@ -1443,8 +1651,14 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # pass would diff the stale text and read it as a human edit reverting the
     # change. User edits are absorbed above (commands → apply_op), so regenerating
     # from the store loses nothing.
-    if (res.accepted or res.user_edits or res.commands or block_store_changed
-            or (res.steered and not dry_run)):
+    # ``conflicted`` counts a DEFERRED command: the store text did not move, but a new
+    # pending proposal carrying the author's own words did land, and the sidecar is the
+    # only way it reaches the editor. Without it in the gate, a pass whose sole outcome
+    # was a deferral re-rendered nothing — so the author's text sat in the store with no
+    # surface saying it existed, and the "waiting for review" it is waiting for could
+    # not be offered until some unrelated pass happened to re-render.
+    if (res.accepted or res.user_edits or res.commands or res.conflicted
+            or block_store_changed or (res.steered and not dry_run)):
         write_tree(store, codoc_dir)
         # KTD9: the daemon is the sole writer of tree.doc.json — re-render the store
         # projection so the webview's file-watch re-read repaints from the source of
@@ -1455,10 +1669,18 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # W6: the author's captured prompt(s) this session — attached to each queued
     # directive so the realizing agent implements the stated goal, not a guess.
     try:
-        from codoc.loop.intent import recent_intent
+        from codoc.loop.intent import freshest_intent, recent_intent
         author_intent = recent_intent(codoc_dir)
+        # W8: the same fact, kept STRUCTURALLY on each directive. `text` quotes the
+        # prompt for the agent to read; these two let a reader walk the other way —
+        # from a sentence the agent wrote back to the conversation that asked for it —
+        # without parsing a prompt template that is free to change.
+        asked_entry = freshest_intent(codoc_dir)
     except Exception:  # noqa: BLE001 — advisory context only
         author_intent = []
+        asked_entry = {}
+    asked_text = str(asked_entry.get("prompt") or "")
+    asked_session = str(asked_entry.get("session_id") or "")
     rendered = [
         (build_directive(op, store, emphasis=diff.emphasis.get(fid),
                          author_intent=author_intent, baseline=baselines.get(fid)),
@@ -1513,6 +1735,18 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # close the queue on evidence of the work rather than on someone deleting
     # realize.md.
     prune_satisfied_directives(store, root_dir, codoc_dir)
+    # A thread whose directive LANDED resolves itself — the half of the comment lifecycle
+    # that never existed: a note went out and nothing ever came back, so "sent" was the
+    # last thing a thread could say no matter what the agent did with it.
+    #
+    # Immediately after the prune, and that placement is the point: the prune is what
+    # writes the completion evidence this reads, and running earlier in the pass (where
+    # the rest of the comment handling lives) left every thread reporting "sent" for one
+    # full pass after its work was already done. Re-derived from realized.jsonl rather
+    # than pushed from the close paths, because there are two of those (cited evidence,
+    # and the queue file vanishing) and a re-derived state cannot be missed by one.
+    if not dry_run:
+        _close_landed_comments(store, codoc_dir)
     existing = edits_channel.read_manifest(codoc_dir)
     if not existing and not res.directives:
         status.refresh_status(codoc_dir, store)
@@ -1529,7 +1763,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
         all_directives = existing + [
             edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause,
                                     text=text, baseline=baselines.get(fid, ""), handed_off=False,
-                                    ts=minted_ts)
+                                    ts=minted_ts, asked=asked_text, session_id=asked_session)
             for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
         ]
         edits_channel.write_manifest(codoc_dir, all_directives)
@@ -1549,7 +1783,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     minted_ts = int(time.time() * 1000)
     all_directives = existing + [
         edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text,
-                                baseline=baselines.get(fid, ""), handed_off=False, ts=minted_ts)
+                                baseline=baselines.get(fid, ""), handed_off=False, ts=minted_ts,
+                                asked=asked_text, session_id=asked_session)
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ]
     for d in all_directives:
@@ -1579,6 +1814,18 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # `triggered` flag so read_manifest can distinguish finished from never-triggered —
     # is the complete fix; see docs/residual-review-findings.)
     handed = [d for d in all_directives if d.handed_off and d.text]
+    # Anchor the "before" side of the code diff, once, at the moment a directive first
+    # crosses into the queue. Read lazily (one `git rev-parse` only when something is
+    # actually being handed off) and stamped only on directives that don't have one, so
+    # a queue that is appended to across several passes keeps each item's own baseline —
+    # the commit ITS work started from, not the commit the newest item started from.
+    unanchored = [d for d in handed if not d.base_sha]
+    if unanchored:
+        from codoc.loop.gitref import head_sha
+        sha = head_sha(root_dir)
+        if sha:
+            for d in unanchored:
+                d.base_sha = sha
     if handed:
         _write_realize(codoc_dir, build_realize_prompt(
             [d.text for d in handed], root_dir, [d.id for d in handed],
@@ -1594,6 +1841,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             pass
     # Manifest (its no-realize.md-but-drafts state is the source of truth for drafts).
     edits_channel.write_manifest(codoc_dir, all_directives)
+    # W8: tell each comment which directive its note became, now that the ids exist.
+    # After the manifest write, so a crash between the two leaves a thread that says
+    # "sent" without a directive — recoverable and honest — rather than one that cites
+    # a directive no manifest records.
+    _stamp_comment_directives(store, steered_threads, all_directives)
     if handed:
         status.refresh_status(
             codoc_dir, store, awaiting_impl=True, pending=len(handed),

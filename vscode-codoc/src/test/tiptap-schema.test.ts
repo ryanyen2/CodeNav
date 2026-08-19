@@ -70,13 +70,14 @@ describe('U1: schema accepts the pm-doc vocabulary', () => {
         expect(authorMark.attrs).toMatchObject({ role: 'claude-code', mode: 'pencil', ts: 42 });
     });
 
-    it('accepts paragraphs as description blocks and bold/italic marks', () => {
+    it('accepts paragraphs as description blocks and the bold mark', () => {
         const doc = makeDoc([
             featureHeadingNode({ fid: 'f-cccc0003', level: 0, retired: false, realized: true }, textToInlineRuns('T')),
-            paragraphNode([textNode('bold', [{ type: 'bold' }]), textNode(' & '), textNode('italic', [{ type: 'italic' }])]),
+            paragraphNode([textNode('bold', [{ type: 'bold' }]), textNode(' plain')]),
         ]);
         const out = validate(doc);
         expect(out.content!.map(n => n.type)).toEqual(['featureHeading', 'paragraph']);
+        expect(out.content![1].content![0].marks).toEqual([{ type: 'bold' }]);
     });
 
     it('a schema-validated doc still serializes to tree.codoc', () => {
@@ -95,13 +96,19 @@ describe('U1: schema shape', () => {
         expect(schema.nodes.codeRef).toBeDefined();
         expect(schema.nodes.paragraph).toBeDefined();
         expect(schema.marks.author).toBeDefined();
-        expect(schema.marks.highlight).toBeDefined();
         expect(schema.marks.comment).toBeDefined();
         expect(schema.marks.bold).toBeDefined();
-        expect(schema.marks.italic).toBeDefined();
         // disabled in StarterKit.configure
         expect(schema.nodes.heading).toBeUndefined();
         expect(schema.nodes.bulletList).toBeUndefined();
         expect(schema.nodes.codeBlock).toBeUndefined();
+    });
+
+    it('has NO italic or highlight mark — a mark tree.codoc cannot carry is a lie', () => {
+        // Both were toolbar buttons whose marks the serializer discarded: the author saw
+        // the styling, saved, and the next daemon projection wiped it. Removing the mark
+        // from the schema is what makes the control impossible to re-add by accident.
+        expect(schema.marks.italic).toBeUndefined();
+        expect(schema.marks.highlight).toBeUndefined();
     });
 });

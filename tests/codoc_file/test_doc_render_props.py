@@ -27,7 +27,11 @@ from codoc.codoc_file.parse import normalize_description
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
 
-_WORDS = ["auth", "theme", "sync loop", "parses the AST", "renders output", "stores rows"]
+# `**…**` is in the pool because bold is not decoration: it projects to a `bold` mark
+# and has to serialize back to the same asterisks, or every projection of a description
+# carrying a focus span reads as an edit nobody made.
+_WORDS = ["auth", "theme", "sync loop", "parses the AST", "renders output", "stores rows",
+          "**get this exactly right**"]
 
 
 def _random_tree(store, rng: random.Random) -> list[Feature]:

@@ -64,8 +64,13 @@ function markedRuns(
             run.t === 'del' ? [mark(MARK_DELETION, a)] :
             run.t === 'ins' ? [mark(MARK_INSERTION, a)] : undefined;
         for (const n of textToInlineRuns(run.s)) {
-            if (n.type === NODE_TEXT) { if (n.text) out.push(textNode(n.text, marks)); }
-            else if (n.type === NODE_CODE_REF && n.attrs) out.push(codeRefNode(n.attrs as unknown as CodeRefAttrs, marks));
+            // Keep the run's OWN marks (bold) under the tracked-change one. Bold is
+            // `**…**` in the text, so dropping it here would make the baseline
+            // projection of this marked doc differ from the pre-proposal tree.codoc —
+            // the exact leak this module exists to avoid.
+            const all = [...(n.marks ?? []), ...(marks ?? [])];
+            if (n.type === NODE_TEXT) { if (n.text) out.push(textNode(n.text, all)); }
+            else if (n.type === NODE_CODE_REF && n.attrs) out.push(codeRefNode(n.attrs as unknown as CodeRefAttrs, all));
         }
     }
     return out;
@@ -106,10 +111,16 @@ export function applyAgentProposals(doc: PMNode, amends: AgentAmend[]): PMNode {
     });
 }
 
-/** Pull the code-ahead AMENDs out of the unified suggestion list, flattened to
+/** Pull the reviewable AMENDs out of the unified suggestion list, flattened to
  *  `AgentAmend`. (add/move/retire can't be in-prose tracked changes — they keep
  *  their compact widgets.) The signature feeds both the host's doc materialization
- *  and the editor's reload trigger so a resolved amend's marks clear on re-render. */
+ *  and the editor's reload trigger so a resolved amend's marks clear on re-render.
+ *
+ *  `yours` (the author's own deferred edit) is included: the verdict strip is drawn
+ *  from the suggestion list but the DIFF is drawn from these marks, so excluding it
+ *  would leave a bare Accept/Reject pair sitting on prose that looks unchanged. It
+ *  materializes under `originRole: 'human'`, so it inks in the author's own hand
+ *  rather than an agent's — which is the whole point of separating the direction. */
 export function agentAmendsFrom(
     suggestions: { direction: string; kind: string; featureId: string | null; id: string;
                    eventId?: string; originRole: string;
@@ -117,7 +128,7 @@ export function agentAmendsFrom(
 ): AgentAmend[] {
     const out: AgentAmend[] = [];
     for (const s of suggestions) {
-        if (s.direction !== 'code-ahead' || s.kind !== 'amend' || !s.featureId) continue;
+        if (s.direction === 'doc-ahead' || s.kind !== 'amend' || !s.featureId) continue;
         out.push({
             featureId: s.featureId,
             changeId: s.eventId ?? s.id,

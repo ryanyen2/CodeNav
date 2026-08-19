@@ -264,13 +264,137 @@ describe('U7: blank-line normalization (no reflow / phantom paragraphs)', () => 
 });
 
 describe('U2: inline text projection helpers', () => {
-    it('inlineRunsToText drops marks but keeps codeRef markdown', () => {
+    it('inlineRunsToText drops presentation marks but keeps codeRef markdown', () => {
         const runs: PMNode[] = [
-            textNode('bold ', [{ type: 'strong' }]),
+            textNode('noted ', [{ type: 'comment', attrs: { threadId: 't1' } }]),
             codeRefNode({ label: 'x', file: 'a.py', symbol: 'fn' }),
             textNode(' end'),
         ];
-        expect(inlineRunsToText(runs)).toBe('bold [x](codoc:a.py#fn) end');
+        expect(inlineRunsToText(runs)).toBe('noted [x](codoc:a.py#fn) end');
+    });
+});
+
+// The bold mark is the ONE inline mark that is not presentation: `**…**` in the
+// description is what `parse.extract_bold` lifts into a realize directive's `Focus:`
+// line. Before this, the B button produced a mark `inlineRunsToText` silently threw
+// away — the author saw bold, saved, and the next projection wiped it, and the signal
+// the prompts document could not be produced from the only human surface at all.
+//
+// The load-bearing property is TEXT → doc → TEXT identity: the daemon projects the
+// stored description into the doc, the webview serializes it back to compare against
+// what it adopted, and any drift there is a phantom AMEND on every projection.
+describe('bold: `**…**` ↔ the bold mark', () => {
+    const bold = (t: string): PMNode => textNode(t, [{ type: 'bold' }]);
+
+    it('serializes a bold run as **text**', () => {
+        expect(inlineRunsToText([textNode('a '), bold('focus'), textNode(' b')]))
+            .toBe('a **focus** b');
+    });
+
+    it('parses **text** back into a bold-marked run', () => {
+        expect(textToInlineRuns('a **focus** b')).toEqual([
+            textNode('a '), bold('focus'), textNode(' b'),
+        ]);
+    });
+
+    it('wraps a maximal bold RUN once — never inside a link target', () => {
+        const runs: PMNode[] = [
+            bold('see '),
+            codeRefNode({ label: 'x', file: 'a.py', symbol: 'fn' }, [{ type: 'bold' }]),
+            bold(' now'),
+            textNode(' tail'),
+        ];
+        expect(inlineRunsToText(runs)).toBe('**see [x](codoc:a.py#fn) now** tail');
+    });
+
+    it('merges adjacent bold runs into one span (not `**a****b**`)', () => {
+        expect(inlineRunsToText([bold('a'), bold('b')])).toBe('**ab**');
+    });
+
+    it('emits nothing rather than `****` when the whole bold run is an insertion', () => {
+        const ins = { type: 'insertion', attrs: { changeId: 'c1' } };
+        expect(inlineRunsToText([textNode('kept '), textNode('gone', [{ type: 'bold' }, ins])]))
+            .toBe('kept ');
+    });
+
+    it('leaves a bold run the parser could not read back UNWRAPPED', () => {
+        // `**  **` strips to nothing in extract_bold, and `a*b` cannot sit inside
+        // `[^*\n]+` — emitting either would change the stored text and signal nothing.
+        expect(inlineRunsToText([bold('  ')])).toBe('  ');
+        expect(inlineRunsToText([bold('a*b')])).toBe('a*b');
+    });
+
+    it('closes the span at a hard break instead of spanning a newline', () => {
+        const runs: PMNode[] = [bold('a'), { type: 'hardBreak', marks: [{ type: 'bold' }] }, bold('b')];
+        expect(inlineRunsToText(runs)).toBe('**a**\n**b**');
+    });
+
+    it('reads `**` inside a citation label as label text, not markup', () => {
+        const runs = textToInlineRuns('[**x**](codoc:a.py#fn) after');
+        expect(runs[0]).toEqual(codeRefNode({ label: '**x**', file: 'a.py', symbol: 'fn' }));
+        expect(runs[0].marks).toBeUndefined();
+    });
+
+    it('marks a citation bold when the span encloses it', () => {
+        const runs = textToInlineRuns('**see [x](codoc:a.py) now**');
+        expect(runs.map(r => r.type)).toEqual(['text', 'codeRef', 'text']);
+        expect(runs.every(r => r.marks?.some(m => m.type === 'bold'))).toBe(true);
+    });
+
+    // THE property. Every case here is a description the daemon could hand the editor;
+    // serialize(parse(text)) must be the same bytes or the settle machinery mints an
+    // edit nobody made. The list and the expected spans are mirrored VERBATIM in
+    // tests/codoc_file/test_doc_render.py (`_BOLD_CASES`) — the daemon runs that side,
+    // and if the two disagree they disagree about what the author wrote.
+    const cases: Array<[string, string[]]> = [
+        ['plain prose, no markers', []],
+        ['a **focus** b', ['focus']],
+        ['**leading** span', ['leading']],
+        ['trailing **span**', ['span']],
+        ['**two** spans **here**', ['two', 'here']],
+        ['**see [x](codoc:a.py#fn) now** tail', ['see [x](codoc:a.py#fn) now']],
+        ['[**x**](codoc:a.py#fn) label markers survive', []],
+        ['**  ** whitespace-only marker pair', []],
+        ['**a****b** touching pairs', ['a']],
+        ['unmatched ** marker', []],
+        ['***tripled***', ['tripled']],
+        ['a **b*c** d', []],
+        ['cite [y](codoc:g.py) then **focus**', ['focus']],
+    ];
+
+    /** The text each maximal run of bold-marked nodes covers — what the author sees
+     *  emphasized, in the shape `extract_bold` returns. */
+    function projectedBold(runs: PMNode[]): string[] {
+        const out: string[] = [];
+        let cur = '';
+        for (const r of runs) {
+            const t = inlineRunsToText([{ ...r, marks: undefined }]);
+            if (r.marks?.some(m => m.type === 'bold')) cur += t;
+            else if (cur) { out.push(cur); cur = ''; }
+        }
+        if (cur) out.push(cur);
+        return out;
+    }
+
+    it.each(cases)('text → doc → text is the identity for %j', text => {
+        expect(inlineRunsToText(textToInlineRuns(text))).toBe(text);
+    });
+
+    it.each(cases)('emphasizes exactly the Focus spans for %j', (text, spans) => {
+        expect(projectedBold(textToInlineRuns(text))).toEqual(spans);
+    });
+
+    it('doc → text → doc is a fixpoint (no phantom edit on re-projection)', () => {
+        for (const [text] of cases) {
+            const doc = textToInlineRuns(text);
+            expect(textToInlineRuns(inlineRunsToText(doc))).toEqual(doc);
+        }
+    });
+
+    it('round-trips through a whole feature description', () => {
+        const desc = 'Keep the **retry budget** bounded, see [backoff](codoc:net.py#backoff).';
+        expect(blocksToDescriptionText(descriptionToBlocks(desc))).toBe(desc);
+        expect(rt(`- F  ⟨f-9999cccc⟩\n    ${desc}\n`)).toBe(`- F  ⟨f-9999cccc⟩\n    ${desc}\n`);
     });
 });
 
@@ -292,14 +416,14 @@ describe('U3: description ↔ paragraph blocks (per-section editor seam)', () =>
         expect(blocksToDescriptionText(blocks)).toBe('');
     });
 
-    it('drops marks (bold/author) when projecting blocks back to text', () => {
+    it('drops the author mark but writes bold back as **…**', () => {
         const blocks: PMNode[] = [
             paragraphNode([
                 textNode('solid ', [{ type: 'author', attrs: { role: 'human', mode: 'pen' } }]),
                 textNode('and bold', [{ type: 'bold' }]),
             ]),
         ];
-        expect(blocksToDescriptionText(blocks)).toBe('solid and bold');
+        expect(blocksToDescriptionText(blocks)).toBe('solid **and bold**');
     });
 
     it('descriptionBlocksForFid extracts the right feature description from a whole doc', () => {

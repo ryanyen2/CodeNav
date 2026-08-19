@@ -42,6 +42,29 @@ on load. Nothing downstream may *require* provenance; it only enriches.
 | 12 | verdict | accept / reject from the IDE inbox | human | apply+consume / delete. RETIRE accept stays detach-only unless `delete_code` (destructive ops need explicit intent) |
 | 13 | code | drift on a **held** feature (pending doc-ahead intent or queued directive) | any | bindings still maintained (rows 1, 3); AMEND/RETIRE/MOVE proposals **suppressed** until the hold releases — **doc always wins** |
 
+### What an applied op RECORDS about what it destroyed (W8)
+
+One rule, at one place (`loop/apply._record_displaced`, the `apply_op` write boundary):
+an applied op stamps the values it is about to overwrite on its own `NodeOp`.
+
+| kind | records |
+|---|---|
+| AMEND | `prev_title` / `prev_description` (whichever it replaces and actually changes) + `prev_written_by` |
+| RETIRE_NODE | `prev_title`, `prev_description`, `prev_parent_id` — the node leaves the live tree entirely, so nothing else can answer what it said or where it sat |
+| MOVE_NODE | `prev_parent_id` (`""` = was a root; `None` = **not recorded** — collapsing the two would silently re-root every node whose move predates the field) |
+
+This is what makes the ledger readable BACKWARDS, which is what the timeline
+(`loop/revisions.py` → `state/revision-model.ts`) does. There is deliberately **no
+backfill**: an event written before a field existed knows a feature changed and not what
+it changed from, and inventing a prior value would make the history confidently wrong —
+strictly worse than admitting the gap, which is what the surface does.
+
+Retiring a node also promotes its live children to the grandparent, and that promotion is
+now **evented** (a MOVE per child, `caused_by` the retire, inheriting its provenance).
+It was previously the one tree mutation the ledger made in silence: `codoc history` showed
+nothing, so a reader who noticed a feature had moved had no way to learn why, and a
+backwards replay lost the subtree wholesale.
+
 Two structural properties make the table sound:
 
 - **Bindings are attribution, not intent.** Rows 1/3 (and DETACH) always run —
@@ -86,6 +109,14 @@ files (the Python loops never read the rich `tree.doc.json`):
   matches the store, so the read-only drain stays idempotent. They are half of
   the doc-wins hold set; intents older than 7 days are ignored (an abandoned
   suggestion must not hold a feature forever).
+
+Directives additionally carry, since W8, the provenance a change needs to be traceable
+BACK to a person: `asked` (the captured author prompt, stamped at mint), `session_id`
+(the coding session it was typed in), and `base_sha` (HEAD when the directive was
+**handed off** — the "before" side of the code diff its work produced; at hand-off, not
+at mint, because a held draft has not caused any code change yet). All three survive the
+manifest into `realized.jsonl`, which is where the chain used to break: everything before
+that point was recoverable, and after it the only join left was timestamp proximity.
 
 **`.codoc/realize.json`** — written by Loop B next to `realize.md`:
 

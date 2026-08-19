@@ -123,6 +123,17 @@ class Steer:
     media: str = ""       # opaque attachment ref (transient consult media, U6)
     media_kind: str = ""  # CONSULT plugin key for the attachment (e.g. "screenshot")
     ts: int = 0           # unix ms
+    # ── W8: the steer carries its whole thread ────────────────────────────────
+    # The steer drains once; the THREAD has to outlive it, or a comment cannot report
+    # what became of the work it asked for (and, before this, could not survive closing
+    # the tab — the bodies lived in extension-host memory). Rather than a second channel
+    # with a second lifetime to keep in sync, the steer carries everything the durable
+    # `CommentThread` needs and Loop B persists it as it drains.
+    body: str = ""          # the author's note, unwrapped (``text`` is the framed form)
+    anchor_text: str = ""   # the prose the note is anchored to — the words, not offsets,
+                            #   because the offsets go stale the moment the prose moves
+    code_refs: list = field(default_factory=list)  # `file::symbol` targets → `Edit only:`
+    scope: str = "code"     # "code" | "both" (also update the description) — CommentScope
 
 
 @dataclass
@@ -180,9 +191,10 @@ class Command:
       a hash would require a byte-identical hash implementation in TypeScript and
       Python, and any drift between them would read as a conflict on every edit.
     * ``payload`` carries the kind's data: ``add`` → ``title``/``description``/
-      ``parent_id``; ``set_title`` → ``title``; ``set_description`` →
-      ``description``; ``move`` → ``parent_id`` + ``after_id``/``before_id``;
-      ``retire`` → (nothing).
+      ``parent_id`` (+ ``realized: false`` for a PLAN node — the authored build
+      request, the one ADD that mints a realize directive); ``set_title`` →
+      ``title``; ``set_description`` → ``description``; ``move`` → ``parent_id`` +
+      ``after_id``/``before_id``; ``retire`` → (nothing).
 
       ``after_id``/``before_id`` name the SIBLINGS a node was dropped between,
       never an index. An index is a re-derived positional guess — by the time the
@@ -239,6 +251,20 @@ class Directive:
                        # it, to expire its doc-wins hold (see :func:`hold_set`). 0 means
                        # "unknown" (a legacy entry) and never expires — an unknown age is
                        # not evidence of abandonment.
+    # ── why this exists, in the author's own words (W8) ───────────────────────
+    # `text` already QUOTES the captured prompt in its `Author asked:` line, because the
+    # realizing agent reads prose. These carry the same fact STRUCTURALLY, for the reader
+    # who arrives from the other end — someone looking at a sentence the agent wrote and
+    # asking "who asked for this?". Parsing it back out of `text` would make the answer
+    # depend on a directive template staying stable, which is not a promise worth making.
+    asked: str = ""       # the captured author prompt behind this directive ("" = none)
+    session_id: str = ""  # the coding session that prompt was typed in ("" = unknown);
+                          #   the id under ~/.claude/projects/<slug>/<session>.jsonl
+    base_sha: str = ""    # HEAD when this directive was HANDED OFF — the "before" side of
+                          #   the code diff it produced. Stamped at hand-off, never at
+                          #   mint: a held draft has not caused any code change yet, so
+                          #   anchoring it at mint would name a commit the work never
+                          #   started from. "" whenever git could not answer.
 
 
 def edits_path(codoc_dir: str | Path) -> Path:
@@ -317,7 +343,11 @@ def read_intents(codoc_dir: str | Path) -> list[Intent]:
 #   emits (add/set_title/set_description/move/retire) instead of Loop B inferring it
 #   from a doc diff. Loop-drained one-shot, applied via apply_op (KTD3); idempotent on
 #   the store's applied-command-id ledger (KTD8). A v1 file (no key) reads as empty.
-_LISTS = ("commands", "edits", "intents", "cancellations", "steers", "drafts", "block_edits", "handoffs")
+_LISTS = ("commands", "edits", "intents", "cancellations", "steers", "drafts", "block_edits",
+          "handoffs", "comment_resolves")
+# The two channels that are always serialized, empty or not — the original file shape,
+# kept so an annotations-only edits.json stays byte-identical to what it always was.
+_ALWAYS_WRITTEN = frozenset({"edits", "intents"})
 
 # Cached, reentrant FileLock per repo guarding every edits.json read-modify-write.
 _edit_locks: dict[str, object] = {}
@@ -373,8 +403,12 @@ def _rewrite(codoc_dir: str | Path, **changes: list) -> Path | None:
     payload: dict = {"version": EDITS_VERSION, "edits": merged["edits"], "intents": merged["intents"]}
     # Keep the optional lists out of the payload when empty (matches the prior shape
     # + keeps a plain annotations-only file byte-identical to before, modulo version).
-    for k in ("commands", "cancellations", "steers", "drafts", "block_edits", "handoffs"):
-        if merged[k]:
+    # DERIVED from _LISTS rather than repeated: this loop used to name each optional
+    # channel by hand, so a channel added to _LISTS and not here was merged in memory and
+    # silently dropped on write — the exact failure the "one funnel" comment above exists
+    # to prevent, reintroduced by a second hand-maintained list beside it.
+    for k in _LISTS:
+        if k not in _ALWAYS_WRITTEN and merged[k]:
             payload[k] = merged[k]
     atomic_write_json(dest, payload)
     return dest
@@ -473,10 +507,15 @@ def read_steers(codoc_dir: str | Path) -> list[Steer]:
     out: list[Steer] = []
     for s in _load(codoc_dir).get("steers", []):
         if isinstance(s, dict) and s.get("feature_id") and (s.get("text") or s.get("media")):
+            refs = s.get("code_refs")
             out.append(Steer(feature_id=s["feature_id"], text=s.get("text") or "",
                              comment_id=s.get("comment_id") or "",
                              media=s.get("media") or "", media_kind=s.get("media_kind") or "",
-                             ts=int(s.get("ts") or 0)))
+                             ts=int(s.get("ts") or 0),
+                             body=s.get("body") or "",
+                             anchor_text=s.get("anchor_text") or "",
+                             code_refs=[str(r) for r in refs] if isinstance(refs, list) else [],
+                             scope=s.get("scope") or "code"))
     return out
 
 
@@ -522,8 +561,58 @@ def append_steer(codoc_dir: str | Path, steer: Steer) -> Path | None:
     if steer.media:
         entry["media"] = steer.media
         entry["media_kind"] = steer.media_kind or "screenshot"
-    steers = (_load(codoc_dir).get("steers") or []) + [entry]
-    return _rewrite(codoc_dir, steers=steers)
+    # Presence-keyed, so a pre-W8 daemon reading this file ignores them and a pre-W8
+    # host's steer still parses here.
+    for key, val in (("body", steer.body), ("anchor_text", steer.anchor_text),
+                     ("scope", steer.scope if steer.scope != "code" else "")):
+        if val:
+            entry[key] = val
+    if steer.code_refs:
+        entry["code_refs"] = list(steer.code_refs)
+    # Identity is the author-minted comment id (KTD4), so re-handing an EDITED note
+    # REPLACES the pending one rather than queueing a second directive for the same
+    # thread. The TS mirror (`edits-channel.appendSteer`) has always done this; this side
+    # appended, so every keystroke-then-save of a comment body used to cost the agent
+    # another item in the queue. A steer with no comment id (the CLI path) has no
+    # identity to dedup on and always appends.
+    prior = _load(codoc_dir).get("steers") or []
+    if steer.comment_id:
+        prior = [s for s in prior
+                 if not (isinstance(s, dict) and s.get("comment_id") == steer.comment_id)]
+    return _rewrite(codoc_dir, steers=[*prior, entry])
+
+
+def read_comment_resolves(codoc_dir: str | Path) -> list[str]:
+    """Comment ids the author closed. Order-preserving, deduped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in _load(codoc_dir).get("comment_resolves", []):
+        cid = c.get("comment_id") if isinstance(c, dict) else None
+        if cid and cid not in seen:
+            seen.add(cid)
+            out.append(cid)
+    return out
+
+
+@_locked
+def drain_comment_resolves(codoc_dir: str | Path) -> list[str]:
+    """Consume the ``comment_resolves`` list — Loop B marks each thread resolved.
+
+    A separate one-shot channel rather than a status field on the steer, because
+    resolving is not a steer: it queues no work, and routing it through the steer channel
+    would mint a directive to do nothing."""
+    ids = read_comment_resolves(codoc_dir)
+    if ids:
+        _rewrite(codoc_dir, comment_resolves=[])
+    return ids
+
+
+@_locked
+def append_comment_resolve(codoc_dir: str | Path, comment_id: str) -> Path | None:
+    """Record that the author closed a comment thread (host resolve; CLI/tests)."""
+    entries = (_load(codoc_dir).get("comment_resolves") or []) + [
+        {"comment_id": comment_id, "ts": int(time.time() * 1000)}]
+    return _rewrite(codoc_dir, comment_resolves=entries)
 
 
 def read_block_edits(codoc_dir: str | Path) -> list[BlockEdit]:
@@ -656,10 +745,16 @@ def _dispatch_host_op(codoc_dir: str | Path, fn: str, arg) -> bool:
             session=arg.get("session") or "",
             payload=arg.get("payload") if isinstance(arg.get("payload"), dict) else {}))
     elif fn == "appendSteer" and isinstance(arg, dict):
+        refs = arg.get("code_refs")
         append_steer(codoc_dir, Steer(
             feature_id=arg.get("feature_id") or "", text=arg.get("text") or "",
             comment_id=arg.get("comment_id") or "", media=arg.get("media") or "",
-            media_kind=arg.get("media_kind") or "", ts=int(arg.get("ts") or 0)))
+            media_kind=arg.get("media_kind") or "", ts=int(arg.get("ts") or 0),
+            body=arg.get("body") or "", anchor_text=arg.get("anchor_text") or "",
+            code_refs=[str(r) for r in refs] if isinstance(refs, list) else [],
+            scope=arg.get("scope") or "code"))
+    elif fn == "resolveComment" and isinstance(arg, dict) and arg.get("comment_id"):
+        append_comment_resolve(codoc_dir, arg["comment_id"])
     elif fn == "appendBlockEdit" and isinstance(arg, dict):
         append_block_edit(codoc_dir, BlockEdit(
             block_id=arg.get("block_id") or "", feature_id=arg.get("feature_id") or "",
@@ -743,7 +838,13 @@ def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
     atomic_write_json(dest, {"version": 1, "directives": [
         {"id": d.id, "feature_id": d.feature_id, "kind": d.kind,
          "caused_by": d.caused_by, "text": d.text, "baseline": d.baseline,
-         "handed_off": d.handed_off, "ts": d.ts}
+         "handed_off": d.handed_off, "ts": d.ts,
+         # Presence-keyed like every other additive field on the control files: a
+         # reader that predates these ignores them, and a writer that predates them
+         # produces a manifest this parser still accepts.
+         **({"asked": d.asked} if d.asked else {}),
+         **({"session_id": d.session_id} if d.session_id else {}),
+         **({"base_sha": d.base_sha} if d.base_sha else {})}
         for d in directives
     ]})
     return dest
@@ -754,8 +855,29 @@ def _parse_manifest(data: dict) -> list[Directive]:
                       kind=d.get("kind") or "", caused_by=d.get("caused_by") or "",
                       text=d.get("text") or "", baseline=d.get("baseline") or "",
                       handed_off=bool(d.get("handed_off", True)),
-                      ts=int(d.get("ts") or 0))
+                      ts=int(d.get("ts") or 0),
+                      asked=d.get("asked") or "",
+                      session_id=d.get("session_id") or "",
+                      base_sha=d.get("base_sha") or "")
             for d in data.get("directives", [])]
+
+
+def peek_manifest(codoc_dir: str | Path) -> list[Directive]:
+    """The queued directives, WITHOUT the staleness drain :func:`read_manifest` performs.
+
+    ``read_manifest`` is a reader that mutates: a manifest with no ``realize.md`` beside
+    it means the agent finished and deleted the queue, so reading it logs the outcomes
+    and clears the file. That is correct for the loop, and wrong for anyone who only
+    wants to LOOK — a view layer that closed the queue as a side effect of drawing
+    itself would make rendering the timeline change the thing it renders.
+
+    So: same parse, no lock, no write, no drain. Use this for display; use
+    ``read_manifest`` when you are the loop and the drain is the point.
+    """
+    path = manifest_path(codoc_dir)
+    if not path.exists():
+        return []
+    return _parse_manifest(read_json(path, default={}))
 
 
 def read_manifest(codoc_dir: str | Path) -> list[Directive]:
@@ -844,6 +966,14 @@ def _log_realized(codoc_dir: str | Path, directives: list[Directive],
                     "id": d.id, "feature_id": d.feature_id, "kind": d.kind,
                     "caused_by": d.caused_by, "text": d.text,
                     "completed_at": now_iso, "ts": now_ts,
+                    # The manifest entry is about to vanish, and it is the only place
+                    # these live. Dropping them here is what used to break the chain
+                    # from a changed sentence back to the prompt that asked for it:
+                    # everything before this point was recoverable, and after it the
+                    # only join left was timestamp proximity.
+                    **({"asked": d.asked} if d.asked else {}),
+                    **({"session_id": d.session_id} if d.session_id else {}),
+                    **({"base_sha": d.base_sha} if d.base_sha else {}),
                     # "evidence" = a cited reflect closed it (real completion);
                     # "queue-file-deleted" = realize.md vanished out-of-band and
                     # the drain INFERRED completion — an unimplemented item closed

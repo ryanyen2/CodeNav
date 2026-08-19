@@ -18,10 +18,13 @@ editor-authored one to the rest of the pipeline.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from codoc.codoc_file.parse import ParsedTree, normalize_description, parse_text
 from codoc.codoc_file.tree_order import preorder
+from codoc.model.annotation import in_margin
+from codoc.model.hlc import HLC
 
 if TYPE_CHECKING:  # avoid a hard import cycle at module load
     from codoc.model.annotation import CommentThread, Mark
@@ -29,29 +32,129 @@ if TYPE_CHECKING:  # avoid a hard import cycle at module load
 
 # Inline code citation, mirroring parse._REF_RE: [label](codoc:file#symbol), symbol optional.
 _REF_RE = re.compile(r"\[(?P<label>[^\]]*)\]\(codoc:(?P<file>[^)#]+)(?:#(?P<symbol>[^)]+))?\)")
+# ``**bold**``, mirroring parse._BOLD_RE (content class included). Bold is not
+# decoration here: ``extract_bold`` lifts these spans into the realize directive's
+# ``Focus:`` line, so the projection must only ever turn into a ``bold`` mark what
+# that regex would match — see ``_bold_matches``.
+_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 # A paragraph break is one or more blank lines.
 _PARA_SPLIT = re.compile(r"\n\s*\n")
 
 
+def _bold_mark() -> dict:
+    return {"type": "bold"}
+
+
+def _bold_matches(text: str, refs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The ``**…**`` spans this paragraph projects as a ``bold`` mark, as FULL match
+    ranges (markers included). The skipped cases are each a match that would NOT
+    survive the trip back through ``doc_parse._inline_text`` — leaving them as prose
+    keeps the stored description byte-identical instead of drifting one asterisk at a
+    time. The TS twin is ``pm-doc.boldMatches``; the two must agree."""
+    out: list[tuple[int, int]] = []
+    prev_end = -1
+    for m in _BOLD_RE.finditer(text):
+        start, end = m.start(), m.end()
+        if not m.group(1).strip():
+            continue  # ``**  **`` carries no focus at all — extract_bold strips it away
+        # A ``**`` INSIDE a citation is part of its label (``[**x**](codoc:a.py)``), not
+        # markup: eating those asterisks would rewrite the link text. Bold that CONTAINS
+        # a whole citation is the normal case and stays.
+        if any(a < start < b or a < end - 2 < b for a, b in refs):
+            continue
+        # Two matches that touch (``**a****b**``) project as adjacent bold runs, and the
+        # serializer emits ONE wrapper per run — so they would come back as ``**ab**``:
+        # a phantom AMEND against text nobody edited. Leave the second one prose.
+        if start == prev_end:
+            continue
+        out.append((start, end))
+        prev_end = end
+    return out
+
+
+@dataclass(frozen=True)
+class _Seg:
+    """One inline segment of a paragraph, in the paragraph's own character space.
+
+    ``kind`` is ``text`` (prose), ``ref`` (a citation atom) or ``marker`` (one ``**``
+    character — dropped from the emitted runs, but still occupying its offset so the
+    annotation anchors in :func:`_annotated_runs`, which index the description
+    INCLUDING the markers, keep pointing at the words they were written against)."""
+    kind: str
+    start: int
+    end: int
+    bold: bool
+    attrs: dict | None = None
+
+
+def _segments(text: str) -> list[_Seg]:
+    """Split a paragraph into inline segments. Per-character classification rather than
+    a cut list: citations and bold can nest (a span covering a citation), and reasoning
+    about their boundaries pairwise is how an off-by-two lands a ``**`` inside a link
+    target."""
+    refs = [
+        (m.start(), m.end(), {
+            "label": m.group("label") or "",
+            "file": m.group("file") or "",
+            "symbol": m.group("symbol") or "",
+        })
+        for m in _REF_RE.finditer(text)
+    ]
+    ref_at = {start: (start, end, attrs) for start, end, attrs in refs}
+    marker = [False] * len(text)
+    bold = [False] * len(text)
+    for start, end in _bold_matches(text, [(a, b) for a, b, _ in refs]):
+        for i in range(start, end):
+            bold[i] = True
+        marker[start] = marker[start + 1] = marker[end - 2] = marker[end - 1] = True
+
+    segs: list[_Seg] = []
+    buf_start = -1
+
+    def close_text(at: int) -> None:
+        nonlocal buf_start
+        if buf_start >= 0:
+            segs.append(_Seg("text", buf_start, at, bold[buf_start]))
+            buf_start = -1
+
+    i = 0
+    while i < len(text):
+        ref = ref_at.get(i)
+        if ref is not None:
+            close_text(i)
+            segs.append(_Seg("ref", ref[0], ref[1], bold[i], ref[2]))
+            i = ref[1]
+            continue
+        if marker[i]:
+            close_text(i)
+            segs.append(_Seg("marker", i, i + 1, False))
+            i += 1
+            continue
+        if buf_start >= 0 and bold[buf_start] != bold[i]:
+            close_text(i)
+        if buf_start < 0:
+            buf_start = i
+        i += 1
+    close_text(len(text))
+    return segs
+
+
 def _inline_runs(text: str) -> list[dict]:
     """Project a paragraph's text into PM inline nodes: plain text + ``codeRef`` atoms
-    for each ``[label](codoc:…)`` citation. The inverse of ``doc_parse._inline_text``."""
+    for each ``[label](codoc:…)`` citation, with ``**bold**`` consumed into a ``bold``
+    mark so the author sees emphasis rather than asterisks. The inverse of
+    ``doc_parse._inline_text``."""
     runs: list[dict] = []
-    pos = 0
-    for m in _REF_RE.finditer(text):
-        if m.start() > pos:
-            runs.append({"type": "text", "text": text[pos:m.start()]})
-        runs.append({
-            "type": "codeRef",
-            "attrs": {
-                "label": m.group("label") or "",
-                "file": m.group("file") or "",
-                "symbol": m.group("symbol") or "",
-            },
-        })
-        pos = m.end()
-    if pos < len(text):
-        runs.append({"type": "text", "text": text[pos:]})
+    for seg in _segments(text):
+        if seg.kind == "marker":
+            continue
+        run: dict = (
+            {"type": "codeRef", "attrs": seg.attrs} if seg.kind == "ref"
+            else {"type": "text", "text": text[seg.start:seg.end]}
+        )
+        if seg.bold:
+            run["marks"] = [_bold_mark()]
+        runs.append(run)
     return runs
 
 
@@ -134,8 +237,10 @@ def _annotated_runs(text: str, base: int, anns: list[tuple[int, int, dict]]) -> 
     into the normalized description and each annotation in ``anns`` (``(start, end,
     mark)``, offsets into the *normalized description*) is applied to the text it
     covers. Text runs are split at every annotation boundary that falls inside them;
-    a ``codeRef`` atom occupies the length of its ``[label](codoc:…)`` projection (so
-    offsets stay aligned with the text the anchors index into) but carries no marks."""
+    a ``codeRef`` atom occupies the length of its ``[label](codoc:…)`` projection and a
+    ``**`` marker its own two characters (so offsets stay aligned with the text the
+    anchors index into), and neither carries an annotation mark — only ``bold``, which
+    is structural rather than an annotation."""
     # Collect the boundary offsets (absolute, into the normalized description) that
     # split this paragraph: every annotation start/end clamped to the paragraph.
     end_of_para = base + len(text)
@@ -172,7 +277,7 @@ def _annotated_runs(text: str, base: int, anns: list[tuple[int, int, dict]]) -> 
             emitted_carets.add(off)
             runs.append({"type": "text", "text": "", "marks": carets[off]})
 
-    def emit_text(seg: str, seg_start: int) -> None:
+    def emit_text(seg: str, seg_start: int, bold: bool) -> None:
         """Emit ``seg`` (starting at absolute offset ``seg_start``) split at every
         boundary inside it, each piece carrying the marks covering its span; a
         zero-width caret at a boundary is emitted as its own zero-width run."""
@@ -183,36 +288,27 @@ def _annotated_runs(text: str, base: int, anns: list[tuple[int, int, dict]]) -> 
             piece = seg[pos - seg_start: cut - seg_start]
             if piece:
                 run = {"type": "text", "text": piece}
-                ms = marks_at(pos, cut)
+                ms = ([_bold_mark()] if bold else []) + marks_at(pos, cut)
                 if ms:
                     run["marks"] = ms
                 runs.append(run)
             pos = cut
             emit_caret(cut)
 
-    cur = base
-    last = 0
-    for m in _REF_RE.finditer(text):
-        if m.start() > last:
-            emit_text(text[last:m.start()], cur)
-        else:
-            emit_caret(cur)  # a caret sitting just before a leading codeRef
-        cur += m.start() - last
-        ref_text = m.group(0)
-        runs.append({
-            "type": "codeRef",
-            "attrs": {
-                "label": m.group("label") or "",
-                "file": m.group("file") or "",
-                "symbol": m.group("symbol") or "",
-            },
-        })
-        cur += len(ref_text)
-        last = m.end()
-    if last < len(text):
-        emit_text(text[last:], cur)
-    elif last == len(text):
-        emit_caret(cur)  # a caret at the very end of the paragraph
+    for seg in _segments(text):
+        at = base + seg.start
+        if seg.kind == "marker":
+            emit_caret(at)  # a caret pinned to the marker still has to land somewhere
+            continue
+        if seg.kind == "ref":
+            emit_caret(at)  # a caret sitting just before a codeRef
+            run = {"type": "codeRef", "attrs": seg.attrs}
+            if seg.bold:
+                run["marks"] = [_bold_mark()]
+            runs.append(run)
+            continue
+        emit_text(text[seg.start:seg.end], at, seg.bold)
+    emit_caret(end_of_para)  # a caret at the very end of the paragraph
     # Any caret not yet placed (e.g. an empty paragraph: base == end_of_para and no
     # text walked) is emitted now so a feature-level note on empty prose still projects.
     for off in sorted(carets):
@@ -341,6 +437,9 @@ def build_doc_from_store(store: Store) -> dict:
     Features are emitted in tree PRE-ORDER (:func:`_preorder`) so the doc body lines up
     with the left-nav's ``render_tree`` walk — not the flat ``created_at`` order
     ``list_features`` returns, which desynchronizes the two panes."""
+    # One clock for the whole projection, so every feature in it agrees about which
+    # closed threads have aged out of the margin.
+    now_ms = HLC.now().wall_clock
     features = _preorder(store.list_features())  # live only (retired excluded), tree order
     depths = _store_depths(features)
     content: list[dict] = []
@@ -360,7 +459,13 @@ def build_doc_from_store(store: Store) -> dict:
         if title:
             heading["content"] = [{"type": "text", "text": title}]
         content.append(heading)
-        anns = _annotations_for(store.marks_for_feature(f.id), store.comments_for_feature(f.id))
+        # Only threads still on the page get an anchor mark. A resolved thread that kept
+        # its mark left a dotted underline pointing at a card nothing renders any more —
+        # an annotation on the prose with nothing behind it.
+        anns = _annotations_for(
+            store.marks_for_feature(f.id),
+            [c for c in store.comments_for_feature(f.id) if in_margin(c, now_ms)],
+        )
         # ownerId=f.id anchors each description paragraph to its feature by identity (I2),
         # so the webview never re-attributes prose to a heading inserted above it.
         content.extend(_annotated_paragraphs(f.description, anns, owner_id=f.id))

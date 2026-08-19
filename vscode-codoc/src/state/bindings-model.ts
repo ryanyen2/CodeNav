@@ -122,7 +122,7 @@ export interface SeeAlsoEntry {
 export interface FeatureProposal {
     op: 'retire' | 'amend';
     event_id: string;
-    tag: string;            // "code drift" | "agent reflection" | "agent plan"
+    tag: string;            // "code drift" | "agent reflection" | "agent plan" | "your edit"
     rationale?: string;
     title?: string | null;        // amend: proposed new title
     description?: string | null;  // amend: proposed new description
@@ -255,6 +255,12 @@ export interface SidecarData {
     // W2 (blame): bounded per-feature edit history (who/when/why), newest first.
     // Only features changed within the daemon's scan window appear. Presence-keyed.
     feature_history?: Record<string, HistoryEntry[]>;
+    // W8: durable inline comment threads, keyed by feature id. The bodies used to live
+    // only in extension-host memory — closing the tab lost every note and left its anchor
+    // underline pointing at nothing. Rows are the store's `CommentThread` (see
+    // codoc/model/annotation.py); optional fields are presence-keyed. Parsed by
+    // `comment-model.storedThreads`, which is why the row type stays loose here.
+    comments?: Record<string, Record<string, unknown>[]>;
 }
 
 /** A typed-media block on a feature (v6, `blocks` slice). `content` is opaque —

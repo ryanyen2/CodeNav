@@ -51,6 +51,9 @@ export interface AutoEditDecorationsOptions {
     /** fid → the rewrite the reader has NOT resolved yet (already filtered by the
      *  seen-set; this layer draws whatever it is handed). */
     getUnseen: () => Record<string, AutoEdit>;
+    /** Features the reader has since edited themselves — this surface stands down on
+     *  them (see `buildAutoEditDecorations`). */
+    getLocallyEdited?: () => Set<string>;
     handlers?: AutoEditHandlers;
 }
 
@@ -155,6 +158,7 @@ function verdictStrip(
 export function buildAutoEditDecorations(
     doc: PMModelNode, unseen: Record<string, AutoEdit>,
     handlers?: AutoEditHandlers,
+    locallyEdited?: Set<string>,
 ): DecorationSet {
     if (!Object.keys(unseen).length) return DecorationSet.empty;
     const decos: Decoration[] = [];
@@ -165,7 +169,17 @@ export function buildAutoEditDecorations(
     doc.forEach((node, pos) => {
         if (node.type.name === 'featureHeading') {
             const fid = node.attrs.fid as string | null;
-            g = fid && unseen[fid] ? { fid, headNode: node, headPos: pos, paras: [] } : null;
+            // Stand down on a feature the reader has since rewritten themselves.
+            //
+            // Not decluttering — correctness. This surface offers "Restore mine", which
+            // re-authors the wording the loop displaced; once the author has edited the
+            // same feature, that wording is two revisions stale and restoring it would
+            // discard their newer text. The verdict is on words that are no longer there.
+            //
+            // It also ends a rail collision: the captured layer draws its own margin rail
+            // on exactly these features, and the two were claiming one `::before`.
+            const owed = !!fid && !!unseen[fid] && !locallyEdited?.has(fid);
+            g = owed && fid ? { fid, headNode: node, headPos: pos, paras: [] } : null;
             if (g) groups.push(g);
             return;
         }
@@ -216,11 +230,13 @@ export const AutoEditDecorations = Extension.create<AutoEditDecorationsOptions>(
     addProseMirrorPlugins() {
         const getUnseen = (): Record<string, AutoEdit> => this.options.getUnseen();
         const handlers = (): AutoEditHandlers | undefined => this.options.handlers;
+        const locallyEdited = (): Set<string> => this.options.getLocallyEdited?.() ?? new Set();
         return [
             new Plugin({
                 key: autoKey,
                 state: {
-                    init: (_c, state) => buildAutoEditDecorations(state.doc, getUnseen(), handlers()),
+                    init: (_c, state) => buildAutoEditDecorations(
+                        state.doc, getUnseen(), handlers(), locallyEdited()),
                     // Structure-keyed (decoration-policy): the rewrite is a fact from the
                     // payload, not something the reader's typing changes. Typing inside a
                     // marked paragraph only MOVES the marks — and the reader editing the
@@ -228,7 +244,8 @@ export const AutoEditDecorations = Extension.create<AutoEditDecorationsOptions>(
                     // old text would start underlining their own words back at them.
                     apply: (tr, old, _o, newState) => nextDecorations(
                         tr, old, !!tr.getMeta(AUTO_EDITS_UPDATED),
-                        () => buildAutoEditDecorations(newState.doc, getUnseen(), handlers()),
+                        () => buildAutoEditDecorations(
+                            newState.doc, getUnseen(), handlers(), locallyEdited()),
                     ),
                 },
                 props: { decorations(state) { return autoKey.getState(state); } },

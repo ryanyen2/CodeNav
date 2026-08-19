@@ -26,8 +26,8 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import {
-    directionLabel, directionActions,
-    consequenceOf, consequenceVerb, consequenceNote, leavesForAgent,
+    directionLabel, directionActions, directionOrigin, directionNote,
+    consequenceOf, consequenceVerb, consequenceNote, leavesForAgent, verdictHints,
 } from '../../state/grammar';
 import { icon } from '../icons';
 import { launchPlane } from '../motion';
@@ -121,9 +121,14 @@ export function setGhostDraft(
 /**
  * The verdict: a quiet Reject/Accept pair, hidden until the feature is hovered.
  *
- * It carries the origin in plain words ("from code") rather than leaving direction to
- * hue alone — the colourblind/high-contrast floor (U6/R8) — and the cascade cue when
- * the change surfaced back from implementing one of the user's own edits.
+ * It carries the origin in plain words rather than leaving direction to hue alone — the
+ * colourblind/high-contrast floor (U6/R8) — and the cascade cue when the change
+ * surfaced back from implementing one of the user's own edits.
+ *
+ * Those words come from `grammar.directionOrigin`, not from here. This function used to
+ * print the literal "from code" on every proposal it drew, which was wrong for the one
+ * kind that is not the machine's: a deferred edit of the reader's own (`yours`), shown
+ * back to them attributed to the codebase.
  */
 function verdictStrip(
     s: Suggestion, handlers: SuggestionHandlers, locallyEdited = false,
@@ -149,9 +154,15 @@ function verdictStrip(
         return row;
     }
 
-    if (s.direction === 'code-ahead') {
-        const dir = elc('span', 'ce-tc-dir', 'from code');
-        dir.title = directionLabel(s.direction) + (s.tag ? ' · ' + s.tag : '');
+    if (s.direction !== 'doc-ahead') {
+        const dir = elc('span', 'ce-tc-dir', directionOrigin(s.direction));
+        // The tag names the origin in the daemon's vocabulary ("code drift", "agent
+        // plan"); on a deferred edit of the reader's own it only repeats the chip, so
+        // the hover carries the REASON instead — the one sentence that explains why
+        // words they typed are sitting here un-applied.
+        dir.title = s.direction === 'yours'
+            ? directionNote(s.direction)
+            : directionLabel(s.direction) + (s.tag ? ' · ' + s.tag : '');
         row.append(dir);
     }
     // The consequence, in one plain sentence, only where it is not the boring one.
@@ -168,7 +179,10 @@ function verdictStrip(
     // where it discards words they just wrote. Say so instead of letting the click
     // look free. (Deliberately NOT auto-rejecting: deferring a decision, editing, and
     // coming back later is a normal way to work, not a verdict.)
-    if (locallyEdited) {
+    // …unless the proposal IS their unlanded edit (`yours`). "Accepting replaces it
+    // with the agent's version" then describes the opposite of what the click does,
+    // and the strip has already said whose words these are.
+    if (locallyEdited && s.direction !== 'yours') {
         const warn = elc('span', 'ce-tc-contested', '· you edited this');
         warn.title = s.kind === 'retire'
             ? 'You have an unlanded edit here. Accepting removes this feature and your edit with it.'
@@ -196,19 +210,20 @@ function verdictStrip(
     const [secondary] = directionActions(s.direction);
     // The VERB carries the consequence. "Accept" for the 4-in-5 that only rewrite
     // words; "Accept & build" / "Accept & delete code" when the click reaches code.
-    const primary = s.direction === 'code-ahead'
-        ? consequenceVerb(cq) : directionActions(s.direction)[1];
+    const primary = s.direction === 'doc-ahead'
+        ? directionActions(s.direction)[1] : consequenceVerb(cq);
     // An accept from an editable ghost carries whatever the author amended in place
     // (ghostEditsFor) — read at CLICK time, so edits typed after the strip rendered
     // still ride the verdict.
     const acceptBtn = actionButton(primary, 'accept',
         once(sug => handlers.accept(sug, getEdits?.()), leavesForAgent(cq)));
-    acceptBtn.title = consequenceNote(cq);
+    // Both hovers come from the grammar, which is the only place that knows a `yours`
+    // amend costs no code AND is still not "matching code that already exists".
+    const hints = verdictHints(s.direction, cq);
+    acceptBtn.title = hints.accept;
     if (leavesForAgent(cq)) acceptBtn.prepend(icon('paper-plane-tilt'));
     const rejectBtn = actionButton(secondary, 'reject', once(handlers.reject, false));
-    rejectBtn.title = leavesForAgent(cq)
-        ? 'Discard this request. Nothing is written.'
-        : 'Discard this update. The tree keeps its current wording.';
+    rejectBtn.title = hints.reject;
     actions.append(rejectBtn, acceptBtn);
     row.append(actions);
     return row;

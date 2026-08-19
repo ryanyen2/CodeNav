@@ -384,11 +384,62 @@ _EN_EMBEDDER = "all-MiniLM-L6-v2"
 # Chinese title against an English one — the state a repo is in while migrating.
 _MULTILINGUAL_EMBEDDER = "paraphrase-multilingual-MiniLM-L12-v2"
 
-_CJK_PROSE = (
+_CJK_PUNCT = (
     "Use this language's own punctuation (。，；：、「」《》) rather than ASCII "
     "punctuation. Put a space on each side of Latin text embedded in a sentence "
     "(so `使用 parse_tree 解析`), which is the convention readers expect and "
     "keeps identifiers selectable."
+)
+
+# Register. Every other CJK profile carried one of these and Chinese did not — Japanese
+# was told である/だ体, Korean 해라체, and Chinese got punctuation advice only. With no
+# instruction, a model asked for "documentation" in Chinese writes 书面语, and the result
+# is prose a native reader finds HARDER to read than the English it came from: nominalized,
+# 被-heavy, and shaped around English clause order.
+#
+# The concrete DON'Ts are not decoration. An abstract "write plainly" loses to the specific
+# constraints elsewhere in a prompt; naming the exact constructions — the light verbs, the
+# calqued connective frames, the transplanted subordinate stacks — is what actually moves
+# the output, because each one is a thing the model can check its own sentence against.
+_ZH_HANS_REGISTER = (
+    " Register: plain explanatory 白话 — the voice of an engineer walking a colleague "
+    "through their own code — never formal 书面语, and never 翻译腔. Concretely: lead "
+    "with verbs rather than nominalizations (「先解析，再判断」, not "
+    "「进行解析之后作出判断」); drop the light verbs 进行/作出/实现 wherever a bare verb "
+    "says it; use 被 only when the doer is genuinely unknown (「规则会去掉页眉」, not "
+    "「页眉会被规则移除」); never calque English connective frames — 「通过…的方式」"
+    "「在…的情况下」「这就是…的原因」 read as translation artifacts, so state the thought "
+    "the way Chinese states it (「提交前想知道改动的影响，就用它看一眼」, not "
+    "「这就是你在提交之前查看规则变更会带来什么影响的方式」); and break a long English "
+    "sentence at its clause boundaries with 。 and ， instead of carrying its whole "
+    "subordinate structure into one Chinese sentence. English library and API terms "
+    "embedded in the prose stay in English."
+)
+_ZH_HANT_REGISTER = (
+    " Register: plain explanatory 白話 — the voice of an engineer walking a colleague "
+    "through their own code — never formal 書面語, and never 翻譯腔. Concretely: lead "
+    "with verbs rather than nominalizations (「先解析，再判斷」, not "
+    "「進行解析之後作出判斷」); drop the light verbs 進行/作出/實現 wherever a bare verb "
+    "says it; use 被 only when the doer is genuinely unknown (「程式會略過空行」, not "
+    "「空行會被程式略過」); never calque English connective frames — 「通過…的方式」"
+    "「在…的情況下」「這就是…的原因」 read as translation artifacts, so state the thought "
+    "the way Chinese states it; and break a long English sentence at its clause "
+    "boundaries with 。 and ， instead of carrying its whole subordinate structure into "
+    "one sentence. English library and API terms embedded in the prose stay in English."
+)
+
+# A title is where the calques show first: an English modifier stack ("transfer-aware
+# dedup") transliterates into a noun pile no one would say. Chinese titles are most
+# naturally verb-object.
+_ZH_TITLE = (
+    "a 4–12 character phrase, most naturally verb-object (「读取银行对账单」) or a plain "
+    "noun phrase (「脚注识别」) — never an English-ordered stack of modifiers "
+    "(not 「转账感知去重」; say 「去重时排除转账」), no trailing punctuation"
+)
+_ZH_HANT_TITLE = (
+    "a 4–12 character phrase, most naturally verb-object (「讀取銀行對帳單」) or a plain "
+    "noun phrase (「腳註識別」) — never an English-ordered stack of modifiers "
+    "(not 「轉帳感知去重」; say 「去重時排除轉帳」), no trailing punctuation"
 )
 
 _PROFILES: dict[str, DocLanguage] = {
@@ -399,18 +450,18 @@ _PROFILES: dict[str, DocLanguage] = {
     ),
     "zh-hans": DocLanguage(
         code="zh-Hans", name="Simplified Chinese / 简体中文", script=LOGOGRAPHIC,
-        title_rule="a 4–12 character noun phrase, no trailing punctuation",
-        prose_rule=_CJK_PROSE, embedder=_MULTILINGUAL_EMBEDDER,
+        title_rule=_ZH_TITLE,
+        prose_rule=_CJK_PUNCT + _ZH_HANS_REGISTER, embedder=_MULTILINGUAL_EMBEDDER,
     ),
     "zh-hant": DocLanguage(
         code="zh-Hant", name="Traditional Chinese / 繁體中文", script=LOGOGRAPHIC,
-        title_rule="a 4–12 character noun phrase, no trailing punctuation",
-        prose_rule=_CJK_PROSE, embedder=_MULTILINGUAL_EMBEDDER,
+        title_rule=_ZH_HANT_TITLE,
+        prose_rule=_CJK_PUNCT + _ZH_HANT_REGISTER, embedder=_MULTILINGUAL_EMBEDDER,
     ),
     "ja": DocLanguage(
         code="ja", name="Japanese / 日本語", script=LOGOGRAPHIC,
         title_rule="a 4–16 character noun phrase (体言止め), no trailing punctuation",
-        prose_rule=_CJK_PROSE + " Write descriptions in である/だ体, not です・ます体.",
+        prose_rule=_CJK_PUNCT + " Write descriptions in である/だ体, not です・ます体.",
         embedder=_MULTILINGUAL_EMBEDDER,
     ),
     "ko": DocLanguage(

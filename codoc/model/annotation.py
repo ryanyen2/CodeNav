@@ -55,15 +55,56 @@ class Mark(BaseModel):
 
 
 class CommentStatus(str, Enum):
-    """Lifecycle of an inline comment thread."""
+    """Lifecycle of an inline comment thread.
+
+    ``RESOLVED`` is reached two ways, and they mean the same thing to a reader: the
+    author closed the thread, or the directive it produced landed. Distinguishing them
+    would ask somebody to care about the difference between "I decided this is done" and
+    "the agent finished it", which nobody does once the code is there.
+    """
 
     OPEN = "open"          # authored, not yet handed to the loop
     SENT = "sent"          # handed to Loop B as a one-shot steer
-    RESOLVED = "resolved"  # closed by the author
+    RESOLVED = "resolved"  # closed by the author, or its directive landed
+
+
+class CommentScope(str, Enum):
+    """What a comment asks to change.
+
+    A steer has always been a note about the feature's CODE that deliberately leaves the
+    prose alone — useful mid-generation, when editing the description is the wrong tool.
+    ``BOTH`` is the other request an author actually makes: *do this, and say so* — when
+    the change alters what the feature is for, and a description that still describes the
+    old behaviour is the next reader's bug.
+
+    ``CODE`` stays the default because it is the conservative one: it changes exactly
+    what the author pointed at.
+    """
+
+    CODE = "code"   # change the code; leave the description as written
+    BOTH = "both"   # change the code AND update the description to match
 
 
 class CommentThread(BaseModel):
     """An inline comment thread anchored to a feature's description span.
+
+    A comment is the smallest unit of REQUESTED WORK in codoc: it names a place in the
+    prose, says what should be different, optionally names the code it means, and can be
+    handed to an agent to build. The fields past ``media_ref`` are what make that
+    possible rather than it being a sticky note:
+
+    * ``anchor_text`` — the quoted snippet. Offsets alone identify a span in a
+      description that may since have been rewritten; the words are what let the agent
+      (and the reader) find what was actually being talked about.
+    * ``code_refs`` — ``file::symbol`` (or bare ``file``) targets, which become the
+      directive's ``Edit only:`` scope. Without them a steer inherits every file the
+      feature touches, so "fix the retry in the uploader" licenses edits across the whole
+      subsystem. This is the difference between commenting ON something and commenting
+      NEAR it.
+    * ``scope`` — code only, or code and prose (see :class:`CommentScope`).
+    * ``directive_id`` — the realize directive this comment produced, stamped when Loop B
+      mints it. It is what closes the loop: the thread can then say "this landed", and
+      join to the events (and the commit) its request actually caused.
 
     ``media_ref`` is an optional repo-relative path to a screenshot attachment
     (U6 of the notebook protocol); empty when the thread is text-only.
@@ -76,6 +117,32 @@ class CommentThread(BaseModel):
     status: CommentStatus = CommentStatus.OPEN
     anchor_start: int = 0
     anchor_end: int = 0
+    anchor_text: str = ""
+    code_refs: list[str] = Field(default_factory=list)
+    scope: CommentScope = CommentScope.CODE
+    directive_id: str = ""
     media_ref: str = ""
     created_at: HLC = Field(default_factory=HLC.now)
     updated_at: HLC = Field(default_factory=HLC.now)
+
+
+# How long a RESOLVED thread keeps its place in the margin.
+#
+# Not forever, and not zero. Forever is what shipped, and it made "resolve" a button that
+# could not do its job: the card came back on every projection, so a thread could be
+# closed and never leave, and the margin accumulated finished conversations. Zero throws
+# away the one moment the thread is most useful — the reader wants to see that their
+# request landed, and what code it produced, exactly once.
+#
+# So a closed thread lingers long enough to be noticed and then goes. The RECORD is not
+# deleted; it stays in the store as the durable answer to "why does this code look like
+# this", reachable from history. It just stops being a live conversation on the page.
+RESOLVED_LINGER_S = 3600.0
+
+
+def in_margin(thread: "CommentThread", now_ms: float) -> bool:
+    """Should this thread still be drawn beside the prose?"""
+    if thread.status is not CommentStatus.RESOLVED:
+        return True
+    age_s = (now_ms - thread.updated_at.wall_clock) / 1000.0
+    return 0 <= age_s <= RESOLVED_LINGER_S

@@ -13,6 +13,7 @@ import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
 import type { HoldDetail, HistoryEntry } from '../state/bindings-model';
 import type { AskWalkthrough } from '../state/ask-model';
+import type { RevisionsFile } from '../state/revision-model';
 import type { ViewerInfo } from './viewer-status';
 import type { CommandKind } from '../state/edits-channel';
 
@@ -270,6 +271,13 @@ export interface DocPayload {
      *  the tree byte-identical — which is what lets it arrive at any point in an
      *  edit without a gate of its own. */
     ask?: AskWalkthrough | null;
+    /** W8: the timeline window (`.codoc/revisions.json`) — applied events carrying the
+     *  text each displaced, plus the directives they cite. The editor reconstructs past
+     *  states from it LOCALLY (`state/revision-model.ts`), because a scrubber cannot
+     *  afford a round trip per frame and the webview has no request channel anyway.
+     *  Absent until the daemon has written one (a pre-W8 workspace, or a tree with no
+     *  applied events yet), which the History stance reports rather than failing on. */
+    revisions?: RevisionsFile | null;
     /** monotonic; the webview ignores any payload with a lower rev than the last */
     rev: number;
 }
@@ -356,6 +364,15 @@ export type WebviewMessage =
     | { kind: 'open-binding'; file: string; symbol: string }
     /** Open an external Consult link (a description's `https://` link) in the browser. */
     | { kind: 'open-link'; url: string }
+    /** W8: show what an agent actually wrote for one change — a real before/after diff
+     *  of each touched file, against the commit the directive was handed off at.
+     *  `baseSha` may be empty (no git, or a directive minted before the anchor existed),
+     *  which the host reports rather than opening a diff against nothing. */
+    | { kind: 'open-code-diff'; files: string[]; baseSha: string; title: string }
+    /** W8: open the coding session a change was asked for in — the far end of the
+     *  provenance chain, and the only link in it that was ever a bare id rather than
+     *  something a person could go and read. */
+    | { kind: 'open-session'; sessionId: string }
     /** Accept/Reject a proposal. `edits` (accept only) carries the author's
      *  amendments to an EDITABLE ghost — the daemon applies the proposal with the
      *  edited title/description in place of the proposed text. */
@@ -378,6 +395,11 @@ export type WebviewMessage =
     | { kind: 'comment-create'; doc: PMNode; thread: CommentThread; mediaData?: string; mediaMime?: string }
     /** Edit a comment's body in place (the anchor + mark are unchanged). */
     | { kind: 'comment-edit'; id: string; body: string }
+    /** W8: start the agent on the realize queue NOW (`codoc realize`), rather than
+     *  leaving the queued note for whoever next remembers to run a sync. `featureId` is
+     *  what prompted it, for the terminal's name — the run implements the whole queue,
+     *  since a queue is what the agent reads. */
+    | { kind: 'launch-agent'; featureId: string }
     /** Resolve / delete a comment: drop the thread + its `> …` line; the doc carries
      *  the mark removal. */
     | { kind: 'comment-resolve'; doc: PMNode; id: string }

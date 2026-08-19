@@ -472,6 +472,12 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
                 typer.echo(f"  · {e.source:9} {e.op.kind.value:11} {title}")
 
 
+def _elide(text: str, limit: int = 100) -> str:
+    """One line of prose for a terminal: newlines collapsed, tail elided."""
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
 @app.command()
 def history(
     feature: str = typer.Argument(..., help="Feature id (f-…) or a title fragment."),
@@ -517,6 +523,16 @@ def history(
             typer.echo(line)
             if e.op.rationale:
                 typer.echo(f"      {e.op.rationale}")
+            # The displaced wording, one line, elided. This command has always claimed to
+            # show what a change replaced (`codoc translate` even points people here for
+            # exactly that) and never did: the data was in the row and the reader dropped
+            # it, so the promise was true about the ledger and false about the output.
+            if e.op.prev_title is not None and e.op.title is not None:
+                typer.echo(f"      title: {e.op.prev_title!r} → {e.op.title!r}")
+            if e.op.prev_description is not None:
+                typer.echo(f"      was: {_elide(e.op.prev_description)}")
+                if e.op.description is not None:
+                    typer.echo(f"      now: {_elide(e.op.description)}")
 
 
 @app.command()

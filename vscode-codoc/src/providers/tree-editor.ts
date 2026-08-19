@@ -28,11 +28,12 @@ import { applyAgentProposals, agentAmendsFrom } from '../state/agent-proposals';
 import { moveCommand, featureUnits } from '../state/commands-from-doc';
 import { EditProvenance } from '../state/edit-provenance';
 import {
-    CommentThread, commentNoteText, reconcileComments,
+    CommentThread, commentNoteText, mergeThreads, reconcileComments, storedThreads,
 } from '../state/comment-model';
 import { directedEdges, heldFeatures, heldDetail, divergentFeatures, blocksForFeature, mintedByLocalId } from '../state/bindings-model';
 import { DOC_LANGUAGE_CHOICES, writeDocLanguage } from '../state/doc-language';
 import { readDocLanguage } from '../state/codoc-config';
+import { openPastDiff } from './past-content';
 import {
     EditsFile, parseEditsFile, emptyEditsFile, CommandEntry,
 } from '../state/edits-channel';
@@ -272,6 +273,9 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await vscode.commands.executeCommand('codoc.openRef', msg.file, sym);
                     return;
                 }
+                case 'open-code-diff':
+                    await this.openCodeDiff(document, msg.files, msg.baseSha, msg.title);
+                    return;
                 case 'open-link':
                     // Consult strand: open the external page in the browser. The
                     // Consult signal is specified as `https://` links only, so a
@@ -309,6 +313,15 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     await this.editComment(document, msg.id, msg.body);
                     post();
                     return;
+                case 'open-session':
+                    await this.openSession(msg.sessionId);
+                    return;
+                case 'launch-agent':
+                    // The steer is already on its way (comment-create ran first). This
+                    // only decides to run the queue NOW instead of leaving it for the
+                    // next sync — see extension.ts's codoc.realize.
+                    await vscode.commands.executeCommand('codoc.realize');
+                    return;
                 case 'comment-resolve':
                     await this.resolveComment(document, msg.doc, msg.id);
                     post();
@@ -336,8 +349,12 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     return;
                 case 'set-pref':
                     await this.setPref(document, msg.pref, msg.value);
-                    // No payload repost needed — the webview already applied it
-                    // optimistically; persistence is all the host owes here.
+                    // Normally no repost: the webview already applied the pref
+                    // optimistically and persistence is all the host owes. History is the
+                    // exception — turning it on is a request for DATA the payload
+                    // withholds while it is off (W8 `revisions`), so this one flip has to
+                    // go back to the host and return with it.
+                    if (msg.pref === 'blame') post();
                     return;
                 case 'set-doc-language':
                     await this.setDocLanguage(document, msg.code);
@@ -562,6 +579,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             feature_id: thread.featureId, text: commentNoteText(thread),
             comment_id: thread.id,
             ...(thread.media ? { media: thread.media.ref, media_kind: thread.media.kind } : {}),
+            // W8: the steer carries the whole thread, so the daemon can persist it (a
+            // comment used to live only in this process's memory) and scope the directive
+            // to the code the note actually named.
+            body: thread.body,
+            anchor_text: thread.anchorText,
+            ...(thread.codeRefs?.length ? { code_refs: thread.codeRefs } : {}),
+            ...(thread.scope && thread.scope !== 'code' ? { scope: thread.scope } : {}),
             ts: Date.now(),
         });
     }
@@ -610,9 +634,19 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     /** Resolve / delete a comment (U4): drop the thread from the live store. The
      *  projection's comment mark clears when the daemon next renders; no tree.doc.json
      *  write (the daemon is its sole writer). */
+    /** Close a thread — durably (W8).
+     *
+     *  This used to filter an in-memory array and nothing else, so a resolve survived
+     *  exactly as long as the tab. It now rides the ordinary host-op log to the daemon,
+     *  which marks the stored thread `resolved` rather than deleting it: a resolved
+     *  comment is the durable answer to "why does this code look like this" — the note,
+     *  the code it named, and the directive it produced — and discarding it at the moment
+     *  it becomes history is the one time that record is most worth keeping. The local
+     *  filter stays, so the card leaves the margin immediately instead of after a pass. */
     private async resolveComment(document: vscode.TextDocument, _doc: PMNode, id: string): Promise<void> {
         const df = this.docFileFor(document);
         df.comments = df.comments.filter(c => c.id !== id);
+        await this.appendHostOp(document, 'resolveComment', { comment_id: id, ts: Date.now() });
     }
 
     /** Resolve an `image` block's repo-relative `.codoc/media/...` ref (or an
@@ -780,13 +814,21 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
         const baselineId = ++this.baselineSeq;
         this.provenance(document).observe(featureUnits(doc), baselineId);
 
-        // Comment lifecycle (U4): the projection carries the anchor MARKS; the thread
-        // bodies live in the in-memory store (seeded from the last tree.doc.json, kept
-        // live by the comment handlers via the steer channel). Drop feature-gone /
-        // settled threads — but no doc mutation / persist (the daemon owns the doc).
+        // Comment lifecycle: the projection carries the anchor MARKS; the bodies come
+        // from the STORE (sidecar `comments`, W8) with this host's not-yet-drained
+        // threads layered on top.
+        //
+        // Before W8 the bodies lived only here, in process memory seeded once from a
+        // legacy tree.doc.json: closing the tab lost every note, and the anchor
+        // underline outlived the thread it pointed at. The store copy is now the
+        // authority; the local copy exists only to cover the window between authoring a
+        // note and the daemon's next pass — without it a fresh comment would blink out
+        // of the margin and back.
+        const stored = storedThreads(this.state.sidecar);
         const rc = reconcileComments(features, prevFile?.comments ?? [], {
             inSync: status.state === 'in_sync',
         });
+        const comments = mergeThreads(stored, rc.threads);
 
         const docFile: DocFile = { version: 1, doc, suggestions: prevFile?.suggestions ?? [], comments: rc.threads };
         this.docFileByUri.set(uri, docFile);
@@ -877,7 +919,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             autoEdits: this.unseenAutoEdits(sidecar),
             suggestions,
             threads,
-            comments: docFile.comments,
+            comments,
             hoverCards,
             pitches,
             awaitingAI: held,
@@ -901,8 +943,95 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             // "dismissed" from "this payload didn't carry one" — omitting it would
             // leave a cleared walkthrough on screen until the next reload.
             ask: this.state.ask,
+            // W8: the timeline window rides the payload only while the stance that reads
+            // it is on. It is the one slice that carries PROSE — the tree's whole recent
+            // edit history, with both sides of every change — and posting that across the
+            // webview boundary on every pass would tax every reader for a view most of
+            // them are not looking at. `set-pref` reposts when History flips on, which is
+            // the one moment the gate can be wrong.
+            revisions: this.prefsFor(document).blame ? this.state.revisions : null,
             rev: ++this.rev,
         };
+    }
+
+    /**
+     * Show what an agent wrote for one change: each touched file, diffed against the
+     * commit its directive was handed off at (W8).
+     *
+     * The tree has always been able to say WHICH code a change touched — bindings are
+     * the whole point — and never what the change DID to it. Joining the recorded base
+     * commit to those files closes that: "codoc rewrote this description" becomes
+     * "…and here are the eleven lines the agent wrote because of it".
+     *
+     * Several files open through a picker rather than as a fan of tabs. Eleven diff tabs
+     * is not a review surface, it is a mess someone has to close.
+     */
+    private async openCodeDiff(
+        document: vscode.TextDocument, files: string[], baseSha: string, title: string,
+    ): Promise<void> {
+        const root = this.state.rootDir;
+        if (!root) return;
+        if (!baseSha) {
+            // Deliberately explicit rather than silent. The affordance was offered
+            // because files were touched; if the anchor is missing the reader is owed
+            // the reason, not a click that does nothing.
+            void vscode.window.showInformationMessage(
+                'codoc did not record which commit this change started from, so it cannot '
+                + 'show a diff. Changes made from now on carry one.');
+            return;
+        }
+        const list = (files ?? []).filter(f => !!f);
+        if (!list.length) return;
+        const pick = list.length === 1
+            ? list[0]
+            : await vscode.window.showQuickPick(list, {
+                title: `Code changed by: ${title}`,
+                placeHolder: 'Pick a file to compare against the commit this change started from',
+            });
+        if (!pick) return;
+        const ok = await openPastDiff(root, baseSha, pick, title);
+        if (!ok) {
+            void vscode.window.showWarningMessage(
+                `codoc will not open "${pick}" — it resolves outside the workspace.`);
+        }
+    }
+
+    /**
+     * Open the coding session a change was asked for in (W8).
+     *
+     * Claude Code stores a session's transcript at
+     * `~/.claude/projects/<cwd with separators flattened to '-'>/<session id>.jsonl`.
+     * That layout is a convention, not an API, so this is written to degrade rather than
+     * assume: no file, no message, or a different agent entirely (`CODOC_AGENT` names
+     * codex/gemini/cursor too) all end in the same honest "codoc recorded which session
+     * asked for this, but cannot find its transcript" — never a broken editor tab.
+     *
+     * Opened read-only in a side column, and never `preview: false`: this is evidence a
+     * reader glances at on the way back to their work, not a document they are switching
+     * to.
+     */
+    private async openSession(sessionId: string): Promise<void> {
+        const root = this.state.rootDir;
+        if (!root || !sessionId) return;
+        const home = process.env.HOME || process.env.USERPROFILE || '';
+        // The id comes from a control file. Anything that is not a plain session id could
+        // walk out of the transcript directory, so it is refused rather than sanitized —
+        // a mangled id has no correct interpretation.
+        if (!home || !/^[A-Za-z0-9._-]+$/.test(sessionId) || sessionId.startsWith('.')) return;
+        const slug = path.resolve(root).replace(/[/\\.]/g, '-');
+        const file = path.join(home, '.claude', 'projects', slug, `${sessionId}.jsonl`);
+        try {
+            await fs.access(file);
+        } catch {
+            void vscode.window.showInformationMessage(
+                `codoc recorded that session ${sessionId} asked for this change, but its `
+                + 'transcript is not on this machine.');
+            return;
+        }
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+        await vscode.window.showTextDocument(doc, {
+            viewColumn: vscode.ViewColumn.Beside, preview: true, preserveFocus: true,
+        });
     }
 
     /** Dismiss the walkthrough overlay by deleting `.codoc/ask.json`.

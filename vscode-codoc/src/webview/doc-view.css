@@ -99,7 +99,7 @@
     --font-mono: 'JetBrains Mono', var(--font-cjk-mono), var(--vscode-editor-font-family, monospace);
 
     /* remaining non-grammar accents: refs = code-ref chips + status default; amend =
-       highlight / comment marks; add / retire = the accept/reject action affordances.
+       comment marks; add / retire = the accept/reject action affordances.
        The op-type rainbow (the old blue/purple proposal hues) was fully retired by U3/U5. */
     --accent-refs: var(--vscode-charts-foreground, var(--vscode-foreground));
     --accent-amend: var(--vscode-charts-yellow, #e6c200);
@@ -653,7 +653,6 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 .ce-btn:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
 .ce-btn.active { background: var(--select-bg); border-color: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
 .ce-btn.ce-bold { font-weight: 700; }
-.ce-btn.ce-italic { font-style: italic; }
 .ce-btn.primary {
     background: var(--vscode-button-background); color: var(--vscode-button-foreground);
     border-color: transparent; font-weight: 600;
@@ -680,10 +679,24 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-phase-editing::after {
 .codoc-code-ref:hover { background: color-mix(in srgb, var(--accent-refs) 22%, transparent); }
 
 /* inline marks (U7) */
-.codoc-highlight { background: color-mix(in srgb, var(--accent-amend) 30%, transparent); border-radius: 2px; }
-/* a commented span keeps the dotted underline; the anchor icon + popover are
-   added by comment-decorations.ts (store-driven) — see "inline comments" below. */
-.codoc-comment { border-bottom: 2px dotted var(--accent-amend); }
+/* A commented span. This is the ONLY thing on the page that says "somebody is talking
+   about these exact words", so it does three jobs, not one: it is visible at rest (the
+   dotted rule), it answers to the pointer (a wash on hover — the tie to its card, which
+   previously did not exist in either direction), and it is a target (the pointer says so,
+   and where the margin is too narrow for cards it opens the thread).
+   `.here` is set from JS when the pointer is on EITHER the words or their card, so the
+   pair light together and a card pushed down the stack still names its sentence. */
+.codoc-comment {
+    border-bottom: 2px dotted var(--accent-amend);
+    cursor: pointer;
+    border-radius: 2px;
+    transition: background var(--dur-fast) var(--ease);
+}
+.codoc-comment:hover,
+.codoc-comment.here {
+    background: color-mix(in srgb, var(--accent-amend) 16%, transparent);
+    border-bottom-style: solid;
+}
 
 /* ── tracked changes (vendored engine: <ins>/<del>) ──────────────────────────
    Kind = shape (insert underlines, delete strikes — colourblind-safe); the author
@@ -703,7 +716,11 @@ del[data-change-id] {
 /* Per-agent tint (F7): the engine marks carry the author role in data-author-id; map
    each to its --ink-* so two agents' proposals read as distinct ink. Themeable here
    (the mark's authorColor attr is left blank so this CSS, not an inline style, drives
-   the hue). The human direction never produces these marks (KTD2). */
+   the hue). ONE human case produces these marks: a deferred edit of the reader's own
+   (loop_b._resolve_content), which inks in the human's neutral --ink-human — the same
+   "the human is the default author, no hue" rule .codoc-role-human follows. Without a
+   rule it fell through to the generic foreground and read as nobody's. */
+ins[data-author-id="human"],       del[data-author-id="human"]       { --author-color: var(--ink-human); }
 ins[data-author-id="claude-code"], del[data-author-id="claude-code"] { --author-color: var(--ink-claude); }
 ins[data-author-id="codex"],       del[data-author-id="codex"]       { --author-color: var(--ink-codex); }
 ins[data-author-id="gemini"],      del[data-author-id="gemini"]      { --author-color: var(--ink-gemini); }
@@ -769,7 +786,9 @@ span[data-change-id] { text-decoration-style: solid; }
     /* the comment margin lives in the right whitespace of the centred prose (no reserved
        column at rest — "default collapsed"). These size the cards + their offset. */
     --cmt-w: 296px; --cmt-gap: 28px;
-    transition: padding-left .32s var(--ease-out);
+    /* (a `transition: padding-left` used to live here, aimed at softening the comment
+       reflow. It never fired: nothing ever changed this element's padding — the reflow
+       was margins on the child. The reflow is gone; so is the transition.) */
 }
 /* the one-page article reads in the editorial body family (Inter, P1) — the single
    biggest "document, not panel" lever. --font-doc falls back to the UI font.
@@ -779,16 +798,17 @@ span[data-change-id] { text-decoration-style: solid; }
     outline: none; font-family: var(--font-doc);
     max-width: 46rem; margin: 0 auto;
 }
-/* when a comment thread (or the composer) is present, slide the prose left of centre so the
-   margin cards get dedicated room beside the text instead of overlapping the page edge. */
-.ce-whole-surface.has-comments .ProseMirror {
-    margin-left: max(0px, calc(50% - 23rem - (var(--cmt-w) + var(--cmt-gap)) / 2));
-    margin-right: calc(var(--cmt-w) + var(--cmt-gap));
-}
-@media (max-width: 1100px) {
-    /* not enough room to slide + keep a full measure → cards overlay the right margin instead */
-    .ce-whole-surface.has-comments .ProseMirror { margin: 0 auto; }
-}
+/* The prose does NOT move when a comment appears.
+   It used to: `.has-comments` swapped these margins, sliding the column 162px left on a
+   wide window and — at every width people actually use — narrowing the measure so the
+   whole document re-wrapped, in one unanimated frame. It fired when somebody else's
+   comment ARRIVED, not only when you opened the composer, and authoring one fired it
+   three times (open, close-before-echo, echo).
+   The cards hang in the whitespace that already exists, exactly as the walkthrough's
+   cards do (`.ce-ask-mcard`, which refused this reflow for the same reason); when that
+   whitespace is too narrow to hold one without covering the text, the editor stops
+   drawing cards at all and the anchor opens the thread as a popover instead
+   (`marginFits`). Either way the reader's page stays where they left it. */
 .ce-whole-surface .ProseMirror:focus { outline: none; }
 
 /* feature headings — Notion-style: flush-left, hierarchy by a STRONG type scale
@@ -1228,10 +1248,15 @@ body.vscode-high-contrast .ce-retire-proposed-body {
    or delete code, and one whose verdict is already recorded and waiting. Everything
    else stays hidden until you go to the feature. */
 .ce-verdict.cq-build, .ce-verdict.cq-remove, .ce-verdict.waiting { opacity: 0.8; }
+/* A third: your own edit, deferred because someone wrote the same lines while you were
+   editing. Sentences you typed are not in the document and nothing else on screen says
+   so — a state a reader must not have to hover to discover. */
+.ce-verdict.yours { opacity: 0.8; }
 /* the placeholder's verdict sits under its text rather than inline with a heading */
 .ce-ghost-feature .ce-verdict { display: flex; margin: 0 0 0.6em; }
-/* the non-color direction label (U6/R8): "from code" in plain text so the change's
-   origin reads without relying on hue. */
+/* the non-color direction label (U6/R8): the origin in plain text ("from code", or
+   "your version — waiting for review" on a deferred edit of the reader's own — see
+   grammar.directionOrigin) so it reads without relying on hue. */
 .ce-tc-dir { font: 10px var(--vscode-font-family); color: var(--fg-muted); letter-spacing: 0.01em; }
 .ce-tc-cascade { font-size: 10px; opacity: 0.8; color: var(--dir-review); }
 /* the user has an unlanded edit on this feature — accepting is a choice between two
@@ -1380,16 +1405,16 @@ body.vscode-using-screen-reader .ce-verdict.waiting .ce-icon { animation: none; 
 }
 .ce-bub-btn:hover { background: var(--hover-bg); }
 .ce-bub-btn.ce-bub-bold { font-weight: 700; }
-.ce-bub-btn.ce-bub-italic { font-style: italic; }
-.ce-bub-btn.ce-bub-hl:hover { background: color-mix(in srgb, var(--accent-amend) 22%, transparent); }
 .ce-bub-sep { width: 1px; margin: 3px 2px; background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
 
 /* ── right-margin comments (Notion-style) ─────────────────────────────────────
    Persistent thread cards + the composer live in the doc's right whitespace,
    absolutely positioned INSIDE the scroll surface (so they scroll with the prose)
    and aligned to the anchored text's vertical offset. Right-aligned at a fixed
-   inset so they don't chase the prose width; the surface gains `.has-comments`
-   which slides the prose left to make room (see the .ProseMirror rules above). */
+   inset so they don't chase the prose width. They hang in the whitespace that already
+   exists — the prose is never moved to make room (see the .ProseMirror note above), and
+   where that whitespace is too narrow the editor draws no cards at all and the anchor
+   opens the thread as a popover instead. */
 .ce-cmt-card,
 .ce-cmt-composer.in-margin {
     position: absolute; right: 16px; left: auto; width: var(--cmt-w, 296px);
@@ -1401,8 +1426,22 @@ body.vscode-using-screen-reader .ce-verdict.waiting .ce-icon { animation: none; 
     border-left: 2px solid color-mix(in srgb, var(--accent-amend) 55%, transparent);
     border-radius: 10px; box-shadow: var(--shadow-pop-sm);
     padding: 9px 11px; font: 12px var(--vscode-font-family); cursor: default;
-    transition: top .22s var(--ease-out);
+    /* Cards are now REUSED across a re-layout (keyed by thread id), so `top` finally has
+       an element to animate on — previously every keystroke destroyed and rebuilt them,
+       which both teleported them and replayed the entrance animation each time. */
+    transition: top .22s var(--ease-out), box-shadow var(--dur-fast) var(--ease);
     animation: ce-pop-in var(--dur-base) var(--ease-out);
+}
+/* Hovering either half lights both. The card lifts rather than changing hue: hue here
+   already encodes thread STATUS (open / sent / resolved) and must not also mean "focused". */
+.ce-cmt-card.here {
+    box-shadow: var(--shadow-pop), 0 0 0 1px color-mix(in srgb, var(--accent-amend) 55%, transparent);
+}
+/* A card the stack pushed off its own line grows a leader back up to it, so the vertical
+   alignment breaking does not take the anchor relationship with it. */
+.ce-cmt-card.pushed::before {
+    content: ''; position: absolute; right: -1px; top: -10px; width: 1px; height: 10px;
+    background: color-mix(in srgb, var(--accent-amend) 45%, transparent);
 }
 .ce-cmt-card.sent { border-left-color: color-mix(in srgb, var(--fg-muted) 45%, transparent); opacity: 0.85; }
 .ce-cmt-card-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; }
@@ -1473,8 +1512,7 @@ body.vscode-high-contrast .ce-cmt-card { outline: 1px solid var(--vscode-contras
 /* HC floors for the selection toolbar: the faint divider + the low-% hover washes
    vanish under high contrast, so raise them to a real border / solid fill. */
 body.vscode-high-contrast .ce-bub-sep { background: var(--vscode-contrastBorder, var(--vscode-foreground)); }
-body.vscode-high-contrast .ce-bub-btn:hover,
-body.vscode-high-contrast .ce-bub-btn.ce-bub-hl:hover {
+body.vscode-high-contrast .ce-bub-btn:hover {
     background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
     outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
 }
@@ -1764,15 +1802,34 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-saved-flash::after {
 .ce-blame-who.ce-blame-human { color: var(--blame-human); }
 .ce-blame-who.ce-blame-agent { color: var(--blame-agent); }
 .ce-blame-who.ce-blame-loop  { color: var(--blame-loop); }
-/* the attribution rail down a feature's description blocks */
-.ce-blame-rail { position: relative; }
-.ce-blame-rail::before {
-    content: ''; position: absolute; left: -12px; top: 0.15em; bottom: 0.15em;
-    width: 2px; border-radius: 2px; opacity: 0.6;
+/* ── inline authorship (W9) ───────────────────────────────────────────────────
+   Who wrote THIS sentence, under the sentence — replacing a rail that said "somebody
+   edited this feature", which is not a question anyone asks. It was also one of FOUR
+   rails competing for the same `::before` on a description paragraph, so turning the
+   History stance on used to erase the "recorded, not sent" and "queued for the agent"
+   cues: a reader asking who wrote something lost the signals about work they owed.
+
+   A quiet underline, not a wash: authorship is a property OF the prose, and a background
+   would make it a highlight — a different grammar this surface already uses for search
+   and for walkthrough quotes. Spans are only drawn where authorship is genuinely mixed
+   (see `significantSpans`), so uniform prose stays completely clean. */
+.ce-blame-span {
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 3px;
+    text-decoration-color: color-mix(in srgb, currentColor 32%, transparent);
 }
-.ce-blame-rail.ce-blame-human::before { background: var(--blame-human); }
-.ce-blame-rail.ce-blame-agent::before { background: var(--blame-agent); }
-.ce-blame-rail.ce-blame-loop::before  { background: var(--blame-loop); }
+.ce-blame-span.ce-blame-human { text-decoration-color: color-mix(in srgb, var(--blame-human) 60%, transparent); }
+.ce-blame-span.ce-blame-agent { text-decoration-color: color-mix(in srgb, var(--blame-agent) 70%, transparent); }
+.ce-blame-span.ce-blame-loop  { text-decoration-color: color-mix(in srgb, var(--blame-loop) 65%, transparent); }
+/* Who, on demand — the words carry the hue, the name arrives when asked for. Printing a
+   name beside every run would turn a paragraph into a changelog. */
+.ce-blame-span:hover::after {
+    content: attr(data-blame-who);
+    font: 10px var(--font-mono); color: var(--fg-faint);
+    margin-left: 4px; vertical-align: 1px;
+}
+body.vscode-high-contrast .ce-blame-span { text-decoration-color: var(--vscode-contrastBorder); }
 
 /* ───────────────────────────────────────────────────────────────────────────
    Viewer status (hub only) — what happens to what I type.
@@ -2456,3 +2513,219 @@ body.vscode-reduce-motion .ce-find { animation: none; }
 }
 body.vscode-high-contrast .ce-find-match { background: none; box-shadow: inset 0 -2px 0 var(--vscode-foreground); }
 body.vscode-high-contrast .ce-find-current { background: none; box-shadow: 0 0 0 1px var(--vscode-foreground); }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   W8 — the time machine: the timeline scrubber + the document as it read then.
+
+   Two surfaces, one rule between them: it must be UNMISTAKABLE which one you are
+   looking at. A reader who thinks Tuesday's prose is today's will act on it, so the
+   past does not merely lack an editing caret — it is tinted, watermarked at the top of
+   the page, and it puts a persistent way back on screen. Everything expensive about
+   this design is spent on that one distinction.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* The bar earns a row, like the walkthrough bar and unlike the transient find widget:
+   a reader scrubbing history is doing that for a while, and a floating strip over the
+   prose would occlude the thing they are reading. */
+.doc-host:has(> .ce-timeline:not([hidden])) { flex-direction: column; }
+.doc-host:has(> .ce-timeline:not([hidden])) > .codoc-whole-editor { height: auto; min-height: 0; }
+
+.ce-timeline {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: 5px clamp(20px, 3.5vw, 56px);
+    background: var(--vscode-editor-background);
+    border-bottom: var(--rule);
+    animation: ask-bar-in var(--dur-fast) var(--ease-out) both;
+}
+.ce-timeline[hidden] { display: none; }  /* author `display` beats UA `[hidden]` — see .ce-find */
+body.vscode-reduce-motion .ce-timeline { animation: none; }
+
+/* The caption is the headline and the hover target; it never shouts, because it is
+   describing somebody's work back to them, not labelling a control. */
+.ce-tl-caption {
+    flex: 0 1 auto; min-width: 0; text-align: left;
+    font: 11px/1.5 var(--font-doc); color: var(--fg-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: transparent; border: 0; padding: 2px 4px; border-radius: var(--radius-ctrl);
+    cursor: pointer;
+}
+.ce-tl-caption:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
+.ce-timeline.past .ce-tl-caption { color: var(--vscode-foreground); }
+
+/* The track: real ticks under a real range input. The input keeps its own hit area
+   (drag, arrows, Home/End, screen-reader announcement); the ticks are decoration. */
+.ce-tl-track { flex: 1 1 auto; position: relative; min-width: 120px; height: 20px; }
+.ce-tl-ticks { position: absolute; inset: 0; pointer-events: none; }
+.ce-tl-tick {
+    position: absolute; top: 50%; width: 2px; height: 7px;
+    margin-top: -3.5px; margin-left: -1px; border-radius: 1px;
+    background: var(--fg-faint);
+}
+/* Authorship, not direction — the same three role hues the blame rail uses, so one
+   glance down the timeline says who has been working. */
+.ce-tl-tick.role-human { background: var(--blame-human); }
+.ce-tl-tick.role-agent { background: var(--blame-agent); }
+.ce-tl-tick.role-loop  { background: var(--blame-loop); }
+.ce-tl-tick.here { height: 13px; margin-top: -6.5px; width: 3px; margin-left: -1.5px; opacity: 1; }
+
+.ce-tl-range {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    margin: 0; background: transparent; -webkit-appearance: none; appearance: none;
+    cursor: ew-resize;
+}
+.ce-tl-range:disabled { cursor: default; opacity: 0.4; }
+.ce-tl-range::-webkit-slider-runnable-track {
+    height: 1px; background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+}
+.ce-tl-range::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 11px; height: 11px; margin-top: -5px; border-radius: 999px;
+    background: var(--vscode-editor-background);
+    border: 2px solid var(--accent);
+}
+.ce-tl-range::-moz-range-track {
+    height: 1px; background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+}
+.ce-tl-range::-moz-range-thumb {
+    width: 11px; height: 11px; border-radius: 999px;
+    background: var(--vscode-editor-background); border: 2px solid var(--accent);
+}
+.ce-tl-range:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+/* "Now" is filled, not a hairline: it is the way out of a mode, and the one control
+   here that must never be mistaken for decoration. */
+.ce-tl-now {
+    flex: 0 0 auto;
+    font: 11px var(--vscode-font-family); line-height: 1;
+    padding: 4px 10px; border: 0; border-radius: var(--radius-ctrl);
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--vscode-foreground); cursor: pointer;
+}
+.ce-tl-now:hover { background: color-mix(in srgb, var(--accent) 32%, transparent); }
+
+/* The provenance card reuses the hover-card chrome verbatim — same card, same
+   typography, different fields (the rule the walkthrough answer card follows). */
+.ce-tl-card { max-width: 460px; display: flex; flex-direction: column; gap: 3px; }
+.ce-tl-row { display: flex; gap: 8px; font: 11px/1.55 var(--font-doc); }
+.ce-tl-row-k { flex: 0 0 78px; color: var(--fg-faint); }
+.ce-tl-row-v { flex: 1 1 auto; min-width: 0; color: var(--fg-body); word-break: break-word; }
+.ce-tl-diff {
+    margin-top: 6px; align-self: flex-start;
+    font: 11px var(--vscode-font-family); line-height: 1;
+    padding: 5px 10px; border: 0; border-radius: var(--radius-ctrl);
+    background: color-mix(in srgb, var(--dir-review) 22%, transparent);
+    color: var(--vscode-foreground); cursor: pointer;
+}
+.ce-tl-diff:hover { background: color-mix(in srgb, var(--dir-review) 34%, transparent); }
+
+/* ── the document as it read then ─────────────────────────────────────────── */
+
+/* The whole app is tinted while the past is on screen. This is the "you are not
+   looking at today" signal, and it is deliberately impossible to miss from any pane:
+   the tree beside the document is still live and would otherwise silently disagree
+   with it. */
+body.history .ce-past-surface { background: color-mix(in srgb, var(--blame-loop) 4%, transparent); }
+body.history .tree { opacity: 0.55; }
+
+/* Same measure, same family, same rhythm as the editor: this IS the document, and a
+   different-looking page would read as a different document. */
+.ce-past-doc {
+    max-width: 46rem; margin: 0 auto;
+    font-family: var(--font-doc);
+    cursor: default; user-select: text;
+}
+.ce-past-doc p {
+    margin: 0 0 0.6em; white-space: pre-wrap; max-width: 70ch;
+    color: var(--fg-body);
+    font: 13.5px/1.7 var(--font-doc);
+}
+.ce-past-surface { cursor: default; }
+
+/* A changed feature wears the same left rail the blame stance uses, in the accent —
+   the reader's eye needs somewhere to land on a long page where two paragraphs moved. */
+.ce-past-feature { position: relative; }
+.ce-past-feature.changed { }
+.ce-past-feature.changed::before {
+    content: ''; position: absolute; left: -14px; top: 0.4em; bottom: 0.3em;
+    width: 2px; border-radius: 2px;
+    background: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+.ce-past-added::before   { background: color-mix(in srgb, var(--ce-staged) 75%, transparent); }
+.ce-past-removed::before { background: color-mix(in srgb, var(--ce-del) 75%, transparent); }
+/* A section that was retired at this moment is shown where it stood, struck — the one
+   question an absence cannot answer is what the absent thing said. */
+.ce-past-removed .codoc-feature-heading { text-decoration: line-through; color: var(--fg-muted); }
+.ce-past-removed p { color: var(--fg-muted); }
+
+/* The diff itself: added words underlined, removed words struck where they stood.
+   Same grammar as the loop-rewrite review surface, so a reader who has learned one has
+   learned both. */
+.ce-past-add {
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--ce-staged) 85%, transparent);
+    text-decoration-thickness: 1.5px; text-underline-offset: 3px;
+    color: var(--fg-strong);
+}
+.ce-past-del {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--ce-del) 85%, transparent);
+    text-decoration-thickness: 1.5px;
+    color: var(--fg-faint);
+}
+.ce-past-gone { opacity: 0.75; }
+
+/* The honest failure, stated in the reader's own page rather than swallowed. */
+.ce-past-unresolved {
+    font: 11.5px/1.6 var(--font-doc) !important;
+    color: var(--fg-faint) !important;
+    border-left: 2px solid color-mix(in srgb, var(--ce-del) 45%, transparent);
+    padding-left: 10px;
+}
+.ce-past-empty { color: var(--fg-faint); font: 13px/1.7 var(--font-doc); }
+
+/* High-contrast floors: every cue above rests on a tint, which washes out under HC. */
+body.vscode-high-contrast .ce-past-feature.changed::before { background: var(--vscode-contrastBorder); }
+body.vscode-high-contrast .ce-past-add { text-decoration-color: var(--vscode-contrastBorder); }
+body.vscode-high-contrast .ce-past-del { text-decoration-color: var(--vscode-contrastBorder); }
+body.vscode-high-contrast .ce-tl-tick { background: var(--vscode-contrastBorder); }
+body.vscode-high-contrast .ce-tl-now,
+body.vscode-high-contrast .ce-tl-diff { border: 1px solid var(--vscode-contrastBorder); }
+
+/* ── W8: a comment as a unit of requested work ───────────────────────────────
+   Three states now, not two. "sent" used to be terminal — a note went out and nothing
+   ever came back — so the card could never distinguish "the agent has this" from "the
+   agent did it". `resolved` is the state that was missing, and it earns the calmest
+   treatment of the three: it is a record, not a request. */
+.ce-cmt-card.resolved {
+    border-left-color: color-mix(in srgb, var(--ce-staged) 70%, transparent);
+    opacity: 0.8;
+}
+.ce-cmt-card.resolved .ce-cmt-state { color: var(--ce-staged); }
+
+/* What the note scoped itself to. Shown BEFORE the agent acts, not only after: a reader
+   should be able to see what they licensed while they can still change it. Mono, because
+   these are file and symbol paths and reading them as prose is how you miss a typo. */
+.ce-cmt-scope {
+    margin-top: 4px;
+    font: 10.5px/1.5 var(--font-mono);
+    color: var(--fg-faint);
+    word-break: break-all;
+}
+
+/* "Build it" — the affirmative verb, so it carries the accent fill while plain "Send"
+   stays a hairline. Two buttons that look identical would make the consequential one
+   (an agent starts writing to your source files) indistinguishable from the safe one. */
+.ce-cmt-build {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    border-color: transparent;
+}
+.ce-cmt-build:hover { background: color-mix(in srgb, var(--accent) 36%, transparent); }
+.ce-cmt-seecode { color: var(--dir-review); }
+body.vscode-high-contrast .ce-cmt-build { border: 1px solid var(--vscode-contrastBorder); }
+body.vscode-high-contrast .ce-cmt-card.resolved { border-left-color: var(--vscode-contrastBorder); }
+
+/* The card's action row. Two verbs at most — the code a change produced, and the
+   conversation that asked for it — so they sit on one line rather than stacking. */
+.ce-tl-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ce-tl-actions .ce-tl-diff { margin-top: 0; }

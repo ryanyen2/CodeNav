@@ -65,11 +65,41 @@ Two markdown-native signals in descriptions feed Loop B directives:
   agent WebFetches them before implementing. The editor underlines them so an
   author can see the link registered as an instruction.
 
-**Steering comments** (`STEER FEATURE` directives) come from the IDE's inline-
-comment surface, which writes them to `edits.json` (`drain_steers`). Typing a
+**Comments are the unit of requested work.** An inline comment on a span of prose
+becomes a `STEER FEATURE` directive through `edits.json` (`drain_steers`). Typing a
 `> …` line into a description does NOT create one: the webview stopped writing
 `tree.codoc` in U6, and U7 retired the text-ingest path that used to read `> ` lines
 out of it (see `loop_b` step 2.7), so a `> ` line is now ordinary prose.
+
+A comment carries four things beyond its text, and together they turn a sticky note
+into a request an agent can act on precisely:
+
+- **the code it means** — `codoc:` citations inside the commented span become the
+  directive's `Edit only:` scope (`comment-model.codeRefsIn`). No picker and no new
+  syntax: a description already cites its code inline, so the sentence you select
+  usually names what you mean. A comment that cites nothing keeps the feature's whole
+  binding set, which is what "no code in particular" honestly means.
+- **the sentence it replies to** (`anchor_text`) — a note reads as a correction, and
+  without the claim it corrects the agent has to guess.
+- **its scope** — `code` (the historic steer: change the implementation, leave the
+  author's prose alone) or `both` (also bring the description in line).
+- **its outcome** — the thread records the directive it produced and reaches
+  `resolved` when that directive lands, so it can then show the code it caused.
+
+Threads are **durable**, in the store's `comments` table and the sidecar's `comments`
+slice; they used to live in extension-host memory and vanish with the tab. A resolved
+thread lingers about an hour and then leaves the margin (`annotation.in_margin`) — long
+enough to read what your request produced, and no longer; the record itself is never
+deleted. **The document never moves for a comment**: the margin cards hang in the
+whitespace that already exists and, where it is too narrow to hold one without covering
+the prose, the anchor opens the thread as a popover instead. (It used to slide the whole
+prose column sideways — on arrival as well as authoring, and three times over when you
+wrote one.) Hovering either the commented words or their card lights both, which is what
+ties a card to its sentence once the stack has pushed it off its own line. **Build it**
+in the composer sends the note, asks for the prose to follow, and runs `codoc realize`
+in a terminal — the one place codoc lets an agent write to your source files, so it is
+visible and interruptible rather than a background spawn. It is offered in the
+extension only; a hub contributor has no working tree to run against.
 
 **Reading the tree** (surfaces that change nothing):
 - `/codoc:ask <question>` answers a question by drawing a numbered *walkthrough* — a
@@ -81,6 +111,50 @@ out of it (see `loop_b` step 2.7), so a `> ` line is now ordinary prose.
 - In the Codoc Tree editor, `Cmd+F` / `Cmd+Alt+F` search and replace across feature
   titles and descriptions (the raw `tree.codoc` is a read-only export, so this is the
   only place to search/rename the tree).
+- The **History** toolbar stance answers two questions in place: **who wrote this
+  sentence** (inline authorship, underlined per span — not per node; see below) and
+  **what did this page say before** (a **timeline scrubber** above the document; dragging
+  it left renders the tree as it read then, with that moment's change marked in the prose
+  where it happened). See "Reading the tree's own past".
+
+## Reading the tree's own past (the timeline)
+
+Turning on **History** reveals a scrubber over every moment the tree has been in.
+Dragging back replaces the page with a **read-only reconstruction** — never the live
+editor with old text in it, because the editor is wired to a settle→command pipeline
+whose job is to report document changes, and pushing Tuesday's prose through it would
+record the author reverting the whole tree. The past page is tinted and the tree pane
+dims, so it is never mistakable for today.
+
+The chain behind every change is one hover away (`state/provenance.ts`, rendered by
+`webview/provenance-card.ts`): **what changed → the directive that asked for it → the
+prompt a person typed → the session they typed it in → the commit the code work started
+from → the code diff itself**. Every link already existed in the ledger; nothing showed
+them together. The same card hangs off the History stance's per-feature label, so the
+question can be asked at a paragraph as well as at a moment.
+
+**Blame is per SPAN, not per feature** (`state/inline-blame.ts`). A feature is several
+paragraphs written by a person, a loop pass and an agent in turn, so "claude-code edited
+this 3h ago" answers a question nobody asks — the reader is deciding whether to trust one
+CLAIM. Replaying the revision window's word diffs forward attributes each surviving span
+to the party that introduced it, using data already on the wire. A span the ledger cannot
+account for stays **unattributed**: crediting it to the nearest editor is precisely the
+error the per-node version made, and doing that per word would multiply it. Where one
+author owns a whole description nothing is drawn at all — the heading's own label already
+says so, and underlining every word to report it would be the node-level signal again.
+
+Two rules make it trustworthy:
+
+- **It reconstructs backwards from the live document**, locally. A scrubber cannot
+  afford a round trip per frame and the webview has no request channel — so the daemon
+  ships a bounded window of applied events carrying the text each one DISPLACED
+  (`.codoc/revisions.json`, `codoc/loop/revisions.py`), and `state/revision-model.ts`
+  un-applies them. Recording what an op destroys is `loop/apply._record_displaced`, at
+  the one write boundary.
+- **It says what it cannot reconstruct.** An event written before codoc recorded the
+  displaced value knows a feature changed and not what it changed from. There is no
+  backfill and there must not be one: such a change is reported as unreconstructible
+  rather than diffed against invented words.
 
 ## Authoring language
 
@@ -171,7 +245,10 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   rationale), inbox.py, status.py, fsio.py (atomic
              #   IO), subtree.py, bootstrap_hier.py, title_dedup.py (opt-in semantic
              #   title dedup), migrate.py (one-time store-authoritative workspace
-             #   heal), sdk_realize.py / autorealize.py, watch.py
+             #   heal), sdk_realize.py / autorealize.py, watch.py,
+             #   revisions.py (the timeline transport: applied events + the text each
+             #   displaced + the directives they cite), gitref.py (the commit a
+             #   directive's code work started from — fails soft to "")
 blocks/      # typed-media blocks + plugin codecs (agent-native notebook protocol):
              #   base.py (Capability LIFT/LOWER/CONSULT + BlockPlugin), registry.py,
              #   builtins.py, prose.py (plugin-zero), diagram.py (graph→mermaid lift +

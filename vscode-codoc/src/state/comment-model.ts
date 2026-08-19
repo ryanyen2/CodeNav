@@ -20,9 +20,17 @@
  *     drop threads whose feature is gone.
  */
 import type { ParsedFeature } from './tree-model';
-import type { PMNode } from './pm-doc';
+import { REF_RE_SOURCE, type PMNode } from './pm-doc';
 
-export type CommentStatus = 'open' | 'sent';
+/** `resolved` is reached two ways and means the same thing to a reader: the author
+ *  closed the thread, or the directive it produced landed. */
+export type CommentStatus = 'open' | 'sent' | 'resolved';
+
+/** What a comment asks to change. `code` (the default) steers the implementation and
+ *  leaves the author's prose alone — the historic steer. `both` additionally asks for
+ *  the description to be brought in line, for when the change alters what the feature is
+ *  FOR and a description still describing the old behaviour is the next reader's bug. */
+export type CommentScope = 'code' | 'both';
 
 export interface CommentThread {
     /** Stable id, also the `comment` mark's threadId (the doc-side visual anchor). */
@@ -49,9 +57,42 @@ export interface CommentThread {
      *  `.codoc/media/`; `kind` names the CONSULT plugin (`screenshot`). It rides the
      *  steer and is consumed once by realization — never a durable block. */
     media?: { kind: string; ref: string };
+    // ── what makes a comment a unit of requested WORK (W8) ────────────────────
+    /** `file::symbol` (or bare `file`) targets this note is about — they become the
+     *  directive's `Edit only:` scope. Seeded from the citations inside the commented
+     *  span, because the tree already says which code its prose is about: comment on a
+     *  sentence that cites `[handle](codoc:upload.py#handle)` and the note is scoped to
+     *  that, with nothing to pick. Empty ⇒ the whole feature, which is what a note
+     *  attached to nothing in particular actually means. */
+    codeRefs?: string[];
+    /** Code only, or code AND the description (see `CommentScope`). Absent ⇒ `code`. */
+    scope?: CommentScope;
+    /** The realize directive this note became, stamped by the daemon. Its presence is
+     *  what lets a thread say "this landed" and offer the code it produced. */
+    directiveId?: string;
 }
 
 const ANCHOR_MAX = 60;
+
+/** `[label](codoc:file#symbol)` citations inside a span, as `file::symbol` targets.
+ *
+ *  This is the whole "specify WHICH code" mechanism, and it needed no new UI: a codoc
+ *  description cites its code inline, so the sentence an author selects to comment on
+ *  usually already names what they mean. Selecting prose that cites nothing yields
+ *  nothing, and the note falls back to the feature's full scope — which is the honest
+ *  reading of a comment that pointed at no code in particular.
+ *
+ *  Deduped, order-preserving; a bare `codoc:file` ref (no `#symbol`) yields the file. */
+export function codeRefsIn(text: string): string[] {
+    const re = new RegExp(REF_RE_SOURCE, 'g');
+    const out: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text ?? '')) !== null) {
+        const target = m[3] ? `${m[2]}::${m[3]}` : m[2];
+        if (target && !out.includes(target)) out.push(target);
+    }
+    return out;
+}
 
 /** Mint a thread id. Prefixed `cm-` so it never collides with feature/event ids.
  *  Used for webview-authored comments (one mint per user action). */
@@ -318,4 +359,80 @@ export function stripOrphanComments(doc: PMNode, liveIds: Set<string>): PMNode {
     };
     const out = visit(doc);
     return mutated ? out : doc;
+}
+
+
+// ── the store's copy (W8) ────────────────────────────────────────────────────
+
+/** The daemon-written comment threads, read off the sidecar `comments` slice.
+ *
+ *  This is the durable half. A thread here has survived the tab that authored it, knows
+ *  which directive it produced, and can say whether that directive landed — none of
+ *  which the host's in-memory copy could ever report. */
+export function storedThreads(sidecar: { comments?: Record<string, unknown[]> }): CommentThread[] {
+    const out: CommentThread[] = [];
+    for (const rows of Object.values(sidecar?.comments ?? {})) {
+        for (const raw of rows ?? []) {
+            const r = raw as Record<string, unknown>;
+            const id = typeof r.id === 'string' ? r.id : '';
+            const featureId = typeof r.feature_id === 'string' ? r.feature_id : '';
+            if (!id || !featureId) continue;
+            const status = r.status === 'sent' || r.status === 'resolved' ? r.status : 'open';
+            out.push({
+                id,
+                featureId,
+                anchorText: typeof r.anchor_text === 'string' ? r.anchor_text : '',
+                body: typeof r.body === 'string' ? r.body : '',
+                status,
+                author: typeof r.author === 'string' ? r.author : 'human',
+                // The store keeps an HLC; the UI wants milliseconds for its relative
+                // times. The wall clock is the HLC's leading field.
+                createdAt: hlcMs(typeof r.created_at === 'string' ? r.created_at : ''),
+                serialized: true,
+                codeRefs: Array.isArray(r.code_refs) ? r.code_refs.map(String) : undefined,
+                scope: r.scope === 'both' ? 'both' : undefined,
+                directiveId: typeof r.directive_id === 'string' ? r.directive_id : undefined,
+                media: typeof r.media_ref === 'string' && r.media_ref
+                    ? { kind: 'screenshot', ref: r.media_ref } : undefined,
+            });
+        }
+    }
+    return out;
+}
+
+function hlcMs(at: string): number {
+    const head = (at ?? '').split('-')[0];
+    const n = Number(head);
+    return head && Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * The store's threads with this host's un-drained ones layered over them.
+ *
+ * LOCAL WINS on id collision, and that direction is the load-bearing part: between
+ * authoring a note and the daemon's next pass, the store's copy is either absent or one
+ * revision behind, and preferring it would make a comment blink out of the margin the
+ * moment it was written. Everything the store knows and the local copy does not —
+ * whether the directive landed, which one it was — is carried across rather than lost,
+ * so the merged thread is never a downgrade of either side.
+ */
+export function mergeThreads(stored: CommentThread[], local: CommentThread[]): CommentThread[] {
+    const byId = new Map(stored.map(t => [t.id, t]));
+    for (const t of local) {
+        const prior = byId.get(t.id);
+        byId.set(t.id, prior
+            ? {
+                ...t,
+                // A resolved thread stays resolved: the local copy is a stale optimistic
+                // 'sent' from before the close, and un-resolving it would put a closed
+                // conversation back in the margin.
+                status: prior.status === 'resolved' ? 'resolved' : t.status,
+                directiveId: t.directiveId ?? prior.directiveId,
+                codeRefs: t.codeRefs?.length ? t.codeRefs : prior.codeRefs,
+                scope: t.scope ?? prior.scope,
+                createdAt: prior.createdAt || t.createdAt,
+            }
+            : t);
+    }
+    return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
 }

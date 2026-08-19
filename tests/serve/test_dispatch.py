@@ -247,3 +247,41 @@ def test_command_preserves_base_text_and_session(tmp_path):
     (cmd,) = edits.read_commands(cd)
     assert cmd.base_text == "before"
     assert cmd.session == "hub-3"
+
+
+def test_a_remote_comment_carries_its_whole_thread(tmp_path):
+    """Forwarding only the note's text made a contributor's comment a lesser thing than a
+    local one: it persisted with the framed `re "…":` wrapper as its body, no quoted
+    anchor, and no code targets — so its directive inherited every file the feature
+    touches instead of the one sentence's citation."""
+    from codoc.loop import edits
+    from codoc.serve.dispatch import dispatch
+    from codoc.serve.auth import Capability
+
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir(parents=True)
+    dispatch({"kind": "comment-create", "thread": {
+        "featureId": "f-1", "id": "cm-1", "body": "cap this at 5/min",
+        "anchorText": "Accepts files.", "codeRefs": ["upload.py::handle"], "scope": "both",
+    }}, Capability.SUGGEST, str(codoc_dir))
+
+    [steer] = edits.read_steers(codoc_dir)
+    assert steer.body == "cap this at 5/min"
+    assert steer.anchor_text == "Accepts files."
+    assert steer.code_refs == ["upload.py::handle"]
+    assert steer.scope == "both"
+
+
+def test_a_remote_comment_with_a_junk_scope_falls_back_to_code(tmp_path):
+    """`scope` decides whether an agent also rewrites the author's prose, so an
+    unrecognised value takes the conservative reading rather than the wire's word."""
+    from codoc.loop import edits
+    from codoc.serve.dispatch import dispatch
+    from codoc.serve.auth import Capability
+
+    codoc_dir = tmp_path / ".codoc"
+    codoc_dir.mkdir(parents=True)
+    dispatch({"kind": "comment-create", "thread": {
+        "featureId": "f-1", "id": "cm-1", "body": "note", "scope": "everything",
+    }}, Capability.SUGGEST, str(codoc_dir))
+    assert edits.read_steers(codoc_dir)[0].scope == "code"

@@ -10,6 +10,11 @@
  *   • doc-ahead  — a human changed intent the code must follow; the AGENT resolves
  *     by implementing it (realize.md), then it clears. These are persisted in the
  *     tree.doc.json wrapper because they are doc-side state with no store event yet.
+ *   • yours      — the reader's OWN edit, deferred because a peer wrote the same lines
+ *     (loop_b._resolve_content). Also a store proposal, also resolved by the human —
+ *     it is a separate direction because it is the one that is not the machine's, and
+ *     folding it into code-ahead is what made the surface hand people their own
+ *     sentences back labelled "from code".
  *
  * Storage is block-level ({old,new} per field); the editor renders a word-level
  * inline diff (see doc-diff.ts). One Suggestion can carry a title change and/or a
@@ -17,13 +22,14 @@
  */
 import type { SidecarData } from './bindings-model';
 import type { CommentThread } from './comment-model';
+import type { Direction } from './grammar';
 import {
     PMNode,
     NODE_FEATURE_HEADING,
     FeatureHeadingAttrs,
 } from './pm-doc';
 
-export type SuggestionDirection = 'code-ahead' | 'doc-ahead';
+export type SuggestionDirection = Direction;
 export type SuggestionKind = 'amend' | 'add' | 'move' | 'retire';
 
 export interface Suggestion {
@@ -36,7 +42,8 @@ export interface Suggestion {
     parentId?: string | null;
     /** Who proposed it: human | claude-code | codex | …. */
     originRole: string;
-    /** Human-readable origin label ("code drift" | "agent plan" | "you"). */
+    /** Human-readable origin label ("code drift" | "agent reflection" | "agent plan" |
+     *  "your edit", the deferred-own-edit tag). */
     tag?: string;
     /** Store event id — present for code-ahead (drives inbox.json verdicts). */
     eventId?: string;
@@ -94,9 +101,26 @@ export function parseDocFile(json: unknown): DocFile | null {
 }
 
 /**
- * Derive code-ahead suggestions from the sidecar proposals. `currentTitle` /
- * `currentDescription` provide the settled (old) text for amend diffs (the sidecar
- * proposal carries only the proposed new values).
+ * The direction a sidecar proposal reads in, from the ledger's own `actor` field.
+ *
+ * Almost every pending proposal is the machine's: Loop A reflected a code change, or an
+ * agent proposed a plan. ONE is not — `loop_b._resolve_content` defers a contended edit
+ * by parking the author's own text as a proposal (actor stays `human`) — and stamping
+ * that `code-ahead` with everything else is what made the strip say "from code" over the
+ * reader's own words. `actor` (v4 ledger) is the field that already knows; a payload
+ * from a daemon that predates it carries no actor and falls through to `code-ahead`,
+ * which is what those rows meant.
+ */
+function directionFromActor(actor: string | undefined): SuggestionDirection {
+    return actor === 'human' ? 'yours' : 'code-ahead';
+}
+
+/**
+ * Derive the pending suggestions from the sidecar proposals — every one of them a
+ * change the HUMAN resolves with a verdict, whether the machine proposed it
+ * (`code-ahead`) or it is the reader's own deferred edit (`yours`; see
+ * `directionFromActor`). `currentTitle` / `currentDescription` provide the settled (old)
+ * text for amend diffs (the sidecar proposal carries only the proposed new values).
  */
 export function codeAheadSuggestions(
     sidecar: SidecarData,
@@ -109,10 +133,10 @@ export function codeAheadSuggestions(
 
     for (const [fid, p] of Object.entries(props.by_feature ?? {})) {
         if (p.op === 'retire') {
-            out.push({ id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'retire', featureId: fid, originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined, writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending });
+            out.push({ id: p.event_id, eventId: p.event_id, direction: directionFromActor(p.actor), kind: 'retire', featureId: fid, originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined, writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending });
         } else if (p.op === 'amend') {
             out.push({
-                id: p.event_id, eventId: p.event_id, direction: 'code-ahead', kind: 'amend', featureId: fid,
+                id: p.event_id, eventId: p.event_id, direction: directionFromActor(p.actor), kind: 'amend', featureId: fid,
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 titleOld: currentTitle(fid), titleNew: p.title ?? currentTitle(fid),
                 descOld: currentDescription(fid), descNew: p.description ?? currentDescription(fid),
@@ -123,7 +147,7 @@ export function codeAheadSuggestions(
     for (const [eventId, p] of Object.entries(props.by_event ?? {})) {
         if (p.op === 'add') {
             out.push({
-                id: eventId, eventId, direction: 'code-ahead', kind: 'add', featureId: null, parentId: p.parent_id ?? null,
+                id: eventId, eventId, direction: directionFromActor(p.actor), kind: 'add', featureId: null, parentId: p.parent_id ?? null,
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 titleNew: p.title ?? '', descNew: p.description ?? '',
                 writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
@@ -131,7 +155,7 @@ export function codeAheadSuggestions(
             });
         } else if (p.op === 'move') {
             out.push({
-                id: eventId, eventId, direction: 'code-ahead', kind: 'move', featureId: p.feature_id ?? null, parentId: p.parent_id ?? null,
+                id: eventId, eventId, direction: directionFromActor(p.actor), kind: 'move', featureId: p.feature_id ?? null, parentId: p.parent_id ?? null,
                 originRole: p.actor || roleFromTag(p.tag), tag: p.tag, causedBy: p.caused_by || undefined,
                 writesCode: p.writes_code ?? null, verdictPending: !!p.verdict_pending,
                 afterId: p.after_id ?? null, beforeId: p.before_id ?? null,
@@ -159,12 +183,13 @@ export function insertAtAnchor(list: string[], id: string,
     list.push(id);
 }
 
-/** Map a proposal tag to an authorship role for tinting (best effort). */
+/** Map a proposal tag to an authorship role for tinting (best effort) — the fallback
+ *  for a sidecar written before `actor` existed. "your edit" is the deferred-own-edit
+ *  tag (render._source_tag); everything else is machine-originated. */
 function roleFromTag(tag: string | undefined): string {
     if (!tag) return 'claude-code';
-    if (tag.includes('plan')) return 'claude-code';
-    if (tag.includes('reflection')) return 'claude-code';
-    return 'claude-code'; // "code drift" etc. — agent-originated
+    if (tag.includes('your')) return 'human';
+    return 'claude-code'; // "code drift" / "agent plan" / "agent reflection"
 }
 
 /** The full pending-suggestion list. Since U3/U2b the human commits directly (no

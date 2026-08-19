@@ -28,7 +28,7 @@ describe('U1 — engine marks registered in the schema', () => {
         expect(marks.formatChange).toBeTruthy();
         // codoc's own marks survive registration
         expect(marks.author).toBeTruthy();
-        expect(marks.highlight).toBeTruthy();
+        expect(marks.bold).toBeTruthy();
         expect(marks.comment).toBeTruthy();
     });
 });

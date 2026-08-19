@@ -4,7 +4,9 @@
  * Descriptions carry three markdown-native signals into realize directives. Two
  * of them tell the author they registered; one did not:
  *
- *   • `**bold**` → `Focus:`   — StarterKit's input rule renders it bold. Visible.
+ *   • `**bold**` → `Focus:`   — a real `bold` mark, and `inlineRunsToText` writes it
+ *     back out as `**…**`. Visible, and it survives the save (it did not before: the
+ *     serializer dropped the mark, so the asterisks the daemon needed never existed).
  *   • `[label](https://…)` → `Consult:` — nothing. It stayed raw markdown while
  *     silently becoming an instruction the agent WebFetches before implementing.
  *   • `> …` → STEER — retired (loop_b step 2.7); inline comments carry steers now.

@@ -172,8 +172,20 @@ def _comment_create(message: dict, codoc_dir: str) -> dict:
     cid = thread.get("id") or ""
     if not fid or not text:
         raise CommandError("comment-create requires thread featureId + body")
-    edits.append_steer(codoc_dir, Steer(feature_id=fid, text=text, comment_id=cid,
-                                        ts=int(time.time() * 1000)))
+    # Everything the thread carries, not just its text. Forwarding only `text` made a
+    # remote contributor's comment a lesser thing than a local one: it persisted with the
+    # framed `re "…":` wrapper as its body, no quoted anchor, and — the part that matters
+    # — no code targets, so its directive inherited every file the feature touches instead
+    # of the one the commented sentence cites.
+    refs = thread.get("codeRefs") or thread.get("code_refs") or []
+    scope = thread.get("scope") or "code"
+    edits.append_steer(codoc_dir, Steer(
+        feature_id=fid, text=text, comment_id=cid, ts=int(time.time() * 1000),
+        body=thread.get("body") or "",
+        anchor_text=thread.get("anchorText") or thread.get("anchor_text") or "",
+        code_refs=[str(r) for r in refs] if isinstance(refs, list) else [],
+        scope=scope if scope in {"code", "both"} else "code",
+    ))
     return {"ok": True}
 
 

@@ -9,6 +9,7 @@ import { CodocCodeActionProvider } from './providers/code-actions';
 import { CodocCompletionProvider } from './providers/completion';
 import { CodocDocumentLinkProvider } from './providers/doc-links';
 import { CodocHoverProvider } from './providers/hover';
+import { registerPastContentProvider } from './providers/past-content';
 import { CodocInlayHintsProvider } from './providers/inlay';
 import { CodocFoldingProvider } from './providers/folding';
 import { CodocSymbolProvider } from './providers/symbol';
@@ -159,6 +160,10 @@ export function activate(context: vscode.ExtensionContext): void {
     const state = new WorkspaceState(context);
     const codocSelector: vscode.DocumentSelector = { language: 'codoc' };
 
+    // W8: the read-only `codoc-past:` scheme — a file as it was at a commit, so the
+    // timeline's "open the code diff" has a real left-hand side.
+    registerPastContentProvider(context);
+
     // ── Directive-completion notifications (W3) ───────────────────────────────
     // realized.jsonl gains entries when the realize queue drains — the author's
     // tree edit LANDED as code. Surface it even when they're not watching the
@@ -275,6 +280,37 @@ export function activate(context: vscode.ExtensionContext): void {
             const terminal = vscode.window.createTerminal({ name: 'codoc sync', cwd: state.rootDir });
             terminal.show();
             terminal.sendText('codoc sync');
+        }),
+    );
+
+    // ── codoc.realize — run the queue NOW, in a terminal the author can watch ──
+    //
+    // `codoc realize` is itself the hand-off gesture: with nothing queued it collects the
+    // held drafts, hands them off, and builds realize.md before running the agent. So a
+    // "Build it" that reaches here does the whole thing, and this stays one command.
+    //
+    // A TERMINAL rather than a background spawn, deliberately. This is the one action in
+    // codoc that lets an agent write to the user's source files, and the author must be
+    // able to see what it is doing and stop it — an output channel they have to go and
+    // find is not the same offer. It also matches `codoc.sync` beside it, so both
+    // agent-facing verbs behave the same way.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.realize', () => {
+            if (!state.rootDir) {
+                void vscode.window.showInformationMessage('No codoc tree found. Run `codoc init` first.');
+                return;
+            }
+            if (!vscode.workspace.isTrusted) {
+                // Same gate `startTranslate` applies: running a process in the workspace
+                // is exactly what Restricted Mode exists to withhold.
+                void vscode.window.showWarningMessage(
+                    'codoc will not start an agent in a Restricted Mode workspace. '
+                    + 'Trust this folder to let it implement your notes.');
+                return;
+            }
+            const terminal = vscode.window.createTerminal({ name: 'codoc realize', cwd: state.rootDir });
+            terminal.show();
+            terminal.sendText('codoc realize');
         }),
     );
 

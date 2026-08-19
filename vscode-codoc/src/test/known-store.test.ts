@@ -17,7 +17,7 @@ import { commandsForSettle, settleCommands, type FeatureUnit } from '../state/co
 import type { CommandEntry } from '../state/edits-channel';
 
 const unit = (fid: string, title: string, description: string): FeatureUnit =>
-    ({ fid, localId: null, title, description, parentId: null, retired: false });
+    ({ fid, localId: null, title, description, parentId: null, retired: false, realized: true });
 
 const setDesc = (fid: string, description: string): CommandEntry =>
     ({ id: `c-${fid}`, kind: 'set_description', feature_id: fid, payload: { description } });

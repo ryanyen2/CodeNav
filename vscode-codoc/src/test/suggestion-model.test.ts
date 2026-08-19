@@ -12,6 +12,7 @@ import {
     Suggestion,
 } from '../state/suggestion-model';
 import { emptySidecar, SidecarData } from '../state/bindings-model';
+import { agentAmendsFrom } from '../state/agent-proposals';
 import { makeDoc, featureHeadingNode, textToInlineRuns } from '../state/pm-doc';
 
 function sidecarWith(proposals: SidecarData['proposals']): SidecarData {
@@ -51,6 +52,54 @@ describe('R2: codeAheadSuggestions from sidecar proposals', () => {
         const got = codeAheadSuggestions(sc, curTitle, curDesc);
         expect(got.find(s => s.kind === 'add')).toMatchObject({ parentId: 'f-a', titleNew: 'OAuth', descNew: 'Third-party login.', eventId: 'e-3' });
         expect(got.find(s => s.kind === 'move')).toMatchObject({ featureId: 'f-x', parentId: 'f-b', eventId: 'e-4' });
+    });
+});
+
+describe('a deferred edit of the reader\'s own reads as theirs, not as the codebase', () => {
+    // loop_b._resolve_content parks a contended edit — the AUTHOR's own text — as a
+    // pending proposal (actor stays `human`). Every sidecar proposal used to be stamped
+    // `code-ahead`, so the verdict strip printed "from code" over the reader's own words
+    // and offered them back for a verdict as if the codebase had proposed them.
+    const deferred = () => sidecarWith({
+        by_feature: {
+            'f-a': {
+                op: 'amend', event_id: 'e-7', tag: 'your edit', actor: 'human', mode: 'pen',
+                description: 'Login and sessions, extended.',
+            },
+        },
+        by_event: {},
+    });
+
+    it('takes the `yours` direction from the ledger actor, never code-ahead', () => {
+        const [s] = codeAheadSuggestions(deferred(), curTitle, curDesc);
+        expect(s.direction).toBe('yours');
+        expect(s.originRole).toBe('human');
+        expect(s.descNew).toBe('Login and sessions, extended.');
+    });
+
+    it('an agent-authored proposal is still code-ahead', () => {
+        const sc = sidecarWith({
+            by_feature: { 'f-a': { op: 'amend', event_id: 'e-1', tag: 'agent reflection', actor: 'claude-code', description: 'x' } },
+            by_event: {},
+        });
+        expect(codeAheadSuggestions(sc, curTitle, curDesc)[0].direction).toBe('code-ahead');
+    });
+
+    it('a payload from a daemon predating `actor` still reads code-ahead', () => {
+        const sc = sidecarWith({
+            by_feature: { 'f-a': { op: 'amend', event_id: 'e-1', tag: 'code drift', description: 'x' } },
+            by_event: {},
+        });
+        expect(codeAheadSuggestions(sc, curTitle, curDesc)[0].direction).toBe('code-ahead');
+    });
+
+    it('still materializes as a tracked-change diff, inked as the human', () => {
+        // The verdict strip comes from the suggestion list but the visible DIFF comes
+        // from these marks. Filtering `yours` out would leave a bare Accept/Reject pair
+        // on prose that looks unchanged.
+        const amends = agentAmendsFrom(codeAheadSuggestions(deferred(), curTitle, curDesc));
+        expect(amends).toHaveLength(1);
+        expect(amends[0]).toMatchObject({ featureId: 'f-a', authorId: 'human', changeId: 'e-7' });
     });
 });
 

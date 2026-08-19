@@ -42,6 +42,7 @@ import type { AutoEditInfo } from '../protocol';
 import { ActivityDecorations, PHASES_UPDATED } from './activity-decorations';
 import { BlameDecorations, BLAME_UPDATED } from './blame-decorations';
 import type { HistoryEntry } from '../../state/bindings-model';
+import type { RevisionDirective, Timeline } from '../../state/revision-model';
 import { RevealDecorations, REVEAL_UPDATED } from './reveal-decorations';
 import { AgentRibbon, STEPS_UPDATED } from './agent-ribbon';
 import { HoldDecorations, HOLDS_UPDATED } from './hold-decorations';
@@ -60,11 +61,11 @@ import {
     type FindMatch, type FindOptions, type FindState,
 } from '../find';
 import type { AskStep, AskWalkthrough } from '../../state/ask-model';
-import { resetCommentDecorations } from './comment-decorations';
+import { resetCommentDecorations, showCard } from './comment-decorations';
 import { attachHoverCards, HoverCardData } from './hover-card';
 import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { gateProjection, shouldDeferProjection } from '../doc-gate';
-import { mintCommentId, CommentThread } from '../../state/comment-model';
+import { codeRefsIn, mintCommentId, CommentThread } from '../../state/comment-model';
 import type { HoldDetail } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
@@ -102,6 +103,11 @@ export interface WholeDocEditorOptions {
      *  thread. `media` carries an optional TRANSIENT screenshot attachment (U6) as
      *  base64 bytes for the host to store under `.codoc/media/`. */
     onCommentCreate: (doc: PMNode, thread: CommentThread, media?: { data: string; mime: string }) => void;
+    /** W8 "Build it": start the agent on the queue now, rather than leaving the note for
+     *  whoever next remembers to run a sync. */
+    onLaunchAgent?: (featureId: string) => void;
+    /** W8: show the code a resolved comment's directive actually produced. */
+    onOpenCommentDiff?: (commentId: string, directiveId: string) => void;
     /** Edit a comment's body in place. */
     onCommentEdit: (id: string, body: string) => void;
     /** Resolve a comment: the whole doc (anchor mark removed) + the thread id. */
@@ -116,6 +122,12 @@ export interface WholeDocEditorOptions {
      *  reconcile work now that the code has moved). Replaces the dwell-to-clear
      *  model, whose marks evaporated the moment the reader looked at them. */
     onAutoEditVerdict?: (fid: string, at: string, keep: boolean, prev: string) => void;
+    /** W8: the code files bound to a feature — the diff targets on its blame card. */
+    getFeatureFiles?: (fid: string) => string[];
+    /** W8: open the code behind a feature, against the commit its change started from. */
+    onOpenFeatureDiff?: (fid: string, baseSha: string, files: string[]) => void;
+    /** W8: open the coding session a change was asked for in. */
+    onOpenSession?: (sessionId: string) => void;
     /** Pointer hovering a depends-on / used-by link — drives a transient tree-pane
      *  highlight + scroll-to (preview navigation). null on leave. */
     onHoverFeature?: (fid: string | null) => void;
@@ -157,6 +169,10 @@ export interface WholeDocEditorHandle {
     setBusy: (busy: Record<string, BusyInfo>) => void;
     setSessionLive: (live: boolean) => void;
     setHistory: (history: Record<string, HistoryEntry[]>) => void;
+    /** W8: the directives the history's `caused_by` ids point at. */
+    setDirectives: (directives: Record<string, RevisionDirective>) => void;
+    /** W9: the revision window, replayed for per-span authorship in the History stance. */
+    setTimeline: (timeline: Timeline | undefined) => void;
     setBlame: (on: boolean) => void;
     /** Update the currently-active agent's role — tints the ribbon + resolves its "who" label
      *  (state/presence.ts's roleName/roleInk), matching the presence avatar's tint. */
@@ -326,6 +342,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentSessionLive = false;        // W3: live agent session → "lands next turn" wording
     let currentBlame = false;              // W2: History (blame) stance on
     let currentHistory: Record<string, HistoryEntry[]> = {};  // W2: per-feature edit history
+    // W8: the directives the history cites, so a blame label can resolve `caused_by` into
+    // the request behind it rather than showing a bare id.
+    let currentDirectives: Record<string, RevisionDirective> = {};
+    // W9: the revision window, replayed per feature for inline authorship.
+    let currentTimeline: Timeline | undefined;
     let currentHoldDetail: Record<string, HoldDetail> = {};  // queued-directive {kind,intent} per held fid
     // Edit-lifecycle phase 1 (U3): the "captured" set is computed in the plugin from
     // (live doc vs baseline) ∪ drafts, minus handed-off. The baseline is the feature text
@@ -396,6 +417,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             }),
             AutoEditDecorations.configure({
                 getUnseen: () => currentAutoEdits,
+                // The same set the suggestion layer calls "contested" — here it means the
+                // rewrite's Restore baseline is stale, so the surface stands down rather
+                // than offering a verdict that would discard the author's newer words.
+                getLocallyEdited: () => new Set([...currentDrafts, ...currentHeld]),
                 // The explicit verdict pair (Keep / Restore). Optimistically clear the
                 // local entry so the strip can't double-fire while the host round-trips.
                 handlers: {
@@ -424,6 +449,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             BlameDecorations.configure({
                 getEnabled: () => currentBlame,
                 getHistory: () => currentHistory,
+                // W8: the label becomes the resting answer to "why does this say this?" —
+                // the directive behind the newest change, whose prompt asked for it, and
+                // a way into the code the agent actually wrote because of it.
+                getDirectives: () => currentDirectives,
+                getTimeline: () => currentTimeline,
+                getFiles: (fid: string) => opts.getFeatureFiles?.(fid) ?? [],
+                onOpenDiff: opts.onOpenFeatureDiff,
+                onOpenSession: opts.onOpenSession,
             }),
             RevealDecorations.configure({ getPhases: () => currentPhases }),
             AgentRibbon.configure({ getSteps: () => currentSteps, getRole: () => currentRole }),
@@ -568,13 +601,17 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         return pos;
     }
 
-    /** Signature of the agent code-ahead AMENDs (the proposals the host materializes
-     *  as engine marks in the payload doc). Changes when a proposal appears, mutates,
+    /** Signature of the reviewable AMENDs (the proposals the host materializes as
+     *  engine marks in the payload doc). Changes when a proposal appears, mutates,
      *  or resolves — the setDoc reload trigger keys on it so the marks render/clear
-     *  even when the baseline `tree.codoc` text is unchanged (notably on reject). */
+     *  even when the baseline `tree.codoc` text is unchanged (notably on reject).
+     *
+     *  Same predicate as agentAmendsFrom, which is what it has to mirror: a `yours`
+     *  amend (the author's own deferred edit) that materializes but never re-triggers
+     *  a reload would show its marks only by luck of a co-occurring text change. */
     function proposalsSig(): string {
         return currentSuggestions
-            .filter(s => s.direction === 'code-ahead' && s.kind === 'amend')
+            .filter(s => s.direction !== 'doc-ahead' && s.kind === 'amend')
             .map(s => `${s.id}:${s.titleNew ?? ''}:${s.descNew ?? ''}`)
             .join('|');
     }
@@ -655,12 +692,15 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
 
     // ── toolbar: marks + structure ────────────────────────────────────────────
+    // Bold and comment are the only two formatting controls, because they are the only
+    // two that DO anything: both become instructions to the agent. Italic and highlight
+    // sat here for months producing marks the serializer discarded — the author saw the
+    // styling, saved, and the next projection wiped it.
     const marks = document.createElement('div');
     marks.className = 'ce-marks';
     marks.append(
-        iconButton('B', 'Bold (⌘B)', () => editor.chain().focus().toggleBold().run(), 'ce-bold'),
-        iconButton('I', 'Italic (⌘I)', () => editor.chain().focus().toggleItalic().run(), 'ce-italic'),
-        iconButton('H', 'Highlight', () => editor.chain().focus().toggleHighlight().run(), 'ce-hl'),
+        iconButton('B', 'Bold (⌘B) — the agent treats bolded text as the highest-priority part of the intent',
+            () => editor.chain().focus().toggleBold().run(), 'ce-bold'),
         iconButton('❝', 'Comment on the selection — a steering note the agent will address', () => openComposerForSelection(), 'ce-cm'),
     );
 
@@ -671,9 +711,16 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         // indent / outdent are Tab / Shift-Tab (makeKeymap) — no redundant toolbar buttons (U5).
         iconButton('~ retire', 'Toggle retire on this feature', () => { toggleRetireHeading(editor); editor.commands.focus(); }, 'ce-retire'),
         // Create a NEW feature as a plan/build request (realized=false) — born plan, so
-        // committing it asks the agent to build the feature. This is the typed "build
-        // this" gesture that replaced the deleted is_imperative prose guess.
-        iconButton('◇ plan', 'New build-request feature (plan — the agent implements it on commit)',
+        // the node asks the agent to build the feature. This is the typed "build this"
+        // gesture that replaced the deleted is_imperative prose guess.
+        //
+        // "as soon as it saves", not "on commit": a plan ADD is one of loop_b's
+        // _EXPLICIT_REALIZE_KINDS, so its directive is handed off THE MOMENT IT IS
+        // MINTED — and the mint happens on the ordinary debounced settle, with no ⌘S
+        // needed. Only a prose AMEND is born held and waits for a hand-off. The tooltip
+        // said "on commit" while the flag was not even reaching the daemon; now that it
+        // does, the sentence has to describe what actually happens.
+        iconButton('◇ plan', 'New build-request feature (plan — the agent starts building it as soon as the edit saves)',
             () => { newFeatureHeading(editor, { realized: false }); }, 'ce-plan'),
     );
 
@@ -1189,9 +1236,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
     const bubSep = (): HTMLElement => { const s = document.createElement('span'); s.className = 'ce-bub-sep'; return s; };
     bubble.append(
-        bubBtn('B', 'Bold (⌘B)', () => editor.chain().focus().toggleBold().run(), 'ce-bub-bold'),
-        bubBtn('I', 'Italic (⌘I)', () => editor.chain().focus().toggleItalic().run(), 'ce-bub-italic'),
-        bubBtn('H', 'Highlight', () => editor.chain().focus().toggleHighlight().run(), 'ce-bub-hl'),
+        bubBtn('B', 'Bold (⌘B) — the agent treats bolded text as the highest-priority part of the intent',
+            () => editor.chain().focus().toggleBold().run(), 'ce-bub-bold'),
         bubSep(),
         bubBtn('❝ Comment', 'Comment on the selection — a steering note the agent will address', () => openComposerForSelection()),
     );
@@ -1246,6 +1292,11 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     surface.addEventListener('compositionend', () => setTimeout(flushPendingProjection, 0));
     let composeFid: string | null = null;
     let composeAnchor = '';
+    // The same span with its `codoc:` citations intact — what the note's code targets are
+    // read from (see `selectedMarkdown`).
+    let composeAnchorMd = '';
+    // "Build it": hand off AND launch the agent, and ask for the prose to follow the code.
+    let composeBuild = false;
     let composeThreadId = '';
     // A TRANSIENT screenshot attachment (U6) captured in the composer, sent with the
     // comment on save and discarded after. Base64 bytes — the host stores them.
@@ -1271,6 +1322,30 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         return editor.state.doc.textBetween(from, to, ' ', ' ');
     }
 
+    /** The commented span with its `codoc:` citations INTACT.
+     *
+     *  `textBetween` flattens a codeRef atom to nothing, so the plain anchor text has no
+     *  citations left in it — and the citations are exactly what say which code the note
+     *  is about. Walking the slice's inline nodes and re-serializing the atoms recovers
+     *  them, which is what lets a comment scope itself with no picker and no new UI. */
+    function selectedMarkdown(from: number, to: number): string {
+        let out = '';
+        editor.state.doc.nodesBetween(from, to, (node, pos) => {
+            if (node.type.name === 'codeRef' && node.attrs) {
+                const a = node.attrs as { label?: string; file?: string; symbol?: string | null };
+                out += `[${a.label ?? ''}](codoc:${a.file}${a.symbol ? '#' + a.symbol : ''})`;
+                return false;
+            }
+            if (node.isText) {
+                const start = Math.max(from, pos);
+                const end = Math.min(to, pos + node.nodeSize);
+                if (end > start) out += (node.text ?? '').slice(start - pos, end - pos);
+            }
+            return true;
+        });
+        return out;
+    }
+
     function openComposerForSelection(): void {
         const range = actionRange();
         if (!range) { editor.commands.focus(); return; }
@@ -1279,6 +1354,7 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         composeRange = { from, to };
         composeFid = activeFid();
         composeAnchor = selectedText(from, to);
+        composeAnchorMd = selectedMarkdown(from, to);
         composeThreadId = mintCommentId(Date.now(), String(from));
         composeMedia = null;
         // The composer opens in the right margin, aligned to the captured range (which
@@ -1370,11 +1446,34 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         send.type = 'button';
         send.className = 'ce-cmt-send';
         send.textContent = composeMode === 'edit' ? 'Save' : 'Send';
+        send.title = composeMode === 'edit'
+            ? 'Update the note the agent will address'
+            : 'Queue this note for the agent. It is implemented on the next /codoc:sync.';
         send.addEventListener('mousedown', ev => ev.preventDefault());
-        send.addEventListener('click', ev => { ev.preventDefault(); saveComposer(ta.value); });
-        foot.append(hint, send);
+        send.addEventListener('click', ev => { ev.preventDefault(); composeBuild = false; saveComposer(ta.value); });
+        // "Build it" — the same note, plus the two things a person means when they stop
+        // writing and want it done: bring the description along with the code, and start
+        // now rather than waiting for someone to remember to run a sync. Create mode only;
+        // editing a note changes what was asked, not whether to start.
+        if (composeMode !== 'edit' && opts.onLaunchAgent) {
+            const build = document.createElement('button');
+            build.type = 'button';
+            build.className = 'ce-cmt-send ce-cmt-build';
+            build.textContent = 'Build it';
+            build.title = 'Send this note AND start the agent now. It updates the code and '
+                + 'brings this description in line with what the code ends up doing.';
+            build.addEventListener('mousedown', ev => ev.preventDefault());
+            build.addEventListener('click', ev => { ev.preventDefault(); composeBuild = true; saveComposer(ta.value); });
+            foot.append(hint, build, send);
+        } else {
+            foot.append(hint, send);
+        }
         box.append(ta, foot);
-        box.classList.add('in-margin');
+        // The composer follows the same rule as the cards: it hangs in the margin when
+        // the margin can hold it, and otherwise stays a floating panel anchored to the
+        // selection. It must never be the thing that pushes the prose around.
+        if (marginFits()) box.classList.add('in-margin');
+        else positionComposerAtSelection(box);
         surface.appendChild(box);   // inside the scroll surface → scrolls with the anchored text
         composer = box;
         syncCommentsPresence();     // open the margin (shift the prose left to make room)
@@ -1395,6 +1494,40 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         renderCommentMargin();    // re-place cards now that the prose width changed
         flushPendingProjection(); // W5: apply any projection deferred while composing
     }
+
+    /** Light the sentence a card is about (and the card, from the sentence).
+     *
+     *  Implemented on the DOM rather than as a ProseMirror decoration on purpose: the
+     *  comment mark already renders a `[data-thread-id]` span, so this needs no
+     *  transaction, no re-render, and cannot touch the document — a hover must never be
+     *  able to dirty the editor. */
+    let focusedThread: string | null = null;
+    function setCommentFocus(threadId: string | null): void {
+        if (focusedThread === threadId) return;
+        focusedThread = threadId;
+        for (const el of surface.querySelectorAll('.codoc-comment.here')) el.classList.remove('here');
+        for (const el of surface.querySelectorAll('.ce-cmt-card.here')) el.classList.remove('here');
+        if (!threadId) return;
+        const sel = `[data-thread-id="${CSS.escape(threadId)}"]`;
+        for (const el of surface.querySelectorAll(`.codoc-comment${sel}`)) el.classList.add('here');
+        surface.querySelector(`.ce-cmt-card${sel}`)?.classList.add('here');
+    }
+
+    // Hovering the commented WORDS raises their card — and, when the margin is too narrow
+    // to hold cards at all, clicking them opens the thread as a popover. That fallback is
+    // what lets the reserved column go away without the conversation going with it.
+    surface.addEventListener('mouseover', ev => {
+        const span = (ev.target as HTMLElement)?.closest?.('.codoc-comment') as HTMLElement | null;
+        setCommentFocus(span?.dataset.threadId ?? null);
+    });
+    surface.addEventListener('mouseleave', () => setCommentFocus(null));
+    surface.addEventListener('click', ev => {
+        const span = (ev.target as HTMLElement)?.closest?.('.codoc-comment') as HTMLElement | null;
+        const id = span?.dataset.threadId;
+        if (!id || marginFits()) return;   // a visible card already answers the click
+        const thread = currentComments.find(t => t.id === id);
+        if (thread) showCard(span as HTMLElement, buildMarginCard(thread), { pinned: true });
+    });
 
     function commentMarkRange(threadId: string): { from: number; to: number } | null {
         let found: { from: number; to: number } | null = null;
@@ -1449,10 +1582,21 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             status: 'open',
             author: 'human',
             createdAt: Date.now(),
+            // The citations inside the commented sentence ARE the code targets. Nothing
+            // to pick, nothing to type: the tree already says which code its prose is
+            // about, and this reads it back.
+            codeRefs: codeRefsIn(composeAnchorMd),
+            scope: composeBuild ? 'both' : 'code',
         };
         const media = composeMedia ? { data: composeMedia.data, mime: composeMedia.mime } : undefined;
         composeMedia = null;
         opts.onCommentCreate(editor.getJSON() as PMNode, thread, media);
+        // The launch is a SEPARATE call, made after the note is on its way. It has to be:
+        // starting the agent before the steer reaches edits.json would race it into an
+        // empty queue, and the two are genuinely different acts — one records the request,
+        // the other decides to run it now.
+        if (composeBuild) opts.onLaunchAgent?.(thread.featureId ?? '');
+        composeBuild = false;
         editor.commands.focus();
     }
 
@@ -1469,9 +1613,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // their anchored text and de-overlapped top-to-bottom. They live INSIDE the scrolling
     // surface (absolute, content-space `top`) so they scroll with the prose for free — only
     // a doc/width change moves an anchor, so we only re-lay-out then (not on scroll). The
-    // surface gains `.has-comments` (CSS shifts the prose left to make room) whenever a
+    // surface gains `.has-comments` (the margin is in use — nothing shifts) whenever a
     // thread or the composer is present — otherwise the margin is empty whitespace ("collapsed").
     const CMT_STACK_GAP = 10;
+    // The whitespace a card needs beside the prose before it is allowed to hang there.
+    // 296px card + 16px inset + a little clearance; below this the cards would sit ON the
+    // text (272px of overlap at a 1000px window, measured), so they become popovers
+    // instead and the document still does not move.
+    const CMT_MIN_MARGIN = 324;
     function elc(tag: string, cls?: string, text?: string): HTMLElement {
         const e = document.createElement(tag);
         if (cls) e.className = cls;
@@ -1488,8 +1637,40 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             return c.top - surface.getBoundingClientRect().top + surface.scrollTop;
         } catch { return null; }
     }
+    /** Mark that comment cards are on screen — WITHOUT reserving a column.
+     *
+     *  This used to slide the whole prose column 162px left (and, at most real widths,
+     *  narrow the measure so every line re-wrapped) the instant a thread existed. It fired
+     *  on ARRIVAL too, so somebody else's comment yanked your page sideways while you
+     *  read; and authoring one triple-fired it — open the composer, close it before the
+     *  echo, then the echo. The `transition` that was supposed to soften it named
+     *  `padding-left`, a property nothing ever changed, so all of it landed as an
+     *  unanimated jump.
+     *
+     *  The whitespace beside a 46rem measure only fits a 296px card on a very wide window,
+     *  so reserving the column was the system absorbing a deficit rather than a choice.
+     *  The `/codoc:ask` layer already refuses this for the same reason (`renderAskMargin`):
+     *  cards hang in the whitespace that exists, and where it does not exist they become
+     *  on-demand popovers instead. The document does not move. */
     function syncCommentsPresence(): void {
-        surface.classList.toggle('has-comments', currentComments.length > 0 || composer !== null);
+        // ONE class, one meaning: cards (or the composer) are currently hanging in the
+        // margin. It no longer means "shift the prose" — nothing shifts — and it is not
+        // set when the margin is too narrow to hold them, because then there is nothing
+        // in the margin to describe.
+        surface.classList.toggle('has-comments',
+            marginFits() && (currentComments.length > 0 || composer !== null));
+    }
+
+    /** Is there room beside the prose for a card that does not cover it?
+     *
+     *  Measured, not assumed: the surface is not the viewport (the nav tree takes ~300px
+     *  of it), which is why the old `@media (max-width: 1100px)` fallback keyed on the
+     *  wrong box and let cards overlap 272px of prose at a 1000px window. */
+    function marginFits(): boolean {
+        const pm = surface.querySelector('.ProseMirror') as HTMLElement | null;
+        if (!pm) return false;
+        const gap = surface.getBoundingClientRect().right - pm.getBoundingClientRect().right;
+        return gap >= CMT_MIN_MARGIN;
     }
     function relTime(ts: number): string {
         const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -1506,24 +1687,63 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         b.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); onClick(); });
         return b;
     }
+    /** Update a REUSED card's mutable parts in place (status, body, actions).
+     *  Identity, position and any open state survive; see renderCommentMargin. */
+    function refreshMarginCard(card: HTMLElement, t: CommentThread): void {
+        const fresh = buildMarginCard(t);
+        card.className = fresh.className;
+        card.replaceChildren(...fresh.childNodes);
+    }
+
     function buildMarginCard(t: CommentThread): HTMLElement {
         const card = document.createElement('div');
-        card.className = 'ce-cmt-card ' + (t.status === 'sent' ? 'sent' : 'open');
+        card.className = 'ce-cmt-card ' + t.status;
         card.contentEditable = 'false';
+        card.dataset.threadId = t.id;
+        // Two-way coupling with the anchored text — the tie that was missing entirely.
+        // Hovering a card lights its sentence; hovering the sentence raises its card
+        // (see the mark-hover wiring below). Without it, a card pushed down the stack by
+        // its neighbours has nothing at all left saying which words it is about.
+        card.addEventListener('mouseenter', () => setCommentFocus(t.id));
+        card.addEventListener('mouseleave', () => setCommentFocus(null));
         const head = document.createElement('div');
         head.className = 'ce-cmt-card-head';
         head.append(elc('span', 'ce-cmt-who', t.author === 'human' ? 'You' : t.author));
         head.append(elc('span', 'ce-cmt-time', relTime(t.createdAt)));
-        head.append(elc('span', 'ce-cmt-state', t.status === 'sent' ? '✓ sent' : '→ for agent'));
+        // The third state is the one the surface never had: a note went out and nothing
+        // ever came back, so "✓ sent" was the last thing a thread could say however the
+        // agent's work turned out.
+        head.append(elc('span', 'ce-cmt-state', t.status === 'resolved'
+            ? '✓ done' : t.status === 'sent' ? '✓ sent' : '→ for agent'));
         card.append(head);
         if (t.anchorText.trim()) {
             const a = elc('div', 'ce-cmt-anchor'); a.textContent = t.anchorText; a.title = t.anchorText;
             card.append(a);
         }
         card.append(elc('div', 'ce-cmt-body', t.body));
+        // What the note scoped itself to — the reader should be able to see what they
+        // licensed before the agent acts on it, not only afterwards.
+        if (t.codeRefs?.length) {
+            const scope = elc('div', 'ce-cmt-scope',
+                (t.scope === 'both' ? 'code + description · ' : '') + t.codeRefs.join(', '));
+            scope.title = t.scope === 'both'
+                ? 'The agent may edit this code, and will update this description to match'
+                : 'The agent may edit only this code';
+            card.append(scope);
+        }
         const foot = elc('div', 'ce-cmt-foot');
-        if (t.status !== 'sent') foot.append(cardAction('Edit', () => openComposerForEdit(t)));
-        foot.append(cardAction('Resolve', () => resolveComment(t.id), 'ce-cmt-resolve'));
+        if (t.status === 'open') foot.append(cardAction('Edit', () => openComposerForEdit(t)));
+        if (t.status === 'resolved' && t.directiveId) {
+            foot.append(cardAction('See the code',
+                () => opts.onOpenCommentDiff?.(t.id, t.directiveId ?? ''), 'ce-cmt-seecode'));
+        }
+        // A resolved thread gets no verb. "Dismiss" was there and could never work — the
+        // thread is already resolved, so the click was a no-op and the next projection
+        // brought the same card back. It leaves on its own now (annotation.in_margin),
+        // after long enough to read what its request produced.
+        if (t.status !== 'resolved') {
+            foot.append(cardAction('Resolve', () => resolveComment(t.id), 'ce-cmt-resolve'));
+        }
         card.append(foot);
         // click the card body → reveal + select its anchored text
         card.addEventListener('mousedown', ev => {
@@ -1536,30 +1756,62 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     }
     /** Re-lay-out the margin cards: build, sort by anchor top, push down to avoid overlap. */
     function renderCommentMargin(): void {
-        clearMarginCards();
         syncCommentsPresence();
-        if (!currentComments.length) return;
-        const items: { card: HTMLElement; top: number }[] = [];
-        for (const t of currentComments) {
-            const range = commentMarkRange(t.id);
-            if (!range) continue;                       // mark gone (resolved) → no card
-            const top = anchorTopInContent(range.from);
-            if (top == null) continue;
-            items.push({ card: buildMarginCard(t), top });
+        // Cards are REUSED across a re-layout, keyed by thread id. Rebuilding them every
+        // time was doing three bad things at once: replaying each card's entrance
+        // animation on every keystroke, discarding the element that the `top` transition
+        // needs to survive in order to animate at all (so cards teleported), and throwing
+        // away any open state on them. Only threads that actually left get removed.
+        const wanted = new Map<string, { top: number; thread: CommentThread }>();
+        if (marginFits()) {
+            for (const t of currentComments) {
+                const range = commentMarkRange(t.id);
+                if (!range) continue;                   // mark gone (resolved) → no card
+                const top = anchorTopInContent(range.from);
+                if (top == null) continue;
+                wanted.set(t.id, { top, thread: t });
+            }
         }
-        items.sort((a, b) => a.top - b.top);
+        for (const el of surface.querySelectorAll('.ce-cmt-card')) {
+            if (!wanted.has((el as HTMLElement).dataset.threadId ?? '')) el.remove();
+        }
+        const items = [...wanted.entries()]
+            .map(([id, w]) => {
+                const existing = surface.querySelector(
+                    `.ce-cmt-card[data-thread-id="${CSS.escape(id)}"]`) as HTMLElement | null;
+                const card = existing ?? buildMarginCard(w.thread);
+                if (existing) refreshMarginCard(existing, w.thread);
+                else surface.appendChild(card);
+                return { card, top: w.top, id };
+            })
+            .sort((a, b) => a.top - b.top);
         let cursor = -Infinity;
         for (const it of items) {
-            surface.appendChild(it.card);               // append first so offsetHeight is real
             const top = Math.max(it.top, cursor);
             it.card.style.top = `${Math.round(top)}px`;
+            // How far the stack pushed this card off its own line. The connector in the
+            // left margin reads it, so a card that could not sit beside its sentence still
+            // says which sentence it belongs to.
+            it.card.classList.toggle('pushed', top - it.top > 4);
             cursor = top + it.card.offsetHeight + CMT_STACK_GAP;
         }
     }
     function positionComposerInMargin(): void {
         if (!composer || !composeRange) return;
+        if (!composer.classList.contains('in-margin')) { positionComposerAtSelection(composer); return; }
         const top = anchorTopInContent(composeRange.from);
         if (top != null) composer.style.top = `${Math.round(top)}px`;
+    }
+
+    /** Float the composer just under the text it is about, clamped on screen — the
+     *  narrow-window path, where there is no margin to sit in. */
+    function positionComposerAtSelection(box: HTMLElement): void {
+        if (!composeRange) return;
+        const rect = coordsRect(composeRange.from, composeRange.to);
+        if (!rect) return;
+        const w = box.offsetWidth || 296;
+        box.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - w - 8))}px`;
+        box.style.top = `${Math.round(rect.bottom + 8)}px`;
     }
 
     // ── /codoc:ask margin notes ───────────────────────────────────────────────
@@ -1818,8 +2070,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setComments: (comments: CommentThread[]) => {
             currentComments = comments;
-            // A comment appearing/leaving toggles `.has-comments`, which shifts the
-            // prose and moves the ask anchors too — reflow both layers.
+            // A comment appearing or leaving changes which cards hang in the margin, and
+            // both layers share that whitespace — so re-lay-out both. The PROSE does not
+            // move for this any more, so nothing here re-wraps the document.
             requestAnimationFrame(reflowMargins);
         },
         setHoverCards: (cards: HoverCardData | null) => {
@@ -1868,6 +2121,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         },
         setHistory: (history: Record<string, HistoryEntry[]>) => {
             currentHistory = history;
+            editor.view.dispatch(editor.state.tr.setMeta(BLAME_UPDATED, true));
+        },
+        setDirectives: (directives: Record<string, RevisionDirective>) => {
+            currentDirectives = directives;
+            editor.view.dispatch(editor.state.tr.setMeta(BLAME_UPDATED, true));
+        },
+        setTimeline: (timeline: Timeline | undefined) => {
+            currentTimeline = timeline;
             editor.view.dispatch(editor.state.tr.setMeta(BLAME_UPDATED, true));
         },
         setBlame: (on: boolean) => {

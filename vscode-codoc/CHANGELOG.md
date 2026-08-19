@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.2.6
+
+The tree can now show you its own past — and several controls stopped lying about what
+they do.
+
+### Added
+
+- **History, in place.** The History stance grows a **timeline** above the document.
+  Drag it back and the page re-reads as it did at that moment, with that moment's change
+  marked in the prose where it happened — old words struck, new underlined. It is
+  reconstructed in the editor from a bounded window of applied events
+  (`.codoc/revisions.json`), each carrying the text it displaced, so scrubbing is local
+  and instant. A change the ledger cannot account for is reported as unreconstructible
+  rather than diffed against invented words.
+
+- **Why does this sentence say this?** One hover card — reachable from a moment on the
+  timeline or from a feature's own History label — walks the chain the change ledger has
+  always held and never showed together: the change, the directive that asked for it, the
+  prompt somebody typed, the session they typed it in, the commit the code work started
+  from, and **the code diff itself**, opened against that commit. Directives now record
+  their prompt, session and git anchor to make this exact.
+
+- **Blame is per sentence, not per feature.** "claude-code edited this 3h ago" answers a
+  question nobody asks; a feature is several paragraphs written by three parties in turn,
+  and the reader is deciding whether to trust one *claim*. Authorship is now derived per
+  span by replaying the revision window's word diffs. A span the ledger cannot account
+  for stays unattributed, and prose with a single author is left completely clean.
+
+- **A comment is a work order.** It scopes itself to the code its sentence cites (no
+  picker — descriptions already cite their code), can ask for the description to follow
+  the code as well, records the directive it produced, and reports **done** when that
+  lands, with the code it caused one click away. **Build it** sends the note and starts
+  the agent immediately (`codoc: Implement queued changes now`).
+
+### Fixed
+
+- **Bold never reached the agent.** Bolding a phrase is supposed to make it the
+  highest-priority part of the intent (`Focus:` on the realize directive) — the flagship
+  markdown-native signal. It has never worked from the editor: the button produced a mark
+  that was discarded on save, and typing literal `**` was converted to the same doomed
+  mark. Bold now round-trips, and the tooltip says what it causes.
+
+- **Italic and Highlight silently discarded your work.** Both produced marks that were
+  dropped on save and wiped by the next projection. Removed.
+
+- **The `◇ plan` button made an ordinary feature.** Its `realized` flag never reached the
+  daemon, so the promised build request was never minted. Wired through; the tooltip now
+  describes what actually happens.
+
+- **Your own conflicted edit was handed back to you as "from code".** When two parties
+  edit the same lines, your text is held for review — and the surface attributed it to
+  the codebase. It now reads as yours. A pass whose only outcome was that deferral also
+  wrote no sidecar, so the edit reached no surface at all until some unrelated pass
+  happened to re-render.
+
+- **Comments no longer move the document.** Opening the margin used to slide the whole
+  prose column sideways — on *arrival* as well as authoring, so somebody else's comment
+  yanked your page mid-read, and writing one fired it three times. At most window widths
+  it was not a slide but a full re-wrap, and the transition meant to soften it named a
+  property nothing ever changed. Cards now hang in the whitespace that exists; where
+  there is none they become popovers. Hovering either the commented words or their card
+  lights both.
+
+- **A resolved comment could not be dismissed.** It stayed in the sidecar forever, so
+  every projection brought the card back, and its anchor kept underlining prose that no
+  longer had a thread behind it. Resolved threads now leave the margin after a while; the
+  record itself is kept.
+
+- **Chinese prose read as stiff 書面語.** Chinese was the only CJK language with no
+  register rule at all (Japanese is told である体, Korean 해라체), while the translate
+  prompt asked for "same order, same number of sentences" — an instruction to keep English
+  clause order, which is what translationese is. Both fixed.
+
+- **Onboarding taught a retired mechanism.** The walkthrough's one line of interaction
+  guidance described `> …` steering notes, which stopped working in U7.
+
+- A rewrite awaiting Keep/Restore now stands down once you have edited that feature
+  yourself: its "Restore mine" baseline is stale by then, and restoring would have
+  discarded your newer words.
+
 ## 0.2.5
 
 Two ways to *read* the tree, where before there was only editing it.

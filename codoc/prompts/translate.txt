@@ -1,16 +1,22 @@
-You are translating the **codoc feature tree** of the codebase "{repo_name}" into
-**{language}**.
+You are re-expressing the **codoc feature tree** of the codebase "{repo_name}" in
+**{language}**, for a developer who reads this tree to find code and to understand why
+it is the way it is.
 
 Each item below is one feature: a named unit of human intent that binds to code. The
-prose is documentation somebody wrote about their own system. You are moving it into
-another language, not rewriting it — the author is not asking you to improve their
-description, reorganize it, or add anything they did not say.
+prose is documentation somebody wrote about their own system. Write what THEY would have
+written if {language} had been their working language — the same claims, the same level
+of detail, nothing improved, reorganized, or added.
+
+Fidelity is to the FACTS, not to the syntax. A paragraph that shadows the source's clause
+order and sentence boundaries fails this task even when every word in it is accurate: it
+reads as translationese, and a reader who can hear that stops trusting the tree.
 
 ## What to translate
 
 - `title` → a natural {language} title of the same scope. {title_rule}
-- `description` → the same paragraph in {language}: same claims, same order, same
-  level of detail, same number of sentences wherever the language allows it.
+- `description` → the same paragraph in {language}: same claims, same level of detail,
+  no claim dropped and none added. The SENTENCES are yours — split, merge, and reorder
+  clauses into whatever shape natural {language} prose uses to state these facts.
 
 ## What must survive EXACTLY
 
@@ -36,10 +42,12 @@ character-for-character; a changed one silently breaks something.
 
 ## Register
 
-Write the way a competent engineer documenting their own system would in
-{language} — plain, direct, unhedged. Do not add "presumably", "appears to", or any
-other hedge that was not there. Do not add a translator's note. Do not append
-anything explaining that this was translated.
+This is working documentation, not formal writing. Write the way a competent engineer
+explains their own system to a colleague in {language} — plain, direct, spoken in rhythm,
+unhedged. If a sentence would sound stiff read aloud to a teammate, restate it.
+
+Do not add "presumably", "appears to", or any other hedge that was not there. Do not add
+a translator's note. Do not append anything explaining that this was translated.
 {prose_rule}
 
 ## Rules

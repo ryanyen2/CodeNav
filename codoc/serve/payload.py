@@ -23,6 +23,7 @@ from pathlib import Path
 from codoc.codoc_file.render import BINDINGS_FILENAME
 from codoc.loop.ask import read_walkthrough
 from codoc.loop.fsio import read_json
+from codoc.loop.filenames import REVISIONS_FILENAME
 from codoc.loop.status import STATUS_FILENAME
 from codoc.model.hlc import HLC
 
@@ -73,6 +74,56 @@ def _doc(codoc_dir: str | Path):
 
 def _activity(codoc_dir: str | Path) -> dict:
     return read_json(Path(codoc_dir) / _ACTIVITY_FILENAME, default={}) or {}
+
+
+def _comments(sidecar: dict) -> list[dict]:
+    """The sidecar's comment threads, re-shaped into the browser's ``CommentThread``.
+
+    Re-shaped, not re-derived (KTD7) — but it does have to be re-SHAPED: the store speaks
+    snake_case and the webview's thread type is camelCase, and the browser runs the same
+    bundle as the extension, whose host does this conversion in TypeScript. Shipping the
+    raw rows would put a second, silently-wrong thread shape on the wire.
+    """
+    out: list[dict] = []
+    for rows in (sidecar.get("comments") or {}).values():
+        for r in rows or []:
+            if not r.get("id") or not r.get("feature_id"):
+                continue
+            at = str(r.get("created_at") or "")
+            head = at.split("-", 1)[0]
+            thread = {
+                "id": r["id"],
+                "featureId": r["feature_id"],
+                "anchorText": r.get("anchor_text") or "",
+                "body": r.get("body") or "",
+                "status": r.get("status") if r.get("status") in {"open", "sent", "resolved"} else "open",
+                "author": r.get("author") or "human",
+                "createdAt": int(head) if head.isdigit() else 0,
+                "serialized": True,
+            }
+            if r.get("code_refs"):
+                thread["codeRefs"] = list(r["code_refs"])
+            if r.get("scope") == "both":
+                thread["scope"] = "both"
+            if r.get("directive_id"):
+                thread["directiveId"] = r["directive_id"]
+            if r.get("media_ref"):
+                thread["media"] = {"kind": "screenshot", "ref": r["media_ref"]}
+            out.append(thread)
+    out.sort(key=lambda t: t["createdAt"])
+    return out
+
+
+def _revisions(codoc_dir: str | Path):
+    """The timeline window (W8), or ``None`` when the daemon has not written one.
+
+    ``None`` rather than an empty document on purpose: the browser distinguishes "no
+    history recorded" (a fresh workspace, or a daemon that predates W8) from "a history
+    whose window happens to be empty", and only the first is worth a message."""
+    doc = read_json(Path(codoc_dir) / REVISIONS_FILENAME, default=None)
+    if not isinstance(doc, dict) or not isinstance(doc.get("revisions"), list):
+        return None
+    return doc
 
 
 _MAX_STEPS = 5
@@ -466,5 +517,23 @@ def build_browser_payload(codoc_dir: str | Path) -> dict:
         # a hub restart never resurrects yesterday's question. Only a HANDOFF-capable
         # viewer may dismiss it (dispatch.py) — a contributor sees it and moves on.
         "ask": read_walkthrough(codoc_dir),
+        # W8: the timeline window, re-shaped straight off `.codoc/revisions.json` — the
+        # hub is a file-channel client, so it reads the daemon's derived artifact rather
+        # than re-deriving one. A remote contributor gets the same in-situ history a
+        # maintainer has, which is the point: the tree's past is what makes a suggestion
+        # legible ("this paragraph was rewritten twice last week" changes what you propose).
+        #
+        # It is unconditional here, unlike the extension — the hub cannot ask the browser
+        # what stance it is in before answering, and a payload is already a whole-tree
+        # projection, so the marginal cost is small next to what it already carries. The
+        # browser's own "open the code diff" affordance stays hidden there: it needs a
+        # working tree, and the contributor has none.
+        "revisions": _revisions(codoc_dir),
+        # W8: the durable inline comment threads. The hub omitted comments entirely
+        # before, because the bodies lived in the VS Code host's memory and there was
+        # nothing on disk to serve. They are in the store now, so a remote contributor
+        # sees the conversation on a feature — which is most of what tells them whether
+        # their suggestion is already somebody's open question.
+        "comments": _comments(sidecar),
         "rev": payload_version(codoc_dir),
     }

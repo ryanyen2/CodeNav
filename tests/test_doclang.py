@@ -195,7 +195,10 @@ def test_directive_names_the_language_and_protects_identifiers():
     d = dl.prompt_directive(dl.resolve("zh-Hans"))
     assert "简体中文" in d
     assert "Never translate code" in d
-    assert "4–12 character noun phrase" in d
+    # The title rule rides the directive. It now also STEERS the shape, because an
+    # English modifier stack transliterates into a noun pile no one would say.
+    assert "4–12 character phrase" in d
+    assert "never an English-ordered stack of modifiers" in d
 
 
 def test_code_agent_directive_exempts_the_source_code():
@@ -260,3 +263,21 @@ def test_corrupt_config_degrades_to_the_default(codoc_dir):
     dl.config_path(codoc_dir).write_text("{not json", encoding="utf-8")
     assert dl.read_config(codoc_dir) == {}
     assert dl.workspace_doc_language(codoc_dir).code == "en"
+
+
+def test_chinese_gets_a_register_rule_like_every_other_cjk_language():
+    """Japanese was told である/だ体 and Korean 해라체; Chinese was told only where to put
+    its spaces. With no register instruction a model writes 书面语 for "documentation",
+    and the result reads harder than the English it came from."""
+    for tag in ("zh-Hans", "zh-Hant"):
+        rule = dl.resolve(tag).prose_rule
+        assert "白话" in rule or "白話" in rule
+        assert "书面语" in rule or "書面語" in rule
+        assert "翻译腔" in rule or "翻譯腔" in rule
+        # The concrete DON'Ts are what actually move the output — an abstract "write
+        # plainly" loses to the specific constraints elsewhere in the prompt.
+        assert "进行" in rule or "進行" in rule          # the light verbs to drop
+        assert "被" in rule                              # the passive rule
+    # …and the punctuation guidance every CJK language shares is still there.
+    assert "。，；：、「」《》" in dl.resolve("zh-Hans").prose_rule
+    assert "である" in dl.resolve("ja").prose_rule

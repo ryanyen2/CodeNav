@@ -13,9 +13,10 @@ import { makeDoc, featureHeadingNode, paragraphNode, textToInlineRuns } from '..
 import type { PMNode } from '../state/pm-doc';
 
 /** A featureHeading + one description paragraph, matching the projection shape. */
-const feat = (attrs: { fid?: string | null; localId?: string | null; level?: number; retired?: boolean }, title: string, desc: string): PMNode[] => [
+const feat = (attrs: { fid?: string | null; localId?: string | null; level?: number; retired?: boolean; realized?: boolean }, title: string, desc: string): PMNode[] => [
     featureHeadingNode(
-        { fid: attrs.fid ?? null, level: attrs.level ?? 0, retired: attrs.retired ?? false, realized: true, localId: attrs.localId ?? null },
+        { fid: attrs.fid ?? null, level: attrs.level ?? 0, retired: attrs.retired ?? false,
+          realized: attrs.realized ?? true, localId: attrs.localId ?? null },
         textToInlineRuns(title),
     ),
     ...(desc ? [paragraphNode(textToInlineRuns(desc))] : []),
@@ -115,6 +116,34 @@ describe('commandsForSettle — identity-keyed command emission', () => {
         const cmds = commandsForSettle(prev, next, 't1');
         expect(cmds).toHaveLength(1);
         expect(cmds[0]).toMatchObject({ kind: 'add', local_id: 'L-9', payload: { title: 'Brand new' } });
+    });
+
+    it('a PLAN node carries realized:false onto its add payload', () => {
+        // The `◇ plan` toolbar button's whole contract. The flag was set on the heading
+        // and dropped here: the payload had no such field, so the daemon built its
+        // ADD_NODE without one, `realized` defaulted True, and classify never minted the
+        // build directive the button's tooltip promised.
+        const next = featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),
+            ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+            ...feat({ localId: 'L-plan', realized: false }, 'Session expiry', 'Log a user out after 30m idle.'),
+        ]));
+        expect(next[2].realized).toBe(false);
+        const cmds = commandsForSettle(prev, next, 't1');
+        expect(cmds).toHaveLength(1);
+        expect(cmds[0]).toMatchObject({ kind: 'add', local_id: 'L-plan', payload: { realized: false } });
+    });
+
+    it('an ordinary add sends no realized key at all', () => {
+        // Absent means realized, end to end (the daemon's NodeOp default), so the
+        // ordinary add's payload is byte-identical to before the plan flag existed.
+        const next = featureUnits(makeDoc([
+            ...feat({ fid: 'f-1' }, 'Auth', 'Validates input.'),
+            ...feat({ fid: 'f-2' }, 'Theme', 'Switcher.'),
+            ...feat({ localId: 'L-9' }, 'Brand new', 'fresh'),
+        ]));
+        const cmds = commandsForSettle(prev, next, 't1');
+        expect(cmds[0].payload).not.toHaveProperty('realized');
     });
 
     it('an add command id is DETERMINISTIC from the localId — FIX B', () => {

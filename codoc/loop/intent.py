@@ -104,6 +104,32 @@ def recent_intent(
     return prompts
 
 
+def freshest_intent(
+    codoc_dir: str | Path,
+    *,
+    max_age_s: float = _MAX_AGE_S,
+) -> dict:
+    """The single freshest captured prompt as ``{prompt, session_id, at, ts}``, or ``{}``.
+
+    :func:`recent_intent` deliberately returns bare strings — it feeds a PROMPT, where a
+    session id would be noise. A directive is the other reader: it is a durable record of
+    why a change happened, and "which session asked for this" is the part that lets the
+    IDE walk back from a line of prose to the conversation that produced it. Same pool
+    and the same epoch-session preference, so the id returned is genuinely the one behind
+    the words the directive quotes.
+    """
+    pool = _pool(codoc_dir, max_age_s)
+    if not pool:
+        return {}
+    e = pool[-1]
+    return {
+        "prompt": str(e.get("prompt") or ""),
+        "session_id": str(e.get("session_id") or ""),
+        "at": str(e.get("at") or ""),
+        "ts": float(e.get("ts") or 0),
+    }
+
+
 def _terms(text: str) -> set[str]:
     """Content words of a prompt or symbol path, camelCase and snake_case split.
 

@@ -29,6 +29,11 @@ import { CommandPalette } from './palette-view';
 import { createAskBar, type AskBarHandle } from './ask-bar';
 import { stepsByFid, type AskStep } from '../state/ask-model';
 import { createFindView, type FindViewHandle } from './find-view';
+import { createTimelineBar, type HistoryIndex, type TimelineBarHandle } from './timeline-bar';
+import { renderRevisionPage } from './revision-view';
+import {
+    buildTimeline, changesAt, liveSnapshot, snapshotAt, type Moment, type Timeline,
+} from '../state/revision-model';
 import type { PaletteContext, PaletteItem } from './palette';
 import { serializeUiState, deserializeUiState, UiState } from './ui-state';
 import type { DocPayload, UINode, WebviewMessage, WebviewPrefs } from './protocol';
@@ -69,6 +74,14 @@ let wholeEditor: WholeDocEditorHandle | null = null;
 // walkthrough survives every ordinary payload repaint.
 let askBar: AskBarHandle | null = null;
 let findView: FindViewHandle | null = null;
+// W8 — the History stance's time machine. `timelineBar` is the scrubber; `historyIndex`
+// is which moment is on screen (null = Now, the live editor). While it is non-null the
+// editor is HIDDEN rather than rewritten: it is wired to a settle→command pipeline whose
+// job is to notice document changes and report them, so pushing an old revision through
+// it would record the author reverting the entire tree.
+let timelineBar: TimelineBarHandle | null = null;
+let timeline: Timeline = { moments: [], directives: {}, truncated: false };
+let historyIndex: HistoryIndex = null;
 // Guard: while the editor's own selection drives the tree highlight, don't scroll
 // the editor back (would fight the user's caret).
 let syncingFromEditor = false;
@@ -392,6 +405,90 @@ function applyGlance(): void {
 function applyBlame(): void {
     document.body.classList.toggle('blame', !!prefs.blame);
     wholeEditor?.setBlame(!!prefs.blame);
+    applyTimeline();
+}
+
+// ── W8: the time machine ─────────────────────────────────────────────────────
+
+/** Seed the scrubber from the payload and show or hide it with the History stance.
+ *
+ *  Turning History OFF returns to Now first. Leaving the reader parked in the past with
+ *  no scrubber on screen would be a document that silently isn't the one on disk — the
+ *  single worst failure this surface can have. */
+function applyTimeline(): void {
+    const on = !!prefs.blame;
+    if (!timelineBar) return;
+    timeline = buildTimeline(payload.revisions ?? null);
+    timelineBar.setTimeline(timeline);
+    // The same window drives inline authorship in the prose (W9), so the stance's two
+    // halves — who wrote this sentence, and what the tree looked like then — read off one
+    // source rather than two that can disagree.
+    wholeEditor?.setTimeline(on ? timeline : undefined);
+    // ADOPT the bar's index back. The window is bounded, so a pass that drops the oldest
+    // moment shifts every index by one; the bar re-finds the viewed moment by ID, and
+    // without reading that back the page kept rendering the old NUMBER — i.e. a different
+    // moment than the caption named, with the wrong change highlighted. If the viewed
+    // moment aged out entirely the bar returns to Now, and so must the page.
+    historyIndex = timelineBar.index();
+    timelineBar.element.hidden = !on;
+    if (!on && historyIndex !== null) goToMoment(null);
+    else renderHistory();
+}
+
+/** Move to a moment (or back to Now) and repaint. */
+function goToMoment(index: HistoryIndex): void {
+    historyIndex = index;
+    timelineBar?.setIndex(index);
+    renderHistory();
+}
+
+/** Show either the live editor or the reconstructed page — never both.
+ *
+ *  The past page is rebuilt from scratch on each move rather than diffed: it is a few
+ *  hundred nodes of static DOM, and a reconstruction that patches itself is a
+ *  reconstruction that can be subtly stale, which is the one thing a version history
+ *  must never be. */
+function renderHistory(): void {
+    const host = document.querySelector('.doc-host') as HTMLElement | null;
+    if (!host) return;
+    const editor = host.querySelector('.codoc-whole-editor') as HTMLElement | null;
+    // Keyed on the SURFACE, not the page inside it. Removing only the page left an empty
+    // surface behind, so the next trip into history built a second one beside it — two
+    // scrolling panes, and the reader's place lost to whichever won the layout.
+    const prior = host.querySelector('.ce-past-surface') as HTMLElement | null;
+    const viewing = historyIndex !== null && !!timeline.moments[historyIndex];
+    document.body.classList.toggle('history', viewing);
+    if (editor) editor.hidden = viewing;
+    if (!viewing) { prior?.remove(); return; }
+
+    const live = liveSnapshot(payload.doc ?? null);
+    const after = snapshotAt(live, timeline, historyIndex as number);
+    const before = snapshotAt(live, timeline, (historyIndex as number) - 1);
+    const page = renderRevisionPage(before, after, changesAt(live, timeline, historyIndex as number), {
+        onOpenRef: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
+        onSelect: fid => setSelected(fid, false),
+    });
+    // Carry the reader's place across the swap, so scrubbing reads as the same page
+    // changing rather than a new one arriving. Entering history inherits the editor's
+    // scroll, so the past opens where the present was.
+    const scrollTop = prior?.scrollTop
+        ?? host.querySelector('.ce-whole-surface')?.scrollTop ?? 0;
+    const surface = prior
+        ?? Object.assign(document.createElement('div'), { className: 'ce-whole-surface ce-past-surface' });
+    surface.replaceChildren(page);
+    if (!surface.parentElement) host.append(surface);
+    surface.scrollTop = scrollTop;
+}
+
+/** Open the code an agent wrote for a moment, as a real before/after diff. */
+function openMomentDiff(moment: Moment, files: string[]): void {
+    const directive = moment.causedBy ? timeline.directives[moment.causedBy] : undefined;
+    vscode.postMessage({
+        kind: 'open-code-diff',
+        files,
+        baseSha: directive?.base_sha ?? '',
+        title: directive?.asked || moment.causedBy || 'codoc change',
+    });
 }
 
 // ── Optimistic verdict feedback ──────────────────────────────────────────────
@@ -866,7 +963,8 @@ function reconcile(): void {
         wholeEditor.setAutoEdits(payload.autoEdits ?? {});
         wholeEditor.setBusy(busyByFid);   // skeleton shimmer + per-section edit guard
         wholeEditor.setSessionLive(payload.sync.sessionLive ?? false);
-        wholeEditor.setHistory(payload.history ?? {});   // W2 blame data (refresh each pass)
+        wholeEditor.setHistory(payload.history ?? {});   // W2 blame data
+        wholeEditor.setDirectives(payload.revisions?.directives ?? {});  // W8 provenance chain
         // Lifecycle split (U3/U4): drafts = recorded-but-not-sent → "captured"; held minus
         // drafts = handed-off (staged & sent) → "pending". Save/Commit (hand-off) moves a
         // feature from drafts → handed-off.
@@ -879,6 +977,8 @@ function reconcile(): void {
         wholeEditor.setDoc(payload.doc, payload.baselineId);
         applyAsk();        // an ask can land, change, or clear at any point in an edit
         applyGlance();     // refresh pitch map (a loop pass may have rewritten pitches)
+        applyTimeline();   // a pass may have appended a moment — the scrubber tracks the
+                           // viewed one by id, so an append never slides the reader forward
     } else {
         document.querySelector('.doc-host')?.replaceWith(renderDocHost());
     }
@@ -1502,6 +1602,11 @@ function renderDocHost(): HTMLElement {
     if (wholeEditor) { wholeEditor.destroy(); wholeEditor = null; }
     askBar?.destroy(); askBar = null;
     findView?.destroy(); findView = null;
+    timelineBar?.destroy(); timelineBar = null;
+    // The past page belongs to the torn-down host; leaving `historyIndex` set would make
+    // the fresh editor render itself hidden behind nothing.
+    historyIndex = null;
+    document.body.classList.remove('history');
     computeFocus(null); // editor torn down → clear the dependency-spotlight body class
     if (!payload.doc) {
         host.append(el('div', 'doc empty', 'No features yet. Run `codoc init` to bootstrap the tree.'));
@@ -1524,6 +1629,20 @@ function renderDocHost(): HTMLElement {
         },
     });
     host.append(askBar.element);
+    timelineBar = createTimelineBar({
+        onScrub: goToMoment,
+        // The code diff needs a local checkout to compare against, which only the
+        // extension has. On the hub the card simply omits the affordance rather than
+        // offering a button that cannot work: a remote contributor reads the tree's
+        // history, they do not have the maintainer's working tree.
+        onOpenDiff: isVsCodeHost() ? openMomentDiff : undefined,
+        // Same reason as the diff: a session transcript is a local file on the
+        // maintainer's machine, and a hub contributor has no business reading it.
+        onOpenSession: isVsCodeHost()
+            ? sessionId => vscode.postMessage({ kind: 'open-session', sessionId })
+            : undefined,
+    });
+    host.append(timelineBar.element);
     wholeEditor = mountWholeDocEditor(host, {
         controller: authorController,
         getSymbols: () => payload.symbols ?? [],
@@ -1555,12 +1674,47 @@ function renderDocHost(): HTMLElement {
         onOpenBinding: (file, symbol) => vscode.postMessage({ kind: 'open-binding', file, symbol }),
         onConsult: url => vscode.postMessage({ kind: 'open-link', url }),
         onCommentCreate: (doc, thread, media) => vscode.postMessage({ kind: 'comment-create', doc, thread, mediaData: media?.data, mediaMime: media?.mime }),
+        // Extension only. "Build it" starts a process that writes to source files, and a
+        // remote contributor on the hub has no business starting one on the maintainer's
+        // machine — the composer hides the verb rather than offering one that would be
+        // refused. (dispatch.py would reject the command anyway; a button that silently
+        // fails is worse than a button that was never there.)
+        onLaunchAgent: isVsCodeHost()
+            ? featureId => vscode.postMessage({ kind: 'launch-agent', featureId })
+            : undefined,
+        // A resolved comment can show the code its request produced: the directive it
+        // became recorded the commit the work started from, and the thread recorded the
+        // files it scoped itself to. Same diff surface the timeline and the blame label
+        // open — one answer to "what did the agent actually write", three ways in.
+        onOpenCommentDiff: (commentId, directiveId) => {
+            const thread = (payload.comments ?? []).find(c => c.id === commentId);
+            const directive = payload.revisions?.directives?.[directiveId];
+            const files = thread?.codeRefs?.length
+                ? [...new Set(thread.codeRefs.map(r => r.split('::')[0]))]
+                : [...new Set((payload.threads?.[thread?.featureId ?? '']?.refs ?? []).map(r => r.file))];
+            vscode.postMessage({
+                kind: 'open-code-diff', files,
+                baseSha: directive?.base_sha ?? '',
+                title: thread?.body ?? 'your note',
+            });
+        },
         onCommentEdit: (id, body) => vscode.postMessage({ kind: 'comment-edit', id, body }),
         onCommentResolve: (doc, id) => vscode.postMessage({ kind: 'comment-resolve', doc, id }),
         // Keep/Restore on an unasked loop rewrite. Either way the host records the
         // acknowledgement; a Restore additionally re-authors the previous wording
         // through the ordinary command channel (a real edit — held until hand-off
         // if the daemon classifies it code-implying).
+        // W8: the blame label's card offers the code behind a feature. Its diff targets
+        // are the feature's own bound files — the precise attribution codoc already
+        // keeps, rather than everything that happened to change since the commit.
+        getFeatureFiles: fid => [...new Set((payload.threads?.[fid]?.refs ?? []).map(r => r.file))],
+        onOpenFeatureDiff: (fid, baseSha, files) => vscode.postMessage({
+            kind: 'open-code-diff', files, baseSha,
+            title: payload.nodes?.[fid]?.title ?? 'this feature',
+        }),
+        onOpenSession: isVsCodeHost()
+            ? sessionId => vscode.postMessage({ kind: 'open-session', sessionId })
+            : undefined,
         onAutoEditVerdict: (fid, at, keep, prev) =>
             vscode.postMessage({ kind: 'auto-edit-verdict', fid, at, keep, prev }),
         onActiveFeature: (fid, source) => {
@@ -1604,10 +1758,11 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
     wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
     wholeEditor.setHistory(payload.history ?? {});   // W2 blame data
+    wholeEditor.setDirectives(payload.revisions?.directives ?? {});  // W8 provenance chain
     wholeEditor.setDoc(payload.doc, payload.baselineId);
     applyAsk();         // seed the /codoc:ask overlay, if one is up
     applyGlance();      // seed pitch + glance state into the fresh editor
-    applyBlame();       // seed the History stance into the fresh editor
+    applyBlame();       // seed the History stance + its timeline into the fresh editor
     // Presence rides the doc surface — re-place the avatar as the surface scrolls (the agent's
     // heading moves under a static avatar). The surface is recreated here, so re-bind.
     host.querySelector<HTMLElement>('.ce-whole-surface')

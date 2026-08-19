@@ -621,7 +621,7 @@ describe('base enforcement — catches a foreign write, ignores its own trail', 
         return { store, units, known: new Map(units.filter(u => u.fid).map(u => [u.fid!, u])) };
     };
     const edited = (text: string): FeatureUnit[] => [{
-        fid: 'f-1', localId: null, title: 'Auth', description: text, parentId: null, retired: false,
+        fid: 'f-1', localId: null, title: 'Auth', description: text, parentId: null, retired: false, realized: true,
     }];
 
     it('refuses to overwrite text an agent wrote after the author last looked', () => {

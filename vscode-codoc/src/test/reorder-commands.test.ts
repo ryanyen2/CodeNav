@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { reorderTargets, moveCommand, type FeatureUnit } from '../state/commands-from-doc';
 
 const u = (fid: string, parentId: string | null = null): FeatureUnit => ({
-    fid, localId: null, title: fid, description: '', parentId, retired: false,
+    fid, localId: null, title: fid, description: '', parentId, retired: false, realized: true,
 });
 
 const seq = (...fids: string[]) => fids.map(f => u(f));
@@ -80,7 +80,7 @@ describe('what must NOT read as a reorder', () => {
 
     it('a brand-new node with no fid is never a move target', () => {
         const fresh: FeatureUnit = {
-            fid: null, localId: 'l-1', title: 'new', description: '', parentId: null, retired: false,
+            fid: null, localId: 'l-1', title: 'new', description: '', parentId: null, retired: false, realized: true,
         };
         const moved = reorderTargets(seq('a'), [u('a'), fresh]);
         expect(moved.size).toBe(0);
@@ -98,7 +98,7 @@ describe('anchors are usable in emission order', () => {
         // An anchor must be a fid the daemon can resolve. A freshly typed heading
         // has only a localId, so anchoring to it would name nothing.
         const fresh: FeatureUnit = {
-            fid: null, localId: 'l-1', title: 'new', description: '', parentId: null, retired: false,
+            fid: null, localId: 'l-1', title: 'new', description: '', parentId: null, retired: false, realized: true,
         };
         const moved = reorderTargets(seq('a', 'b', 'c'), [u('c'), fresh, u('a'), u('b')]);
         const known = new Set(['a', 'b', 'c']);

@@ -7,9 +7,13 @@ from __future__ import annotations
 
 import json
 
-from codoc.codoc_file.doc_render import build_doc, build_doc_from_store, build_doc_from_text
-from codoc.codoc_file.doc_parse import parse_doc
-from codoc.codoc_file.parse import parse_text
+import pytest
+
+from codoc.codoc_file.doc_render import (
+    _inline_runs, build_doc, build_doc_from_store, build_doc_from_text,
+)
+from codoc.codoc_file.doc_parse import _inline_text, parse_doc
+from codoc.codoc_file.parse import extract_bold, parse_text
 from codoc.model.annotation import CommentThread, Mark, MarkKind
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
@@ -223,3 +227,112 @@ def test_store_projection_idempotent(tmp_path):
         first = build_doc_from_store(s)
         second = build_doc_from_store(s)
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+# ── bold: the focus signal survives the projection ───────────────────────────
+#
+# `**…**` is the one piece of markdown in a description that MEANS something:
+# `extract_bold` lifts it into a realize directive's `Focus:` line. The projection
+# turns it into a `bold` mark so the author reads emphasis instead of asterisks, and
+# `doc_parse._inline_text` writes it back — the editor's B button used to produce a
+# mark both serializers threw away, so the signal was unreachable from the only human
+# surface. The case list below is mirrored verbatim in the TS twin
+# (vscode-codoc/src/test/doc-roundtrip.test.ts, "bold: `**…**` ↔ the bold mark");
+# both sides must agree, or the daemon and the webview disagree about what the author
+# wrote.
+
+_BOLD_CASES: list[tuple[str, list[str]]] = [
+    ("plain prose, no markers", []),
+    ("a **focus** b", ["focus"]),
+    ("**leading** span", ["leading"]),
+    ("trailing **span**", ["span"]),
+    ("**two** spans **here**", ["two", "here"]),
+    ("**see [x](codoc:a.py#fn) now** tail", ["see [x](codoc:a.py#fn) now"]),
+    ("[**x**](codoc:a.py#fn) label markers survive", []),
+    ("**  ** whitespace-only marker pair", []),
+    ("**a****b** touching pairs", ["a"]),
+    ("unmatched ** marker", []),
+    ("***tripled***", ["tripled"]),
+    ("a **b*c** d", []),
+    ("cite [y](codoc:g.py) then **focus**", ["focus"]),
+]
+
+
+def _projected_bold(runs: list[dict]) -> list[str]:
+    """The text each maximal run of bold-marked inline nodes covers — what the author
+    sees emphasized, in the same shape ``extract_bold`` returns."""
+    out: list[str] = []
+    cur = ""
+    for r in runs:
+        if r["type"] == "text":
+            text = r.get("text") or ""
+        else:
+            a = r["attrs"]
+            target = f"{a['file']}#{a['symbol']}" if a.get("symbol") else a["file"]
+            text = f"[{a['label']}](codoc:{target})"
+        if any(m["type"] == "bold" for m in r.get("marks") or []):
+            cur += text
+        elif cur:
+            out.append(cur)
+            cur = ""
+    if cur:
+        out.append(cur)
+    return out
+
+
+@pytest.mark.parametrize("text,expected", _BOLD_CASES)
+def test_bold_projection_and_text_round_trip(text, expected):
+    """THE property: text → doc → text is the identity. The daemon projects the stored
+    description, the webview serializes it back to compare against what it adopted, and
+    any drift there is a phantom AMEND on every projection."""
+    runs = _inline_runs(text)
+    assert _inline_text(runs) == text
+    assert _projected_bold(runs) == expected
+
+
+@pytest.mark.parametrize("text,_expected", _BOLD_CASES)
+def test_bold_projection_is_a_fixpoint(text, _expected):
+    """doc → text → doc: re-projecting what was just serialized changes nothing."""
+    runs = _inline_runs(text)
+    assert _inline_runs(_inline_text(runs)) == runs
+
+
+@pytest.mark.parametrize("text,expected", _BOLD_CASES)
+def test_bold_projection_matches_extract_bold(text, expected):
+    """Parity with ``parse.extract_bold`` — the daemon's reader of the same signal. The
+    author must see emphasized exactly what the agent is told to focus on.
+
+    Two inputs diverge, both deliberately (see ``doc_render._bold_matches``): markers
+    inside a citation LABEL stay label text, and the second of two touching pairs stays
+    prose. Neither is reachable by any authoring gesture — TipTap merges adjacent bold
+    into one span — and projecting them would corrupt the text on the way back."""
+    if text in ("[**x**](codoc:a.py#fn) label markers survive", "**a****b** touching pairs"):
+        assert _projected_bold(_inline_runs(text)) != extract_bold(text)
+        return
+    assert _projected_bold(_inline_runs(text)) == extract_bold(text)
+
+
+def test_bold_survives_a_whole_feature_round_trip():
+    text = "- Retry  ⟨f-1⟩\n    Keep the **retry budget** bounded, see [backoff](codoc:net.py#backoff).\n"
+    tree = parse_doc(build_doc_from_text(text))
+    assert tree.nodes[0].description == (
+        "Keep the **retry budget** bounded, see [backoff](codoc:net.py#backoff)."
+    )
+    assert extract_bold(tree.nodes[0].description) == ["retry budget"]
+
+
+def test_bold_projects_alongside_an_annotation_anchor(tmp_path):
+    """An annotation anchors at a char offset into the description — which INCLUDES the
+    `**` markers. The markers are dropped from the emitted runs but still occupy their
+    offsets, so a comment written against the bolded words still lands on them."""
+    with open_store(tmp_path) as s:
+        f = Feature(title="Retry", description="a **focus** b")
+        s.upsert_feature(f)
+        # offsets 2..10 span `**focus**` in the stored description
+        s.upsert_comment(CommentThread(feature_id=f.id, body="why?", anchor_start=2, anchor_end=10))
+        doc = build_doc_from_store(s)
+    para = next(b for b in doc["content"] if b["type"] == "paragraph")
+    marked = next(r for r in para["content"] if r.get("marks"))
+    assert marked["text"] == "focus"
+    assert {m["type"] for m in marked["marks"]} == {"bold", "comment"}
+    assert parse_doc(doc).nodes[0].description == "a **focus** b"

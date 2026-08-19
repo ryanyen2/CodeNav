@@ -49,6 +49,17 @@ export interface FeatureUnit {
     /** The `retired` attr the `~ retire` gesture toggles. The ONLY retire signal — a
      *  retired node stays in the doc, flagged; absence is never a retire (invariant I1). */
     retired: boolean;
+    /** The `realized` attr the `◇ plan` gesture clears. `false` = an authored BUILD
+     *  REQUEST, and the only thing that makes an `add` mint a realize directive
+     *  (classify.edit_mints_directive: ADD mints iff `realized is False`).
+     *
+     *  It is on the unit because the toolbar wrote it onto the heading and this walk
+     *  then dropped it: the payload carried no such field, the daemon built its
+     *  ADD_NODE without one, `realized` defaulted True, and a node the user created
+     *  through a button captioned "the agent implements it" became an ordinary
+     *  feature whose placeholder title said "(plan)". Required, not optional, so a
+     *  future unit source has to decide rather than silently lose it again. */
+    realized: boolean;
 }
 
 function headingAttrs(node: PMNode): FeatureHeadingAttrs {
@@ -79,7 +90,8 @@ export function featureUnits(doc: PMNode): FeatureUnit[] {
 
     // Pass 1 — headings → their identity + parent (level stack) + a bucket for prose.
     interface Head { fid: string | null; localId: string | null; selfId: string | null;
-                     title: string; parentId: string | null; retired: boolean; desc: PMNode[]; }
+                     title: string; parentId: string | null; retired: boolean;
+                     realized: boolean; desc: PMNode[]; }
     const heads: Head[] = [];
     const indexBySelfId = new Map<string, number>();  // identity → its heading's index (first wins)
     const stack: Array<{ depth: number; id: string | null }> = [];
@@ -97,7 +109,7 @@ export function featureUnits(doc: PMNode): FeatureUnit[] {
         stack.push({ depth, id: selfId });
         if (selfId && !indexBySelfId.has(selfId)) indexBySelfId.set(selfId, heads.length);
         heads.push({ fid, localId, selfId, title: inlineRunsToText(b.content).trim(),
-                     parentId, retired: attrs.retired, desc: [] });
+                     parentId, retired: attrs.retired, realized: attrs.realized, desc: [] });
     }
 
     // Pass 2 — route each paragraph to a feature: its ownerId if that names a live
@@ -115,7 +127,8 @@ export function featureUnits(doc: PMNode): FeatureUnit[] {
 
     return heads.map(h => ({
         fid: h.fid, localId: h.localId, title: h.title, parentId: h.parentId,
-        retired: h.retired, description: blocksToDescriptionText(h.desc),
+        retired: h.retired, realized: h.realized,
+        description: blocksToDescriptionText(h.desc),
     }));
 }
 
@@ -206,6 +219,11 @@ export function commandsForSettle(
             const anchors = addAnchors(idx);
             const payload: NonNullable<CommandEntry['payload']> =
                 { title: u.title, description: u.description, parent_id: u.parentId };
+            // Sent only for a PLAN node, the way after_id/before_id are sent only when
+            // they say something: `realized` is a three-state field end to end (absent
+            // ⇒ realized, the daemon's NodeOp default), so an ordinary add's payload
+            // stays byte-identical to before the plan flag existed.
+            if (!u.realized) payload.realized = false;
             if (anchors.afterId) payload.after_id = anchors.afterId;
             if (anchors.beforeId) payload.before_id = anchors.beforeId;
             out.push({

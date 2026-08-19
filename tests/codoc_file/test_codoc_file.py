@@ -321,6 +321,22 @@ def test_retire_amend_overlay_not_in_text_roundtrip_noop(store):
     assert text == render_tree(store)
 
 
+def test_a_deferred_human_edit_is_not_tagged_as_the_codebase(store):
+    """loop_b._resolve_content parks a contended edit — the AUTHOR's own words — as a
+    pending proposal (source="user"). The origin tag fell through to "code drift", so
+    the IDE showed a person their own sentence attributed to the codebase and offered
+    it back with Accept/Reject. The ledger's `actor` already knew who wrote it."""
+    root, *_ = _tree(store)
+    deferred = Event(source="user", applied=False,
+                     op=NodeOp(kind=NodeOpKind.AMEND, feature_id=root.id,
+                               description="as the author saw it, extended"))
+    store.append_event(deferred)
+
+    entry = _proposals_map(store)["by_feature"][root.id]
+    assert entry["tag"] == "your edit"
+    assert entry["actor"] == "human"        # the field the IDE reads for the direction
+
+
 def test_sidecar_proposals_map_shape(store):
     root, child, *_ = _tree(store)
     retire = Event(source="loop_a_agent", applied=False,

@@ -11,13 +11,16 @@ dedup pass is needed anywhere downstream.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codoc.model.annotation import CommentStatus, CommentThread, Mark, MarkKind
+from codoc.model.annotation import (
+    CommentScope, CommentStatus, CommentThread, Mark, MarkKind,
+)
 from codoc.model.binding import Binding
 from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import ACTOR_HUMAN, Event, NodeOp
@@ -143,6 +146,14 @@ CREATE TABLE IF NOT EXISTS comments (
     status       TEXT NOT NULL DEFAULT 'open',
     anchor_start INTEGER NOT NULL DEFAULT 0,
     anchor_end   INTEGER NOT NULL DEFAULT 0,
+    -- W8: what makes a comment a unit of requested WORK rather than a sticky note —
+    -- the words it was anchored to (offsets alone go stale the moment the prose is
+    -- rewritten), the code it names (the directive's `Edit only:` scope), whether it
+    -- also asks for the prose to be updated, and the directive it produced.
+    anchor_text  TEXT NOT NULL DEFAULT '',
+    code_refs    TEXT NOT NULL DEFAULT '[]',
+    scope        TEXT NOT NULL DEFAULT 'code',
+    directive_id TEXT NOT NULL DEFAULT '',
     media_ref    TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
@@ -354,6 +365,15 @@ class Store:
         # actor/mode and no causality link; readers treat '' as "render as today".
         for col in ("actor", "mode", "caused_by"):
             self._add_column("events", col, "TEXT NOT NULL DEFAULT ''")
+        # W8: a comment becomes a unit of requested work. The defaults are exactly the
+        # behaviour a pre-W8 thread had — no quoted anchor, no code targets, code-only
+        # scope, no directive — so an existing workspace reads unchanged and the fields
+        # only start meaning something once something writes them.
+        for col, decl in (("anchor_text", "TEXT NOT NULL DEFAULT ''"),
+                          ("code_refs", "TEXT NOT NULL DEFAULT '[]'"),
+                          ("scope", "TEXT NOT NULL DEFAULT 'code'"),
+                          ("directive_id", "TEXT NOT NULL DEFAULT ''")):
+            self._add_column("comments", col, decl)
         # Blame index (v3): the feature an event touched, lifted out of the op_json
         # payload so per-feature history is a single indexed lookup instead of a
         # full-scan JSON parse.
@@ -868,8 +888,10 @@ class Store:
         """Insert or update a comment thread by its stable id."""
         self.conn.execute(
             """
-            INSERT INTO comments (id, feature_id, body, author, status, anchor_start, anchor_end, media_ref, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO comments (id, feature_id, body, author, status, anchor_start, anchor_end,
+                                  anchor_text, code_refs, scope, directive_id, media_ref,
+                                  created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 feature_id=excluded.feature_id,
                 body=excluded.body,
@@ -877,13 +899,22 @@ class Store:
                 status=excluded.status,
                 anchor_start=excluded.anchor_start,
                 anchor_end=excluded.anchor_end,
+                anchor_text=excluded.anchor_text,
+                code_refs=excluded.code_refs,
+                scope=excluded.scope,
+                -- Never cleared by a later write: a re-sent steer (the author edited
+                -- their note) carries no directive id, and blanking the one already
+                -- minted would orphan the thread from the work it caused.
+                directive_id=CASE WHEN excluded.directive_id != '' THEN excluded.directive_id
+                                  ELSE comments.directive_id END,
                 media_ref=excluded.media_ref,
                 updated_at=excluded.updated_at
             """,
             (
                 c.id, c.feature_id, c.body, c.author.value, c.status.value,
-                c.anchor_start, c.anchor_end, c.media_ref,
-                c.created_at.to_str(), c.updated_at.to_str(),
+                c.anchor_start, c.anchor_end, c.anchor_text,
+                json.dumps(c.code_refs, ensure_ascii=False), c.scope.value, c.directive_id,
+                c.media_ref, c.created_at.to_str(), c.updated_at.to_str(),
             ),
         )
         self._commit()
@@ -1189,6 +1220,7 @@ def _row_to_mark(r: sqlite3.Row) -> Mark:
 
 
 def _row_to_comment(r: sqlite3.Row) -> CommentThread:
+    keys = r.keys()
     return CommentThread(
         id=r["id"],
         feature_id=r["feature_id"],
@@ -1197,10 +1229,30 @@ def _row_to_comment(r: sqlite3.Row) -> CommentThread:
         status=CommentStatus(r["status"]),
         anchor_start=r["anchor_start"],
         anchor_end=r["anchor_end"],
+        # Presence-checked per column: a db written before these existed is migrated on
+        # open, but a row read through a connection that predates the migration (or a
+        # hand-built fixture) must still parse rather than raise.
+        anchor_text=(r["anchor_text"] if "anchor_text" in keys else ""),
+        code_refs=_json_list(r["code_refs"]) if "code_refs" in keys else [],
+        scope=CommentScope(r["scope"]) if "scope" in keys and r["scope"] else CommentScope.CODE,
+        directive_id=(r["directive_id"] if "directive_id" in keys else ""),
         media_ref=r["media_ref"],
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )
+
+
+def _json_list(raw) -> list[str]:
+    """A JSON string column read as a list of strings; anything else reads as empty.
+
+    Never raises: a corrupt cell costs the comment its code targets (the directive falls
+    back to the feature's own bindings), which is a degraded answer rather than a failed
+    read of the whole tree."""
+    try:
+        val = json.loads(raw) if isinstance(raw, str) and raw else []
+    except (ValueError, TypeError):
+        return []
+    return [str(x) for x in val] if isinstance(val, list) else []
 
 
 def _row_to_event(r: sqlite3.Row) -> Event:

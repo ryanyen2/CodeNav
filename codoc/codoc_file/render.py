@@ -36,8 +36,10 @@ from pathlib import Path
 
 from codoc.codoc_file.tree_order import children_map
 from codoc.doclang import language_tag_for, workspace_doc_language
+from codoc.model.annotation import in_margin
+from codoc.model.hlc import HLC
 from codoc.model.event import (
-    LOOP_A_AGENT_SOURCE, MODE_AUTO, PLAN_SOURCE, Event, NodeOpKind,
+    ACTOR_HUMAN, LOOP_A_AGENT_SOURCE, MODE_AUTO, PLAN_SOURCE, Event, NodeOpKind,
 )
 from codoc.store.db import Store
 
@@ -119,11 +121,24 @@ def render_tree(store: Store) -> str:
 
 
 def _source_tag(e: Event) -> str:
-    """Human-readable label for the origin of a proposal."""
+    """Human-readable label for the origin of a proposal.
+
+    Not every proposal comes from the machine. ``loop_b._resolve_content`` DEFERS a
+    contended edit — two peers rewrote the same lines and neither outranks the other —
+    by parking the AUTHOR's own text as a pending proposal. Falling through to "code
+    drift" showed a person their own sentence attributed to the codebase and offered it
+    back for a verdict; the honest sentence existed in ``edit_notes`` and reached no
+    surface. ``actor`` is the ledger's own answer to "who wrote this" (the Event
+    validator fills it in even for rows written before provenance existed), so it is
+    what decides here — no new channel, and no keying off ``source`` strings that only
+    happen to correlate.
+    """
     if e.source == PLAN_SOURCE:
         return "agent plan"
     if e.source == LOOP_A_AGENT_SOURCE:
         return "agent reflection"
+    if e.actor == ACTOR_HUMAN:
+        return "your edit"
     return "code drift"
 
 
@@ -608,6 +623,47 @@ def _compute_see_also(edges: dict[str, list[dict]]) -> dict[str, list[dict]]:
     return out
 
 
+def _comments_map(store: Store) -> dict[str, list[dict]]:
+    """`{feature_id: [thread, …]}` — the durable inline comment threads (W8).
+
+    The IDE used to hold comment bodies in extension-host memory: close the tab and every
+    body was gone, leaving the projection's anchor underline with nothing behind it. They
+    live in the store now, so they ride the sidecar like every other derived view — and
+    a thread can finally report what became of the work it asked for (``directive_id``,
+    and a ``status`` that reaches ``resolved`` when that directive lands).
+
+    A RESOLVED thread lingers briefly and then leaves (``annotation.in_margin``): the
+    reader is owed one look at "your request landed, here is the code it produced", and
+    nothing after that. Keeping them forever — which is what shipped first — made
+    "resolve" a button that could not do its job, since every projection brought the card
+    back. The RECORD is not deleted either way; it stays in the store as the durable
+    answer to "why does this code look like this", reachable from history.
+    """
+    now_ms = HLC.now().wall_clock
+    out: dict[str, list[dict]] = {}
+    for c in store.all_comments():
+        if not c.feature_id or not in_margin(c, now_ms):
+            continue
+        row = {
+            "id": c.id, "feature_id": c.feature_id, "body": c.body,
+            "author": c.author.value, "status": c.status.value,
+            "anchor_start": c.anchor_start, "anchor_end": c.anchor_end,
+            "created_at": c.created_at.to_str(), "updated_at": c.updated_at.to_str(),
+        }
+        # Presence-keyed, so a thread that carries none of this costs nothing and an
+        # older reader ignores what it does not know.
+        for key, val in (("anchor_text", c.anchor_text), ("scope", c.scope.value),
+                         ("directive_id", c.directive_id), ("media_ref", c.media_ref)):
+            if val and not (key == "scope" and val == "code"):
+                row[key] = val
+        if c.code_refs:
+            row["code_refs"] = list(c.code_refs)
+        out.setdefault(c.feature_id, []).append(row)
+    for rows in out.values():
+        rows.sort(key=lambda r: (r["anchor_start"], r["created_at"]))
+    return out
+
+
 def _blocks_map(store: Store, feature_ids: set[str]) -> dict[str, list[dict]]:
     """The sidecar ``blocks`` slice: persistent typed-media blocks per feature
     (v6). Prose is NOT here — it is block-zero, carried by the feature description
@@ -730,6 +786,13 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     recent_events = store.recent_events(_HISTORY_FEED_SCAN)
     live_ids = {f.id for f in features}
 
+    # W8: the timeline transport, off the SAME scan. Its own file rather than a slice
+    # here because it is the one view that carries prose, and the sidecar is re-read on
+    # every pass by everything (see loop/revisions.py). Self-skipping when the window
+    # hasn't moved, so an event-free pass writes nothing.
+    from codoc.loop.revisions import write_revisions
+    write_revisions(recent_events, codoc_dir)
+
     sidecar = {
         # v6: adds the `blocks` slice (typed-media blocks). Presence-keyed — the TS
         # reader and the hub key on field presence, so a v5 sidecar (no `blocks`)
@@ -794,6 +857,9 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # History stance + hover timeline. Only features changed within the scan
         # window appear; deep history stays in `codoc history` / codoc_history MCP.
         "feature_history": _history_feed(recent_events, live_ids),
+        # W8: durable inline comment threads (see _comments_map). A workspace with no
+        # comments emits an empty map, and the reader keys on presence.
+        "comments": _comments_map(store),
     }
     # Route through the shared atomic writer (per-writer-unique tmp) rather than a
     # hand-rolled fixed-name tmp: two writers of this sidecar (two daemons, or a daemon

@@ -941,3 +941,90 @@ def test_a_move_does_not_claim_authorship_of_the_text(dirs):
     s = open_store(codoc_dir)
     assert s.feature_writer_info("f-1") == writer_before
     s.close()
+
+
+# ── the `◇ plan` gesture: an authored plan ADD must reach the agent ──────────
+def test_plan_add_command_mints_a_directive_and_queues_realize_md(dirs):
+    """The toolbar's `◇ plan` button promises the agent will build the node. That
+    promise travels on ONE field — ``payload.realized: false`` — and it used to be
+    dropped between the heading attr and the command payload, so
+    ``classify.edit_mints_directive`` (ADD mints iff ``realized is False``) never
+    fired and the button produced an ordinary feature titled "(plan)".
+
+    End to end: the command channel → apply → the store's lifecycle → the directive →
+    the queue the agent actually reads."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir)
+    append_command(codoc_dir, Command(
+        id="cmd-plan", kind="add", local_id="L-plan",
+        payload={"title": "Session expiry", "description": "Log a user out after 30m idle.",
+                 "realized": False}))
+
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.commands == 1
+    s = open_store(codoc_dir)
+    minted = [f for f in s.list_features() if f.title == "Session expiry"]
+    assert len(minted) == 1
+    assert minted[0].realized is False       # stored as a plan placeholder, not a feature
+    s.close()
+    # A directive was minted for it...
+    assert res.directives, "a plan ADD must mint a realize directive"
+    manifest = edits_channel.read_manifest(codoc_dir)
+    assert [d.feature_id for d in manifest] == [minted[0].id]
+    # ...and a plan ADD is an EXPLICIT realize gesture, so it is handed off ON MINT
+    # (no separate hand-off / commit) and the agent's trigger file exists.
+    assert all(d.handed_off for d in manifest)
+    assert res.queued
+    realize_md = Path(codoc_dir) / "realize.md"
+    assert realize_md.exists()
+    assert "Session expiry" in realize_md.read_text()
+
+
+def test_ordinary_add_command_mints_no_directive(dirs):
+    """The other half of the contract: an add WITHOUT the plan flag is a node, not a
+    build request. A payload with no ``realized`` key (every ordinary add, and every
+    command written before the field existed) leaves ``NodeOp.realized`` None, which
+    means realized."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir)
+    append_command(codoc_dir, Command(
+        id="cmd-ord", kind="add", local_id="L-ord",
+        payload={"title": "Session expiry", "description": "Logs a user out after 30m idle."}))
+
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+
+    assert res.commands == 1
+    s = open_store(codoc_dir)
+    assert [f.realized for f in s.list_features() if f.title == "Session expiry"] == [True]
+    s.close()
+    assert not res.directives
+    assert not (Path(codoc_dir) / "realize.md").exists()
+
+
+# ── a deferred edit is the AUTHOR's, and the sidecar has to say so ───────────
+def test_a_deferred_command_surfaces_as_the_authors_own_edit(dirs):
+    """The companion to ``test_a_command_a_PEER_overlapped_is_kept_for_review``: not
+    what the store does with the deferred text, but what the IDE is told about it.
+
+    The proposal carries the author's own words, so the sidecar entry the editor draws
+    it from must read as theirs. It used to fall through to ``tag: "code drift"`` with
+    every other pending proposal, and the verdict strip printed "from code" over a
+    sentence the reader had just typed."""
+    root, codoc_dir = dirs
+    _seed_tree(codoc_dir, Feature(id="f-1", title="Auth", description="as the author saw it"))
+    _write_as(codoc_dir, "f-1", "a colleague rewrote this",
+              source="user", writer="sess-b")   # a person, on another session
+
+    append_command(codoc_dir, Command(
+        id="c-defer", kind="set_description", feature_id="f-1", session="sess-a",
+        base_text="as the author saw it",
+        payload={"description": "as the author saw it, extended"}))
+    res = run_loop_b(root, codoc_dir, dry_run=False)
+    assert res.conflicted == 1
+
+    sidecar = json.loads((Path(codoc_dir) / "tree.bindings.json").read_text(encoding="utf-8"))
+    entry = sidecar["proposals"]["by_feature"]["f-1"]
+    assert entry["description"] == "as the author saw it, extended"   # their words
+    assert entry["actor"] == "human"                                  # …by them
+    assert entry["tag"] == "your edit"                                # …and labelled so

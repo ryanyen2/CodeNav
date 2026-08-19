@@ -117,14 +117,27 @@ class NodeOp(BaseModel):
                                    #   in-progress node (no title/order guessing → no duplicate/orphan adds).
     delete_code: bool = False      # RETIRE_NODE: True ⇒ also remove the bound code (explicit intent —
                                    #   an agent via MCP, or a human `~`); False ⇒ detach-only untrack
-    # What an APPLIED amend displaced, recorded at the write boundary (apply_op) because
-    # it is unrecoverable a moment later. A safe auto-amend never asks anyone — the loop
-    # rewrites a description and the author finds out only if they happen to reread it —
-    # so the IDE needs the previous wording to show WHAT changed, not merely that
-    # something did. Same pattern as ADD_NODE pre-minting its feature_id: the event
-    # records its own outcome rather than leaving it to be re-derived. Empty on a pending
-    # proposal (nothing displaced yet) and on ops loaded from rows written before this.
-    prev_description: str | None = None
+    # ── what this op DISPLACED ────────────────────────────────────────────────
+    # ONE rule: an applied op records, at the write boundary (apply_op), the values it
+    # is about to destroy on its target. Same pattern as ADD_NODE pre-minting its
+    # feature_id — the event records its own outcome rather than leaving it to be
+    # re-derived, because a moment later the prior value is simply gone. All are None /
+    # empty on a pending proposal (nothing displaced yet) and on rows written before the
+    # field existed; there is deliberately no backfill (inventing a prior value the
+    # ledger never saw is worse than admitting the gap — see loop/revisions.py, which
+    # reports such a change as unreconstructible rather than guessing).
+    #
+    # A safe auto-amend never asks anyone: the loop rewrites a description and the
+    # author finds out only if they happen to reread it. Without the displaced text the
+    # IDE can say only that the paragraph is different from the one they remember, not
+    # what changed.
+    prev_description: str | None = None  # AMEND / RETIRE_NODE: the description before
+    prev_title: str | None = None        # AMEND / RETIRE_NODE: the title before
+    # MOVE_NODE: the parent before. `None` means NOT RECORDED, `""` means the node WAS A
+    # ROOT — a distinction `parent_id`'s own `None`-is-root convention cannot express
+    # here, and collapsing the two would silently re-root every node whose move predates
+    # this field on a reverse replay.
+    prev_parent_id: str | None = None
     prev_written_by: str = ""      # authorship of the displaced prose ("human" | agent | "loop"),
                                    #   read BEFORE the write reassigns it — the IDE weights the
                                    #   cue by whether the loop overwrote a person's own words.
