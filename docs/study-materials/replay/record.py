@@ -290,7 +290,24 @@ def _watch_loop(workspace: Path, raw: Path, interval: float,
     # is finished, and `check` then compares the replay against a state the
     # recording never contained. It looked like corrupt frames and was one more
     # Loop A pass eleven seconds late.
-    _quiesce(workspace)
+    # Stopping it is not enough on its own. Between the last frame's scan and the
+    # stop, the daemon can finish one more pass, and those writes are then in the
+    # workspace and in no frame at all, so the replay cannot reproduce them. Take
+    # one more diff after it has gone and fold it into the last frame, the same
+    # way the condition's own record pass above is folded in.
+    if _quiesce(workspace):
+        current = scan(workspace)
+        writes = [r for r, h in current.items() if previous.get(r) != h]
+        if writes:
+            dest_dir = out / f"{derived[-1]['n']:04d}"
+            for rel in writes:
+                dest = dest_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(workspace / rel, dest)
+            derived[-1]["writes"] = sorted(set(derived[-1]["writes"]) | set(writes))
+            print(f"  its last pass wrote {len(writes)} file(s) after the final frame")
+        previous = current
+
     final = scan(workspace, with_index=True)
     tail = raw / "final"
     for rel in final:
@@ -558,20 +575,23 @@ def _wait_for_daemon(workspace: Path, mark: float, settle: float, timeout: float
     return waited
 
 
-def _quiesce(workspace: Path) -> None:
-    """Stop the workspace's daemon, so its end state stops changing."""
+def _quiesce(workspace: Path) -> bool:
+    """Stop the workspace's daemon, so its end state stops changing.
+
+    Returns whether there was one to stop.
+    """
     pidfile = workspace / ".codoc" / "watch.pid"
     if not pidfile.exists():
-        return
+        return False
     try:
         raw = pidfile.read_text().strip()
         pid = int(json.loads(raw)["pid"]) if raw.startswith("{") else int(raw)
     except (OSError, ValueError, KeyError, json.JSONDecodeError):
-        return
+        return False
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError:
-        return
+        return False
     for _ in range(30):
         try:
             os.kill(pid, 0)
@@ -579,6 +599,7 @@ def _quiesce(workspace: Path) -> None:
             break
         time.sleep(1.0)
     print(f"  stopped the daemon ({pid}) so the end state holds still")
+    return True
 
 
 def derive(frames: Path, workspace: Path, out: Path, settle: float,

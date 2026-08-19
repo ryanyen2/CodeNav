@@ -398,7 +398,24 @@ class QuiesceTest(unittest.TestCase):
 
     def test_quiescing_a_workspace_with_no_daemon_is_fine(self):
         with tempfile.TemporaryDirectory() as tmp:
-            record._quiesce(Path(tmp))
+            self.assertFalse(record._quiesce(Path(tmp)))
+
+    def test_quiesce_says_whether_there_was_one_to_stop(self):
+        """derive needs to know, because if a daemon was stopped it has to take
+        one more diff: between the last frame's scan and the stop the daemon can
+        finish a pass, and those writes would then be in the workspace and in no
+        frame at all."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "ws"
+            (ws / ".codoc").mkdir(parents=True)
+            proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+            try:
+                (ws / ".codoc" / "watch.pid").write_text(json.dumps({"pid": proc.pid}))
+                self.assertTrue(record._quiesce(ws))
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait(timeout=5)
 
 
 class IdleTest(unittest.TestCase):
