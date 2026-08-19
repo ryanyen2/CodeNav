@@ -10,13 +10,13 @@ The link carries your participant code, and nothing here works without it.
 
 ## What the session is
 
-You will do two short tasks, one after the other, on two small codebases you
-have not seen before. In each one, a coding agent has already made a change and
-your job is to look at what it did, decide what to keep, and finish the work. A
-coding agent is available throughout and you can use it as much or as little as
-you like. We are studying how people and coding agents share the written
-description of a codebase, so we are interested in how you work, not in how fast
-you are.
+You will do two short tasks, one after the other, on two small codebases you have
+not seen before. In each one you ask a coding agent for a change, and then your
+job is to look at what it did, decide what to keep, and leave the project in a
+state you would be happy to ship. The agent is available throughout and you can
+use it as much or as little as you like. We are studying how people and coding
+agents share the written description of a codebase, so we are interested in how
+you work, not in how fast you are.
 
 You do not need to know either codebase in advance, and you will not be asked to
 write much code.
@@ -57,7 +57,7 @@ We do. Nothing in the session costs you anything, and you do not need a plan of
 your own.
 
 You never handle a key. The setup fetches them using the code in your link, and
-writes them only into the four project folders, so deleting those folders removes
+writes them only into the two project folders, so deleting those folders removes
 them. Nothing is added to your shell.
 
 Each project folder gets its own assistant profile and its own launcher, called
@@ -96,9 +96,9 @@ problem before the session rather than during it.
 
 ## Two requests
 
-Please do not open the two project folders in `~/codoc-study` before we meet,
-and please do not look at their code. The session measures what you can work out
-during it, so a head start would make your data unusable.
+Please do not open the two project folders in `~/codoc-study` before we meet, and
+please do not look at their code or run anything inside them. The session measures
+what you can work out during it, so a head start would make your data unusable.
 
 Please also close anything you do not want on camera, because you will be
 sharing your whole screen.

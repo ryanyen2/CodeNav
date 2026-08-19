@@ -351,6 +351,28 @@ if [ "$CHECK_ONLY" = 1 ]; then
     fi
   done
 
+  # The change under review, and the proof that nobody has already seen it.
+  #
+  # The first turn of a session plays a recording into the workspace. A workspace
+  # where that has already happened has the change in it, uncommitted, before the
+  # participant has asked for anything, and a session started there reviews a
+  # change that arrived with no request. Rehearsing on a real bundle is how it
+  # happens, and it is silent, so it is checked here.
+  for w in $PROJECTS; do
+    arm="$(condition_on_disk "$w")"
+    [ -n "$arm" ] || continue
+    if [ -f "$WORK/replay/frames/$w/$arm/manifest.json" ]; then
+      ok "$w: the session it reviews is here"
+    else
+      bad "$w: no recorded session for this folder, so the task cannot start"
+      FAILED=1
+    fi
+    if [ -f "$WORK/$w/.claude-study/handover.json" ]; then
+      bad "$w: the session has already been played there, so this folder is used"
+      FAILED=1
+    fi
+  done
+
   # The slash commands, in the arm that has them. install-hooks writes one file
   # per command, and the verify step used to delete any that the archive was too
   # old to have tracked — so the codoc condition ran without /codoc:ask, which is
@@ -888,12 +910,33 @@ for name in $PROJECTS; do
   #                         model one-shots it either way
   #   --disallowedTools Task  no sub-agents: they add minutes and their work lands
   #                         with no trace in the transcript the analysis reads
+  frames_dir="$WORK/replay/frames/$name/$(condition_for "$name")"
+  watcher=""
+  [ "$(condition_for "$name")" = codoc ] && watcher="$WORK/codoc"
   cat > "$d/claude-study" <<LAUNCHER
 #!/usr/bin/env bash
 # Start the assistant for this study. Use this, not plain \`claude\`.
 export CLAUDE_CONFIG_DIR="$d/.claude-study"
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
-exec claude \\
+
+# The first turn of the session is the change under review. It is recorded once
+# and played back, so everybody reviews the same code and nobody waits forty
+# minutes for an agent to type. `agent.py` takes the request, plays it, and
+# leaves the session where the assistant picks it up, so every turn after the
+# first is the real assistant with the change's own context.
+# Only when it is started the way a session starts it, with no arguments. The
+# setup check runs \`./claude-study -p ...\` to prove the key works, and without
+# this that check would play the session's one recording into the workspace days
+# before anybody sat down.
+if [ \$# -eq 0 ] && [ ! -f "$d/.claude-study/handover.json" ] && [ -f "$frames_dir/manifest.json" ]; then
+  python3 "$WORK/replay/agent.py" play "$d" "$frames_dir" ${watcher:+--codoc-bin "$watcher"} || exit \$?
+fi
+
+# Unquoted on purpose: empty expands to no argument at all, and an empty array
+# does not on the bash macOS ships.
+RESUME=""
+[ -f "$d/.claude-study/handover.json" ] && RESUME="--continue"
+exec claude \$RESUME \\
   --effort low \\
   --disallowedTools Task \\
   --append-system-prompt "You are helping someone during a short timed session. Work quickly and directly. Make the change they asked for and stop. Do not write new tests, and do not run the test suite unless they ask. Do not explore the codebase beyond what the change needs. Keep replies to a few sentences: say what you changed and any decision you had to make, and skip summaries, plans, and next-step suggestions. If a choice is genuinely open, make a reasonable one and say which you made in one line rather than asking." \\
@@ -906,6 +949,7 @@ LAUNCHER
   exclude_local "$d"
 done
 
+# ----------------------------------------------------------------------- codoc
 # codoc, in the two workspaces that have it. Written down rather than inferred:
 # left alone codoc reads the environment, and a key in the participant's own
 # shell would silently move it onto their account.
@@ -1010,6 +1054,23 @@ case "$HTTP" in
   *)   bad "OpenAI answered $HTTP when checking the key. Tell the researcher."; FAILED=1 ;;
 esac
 
+step "Keeping this machine's own opening screen"
+# The session's first turn draws the assistant's welcome and takes the request
+# there, so that welcome has to be this machine's rather than a copy of one.
+# Recording it here, with the participant's own profile and their own key, means
+# an assistant that changes its layout changes it here too and nobody has to
+# notice. A failure is a warning and not a fault: the first turn falls back to a
+# plain welcome, and every other part of the session is unaffected.
+for name in $PROJECTS; do
+  d="$WORK/$name"
+  if python3 "$WORK/replay/agent.py" capture "$d" >/dev/null 2>&1 \
+     && [ -s "$d/.claude-study/welcome.ansi" ]; then
+    ok "$name: the assistant's opening screen"
+  else
+    warn "$name: could not record the opening screen, so a plain one is used"
+  fi
+done
+
 # ------------------------------------------------------------------- extension
 step "Installing the VS Code extension"
 VSIX="$(ls "$HERE"/codoc-[0-9]*.vsix 2>/dev/null | head -1)"
@@ -1109,9 +1170,9 @@ if [ "$FAILED" = 0 ] && [ "$TODO" = 0 ]; then
 
   Please do not open them or look inside them before the session.
 
-  For the experimenter: $CODOC_ARM is the codoc one this time, so start the
-  daemon there with
-    cd $WORK/$CODOC_ARM && $WORK/codoc watch
+  For the experimenter: $CODOC_ARM is the codoc one this time. Nothing has to be
+  started by hand there. The launcher starts the daemon itself, once the
+  participant has sent their first request.
 EOF
 else
   echo "  Some things still need doing. See the lines marked fail or todo above,"

@@ -8,11 +8,10 @@ import {
     PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, PERFORMANCE,
     scaleFor, keyed, normalized, rtlx, umuxLite, constructScore,
     SIGNOFF, INTERVIEW, INTERVIEW_QUESTIONS,
-    SCENARIOS, TASK_CARDS, PROJECTS, HOW_TO_START, REFLECTION,
+    SCENARIOS, PROJECTS, HOW_TO_START, REFLECTION, TUTORIAL,
     buildSteps, answerDoc, shouldExclude, CONSENT_FORM,
 } from '../participant/steps.js';
 
-let drawCard;
 
 before(async () => {
     const dom = new JSDOM('<!doctype html><body></body>', { pretendToBeVisual: true });
@@ -21,7 +20,6 @@ before(async () => {
     Object.defineProperty(global, 'navigator', {
         value: dom.window.navigator, configurable: true, writable: true,
     });
-    ({ drawCard } = await import('../participant/card.js'));
 });
 
 // ── the order of the session ─────────────────────────────────────────────────
@@ -235,40 +233,51 @@ test('each research question has items that can answer it', () => {
 test('each project explains itself on the page', () => {
     for (const name of ['scribe', 'tally']) {
         const p = PROJECTS[name];
-        assert.ok(p.oneLine && p.problem.length && p.commands.length && p.layout.length,
+        assert.ok(p.oneLine && p.why.length && p.commands.length,
             `${name} is missing part of its briefing`);
-        // The before and after. The pair is the whole explanation: you can see
-        // what the program is for without reading either one closely.
-        assert.ok(p.before && p.after && p.before !== p.after);
-        // Six things it does, and what it does not do, so nobody goes looking
-        // for a feature that is not there.
-        assert.equal(p.does.length, 6);
-        assert.ok(p.notScope);
+        // The worked pair is the whole explanation: you can see what the
+        // program is for without reading either side closely.
+        assert.ok(p.worked.input && p.worked.output
+            && p.worked.input !== p.worked.output);
+        // Four things it does, and what it does not do, so nobody goes looking
+        // for a feature that is not there. Six, with a second sentence each,
+        // was more than five minutes buys.
+        assert.equal(p.rules.length, 4);
+        assert.ok(p.limits);
+        // And no file names. The briefing used to list nine source files, which
+        // is a level of detail nobody can hold and nobody needs in order to
+        // read a change.
+        const said = [p.oneLine, ...p.why, ...p.rules.map((r) => r.what), p.limits].join(' ');
+        assert.ok(!/\.py\b/.test(said), `${name}'s briefing still names source files`);
     }
 });
 
-test('each briefing says the rules could have gone another way', () => {
-    // This is the study's premise. Without it a participant reads the code as
-    // the only possible version of itself, and the description has nothing to
-    // add that the code does not already say.
+test('the task shows the case that makes the request worth making', () => {
+    // The request used to arrive with no occasion: a card saying "a config file,
+    // a short report next to the output", which a person meeting the project
+    // ten minutes ago cannot read. What a config file is for is the thing the
+    // program currently gets wrong, so that is shown first.
     for (const name of ['scribe', 'tally']) {
-        const p = PROJECTS[name];
-        assert.ok(p.judgement.length >= 2, `${name} names no judgement calls`);
-        for (const [what, why] of p.judgement) {
-            assert.ok(what && why.length > 40, `${name}: "${what}" is not explained`);
-        }
+        const f = PROJECTS[name].failure;
+        assert.ok(f.lead && f.input && f.output && f.caption,
+            `${name} asks for a change without showing why`);
+        assert.ok(PROJECTS[name].ask.length >= 2,
+            `${name} does not say what is being asked for`);
     }
 });
 
 test('both conditions are started from written steps, not from memory', () => {
     for (const c of ['codoc', 'baseline']) {
         const how = HOW_TO_START[c];
-        assert.ok(how.steps.length && how.about.length);
+        assert.ok(how.steps.length);
         assert.match(how.folder('scribe'), /codoc-study/);
     }
-    // The difference between them IS the manipulation, so it must not be
-    // improvised differently for each participant.
-    assert.notDeepEqual(HOW_TO_START.codoc.about, HOW_TO_START.baseline.about);
+    // The two used to differ in shape as well as content: three terminals and a
+    // daemon in one arm, one terminal in the other. That is a difference in how
+    // much setting up a person does, on top of the one being studied.
+    assert.equal(HOW_TO_START.codoc.steps.length,
+        HOW_TO_START.baseline.steps.length,
+        'one arm is set up in more steps than the other');
 });
 
 // ── screening ────────────────────────────────────────────────────────────────
@@ -285,76 +294,61 @@ test('the screening question does not tell them which answer excludes', () => {
         'saying so would stop the answer being honest');
 });
 
-// ── the task card ────────────────────────────────────────────────────────────
+// ── the request the participant sends ────────────────────────────────────────
 
-test('the card is drawn as a picture with no text to select', () => {
-    // The guide has always said to show the card as an image. If it can be
-    // selected it can be pasted into the agent, and then the agent is working
-    // from our wording instead of the participant's, which is one of the things
-    // the study measures.
-    const el = document.createElement('div');
-    document.body.append(el);
-    drawCard(el, TASK_CARDS.scribe, { width: 700 });
-
-    const canvas = el.querySelector('canvas');
-    if (canvas) {
-        assert.equal(el.textContent.trim(), '', 'there is no text in the page to select');
-        assert.match(canvas.getAttribute('aria-label'), /Task card/);
-        assert.ok(!canvas.getAttribute('aria-label').includes('must not appear'),
-            'and the alternative text names the card without repeating it');
-    } else {
-        // No drawing surface here, which is the fallback path. A card that cannot
-        // be seen would be worse than one that can be selected, so it degrades to
-        // text rather than to nothing.
-        const fallback = el.querySelector('.card-fallback');
-        assert.ok(fallback, 'it falls back to something visible');
-        assert.ok(fallback.textContent.includes(TASK_CARDS.scribe.title));
+test('the request is copyable, and is the one the recording was made from', async () => {
+    // It used to be a picture, on purpose: the participant wrote their own
+    // instructions and those instructions were a measure, so a card they could
+    // paste would have measured our wording instead of theirs. The task is a
+    // review now. The request is a stimulus, every participant has to send the
+    // same one, and a retyped paragraph is a different one.
+    const { readFile } = await import('node:fs/promises');
+    const root = new URL('../../docs/study-materials/replay/requests/', import.meta.url);
+    for (const name of ['scribe', 'tally']) {
+        const recorded = (await readFile(new URL(`${name}.txt`, root), 'utf8'))
+            .replace(/\s+/g, ' ').trim();
+        assert.equal(PROJECTS[name].prompt, recorded,
+            `${name}'s request is not the one the change was recorded from`);
+        assert.ok(!PROJECTS[name].prompt.includes('\n'),
+            'a request with a line break in it submits halfway through when pasted');
     }
 });
 
-test('both cards leave the open decisions open', () => {
-    for (const [name, card] of Object.entries(TASK_CARDS)) {
-        // Everything drawn on the card: the task, and the sample of what the
-        // finished thing looks like.
-        const text = [card.title, ...card.lines,
-            ...(card.example ? [card.example.label, ...card.example.lines] : [])]
+test('the task page leaves the open decisions open', () => {
+    for (const name of ['scribe', 'tally']) {
+        const p = PROJECTS[name];
+        const said = [...p.ask, p.prompt, p.failure.lead, p.failure.caption]
             .join(' ').toLowerCase();
-        // The card is the TASK and nothing else. "Decide anything this card does
-        // not specify" is an instruction about the study, and it now sits on the
-        // page beside the card rather than inside the picture of the task.
-        assert.ok(!text.includes('decide anything'),
-            `${name}'s card still carries the study's instruction; that belongs on the page`);
-        // The card must not point at any of the planted problems, because
-        // whether the participant finds them is the measure. The words below are
-        // either a policy a planted problem changes or the name of the rule it
-        // changed it in, so a card carrying one would hand over a detection.
-        for (const giveaway of ['indent', 'hyphen', 'paragraph', 'page break',
-            'duplicate', 'transfer', 'uncategorised', 'reference',
-            'furniture', 'footnote', 'rounding', 'posted']) {
-            assert.ok(!text.includes(giveaway),
-                `the ${name} card mentions "${giveaway}", which is one of its open decisions`);
+        // Whether the participant finds a planted problem is the measure. The
+        // words below are either a policy a planted problem changes or the name
+        // of the rule it changed it in, so naming one hands over a detection.
+        for (const giveaway of ['indent', 'hyphen', 'page break', 'duplicate',
+            'transfer', 'reference', 'furniture', 'footnote', 'rounding', 'posted']) {
+            assert.ok(!said.includes(giveaway),
+                `the ${name} task mentions "${giveaway}", which is one of its open decisions`);
+        }
+        // And it never says the change is wrong. It has not happened yet.
+        for (const tell of ['wrong', 'mistake', 'bug', 'check that', 'make sure']) {
+            assert.ok(!said.includes(tell), `the ${name} task primes with "${tell}"`);
         }
     }
-    // And the card is short. A long one starts answering the questions it is
-    // supposed to leave open.
-    for (const name of ['scribe', 'tally']) {
-        assert.ok(TASK_CARDS[name].lines.filter((l) => l.trim()).length <= 8,
-            `${name}'s card is too long to have left anything open`);
-        // A sample that ran long would be a specification, not an illustration.
-        assert.ok((TASK_CARDS[name].example?.lines ?? []).length <= 4,
-            `${name}'s example is long enough to be answering the task`);
-    }
 });
 
-
-
-test('drawing twice reuses the canvas rather than stacking them', () => {
-    const el = document.createElement('div');
-    document.body.append(el);
-    drawCard(el, TASK_CARDS.tally, { width: 700 });
-    drawCard(el, TASK_CARDS.tally, { width: 700 });
-    assert.ok(el.querySelectorAll('canvas').length <= 1, 'no stacking');
-    assert.ok(el.querySelectorAll('.card-fallback').length <= 1);
+test('both conditions are taught, at the same length', () => {
+    // A tutorial in one arm and four sentences in the other is a difference in
+    // how much the page teaches, on top of the difference the study is about.
+    const codoc = TUTORIAL.codoc;
+    const baseline = TUTORIAL.baseline;
+    assert.equal(codoc.steps.length, baseline.steps.length,
+        'one arm walks through more steps than the other');
+    assert.equal(codoc.parts.length, baseline.parts.length);
+    for (const g of [codoc, baseline]) {
+        for (const step of g.steps) {
+            assert.ok(step.points.length >= 2, `${step.title} says almost nothing`);
+            assert.ok(step.figure && (step.figure.src || step.figure.todo),
+                `${step.title} has no figure and no note saying what belongs there`);
+        }
+    }
 });
 
 // ── consent ──────────────────────────────────────────────────────────────────
@@ -404,8 +398,8 @@ test('the session leaves nowhere for the researcher to improvise', () => {
     // Every step either shows something written down or collects something. A
     // step whose content lives on the call is a step that differs per session.
     const kinds = new Set(buildSteps('codoc-first').map((s) => s.kind));
-    for (const needed of ['intro', 'about', 'task', 'questionnaire', 'interview',
-        'prestudy', 'signoff', 'quiz']) {
+    for (const needed of ['intro', 'about', 'system', 'task', 'questionnaire',
+        'interview', 'prestudy', 'signoff', 'reflect']) {
         assert.ok(kinds.has(needed), `no ${needed} step`);
     }
 });
@@ -528,17 +522,6 @@ test('the interview is spoken, so the page neither shows it nor stores it', asyn
     assert.ok(INTERVIEW_QUESTIONS.length >= 10, 'and they are still written down');
 });
 
-test('a filled quiz answers all five, for either project', async () => {
-    const { defaultsFor } = await import('../participant/autofill.js');
-    const { QUIZZES } = await import('../participant/quiz.js');
-    for (const project of ['scribe', 'tally']) {
-        const filled = defaultsFor({ kind: 'quiz', project });
-        for (const q of QUIZZES[project]) {
-            assert.ok(filled[`q${q.n}`], `${project} q${q.n} was left blank`);
-        }
-    }
-});
-
 test('nothing outside a pilot code can reach the skip', async () => {
     const { isPilotCode } = await import('../shared/schema.js');
     assert.equal(isPilotCode('p-abcdefghjkmn'), false);
@@ -563,16 +546,25 @@ test('the page names the launcher that setup actually writes', async () => {
 
     const named = Object.values(HOW_TO_START)
         .flatMap((h) => h.steps.map(([, cmd]) => cmd).filter(Boolean));
-    assert.ok(named.some((c) => c === './claude-study'),
-        'both conditions start the agent through the study launcher');
     assert.ok(!named.some((c) => /^claude(\s|$)/.test(c)),
         'nothing tells them to run plain claude, which would use their own account');
     assert.match(setup, /claude-study/, 'and setup writes that launcher');
 
-    // The codoc arm's watch command has to be the launcher setup made, not the
-    // codoc that may or may not be on their PATH.
-    assert.ok(named.some((c) => c.startsWith('~/codoc-study/codoc ')));
-    assert.match(setup, /ln -sf "\$CODOC" "\$WORK\/codoc"/);
+    // The agent is started on the task page, at the moment the request is sent,
+    // because that is the only place a participant needs it. It is still the
+    // launcher, in both arms.
+    const page = readFileSync(join(root, 'study-app', 'participant', 'app.js'), 'utf8');
+    assert.match(page, /cmd\('\.\/claude-study'\)/,
+        'the task page starts the agent through the study launcher');
+
+    // Nothing tells them to start the daemon by hand any more. It used to be a
+    // terminal of its own in one arm and nothing in the other, which is a
+    // difference in how much setting up a person does on top of the one the
+    // study is about.
+    assert.ok(!named.some((c) => /codoc watch/.test(c)),
+        'a participant is still starting the daemon by hand');
+    assert.match(setup, /--codoc-bin/,
+        'and nothing starts it for them once the recording has played');
 });
 
 // ── copying a command ────────────────────────────────────────────────────────
@@ -667,7 +659,7 @@ test('nothing the participant reads names the condition', async () => {
             assert.ok(!/baseline/i.test(shown),
                 `a step in ${name} says "baseline" to the participant: ${shown}`);
         }
-        assert.ok(!/baseline/i.test(how.title + how.about.join(' ')),
+        assert.ok(!/baseline/i.test(how.title),
             `${name} describes itself without ranking the two`);
     }
 
@@ -710,16 +702,16 @@ test('the preference item asks about kinds of work, and can go against the tool'
 
 // ── after the task, closed book ──────────────────────────────────────────────
 
-test('the quiz is asked once, and what follows the task is about their own change', async () => {
-    // It used to be the same twelve questions again, and the change between the
-    // two sittings was the measure. Both sittings asked about the CODEBASE,
-    // which the open-book sitting already reaches. What the study is about is
-    // whether the person still owns the change their agent helped them write,
-    // and that can only be asked about their own change.
+test('the only question round is the one about their own change', async () => {
+    // The open-book round that used to sit before the task asked about the
+    // CODEBASE. The task is now a review of a change to that codebase, and its
+    // first half is spent working the same thing out, so the round was the first
+    // half of the task with the clock running twice. What the study is about is
+    // whether the person still owns the change, and that can only be asked
+    // about their own change.
     const steps = buildSteps('codoc-first');
-    const quizzes = steps.filter((s) => s.kind === 'quiz');
-    assert.equal(quizzes.length, 2, 'one quiz per condition, not two');
-    assert.ok(quizzes.every((s) => s.sitting === 'before'), 'all before the task');
+    assert.equal(steps.filter((s) => s.kind === 'quiz').length, 0,
+        'the pre-task question round is still in the session');
 
     const reflect = steps.filter((s) => s.kind === 'reflect');
     assert.equal(reflect.length, 2, 'one reflection per condition');
@@ -791,19 +783,3 @@ test('a reflection can be finished without writing an essay', async () => {
     }
 });
 
-test('the question round is actually timed', async () => {
-    // A clock that says "time is up" and then lets somebody carry on is not a
-    // timed sitting. How long twelve answers took is half of what this measures —
-    // the same score in fourteen minutes is not the same result as in ten — so
-    // the clock has to end the step, not comment on it.
-    const { QUIZ_MINUTES } = await import('../participant/quiz-timing.js');
-    assert.ok(QUIZ_MINUTES > 0, 'there is a limit at all');
-
-    const { timedOutAllowsAdvance } = await import('../participant/quiz-timing.js');
-    // Unanswered + still running → held, so nobody skips the sitting by clicking.
-    assert.equal(timedOutAllowsAdvance({ answered: false, timedOut: false }), false);
-    // Unanswered + the clock ran out → released: holding somebody on a step they
-    // are out of time for would make the button, not the timer, the thing in charge.
-    assert.equal(timedOutAllowsAdvance({ answered: false, timedOut: true }), true);
-    assert.equal(timedOutAllowsAdvance({ answered: true, timedOut: false }), true);
-});

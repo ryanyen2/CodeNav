@@ -27,7 +27,7 @@ import { comparableEpisodes, letters } from '../analysis/sequences.js';
 import { score } from '../analysis/ngrams.js';
 import {
     OPEN_DECISIONS, FALSE_ALARMS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
-    questionsFor, afterFor, bandsFor, score as quizScore, emptyAssessment, outstanding,
+    questionsFor, afterFor, emptyAssessment, outstanding,
 } from './forms.js';
 // The interview is asked from the dashboard now, so its questions come from the
 // same instrument file the participant page uses. One copy, so the two cannot
@@ -75,7 +75,6 @@ const state = {
     answers: {},
     devices: [],
     assessment: null,
-    quiz: {},
     project: 'scribe',
 };
 
@@ -492,7 +491,7 @@ function renderDetail() {
     renderSession();
     watchAssessment();
     watchInterview();
-    watchQuiz();
+    watchAnswers();
     watchContact();
 }
 
@@ -767,15 +766,13 @@ function wireCopy(el) {
 // ── starting a condition ─────────────────────────────────────────────────────
 
 /**
- * The steps for starting the condition on screen, with the commands filled in.
+ * The steps for starting the condition on screen.
  *
- * The player's command was written down in the guide alone, which is a file
- * nobody opens while a participant is waiting. Worse, the two things that make it
- * work, stopping the daemon first and starting it again afterwards, were a
- * sentence in the middle of a paragraph, so the failure they prevent (the player
- * refusing to run, or the daemon never coming back for the live half) turned up
- * mid-session. The folder and the frames differ per participant, so the commands
- * are built here rather than copied by hand from a fixed example.
+ * There is far less to do than there used to be. The participant no longer
+ * starts a daemon, stops it, runs a player and starts it again: the launcher
+ * does all four, because every one of them was a command with the word replay in
+ * it typed by the person who was not supposed to know there was one. What is
+ * left is opening the folder, checking the logger is recording, and watching.
  */
 function renderRunning() {
     const el = $('#running');
@@ -786,9 +783,6 @@ function renderRunning() {
     const codoc = state.condition === 'codoc';
     const project = projectFor(p, state.condition);
     const folder = `~/codoc-study/${project}`;
-    const watch = `~/codoc-study/codoc watch --root ${folder}`;
-    const player = `python3 ~/codoc-study/replay/play.py ${folder} `
-        + `~/codoc-study/replay/frames/${project}/${state.condition}`;
 
     const line = (text, command) => `<li>${text}${command ? `
         <div class="give-row">
@@ -800,80 +794,66 @@ function renderRunning() {
         line(`They open <code>${esc(folder)}</code> in VS Code and answer the trust
               prompt with "Yes, I trust the authors". Until they do, VS Code turns
               every extension off and the session records nothing.`),
-        codoc ? line('They open a terminal inside VS Code, start the daemon, and leave '
-            + 'it running for the whole condition.', watch) : null,
         codoc
-            ? line('They open the description with Cmd+Shift+P and "codoc: Open", start '
-                + 'the agent with <code>./claude-study</code> in a second terminal, and '
-                + 'open a third for running the project.')
-            : line('They start the agent with <code>./claude-study</code> in a terminal '
-                + 'inside VS Code, and open a second for running the project. '
-                + '<code>CLAUDE.md</code> is picked up on its own.'),
+            ? line('They open the description with Cmd+Shift+P and "codoc: Open", and '
+                + 'open a terminal inside VS Code.')
+            : line('They open <code>CLAUDE.md</code> from the file tree, and open a '
+                + 'terminal inside VS Code.'),
         line('They run "Study logger: show what is being recorded" from Cmd+Shift+P, '
             + 'and read you the snapshot count. Anything above zero is fine. A zero '
             + 'here is the one fault that cannot be repaired afterwards.'),
-        line('They work through their own page as far as the task card. You read the '
-            + 'card out and ask what they expect the agent to have done.'),
-        codoc ? line('They stop the daemon with Ctrl+C in its terminal. The player '
-            + 'refuses to run while a live daemon owns the workspace, because the two '
-            + 'would write the same files.') : null,
-        line('They run the player and watch. It takes about three minutes.', player),
-        codoc ? line('They start the daemon again in the same terminal, with the command '
-            + 'from step 2. Everything after their first prompt is live.', watch) : null,
-    ].filter(Boolean);
+        line('They read the project page, then the page about the way of working. '
+            + 'Five minutes each. Answer questions, but do not add to either page.'),
+        line('On the task page they start the agent with <code>./claude-study</code> '
+            + 'and paste in the request the page gives them. It works for about three '
+            + 'minutes. Let them watch it.'),
+        line('Twenty minutes from there. Say "about ten minutes gone" once, at the '
+            + 'halfway point, and call time at twenty.'),
+    ];
 
     el.innerHTML = `
       <h3>Starting the condition ${codoc ? 'with codoc' : 'without codoc'}</h3>
-      <p class="hint">Their project for this half is <strong>${esc(project)}</strong>,
-      so every command below names that folder. They type them, on the screen you
-      are watching.</p>
+      <p class="hint">Their project for this half is <strong>${esc(project)}</strong>.
+      They type everything themselves, on the screen you are watching.</p>
       <ol class="do">${steps.join('')}</ol>
 
       <div class="say">
-        <h4>What to say while it plays</h4>
-        <p class="quote">You asked for this before you went out, and the agent worked
-        on it while you were away. Here is what it did. Watch it come in, and when it
-        stops, decide what to keep.</p>
-        <p class="hint">Do not call it a recording during the session, and do not say
-        whether anything in the change is right or wrong. If they ask, tell them to
-        work from the card and what they find in the project.</p>
+        <h4>What to say when the agent starts working</h4>
+        <p class="quote">That is it running. Watch what it does, and when it stops,
+        decide what you want to keep.</p>
+        <p class="hint">Do not say the session was recorded, and do not say whether
+        anything in the change is right or wrong. If they ask, tell them to work from
+        the request and what they find in the project.</p>
       </div>
 
-      <p class="hint">If the player says the daemon is running, the Ctrl+C did not
-      land. If it stops partway, run it again, because it restores the starting state
-      first. For a dry run of your own, <code>--speed 2</code> plays it faster and
-      <code>--step</code> waits for Enter between frames.</p>`;
+      <p class="hint">If the agent starts and no work arrives, the recording for that
+      folder is missing: run <code>./setup.sh --check</code> in their bundle. If it
+      stops partway, they can run <code>./claude-study</code> again, which restarts
+      the same session from the beginning.</p>`;
 
     wireCopy(el);
 }
 
 // ── the forms ────────────────────────────────────────────────────────────────
 
-function watchQuiz() {
+/**
+ * Everything the participant has answered, as they answer it.
+ *
+ * It used to sort the answers a second time into a per-project shape, keyed by
+ * question and sitting, for the panel that scored the open-book round before the
+ * task. That round is gone and so is the panel, and what was left was a regular
+ * expression matching document names nothing writes.
+ */
+function watchAnswers() {
     if (state.unsubQuiz) state.unsubQuiz();
-    state.quiz = {};
     state.unsubQuiz = onSnapshot(
         collection(db, `participants/${state.selected}/answers`),
         (snap) => {
-            state.quiz = {};
             state.answers = {};
-            for (const d of snap.docs) {
-                // quiz-scribe-before -> { scribe: { q1-before: 'b', … } }
-                // Everything they wrote, so the read-only panels can show it.
-                state.answers = state.answers || {};
-                state.answers[d.id] = d.data();
-                const match = /^quiz-([a-z]+)-(before|after)$/.exec(d.id);
-                if (!match) continue;
-                const [, project, sitting] = match;
-                state.quiz[project] = state.quiz[project] || {};
-                for (const [key, value] of Object.entries(d.data())) {
-                    if (/^q\d+$/.test(key)) state.quiz[project][`${key}-${sitting}`] = value;
-                }
-            }
-            renderRounds();
+            for (const d of snap.docs) state.answers[d.id] = d.data();
             renderForms();
         },
-        () => { state.quiz = {}; renderRounds(); },
+        () => { state.answers = {}; renderForms(); },
     );
 }
 
@@ -966,16 +946,8 @@ function renderForms() {
           placeholder="What they called wrong, in their words">${esc(a.falseAlarmNotes || '')}</textarea>
       </div>
 
-      <div class="form-block">
-        <h4>The questions</h4>
-        <p class="hint">Closed book first, then again with the description open.
-        The change between the two is the result.</p>
-        <div class="rounds" id="rounds"></div>
-      </div>
-
       <p class="gaps" id="gaps"></p>`;
 
-    renderRounds();
     wireForms();
     renderGaps();
 }
@@ -1054,59 +1026,11 @@ function projectFor(p, condition) {
     return codocFirst ? 'tally' : 'scribe';
 }
 
-/**
- * What the participant answered, and how long it took them.
- *
- * Read only. The quiz is multiple choice and they answer it themselves, so
- * there is nothing to mark by hand, and a researcher marking during a session
- * would be scoring while listening, which is how a score ends up reflecting how
- * well somebody explained rather than what they knew.
- *
- * One sitting, before the task, answered with the description, the code and the
- * agent all open and a clock running. The time is as much the result as the
- * score: both ways of working can reach every answer, and the question is what
- * it costs to get there.
- */
-function renderRounds() {
-    const wrap = $('#rounds');
-    if (!wrap) return;
-    const project = state.project;
-    const answers = (state.quiz && state.quiz[project]) || {};
-    const before = quizScore({ answers }, project, 'before');
-    const took = (state.answers || {})[`quiz-${project}-before`] || {};
-
-    if (!before.answered) {
-        wrap.innerHTML = `<p class="hint">The quiz appears here once they have
-          answered it. They do it on their own page, before the task, with
-          everything open.</p>`;
-        return;
-    }
-
-    const minutes = took.elapsedMs
-        ? `${Math.floor(took.elapsedMs / 60000)}m ${Math.round((took.elapsedMs % 60000) / 1000)}s`
-        : null;
-
-    wrap.innerHTML = `
-      <div class="quiz-score">
-        <span><b>${before.right}</b>/${before.of} correct</span>
-        ${minutes ? `<span>in <b>${esc(minutes)}</b></span>` : ''}
-      </div>
-      ${bandsFor(project).map((group) => `
-        <div class="band">
-          <h5>${esc(group.band)}</h5>
-          ${group.questions.map((q) => {
-        const given = answers[`q${q.n}-before`];
-        const mark = given == null ? '<i class="unanswered">·</i>'
-            : given === q.answer ? '<i class="right">✓</i>' : `<i class="wrong">${esc(given)}</i>`;
-        return `<div class="q-line">
-              <span class="q-marks">${mark}</span>
-              <span class="q-title">${q.n}. ${esc(q.question)}</span>
-            </div>`;
-    }).join('')}
-        </div>`).join('')}
-      <p class="hint">A letter is the wrong option they chose, which is usually
-      more informative than the fact that they were wrong.</p>`;
-}
+// The panel that showed the open-book round before the task is gone with the
+// round itself. It asked about the CODEBASE, and the task is now a review of a
+// change to that codebase, so its first half was the same activity with the
+// clock running twice. The only set left has right answers and is rendered by
+// `wireForms`, under the sign-off, because it is answered after the task.
 
 function renderGaps() {
     const el = $('#gaps');

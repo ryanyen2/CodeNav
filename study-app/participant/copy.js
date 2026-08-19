@@ -15,6 +15,19 @@ export function cmd(text) {
 }
 
 /**
+ * A block of text with a copy button, for something longer than a command.
+ *
+ * The request a participant sends their agent is a paragraph, and it has to
+ * arrive exactly as written or two participants are reviewing answers to two
+ * different questions. So it is copied rather than retyped.
+ */
+export function block(text, label = 'Copy') {
+    return `<div class="paste"><pre class="pick">${esc(text)}</pre>`
+        + `<button type="button" class="copy" data-copy="${esc(text)}"`
+        + ` aria-label="${esc(label)}">${esc(label)}</button></div>`;
+}
+
+/**
  * Make every copy button inside `root` work.
  *
  * Called after each render, because the step's markup is replaced wholesale and

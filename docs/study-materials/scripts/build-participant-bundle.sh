@@ -53,6 +53,7 @@ run node "$MAT/logger/test-transcript.js"
 run node "$MAT/logger/test-snapshot.js"
 run node --test "$MAT/logger/test-composition.js"
 run python3 "$MAT/replay/test_replay.py"
+run python3 -m pytest -q "$MAT/replay/test_agent.py"
 # The extension reads every recorded frame the way the webview does. It skips
 # when no recording is present, so it costs nothing until there is one.
 ( cd "$REPO/vscode-codoc" && run npx vitest run src/test/recorded-frames.test.ts )
@@ -138,8 +139,8 @@ chmod +x "$STAGE"/setup.sh "$STAGE"/session-log.sh "$STAGE"/collect.sh
 # saw. Missing frames are a warning rather than a failure only until the first
 # recording exists; after that this is the gate that keeps them honest.
 mkdir -p "$STAGE/replay"
-cp "$MAT"/replay/play.py "$MAT"/replay/record.py "$STAGE/replay/"
-chmod +x "$STAGE"/replay/play.py
+cp "$MAT"/replay/play.py "$MAT"/replay/record.py "$MAT"/replay/agent.py "$STAGE/replay/"
+chmod +x "$STAGE"/replay/play.py "$STAGE"/replay/agent.py
 MISSING=0
 for project in scribe tally; do
   for arm in codoc baseline; do

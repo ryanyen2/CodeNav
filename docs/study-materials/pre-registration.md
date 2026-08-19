@@ -34,6 +34,20 @@ change under review is identical across people and across conditions.
 Recruitment stops at twelve. There is no optional stopping and no interim look at
 the outcome measures.
 
+Each condition runs to a fixed budget: five minutes reading about the project,
+five minutes reading about the way of working, twenty minutes on the task, five
+minutes on the sign-off and the questions about the change, and five on the
+questionnaire. The task budget is the one that bears on the outcome, because
+detection coverage is what a person finds in the time they have. There is one
+question round and it comes after the task, closed book. The open-book round that
+used to run before the task was removed from the session on 2026-08-19, and no
+measure here depended on it.
+
+Nothing on the participant's page runs a clock, so the researcher calls time. How
+long the task actually took is stamped by the page as `task-<condition>` with a
+start and a finish, and a condition that ran over is reported with the time it
+took rather than as a standard twenty.
+
 A participant is excluded if the replay fails to complete, if the logger records
 no events for a condition, or if they tell us during the session that they have
 used codoc before. Exclusions are reported with their reason and the analysis is
@@ -119,8 +133,8 @@ Nothing can be said about the week scale, because this is one session.
 
 Time to the first correct detection, coverage at fifteen minutes, who settled
 each problem, the strategy codes for what a participant read and in what order,
-the closed-book quiz, the questionnaire, the agent turn overhead, and the offline
-transfer probe. All of them are reported. None of them is a test of the claim,
+the five closed-book questions asked after the task, the questionnaire, the agent
+turn overhead, and the offline transfer probe. All of them are reported. None of them is a test of the claim,
 and a result in any of them is a question for the next study rather than an
 answer from this one.
 

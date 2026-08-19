@@ -11,8 +11,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     PRESTUDY, AFTER_CONDITION, CONSTRUCTS, MANIPULATION_CHECK,
-    SIGNOFF, REFLECTION, SCENARIOS, PROJECTS, HOW_TO_START, RESPONSIBILITY,
-    QUIZZES, AFTER_QUIZZES,
+    SIGNOFF, REFLECTION, SCENARIOS, PROJECTS, TASK, HOW_TO_START, TUTORIAL,
+    AFTER_QUIZZES,
 } from '../participant/steps.js';
 import {
     LANGUAGES, DEFAULT_LANGUAGE, isLanguage, setLanguage, language, t,
@@ -139,41 +139,62 @@ test('every briefing, start instruction and page string is translated', () => {
     setLanguage('zh-Hans');
     for (const [name, project] of Object.entries(PROJECTS)) {
         t(`project.${name}.oneLine`, project.oneLine);
-        t(`project.${name}.notScope`, project.notScope);
-        project.problem.forEach((line, i) => t(`project.${name}.problem.${i}`, line));
-        project.does.forEach(([w, d], i) => {
-            t(`project.${name}.does.${i}.term`, w);
-            t(`project.${name}.does.${i}.body`, d);
+        t(`project.${name}.limits`, project.limits);
+        project.why.forEach((line, i) => t(`project.${name}.why.${i}`, line));
+        t(`project.${name}.worked.inputLabel`, project.worked.inputLabel);
+        t(`project.${name}.worked.outputLabel`, project.worked.outputLabel);
+        t(`project.${name}.worked.caption`, project.worked.caption);
+        project.rules.forEach((r, i) => {
+            t(`project.${name}.rule.${i}.name`, r.name);
+            t(`project.${name}.rule.${i}.what`, r.what);
         });
-        project.judgement.forEach(([w, d], i) => {
-            t(`project.${name}.judgement.${i}.term`, w);
-            t(`project.${name}.judgement.${i}.body`, d);
-        });
+        project.commands.forEach(([, w], i) => t(`project.${name}.command.${i}`, w));
+        t(`project.${name}.failure.lead`, project.failure.lead);
+        t(`project.${name}.failure.caption`, project.failure.caption);
+        project.ask.forEach((line, i) => t(`project.${name}.ask.${i}`, line));
     }
+    // The request itself is NOT translated. It is pasted into an agent working
+    // in a codebase whose identifiers are English, and a translated request
+    // would ask for a different change from the one that was recorded.
     for (const [condition, how] of Object.entries(HOW_TO_START)) {
         t(`start.${condition}.title`, how.title);
         how.steps.forEach(([text], i) => t(`start.${condition}.step.${i}`, text));
-        how.about.forEach((line, i) => t(`start.${condition}.about.${i}`, line));
     }
-    RESPONSIBILITY.forEach((line, i) => t(`responsibility.${i}`, line));
+    for (const [condition, guide] of Object.entries(TUTORIAL)) {
+        const key = `tutorial.${condition}`;
+        t(`${key}.title`, guide.title);
+        t(`${key}.lead`, guide.lead);
+        if (guide.hero.caption) t(`${key}.hero.caption`, guide.hero.caption);
+        if (guide.hero.alt) t(`${key}.hero.alt`, guide.hero.alt);
+        if (guide.hero.todo) t(`${key}.hero.todo`, guide.hero.todo);
+        guide.parts.forEach(([name, what], i) => {
+            t(`${key}.part.${i}.name`, name);
+            t(`${key}.part.${i}.what`, what);
+        });
+        guide.marks.forEach(([colour, means], i) => {
+            t(`${key}.mark.${i}.colour`, colour);
+            t(`${key}.mark.${i}.means`, means);
+        });
+        guide.steps.forEach((step, i) => {
+            t(`${key}.step.${i}.title`, step.title);
+            step.points.forEach((point, j) => t(`${key}.step.${i}.point.${j}`, point));
+            const fig = step.figure || {};
+            if (fig.caption) t(`${key}.step.${i}.figure.caption`, fig.caption);
+            if (fig.alt) t(`${key}.step.${i}.figure.alt`, fig.alt);
+            if (fig.todo) t(`${key}.step.${i}.figure.todo`, fig.todo);
+        });
+    }
 
     assert.deepEqual(missingKeys(), [],
         'these would render in English inside a Chinese page');
 });
 
 test('every quiz question and every option is translated', () => {
-    // Twenty-four questions and ninety-six options. One option left in English
-    // inside a Chinese question is not a blemish: it is the only Latin text on
-    // the screen, which makes it the option that stands out, and a distractor
-    // that draws the eye for a reason unrelated to its content is a broken item.
+    // One option left in English inside a Chinese question is not a blemish: it
+    // is the only Latin text on the screen, which makes it the option that
+    // stands out, and a distractor that draws the eye for a reason unrelated to
+    // its content is a broken item.
     setLanguage('zh-Hans');
-    for (const [project, questions] of Object.entries(QUIZZES)) {
-        for (const q of questions) {
-            t(`quiz.${project}.${q.n}.question`, q.question);
-            for (const o of q.options) t(`quiz.${project}.${q.n}.option.${o.letter}`, o.text);
-        }
-    }
-    // The closed-book set asked after the task, which is per project too.
     for (const [project, questions] of Object.entries(AFTER_QUIZZES)) {
         for (const q of questions) {
             t(`after.${project}.${q.n}.question`, q.question);
@@ -183,7 +204,7 @@ test('every quiz question and every option is translated', () => {
     assert.deepEqual(missingKeys(), [], 'these would render in English among Chinese options');
 });
 
-test('every page string and every task card is translated', async () => {
+test('every page string is translated', async () => {
     // The page's own strings are written inline at the call site, so unlike the
     // instrument there is no list of them to walk. They are read out of the
     // source instead, because the failure they produce is invisible: a key added
@@ -195,20 +216,10 @@ test('every page string and every task card is translated', async () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, '..', 'participant', 'app.js'), 'utf8');
     const { ZH_HANS } = await import('../participant/i18n/zh-Hans.js');
-    const { TASK_CARDS } = await import('../participant/steps.js');
 
     const asked = [...new Set(
         [...src.matchAll(/\bt\(\s*'(ui\.[a-zA-Z0-9._]+)'/g)].map((m) => m[1]))];
-    assert.ok(asked.length > 40, `the page asks for very few strings: ${asked.length}`);
-
-    // The card's keys are built from the project name, so they are walked the way
-    // the page builds them rather than read out of the source.
-    for (const name of Object.keys(TASK_CARDS)) {
-        asked.push(`card.${name}.title`, `card.${name}.lines`);
-        if (TASK_CARDS[name].example) {
-            asked.push(`card.${name}.example.label`, `card.${name}.example.lines`);
-        }
-    }
+    assert.ok(asked.length > 30, `the page asks for very few strings: ${asked.length}`);
 
     assert.deepEqual(asked.filter((k) => !(k in ZH_HANS)), [],
         'these would render in English inside a Chinese page');

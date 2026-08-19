@@ -64,3 +64,6 @@ paper/main.out
 paper/main.pdf
 evals/work/
 evals/out/
+
+# Rendered by study-app/scripts/preview.mjs, for looking at the pages.
+study-app/preview/

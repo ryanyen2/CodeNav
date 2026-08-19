@@ -53,6 +53,17 @@ for (const page of pages) {
             copyFileSync(join(page, asset), join('dist', page, asset));
         }
     }
+    // Pictures, if the page has any. The tutorial is mostly screenshots, and
+    // without this they are the one part of a built page that 404s, which looks
+    // like a broken step rather than a missing file.
+    const images = join(page, 'img');
+    if (existsSync(images)) {
+        mkdirSync(join('dist', page, 'img'), { recursive: true });
+        for (const file of readdirSync(images)) {
+            if (file.startsWith('.')) continue;
+            copyFileSync(join(images, file), join('dist', page, 'img', file));
+        }
+    }
 
     const ctx = await build({
         entryPoints: [join(page, 'app.js')],

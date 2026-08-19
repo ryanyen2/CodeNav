@@ -6,6 +6,11 @@ write code is not part of what we are testing, and the quality of that code is
 not what we are measuring, so the session is recorded once and replayed in about
 three minutes.
 
+The participant asks for the change themselves and is never told a recording
+exists. They type the request into what looks like the assistant's own input box,
+and the recording plays as the answer. How that first turn works is in "The first
+turn" below. Everything before it is about making the recording.
+
 Replay is cheap because of how codoc is built. The local extension is file based,
 with no server and no port, and everything the participant sees comes from files
 under `.codoc/`, which the extension watches and reparses when they change. The
@@ -162,30 +167,100 @@ extension's `recorded-frames.test.ts` reads every frame the way the webview does
 and fails if the daemon's own document renders differently from the daemon's own
 export, which would make the webview emit commands nobody typed.
 
-## Replaying
+## The first turn
+
+Nobody runs the player during a session. The participant runs `./claude-study`,
+which is a launcher `setup.sh` writes into their project folder. On its first run
+with no arguments it hands the turn to `agent.py`:
+
+    agent.py play <workspace> <frames> --codoc-bin <codoc>
+
+`agent.py` prints the assistant's own opening screen, takes the request in an
+input box of its own, stops the codoc daemon if one is running, plays the
+recording, writes `.claude-study/handover.json`, and starts the daemon again in
+the background. The launcher then runs the real assistant with `--continue`, so
+every turn after the first is live and carries the recorded session's context.
+
+Asking for the change is the one thing a recording cannot supply, and it is what
+makes the change theirs to decide about. The version before this had a researcher
+start the player, having told the participant they had asked for the change
+earlier and gone out. Now the request comes from them, in the same box every
+later turn comes from.
+
+The recorded frames carry the request as the agent's own first line, so nothing
+that was typed is echoed back. A participant who mistyped their paste still sees
+the request the change was actually made from, which is also the one the assistant
+is resumed on. What they typed is kept in `handover.json` with the moment of the
+handover, and `collect.sh` takes it with the rest of the workspace.
+
+The handover record is also the guard. The launcher takes the first turn only when
+no handover record exists, so the recording plays once per folder and a bare
+`./claude-study` afterwards goes straight to the assistant. It is written only
+after the recording has played all the way through, so a run that was interrupted
+starts again from the beginning. `setup.sh --check` fails a folder that already
+holds one, because such a folder holds the change before anybody has asked for
+anything.
+
+The daemon is handled here rather than by a person. The player refuses to write
+into a workspace a live daemon owns, so `agent.py` stops it first and starts it
+again once the participant takes over, with its output going to `.codoc/watch.log`
+rather than to a terminal somebody is watching.
+
+### The opening screen is recorded, not written
+
+    agent.py capture <workspace>
+
+`capture` runs the real assistant once, on the participant's own machine, during
+setup, and keeps the bytes it drew before its input box in
+`<workspace>/.claude-study/welcome.ansi`. `play` prints those bytes back. An
+assistant that changes its welcome changes it here too, and nobody has to keep a
+copy of somebody else's layout up to date.
+
+The cut is the last top-left box corner in the stream. The input box is the last
+thing drawn on an empty session and nothing follows it, so everything above the
+corner is the part that is drawn once and worth keeping. The box itself has to be
+ours, because it is redrawn on every keystroke and the captured bytes are a
+picture rather than a program.
+
+A capture is refused rather than kept if it holds a first-run question, e.g. the
+theme picker, the login choice, or the question about a key found in the
+environment. None of those is a welcome screen, and showing one would put a setup
+question in front of somebody at the moment they are supposed to be asking for a
+change. Setup runs the assistant once before capturing, which is what gets it past
+them. A machine with no usable capture draws a plain welcome instead, and nothing
+else about the session changes.
+
+## Replaying by hand
 
     docs/study-materials/replay/play.py ~/codoc-study/scribe \
         docs/study-materials/replay/frames/scribe/codoc
 
-The player restores the starting state, prints the recorded terminal text, writes
-the recorded files, and installs the recorded session where `claude --resume`
-will find it. The participant's first prompt then continues the session that
-produced the change, with the agent's own context intact, and the recorded
-transcript is also the terminal scrollback.
+`play.py` is what `agent.py` calls, and running it directly is how a recording is
+rehearsed or checked without the first turn. It restores the starting state,
+prints the recorded terminal text, writes the recorded files, and installs the
+recorded session in the assistant's project history, under a name made from the
+participant's own workspace path.
 
-The daemon has to be stopped while the player runs, and the player refuses to
-start if a live daemon owns the workspace. Start the daemon again once the replay
-has finished, because everything after the participant's first prompt is live.
+Give it an empty folder. Restoring the starting state means deleting whatever else
+is in the workspace, and playing into a folder a participant is going to use burns
+that folder.
+
+Run it by hand and the daemon is your problem. The player refuses to start if a
+live daemon owns the workspace, and it does not start one again afterwards.
 
 Useful options: `--speed 2` plays twice as fast, `--step` waits for Enter between
-frames for a dry run, and `--no-reset` leaves the current state alone.
+frames for a dry run, and `--no-reset` leaves the current state alone. `agent.py
+play` takes `--speed` as well, and is how the first turn is rehearsed with the
+opening screen and the input box in place.
 
 ## Files
 
 `record.py` holds the watcher and the frame builder. `play.py` is the player.
+`agent.py` is the participant's first turn, and also captures the opening screen.
 `record-session.sh` drives a recording end to end. `requests/` holds the prompt
-each recorded agent was given. `frames/<project>/<condition>/` holds the frames,
-the manifest, the transcript and the notes.
+each recorded agent was given, which is word for word the request the participant
+is given to paste. `frames/<project>/<condition>/` holds the frames, the manifest,
+the transcript and the notes.
 
 Run the tests with `python3 docs/study-materials/replay/test_replay.py`. The test
 that matters is the round trip, because a participant reviews the replayed state
