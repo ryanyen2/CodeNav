@@ -1,7 +1,12 @@
 # About scribe
 
-This is what the participant reads. Two minutes, no assumed knowledge, and one
-worked example rather than a description.
+The long version of what a participant reads about scribe, kept here beside the
+code. No assumed knowledge, and one worked example rather than a description.
+
+The page they actually read is shorter, runs to five minutes, and is built from
+`study-app/participant/prose.js`. A change to their wording goes there. Keep this
+file saying the same things about the program, because it is what anybody working
+on the instrument reads.
 
 ---
 
@@ -118,11 +123,11 @@ header, so a rule that helps the report can hurt the memo.
 
 ## What we are asking
 
-You will get a short task card. Work however you normally would and use the
-coding agent as much or as little as you like.
+You will ask the coding agent for a change, and then decide what to keep. Work
+however you normally would and use the agent as much or as little as you like.
 
-The card is short on purpose. Anything it does not say is yours to decide, and we
-will ask you about those decisions afterwards, so make them on purpose.
+The request is short on purpose. Anything it does not say is yours to decide, and
+we will ask you about those decisions afterwards, so make them on purpose.
 
 We will also ask you to explain the code: what it does, why it is built that way,
 and what you would change to extend it.

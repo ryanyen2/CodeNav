@@ -85,6 +85,20 @@ def reset(workspace: Path, frames: Path) -> None:
     copy_tree(base, workspace)
 
 
+def config_dir() -> Path:
+    """Where the assistant this session runs keeps its history.
+
+    NOT `~/.claude`. Each workspace runs the assistant under its own config
+    directory, which is what keeps the study off the participant's own account,
+    and the launcher exports `CLAUDE_CONFIG_DIR` before anything here runs. A
+    session installed in the home directory instead is one that `--continue`
+    cannot see, so the turn after the recording would start a conversation with
+    none of the change's context, which is the whole point of installing it.
+    """
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(configured).expanduser() if configured else Path.home() / ".claude"
+
+
 def install_transcript(workspace: Path, frames: Path) -> Path | None:
     """Put the recorded session where `claude --resume` will find it.
 
@@ -117,7 +131,7 @@ def install_transcript(workspace: Path, frames: Path) -> Path | None:
 
     target_root = str(workspace.resolve())
     slug = target_root.replace(os.sep, "-")
-    out_dir = Path.home() / ".claude" / "projects" / slug
+    out_dir = config_dir() / "projects" / slug
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{session_id}.jsonl"
 

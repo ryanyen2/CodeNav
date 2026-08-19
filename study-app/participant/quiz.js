@@ -248,28 +248,51 @@ export const AFTER_QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "You had a config file added. What does scribe now do when it runs with no config file at all?",
+            "question": "You had a short report written beside the Markdown. What does it list?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It refuses to run until a config file exists"
+                    "text": "How long each rule took to run"
                 },
                 {
                     "letter": "b",
-                    "text": "It converts as before, except that a line repeated on two pages is now removed"
+                    "text": "The original text, with everything the conversion removed crossed out"
                 },
                 {
                     "letter": "c",
-                    "text": "It writes out a config file with the current settings and stops"
+                    "text": "The lines it removed, the words it rejoined, and the notes it moved"
                 },
                 {
                     "letter": "d",
-                    "text": "It converts exactly as it did before, with nothing changed"
+                    "text": "The parts of the document the conversion could not handle"
                 }
             ]
         },
         {
             "n": 2,
+            "band": "Extension",
+            "question": "You had the rules' settings taken out of the code. Where are they set now?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "In a settings file that scribe looks for near the document"
+                },
+                {
+                    "letter": "b",
+                    "text": "In each rule module, at the top, as before"
+                },
+                {
+                    "letter": "c",
+                    "text": "On the command line, given again on every run"
+                },
+                {
+                    "letter": "d",
+                    "text": "In an environment variable read when the program starts"
+                }
+            ]
+        },
+        {
+            "n": 3,
             "band": "Rationale",
             "question": "You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?",
             "options": [
@@ -292,7 +315,7 @@ export const AFTER_QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 3,
+            "n": 4,
             "band": "Change",
             "question": "The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?",
             "options": [
@@ -315,7 +338,7 @@ export const AFTER_QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 4,
+            "n": 5,
             "band": "Rationale",
             "question": "Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?",
             "options": [
@@ -336,59 +359,59 @@ export const AFTER_QUIZZES = Object.freeze({
                     "text": "The first page loses its heading, because there is nothing before it to compare against"
                 }
             ]
-        },
-        {
-            "n": 5,
-            "band": "Extension",
-            "question": "Someone picks this up tomorrow and adds another rule. What do they have to decide that they would not have to if the rules were independent?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "Which file to put it in"
-                },
-                {
-                    "letter": "b",
-                    "text": "Whether to give its threshold a name"
-                },
-                {
-                    "letter": "c",
-                    "text": "Where it goes in the fixed order the stages run in, because each stage sees what the ones before it left"
-                },
-                {
-                    "letter": "d",
-                    "text": "Whether to add a sample document for it"
-                }
-            ]
         }
     ],
     "tally": [
         {
             "n": 1,
             "band": "Purpose",
-            "question": "You had the merchant rules moved into a file you can edit. What does tally now do with money moved between your own accounts?",
+            "question": "You had a weekly view added beside the monthly one. What does it show for each week?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Leaves it out of the totals, as it did before"
+                    "text": "Only a total, with no breakdown"
                 },
                 {
                     "letter": "b",
-                    "text": "Counts it in the totals, because the new setting arrives switched off"
+                    "text": "One line for each transaction, in date order"
                 },
                 {
                     "letter": "c",
-                    "text": "Lists it separately at the bottom of the summary"
+                    "text": "The difference from the week before, as a percentage"
                 },
                 {
                     "letter": "d",
-                    "text": "Refuses to run until you say which you want"
+                    "text": "A breakdown by category and a total, the same as a month gets"
                 }
             ]
         },
         {
             "n": 2,
+            "band": "Extension",
+            "question": "You had the merchant rules taken out of the code. Where does a colleague add a rule for a new shop now?",
+            "options": [
+                {
+                    "letter": "a",
+                    "text": "In the settings file, which is where every rule now lives"
+                },
+                {
+                    "letter": "b",
+                    "text": "In the code, in the list of rules, as before"
+                },
+                {
+                    "letter": "c",
+                    "text": "On the command line, giving the shop and the category on every run"
+                },
+                {
+                    "letter": "d",
+                    "text": "In the statement itself, by editing what the shop is called"
+                }
+            ]
+        },
+        {
+            "n": 3,
             "band": "Rationale",
-            "question": "You had a weekly view added beside the monthly one. What does the weekly view no longer look at when it decides two rows are the same row twice?",
+            "question": "In the weekly view you had added, what does tally no longer look at when it decides two rows are the same row twice?",
             "options": [
                 {
                     "letter": "a",
@@ -409,71 +432,48 @@ export const AFTER_QUIZZES = Object.freeze({
             ]
         },
         {
-            "n": 3,
-            "band": "Change",
-            "question": "Besides the three things you had asked for, the agent changed one more rule. Which one?",
-            "options": [
-                {
-                    "letter": "a",
-                    "text": "The rule that decides what counts as recurring"
-                },
-                {
-                    "letter": "b",
-                    "text": "The rule that decides which month a transaction belongs to"
-                },
-                {
-                    "letter": "c",
-                    "text": "The rule that nets refunds against a category"
-                },
-                {
-                    "letter": "d",
-                    "text": "Nothing else changed"
-                }
-            ]
-        },
-        {
             "n": 4,
-            "band": "Rationale",
-            "question": "Your change leaves two rules disagreeing about the same pair of rows. Which two?",
+            "band": "Change",
+            "question": "You had the merchant rules moved into a file you can edit. What happens now when a shop on the statement matches no rule in that file?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Recurring payments and refunds"
+                    "text": "It goes to the uncategorised bucket, and the run finishes"
                 },
                 {
                     "letter": "b",
-                    "text": "Leaving out money moved between your own accounts, and removing a row recorded twice"
+                    "text": "The run stops, and no summary is written at all"
                 },
                 {
                     "letter": "c",
-                    "text": "Categorising and rounding"
+                    "text": "It is filed under the rule whose wording is closest to it"
                 },
                 {
                     "letter": "d",
-                    "text": "Month attribution and the sign convention"
+                    "text": "It is left out, and the rest of the summary still prints"
                 }
             ]
         },
         {
             "n": 5,
-            "band": "Extension",
-            "question": "Someone picks this up tomorrow and wants the weekly view to agree with the monthly one again. What do they have to settle first?",
+            "band": "Rationale",
+            "question": "Your change lines the weekly view up on the date the bank posted a transaction, while the monthly view still files it by the date it was made. What else does that affect?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Which file the weekly code lives in"
+                    "text": "Nothing, because the two views count the same transactions either way"
                 },
                 {
                     "letter": "b",
-                    "text": "Whether weeks start on Monday or Sunday"
+                    "text": "A transaction the bank has not posted yet can no longer appear at all"
                 },
                 {
                     "letter": "c",
-                    "text": "Which date a transaction belongs to, because the two views answer that differently now"
+                    "text": "One transaction can land in January in the monthly view and in February in the weekly one, so the two summaries of one statement disagree"
                 },
                 {
                     "letter": "d",
-                    "text": "Whether to add a sample file for it"
+                    "text": "Transactions made at a weekend are left out, because the bank posts them later"
                 }
             ]
         }

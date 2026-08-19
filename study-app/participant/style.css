@@ -187,14 +187,6 @@ input:focus { outline: none; border-color: var(--accent); }
 
 /* ── the task card ───────────────────────────────────────────────────────── */
 
-.card-wrap {
-    margin: 26px 0;
-    /* Belt and braces with the canvas: nothing here is selectable anyway, but a
-       stray element must not become copyable by accident. */
-    user-select: none; -webkit-user-select: none;
-}
-.card-wrap canvas { display: block; margin: 0 auto; }
-
 iframe {
     width: 100%; border: 1px solid var(--line); border-radius: var(--radius);
     background: var(--panel);
@@ -260,15 +252,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Only ever seen if the browser cannot give a drawing surface. Visible beats
    uncopyable when the choice is forced. */
-.card-fallback {
-    border: 1px solid var(--line); border-radius: var(--radius);
-    background: var(--panel); padding: 28px 32px;
-    user-select: none; -webkit-user-select: none;
-}
-.card-fallback strong { display: block; font-size: 20px; margin-bottom: 14px; }
-.card-fallback p { margin: 0 0 6px; min-height: 1em; }
-.card-fallback em { color: var(--ink-faint); font-size: 14px; font-style: normal; }
-
 /* ── the project briefing, on the page ───────────────────────────────────── */
 
 /* This content used to be a file the researcher shared on the call. It is long,
@@ -399,3 +382,85 @@ textarea:focus { outline: none; border-color: var(--accent); }
 /* The last half-minute. Amber, not red: it is a prompt to finish the question in
    hand, not an error. The out state (time reached zero) keeps the red it had. */
 .timer.soon { color: #8a5a00; background: #fbf0dc; }
+
+
+/* ── the request, and the pictures ─────────────────────────────────────────
+ *
+ * A paste block rather than a command chip: the request is a paragraph, and it
+ * has to reach the agent word for word or two participants are reviewing the
+ * answers to two different questions.
+ */
+.paste {
+    display: flex; align-items: flex-start; gap: 10px;
+    margin: 10px 0 4px;
+}
+.paste pre.pick {
+    flex: 1 1 auto; margin: 0; padding: 14px 16px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    font-size: 13px; line-height: 1.55; white-space: pre-wrap;
+}
+.paste button.copy { flex: 0 0 auto; margin-top: 2px; }
+
+/* A sample that shows what goes wrong reads as a sample, not as an alarm. It is
+ * marked once, quietly, because a red panel would tell somebody what to think
+ * before they have read it. */
+pre.sample.bad { border-left: 2px solid var(--line-strong, var(--line)); padding-left: 12px; }
+
+.asks { margin: 8px 0 0; padding-left: 20px; }
+.asks li { margin-bottom: 8px; }
+
+.rule { font-size: 14px; color: var(--ink-soft); margin: 0 0 18px; }
+
+/* ── the tutorial ─────────────────────────────────────────────────────────── */
+
+figure.shot { margin: 14px 0 6px; }
+figure.shot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--line); border-radius: 8px;
+}
+figure.shot figcaption {
+    margin-top: 8px; font-size: 13px; color: var(--ink-faint);
+}
+/* A screenshot that has not been taken yet is a space with a line saying what
+ * belongs in it. A page under construction then looks like one, instead of
+ * showing a participant a broken image. */
+figure.shot.todo .holder {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 150px; padding: 22px 26px; text-align: center;
+    border: 1px dashed var(--line); border-radius: 8px;
+    background: var(--panel);
+    font-size: 13px; color: var(--ink-faint); line-height: 1.5;
+}
+figure.shot.hero { margin-bottom: 22px; }
+
+.parts { margin-bottom: 20px; }
+
+.marks { display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;
+    font-size: 14px; color: var(--ink-soft); margin: 0 0 24px; }
+.mark {
+    display: inline-block; padding: 1px 8px; border-radius: 4px;
+    font-size: 12px; margin-right: 4px;
+}
+.mark.orange { background: #f5d9b8; color: #6b4a1c; }
+.mark.blue { background: #cfe0ef; color: #234a68; }
+
+.tour { list-style: none; margin: 0; padding: 0; counter-reset: tour; }
+.tour > li {
+    counter-increment: tour;
+    padding: 22px 0 26px; border-top: 1px solid var(--line);
+}
+.tour > li > h2 { margin: 0 0 10px; }
+.tour > li > h2::before {
+    content: counter(tour); display: inline-block; width: 1.6em;
+    color: var(--ink-faint); font-variant-numeric: tabular-nums;
+}
+.tour ul { margin: 0; padding-left: calc(1.6em + 18px); }
+.tour ul li { margin-bottom: 6px; }
+.tour figure.shot { margin-left: calc(1.6em); }
+
+/* The minute budget for a stage, beside it rather than in it. A participant
+ * paces themselves against it and the researcher calls the end. */
+.mins {
+    display: block; margin-top: 2px;
+    font-size: 13px; color: var(--ink-faint);
+}

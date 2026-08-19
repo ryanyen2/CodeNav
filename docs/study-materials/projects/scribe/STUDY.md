@@ -3,40 +3,45 @@
 Not shipped to participants. What the task is, what is being rated, and why each
 question has the answer it has.
 
-The task changed on 2026-08-19. The participant now reviews a change an agent
-already made, rather than making one, and the reasoning is in
-`docs/plans/2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`. The
-quiz further down is unchanged, because it asks what the codebase already commits
-to, and a reviewer has to know that either way.
+The task changed on 2026-08-19. The participant asks the agent for a change and
+then reviews what it did, rather than making the change themselves, and the
+reasoning is in
+`docs/plans/2026-08-19-001-task-redesign-v2-reviewing-an-agent-session.md`. Two
+things went with that change and are recorded where they used to be described: the
+follow-up request, and the round of questions that used to be asked before the
+task. Both sections say what happened to them rather than having been deleted.
 
-## The task card
+## The task, as the participant meets it
 
-> **Review what the agent did**
->
-> Before you left you asked for: a config file, a short report next to the
-> output, and a tidy-up of how the rules get their settings.
->
-> Decide what to keep, and ship it.
->
-> Finished means: the code does what you meant, and the description says what the
-> code does.
+There is no task card. It was replaced on 2026-08-19, because a card that said
+"you asked for" assumed a story nobody had told the participant, and meeting it
+cold the reasonable next move was to ask the researcher.
 
-The card is the request and the decision. What happened while they were away,
-what arrives in their terminal, that the tests pass, and how long they have are
-on the page around the card rather than in the picture, because a participant
-meeting the card cold could not tell which part was the job.
+The task page now reads as one occasion, in this order. First, one case where
+scribe behaves unhelpfully, which is a report carrying a running header over its
+main pages and a different one over its appendix, where the first is removed and
+the second stays in the middle of the writing. Second, what they are therefore
+asking for, as three plain lines. Third, the request itself in a copy block, which
+they paste into the agent. Fourth, what to do while it works, and what is left to
+them.
 
-The card does not say that anything is wrong, and it does not say that nothing
-is. Whether the participant looks at all is one of the outcomes, so the card asks
-for a decision and leaves the rest to them.
+The two halves of the task are on the page as well. The first is working out what
+the agent changed and how the project works now, and the second is deciding what to
+keep and leaving the project in a state they would be happy to ship.
+
+Nothing on the page says that anything is wrong, and nothing says that everything
+is fine. Whether the participant looks at all is one of the outcomes, so the page
+asks for a decision and leaves the rest to them. Sending the request themselves is
+what makes the change theirs to decide about.
 
 ## What the recorded agent was asked for
 
-The prompt is in `replay/requests/scribe.txt`, and the participant is told they
-wrote it before lunch. Three things are asked for at once, so no run of the
-transcript is about a single intent and no file carries only one intent. The
-prompt says nothing about defaults, which is the ordinary case, and the choices
-the agent makes to fill that silence are what the study is about.
+The prompt is in `replay/requests/scribe.txt`, and it is word for word the request
+the participant is given to paste, so the change they watch arrive is the change
+they asked for. Three things are asked for at once, so no run of the transcript is
+about a single intent and no file carries only one intent. The prompt says nothing
+about defaults, which is the ordinary case, and the choices the agent makes to fill
+that silence are what the study is about.
 
 The session is recorded once and replayed to each participant in about three
 minutes, because watching an agent write code for forty minutes is not what we
@@ -137,17 +142,24 @@ Flagging D0 as wrong counts as a false alarm, and so does flagging any other
 correct part of the change. A surface that makes everything look suspicious is
 not an improvement, and the false alarm count is what says so.
 
-## The follow-up request
+## The follow-up request, which is no longer given
 
-Given after the review, and read aloud rather than put on the card:
+**Dropped on 2026-08-19. It is written down here because it was part of the
+instrument, not because anybody reads it out.** It used to be given after the
+review:
 
 > Keep the document's title line at the top of the output.
 
 The title line is the line that repeats on every page, so the obvious
-implementation runs into a commitment the record already holds. The participant
-has to notice the conflict and settle it deliberately, either by changing the
-commitment and saying so, or by keeping it and constraining the request. Whether
-they notice at all is recorded, and so is which way they went.
+implementation runs into a commitment the record already holds. Whether the
+participant noticed the conflict, and which way they settled it, was recorded.
+
+It was dropped because there is one request per condition now and the task runs
+twenty minutes. A second request read out mid-task splits those twenty minutes
+into reviewing somebody else's change and then making one of your own, which are
+different activities, and the study is about the first. Nothing measures that
+conflict any more. What survives of the idea that a change can look local and not
+be is inside the planted set, where D1 carries the coupling and says so.
 
 ## What else is recorded per problem
 
@@ -164,15 +176,32 @@ description as true, contradicted, or missing.
 
 ## The quiz
 
-Five questions, four options, one right, asked before the task.
+**No longer asked in a session. Dropped on 2026-08-19.** These five questions were
+asked before the task, open book and timed, and the round has been removed from
+the participant's page. Nothing writes `answers/quiz-scribe-before` any more, and
+the measure it fed, how well and how fast somebody can find an answer in this
+codebase, is gone with no replacement. `analysis-plan.md` records that.
 
-**They are answered open book, with a clock running.** The participant may read
+It was dropped because reviewing a change to the codebase means working the
+codebase out, so the first half of the task is the same activity this round
+measured, and the whole task budget is twenty minutes.
+
+The questions are kept, and this heading has to stay exactly as it is, because two
+programs read the section. `scoring/check-description-answers.py` uses them as a
+smoke test on the descriptions, which is a floor on guessability and a check that a
+description has not lost its content. `study-app/scripts/extract-questions.mjs`
+still extracts them. What follows describes the round as it was run, and is kept as
+the record of an instrument rather than as instructions for a session.
+
+They were five questions, four options, one right.
+
+**They were answered open book, with a clock running.** The participant could read
 the description, read the code, run the project, and ask the agent. The one thing
-barred is pasting a question at the agent, which would measure the agent. This
+barred was pasting a question at the agent, which would measure the agent. That
 changed in 2026-08: asking people to answer "from what you have just read"
-measured how much of a two-minute briefing they retained, which is not what
-either way of working is for. How quickly somebody can find five answers is
-the comparison, so the elapsed time is stored with the answers.
+measured how much of a two-minute briefing they retained, which is not what either
+way of working is for. How quickly somebody could find five answers was the
+comparison, so the elapsed time was stored with the answers.
 
 **Every wrong option is something scribe could reasonably have done and did not.**
 A quiz whose wrong answers are obviously wrong is answered by picking the
@@ -221,15 +250,15 @@ Both descriptions are generated by their own tool: `CLAUDE.md` by Claude Code's
 `/init`, and the tree by `codoc init`. Neither is hand-written. Writing one by
 hand and generating the other would make the comparison meaningless.
 
-**Nine blind is still too high, and it is the open problem in this instrument.**
-A frontier model with no description gets as many as one reading either
-description, so on this evidence the questions do not separate the arms. Two
-things make that less damaging than it reads. A frontier model is a harsh proxy
-for somebody with ten minutes and a codebase they met today, so this is a ceiling
-on guessability rather than a prediction. And the sitting is now open book and
-timed, so the measure is no longer only the score: it is also how long the answers
-took, which a blind run cannot speak to at all. Say both of these in the
-pre-registration rather than discovering them in the results.
+**Nine blind was the open problem in this instrument, and it is now moot.** A
+frontier model with no description gets as many as one reading either description,
+so on this evidence the questions did not separate the arms. A frontier model is a
+harsh proxy for somebody with ten minutes and a codebase they met today, so the
+number is a ceiling on guessability rather than a prediction, which is exactly what
+the smoke test still uses it for. The answer to it used to be that the sitting was
+timed as well as scored, and a blind run cannot speak to elapsed time at all. With
+the round dropped there is no sitting and no elapsed time, so nothing rests on the
+score either way.
 
 ### Purpose: what it is for, and where it stops
 
@@ -274,32 +303,38 @@ pre-registration rather than discovering them in the results.
 Five questions, four options, one right, asked straight after the task with the
 code, the description and the agent CLOSED. Never shown before the task.
 
-**Every one of them is about the agent's session and what the participant did
-with it.** A question answerable by somebody who read the project page and did
-nothing is a question that measures reading. Four of the five turn on a planted
-problem, so the two ways to get one right are to have found the problem or to
-have read the whole change carefully. Somebody who shipped without looking will
-have neither.
+**The five run from obvious to hard, in that order.** The first two are
+answerable by anybody who opened the change at all, and they are there so that a
+participant who did the work is not scored as though they did none. The next two
+need the participant to know what the edits actually were and which way a
+decision went. The last one asks what the change causes somewhere else in the
+program, away from the lines it altered, and it is the only hard one in the set.
+
+**Every one of them is about the recorded change.** A question answerable by
+somebody who read the project page and did nothing is a question that measures
+reading. Three of the five turn on a planted problem, so the two ways to get one
+of those right are to have found the problem or to have read the whole change
+carefully. Somebody who shipped without looking will have neither.
 
 They are matched to tally's set one for one, band for band and level for level.
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) You had a config file added. What does scribe now do when it runs with no config file at all?**
-- a) It refuses to run until a config file exists
-- b) **It converts as before, except that a line repeated on two pages is now removed** ✓
-- c) It writes out a config file with the current settings and stops
-- d) It converts exactly as it did before, with nothing changed
+**Q1. (easy) You had a short report written beside the Markdown. What does it list?**
+- a) How long each rule took to run
+- b) The original text, with everything the conversion removed crossed out
+- c) **The lines it removed, the words it rejoined, and the notes it moved** ✓
+- d) The parts of the document the conversion could not handle
 
 ### Rationale: why that way and not the other
 
-**Q2. (medium) You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?**
+**Q3. (medium) You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?**
 - a) It keeps its hyphen, exactly as before
 - b) **It loses its hyphen, because the list of prefixes that keep one is now empty by default** ✓
 - c) The line break is kept along with the hyphen
 - d) The run refuses until the document says which it wants
 
-**Q4. (hard) Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?**
+**Q5. (hard) Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?**
 - a) Nothing; furniture and headings never look at the same lines
 - b) Page numbers can no longer be used to order the sections
 - c) **A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents** ✓
@@ -307,7 +342,7 @@ They are matched to tally's set one for one, band for band and level for level.
 
 ### Change: what it cost, and what it touched
 
-**Q3. (medium) The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?**
+**Q4. (medium) The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?**
 - a) `[^1]` and `[^2]`, which is what the Markdown holds
 - b) **`[^1]` beside both, so the marker does not tell them apart** ✓
 - c) No markers at all, only the text of each note
@@ -315,11 +350,11 @@ They are matched to tally's set one for one, band for band and level for level.
 
 ### Extension: what a next person needs
 
-**Q5. (hard) Someone picks this up tomorrow and adds another rule. What do they have to decide that they would not have to if the rules were independent?**
-- a) Which file to put it in
-- b) Whether to give its threshold a name
-- c) **Where it goes in the fixed order the stages run in, because each stage sees what the ones before it left** ✓
-- d) Whether to add a sample document for it
+**Q2. (easy) You had the rules' settings taken out of the code. Where are they set now?**
+- a) **In a settings file that scribe looks for near the document** ✓
+- b) In each rule module, at the top, as before
+- c) On the command line, given again on every run
+- d) In an environment variable read when the program starts
 
 ## Matching `tally`
 

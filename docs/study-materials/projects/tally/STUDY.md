@@ -4,28 +4,22 @@ Not shipped to participants. Matched to scribe one for one. The reasoning for
 both is written out once, in `../scribe/STUDY.md`, and only what differs is
 repeated here.
 
-## The task card
+## The task, as the participant meets it
 
-> **Review what the agent did**
->
-> Before you left you asked for: the merchant rules moved into a file you can
-> edit, a weekly view beside the monthly one, and a tidy-up of how the rules get
-> their settings.
->
-> Decide what to keep, and ship it.
->
-> Finished means: the code does what you meant, and the description says what the
-> code does.
+There is no task card. It was replaced on 2026-08-19, for the reason written out
+in `../scribe/STUDY.md`.
 
-The card is the request and the decision. What happened while they were away,
-what arrives in their terminal, that the tests pass, and how long they have are
-on the page around the card rather than in the picture, because a participant
-meeting the card cold could not tell which part was the job.
+The task page reads as one occasion, in this order. First, one case where tally
+behaves unhelpfully, which is a supermarket missing from the merchant patterns
+being counted as uncategorised, so that no month in the file gets a groceries
+figure at all. Second, what they are therefore asking for, as three plain lines.
+Third, the request itself in a copy block, which they paste into the agent.
+Fourth, what to do while it works, and what is left to them.
 
 ## What the recorded agent was asked for
 
-The prompt is in `replay/requests/tally.txt`, and the participant is told they
-wrote it before lunch.
+The prompt is in `replay/requests/tally.txt`, and it is word for word the request
+the participant is given to paste.
 
 ## The three planted problems
 
@@ -36,9 +30,8 @@ and what it would not land, is in `replay/frames/tally/neutral/notes.md`.
 
 tally plants three rather than four, for the same reason scribe does. The fourth
 was the transfer default arriving switched off, and the agent would not produce it
-from a request a person would send. The request that would have landed it is the
-task's own follow-up request, given live, so using it as a steer would have spent
-the second half of the task on the first half.
+from a request a person would send. The only request that would have landed it was
+the follow-up, which is no longer given.
 
 ### D1. The two summaries of one statement disagree
 
@@ -92,16 +85,20 @@ the run finishes. Checked as C4.
 The loop that tries each merchant rule in turn is replaced by a prepared ordered
 mapping. It reads like a change to which rule wins and it is not one.
 
-## The follow-up request
+## The follow-up request, which is no longer given
 
-Given after the review, and read aloud:
+**Dropped on 2026-08-19, with scribe's, and for the same reason: one request per
+condition, and twenty minutes for the task.** It is written down here because it
+was part of the instrument. It used to be read aloud after the review:
 
 > Include the money I move into savings in the totals. I want to see everything
 > that left the account.
 
-Money moved between your own accounts is two rows that look like one row
-recorded twice, so counting it and removing repeats cannot both be done the naive
-way. The obvious implementation runs into a commitment the record already holds.
+Money moved between your own accounts is two rows that look like one row recorded
+twice, so counting it and removing repeats cannot both be done the naive way. The
+obvious implementation ran into a commitment the record already holds, and whether
+the participant noticed was recorded. Nothing measures that now. The coupled
+problem in the planted set is D2, and it is what is left of the idea.
 
 ## What else is recorded per problem
 
@@ -111,11 +108,22 @@ coverage at fifteen minutes, and whether the record is true at the end against
 
 ## The quiz
 
-Five questions, four options, one right, asked before the task. Matched to scribe band for band and level for
-level, which `extract-questions.mjs` refuses to let drift.
+**No longer asked in a session. Dropped on 2026-08-19, with scribe's, and for the
+same reason.** The round is off the participant's page, nothing writes
+`answers/quiz-tally-before` any more, and the measure it fed is gone with no
+replacement. `analysis-plan.md` records that, and `../scribe/STUDY.md` gives the
+reasoning.
 
-Answered open book with a clock running, and the difficulty tags work the same
-way as scribe's. The reasoning for both is written out once, in
+The questions are kept and this heading has to stay exactly as it is, because
+`scoring/check-description-answers.py` uses them as a smoke test on the
+descriptions and `study-app/scripts/extract-questions.mjs` reads the section. What
+follows describes the round as it was run.
+
+They were five questions, four options, one right. They are matched to scribe band
+for band and level for level, which `extract-questions.mjs` refuses to let drift.
+
+They were answered open book with a clock running, and the difficulty tags work the
+same way as scribe's. The reasoning for both is written out once, in
 `../scribe/STUDY.md`, rather than kept in two copies that can disagree.
 
 **Every wrong option is something tally could reasonably have done and did not,
@@ -180,47 +188,50 @@ questions are not separating the arms.
 ## The after-task questions
 
 Five questions, four options, one right, asked straight after the task with the
-code, the description and the agent CLOSED. Matched to scribe's set one for one,
-band for band and level for level. The reasoning for both is written out once, in
+code, the description and the agent CLOSED. The first two are obvious to anybody
+who opened the change at all. The next two need the participant to know what the
+edits were and which way a decision went, and the last one asks what the change
+causes somewhere else in the program. Matched to scribe's set one for one, band
+for band and level for level. The reasoning for both is written out once, in
 `../scribe/STUDY.md`.
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) You had the merchant rules moved into a file you can edit. What does tally now do with money moved between your own accounts?**
-- a) Leaves it out of the totals, as it did before
-- b) **Counts it in the totals, because the new setting arrives switched off** ✓
-- c) Lists it separately at the bottom of the summary
-- d) Refuses to run until you say which you want
+**Q1. (easy) You had a weekly view added beside the monthly one. What does it show for each week?**
+- a) Only a total, with no breakdown
+- b) One line for each transaction, in date order
+- c) The difference from the week before, as a percentage
+- d) **A breakdown by category and a total, the same as a month gets** ✓
 
 ### Rationale: why that way and not the other
 
-**Q2. (medium) You had a weekly view added beside the monthly one. What does the weekly view no longer look at when it decides two rows are the same row twice?**
+**Q3. (medium) In the weekly view you had added, what does tally no longer look at when it decides two rows are the same row twice?**
 - a) The date
 - b) The amount
 - c) **The merchant** ✓
 - d) The category
 
-**Q4. (hard) Your change leaves two rules disagreeing about the same pair of rows. Which two?**
-- a) Recurring payments and refunds
-- b) **Leaving out money moved between your own accounts, and removing a row recorded twice** ✓
-- c) Categorising and rounding
-- d) Month attribution and the sign convention
+**Q5. (hard) Your change lines the weekly view up on the date the bank posted a transaction, while the monthly view still files it by the date it was made. What else does that affect?**
+- a) Nothing, because the two views count the same transactions either way
+- b) A transaction the bank has not posted yet can no longer appear at all
+- c) **One transaction can land in January in the monthly view and in February in the weekly one, so the two summaries of one statement disagree** ✓
+- d) Transactions made at a weekend are left out, because the bank posts them later
 
 ### Change: what it cost, and what it touched
 
-**Q3. (medium) Besides the three things you had asked for, the agent changed one more rule. Which one?**
-- a) The rule that decides what counts as recurring
-- b) **The rule that decides which month a transaction belongs to** ✓
-- c) The rule that nets refunds against a category
-- d) Nothing else changed
+**Q4. (medium) You had the merchant rules moved into a file you can edit. What happens now when a shop on the statement matches no rule in that file?**
+- a) It goes to the uncategorised bucket, and the run finishes
+- b) **The run stops, and no summary is written at all** ✓
+- c) It is filed under the rule whose wording is closest to it
+- d) It is left out, and the rest of the summary still prints
 
 ### Extension: what a next person needs
 
-**Q5. (hard) Someone picks this up tomorrow and wants the weekly view to agree with the monthly one again. What do they have to settle first?**
-- a) Which file the weekly code lives in
-- b) Whether weeks start on Monday or Sunday
-- c) **Which date a transaction belongs to, because the two views answer that differently now** ✓
-- d) Whether to add a sample file for it
+**Q2. (easy) You had the merchant rules taken out of the code. Where does a colleague add a rule for a new shop now?**
+- a) **In the settings file, which is where every rule now lives** ✓
+- b) In the code, in the list of rules, as before
+- c) On the command line, giving the shop and the category on every run
+- d) In the statement itself, by editing what the shop is called
 
 ## Where it does not match scribe, and by how much
 

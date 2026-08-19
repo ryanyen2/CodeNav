@@ -14,15 +14,11 @@ import {
 } from 'firebase/firestore';
 import {
     CONSENT_FORM, PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS,
-    scaleFor, MANIPULATION_CHECK, SCENARIOS, SIGNOFF, REFLECTION, TASK_CARDS,
-    PROJECTS, RESPONSIBILITY, HOW_TO_START, QUIZZES, AFTER_QUIZZES,
+    scaleFor, MANIPULATION_CHECK, SCENARIOS, SIGNOFF, REFLECTION,
+    PROJECTS, TASK, HOW_TO_START, TUTORIAL, AFTER_QUIZZES,
     buildSteps, answerDoc,
 } from './steps.js';
-import { drawCard } from './card.js';
-import { cmd, wireCopy } from './copy.js';
-import {
-    QUIZ_MINUTES, QUIZ_WARN_MS, QUIZ_ADVANCE_DELAY_MS, timedOutAllowsAdvance,
-} from './quiz-timing.js';
+import { cmd, block, wireCopy } from './copy.js';
 import { defaultsFor } from './autofill.js';
 import { isPilotCode } from '../shared/schema.js';
 import { setLanguage, language, t, localize, localizeAll } from './i18n/index.js';
@@ -204,53 +200,24 @@ const answersFor = (step) => {
 
 function render() {
     const step = state.steps[state.at];
-    // Stop the question clock before the step it belongs to leaves the screen.
-    // Only the quiz step arms it, and going Back off one used to leave it
-    // ticking against an element that no longer existed.
-    clearInterval(quizTick);
     $('#rail').style.width = `${(state.at / (state.steps.length - 1)) * 100}%`;
 
     const section = document.createElement('section');
     section.className = 'step';
-    // The questions are not copyable. They are open book, read the description,
-    // read the code, ask the agent about the PROJECT, but pasting the question
-    // itself into the agent measures the agent instead of the pair. Blocking the
-    // copy is not a security boundary and is not meant to be; it removes the
-    // thoughtless path, which is the one people actually take.
-    if (step.kind === 'quiz' || step.kind === 'reflect') section.classList.add('noselect');
+    // The closed book questions are not copyable. Blocking it is not a security
+    // boundary and is not meant to be; it removes the thoughtless path, which is
+    // the one people actually take.
+    if (step.kind === 'reflect') section.classList.add('noselect');
     section.innerHTML = VIEWS[step.kind](step);
     stage.replaceChildren(section);
     window.scrollTo({ top: 0, behavior: 'instant' });
 
-    if (step.kind === 'task') {
-        // Light, like the rest of the page, rather than following the machine.
-        // The card is a picture that goes into the screen recording, and a card
-        // that is dark for one participant and light for the next is one more
-        // thing that differs between sessions for no reason.
-        // The card is a picture so its words cannot be selected and pasted at the
-        // agent. It is drawn in the session's language like everything else.
-        const card = TASK_CARDS[step.project];
-        drawCard(section.querySelector('.card-wrap'), {
-            title: t(`card.${step.project}.title`, card.title),
-            lines: (t(`card.${step.project}.lines`, card.lines.join('\n'))).split('\n'),
-            // The sample used to stay in the language the OUTPUT is in, because
-            // it was what the program prints. Since the task became a review it
-            // is a sentence about what finished means, so it is prose and it is
-            // translated like the rest of the card.
-            example: card.example && {
-                label: t(`card.${step.project}.example.label`, card.example.label),
-                lines: (t(`card.${step.project}.example.lines`,
-                    card.example.lines.join('\n'))).split('\n'),
-            },
-        }, { dark: false });
-    }
     wire(section, step);
     wireCopy(section);
-    if (step.kind === 'quiz') startQuizTimer(step);
-    // The task has no clock on screen, it is not timed against them, but the
-    // instant it opened is recorded, because that is where the interaction log
-    // stops being a record of working the codebase out and starts being a record
-    // of changing it.
+    // The task has no clock on screen: the researcher is on the call and calls
+    // time. The instant it opened is recorded anyway, because it is where the
+    // interaction log stops being a record of reading and starts being a record
+    // of reviewing.
     if (step.kind === 'task') {
         const a = answersFor(step);
         if (!a.startedAt) { a.startedAt = Date.now(); void save(step); }
@@ -280,7 +247,7 @@ function complete(step) {
     }
     if (step.kind === 'scenarios') return SCENARIOS.every((s) => given(s.id));
     if (step.kind === 'reflect') {
-        // Every one answered, the same rule the pre-task quiz uses: a blank is
+        // Every one answered. A blank is
         // indistinguishable from "I do not know", and which wrong option drew
         // somebody is most of what a wrong answer tells us.
         return (AFTER_QUIZZES[step.project] || []).every((q) => given(`a${q.n}`))
@@ -291,19 +258,6 @@ function complete(step) {
         // box buys blank characters typed to get past the button.
         return ['correct', 'confidence'].every((id) => given(id))
             && (a.grounds || []).length > 0;
-    }
-    if (step.kind === 'quiz') {
-        // Every one answered. A blank is indistinguishable from "I do not know",
-        // and the guess is the data: which wrong option attracted somebody is
-        // most of what a wrong answer tells us.
-        //
-        // Unless the clock ran out, which is the one case where a blank means
-        // something on its own, and holding somebody on a step they are out of
-        // time for would make the button, not the timer, the thing in charge.
-        return timedOutAllowsAdvance({
-            answered: (QUIZZES[step.project] || []).every((q) => given(`q${q.n}`)),
-            timedOut: a.timedOut,
-        });
     }
     return true;
 }
@@ -316,8 +270,7 @@ const VIEWS = {
     welcome: () => `
         <h1>${esc(t('ui.welcome.h', 'Thanks for taking part'))}</h1>
         <p class="lead">${esc(t('ui.welcome.lead', 'This page walks you through the session. It saves as you go, so if anything closes you can open the same link and carry on.'))}</p>
-        <p>${esc(t('ui.welcome.p', 'The researcher is on the call with you. Ask them anything at any point, and tell them if something on this page does not make sense.'))}</p>
-        <div class="note">${esc(t('ui.welcome.note', 'Nothing you type here is stored with your name. Your answers are filed against a code, and only the consent form knows who you are.'))}</div>`,
+        <p>${esc(t('ui.welcome.p', 'The researcher is on the call with you. Ask them anything at any point, and tell them if something on this page does not make sense.'))}</p>`,
 
     consent: () => `
         <h1>${esc(t('ui.consent.h', 'Consent'))}</h1>
@@ -350,7 +303,7 @@ const VIEWS = {
 
         <ol class="do">
           <li>${esc(t('ui.setup.dl', 'Download the study folder.'))}
-            <a class="dl" href="${BUNDLE_URL}" download>${esc(t('ui.setup.dlbtn', 'Download (about 5 MB)'))}</a></li>
+            <a class="dl" href="${BUNDLE_URL}" download>${esc(t('ui.setup.dlbtn', 'Download (about 9 MB)'))}</a></li>
           <li>${esc(t('ui.setup.unzip', 'Unzip it. Double-click on a Mac, or'))} ${cmd('unzip codoc-study-bundle.zip')}</li>
           <li>${esc(t('ui.setup.cd', 'Open a terminal in the unzipped folder.'))}
             ${cmd('cd ~/Downloads/codoc-study-bundle')}</li>
@@ -361,12 +314,10 @@ const VIEWS = {
 
         <p>${esc(t('ui.setup.p', 'It prints a line for each thing it does and asks you for nothing. When it finishes it either says everything is ready or lists what is missing. Send the last few lines to the researcher either way.'))}</p>
 
-        <div class="note">${esc(t('ui.setup.pays', 'We pay for the AI, so nothing in this study costs you anything and you do not need your own plan. The keys come down with your code, so you never paste one. Everything it sets up lives inside the project folders, including a separate assistant profile, so your own setup is untouched and deleting those folders removes all of it.'))}</div>
 
         <h2>${esc(t('ui.setup.dayh', 'On the day'))}</h2>
         <p>${esc(t('ui.setup.dayp', 'Run this in the same folder and read the result to the researcher.'))}</p>
-        <p>${cmd('./setup.sh --check')}</p>
-        <div class="note">${esc(t('ui.setup.daynote', 'If anything says fail or todo, say so now. It takes a minute to fix here and cannot be fixed afterwards.'))}</div>`,
+        <p>${cmd('./setup.sh --check')}</p>`,
 
     intro: (step) => {
         const how = HOW_TO_START[step.condition];
@@ -374,106 +325,139 @@ const VIEWS = {
         <h1>${esc(step.n === 1
         ? t('ui.intro.first', 'The first way of working')
         : t('ui.intro.second', 'The second way of working'))}</h1>
-        <p class="lead">${esc(t(`start.${step.condition}.title`, how.title))}.</p>
-        <p>${esc(t('ui.intro.shape',
-        'First you get the project open, which is what the steps below are for. Then you answer a '
-        + 'few questions about the project. Then you look at a change your coding agent has '
-        + 'already made to it, and you decide what to keep.'))}</p>
+        <p class="lead">${esc(t('ui.intro.shape',
+        'Get the project open, read about it, then look at a change your coding agent '
+        + 'made to it and decide what to keep.'))}</p>
         <ol class="do">
           ${how.steps.map(([text, c], i) => `<li>${esc(t(`start.${step.condition}.step.${i}`, text))}
             ${c ? cmd(c.replace('{folder}', how.folder(step.project))) : ''}
           </li>`).join('')}
-        </ol>
-        <h2>${esc(t('ui.intro.whatdoc', 'What the written description is here'))}</h2>
-        ${how.about.map((line, i) => `<p>${esc(t(`start.${step.condition}.about.${i}`, line))}</p>`).join('')}`;
+        </ol>`;
     },
 
-    // Everything on this page used to be a file the researcher shared on the
-    // call. Reading it here means nobody leaves the page while forming their
-    // first picture of the codebase, and every participant gets the same words.
+    // The project, in five minutes, led by pictures.
+    //
+    // What it replaced ran to nine source files, six rules with a second
+    // sentence each explaining that another choice was possible, and a heading
+    // that told the reader every rule was a tradeoff. None of that survives a
+    // five minute budget, and a participant who spends it reading is one who
+    // meets the change without a picture of the project.
     about: (step) => {
         const p = PROJECTS[step.project];
         return `
         <h1>${esc(t('ui.about.h', 'About {project}').replace('{project}', p.name))}</h1>
         <p class="lead">${esc(t(`project.${step.project}.oneLine`, p.oneLine))}</p>
 
-        <h2>${esc(t('ui.about.problem', 'The problem'))}</h2>
-        ${p.problem.map((line, i) => `<p>${esc(t(`project.${step.project}.problem.${i}`, line))}</p>`).join('')}
+        ${p.why.map((line, i) => `<p>${esc(t(`project.${step.project}.why.${i}`, line))}</p>`).join('')}
+
         <div class="ba">
-          <div><span class="ba-label">${esc(t(`project.${step.project}.beforeLabel`, 'Out of the PDF'))}</span><pre class="sample">${esc(p.before)}</pre></div>
-          <div><span class="ba-label">${esc(t('ui.about.after', 'After'))}</span><pre class="sample">${esc(p.after)}</pre></div>
+          <div><span class="ba-label">${esc(t(`project.${step.project}.worked.inputLabel`, p.worked.inputLabel))}</span>
+               <pre class="sample">${esc(p.worked.input)}</pre></div>
+          <div><span class="ba-label">${esc(t(`project.${step.project}.worked.outputLabel`, p.worked.outputLabel))}</span>
+               <pre class="sample">${esc(p.worked.output)}</pre></div>
         </div>
-        <p class="fine">${esc(t(`project.${step.project}.afterNote`, p.afterNote))}</p>
+        <p class="fine">${esc(t(`project.${step.project}.worked.caption`, p.worked.caption))}</p>
 
-        <h2>${esc(t('ui.about.does', 'What it does'))}</h2>
-        <p>${esc(t('ui.about.doesp', 'You do not need to remember these. They are here so nothing in the code is a surprise.'))}</p>
-        <dl class="words">${p.does.map(([w, d], i) => `
-          <dt>${esc(t(`project.${step.project}.does.${i}.term`, w))}</dt>
-          <dd>${esc(t(`project.${step.project}.does.${i}.body`, d))}</dd>`).join('')}
+        <h2>${esc(t('ui.about.rules', 'What it does'))}</h2>
+        <dl class="words">${p.rules.map((r, i) => `
+          <dt>${esc(t(`project.${step.project}.rule.${i}.name`, r.name))}</dt>
+          <dd>${esc(t(`project.${step.project}.rule.${i}.what`, r.what))}</dd>`).join('')}
         </dl>
-        <p>${esc(t(`project.${step.project}.notScope`, p.notScope))}</p>
-
-        <h2>${esc(t('ui.about.tradeoff', 'Each rule is a tradeoff'))}</h2>
-        <p class="lead">${esc(t('ui.about.tradeoffp', 'Each of the rules above chose one reasonable option over another reasonable option.'))}</p>
-        <dl class="words">${p.judgement.map(([w, d], i) => `
-          <dt>${esc(t(`project.${step.project}.judgement.${i}.term`, w))}</dt>
-          <dd>${esc(t(`project.${step.project}.judgement.${i}.body`, d))}</dd>`).join('')}
-        </dl>
-        <div class="note">${esc(t('ui.about.chose',
-        'The code shows you what {project} chose in each case. It does not always say why, or what the alternative would have cost.')
-        .replace('{project}', p.name))}</div>
+        <p>${esc(t(`project.${step.project}.limits`, p.limits))}</p>
 
         <h2>${esc(t('ui.about.running', 'Running it'))}</h2>
         <table class="cmds"><tbody>${p.commands.map(([c, w], i) => `
           <tr><td class="mono">${cmd(c)}</td><td>${esc(t(`project.${step.project}.command.${i}`, w))}</td></tr>`).join('')}
-        </tbody></table>
-        <p class="fine">${esc(t(`project.${step.project}.commandNote`, p.commandNote))}</p>
-
-        <h2>${esc(t('ui.about.files', 'The files'))}</h2>
-        <p>${esc(t('ui.about.filesp', 'Nine, and small. You will probably touch two or three.'))}</p>
-        <table class="cmds"><tbody>${p.layout.map(([c, w], i) => `
-          <tr><td class="mono">${esc(c)}</td><td>${esc(t(`project.${step.project}.layout.${i}`, w))}</td></tr>`).join('')}
-        </tbody></table>
-        <p>${esc(t(`project.${step.project}.inputs`, p.inputs))}</p>
-
-        <div class="note">${RESPONSIBILITY.map((line, i) => `<p>${esc(t(`responsibility.${i}`, line))}</p>`).join('')}</div>`;
+        </tbody></table>`;
     },
 
-    // The card is the request they left. Everything a person needs in order to
-    // read it is on the page around it: who did what while they were away, what
-    // is about to happen in their terminal, what they are being asked to decide,
-    // and how long it takes. A participant meeting the card cold could not answer
-    // any of those, and asked the researcher instead, which made the framing
-    // depend on how it was improvised on the day.
-    task: (step) => `
+    // The way of working, in five minutes, as a tutorial rather than as four
+    // sentences somebody reads once and cannot use.
+    //
+    // Both conditions get one of the same length. A page that is longer in one
+    // arm teaches more in that arm, and then the comparison is between two
+    // pages rather than between two tools.
+    system: (step) => {
+        const g = TUTORIAL[step.condition];
+        const key = `tutorial.${step.condition}`;
+        return `
+        <h1>${esc(t(`${key}.title`, g.title))}</h1>
+        <p class="lead">${esc(t(`${key}.lead`, g.lead))}</p>
+
+        ${figure(g.hero, `${key}.hero`, 'hero')}
+
+        <dl class="words parts">${g.parts.map(([name, what], i) => `
+          <dt>${esc(t(`${key}.part.${i}.name`, name))}</dt>
+          <dd>${esc(t(`${key}.part.${i}.what`, what))}</dd>`).join('')}
+        </dl>
+
+        ${g.marks.length ? `<p class="marks">${g.marks.map(([colour, means], i) => `
+          <span class="mark ${esc(colour.toLowerCase())}">${esc(t(`${key}.mark.${i}.colour`, colour))}</span>
+          ${esc(t(`${key}.mark.${i}.means`, means))}`).join('')}</p>` : ''}
+
+        <ol class="tour">${g.steps.map((s, i) => `
+          <li>
+            <h2>${esc(t(`${key}.step.${i}.title`, s.title))}</h2>
+            <ul>${s.points.map((point, j) => `
+              <li>${esc(t(`${key}.step.${i}.point.${j}`, point))}</li>`).join('')}
+            </ul>
+            ${figure(s.figure, `${key}.step.${i}.figure`)}
+          </li>`).join('')}
+        </ol>`;
+    },
+
+    // The request, and the decision.
+    //
+    // It reads as one occasion: this is what the project gets wrong, this is
+    // what you are going to ask for, here is the request, send it. The page used
+    // to open on a memory the participant did not have, of asking for something
+    // earlier and going out, and the card was a request with no author. Sending
+    // it themselves is what makes the change theirs to own.
+    //
+    // Nothing here says the change is wrong, and nothing says what to check.
+    // Either would hand over the thing being measured.
+    task: (step) => {
+        const p = PROJECTS[step.project];
+        return `
         <h1>${esc(t('ui.task.h', 'Your task'))}</h1>
-        <p class="lead">${esc(t('ui.task.lead',
-        'Earlier today you asked your coding agent for some changes to {project}, and then you '
-        + 'went out. It worked while you were away, and it has finished. The card below is the '
-        + 'request you left.').replace('{project}', step.project))}</p>
-        <div class="card-wrap"></div>
 
-        <h2>${esc(t('ui.task.arrive.h', 'What happens next'))}</h2>
-        <p>${esc(t('ui.task.arrive.p',
-        'The researcher starts the agent\'s work in your terminal, and it runs for about three '
-        + 'minutes. Your files change while it runs, and the agent prints what it is doing. Watch '
-        + 'it, and leave the keyboard alone until it stops.'))}</p>
-        <p>${esc(t('ui.task.arrive.after',
-        'When it stops, the change is sitting in your project with nothing committed, and the '
-        + 'tests pass. Everything the agent said stays in the terminal, so you can scroll back and '
-        + 'read it. Your first message carries on the same conversation, so you can ask the agent '
-        + 'about anything it did.'))}</p>
+        <h2>${esc(t('ui.task.problem', 'One thing {project} gets wrong')
+        .replace('{project}', step.project))}</h2>
+        <p>${esc(t(`project.${step.project}.failure.lead`, p.failure.lead))}</p>
+        <div class="ba">
+          <div><span class="ba-label">${esc(t('ui.task.in', 'In'))}</span>
+               <pre class="sample">${esc(p.failure.input)}</pre></div>
+          <div><span class="ba-label">${esc(t('ui.task.out', 'Out'))}</span>
+               <pre class="sample bad">${esc(p.failure.output)}</pre></div>
+        </div>
+        <p class="fine">${esc(t(`project.${step.project}.failure.caption`, p.failure.caption))}</p>
 
-        <h2>${esc(t('ui.task.decide.h', 'What is left to you'))}</h2>
-        <p>${esc(t('ui.task.decide.p',
-        'The agent has already done the work. What is left is yours to decide. Keep what you '
-        + 'want, change what you do not, and leave the written description saying what the code '
-        + 'does. We ask you about those decisions afterwards, with the code and the agent closed, '
-        + 'so make them on purpose.'))}</p>
-        <p class="note">${esc(t('ui.task.time',
-        'About 30 minutes in all. Roughly half of that goes on the change the agent has made, and '
-        + 'the rest on one more request the researcher reads out to you partway through. Work as '
-        + 'you normally would.'))}</p>`,
+        <h2>${esc(t('ui.task.ask', 'What you are asking for'))}</h2>
+        <ul class="asks">${p.ask.map((line, i) => `
+          <li>${esc(t(`project.${step.project}.ask.${i}`, line))}</li>`).join('')}
+        </ul>
+
+        <h2>${esc(t('ui.task.send', 'Send it'))}</h2>
+        <p>${esc(t('ui.task.lead', TASK.lead))}</p>
+        <ol class="do">
+          <li>${esc(t('ui.task.send.1', 'Start your coding agent in a terminal.'))}
+            ${cmd('./claude-study')}</li>
+          <li>${esc(t('ui.task.send.2', 'Copy this and paste it in.'))}
+            ${block(p.prompt, t('ui.task.copy', 'Copy'))}</li>
+          <li>${esc(t('ui.task.send.3', 'Watch it work. It takes a few minutes.'))}</li>
+        </ol>
+
+        <h2>${esc(t('ui.task.then', 'Then'))}</h2>
+        <ol class="do">
+          <li>${esc(t('ui.task.stage1', TASK.stage1))}
+            <span class="mins">${esc(t('ui.task.mins1', 'about ten minutes'))}</span></li>
+          <li>${esc(t('ui.task.stage2', TASK.stage2))}
+            <span class="mins">${esc(t('ui.task.mins2', 'about ten minutes'))}</span></li>
+        </ol>
+        <p class="rule">${esc(t('ui.task.clock',
+        'Twenty minutes in all. There is no clock on this page. The researcher will '
+        + 'tell you when time is nearly up.'))}</p>`;
+    },
 
     // Grouped by what each block measures, with the groups named. An unbroken
     // column of twenty-five identical rows is answered by pattern rather than by
@@ -486,13 +470,11 @@ const VIEWS = {
         // So the workload block names the task, and only the workload block:
         // usability and the rest are about the way of working, which is the
         // thing the study compares.
-        const task = (TASK_CARDS[step.project] || {}).title || '';
         const intro = {
             load: esc(t('ui.after.loadlead',
-        'These six are about one thing only: the change you just made to {project}{task}. '
+        'These six are about one thing only: reviewing the change to {project}. '
         + 'Not the reading beforehand, not the questions afterwards. Mark a position on each line.')
-        .replace('{project}', step.project)
-        .replace('{task}', task ? `, ${task}` : '')),
+        .replace('{project}', step.project)),
         };
         return `
         <h1>${esc(t('ui.after.h', 'How that felt'))}</h1>
@@ -512,63 +494,10 @@ const VIEWS = {
         </section>`;
     },
 
-    // Open book, and timed.
-    //
-    // Answering "from what you have just read" measured how much of a two-minute
-    // briefing somebody retained, which is not what either way of working is for.
-    // Both arms let you go and find out: the baseline has CLAUDE.md, the code and
-    // an agent you can ask; the codoc arm has the feature tree, the code and the
-    // same agent. How quickly and how well you can find an answer IS the
-    // comparison, so the questions are asked with everything open and a clock
-    // running.
-    //
-    // The one thing barred is pasting a question into the agent, which would
-    // measure the agent instead of the pair. Nothing enforces it; the researcher
-    // is watching the screen, and the transcript shows it afterwards.
-    //
-    // No feedback either sitting: telling somebody they were wrong before the
-    // task would teach them the answer.
-    quiz: (step) => {
-        const a = answersFor(step);
-        const questions = QUIZZES[step.project] || [];
-        const where = step.condition === 'codoc'
-            ? t('ui.quiz.where.codoc', 'the feature tree and the code')
-            : t('ui.quiz.where.baseline', 'CLAUDE.md and the code');
-        return `
-        <h1>${esc(step.sitting === 'before'
-        ? t('ui.quiz.h.before', 'Before you start')
-        : t('ui.quiz.h.after', 'A few questions'))}</h1>
-        <p class="lead">${esc(t('ui.quiz.lead',
-        'Five questions about {project}. You have {minutes} minutes and may look anything up. '
-        + 'When the time is up the page moves on by itself.')
-        .replace('{project}', step.project).replace('{minutes}', String(QUIZ_MINUTES)))}</p>
-        <div class="timer" id="quiz-timer" role="timer" aria-live="off"></div>
-        <div class="note">
-          <p><b>${esc(t('ui.quiz.go', 'Go and find out.'))}</b>
-          ${esc(t('ui.quiz.gop',
-        'Read {where}, run the project, and ask the agent whatever you like. Working out where the answer lives is part of what we are looking at.')
-        .replace('{where}', where))}</p>
-          <p><b>${esc(t('ui.quiz.rule', 'One rule:'))}</b>
-          ${esc(t('ui.quiz.rulep', 'do not paste a question or its options into the agent. Ask in your own words instead.'))}</p>
-          <p>${esc(t('ui.quiz.answerall', 'Answer every one. A guess is fine and we expect several. There is no feedback, so nothing here tells you whether you were right.'))}</p>
-        </div>
-        ${questions.map((q) => `
-          <div class="q" data-q="q${q.n}">
-            <span class="label">${q.n}. ${esc(t(`quiz.${step.project}.${q.n}.question`, q.question))}</span>
-            <div class="opts">${q.options.map((o) => `
-              <button type="button" data-value="${esc(o.letter)}"
-                aria-pressed="${String(a[`q${q.n}`] === o.letter)}">
-                <span class="opt-letter">${esc(o.letter)}</span>
-                <span class="opt-text">${esc(t(`quiz.${step.project}.${q.n}.option.${o.letter}`, o.text))}</span>
-              </button>`).join('')}</div>
-          </div>`).join('')}`;
-    },
-
     break: () => `
         <h1>${esc(t('ui.break.h', 'Halfway'))}</h1>
         <p class="lead">${esc(t('ui.break.lead', 'Take five minutes. Stretch, get a drink, leave the call running.'))}</p>
-        <p>${esc(t('ui.break.p', 'The second half is the same shape as the first: a different project, the other way of working, and the same questions afterwards.'))}</p>
-        <div class="note">${esc(t('ui.break.note', 'Leave the folder you have just been working in exactly as it is. Nothing needs saving or closing, and we collect it at the end.'))}</div>`,
+        <p>${esc(t('ui.break.p', 'The second half is the same shape as the first: a different project, the other way of working, and the same questions afterwards.'))}</p>`,
 
     // Asked once, with both conditions behind them. Which way of working somebody
     // would pick depends heavily on the job, and asking it as one flat question
@@ -591,7 +520,6 @@ const VIEWS = {
         <div class="note">
           <p><b>${esc(t('ui.scenarios.first', 'The first one'))}</b> ${name(first)}.<br>
              <b>${esc(t('ui.scenarios.second', 'The second one'))}</b> ${name(second)}.</p>
-          <p>${esc(t('ui.scenarios.noright', 'There is no right answer, and "no preference" is a real one.'))}</p>
         </div>
         ${localizeAll('scenario', SCENARIOS).map((s) => scenarioRow(s, a[s.id])).join('')}`;
     },
@@ -610,11 +538,8 @@ const VIEWS = {
         <p class="lead">${esc(t('ui.reflect.lead',
         'Five questions about the change you just made to {project}.')
         .replace('{project}', step.project))}</p>
-        <div class="note">
-          <p><b>${esc(t('ui.reflect.closed', 'Please answer from memory.'))}</b>
-          ${esc(t('ui.reflect.closedp', 'Do not go back to the code, the description, or the agent for this part.'))}</p>
-          <p>${esc(t('ui.reflect.why', 'What we are looking at is what you carried out of the task, so an answer you went and looked up would not tell us anything. Answer every one; a guess is fine.'))}</p>
-        </div>
+        <p class="rule"><b>${esc(t('ui.reflect.closed', 'Answer from memory.'))}</b>
+          ${esc(t('ui.reflect.closedp', 'Do not go back to the code, the description, or the agent. A guess is fine.'))}</p>
         ${questions.map((q) => `
           <div class="q" data-q="a${q.n}">
             <span class="label">${q.n}. ${esc(t(`after.${step.project}.${q.n}.question`, q.question))}</span>
@@ -643,8 +568,7 @@ const VIEWS = {
     interview: () => `
         <h1>${esc(t('ui.interview.h', 'Last part'))}</h1>
         <p class="lead">${esc(t('ui.interview.lead', 'Nothing to fill in here. The researcher will talk this part through with you.'))}</p>
-        <p>${esc(t('ui.interview.p', 'They will ask how the two compared, where you trusted the agent and where you did not, and whether you would use either of them for your own work. Answer however you like, and say so if you would rather not answer something.'))}</p>
-        <div class="note">${esc(t('ui.interview.note', 'When you have finished talking, continue to the last step, which tells you how to send your work back.'))}</div>`,
+        <p>${esc(t('ui.interview.p', 'They will ask how the two compared, where you trusted the agent and where you did not, and whether you would use either of them for your own work. Answer however you like, and say so if you would rather not answer something.'))}</p>`,
 
     done: () => `
         <h1>${esc(t('ui.done.h', 'That is everything'))}</h1>
@@ -653,77 +577,27 @@ const VIEWS = {
         <p>${esc(t('ui.done.p', 'Once they confirm it arrived, you can delete the {folder} folder and the extensions.').replace('{folder}', '~/codoc-study'))}</p>`,
 };
 
-// ── the question clock ───────────────────────────────────────────────────────
-//
-// Started when the step is first shown and stored with the answers, so how long
-// somebody took to find twelve answers is itself a result: the same questions,
-// the same clock, one way of working each. It survives a reload, because the
-// start time is stored rather than the remaining time.
-
-let quizTick;
-
-function startQuizTimer(step) {
-    const el = $('#quiz-timer');
-    if (!el) return;
-    const a = answersFor(step);
-    if (!a.startedAt) { a.startedAt = Date.now(); void save(step); }
-
-    const draw = () => {
-        // A step's markup is replaced wholesale, so this element can outlive the
-        // screen it was drawn on. Stopping when it is no longer in the document
-        // bounds the clock to its own step however the step was left.
-        if (!el.isConnected) { clearInterval(quizTick); return; }
-        const left = a.startedAt + QUIZ_MINUTES * 60_000 - Date.now();
-        if (left <= 0) {
-            clearInterval(quizTick);
-            el.textContent = t('ui.quiz.timeup', 'Time is up.');
-            el.classList.add('out');
-            // The clock RUNS OUT, it does not merely say so. Letting somebody
-            // carry on past it meant the sitting was not timed at all, and how
-            // long they took is half of what this measures: a score reached in
-            // fourteen minutes is not the same result as the same score in ten.
-            // Whatever is answered at this instant is the answer.
-            timeUp(step, a);
-            return;
-        }
-        const total = Math.round(left / 1000);
-        const clock = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
-        el.textContent = t('ui.quiz.timeleft', '{time} left').replace('{time}', clock);
-        // Warn before it happens rather than after. Being moved on mid-click with
-        // no notice reads as the page malfunctioning; thirty seconds is enough to
-        // put an answer down on the question in hand.
-        el.classList.toggle('soon', left <= QUIZ_WARN_MS);
-    };
-
-    clearInterval(quizTick);
-    draw();
-    quizTick = setInterval(draw, 1000);
-    // A repainting clock is never a reason to keep a process alive. In a browser
-    // setInterval returns a number and this does nothing; under the test runner
-    // it returns a handle, and without this the page's own clock kept the run
-    // from ever exiting.
-    quizTick?.unref?.();
-}
-
 /**
- * The clock reached zero: stamp it and move on.
+ * A figure in the tutorial.
  *
- * `timedOut` is recorded so the analysis can tell an unanswered question that RAN
- * OUT from one somebody chose to leave, they are different findings, and without
- * the flag both arrive as the same blank.
+ * A figure with a `src` is a picture. A figure with a `todo` is a space with a
+ * line saying what belongs in it, so a screenshot that has not been taken yet is
+ * a visible gap while the page is being built rather than a broken image in
+ * front of somebody. Both draw at the same width, so adding the picture later
+ * does not move the page around.
  */
-function timeUp(step, answers) {
-    if (answers.timedOut) return;          // already handled (a re-render re-armed the clock)
-    answers.timedOut = true;
-    answers.finishedAt = Date.now();
-    if (answers.startedAt) answers.elapsedMs = answers.finishedAt - answers.startedAt;
-    void save(step);
-    // A beat before the page changes under them, so the last thing they see is
-    // the clock reaching zero rather than a different screen arriving unexplained.
-    setTimeout(() => {
-        if (state.steps[state.at] !== step) return;   // they already moved on themselves
-        advance();
-    }, QUIZ_ADVANCE_DELAY_MS)?.unref?.();
+function figure(fig, key, extra = '') {
+    if (!fig) return '';
+    const caption = fig.caption
+        ? `<figcaption>${esc(t(`${key}.caption`, fig.caption))}</figcaption>` : '';
+    if (fig.src) {
+        return `<figure class="shot ${extra}">
+            <img src="${esc(fig.src)}" alt="${esc(t(`${key}.alt`, fig.alt || ''))}">
+            ${caption}</figure>`;
+    }
+    return `<figure class="shot todo ${extra}">
+        <div class="holder">${esc(t(`${key}.todo`, fig.todo || ''))}</div>
+        ${caption}</figure>`;
 }
 
 function field(q, value) {
@@ -870,7 +744,7 @@ function wire(section, step) {
 //
 // Two controls, shown only to a `pilot-` code: fill this step in and move on,
 // and jump straight to a step by name. Piloting the interview meant answering
-// twenty-five scales and two quizzes first, so in practice the last steps were
+// twenty-five scales and two question rounds first, so in practice the last steps were
 // piloted least, which is the wrong way round, since they are the ones nobody
 // has walked through before.
 
@@ -920,7 +794,6 @@ function pilotBar() {
 /** What a step is called in the jump menu. */
 function stepName(step) {
     const which = step.n ? ` ${step.n} (${step.condition})` : '';
-    if (step.kind === 'quiz') return `quiz ${step.sitting}, ${step.project}`;
     return `${step.kind}${which}`;
 }
 
@@ -929,18 +802,8 @@ function stepName(step) {
 /** Move to the next step, stamping anything the step owes on the way out. */
 function advance() {
     const step = state.steps[state.at];
-    // How long twelve answers took, with everything open, is one of the numbers
-    // the two ways of working are compared on. Stamped on the way out rather
-    // than computed later, because nothing else records when they left.
-    if (step.kind === 'quiz') {
-        const a = answersFor(step);
-        a.finishedAt = Date.now();
-        if (a.startedAt) a.elapsedMs = a.finishedAt - a.startedAt;
-        clearInterval(quizTick);
-    }
-    // The task's clock, for the same reason as the quiz's: it is the only record
-    // of when the change stage began and ended, and the interaction log is cut on
-    // those two instants to tell comprehending from implementing.
+    // The task's clock. It is the only record of when the review began and
+    // ended, and the interaction log is cut on those two instants.
     if (step.kind === 'task') {
         const a = answersFor(step);
         a.finishedAt = Date.now();

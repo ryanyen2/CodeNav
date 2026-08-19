@@ -19,11 +19,11 @@
 //
 // Defaults come from the instrument itself. A second list of answers here would
 // silently stop covering a question the moment one was added.
+import { AFTER_QUIZZES } from './quiz.js';
 import {
     PRESTUDY, REQUIRED, EXCLUDING, AFTER_CONDITION, MANIPULATION_CHECK,
     SCENARIOS, SIGNOFF, REFLECTION, scaleFor,
 } from './instrument.js';
-import { QUIZZES } from './quiz.js';
 
 const SAID = 'Filled in automatically. This is a pilot run.';
 
@@ -74,11 +74,6 @@ export function defaultsFor(step, project) {
                 if (REQUIRED.includes(q.id)) out[q.id] = answer(q);
             }
             break;
-        case 'quiz':
-            for (const q of QUIZZES[project || step.project] || []) {
-                out[`q${q.n}`] = 'a';
-            }
-            break;
         case 'questionnaire':
             for (const q of AFTER_CONDITION) out[q.id] = middle(scaleFor(q));
             for (const q of MANIPULATION_CHECK) out[q.id] = answer(q);
@@ -95,6 +90,12 @@ export function defaultsFor(step, project) {
             out.elapsedMs = 0;
             break;
         case 'reflect':
+            // The five closed-book questions as well as the free text. Filling
+            // only the free text left the button disabled, so a pilot could not
+            // skip the step at all, which is the one thing the skip is for.
+            for (const q of AFTER_QUIZZES[project || step.project] || []) {
+                out[`a${q.n}`] = 'a';
+            }
             for (const q of REFLECTION) out[q.id] = answer(q);
             break;
         case 'scenarios':

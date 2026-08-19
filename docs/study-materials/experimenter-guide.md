@@ -22,23 +22,26 @@ that description is kept.
 - Without codoc, they use a `CLAUDE.md` file holding exactly the same text. The
   agent is told to update it after every change it makes.
 
-> **Cut-over.** `/codoc:ask` and tree search were added on 2026-08-17. They change
-> what the codoc arm can do during the understanding quiz, so a session run before
-> that date is not comparable to a later one on the quiz's *time*, and the codoc arm
-> must be described as it now stands. Re-run any pilot that predates it before
-> pooling. `/codoc:ask` is subject to the same rule as any other way of asking the
-> agent: the participant may ask it about the codebase, but pasting a quiz question
-> or its options into it is barred exactly as pasting one into the terminal is —
-> that would measure the agent, not the pair. Watch for it the same way.
+> **Cut-over.** The task was rewritten on 2026-08-19. The participant now asks for
+> the change themselves and then reviews what came back, the open-book question
+> round that used to run before the task is gone, and the task runs twenty minutes.
+> A session run before that date is a different session and cannot be pooled with a
+> later one, so re-run any pilot that predates it.
+>
+> `/codoc:ask` and tree search were added on 2026-08-17 and are part of the codoc
+> arm. The participant may ask either of them about the codebase while the task is
+> running, the same as they may ask the agent anything else. The questions
+> afterwards are closed book, so by then nothing is pasted into either one.
 
 There are two projects, scribe and tally, with matched tasks. Each participant
 does one project each way, so nobody solves the same problem twice.
 
-The task in both is to review a change an agent has already made and to decide
-what to keep. The change is recorded once, in advance, and replayed to every
-participant, so everybody reviews the same thing and nobody spends forty minutes
-watching code get written. What is being compared is what a person can see and
-change about a decision an agent made for them.
+The task in both is to ask a coding agent for a change, and then to review what it
+did and decide what to keep. The change is recorded once, in advance, and replayed
+to every participant, so everybody reviews the same thing and nobody spends forty
+minutes watching code get written. The participant types the request themselves
+and is never told a recording exists. What is being compared is what a person can
+see and change about a decision an agent made for them.
 
 Within a project, the two copies hold identical source and tests and the same 12
 commits, so reading the history tells you the same things either way. The only
@@ -55,7 +58,7 @@ bundle they install is downloaded from theirs.
   scores here during the session.
 - Their page is <https://codoc-11b10.web.app/participant/>, reached only through
   the link you send. It walks them through consent, the questionnaires, the task
-  cards and the break, one step at a time, and saves as they go.
+  pages and the break, one step at a time, and saves as they go.
 - The bundle is at `/bundles/codoc-study-bundle.zip` on the same site, with a
   Download button on their setup step. It holds the extension, the four projects
   and a setup script. You never send it: publishing the site publishes it.
@@ -210,8 +213,12 @@ unzipped, run this, and read you the result:
 ./setup.sh --check
 ```
 
-The line to listen for is the one naming their code. Everything else it checks
-can be fixed afterwards; a session that ran without a code recorded nothing.
+Two lines matter here. The first is the one naming their code, because everything
+else it checks can be fixed afterwards and a session that ran without a code
+recorded nothing. The second is the pair of lines about the change: it says, per
+folder, that the session it reviews is there, and it fails a folder that has
+already been played into. A folder that has been played into holds the change
+before the participant has asked for anything, and it cannot be used.
 
 Then have them share their whole screen and start recording. Open their page in
 the dashboard and keep it beside the call for the rest of the session.
@@ -236,43 +243,37 @@ and the end of a setup run prints which folder is the codoc one.
 ### Starting a codoc condition
 
 The order to do things in is the checklist in Part 5, and the dashboard shows the
-same steps with this participant's folders already in them. What follows is the
-reasoning behind the two steps that surprise people.
+same steps with this participant's folder already in them. What follows is the
+reasoning behind the parts that surprise people.
 
-They open the codoc folder from the table above in VS Code, then open a terminal
-inside VS Code and run:
+They open the codoc folder from the table above in VS Code, answer the trust
+prompt, open the description with Cmd+Shift+P and the command "codoc: Open", and
+open one terminal inside VS Code. That is the whole setting up, and the other
+condition is the same shape. A condition that costs more setting up than the other
+one differs from it in something the study is not comparing.
 
-```
-~/codoc-study/codoc watch --root ~/codoc-study/scribe
-```
+Nobody starts the daemon by hand any more. The launcher `./claude-study` stops it
+before the recorded session plays, because the player will not write into a
+workspace a live daemon owns. It starts the daemon again behind the session
+afterwards, with its output going to `.codoc/watch.log` rather than to a terminal
+somebody is watching. Until the first turn has run there is no daemon at all, and
+that is fine for the reading part. Everything the extension shows comes from
+files, so the description opens and reads normally without one.
 
-Leave it running for the whole condition. Someone has to start it by hand. The
-extension normally starts it automatically after installing codoc, but it skips
-installing when the project already has a codoc setup, and these projects do.
-Everything else in the extension reads from files, so it does not matter how the
-daemon was started.
-
-Use the full path `~/codoc-study/codoc` rather than plain `codoc`. Installing
-codoc adds it to the PATH, but only for terminals opened after the install. The
-session runs in the terminal they already have open, which does not have the
-updated PATH. The setup script creates `~/codoc-study/codoc` for this reason.
-
-They then open the description with Cmd+Shift+P and the command "codoc: Open".
-They will want a second terminal for Claude Code and a third for running builds.
-
-Check three things before going on. The status bar says codoc is in sync, the
-description lists 15 features for scribe or 23 for tally, and `codoc watch` has
-not printed an error.
+Check two things before going on. The description opens, and it lists 15 features
+for scribe or 23 for tally.
 
 Nothing should ask them to approve anything. Setup pre-approves codoc's MCP
-server in the assistant's profile, and the daemon installs any `/codoc:*` command
-the archive is too old to carry. If a trust prompt does appear, answer it and tell
-me — it means the profile did not land, and `./setup.sh --check` will say so.
+server in the assistant's profile and runs `codoc install-hooks` in each codoc
+workspace, so the `/codoc:*` commands are already there. If a trust prompt does
+appear, answer it and tell me. It means the profile did not land, and
+`./setup.sh --check` will say so.
 
 ### Starting a condition without codoc
 
-They open the other folder and start Claude Code in a terminal. Nothing else runs.
-`CLAUDE.md` sits in the project root and Claude Code picks it up on its own.
+They open the other folder, open `CLAUDE.md` from the file tree, and open one
+terminal inside VS Code. Nothing else runs. `CLAUDE.md` sits in the project root
+and Claude Code picks it up on its own.
 
 ### Recording the session
 
@@ -300,20 +301,25 @@ the measures come from nowhere else, and `analysis-plan.md` says which five.
 
 ## Part 4. The shape of the session
 
-About two and a half hours. The middle block runs twice, once for each condition.
+About 105 minutes. Consent and the questions about them are done on their own
+page days ahead, so the session starts at the introduction. The block in the
+middle runs twice, once for each condition, and takes forty minutes each time.
 
 | Part | Minutes | What happens |
 | --- | --- | --- |
 | Introduction | 5 | The words are below |
-| Walkthrough and warm-up | 6 | The same in both conditions |
-| Getting oriented | 6 | They explore, thinking out loud |
-| The questions about the project | 6 | On their own page, open book, timed there |
-| The agent's work plays | 3 | They watch it, and touch nothing |
-| The task | 30 | Reviewing, then the follow-up you read out |
-| Sign-off and the closed-book questions | 6 | The sign-off first |
-| Questionnaires | 5 | The workload block has a definition under each item; let them read it |
-| Break | 3 | |
+| **One condition, run twice** | **40 each** | The five rows below |
+| Opening the project and reading about it | 5 | On their own page |
+| The way of working | 5 | On their own page, one page per condition |
+| The task | 20 | They send the request, then review what came back |
+| Sign-off, then five questions about the change | 5 | The sign-off first |
+| The questionnaire | 5 | The workload block has a definition under each item; let them read it |
+| Break | 5 | Between the two conditions |
 | Which would you pick, and the interview | 14 | At the end, with both conditions done |
+
+Nothing on the participant's page runs a clock. You watch the time and call it,
+and the two five-minute reading pages and the twenty-minute task are the three
+places where it matters.
 
 ### What to say at the start
 
@@ -322,9 +328,9 @@ Read this out, and use the same words with everyone.
 > Today you will try two ways of working with a coding agent. Both are set up on
 > your machine already.
 >
-> The two halves have the same shape. You get to know a small project, you answer
-> a few questions about it, and then you look at a change your coding agent has
-> already made to it and decide what to keep. A few more questions follow.
+> The two halves have the same shape. You get to know a small project and the way
+> of working on it, you ask your coding agent for a change, and then you decide
+> what to keep. A few questions follow.
 >
 > Both times there is a written description of the project. It is yours to keep
 > current, and the questions afterwards are based on it.
@@ -337,135 +343,143 @@ Read this out, and use the same words with everyone.
 
 Never call either way of working "our tool", and never say which one we built.
 
-### The warm-up
+### The two reading pages
 
-Six minutes, worded the same in both conditions.
+There is no warm-up task any more. Its job is done by the two pages the
+participant reads at the start of each condition, five minutes each, and both are
+on their own page.
 
-> Find where the template engine is described. Then ask the agent to rename the
-> template cache so its name says it holds parsed templates, and deal with
-> whatever the written description does afterwards.
+The first is about the project: what it is for, one worked example, four rules,
+what it does not do, and how to run it. The second is about the way of working,
+and it is where somebody meets the description for the first time. The codoc
+version has four steps, which are how to read a feature and the code it owns and
+search the tree with `Cmd+F`, how to ask a question with `/codoc:ask`, how a
+proposal arrives, and how to comment on a sentence. The baseline version has the
+same four, done the ordinary way with `CLAUDE.md`.
 
-The rename is deliberately nowhere near the code the task touches, so it can
-neither help nor hinder them later. Leave it in place afterwards.
+Both pages have the same shape and the same number of steps, on purpose. A page
+that teaches more in one arm makes the comparison about the page.
 
-The warm-up exists so that nobody encounters an unfamiliar screen for the first
-time while the clock is running. In the codoc condition it makes them use the
-description, the agent, and the accept button. In the baseline condition it makes
-them use the description and the agent.
-
-In the codoc condition, also show them the two reading aids once, here, so they are
-not discovering them on the clock: `Cmd+F` to search the description, and one
-`/codoc:ask` about the project (its own question, not a quiz question) so they have
-seen a walkthrough appear and stepped through it. Point out the `‹ ›` stepper and
-`✕`. Do not demonstrate these in the baseline condition — it has neither, and a
-demonstration of something the participant will not have is its own confound.
+Answer questions while they read, but do not add to either page. What you say to
+one participant and not another is a difference you cannot account for later.
 
 ## Part 5. The task
 
-Each project has one task card, in `projects/<name>/STUDY.md`. It is on their own
-page as a picture, so there is no text to paste at the agent. Since 2026-08-19 the
-task is to review a change an agent already made, rather than to make one.
+There is no task card any more. The task page carries the whole occasion: one
+case where the project behaves unhelpfully, what they are therefore asking for,
+the exact request in a copy block, and what to do once the agent stops. They send
+the request themselves, which is what makes the change theirs to decide about.
 
-- **scribe:** review the config file, the report and the settings tidy-up.
-- **tally:** review the rules file, the weekly view and the settings tidy-up.
-
-The card is the request they are told they left, and the decision they are being
-asked for. Everything else a person needs in order to read it is on the page
-around the card, so you do not have to supply it on the call. The page tells them:
-
-- they asked for the change earlier and then went out, and the agent worked on it
-  while they were away
-- you will start its work in their terminal, and it takes about three minutes
-- the change will be sitting uncommitted, with the tests passing
-- their first message carries on the agent's own session
-
-Read the card out anyway, because hearing it is what gets them to say what they
-expect.
+- **scribe:** a config file, a short report beside the Markdown, and a tidy-up of
+  how the rules get their settings.
+- **tally:** a rules file, a weekly view, and a tidy-up of how the rules get
+  their settings.
 
 The change is recorded in advance and replayed, so every participant reviews the
 same change and nobody waits forty minutes for code that is not what we are
-measuring.
+measuring. **The participant is not told any of that.** They type the request,
+the recording plays as the agent's answer, and every turn after the first is the
+real assistant carrying the recorded session's context, so they can ask it about
+anything it did.
+
+Nothing on the page says the change is wrong, and nothing says what to check.
+Either would hand over the thing being measured.
+
+### What `./claude-study` does on the first run
+
+`./claude-study` is a launcher that setup writes into each project folder. On its
+first run with no arguments, when the folder holds no `.claude-study/handover.json`
+and a recording for that folder is present, it hands the turn to
+`~/codoc-study/replay/agent.py`, which does five things:
+
+1. It prints the assistant's own opening screen, recorded on that machine during
+   setup and kept in `.claude-study/welcome.ansi`.
+2. It takes the request in an input box of its own.
+3. It stops the codoc daemon if one is running, because the player will not write
+   into a workspace a live daemon owns.
+4. It plays the recording, which takes about three minutes.
+5. It writes `.claude-study/handover.json` and starts the daemon again in the
+   background.
+
+The launcher then runs the real assistant with `--continue`, so every turn after
+the first is live and carries the recorded session's context. The handover file is
+what stops the first turn happening twice. Once it exists, every later run goes
+straight to the assistant.
+
+The recorded frames carry the request as the agent's own first line, so what plays
+is the recorded request rather than the text that was typed. A participant who
+mistyped their paste still sees the request the change was actually made from, and
+that is also the one the assistant is resumed on. What they typed is kept in
+`handover.json`, which `collect.sh` takes with the rest of the workspace.
 
 ### Starting a condition, step by step
 
 The same steps are on the participant's page in the dashboard, under **Starting
-the condition**, with their own folder and their own frames already written into
-each command. Copy them from there rather than retyping, because the folder and
-the frames differ by participant and by condition.
-
-The steps below use `scribe` in the codoc condition as the worked example. Which
-folder carries codoc for this participant is in the table in Part 3.
+the condition**, with their own folder already written into each command. Copy
+them from there rather than retyping.
 
 1. They open `~/codoc-study/scribe` in VS Code and answer the trust prompt with
-   "Yes, I trust the authors".
+   "Yes, I trust the authors". Until they do, VS Code turns every extension off
+   and the session records nothing.
 
-2. Codoc only. They open a terminal inside VS Code, start the daemon, and leave
-   it running for the whole condition.
+2. Codoc: they open the description with Cmd+Shift+P and "codoc: Open", and open
+   a terminal inside VS Code. Without codoc: they open `CLAUDE.md` from the file
+   tree, and open a terminal inside VS Code.
 
-   ```
-   ~/codoc-study/codoc watch --root ~/codoc-study/scribe
-   ```
-
-3. Codoc only. They open the description with Cmd+Shift+P and "codoc: Open",
-   start the agent with `./claude-study` in a second terminal, and open a third
-   for running the project. Without codoc there is no daemon and no description
-   to open, so they need `./claude-study` and one spare terminal.
-
-4. They run "Study logger: show what is being recorded" from Cmd+Shift+P and read
-   you the snapshot count. Anything above zero is fine, and a zero is the one
+3. They run "Study logger: show what is being recorded" from Cmd+Shift+P, and read
+   you the snapshot count. Anything above zero is fine. A zero here is the one
    fault that cannot be repaired afterwards.
 
-5. They work through their own page as far as the task card. You read the card
-   out and ask what they expect the agent to have done.
+4. They read the project page, then the page about the way of working. Five
+   minutes each. Answer questions, but do not add to either page.
 
-6. Codoc only. They stop the daemon with Ctrl+C in its terminal. The player
-   refuses to run while a live daemon owns the workspace, because the two would
-   write the same files.
+5. On the task page they start the agent with `./claude-study` and paste in the
+   request the page gives them. It works for about three minutes. Let them watch
+   it.
 
-7. They run the player and watch it. It takes about three minutes.
+6. Twenty minutes from there. Say "about ten minutes gone" once, at the halfway
+   point, and call time at twenty.
 
-   ```
-   python3 ~/codoc-study/replay/play.py ~/codoc-study/scribe ~/codoc-study/replay/frames/scribe/codoc
-   ```
+Which folder carries codoc for this participant is in the table in Part 3. There
+is no daemon to start and no frames argument to get right. Setup wrote the
+recording for that folder's own condition into the launcher when it made it.
 
-8. Codoc only. They start the daemon again with the command from step 2.
-   Everything after their first prompt is live.
+#### What to say when the agent starts working
 
-The last argument is named for the project and the condition, so it is
-`~/codoc-study/replay/frames/<project>/codoc` in one condition and
-`.../<project>/baseline` in the other. Playing one condition's frames gives the
-other condition somebody else's change to review.
+> That is it running. Watch what it does, and when it stops, decide what you want
+> to keep.
 
-While the player runs, the terminal prints what the agent printed and the files
-change under it, and in the codoc condition the tree fills in as the daemon did
-during the recording. Let them watch. The recorded session is installed where
-`claude --resume` finds it, so their first prompt continues the session that made
-the change, with the agent's own context.
-
-If the player refuses or stalls, the fallback is in Part 9.
-
-#### What to say while it plays
-
-> You asked for this before you went out, and the agent worked on it while you
-> were away. Here is what it did. Watch it come in, and when it stops, decide
-> what to keep.
-
-Do not call it a recording during the session, and do not say whether anything in
-the change is right or wrong.
+Do not say the session was recorded, and do not say whether anything in the change
+is right or wrong. If they ask, tell them to work from the request and what they
+find in the project.
 
 #### Rehearsing it on your own machine
 
-The same player is in the repo and takes the same two arguments, so a dry run
-needs no bundle.
+Never rehearse in a folder a participant is going to use. The recording plays once
+and leaves `handover.json` behind, and the change is then sitting in the workspace
+before anybody has asked for anything. `./setup.sh --check` fails a folder that has
+been played into, and says "the session has already been played there".
+
+To see the first turn as a participant meets it, opening screen and input box and
+all, run the same program the launcher runs, against an empty folder:
 
 ```
-python3 docs/study-materials/replay/play.py <a scratch folder> docs/study-materials/replay/frames/scribe/codoc
+python3 docs/study-materials/replay/agent.py play <an empty folder> docs/study-materials/replay/frames/scribe/codoc
 ```
 
-`--speed 2` plays it faster, `--step` waits for Enter between frames, and
-`--no-reset` leaves the current state alone. Use them for a rehearsal and not in
-a session. `docs/study-materials/replay/README.md` explains how a recording is
-made and what keeps it honest.
+To watch only the replay, `play.py` takes the same two arguments and skips the
+first turn. `--speed 2` plays it faster, `--step` waits for Enter between frames,
+and `--no-reset` leaves the current state alone. Use them for a rehearsal and not
+in a session.
+
+```
+python3 docs/study-materials/replay/play.py <an empty folder> docs/study-materials/replay/frames/scribe/codoc
+```
+
+Give both of them an empty folder. The player restores the state the recording
+started from, which means deleting whatever else is there.
+`docs/study-materials/replay/README.md` explains how a recording is made and what
+keeps it honest.
 
 ### What is planted in the change
 
@@ -476,10 +490,11 @@ participant nothing about whether the change is right.
 
 **Do not hint at any of it.** If they ask whether something is deliberate, say:
 
-> Work from what the card says and what you find in the project.
+> Work from the request and what you find in the project.
 
-Their page says the agent has finished and the tests pass. Nothing they read says
-anything is wrong, and nothing says everything is fine.
+The terminal says the agent has finished and the tests pass, at the end of the
+replay. Nothing they read says anything is wrong, and nothing says everything is
+fine.
 
 ### What is scored
 
@@ -498,19 +513,17 @@ Rate it during the session, in the dashboard, while you can still remember what
 they said. Alongside it, record **who settled each problem**: they directed it,
 they accepted a proposal deliberately, or it stands and they never noticed.
 
-### The follow-up request
-
-After the review, read the follow-up out loud. It is in the project's `STUDY.md`
-and it is not on the card. Its obvious implementation runs into a commitment the
-description already holds, and what is recorded is whether they noticed the
-conflict and which way they settled it.
-
 ### Timing
 
-Thirty minutes per task, on top of the three minutes the replay takes. About
-fifteen for the review and about twelve for the follow-up, and say so at the
-start. If they finish early, the time is recorded as part of the result. If they
-are still going at thirty-five minutes, ask them to stop where they are.
+Twenty minutes for the task, starting when the agent stops. There is no clock on
+the participant's page, so you watch the time and call it. Say "about ten minutes
+gone" once, at the halfway point, and call time at twenty.
+
+The twenty is meant to run in two halves, and their page says so. The first is
+spent working out what the agent changed and how the project works now. The second
+is spent deciding what to keep, and leaving the project in a state they would be
+happy to ship. Do not extend it. If they finish early, the time they took is
+recorded as part of the result.
 
 The time to their first correct detection is a measure, so note the clock when
 they first name something as wrong, and note whether they were right.
@@ -525,57 +538,36 @@ When they say they are done, ask, and write the answer down word for word:
 The confidence number matters less than what the confidence rests on. "I ran the
 tests" and "the agent said so" are very different answers.
 
-## Part 6. The questions
+## Part 6. The questions about the change
 
-Two sets, one before the task and a different one after. The participant answers
-both on their own page. **You do not read either out and you do not score them
-during the session.**
+Five multiple-choice questions, closed book, straight after the sign-off. The
+participant answers them on their own page. **You do not read them out and you do
+not score them during the session.** They have right answers and the dashboard
+scores them as they answer, so nothing here needs marking by hand.
 
-### Before the task: five questions, open book, six minutes
+**Ask them to close the code, the description and the agent first**, and say why.
+What is being looked at is what they carried out of the task, so an answer they
+went and looked up says nothing. Their page says the same thing, but it lands
+better from you. The page also stops the text being selected, which removes the
+thoughtless path rather than enforcing anything.
 
-Five multiple-choice questions about the project, four options each, one
-correct. They may read the description, read the code, run the project and ask
-the agent. The one thing barred is pasting a question or its options at the
-agent, which would measure the agent rather than the pair. Nothing enforces it,
-so watch the screen, and the transcript shows it afterwards.
-
-The clock is on their page and **ends the sitting**: at zero it stamps whatever is
-answered and moves to the next step by itself, with a thirty-second warning first.
-You do not have to call time, and should not extend it — how long five answers
-took is half the measure, so a sitting that ran long is not the same result as one
-that did not. An unanswered question is recorded as `timedOut` rather than as a
-blank, so the analysis can tell "ran out" from "left it".
-
-**Both the score and the time are results.** Either way of working can reach
-every answer eventually, so what separates them is what it costs to get there.
-Both appear in the dashboard as they answer, along with which option they picked
-when they were wrong, which is usually more informative than the fact that they
-were wrong.
-
-The bands are the four parts of RQ1: what the program is for, why it is the way
-it is, why a particular change was made, and what a further change would need
-decided first. With five questions one band carries two; scribe and tally match
-band for band and level for level, so neither project is the harder draw.
-
-### After the task: five questions, closed book
-
-Multiple choice, about the change they just made. **Ask them to close the code,
-the description and the agent first**, and say why: what is being looked at is
-what they carried out of the task, so an answer they went and looked up says
-nothing. Their page says the same thing, but it lands better from you.
-
-Each one turns on a consequence of their change meeting a rule that was already
+Each one turns on a consequence of the change meeting a rule that was already
 there, so it can be answered by somebody who understood the codebase or who made
 the decision themselves and watched what it did, and not by somebody who let the
-agent write it and did not look. They have right answers, and the dashboard scores
-them as they answer. Nothing here needs marking by hand.
+agent write it and did not look. The five run from easy to hard in that order, so
+a participant who did the work is not scored as though they did none.
 
 Alongside the five is one scale: how much of it they were sure of rather than
 working out on the spot. A fluent reconstruction and a real memory look the same
 in a set of answers, and only they can say which it was.
 
-There is no feedback on anything. Telling somebody they were wrong before the
-task would teach them the answer.
+There is no feedback on anything. Telling somebody they were wrong would teach
+them how the second half works.
+
+The open-book round that used to run before the task is gone. It asked about the
+codebase, and the task now asks somebody to review a change to that codebase, so
+the first ten minutes of the task were the question round over again with the
+clock running twice.
 
 ## Part 7. Collecting the data
 
@@ -667,34 +659,49 @@ have them click "Yes, I trust the authors" before anything else. Their page tell
 them this too. To confirm afterwards, `./setup.sh --check` reports whether the
 logger has ever run in each workspace.
 
-**The replay refuses to start.** It says the daemon is running. Stop the
-`codoc watch` terminal and run it again. The player will not write into a
-workspace a live daemon owns, because the two would race for the same files.
+**The agent starts and no work arrives.** The recording for that folder is
+missing, so the launcher skipped the first turn and went straight to a live
+assistant. Have them run `./setup.sh --check` in their bundle, which says per
+folder whether the session it reviews is there. Note it on the session sheet
+either way, because that participant did not review the same change as everybody
+else.
 
-**The replay stopped partway.** Run it again. It restores the starting state
-first, so a half-finished replay is safe to repeat, and the participant has seen
-nothing that a second run does not show them again. If it fails twice, put the
-recorded end state in place by hand with `--speed 1000`, tell the participant the
-agent finished while they were away, and note it on the session sheet, because
-that participant did not see the change arrive.
+**It stopped partway.** They run `./claude-study` again. The handover record is
+only written once the recording has played all the way through, so a run that was
+interrupted starts again from the beginning, restoring the starting state as it
+goes, and the participant sees nothing a second run does not show them again.
 
-**Nothing is updating.** The status bar is stuck and no proposals appear. Check
-that the `codoc watch` terminal is still open. It is easy to close accidentally
-when closing a finished task's terminal.
+**The change is already in the folder.** `./setup.sh --check` says the session has
+already been played there. Somebody has run `./claude-study` in that folder, and
+the change is sitting in it before the participant has asked for anything. Do not
+run the session there. Delete `~/codoc-study` and run `./setup.sh` with their code
+and order again.
+
+**Nothing is updating.** The status bar is stuck and no proposals appear. The
+daemon runs behind the session with no terminal of its own, so read
+`.codoc/watch.log` in the project folder for what it last printed.
 
 **The description looks slightly different from what you expected.** On first
 start, codoc tidies up the project and reports something like "1 amend, 1
 attach". This is normal and does not change the text. Check that it still lists
 15 features (scribe) or 23 (tally) before you begin.
 
-**Claude Code is not signed in.** codoc uses the participant's Claude Code login.
-If they are not signed in, codoc has no model to call. Have them run `claude` in
-a terminal, sign in, and then start `codoc watch` again.
+**The assistant asks them to sign in.** They should not have to. `./claude-study`
+sets the assistant's config directory to `.claude-study` inside the project folder
+and reads the study's key from a helper there, and it clears any key of their own
+out of the environment first. If it asks anyway, the profile did not land, and
+`./setup.sh --check` will say which folder has no key.
 
-**They pasted the task card into the agent.** Showing the card as an image
-prevents this. If it happens anyway, note it, because the instructions they write
-to the agent are one of the measures, and pasted text would be yours rather than
-theirs.
+**codoc has no model to call.** codoc reads its own key from `.env` in the project
+folder, separately from the assistant, and only the codoc folder has one.
+`./setup.sh --check` reports it as a missing OpenAI key.
+
+**They typed their own request instead of pasting the one on the page.** The
+recording plays the request the change was actually made from, so the change is
+the same either way and nothing is lost. What they typed is kept in
+`.claude-study/handover.json`. Note it if it was very different from the request
+on the page, because what they thought they were asking for is part of how they
+read the result.
 
 **A project looks wrong before they start.** A fresh scribe passes 54 tests, and
 `scribe check fixtures/` reports three documents (`report.txt: 3 pages, 8 headings,

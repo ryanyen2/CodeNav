@@ -16,8 +16,8 @@ archives, which means nobody has ever reviewed a line of them.
 Each project holds four documents:
 
 - `README.md`: what a developer opening the folder reads
-- `ABOUT.md`: what the participant reads, two minutes, no assumed knowledge
-- `STUDY.md`: the task card, the planted problems and their rating guides, the follow-up request, and both five-question sets. A project plants as many as its recorded session landed, which is three for scribe
+- `ABOUT.md`: the long version of what the participant reads, no assumed knowledge. The page they actually read is built from `study-app/participant/prose.js`
+- `STUDY.md`: the request the participant sends, the planted problems and their rating guides, the follow-up request, and the five questions asked after the task. A project plants as many as its recorded session landed, which is three for each
 - the code, the fixtures and the tests
 
 `STUDY.md` is never shipped to a participant.

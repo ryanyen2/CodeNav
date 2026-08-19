@@ -94,11 +94,9 @@ async function loadPage(page, storage, code = 'p-abcdefghjkmn') {
     // start. This is how a test lands on a step other than the first.
     for (const [k, v] of Object.entries(storage || {})) dom.window.localStorage.setItem(k, v);
 
-    // jsdom ships no canvas, so without this every page test took the task
-    // card's no-canvas fallback, the branch that writes the words into the DOM
-    // as text. The branch a participant actually gets was the one never
-    // exercised, which is the wrong way round for the control that stops them
-    // pasting the card at the agent. It records nothing; it only has to exist.
+    // jsdom ships no canvas. Nothing on the participant page draws one any
+    // more, but the dashboard's figures do, and a shared loader is cheaper than
+    // two. It records nothing; it only has to exist.
     dom.window.HTMLCanvasElement.prototype.getContext = function getContext() {
         const noop = () => {};
         return new Proxy({}, {
@@ -166,7 +164,9 @@ test('creating a participant does not throw', async () => {
     assert.match(document.body.textContent, /Their sign-off/, 'the forms rendered');
     assert.match(document.body.textContent, /What they found, and who settled it/);
     assert.match(document.body.textContent, /False alarms/);
-    assert.match(document.body.textContent, /The questions/);
+    // The panel for the open-book round before the task went with the round.
+    assert.ok(!/Closed book first, then again/.test(document.body.textContent),
+        'the dashboard still shows a question round that is never asked');
 });
 
 test('the dashboard hands over a link and a command, both carrying the code', async () => {
@@ -206,12 +206,12 @@ test('a participant created in another language gets it on their link', async ()
     assert.match(shown[0], /&lang=zh-Hans$/);
 });
 
-test('the dashboard carries the commands for starting the condition on screen', async () => {
-    // The player's command lived in the guide alone, which nobody opens while a
-    // participant is waiting, and the two steps that make it work, stopping the
-    // daemon first and starting it again for the live half, were a sentence in
-    // the middle of a paragraph. Both folder and frames differ per participant,
-    // so a fixed example in a document is also a command to be edited by hand.
+test('the dashboard tells the researcher how the condition starts', async () => {
+    // It used to carry the player's command, the daemon's command, and the two
+    // steps that made them work in the right order. All four are gone from the
+    // session: the launcher stops the daemon, plays the recording and starts the
+    // daemon again, because every one of those was a command with the word
+    // replay in it, typed by the person who is not supposed to know there is one.
     const { document, window } = await loadPage('experimenter');
     window.__authCb?.({ email: 'someone@example.com' });
     (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
@@ -220,33 +220,31 @@ test('the dashboard carries the commands for starting the condition on screen', 
 
     const run = document.querySelector('#running');
     assert.ok(run, 'the checklist is on the participant page');
-    const copyable = [...run.querySelectorAll('[data-copy]')].map((b) => b.dataset.copy);
-    // codoc-first means scribe is the codoc project, and the tab opens on codoc.
-    assert.ok(copyable.includes(
-        'python3 ~/codoc-study/replay/play.py ~/codoc-study/scribe'
-        + ' ~/codoc-study/replay/frames/scribe/codoc'),
-    `the player command is copyable, got: ${copyable.join(' | ')}`);
-    assert.ok(copyable.includes('~/codoc-study/codoc watch --root ~/codoc-study/scribe'),
-        'and so is the daemon, which has to be stopped and started around it');
-
     const said = run.textContent.replace(/\s+/g, ' ');
-    assert.match(said, /stop the daemon with Ctrl\+C/i, 'the player will not run otherwise');
-    assert.match(said, /start the daemon again/i, 'and the live half needs it back');
+
+    // codoc-first means scribe is the codoc project, and the tab opens on codoc.
+    assert.match(said, /~\/codoc-study\/scribe/, 'it names the folder for this half');
+    assert.match(said, /claude-study/, 'and how the agent is started');
+    assert.ok(!/play\.py|replay|codoc watch/i.test(said),
+        `nothing the participant types mentions the machinery: ${said}`);
+
+    // The timing is the researcher's job now, because there is no clock on the
+    // participant's page, so the checklist has to say when to call it.
+    assert.match(said, /twenty|20/i, 'it says how long the task runs');
+
     const script = run.querySelector('.say .quote').textContent;
     assert.ok(!/record(ed|ing)/i.test(script),
         'the words to say out loud do not give the design away');
-    assert.match(said, /do not call it a recording/i, 'and the card says so in as many words');
+    assert.match(said, /do not say the session was recorded/i,
+        'and the checklist says so in as many words');
 
-    // The other condition is a different project, so its commands must move with
-    // the tab. A checklist naming the wrong folder replays somebody else's change.
+    // The other condition is a different project, so the checklist moves with
+    // the tab. One naming the wrong folder is one that starts the wrong half.
     const tabs = [...document.querySelectorAll('#tabs button')];
     tabs.find((b) => b.textContent === 'Without codoc').click();
-    const other = [...document.querySelectorAll('#running [data-copy]')]
-        .map((b) => b.dataset.copy);
-    assert.ok(other.some((c) => c.includes('frames/tally/baseline')),
-        `the other condition names its own frames, got: ${other.join(' | ')}`);
-    assert.ok(!other.some((c) => c.includes('codoc watch')),
-        'and there is no daemon to start in the condition without one');
+    const other = document.querySelector('#running').textContent;
+    assert.match(other, /~\/codoc-study\/tally/, 'the other condition names its own folder');
+    assert.match(other, /CLAUDE\.md/, 'and its own description');
 });
 
 test('it says which half of the handoff has not landed', async () => {
@@ -314,7 +312,6 @@ test('the participant page does not promise a prompt that no longer happens', as
     const text = document.body.textContent.replace(/\s+/g, ' ');
     assert.match(text, /Set up your machine/, 'we are on the setup step');
     assert.ok(!/ask you for two keys/.test(text), 'nothing asks for a key');
-    assert.match(text, /costs you\s+anything|nothing in this study costs you/, 'nobody should think this costs them');
     // The command itself must still carry their own code, not the example.
     assert.match(text, /\.\/setup\.sh p-abcdefghjkmn codoc-first/);
 });
@@ -704,69 +701,68 @@ test('the workload block is TLX as published, and says which task it is about', 
         'the workload block names the task rather than the session');
 });
 
-test('the task card is a picture, and its words are in no text node', async () => {
-    // If it can be selected it can be pasted at the agent, and then the agent is
-    // working from our wording instead of theirs. What they write is one of the
-    // things the study measures.
-    const { TASK_CARDS, buildSteps } = await import('../participant/steps.js');
+test('the task page reads as one occasion, from a cold start', async () => {
+    // The card used to arrive with no author and no occasion: a request the
+    // participant was told they had made that morning, in words like "a config
+    // file, a short report next to the output". Somebody who met the project ten
+    // minutes ago cannot read that. The page now shows what the program gets
+    // wrong, what they are therefore asking for, and the request itself.
+    const { buildSteps, PROJECTS } = await import('../participant/steps.js');
     const steps = buildSteps('codoc-first');
     const at = steps.findIndex((s) => s.kind === 'task');
     const { document } = await participantAt(at);
-
     const stage = document.querySelector('#stage');
-    assert.ok(stage.querySelector('canvas'), 'the card is drawn, not written');
-    const shown = stage.textContent.replace(/\s+/g, ' ');
-    for (const line of TASK_CARDS[steps[at].project].lines) {
-        if (line.trim()) {
-            assert.ok(!shown.includes(line.trim()),
-                `the card's words are selectable on the page: ${line}`);
-        }
-    }
+    const text = stage.textContent.replace(/\s+/g, ' ');
+    const project = steps[at].project;
+
+    assert.match(text, /gets wrong/i, 'the case that makes the request worth making');
+    assert.match(text, /what you are asking for/i, 'what they are asking for');
+    assert.match(text, /you asked your coding agent/i, 'who is asking');
+    assert.match(text, new RegExp(project), 'and which project it is about');
+
+    // The request is copyable, and carries the recorded wording exactly. It used
+    // to be a picture on purpose; the task is a review now, every participant
+    // has to send the same request, and a retyped paragraph is a different one.
+    const paste = stage.querySelector('.paste [data-copy]');
+    assert.ok(paste, 'there is nothing to copy');
+    assert.equal(paste.getAttribute('data-copy'), PROJECTS[project].prompt);
+    assert.match(stage.innerHTML, /data-copy="\.\/claude-study"/,
+        'and the agent is started through the study launcher');
+
+    // Three things that must never be on it. Naming the recording gives the
+    // design away, saying anything is wrong hands over the detection being
+    // measured, and a memory of having asked earlier is a memory nobody has.
+    assert.ok(!/record(ed|ing)/i.test(text), 'the page does not say it was recorded');
+    // Read the prose only. The samples are real output, and one of them happens
+    // to contain the phrase "measurement error", which says nothing about the
+    // change and would fail a word match run over the whole page.
+    const prose = [...stage.querySelectorAll('h1, h2, p, li')]
+        .map((el) => el.textContent).join(' ');
+    assert.ok(!/(mistake|bug|broken|defect|incorrect)/i.test(prose),
+        'and nothing suggests the change has anything to find in it');
+    assert.ok(!/while you were away|went out/i.test(text),
+        'and it does not ask them to remember something they did not do');
 });
 
-test('the study instruction and the clock are on the page, not on the card', async () => {
-    // Moved out of the picture in 2026-08. A card carrying "about 17 minutes" and
-    // "decide anything this card does not specify" was a picture of the task AND
-    // of the study's instructions, read as one thing. The card is the task now.
-    const { TASK_CARDS, buildSteps } = await import('../participant/steps.js');
-    const steps = buildSteps('codoc-first');
-    const at = steps.findIndex((s) => s.kind === 'task');
-    const { document } = await participantAt(at);
-    const text = document.querySelector('#stage').textContent.toLowerCase();
-
-    assert.ok(text.includes('yours to decide'), 'the invitation to decide is on the page');
-    assert.ok(text.includes('30 minutes'), 'the time is on the page');
-    for (const card of Object.values(TASK_CARDS)) {
-        const onCard = [...card.lines, ...(card.example?.lines ?? [])].join(' ').toLowerCase();
-        assert.ok(!onCard.includes('30 minutes') && !onCard.includes('decide anything'),
-            'the card carries the task and nothing else');
-    }
-});
-
-test('the task page answers what a person walking in cold would ask', async () => {
-    // The card on its own reads as a request with no author and no occasion. Who
-    // made the change, what is about to happen in the terminal, and what counts
-    // as finished were all things the researcher improvised on the call, which
-    // made the framing differ between participants.
+test('the tutorial teaches the way of working, in both arms', async () => {
+    // A participant used to meet the description in the same minute as the
+    // codebase, with four lines of text to explain it, and spent the first part
+    // of the task working out what they were looking at.
     const { buildSteps } = await import('../participant/steps.js');
     const steps = buildSteps('codoc-first');
-    const at = steps.findIndex((s) => s.kind === 'task');
-    const { document } = await participantAt(at);
-    const text = document.querySelector('#stage').textContent.replace(/\s+/g, ' ');
-
-    assert.match(text, /you asked your coding agent/i, 'who asked for the change');
-    assert.match(text, new RegExp(steps[at].project), 'and which project it is about');
-    assert.match(text, /worked while you were away/i, 'who did it, and when');
-    assert.match(text, /about three minutes/i, 'how long the change takes to arrive');
-    assert.match(text, /leave the keyboard alone/i, 'and what to do while it does');
-    assert.match(text, /nothing committed/i, 'what they are then looking at');
-    assert.match(text, /carries on the same conversation/i, 'and that the agent is still there');
-
-    // Two things that must never be on it. Naming the recording gives the design
-    // away, and saying anything is wrong hands over the detection being measured.
-    assert.ok(!/record(ed|ing)/i.test(text), 'the page does not say it was recorded');
-    assert.ok(!/(mistake|bug|wrong|broken|defect|error)/i.test(text),
-        'and nothing suggests there is anything to find');
+    for (const n of [1, 2]) {
+        const at = steps.findIndex((s) => s.kind === 'system' && s.n === n);
+        assert.ok(at > 0, `no tutorial in condition ${n}`);
+        const { document } = await participantAt(at);
+        const stage = document.querySelector('#stage');
+        assert.ok(stage.querySelectorAll('.tour > li').length >= 3,
+            'a tutorial with two steps is a paragraph with headings');
+        // Every step shows something, or says what is going to be shown there.
+        for (const fig of stage.querySelectorAll('figure.shot')) {
+            assert.ok(fig.querySelector('img') || fig.querySelector('.holder'),
+                'a figure that draws nothing at all');
+        }
+    }
 });
 
 test('the setup step offers the download rather than naming a file nobody has', async () => {

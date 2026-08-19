@@ -203,7 +203,18 @@ data properly rather than only checking that files arrived.
 
 ## What the data can now support
 
-**RQ1 — understanding.** This is the strongest position, and it improved most.
+**RQ1 — understanding.**
+
+> **Out of date since 2026-08-19.** What follows calibrates the round of five
+> questions that was asked before the task, open book and timed. That round has
+> been removed from the session, so neither its score nor its elapsed time is
+> collected any more, and the claim about FINDING stated at the end of this
+> subsection has no measure behind it as things stand. What RQ1 can support has to
+> be restated, and that is a decision for the study lead rather than an edit made
+> here. `analysis-plan.md` records the removal and its reason. The closed-book set
+> asked after the task is unaffected.
+
+This is the strongest position, and it improved most.
 The instrument's own stated open problem was that a blind model scored 9/12 while
 the description scored 8/12 — "on this evidence the questions do not separate the
 arms" (`projects/scribe/STUDY.md`, before this revision). After rewriting both

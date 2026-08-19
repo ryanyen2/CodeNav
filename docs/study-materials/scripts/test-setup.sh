@@ -807,6 +807,42 @@ case "$(cat "$BUNDLE")" in
   *'replay/test_replay.py'*) ok "and runs the replay tests before building" ;;
   *) bad "the replay tests are no longer a build gate" ;;
 esac
+case "$(cat "$BUNDLE")" in
+  *'replay/agent.py'*) ok "and the launcher's own first turn" ;;
+  *) bad "the bundle has no way to take the first turn" ;;
+esac
+
+printf '\n\033[1m%s\033[0m\n' "The first turn"
+# The participant asks for the change themselves and does not know a recording
+# exists. Everything below is a way that could stop being true silently.
+case "$(cat "$SETUP")" in
+  *'agent.py" play'*) ok "the launcher takes the first turn" ;;
+  *) bad "the launcher no longer plays the recording, so a live agent would" ;;
+esac
+case "$(cat "$SETUP")" in
+  *'[ \$# -eq 0 ]'*) ok "and only when it is started the way a session starts it" ;;
+  *) bad "the setup check would play the recording days before the session" ;;
+esac
+case "$(cat "$SETUP")" in
+  *'handover.json'*) ok "and only once" ;;
+  *) bad "a second run would replay the change over the participant's work" ;;
+esac
+case "$(cat "$SETUP")" in
+  *'RESUME="--continue"'*) ok "every turn after it resumes that session" ;;
+  *) bad "the live half would start a conversation with no context" ;;
+esac
+case "$(cat "$SETUP")" in
+  *'--codoc-bin'*) ok "and the daemon is started for them, not by them" ;;
+  *) bad "the participant is back to typing the daemon command" ;;
+esac
+case "$(cat "$SETUP")" in
+  *'agent.py" capture'*) ok "the opening screen is this machine's own" ;;
+  *) bad "the first turn would draw a copy of somebody else's welcome" ;;
+esac
+case "$(cat "$SETUP")" in
+  *'has already been played there'*) ok "a used folder is refused by --check" ;;
+  *) bad "a rehearsed folder would start a session with the change already in it" ;;
+esac
 
 if [ "$FAIL" = 0 ]; then printf '\033[32m%s passed\033[0m\n' "$PASS"; else printf '\033[31m%s failed, %s passed\033[0m\n' "$FAIL" "$PASS"; fi
 exit "$FAIL"

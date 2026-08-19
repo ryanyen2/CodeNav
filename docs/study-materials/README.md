@@ -34,9 +34,9 @@ them each way, so most files come as a pair.
 | File | When |
 | --- | --- |
 | `participant-before-the-session.md` | Sent days ahead. What the study is and how to set up their machine. Also goes in the bundle as `README.md`. |
-| `projects/scribe/ABOUT.md` | What a participant reads at the start of a scribe condition. Also on their own page. |
+| `projects/scribe/ABOUT.md` | The long version of what a participant reads at the start of a scribe condition. The page they actually read is built from `study-app/participant/prose.js`. |
 | `projects/tally/ABOUT.md` | The same, for tally. |
-| `projects/<name>/STUDY.md` | **The answer key.** The task card, the planted problems and their rating guides, the follow-up request, and both five-question sets. A project plants as many as its recorded session actually landed, which is three for scribe. Never shown to a participant. |
+| `projects/<name>/STUDY.md` | **The answer key.** The request the participant sends, the planted problems and their rating guides, the follow-up request, and the five questions asked after the task. A project plants as many as its recorded session actually landed, which is three for each. Never shown to a participant. |
 | `projects/<name>/CLAUDE.md` | The description both arms start from. The baseline gets it as a file; the codoc arm gets the same content as a feature tree. |
 
 **The projects and the tools**

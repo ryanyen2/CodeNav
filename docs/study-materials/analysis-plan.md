@@ -44,6 +44,27 @@ decisions pass through the person). The section headings kept the wording of an
 earlier three-question design, so read the heading as a topic and the RQ tag as
 the claim.
 
+**RQ1 is now reached only through the change under review.** The one measure that
+asked about the program on its own was the round of five questions before the
+task, and it was dropped on 2026-08-19 for the reason written under "What they
+understand afterwards". What is left under RQ1 is what somebody carried out of
+reviewing a change and what they found in it.
+
+**Open point, and it is the study lead's to settle.** The position stated for RQ1
+in `what-the-data-can-support.md` is that the claim it can support is about
+finding rather than about content, and that position rested on the open-book
+round's score together with how long the answers took. With the round gone,
+nothing measures how fast somebody finds an answer in the codebase, so RQ1 has to
+be restated in terms of what a person carried out of reviewing a change. The
+restatement has not been made, and that subsection carries a note saying so.
+
+Nothing confirmatory hangs on it. `pre-registration.md` predicts two things,
+detection coverage and a durable written trace, and both are measured. The word
+"finding" means different things in the two documents: in the pre-registration it
+is finding a problem in the change, which is detection coverage, and in
+`what-the-data-can-support.md` it was finding an answer in the codebase, which is
+the measure that is gone.
+
 What is confirmatory and what is exploratory is settled in
 `pre-registration.md`, and it does not follow the RQ tags. Detection coverage and
 a durable written trace are the two confirmatory predictions. Record truth is
@@ -78,34 +99,48 @@ it is reported.
 
 | Measure | Computed from |
 | --- | --- |
-| **How well and how fast they can find an answer in this codebase** | The five questions, asked once before the task, **open book and timed**. The participant may read the description, read the code, run the project and ask the agent. Score and elapsed time both land in `answers/quiz-<project>-before`. Both are results: either way of working can reach every answer given unlimited time, so the limit is what makes the score mean anything. The clock ends the sitting itself; a run that hit it carries `timedOut`, so an unanswered question is distinguishable from one somebody chose to leave. |
-| **What they carried out of the task** | Five multiple-choice questions in `answers/reflect-<condition>`, **closed book**: no code, no description, no agent. They have right answers, held in `experimenter/after-questions.json` and never shipped to the browser, so the dashboard scores them and nothing is marked by hand. They are per project and about the change the participant just made, in the same four bands as the pre-task set. |
+| **What they carried out of the task** | Five multiple-choice questions in `answers/reflect-<condition>`, **closed book**: no code, no description, no agent. They have right answers, held in `experimenter/after-questions.json` and never shipped to the browser, so the dashboard scores them and nothing is marked by hand. They are per project and about the change the participant just made, and they run two easy, two medium and one hard, in that order. |
 | Whether they were sure or reconstructing | The `recall` scale on the same page. A fluent reconstruction and a real memory read the same in prose, so it is asked directly. |
 | Whether the decisions passed through them | The who-settled-what record in the dashboard, and the two after-task questions that turn on a decision the participant made rather than on the codebase alone. |
+
+**One measure was dropped on 2026-08-19, and nothing replaces it.** How well and
+how fast somebody can find an answer in this codebase was measured by five
+questions asked before the task, open book and timed, with the score and the
+elapsed time both landing in `answers/quiz-<project>-before`. That round is gone
+from the session, so nothing writes that document any more and the measure cannot
+be computed.
+
+It was dropped because the task changed. Reviewing a change to the codebase means
+working the codebase out, so the first half of the task is the same activity the
+open-book round measured, and running both put the same activity on the clock
+twice inside a session whose whole task budget is now twenty minutes. Nothing has
+been put in its place, and a session collected before that date holds the round
+while a later one does not, so the two cannot be pooled on it.
 
 The after-task set was four boxes to type in until 2026-08. Freeform got short
 answers to questions whose value is in the follow-up, at the end of two hours,
 and nothing comparable between participants. The follow-up now happens out loud
 in the closing interview, where it belongs.
 
-Four of the five turn on a planted problem in the agent's session, and the fifth
-on what a next person would have to settle. The two ways to get one right are to
-have found the problem or to have read the whole change carefully. A question
-answerable from the project briefing would measure reading, and somebody who
-shipped without looking will have neither route.
+Three of the five turn on a planted problem in the agent's session. The two ways
+to get one of those right are to have found the problem or to have read the whole
+change carefully. A question answerable from the project briefing would measure
+reading, and somebody who shipped without looking will have neither route.
 
-**The quiz is no longer asked twice.** It used to be the same twelve before and
-after, with the change between them as the measure. Both sittings asked about the
-codebase, which the open-book sitting already reaches, and neither asked about
-the thing the study is actually about: whether the person still owns the change
-their agent helped them write. The set that replaced it asks exactly that, and can
-be multiple choice because the CONSEQUENCES of the change are fixed by the
-codebase even though the change itself differs from participant to participant.
+**There is one question round, and it is after the task.** It used to be the same
+twelve questions before and after, with the change between them as the measure.
+Both sittings asked about the codebase, and neither asked about the thing the
+study is actually about, which is whether the person still owns the change their
+agent helped them write. The set that replaced it asks exactly that, and it can be
+multiple choice because the CONSEQUENCES of the change are fixed by the codebase
+even though the change itself differs from participant to participant. The
+open-book sitting survived that revision and was dropped by the next one, for the
+reason above.
 
 The comparison is **within participant, between conditions**: each person does
 one project each way, so their after-task score with codoc is compared against
-their own after-task score without it. There is no comparison between the two
-question sets, and none between participants.
+their own after-task score without it. There is no comparison between
+participants.
 
 ## What they found in the agent's change  (serves RQ1 and RQ2)
 
@@ -120,7 +155,7 @@ as a proportion of that project's maximum, so the two projects can be pooled.
 | Measure | Computed from |
 | --- | --- |
 | **Detection coverage** | Each planted problem rated 0 to 2 in the dashboard during the session, and again afterwards by a rater who does not know the condition. 0 not found, 1 found, 2 found and correctly attributed to the commitment it contradicts. The two ratings are compared rather than merged. |
-| Time to the first correct detection, and coverage at fifteen minutes | The interaction log and the transcript, against the replay's handover time in `.codoc/replay.stamp`. |
+| Time to the first correct detection, and coverage at fifteen minutes | The interaction log and the transcript, against the moment the participant took over. That moment is `at_ms` in `.claude-study/handover.json`, which `agent.py` writes in both conditions. `.codoc/replay.stamp` carries the same instant but only where there is a `.codoc` directory to write it into, so it is the codoc arm's copy and not the shared one. Fifteen minutes of a twenty-minute task is close to the end of it, so the number is nearly the final coverage. |
 | **False alarms** | The count and the notes in the dashboard. The decoy, plus any correct part of the change the participant called wrong. A blank is a gap the dashboard names before the call ends, because none and not-asked are different answers. |
 | Who settled each problem | Directed by the participant, accepted deliberately, or standing and never noticed. The merged stream and the codoc ledger. |
 | **Which route they took, per problem** | Found by reading the agent's own account, or found by reviewing the change. The recorded agent mentions all three planted problems somewhere in 54 blocks and 14,235 characters of its own prose, and both conditions get that text in the scrollback. The two are different abilities and only the second is what codoc is for, so they are coded separately rather than added together. |
@@ -151,7 +186,8 @@ as a proportion of that project's maximum, so the two projects can be pooled.
 | How many files they opened before the right one | Focus events in order, against the file the change eventually landed in. |
 | How long their instructions to the agent were | The transcript. |
 | How they navigated, coded into seek, relate, and collect | The interaction log with the screen recording. Hand-coded. |
-| **Which stage an action belongs to: working the codebase out, or changing it** | The interaction log is one stream, and the same actions appear in both stages — reading the description to answer a question looks exactly like reading it to plan a change. Cut it on wall clock: the questions run from `quiz-<project>-<sitting>.startedAt` to its `finishedAt`, and the task from `task-<condition>.startedAt` to its `finishedAt`. Both are stamped by the participant's page, on the same machine as the log, so they merge on time like every other source here. Anything between the two (reading the task card, the break) belongs to neither and is reported as such rather than folded into the nearer one. |
+| **Which part of the session an action belongs to** | The interaction log is one stream, so it is cut on wall clock. The task runs from `task-<condition>.startedAt` to its `finishedAt`, both stamped by the participant's page, on the same machine as the log, so they merge on time like every other source here. They are the only stamps of their kind left: the question round after the task stores answers and no clock, and the round that had one ran before the task and is gone. Everything before `startedAt` is the participant reading the two pages, and it is reported as such rather than folded into the task. |
+| Where the task's own two halves divide | Nowhere in the data. The participant is asked to work out what the agent changed and then to decide what to keep, and nothing stamps the moment they move from one to the other, so an action inside the task cannot be assigned to one half. `startedAt` is also stamped when the task page opens, which is before the agent runs, so the first three minutes of the task are the participant watching it work. Any split finer than the task itself has to come from the think-aloud, coded by hand. |
 
 ## Questionnaires and notes
 
@@ -264,6 +300,9 @@ difference**: one value per participant, codoc minus baseline.
   or not the participant is actually looking at it. This overstates review
   coverage in both conditions equally, so the comparison between conditions is
   still valid even though the absolute number is not.
+- **How fast somebody can find an answer in this codebase.** The open-book round
+  that measured it was dropped on 2026-08-19 with the task redesign, and nothing
+  replaces it. The reasoning is under "What they understand afterwards" above.
 - **Anything after they close the window.** Nothing measures whether the
   description would still help a month later. Item 10 on the questionnaire asks
   people to predict it rather than demonstrating it. Long-term retention is a
