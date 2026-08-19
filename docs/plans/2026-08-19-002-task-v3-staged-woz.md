@@ -88,6 +88,14 @@ configurable, and "tell me what it did" does not say where. A capable agent will
 make both calls, and one of them will be wrong in a way that only shows up in the
 output.
 
+## What the session is made of
+
+The agent's half is written, not recorded (`record.py simulate`). Recording one
+cost a key, forty minutes and a lot of steering, and every planted problem was
+steered in anyway, so what was being recorded was already an authored stimulus
+with a real agent typing it. codoc's half is still not authored: `derive` replays
+the written frames into a live workspace and records what the daemon did.
+
 ## The planted misinterpretation
 
 The agent reads "different documents need different rules" as licence to change
@@ -96,23 +104,38 @@ does fix the document in front of it. It also means a real heading that repeats
 across a long document is now removed before the heading rule ever sees it, so a
 report loses its section titles.
 
-This is the misinterpretation the study is built on, and it has the properties
-that matter:
+That was the first draft of it, and measuring killed it. On the documents that
+ship, lowering the share costs nothing: the threshold is `max(2, int(pages *
+share))` and the floor of two wins for every one of them. Lowering the floor as
+well does move it, and fails two of the project's own tests, which means the
+participant is told by the test suite rather than by their own investigation.
 
-- It is a defensible reading of the request. Nobody has to believe the agent was
-  careless.
-- The tests still pass, because no test pins the default.
-- It is invisible by reading and obvious by running. The participant has to
-  convert the second fixture and look.
-- The description codoc surfaces says what the code now does, so the codoc arm
-  has a route to it that the other arm has to find by running.
+So the misinterpretation is one level up, in what "configurable" was taken to
+mean. The agent builds the settings, ships a config file whose default suits the
+survey, and wires it into the command line — but the rule itself still reads its
+module constant, so the PER DOCUMENT overrides the request actually asked for are
+parsed, matched, and then ignored. The default works. Nothing else does.
+
+It has the properties that matter:
+
+- It is a defensible reading. The agent did make it configurable, and the one
+  case in front of it does now convert correctly.
+- The tests still pass, because they call the library directly and the library's
+  defaults are untouched. Only the command line path reads the config.
+- It is invisible by reading the diff and obvious the moment somebody gives one
+  document its own setting, which is the natural next thing to try.
+- codoc has a route to it that the other arm does not: the furniture rule's own
+  description still says it reads a module constant, which contradicts the new
+  feature's description of per document settings. Two descriptions that cannot
+  both be true, sitting next to each other.
 
 ## What the participant needs in order to debug
 
 A person cannot debug a program they cannot run, and cannot bisect a rule they
 cannot see the effect of. The task page carries, and the workspace contains:
 
-- the three fixtures, with one line saying what each is for;
+- the four fixtures, with one line saying what each is for, including
+  `survey.txt`, which is the document the failure above happens to;
 - the command that converts one and prints it, so a run is one paste;
 - the command that converts all three and prints a summary line each, which is
   the cheapest way to see a rule change move something it should not have;
