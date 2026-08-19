@@ -285,6 +285,12 @@ def _watch_loop(workspace: Path, raw: Path, interval: float,
 
     # The last snapshot carries the index directories, so the daemon can pick up
     # a consistent workspace when it starts at the handover.
+    # Stop the daemon before the end state is taken. It keeps working after the
+    # last frame goes in, so the workspace carries on moving while the recording
+    # is finished, and `check` then compares the replay against a state the
+    # recording never contained. It looked like corrupt frames and was one more
+    # Loop A pass eleven seconds late.
+    _quiesce(workspace)
     final = scan(workspace, with_index=True)
     tail = raw / "final"
     for rel in final:
@@ -550,6 +556,29 @@ def _wait_for_daemon(workspace: Path, mark: float, settle: float, timeout: float
         time.sleep(1.0)
         waited += 1.0
     return waited
+
+
+def _quiesce(workspace: Path) -> None:
+    """Stop the workspace's daemon, so its end state stops changing."""
+    pidfile = workspace / ".codoc" / "watch.pid"
+    if not pidfile.exists():
+        return
+    try:
+        raw = pidfile.read_text().strip()
+        pid = int(json.loads(raw)["pid"]) if raw.startswith("{") else int(raw)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(30):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+        time.sleep(1.0)
+    print(f"  stopped the daemon ({pid}) so the end state holds still")
 
 
 def derive(frames: Path, workspace: Path, out: Path, settle: float,

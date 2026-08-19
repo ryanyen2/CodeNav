@@ -93,8 +93,8 @@ as C4.
 | D0 | The decoy, see the project's STUDY.md | unsteered |
 
 Each is confirmed by running the code rather than by reading the agent's account.
-`scoring/claims/tally.json` reports C2, C4 and C6 contradicted and C1, C3 and C5
-holding.
+`scoring/claims/tally.json` reports C6, C2 and C4 contradicted, which are D1, D2
+and D3, and C1, C3 and C5 holding.
 
 None of the three breaks a test. All 120 tests pass at the end of the recording.
 

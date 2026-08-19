@@ -375,6 +375,32 @@ class TranscriptTest(unittest.TestCase):
             self.assertEqual(lines[2][0] - lines[0][0], 5.0)
 
 
+class QuiesceTest(unittest.TestCase):
+    def test_the_end_state_is_taken_after_the_daemon_is_stopped(self):
+        """The daemon keeps working after the last frame goes in, so the
+        workspace carries on moving while the recording is finished, and `check`
+        then compares the replay against a state the recording never held. It
+        looked like corrupt frames and was one more Loop A pass eleven seconds
+        late."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            ws = tmp / "ws"
+            (ws / ".codoc").mkdir(parents=True)
+            proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+            try:
+                (ws / ".codoc" / "watch.pid").write_text(json.dumps({"pid": proc.pid}))
+                record._quiesce(ws)
+                self.assertIsNotNone(proc.poll(), "the daemon was left running")
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait(timeout=5)
+
+    def test_quiescing_a_workspace_with_no_daemon_is_fine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            record._quiesce(Path(tmp))
+
+
 class IdleTest(unittest.TestCase):
     """The pause between turns is the experimenter, not the agent."""
 

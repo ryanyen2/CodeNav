@@ -79,7 +79,7 @@
     {
       "id": "C4",
       "policy": "a merchant matching no rule",
-      "planted": "D4",
+      "planted": "D3",
       "statement": "A merchant that matches no rule goes to the uncategorised bucket, and the run finishes.",
       "probe": {
         "sample": "unmatched.csv",
