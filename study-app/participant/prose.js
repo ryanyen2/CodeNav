@@ -18,8 +18,8 @@ const SCRIBE = Object.freeze({
     oneLine: 'Turns text copied out of a PDF into clean Markdown.',
 
     why: Object.freeze([
-        'Text copied out of a PDF arrives broken, because a PDF stores where each line sat on the page rather than the writing itself.',
-        'Sentences come out cut into pieces, and long words come out split wherever the line ran out.',
+        'Text copied out of a PDF arrives broken, because a PDF stores where each line sat on the page rather than the actual text.',
+        'Sentences come out cut into pieces, and long words come out split wherever the line ran out of space.',
     ]),
 
     worked: Object.freeze({
@@ -43,7 +43,7 @@ ment had moved two of the 2019 markers.`,
         }),
         Object.freeze({
             name: 'Drops repeated headers',
-            what: 'A line printed near the top or bottom of enough of the pages is treated as a repeated page title rather than as writing, so it is removed, and page numbers go too.',
+            what: 'A line that appears near the top or bottom of most of the pages is treated as a repeating page header and removed. Page numbers are removed too.',
         }),
         Object.freeze({
             name: 'Restores headings and notes',
@@ -54,7 +54,7 @@ ment had moved two of the 2019 markers.`,
     limits: 'It does not open PDF files itself. It reads text that somebody has already copied out of one, and tables, images and columns do not survive the copying.',
 
     failure: Object.freeze({
-        lead: 'One of the sample documents, survey.txt, is a five page report. Below is the top line of each of its pages: the first three share one line, and the two appendix pages at the end have a different one.',
+        lead: 'One of the sample documents, survey.txt, is a five page report. The first three pages all have the same header. The last two, the appendix, have a different header.',
         input: `page 1   Coastal Erosion Survey 2026     Marine Institute
 page 2   Coastal Erosion Survey 2026     Marine Institute
 page 3   Coastal Erosion Survey 2026     Marine Institute
@@ -63,7 +63,7 @@ page 5   Appendix A: Site Photographs    Marine Institute`,
         output: `Ardmore retreated 0.1 metres per year, which is within measurement error of no change at all. The revetment appears to be holding for now.
 
 Appendix A: Site Photographs            Marine Institute`,
-        caption: 'A line is removed only when it repeats on enough of the pages. Coastal Erosion Survey 2026 was on three of five and went. Appendix A was on two, so it stayed in the middle of the writing. Convert survey.txt yourself and you will see it there.',
+        caption: 'A header is only removed when it appears on most of the pages. "Coastal Erosion Survey 2026" was on three of five pages, so it was removed. "Appendix A" was only on two, so it was kept and ended up in the middle of the converted text. Convert survey.txt yourself to see it.',
     }),
 
     ask: Object.freeze([
@@ -81,7 +81,7 @@ Appendix A: Site Photographs            Marine Institute`,
 memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furniture
 report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture
 survey.txt: 5 pages, 3 headings, 12 paragraphs, 0 bullets, 0 notes, 8 lines of furniture`,
-        caption: 'Furniture is the project\'s word for a repeated page title or a page number. A rule that starts removing more of it removes it from somewhere.',
+        caption: '"Furniture" is the project\'s word for repeated page headers and page numbers. If a change causes more or fewer lines of furniture to be removed, the numbers here will change.',
     }),
 
     prompt: 'Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.',
@@ -115,7 +115,7 @@ const TALLY = Object.freeze({
     rules: Object.freeze([
         Object.freeze({
             name: "Reads any bank's file",
-            what: 'One bank heads a column Transaction Date and another heads it Date, so column names and date formats are matched loosely and both files read.',
+            what: 'Different banks use different column names (Transaction Date vs Date) and date formats. The tool matches them loosely, so exports from any bank are accepted.',
         }),
         Object.freeze({
             name: 'Sorts payments into categories',
@@ -166,12 +166,9 @@ other-bank.csv: 13 rows, 3 months, 0 duplicates, 0 transfers, 3 uncategorised, 1
 
 const TASK = Object.freeze({
     lead: 'You asked your coding agent for the following, and it is about to work on it.',
-    // Three, because the session now has three moments in it rather than two: the
-    // agent stops to ask before it builds anything, and what it builds has to be
-    // run rather than only read.
-    stage1: 'It reads the project and comes back with what it intends to do. Answer it.',
-    stage2: 'It makes the change. Watch what moves, and read what it says it did.',
-    stage3: 'Then satisfy yourself that it worked, and leave the project in a state you would be happy to ship.',
+    stage1: 'The agent reads the code and proposes what it plans to do. Look at the proposals and accept or reject each one.',
+    stage2: 'The agent writes the code. Read through what it changed and check that it makes sense.',
+    stage3: 'Run the project yourself to confirm it works. Fix anything that is wrong before you finish.',
 });
 
 export const COPY = Object.freeze({

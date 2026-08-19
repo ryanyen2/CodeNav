@@ -38,7 +38,7 @@ const CODOC = {
     parts: [
         ['Navigation tree', 'Every feature in the project, on the left. Click one to jump to it.'],
         ['The description', 'What each feature does, and why it was built that way.'],
-        ['Code linkage', 'The names under a heading are the code that feature owns. Click one to open it.'],
+        ['Linked code', 'The names under a heading are the code files belonging to that feature. Click one to open it.'],
         ['Pending suggestions', 'Changes waiting for you to accept or reject, counted in the toolbar.'],
     ],
     steps: [
@@ -46,7 +46,7 @@ const CODOC = {
             title: 'Read it',
             points: [
                 'The tree is the map. Start at the top and open what you need.',
-                'A heading is a feature. The names under it are the code it owns.',
+                'Each heading is a feature. The names under it are the code files it is linked to.',
                 'Clicking one of those names opens that code.',
                 'Search it with Cmd+F, which also replaces across it.',
             ],
@@ -59,7 +59,7 @@ const CODOC = {
             title: 'Ask it',
             points: [
                 'Type /codoc:ask followed by a question in the agent terminal.',
-                'It draws a numbered path through the description to the parts that answer you.',
+                'It draws a numbered path through the features that answer your question.',
                 'Step through the path with the arrows.',
             ],
             figure: {
@@ -70,8 +70,8 @@ const CODOC = {
             title: 'See what changed',
             points: [
                 'When the code changes, the description proposes its own change to match.',
-                'A rewritten paragraph shows the new wording with Keep and Restore mine beside it.',
-                'A new feature arrives as a row waiting for a yes or a no.',
+                'A rewritten paragraph shows the new wording with "Keep" and "Restore mine" buttons beside it.',
+                'A new feature appears as a suggestion waiting for you to accept or reject it.',
                 'Nothing is applied until you say so.',
             ],
             figure: {
@@ -83,8 +83,8 @@ const CODOC = {
             title: 'Change it',
             points: [
                 'The text is yours to edit. Type into it like any document.',
-                'Select a sentence and comment on it to send the agent a request about that code.',
-                'Build it in the comment box makes the agent do the work.',
+                'Select a sentence and leave a comment on it to tell the agent what to change.',
+                'Click "Build it" in the comment box to make the agent carry out your request.',
             ],
             figure: {
                 todo: 'A sentence selected, the comment box open beside it, and the Build it button.',
