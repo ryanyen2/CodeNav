@@ -46,6 +46,13 @@ SKIP_DIRS = {
 # the participant's own workspace.
 SKIP_DIR_SUFFIXES = (".egg-info",)
 INDEX_DIRS = {".codoc/lancedb", ".codoc/cocoindex.db"}
+# Copied once, into the last frame, for the same reason as the index directories.
+# The store is the daemon's own state and nothing reads it during a replay: the
+# webview draws tree.doc.json and the status bar reads status.json. A copy per
+# frame was 85% of a recording's size and wrote a database nineteen times during a
+# three-minute replay for nothing anybody could see. The last one is kept, because
+# the workspace has to be consistent when the participant takes over.
+FINAL_ONLY_FILES = {".codoc/codoc.db"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 # The player writes this when it hands the workspace over, so it exists after a
 # replay and never during a recording. Counting it would make a correct replay
@@ -88,7 +95,15 @@ def _skip(rel: str, with_index: bool) -> bool:
         return True
     if not with_index and any(rel.startswith(d + os.sep) for d in INDEX_DIRS):
         return True
+    if not with_index and rel in FINAL_ONLY_FILES:
+        return True
     return False
+
+
+def _final_only(rel: str) -> bool:
+    """Whether this file is carried once, in the last frame, rather than per frame."""
+    return rel in FINAL_ONLY_FILES or any(
+        rel.startswith(d + os.sep) for d in INDEX_DIRS)
 
 
 def scan(root: Path, with_index: bool = False) -> dict[str, str]:
@@ -153,7 +168,7 @@ def watch(workspace: Path, raw: Path, interval: float) -> int:
     final = scan(workspace, with_index=True)
     tail = raw / "final"
     for rel in final:
-        if not any(rel.startswith(d + os.sep) for d in INDEX_DIRS):
+        if not _final_only(rel):
             continue
         dest = tail / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -468,7 +483,7 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     final = scan(workspace, with_index=True)
     last = out / "final"
     for rel in final:
-        if not any(rel.startswith(d + os.sep) for d in INDEX_DIRS):
+        if not _final_only(rel):
             continue
         dest = last / rel
         dest.parent.mkdir(parents=True, exist_ok=True)

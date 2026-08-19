@@ -124,7 +124,10 @@ class TransientTest(unittest.TestCase):
             write(root, ".codoc/codoc.db-shm", "shared")
             write(root, ".codoc/loop.lock", "")
             write(root, ".codoc/watch.pid", '{"pid": 1}')
-            self.assertEqual(sorted(record.scan(root)),
+            # The store itself is carried once, into the last frame, so a
+            # per-frame scan does not list it either.
+            self.assertEqual(sorted(record.scan(root)), [".codoc/tree.doc.json"])
+            self.assertEqual(sorted(record.scan(root, with_index=True)),
                              [".codoc/codoc.db", ".codoc/tree.doc.json"])
 
 
