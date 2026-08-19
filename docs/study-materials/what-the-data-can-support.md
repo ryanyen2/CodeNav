@@ -39,7 +39,61 @@ alarm count is new and it is there so that a difference in detection cannot be
 claimed without checking that the participant did not simply call everything
 wrong.
 
-**Both conditions' machinery keeps the record true, and that was measured, not
+## The two conditions end the recording with opposite records, and that is the finding
+
+Measured on the scribe recording, by deriving the same code through both
+conditions and running each one's own record pass over it. It is the most
+important thing the build produced and it inverts what the design expected.
+
+**The baseline's record is true, because the agent rewrote the commitment to
+match what it had done.** Its `CLAUDE.md` now reads "The share is 0.4, lowered
+from 0.6 because a running header that starts after a title page or stops before
+the appendices appears on two pages of five", and it goes on to state the cost,
+that "a line near an edge on 16 pages of 40 is now furniture where it used to
+take 24". The same for the hyphen list, which it records as starting empty. Every
+word of that is accurate.
+
+**codoc's record is stale.** Its tree still says a line is furniture when "the
+same text repeats on at least 60% of pages", and still says "a short list of
+prefixes keeps theirs, `well-` + `being` stays `well-being`". Both are now false
+of the code, and codoc says so: the state is `code_drift` with seven proposals
+waiting for somebody to answer.
+
+So at the moment the participant takes over, **the baseline holds a true record
+and codoc holds a false one.** Read naively that is a result against codoc, and
+reported naively it would be one.
+
+It is the opposite. The sentence the baseline agent overwrote was a human
+author's commitment, and the agent replaced it with its own decision and an
+argument for that decision, so nothing anywhere records that a person ever chose
+60% or that anything changed. A reader nods. codoc's amend gate is built to
+refuse exactly that: it preserves human-authored prose and raises the conflict as
+a verdict somebody has to give, which is why its tree still disagrees with its
+code. An agent quietly rewriting your stated intent to match its own work is the
+failure codoc exists to prevent, and here it is on video.
+
+Three things follow, and they change the analysis rather than decorate it.
+
+First, **record truth measured at the end cannot be read on its own.** The
+baseline starts the review already true and can win it by the participant doing
+nothing at all, while codoc starts stale and only becomes true if the person acts.
+Report the starting state of each record beside the ending state, or the measure
+says the reverse of what happened.
+
+Second, **a record can be true and worthless.** "True" here means the agent's
+account of the agent's own decision. What the study is actually asking is whether
+the person decided, which is the durable written trace and who settled it, and
+those are the measures to lead with.
+
+Third, **detection is harder in the baseline than it looks**, and not because
+information is missing. The contradiction has been normalised away: the record no
+longer holds the commitment the change contradicts, so a participant cannot find
+the conflict by reading the record. They have to find it in the diff, the
+transcript, or the README. In codoc the conflict is what the surface is showing
+them. That is the mechanism the study is testing, stated in a form that a rater
+can code.
+
+**Both conditions' machinery keeps the record current, and that was measured, not
 assumed.** The scribe recording was derived through both conditions and each
 condition's own record pass was run over it. The baseline's maintenance skill
 produced a `CLAUDE.md` that states the changes plainly: "repeat_share moved from

@@ -21,7 +21,8 @@ Three questions are confirmatory.
 
 First, does codoc raise how much of an agent's change a reviewer finds? Second,
 does codoc leave more of what was decided written down in a form that survives
-the session? Third, is the record still true of the code at the end?
+the session? Record truth is measured too, as a pair of before and after values,
+for the reason given under the predictions.
 
 ## Design
 

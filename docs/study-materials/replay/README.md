@@ -134,7 +134,9 @@ nothing happen and then everything happen at once.
 
 The baseline's record is written by an agent at the end of a session rather than
 by a daemon as it goes, so it derives with `--after` naming a command that runs
-the maintenance skill once after the last frame:
+the maintenance skill once after the last frame. Export the API key into the
+environment first and leave it out of the command string, because `--after` is a
+shell line that ends up in logs:
 
     python3 record.py derive frames/scribe/neutral ~/codoc-recording/scribe-baseline \
         frames/scribe/baseline --after "…run the maintenance skill…"
@@ -146,11 +148,12 @@ in the record beside it.
 an empty directory and compares the result against the workspace the recording
 ended in, file by file. A recording that does not pass `check` is not shipped.
 
-What the scribe recording actually contains, as a worked example: 42 frames,
-1,094 seconds of real session compressed to 180 of playback at 6.1x, three
-pending ADD proposals the daemon raised, and a tree that visibly catches up with
-the code twice during the replay. The round trip reproduces the recorded end
-state across 39 files.
+What the scribe recording actually contains, as a worked example: 48 frames,
+1,389 seconds of real session of which 212 was the experimenter waiting between
+turns, compressed to 180 of playback at 6.5x. The description visibly catches up
+with the code 16 times during the replay, leaving seven ADD proposals pending as
+ghost rows. The round trip reproduces the recorded end state across 21 files in
+the neutral recording and 37 in the codoc condition.
 
 Two more gates run against a finished recording. `test_handover.py` drives a copy
 of the derived workspace through accepting a proposal, rejecting one, editing a

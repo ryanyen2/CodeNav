@@ -628,7 +628,12 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     # transcript either, so discarding it is what keeps the two conditions
     # symmetrical.
     if after:
-        print(f"  running the condition's own record pass: {after[:60]}")
+        # Never the command itself. It is a shell line the experimenter wrote and
+        # the obvious way to write it puts an API key in it, which would then be
+        # in the log, in the scrollback and in anything that quotes them. The
+        # command inherits this process's environment, so the key belongs there
+        # instead and does not need to be in the string at all.
+        print("  running the condition's own record pass")
         subprocess.run(after, cwd=workspace, shell=True, timeout=1800)
         current = scan(workspace)
         writes = [r for r, h in current.items() if previous.get(r) != h]
