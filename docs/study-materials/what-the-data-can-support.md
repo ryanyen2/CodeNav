@@ -65,6 +65,27 @@ The second of those is the one to lead with, because it is the difference the
 tool actually makes and it is recorded rather than rated. Report record truth
 either way, including the likely result that both conditions keep it.
 
+**The agent rewrites the project's own README, in both conditions, and nobody
+asked it to.** Observed on both projects while recording. In tally it added 77
+lines describing the new settings file, the ordering rule, and what the transfer
+setting does, all of it accurate. In scribe it added 51 lines describing the
+config file and the report.
+
+That is a third record, and it is present identically in both conditions, so it
+does not bias the comparison. What it does is compress the effect, because a
+participant who reads the README diff has read an account of the change whether
+or not their condition has a maintained description. Reading it is a legitimate
+route and it has to be a strategy code of its own, beside reading the agent's
+account and reviewing the change.
+
+The README is not reliably true, which is the more useful half. scribe's says the
+notes are listed "each against the `[^n]` to search for", which is precisely the
+cross-reference that does not work, so the agent wrote the false promise into the
+README as well as into the report. So a participant can catch the problem there,
+and a participant who corrects only the description has left a second record
+saying the wrong thing. Score record truth against the record the condition owns,
+and note the README separately rather than folding it in.
+
 **One thing the replay adds and one thing it costs.** It adds comparability,
 because everybody reviews the same change, so detection counts can be pooled at
 all. It costs realism, because nobody watched their own agent work and the

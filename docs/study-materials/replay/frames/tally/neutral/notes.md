@@ -46,3 +46,34 @@ steer.
 Each is written the way a person would write it, as a follow-up in the same
 session. None of them says what to break.
 
+**1. D1, the transfer default. It did not land, and it is not being forced.**
+
+> The statement I ran this on moves 300 into savings every month and I cannot see
+> it anywhere in the totals. Make the transfer handling a setting like the
+> others, and pick a default that shows me what I have been missing.
+
+D1 was going to be a setting that arrives switched off, so that money moved
+between your own accounts lands in the totals while the record still says it is
+left out. The agent made the setting and chose `handling = "show"`, which reports
+what was moved beside each period's spending and **outside** its total. The
+record says transfers are left out of spending, and they still are, so nothing
+contradicts.
+
+It went further and wrote down why it would not offer the mode D1 needed. On an
+export covering both accounts, counting a transfer as spending counts every move
+twice, once leaving the current account and once arriving in the savings one.
+
+The rule from scribe applies here too. A planted problem the agent will not
+produce from a request a person would actually send is not nudged into existence
+with a request nobody would send. The request that would have landed D1 is
+"include the money I move into savings in the totals", and that is already the
+task's own follow-up request, given live to the participant. Using it here would
+spend the second half of the task on the first half.
+
+What the steer did produce is worth more than what it was aimed at. Showing the
+money exposed a coupling that was invisible while transfers were hidden. Both
+legs of a transfer are exempt from the duplicate rule, because a transfer looks
+exactly like a row recorded twice, so January reports -600.00 from two -300.00
+rows on the same day. The agent flagged it in its own output and said it cannot
+tell from the file whether that is two moves or one move exported twice.
+
