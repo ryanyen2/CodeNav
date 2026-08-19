@@ -54,7 +54,7 @@ ment had moved two of the 2019 markers.`,
     limits: 'It does not open PDF files itself. It reads text that somebody has already copied out of one, and tables, images and columns do not survive the copying.',
 
     failure: Object.freeze({
-        lead: 'Below is the top line of each page of a five page report. The first three pages share one line, and the two appendix pages at the end have a different one.',
+        lead: 'One of the sample documents, survey.txt, is a five page report. Below is the top line of each of its pages: the first three share one line, and the two appendix pages at the end have a different one.',
         input: `page 1   Coastal Erosion Survey 2026     Marine Institute
 page 2   Coastal Erosion Survey 2026     Marine Institute
 page 3   Coastal Erosion Survey 2026     Marine Institute
@@ -63,7 +63,7 @@ page 5   Appendix A: Site Photographs    Marine Institute`,
         output: `Ardmore retreated 0.1 metres per year, which is within measurement error of no change at all. The revetment appears to be holding for now.
 
 Appendix A: Site Photographs            Marine Institute`,
-        caption: 'A line is removed only when it repeats on enough of the pages. Coastal Erosion Survey 2026 was on three of five and went. Appendix A was on two, so it stayed in the middle of the writing.',
+        caption: 'A line is removed only when it repeats on enough of the pages. Coastal Erosion Survey 2026 was on three of five and went. Appendix A was on two, so it stayed in the middle of the writing. Convert survey.txt yourself and you will see it there.',
     }),
 
     ask: Object.freeze([
@@ -75,11 +75,12 @@ Appendix A: Site Photographs            Marine Institute`,
     // having to remember what it used to be. This is the whole debugging surface:
     // one command, three documents, one line each.
     repl: Object.freeze({
-        lead: 'Converting all three sample documents prints one line each. This is what they print now, before anything changes.',
+        lead: 'Converting all four sample documents prints one line each. This is what they print now, before anything changes.',
         command: '.venv/bin/scribe check fixtures/',
         before: `handbook.txt: 4 pages, 9 headings, 10 paragraphs, 3 bullets, 0 notes, 12 lines of furniture
 memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furniture
-report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture`,
+report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture
+survey.txt: 5 pages, 3 headings, 12 paragraphs, 0 bullets, 0 notes, 8 lines of furniture`,
         caption: 'Furniture is the project\'s word for a repeated page title or a page number. A rule that starts removing more of it removes it from somewhere.',
     }),
 
