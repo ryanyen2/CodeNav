@@ -118,3 +118,23 @@ text in the scrollback.
 The study therefore asks whether a person ends up knowing what was decided, not
 whether the information exists. Strategy coding has to separate a problem found
 by reading the transcript from one found by reviewing the change.
+
+
+## What the derived recordings contain
+
+**codoc.** 42 frames, 1,094 seconds of real session compressed to 180 of playback
+at 6.1x. The daemon ran 28 Loop A passes over the change and the description
+visibly catches up 23 times during the replay. Three ADD proposals are left
+pending at the end, drawn as ghost rows: "Per-document conversion settings",
+"Conversion result reports", "Conversion settings coverage". The round trip
+reproduces the recorded end state across 37 files.
+
+**baseline.** The same 42 code frames, with the maintenance skill run once after
+the last one. It rewrote `CLAUDE.md` from 103 lines to 163 and its account of the
+change is accurate: it records that the repeat share moved from 0.6 to 0.5 with a
+floor of two pages, and that the keep-hyphen list starts empty rather than listing
+twelve prefixes. The round trip reproduces 23 files.
+
+Both conditions hold the same code and the same transcript. That the baseline's
+own machinery keeps its record true is a result, not a problem, and
+`what-the-data-can-support.md` says what it does to the claims.
