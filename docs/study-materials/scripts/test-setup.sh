@@ -861,6 +861,14 @@ case "$(cat "$HERE/build-participant-bundle.sh")" in
     ok "and refuses to ship an extension it did not just build" ;;
   *) bad "a stale extension build would ship under a fresh version number" ;;
 esac
+# The participant pastes the request from the page and the recording echoes its
+# own as the agent's first line. If those two are not the same sentence, the
+# change under review answers a question nobody asked.
+case "$(cat "$HERE/build-participant-bundle.sh")" in
+  *'was made from a different request than'*)
+    ok "and refuses to ship a request the recording does not answer" ;;
+  *) bad "the page and the recording could ask for different things" ;;
+esac
 
 printf '\n\033[1m%s\033[0m\n' "The recorded session"
 case "$(cat "$SETUP")" in

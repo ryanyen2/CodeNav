@@ -154,6 +154,31 @@ chmod +x "$STAGE"/setup.sh "$STAGE"/session-log.sh "$STAGE"/collect.sh
 mkdir -p "$STAGE/replay"
 cp "$MAT"/replay/play.py "$MAT"/replay/record.py "$MAT"/replay/agent.py "$STAGE/replay/"
 chmod +x "$STAGE"/replay/play.py "$STAGE"/replay/agent.py
+# The request on the page and the request the recording was made from must be the
+# same sentence. The participant pastes one and the agent echoes the other as its
+# own first line, and a session where those two disagree is one where the change
+# under review answers a question nobody asked. Changing one without the other has
+# been possible, so it is checked here rather than remembered.
+for project in scribe tally; do
+  req="$MAT/replay/requests/$project.txt"
+  [ -f "$req" ] || continue
+  want="$(tr -s '[:space:]' ' ' < "$req" | sed 's/^ //; s/ $//')"
+  for arm in codoc baseline neutral; do
+    man="$MAT/replay/frames/$project/$arm/manifest.json"
+    [ -f "$man" ] || continue
+    if ! REQ="$want" MAN="$man" python3 - <<'REQ_PY'
+import json, os, sys
+first = json.load(open(os.environ["MAN"]))["frames"][0].get("terminal", "")
+sys.exit(0 if os.environ["REQ"][:60] in first else 1)
+REQ_PY
+    then
+      echo "the $project/$arm recording was made from a different request than"
+      echo "replay/requests/$project.txt. Record it again, or put the request back."
+      exit 1
+    fi
+  done
+done
+
 MISSING=0
 for project in scribe tally; do
   for arm in codoc baseline; do
