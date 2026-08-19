@@ -82,12 +82,24 @@ in codoc than in their own baseline. Chat that ends with the decision landing in
 the record counts as a trace, because the claim is that decisions persist rather
 than that typing happens in a particular pane.
 
-**Record truth is predicted not to differ.** Both conditions have machinery that
-keeps a record current, and the baseline's was measured doing so before any
-participant ran. The prediction is that record truth is at or near ceiling in
-both, and it is reported that way whichever direction it falls. A codoc advantage
-here would be a finding this study did not predict, and the paper has to label it
-exploratory.
+**Record truth is predicted to favour the baseline at handover, and is not
+interpretable as a final value.** Deriving both projects through both conditions
+showed that the two do not start the review from the same place. Both baselines
+end the recording with a true record, because the maintenance skill rewrites the
+commitment to match what the agent did and argues for it. codoc ended the two
+projects differently: on scribe its tree kept the sentences the change
+contradicts and raised seven proposals, and on tally it amended to match and
+raised two. The cause of that difference was not identified, and this study does
+not claim one.
+
+So record truth is measured twice, at handover and at the end, and reported as
+the change between them, with the handover state given per project because it
+differs per project. A raw final-value comparison favouring the baseline is
+expected and is not evidence about either tool. The reasoning is in
+`what-the-data-can-support.md`, and the short version is that a record which is
+true because an agent quietly rewrote a person's stated intent to match its own
+work is not the outcome this study wants to reward.
+
 
 **False alarms are predicted not to differ.** A codoc advantage in detection
 paired with a higher false alarm count is reported as a wash rather than as

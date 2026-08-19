@@ -1,0 +1,783 @@
+{
+  "recorded_at": "2026-08-19T15:29:48.028271+00:00",
+  "recorded_root": "/Users/r4yen/codoc-recording/tally-neutral",
+  "real_duration_s": 1712.3,
+  "idle_removed_s": 305.0,
+  "idle_cap_s": 120.0,
+  "playback_duration_s": 180.0,
+  "speed": 7.82,
+  "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/tally/neutral",
+  "derived_at": "2026-08-19T15:41:17.630594+00:00",
+  "frames": [
+    {
+      "n": 1,
+      "at_s": 222.4,
+      "delay_s": 15.348,
+      "writes": [
+        "tally/rules.toml"
+      ],
+      "deletes": [],
+      "terminal": "> Move the merchant rules out into rules.toml so I can edit them without touching\ncode. Also add a --by-week mode next to the monthly summary. While you are in\nthere, tidy up how the rules get their settings, because at the moment they read\nmodule constants directly.\nI'll start by exploring the repository to understand the codebase.\n  Bash(find . -type f -not -path \"./.git/*\" | head -50 && echo \"---\" && ls -la)\n  Read({{WORKSPACE}}/README.md)\n  Read({{WORKSPACE}}/pyproject.toml)\n  Read({{WORKSPACE}}/tally/summary.py)\n  Read({{WORKSPACE}}/tally/categories.py)\n  Read({{WORKSPACE}}/tally/rows.py)\n  Read({{WORKSPACE}}/tally/dedupe.py)\n  Read({{WORKSPACE}}/tally/months.py)\n  Read({{WORKSPACE}}/tally/recurring.py)\n  Read({{WORKSPACE}}/tally/money.py)\n  Read({{WORKSPACE}}/tally/cli.py)\n  Read({{WORKSPACE}}/tests/test_rules.py)\n  Read({{WORKSPACE}}/tests/test_statements.py)\n  Bash(ls fixtures/ && head -5 fixtures/*.csv && cat tally/__init__.py && cat tally.egg)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -5 && .venv/bin/python -c \"impo)\n  Bash(grep -rn \"is_refund\\|UNCATEGORISED\\|COMPILED\\|TRANSFER_WORDS\\|recurring.MONTHS\\|)\n  Bash(git log --oneline -12 && cat tally.egg-info/top_level.txt)\nNow I understand the structure. Let me write the rules file first, carrying over the reasoning that currently lives in the code comments.\n  Bash(cat > {{WORKSPACE}}/tally/rules.toml <<'TOML'\n# The rules, as data. Edit this fi)\nNow the loader that reads it:\n  Bash(cat > {{WORKSPACE}}/tally/settings.py <<'PY'\n\"\"\"Where the rules get their settin)\nThe loader works. Now I'll update the rule modules to take their settings as an argument:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 2,
+      "at_s": 248.61,
+      "delay_s": 3.352,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cat > {{WORKSPACE}}/tally/categories.py <<'PY'\n\"\"\"Putting a transaction in a cat)\n  Edit({{WORKSPACE}}/tally/money.py)\n  Edit({{WORKSPACE}}/tally/money.py)\nNow the week bucketing. Since the module will answer \"which month *or week*\", I'll rename it so the file map stays honest:\n  Bash(git mv tally/months.py tally/periods.py && ls tally/)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 3,
+      "at_s": 266.77,
+      "delay_s": 2.323,
+      "writes": [
+        "tally/categories.py",
+        "tally/dedupe.py",
+        "tally/recurring.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cat > {{WORKSPACE}}/tally/periods.py <<'PY'\n\"\"\"Which period a transaction belong)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 4,
+      "at_s": 271.81,
+      "delay_s": 0.645,
+      "writes": [
+        "tally/money.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 5,
+      "at_s": 278.88,
+      "delay_s": 0.904,
+      "writes": [
+        "tally/money.py"
+      ],
+      "deletes": [],
+      "terminal": "Now `summary.py`, which threads the settings through and picks the period:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 6,
+      "at_s": 283.93,
+      "delay_s": 0.646,
+      "writes": [
+        "tally/periods.py"
+      ],
+      "deletes": [
+        "tally/months.py"
+      ],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 7,
+      "at_s": 299.21,
+      "delay_s": 1.954,
+      "writes": [
+        "tally/periods.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cat > {{WORKSPACE}}/tally/summary.py <<'PY'\n\"\"\"Putting the rules together, in th)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 8,
+      "at_s": 328.44,
+      "delay_s": 3.739,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "I left a stray artifact line in that file \u2014 let me fix it properly by resolving the period once, up front:\n  Edit({{WORKSPACE}}/tally/periods.py)\n  Edit({{WORKSPACE}}/tally/summary.py)\n  Edit({{WORKSPACE}}/tally/summary.py)\nNow the CLI, which loads the rules once at the edge and gains the flag:\n  Bash(cat > {{WORKSPACE}}/tally/cli.py <<'PY'\n\"\"\"The command.\n\n    tally summarise fix)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 9,
+      "at_s": 342.57,
+      "delay_s": 1.807,
+      "writes": [
+        "tally/periods.py"
+      ],
+      "deletes": [],
+      "terminal": "Both modes work, and the monthly numbers are unchanged from the README's documented line. Now packaging, so the rules file ships with the package:\n  Edit({{WORKSPACE}}/pyproject.toml)\nNow the tests \u2014 updating existing ones for the new signatures and adding coverage for the new behaviour:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 10,
+      "at_s": 346.6,
+      "delay_s": 0.515,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_rules.py\")\nt = p.)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 11,
+      "at_s": 349.63,
+      "delay_s": 0.388,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(.venv/bin/python -m pytest tests/test_rules.py -q 2>&1 | tail -20)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 12,
+      "at_s": 361.73,
+      "delay_s": 1.548,
+      "writes": [
+        "tally/cli.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\")\nt)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 13,
+      "at_s": 367.78,
+      "delay_s": 0.774,
+      "writes": [
+        "pyproject.toml"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 14,
+      "at_s": 379.89,
+      "delay_s": 1.549,
+      "writes": [
+        "tests/test_rules.py"
+      ],
+      "deletes": [],
+      "terminal": "All 43 existing tests pass. Now tests for the new behaviour \u2014 first the rules file itself:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 15,
+      "at_s": 394.01,
+      "delay_s": 1.806,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 16,
+      "at_s": 438.41,
+      "delay_s": 5.679,
+      "writes": [
+        "tests/test_settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cat > {{WORKSPACE}}/tests/test_settings.py <<'PY'\n\"\"\"The rules file, and what ha)\n  Bash(.venv/bin/python -c \"\nfrom datetime import date\nfor d in ['2026-01-01','2025-12-)\n  Edit({{WORKSPACE}}/tests/test_rules.py)\n  Edit({{WORKSPACE}}/tests/test_statements.py)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -25)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 17,
+      "at_s": 458.61,
+      "delay_s": 2.584,
+      "writes": [
+        "tests/test_rules.py"
+      ],
+      "deletes": [],
+      "terminal": "Let me extend the ordering check to cover weeks too, and add a small CLI test for the file-writing behaviour:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\")\nt)\nAll green. Now the README, so the file map and usage stay truthful:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 18,
+      "at_s": 468.73,
+      "delay_s": 1.294,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cat > {{WORKSPACE}}/README.md <<'MD'\n# tally\n\nA bank export, into a monthly summ)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 19,
+      "at_s": 486.91,
+      "delay_s": 2.325,
+      "writes": [
+        "tests/test_cli.py",
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "Now a full end-to-end verification, including a fresh install to confirm the rules file actually ships:\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3 && echo \"=== monthly ===\" &&)\n  Bash(cd /tmp && rm -rf tally-install-check && python3 -m venv tally-install-check && )\n  Bash(/tmp/tally-install-check/bin/pip install -q . 2>&1 | tail -2; ls /tmp/tally-inst)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 20,
+      "at_s": 504.07,
+      "delay_s": 2.195,
+      "writes": [
+        "README.md"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cd /tmp && /tmp/tally-install-check/bin/tally summarise {{WORKSPACE}}/fixtures/c)\n  Bash(R=/tmp/tally-install-check/lib/python3.12/site-packages/tally/rules.toml; cp $R )",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 21,
+      "at_s": 588.84,
+      "delay_s": 10.842,
+      "writes": [
+        "tally/recurring.py",
+        "tally/settings.py",
+        "tests/test_settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(git status --short && echo \"--- untracked/ignored check ---\" && ls fixtures/)\n  Read({{WORKSPACE}}/tally/summary.py)\n  Bash(rm -rf build/ && git ls-files | grep -c \"egg-info\" ; git status --short)\nLet me tighten a couple of things I noticed on review \u2014 an unused field, line lengths, and unknown-flag handling:\n  Bash(awk 'length > 95 {print FILENAME\": \"FNR\": \"length}' tally/*.py tests/*.py)\n  Bash(grep -rn \"source\" tally/*.py | grep -v \"settings.py\")\n  Bash(.venv/bin/python - <<'PY'\nfrom pathlib import Path\nfor f in sorted(Path(\"tally\"))\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\n\nr = Path(\"tally/recurring.py\"); t = r)\n  Read({{WORKSPACE}}/tally/settings.py)\n  Edit({{WORKSPACE}}/tally/settings.py)\n  Edit({{WORKSPACE}}/tally/settings.py)\nNow the unknown-flag guard in the CLI, so a plausible typo like `--by-month` isn't read as a filename:\n  Edit({{WORKSPACE}}/tally/cli.py)\n  Bash(cat >> {{WORKSPACE}}/tests/test_cli.py <<'PY'\n\n\ndef test_an_option_that_does_not)\n  Bash(git diff --stat && echo \"=== behaviour unchanged? ===\" && .venv/bin/tally check )",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 22,
+      "at_s": 599.03,
+      "delay_s": 1.303,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "Let me verify the monthly output is byte-identical to what the pre-change code produced, using a worktree at HEAD:\n  Bash(git worktree add -q /tmp/tally-before HEAD 2>&1 | tail -2; for f in current othe)\nByte-identical. A final read-through of the new files:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 23,
+      "at_s": 602.04,
+      "delay_s": 0.385,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Read({{WORKSPACE}}/tally/settings.py)\n  Read({{WORKSPACE}}/tally/cli.py)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 24,
+      "at_s": 608.12,
+      "delay_s": 0.778,
+      "writes": [
+        "tally/cli.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 25,
+      "at_s": 618.19,
+      "delay_s": 1.288,
+      "writes": [
+        "tests/test_cli.py"
+      ],
+      "deletes": [],
+      "terminal": "All three pieces are done and the test suite is at 83 passing (was 43).\n\n**1. Merchant rules moved to `tally/rules.toml`**\n\nThe patterns, their order, transfer wording, the recurring window and the sign-flip threshold now live in a TOML file, with the reasoning that was in the code comments moved alongside the values an editor will be looking at. `settings.py` reads it into a frozen `Settings`.\n\nThe file is the *only* source of those values \u2014 there are no fallback defaults in code, since two copies of one policy drift apart and the loser is always the one somebody edited. That means a broken file has to fail loudly, so the loader validates and names what's wrong: `rules.toml: rule 3 (groceries) has a bad pattern: missing )`. Without that, a pattern that doesn't compile becomes a rule matching nothing, and a category silently vanishes from a summary.\n\n**2. `--by-week`**\n\nWorks on `summarise` and `check`. Weeks are ISO (`2026-W03`), using the ISO year rather than the calendar year \u2014 2027-01-01 is week 53 of 2026, and the calendar year would label it `2027-W53`, sorting the first day of January to the bottom of the summary.\n\nIt writes `current.weekly.md` rather than over `current.md`: the two answer different questions, and someone who ran both should end up with both. Recurring detection stays monthly whatever the grouping, since counting in weeks would find nothing.\n\n**3. Settings as an argument**\n\nEvery rule now takes `settings` instead of reading a module constant: `categorise(row, settings)`, `is_transfer(row, settings)`, `find(rows, settings)`, `sign_convention(rows, settings)`. The file is read once in the CLI and passed down; nothing below the CLI touches a file or a global.\n\nThree judgement calls worth your veto:\n\n- **I renamed `months.py` \u2192 `periods.py`** (via `git mv`, so history follows). A module called `months.py` containing `week_of` makes the README's file map a lie. Easy to revert if you'd rather keep the name.\n- **`Summary.months` is now `Summary.periods`**, plus `Summary.by` (`\"month\"`/`\"week\"`), since the list no longer holds only months. This is the API change most likely to annoy you; your tests are updated.\n- **`money.PENNY` stayed in code.** It's what the currency *is*, not a rule to tune. If you want it configurable for a zero-decimal currency, it's a one-line addition.\n\nI verified the monthly output is byte-identical to the pre-change code for all three fixtures, and confirmed `rules.toml` ships correctly by installing into a clean venv and running from an unrelated directory. Changes are uncommitted.\n> The statement I ran this on moves 300 into savings every month and I cannot see it anywhere in the totals. Make the transfer handling a setting like the others, and pick a default that shows me what I have been missing.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 26,
+      "at_s": 795.49,
+      "delay_s": 15.348,
+      "writes": [
+        "tally/rules.toml"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(grep -in \"transfer\\|savings\\|xfer\" fixtures/*.csv)\n  Bash(.venv/bin/tally summarise fixtures/current.csv - | head -30)\nNow I understand the shape of the data \u2014 that statement's transfers (`-300` a month, plus a same-day pair in January) are currently dropped after the transfer check, so they appear nowhere. Let me make it a setting:\n  Edit({{WORKSPACE}}/tally/rules.toml)\n  Edit({{WORKSPACE}}/tally/settings.py)\n  Edit({{WORKSPACE}}/tally/settings.py)\n  Edit({{WORKSPACE}}/tally/settings.py)\n  Edit({{WORKSPACE}}/tally/settings.py)\nNow `summary.py`, where the transfers were being dropped:\n  Edit({{WORKSPACE}}/tally/summary.py)\n  Edit({{WORKSPACE}}/tally/summary.py)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 27,
+      "at_s": 802.55,
+      "delay_s": 0.903,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Edit({{WORKSPACE}}/tally/summary.py)\nNow the body of `summarise`, which is where transfers were being discarded:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 28,
+      "at_s": 805.58,
+      "delay_s": 0.388,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 29,
+      "at_s": 809.61,
+      "delay_s": 0.515,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 30,
+      "at_s": 815.64,
+      "delay_s": 0.771,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Edit({{WORKSPACE}}/tally/summary.py)\n  Bash(.venv/bin/tally summarise fixtures/current.csv - | head -34 && echo \"===\" && .ve)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 31,
+      "at_s": 822.98,
+      "delay_s": 0.939,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "The \u00a3300 is now visible, and the recurring count went 3 \u2192 4. Let me check the recurring list and the other two modes:\n  Bash(.venv/bin/tally summarise fixtures/current.csv - | tail -8\necho \"=== show = spen)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 32,
+      "at_s": 826.0,
+      "delay_s": 0.386,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -15)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 33,
+      "at_s": 831.04,
+      "delay_s": 0.645,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "Expected failures \u2014 the test fixture file needs the new keys, and one test asserts the old policy. Let me update both:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 34,
+      "at_s": 846.22,
+      "delay_s": 1.942,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_settings.py\"); t )\n  Read({{WORKSPACE}}/tests/test_statements.py)\n  Edit({{WORKSPACE}}/tests/test_statements.py)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 35,
+      "at_s": 868.65,
+      "delay_s": 2.869,
+      "writes": [
+        "tests/test_settings.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 36,
+      "at_s": 878.75,
+      "delay_s": 1.292,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )\nNow the settings-level tests for the new keys:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 37,
+      "at_s": 907.99,
+      "delay_s": 3.74,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_settings.py\"); t )\nAll 93 pass. Now the docstrings and README that still describe the old policy:\n  Edit({{WORKSPACE}}/tally/dedupe.py)\n  Edit({{WORKSPACE}}/tally/summary.py)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"README.md\"); t = p.read_text)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 38,
+      "at_s": 917.05,
+      "delay_s": 1.159,
+      "writes": [
+        "tests/test_settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"README.md\"); t = p.read_text)\nNow let me verify the full behaviour end to end, including that the old behaviour is exactly recoverable:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 39,
+      "at_s": 928.12,
+      "delay_s": 1.416,
+      "writes": [
+        "tally/dedupe.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(git stash -q && .venv/bin/python -c \"\nfrom tally.summary import summarise\nprint()\n  Bash(git status --short && .venv/bin/python -m pytest tests/ -q 2>&1 | tail -2 && rm )\n  Bash(.venv/bin/tally summarise fixtures/current.csv - --by-week | head -22)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 40,
+      "at_s": 933.15,
+      "delay_s": 0.643,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 41,
+      "at_s": 942.21,
+      "delay_s": 1.159,
+      "writes": [
+        "README.md"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 42,
+      "at_s": 947.24,
+      "delay_s": 0.643,
+      "writes": [
+        "README.md"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 43,
+      "at_s": 1020.7,
+      "delay_s": 9.396,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "One thing I got wrong on review: if a bank exports *both* legs of a move (`-300` out, `+300` in), those net to zero and my line would vanish \u2014 hiding the money again for exactly the person complaining. Let me fix that:\n  Edit({{WORKSPACE}}/tally/summary.py)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tally/summary.py\"); t = p.re)\n  Edit({{WORKSPACE}}/tally/rules.toml)\n  Bash(.venv/bin/python - <<'PY'\nfrom tally import settings\nfrom tally.summary import s)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"README.md\"); t = p.read_text)\n  Bash(git add -A tally/months.py tally/periods.py 2>/dev/null; .venv/bin/python - <<'P)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 44,
+      "at_s": 1028.75,
+      "delay_s": 1.03,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_rules.py\"); t = p)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 45,
+      "at_s": 1034.78,
+      "delay_s": 0.771,
+      "writes": [
+        "tally/rules.toml"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 46,
+      "at_s": 1048.88,
+      "delay_s": 1.803,
+      "writes": [
+        "README.md",
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "Done \u2014 94 tests passing. Your \u00a3300 a month is now visible:\n\n```\n## 2026-02\n\n  housing             -950.00\n  ...\n  total               1143.91\n  transfers           -300.00   (not in the total)\n```\n\n**The setting** is `[transfers] show` in `rules.toml`, alongside `words`, with three values:\n\n- **`\"apart\"` (the default I picked)** \u2014 listed under each period, left out of its total.\n- `\"never\"` \u2014 the old behaviour, gone entirely.\n- `\"spending\"` \u2014 counted in the totals, under `[transfers] category`.\n\n**Why `\"apart\"` rather than counting it in the total.** Both other answers hide something. Left out, a standing order into savings never appears \u2014 your complaint. Counted as spending, the total claims you spent money you still have, and if your export carries both legs of a move it invents an outgoing that never happened. Listed apart, the money is visible and no total lies about it. If you'd rather savings counted as money out, `show = \"spending\"` is one word.\n\nTwo knock-on effects worth knowing:\n\n- **Your statement's January shows `-600.00`**, not `-300.00`. There are two transfer rows dated the 4th. The figure is the sum of the rows, so whether that's two moves or one move exported as two legs depends on your bank \u2014 which is the other reason it stays out of the total.\n- **\"transfer to savings\" now appears in the Recurring list** (3 \u2192 4 for `current.csv`). A standing order is a fixed commitment, and it was missing from the one list whose job is naming them. Under `show = \"never\"` it stays out, since you'd have asked not to see transfers at all.\n\nI caught one bug in my own first attempt while reviewing: I was only printing the line when the amount was non-zero, so a bank exporting both legs (`-300` and `+300`) would net to zero and the line would vanish \u2014 hiding the money again for exactly the person complaining. Periods now track the transfer *count* as well as the net, and the line prints whenever transfers happened, so `transfers 0.00` (they cancelled) is distinguishable from silence (there were none).\n\nI verified `show = \"never\"` reproduces the previous output byte-for-byte on all three fixtures, so nothing else moved. `dedupe.py` still only *recognises* transfers \u2014 both legs still survive the duplicate rule regardless of the setting; what happens to them afterwards is now `summary.py`'s decision, driven by the file.\n> Three more small things and then I am done.\n\n1. Line the weeks up on the date the bank posted things rather than the date I made them. I am reconciling this against the statement the bank sends me and that is the date it shows.\n2. My bank writes the same shop three different ways, so one weekly shop comes out as separate rows. In the weekly view, treat two rows on the same day for the same amount as one even when the description is written differently.\n3. If a merchant matches nothing in rules.toml I would rather the run stopped than have it quietly filed somewhere I do not look.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 47,
+      "at_s": 1060.98,
+      "delay_s": 1.548,
+      "writes": [
+        "tests/test_rules.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 48,
+      "at_s": 1326.31,
+      "delay_s": 15.348,
+      "writes": [
+        "tally/periods.py"
+      ],
+      "deletes": [],
+      "terminal": "Three changes, each reversing a documented decision. Let me look at what the data says before I touch anything:\n  Bash(.venv/bin/python - <<'PY'\nfrom collections import defaultdict\nfrom pathlib impor)\nNow I have what I need. Starting with `periods.py`, where the date choice becomes a setting:\n  Bash(cat > {{WORKSPACE}}/tally/periods.py <<'PY'\n\"\"\"Which period a transaction belong)\nNow the settings \u2014 the choice-sets and the two per-summary tables:\n  Edit({{WORKSPACE}}/tally/settings.py)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tally/settings.py\"); t = p.r)\nNow `dedupe.py` \u2014 the looser match, and reporting what it merged:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 49,
+      "at_s": 1335.41,
+      "delay_s": 1.164,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 50,
+      "at_s": 1352.56,
+      "delay_s": 2.194,
+      "writes": [
+        "tally/settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(cat > {{WORKSPACE}}/tally/dedupe.py <<'PY'\n\"\"\"Transactions that appear twice, an)\nNow the unmatched-merchant stop:\n  Edit({{WORKSPACE}}/tally/categories.py)\n  Edit({{WORKSPACE}}/tally/categories.py)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 51,
+      "at_s": 1372.8,
+      "delay_s": 2.589,
+      "writes": [
+        "tally/dedupe.py"
+      ],
+      "deletes": [],
+      "terminal": "Now wiring it together in `summary.py`:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tally/summary.py\"); t = p.re)\nNow the CLI needs to handle the stop, and `rules.toml` needs the new settings:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 52,
+      "at_s": 1380.89,
+      "delay_s": 1.035,
+      "writes": [
+        "tally/categories.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 53,
+      "at_s": 1386.97,
+      "delay_s": 0.778,
+      "writes": [
+        "tally/categories.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 54,
+      "at_s": 1400.1,
+      "delay_s": 1.679,
+      "writes": [
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tally/cli.py\"); t = p.read_t)\n  Bash(.venv/bin/tally check fixtures/; echo \"EXIT: $?\")",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 55,
+      "at_s": 1425.3,
+      "delay_s": 3.223,
+      "writes": [
+        "tally/cli.py",
+        "tally/rules.toml"
+      ],
+      "deletes": [],
+      "terminal": "Weekly grouping and loose merging now need verifying together:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 56,
+      "at_s": 1487.87,
+      "delay_s": 8.003,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(.venv/bin/python - <<'PY'\nfrom dataclasses import replace\nfrom tally import sett)\nAll three interact correctly. Now the test suite \u2014 let me see the damage and work through it:\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -25)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\n\n# ---- test_statements.py: the fixtur)\nMy assertion was wrong \u2014 W05 still exists (Aldi posted the 30th). Let me make the test say what I actually mean:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )\nNow `test_rules.py`, where the period functions changed signature:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 57,
+      "at_s": 1502.0,
+      "delay_s": 1.807,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_rules.py\"); t = p)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_settings.py\"); t )",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 58,
+      "at_s": 1530.22,
+      "delay_s": 3.609,
+      "writes": [
+        "tests/test_rules.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_cli.py\"); t = p.r)\nNow tests for the new settings and the end-to-end behaviour of all three changes:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 59,
+      "at_s": 1536.26,
+      "delay_s": 0.773,
+      "writes": [
+        "tests/test_settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\n\np = Path(\"tests/test_settings.py\"); t)\n  Bash(.venv/bin/python -m pytest tests/test_settings.py::test_a_summary_that_does_not_)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 60,
+      "at_s": 1553.44,
+      "delay_s": 2.197,
+      "writes": [
+        "tests/test_cli.py"
+      ],
+      "deletes": [],
+      "terminal": "The validator reports the missing key first \u2014 reasonable, but my test wasn't isolating the case it names:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_settings.py\"); t )\nNow end-to-end tests for the three behaviours working together:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 61,
+      "at_s": 1567.75,
+      "delay_s": 1.83,
+      "writes": [
+        "tests/test_settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 62,
+      "at_s": 1581.9,
+      "delay_s": 1.81,
+      "writes": [
+        "tests/test_settings.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(grep -n \"unknown_merchant\\|uncategorised == 1\" tests/test_statements.py)\n  Read({{WORKSPACE}}/tests/test_statements.py)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 63,
+      "at_s": 1602.12,
+      "delay_s": 2.586,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "Now the README, which documents all three of the behaviours I've just inverted:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"README.md\"); t = p.read_text)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 64,
+      "at_s": 1616.27,
+      "delay_s": 1.81,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "The quick-start examples now point at a fixture that stops. Let me fix that:\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"README.md\"); t = p.read_text)\nLet me do a full verification pass \u2014 line lengths, a clean install, and the error paths:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 65,
+      "at_s": 1635.49,
+      "delay_s": 2.458,
+      "writes": [
+        "README.md"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(.venv/bin/python - <<'PY'\nfrom pathlib import Path\nfor f in sorted(Path(\"tally\"))\n  Bash(cd /tmp && rm -rf tc2 && python3 -m venv tc2 -q && /tmp/tc2/bin/pip install -q {)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tally/dedupe.py\"); t = p.rea)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 66,
+      "at_s": 1648.63,
+      "delay_s": 1.681,
+      "writes": [
+        "README.md"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(sed -n '/def test_grouping_by_week_moves/,/^def /p' tests/test_statements.py | h)",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 67,
+      "at_s": 1658.75,
+      "delay_s": 1.294,
+      "writes": [
+        "tally/dedupe.py"
+      ],
+      "deletes": [],
+      "terminal": "That test's docstring now claims an invariant that the loose weekly matching breaks. Let me make it honest:",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 68,
+      "at_s": 1696.16,
+      "delay_s": 4.785,
+      "writes": [
+        "tests/test_statements.py"
+      ],
+      "deletes": [],
+      "terminal": "  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/test_statements.py\"); )\n  Read({{WORKSPACE}}/tally/summary.py)\n  Bash(python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"tally/summary.py\"); t = p.re)\n  Bash(rm -rf build/ /tmp/tc2 && .venv/bin/tally summarise fixtures/current.csv - --by-)\nAll three are done, 120 tests passing.\n\n**1. Weeks line up on the posting date.** `[periods]` in `rules.toml` sets which date decides each summary, separately:\n\n```toml\n[periods]\nmonth = \"made\"\nweek  = \"posted\"\n```\n\nYour monthly file is untouched (Tesco made 31 Jan is still January); the weekly file now files it in the week the bank cleared it. I set them differently on purpose rather than switching both \u2014 the monthly summary answers \"what did I spend in January\", the weekly one is the one you hold up against the statement. Flip `month = \"posted\"` if you'd rather they agree.\n\n**2. Same day, same amount, any wording \u2014 in the weekly view only.** `[duplicates]` is also per-summary:\n\n```toml\n[duplicates]\nmonth = \"same wording\"\nweek  = \"any wording\"\n```\n\nThe day it compares is whichever date that summary is lined up on, so the weekly view merges what the bank *posted* together.\n\nThis one can be wrong \u2014 two identical fares in a day are two fares \u2014 and there's no way for it not to be. So anything it merged is printed with both descriptions rather than just counted:\n\n```\n## Merged\n\n  2026-02-02      -52.40  TESCO STORES 3241 / TESCO-EXPRESS 3241\n```\n\nThere's a test pinning the property that matters: the weekly total is lighter than the monthly one by *exactly* the rows it listed, and nothing else. Worth knowing: your two files will now legitimately disagree on totals. That's the request, but it means they can't be reconciled against each other, only each against its own purpose.\n\n**3. Unknown merchants stop the run.** Every unmatched merchant is listed at once, with line numbers and counts \u2014 one run, not one run per merchant. Nothing is written, exit code 2. `check` reports the file that stopped and carries on through the folder, exiting 2 at the end.\n\nThree things to flag:\n\n- **`check fixtures/` now exits 2**, on `current.csv`'s MOONLIGHT RECORDS. That fixture exists to be an unknown merchant, so it now demonstrates the stop instead of the bucket. The README says so.\n- **I added `waitrose` to the groceries rule.** Turning this on surfaced it immediately \u2014 it appeared 3\u00d7 in `other-bank.csv` and had been sitting in the uncategorised bucket unnoticed, which is precisely your point.\n- **The broad fixture tests run with `unmatched = \"bucket\"`**, since they're about everything except that policy; the stopping has its own tests against the shipped rules.\n\n`[categories] unmatched = \"bucket\"` restores the old behaviour if a statement full of new merchants ever makes stopping too costly.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 69,
+      "at_s": 1712.34,
+      "delay_s": 2.069,
+      "writes": [
+        "CLAUDE.md",
+        "tally/rules.toml",
+        "tally/summary.py"
+      ],
+      "deletes": [],
+      "terminal": "",
+      "settled_after_s": 0.0
+    }
+  ]
+}
