@@ -837,7 +837,15 @@ def simulate(script_dir: Path, workspace: Path, out: Path) -> int:
             shutil.copy2(workspace / rel, dest)
         delay = float(step.get("delay_s", 2.0))
         at += delay
-        terminal = "\n".join(step.get("say", []))
+        said = list(step.get("say", []))
+        if i == 1:
+            # The session opens with the request, echoed the way the assistant
+            # echoes what was typed at it. A real recording gets this for free
+            # from the transcript; a written one has to say it, and without it the
+            # participant pastes a request and watches a session that never
+            # mentions it.
+            said = [f"> {script['request']}", ""] + said
+        terminal = "\n".join(said)
         check_no_leak(terminal, "", f"step {i} of the script")
         frames.append({
             "n": i, "at_s": round(at, 3), "delay_s": round(delay, 3),

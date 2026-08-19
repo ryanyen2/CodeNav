@@ -691,6 +691,22 @@ class SimulateTest(unittest.TestCase):
                       do_reset=True, do_transcript=False)
             self.assertEqual(record.scan(played), record.scan(ws))
 
+    def test_the_first_frame_echoes_the_request(self):
+        # A real recording gets this from the transcript. Without it the
+        # participant pastes a request and watches a session that never mentions
+        # it, and the bundle's own check that the two agree has nothing to read.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ws = root / "ws"
+            ws.mkdir()
+            (ws / "a.py").write_text("VALUE = 1\n")
+            script = self.script(root, [{"say": ["● reading"], "delay_s": 1}])
+            out = root / "frames"
+            record.simulate(script, ws, out)
+            first = json.loads((out / "manifest.json").read_text())["frames"][0]
+            self.assertIn("make it configurable", first["terminal"])
+            self.assertTrue(first["terminal"].startswith("> "))
+
     def test_the_session_it_writes_can_be_resumed(self):
         # The participant's first turn continues this file, so it has to carry the
         # request and what the agent said back.

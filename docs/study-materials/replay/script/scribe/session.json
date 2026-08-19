@@ -1,0 +1,108 @@
+{
+  "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",
+  "session_id": "9f2c1d84-6b70-4a15-9c3e-2d8b7a614f03",
+  "checkpoints": [6],
+  "checkpoint_says": "● The settings layer is in. Before I wire the rest of it up, take a look at how this is being described and tell me what you want kept.",
+  "steps": [
+    {
+      "delay_s": 4.0,
+      "say": [
+        "● I'll start by seeing how the rules get their values today.",
+        "  Read({{WORKSPACE}}/scribe/convert.py)",
+        "  Read({{WORKSPACE}}/scribe/furniture.py)"
+      ]
+    },
+    {
+      "delay_s": 5.0,
+      "say": [
+        "  Read({{WORKSPACE}}/scribe/paragraphs.py)",
+        "  Read({{WORKSPACE}}/scribe/cli.py)",
+        "● Each rule reads a module constant of its own: REPEAT_SHARE and EDGE in",
+        "  furniture, the keep-hyphen prefixes in paragraphs. Nothing reads a file, so",
+        "  the only way to convert one awkward document differently is to edit the",
+        "  source."
+      ]
+    },
+    {
+      "delay_s": 4.0,
+      "say": [
+        "● The five page survey is the case you mean. Its appendix carries its own",
+        "  header over two pages of five, which is under the share a line has to",
+        "  reach, so it survives into the prose.",
+        "  Bash(.venv/bin/scribe convert fixtures/survey.txt - | sed -n '18,20p')"
+      ]
+    },
+    {
+      "delay_s": 3.0,
+      "say": [
+        "  ⎿  Appendix A: Site Photographs           Marine Institute",
+        "● Confirmed. I'll gather the values into settings that can come from a file,",
+        "  and write a note beside each conversion saying what happened."
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "say": [
+        "  Write({{WORKSPACE}}/scribe/settings.py)"
+      ],
+      "write": { "scribe/settings.py": "files/settings.py" }
+    },
+    {
+      "delay_s": 7.0,
+      "say": [
+        "  Write({{WORKSPACE}}/scribe/config.py)",
+        "● scribe.toml is optional, discovered from the working directory upwards. A",
+        "  [defaults] section sets the values for every document and a",
+        "  [document.\"name\"] section overrides them for one."
+      ],
+      "write": { "scribe/config.py": "files/config.py" }
+    },
+    {
+      "delay_s": 5.0,
+      "say": [
+        "  Write({{WORKSPACE}}/scribe.toml)",
+        "● I've set repeat_share to 0.4 in the defaults, which is what catches the",
+        "  appendix header on a five page document."
+      ],
+      "write": { "scribe.toml": "files/scribe.toml" }
+    },
+    {
+      "delay_s": 6.0,
+      "say": [
+        "  Write({{WORKSPACE}}/scribe/report.py)",
+        "● report.md goes next to the Markdown rather than to the terminal, so it is",
+        "  still there when somebody wonders where a line went."
+      ],
+      "write": { "scribe/report.py": "files/report.py" }
+    },
+    {
+      "delay_s": 5.0,
+      "say": [
+        "  Edit({{WORKSPACE}}/scribe/cli.py)",
+        "● The command loads the config once and applies it before converting."
+      ],
+      "write": { "scribe/cli.py": "files/cli.py" }
+    },
+    {
+      "delay_s": 6.0,
+      "say": [
+        "  Bash(.venv/bin/python -m pytest tests/ -q)",
+        "  ⎿  ...................................................... 54 passed",
+        "  Bash(.venv/bin/scribe check fixtures/)",
+        "  ⎿  handbook.txt: 4 pages, 9 headings, 10 paragraphs, 3 bullets, 0 notes, 12 lines of furniture",
+        "     memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furniture",
+        "     report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture",
+        "     survey.txt: 5 pages, 3 headings, 10 paragraphs, 0 bullets, 0 notes, 10 lines of furniture",
+        "     checked 4 documents"
+      ]
+    },
+    {
+      "delay_s": 4.0,
+      "say": [
+        "● Done. The rules take their values from settings now, scribe.toml sets them,",
+        "  and each conversion writes a report.md saying what it did. The survey's",
+        "  appendix header is gone and the other three documents are unchanged."
+      ]
+    }
+  ]
+}
