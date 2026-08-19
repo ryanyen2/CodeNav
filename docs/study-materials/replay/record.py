@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -315,7 +316,7 @@ def _codoc_quiet_for(workspace: Path, seconds: float) -> bool:
 
 
 def derive(frames: Path, workspace: Path, out: Path, settle: float,
-           timeout: float, settle_every: int = 1) -> int:
+           timeout: float, settle_every: int = 1, after: str = "") -> int:
     """Replay the neutral recording into one condition and record its response.
 
     `settle_every` is how many code frames go in before the daemon is given time
@@ -375,6 +376,27 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
         print(f"  frame {frame['n']:>3}  +{len(writes)} -{len(deletes)}"
               f"  {len(moved)} under .codoc  settled in {waited:.0f}s")
 
+    # The condition's own record-updating machinery, for a condition whose
+    # machinery is not a daemon. In the baseline that is the documentation
+    # maintenance skill, run once at the end the way it runs at the end of any
+    # session. Its own transcript is discarded: the participant's scrollback is
+    # the neutral recording, and the daemon's Loop A passes are not in a
+    # transcript either, so discarding it is what keeps the two conditions
+    # symmetrical.
+    if after:
+        print(f"  running the condition's own record pass: {after[:60]}")
+        subprocess.run(after, cwd=workspace, shell=True, timeout=1800)
+        current = scan(workspace)
+        writes = [r for r, h in current.items() if previous.get(r) != h]
+        if writes:
+            dest_dir = out / f"{derived[-1]['n']:04d}"
+            for rel in writes:
+                dest = dest_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(workspace / rel, dest)
+            derived[-1]["writes"] = sorted(set(derived[-1]["writes"]) | set(writes))
+            print(f"  it wrote {len(writes)} file(s)")
+
     final = scan(workspace, with_index=True)
     last = out / "final"
     for rel in final:
@@ -423,13 +445,17 @@ def main(argv: list[str]) -> int:
                    help="how long to wait for one Loop A pass before moving on")
     d.add_argument("--settle-every", type=int, default=1,
                    help="how many frames go in before the daemon is given time")
+    d.add_argument("--after", default="",
+                   help="a command to run in the workspace after the last frame, "
+                        "for a condition whose record is written by an agent "
+                        "rather than by a daemon")
 
     args = parser.parse_args(argv)
     if args.command == "watch":
         return watch(args.workspace, args.raw, args.interval)
     if args.command == "derive":
         return derive(args.frames, args.workspace, args.out, args.settle,
-                      args.timeout, max(1, args.settle_every))
+                      args.timeout, max(1, args.settle_every), args.after)
     return build(args.raw, args.transcript, args.frames, args.seconds)
 
 

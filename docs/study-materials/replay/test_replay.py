@@ -204,6 +204,29 @@ class DeriveTest(unittest.TestCase):
             self.assertTrue((replayed / "CLAUDE.md").exists(),
                             "the condition's own description has to survive the derivation")
 
+    def test_the_conditions_own_record_pass_lands_in_the_last_frame(self):
+        # The baseline's record is written by an agent at the end of a session
+        # rather than by a daemon as it goes, so `derive` runs it after the last
+        # code frame. What it writes has to reach the frames, or the baseline
+        # ships a description that never learned about the change.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, neutral, ws, out = tmp / "raw", tmp / "neutral", tmp / "ws", tmp / "out"
+            fake_recording(raw, SESSION)
+            record.build(raw, None, neutral, seconds=0.01)
+            ws.mkdir()
+            play.play(ws, neutral, 1000.0, False, True, False)
+            play.reset(ws, neutral)
+            write(ws, "CLAUDE.md", "before the change\n")
+
+            record.derive(neutral, ws, out, settle=0.0, timeout=0.0,
+                          after="printf 'after the change\n' > CLAUDE.md")
+
+            replayed = tmp / "replayed"
+            replayed.mkdir()
+            play.play(replayed, out, 1000.0, False, True, False)
+            self.assertEqual((replayed / "CLAUDE.md").read_text(), "after the change\n")
+
     def test_the_derived_manifest_keeps_the_pacing_and_says_where_it_came_from(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)

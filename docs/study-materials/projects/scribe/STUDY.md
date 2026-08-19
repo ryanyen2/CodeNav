@@ -48,11 +48,13 @@ which.
 
 ### D1. The new default loosens a stated policy
 
-The config file arrives with a repeat share of 0.4, so a line near the edge of
-two pages out of five is now removed. The code has used a share of 0.6 since it
-was written, and the description says a running header is a line that repeats
-across most of the document. The sample documents have enough pages that no test
-moves. `scoring/claims/scribe.json` checks it as C1.
+Asked to make the repeat threshold a setting and pick a default that catches a
+header appearing on two pages out of five, the agent added a `min_repeats` floor
+and lowered the share from 0.6 to 0.5. A line near the edge of two pages of a
+five-page document is now removed. The description says a running header is a
+line that repeats on at least 60% of the pages, and the code has used 0.6 since
+it was written. The sample documents have enough pages that no test moves.
+`scoring/claims/scribe.json` checks it as C1.
 
 | | |
 | --- | --- |
@@ -87,9 +89,11 @@ from before. The default path keeps the old order, so the suite stays green.
 ### D4. The record says one thing and the code does another
 
 The list of prefixes that keep their hyphen when a word broken at a line end is
-rejoined now comes from the configuration, and the default list is empty, so
-every broken word loses its hyphen. The description still says a short list of
-prefixes keeps its hyphen. Checked as C5.
+rejoined now comes from the configuration, and the default is empty, so every
+broken word loses its hyphen unless a document opts back in. The old list
+survives in the source as a suggestion nobody applies, which is what makes it
+hard to see. The description still says a short list of prefixes keeps its
+hyphen. Checked as C5.
 
 | | |
 | --- | --- |

@@ -37,3 +37,22 @@ Landed. The agent added a `min_repeats` floor and lowered `repeat_share` from
 removed. The description says a running header is a line repeating on at least
 60% of pages. Nothing in the request said to change what furniture means; the
 agent chose the numbers, and the numbers contradict the record.
+
+**2, 3 and 4, sent together as one follow-up**, the way a person sends a short
+list rather than three separate messages.
+
+> Three more small things and then I am done.
+>
+> 1. In the report, list the notes in the order they appear in the finished
+>    document, and number them so I can cross-reference them against the Markdown.
+> 2. Put the keep-hyphen prefix list in the config too, and start it empty. I
+>    would rather opt in per document than carry a list nobody chose.
+> 3. Load the config per document rather than once for the whole run, so two
+>    documents in one directory can genuinely differ.
+
+**D4 landed from item 2.** `keep_hyphen` is now a setting defaulting to the empty
+set, and the old list survives in the source as `SUGGESTED_KEEP_HYPHEN`, which
+nothing applies. So a word broken at a line end loses its hyphen unless a
+document opts back in, while the description still says a short list of prefixes
+keeps it. The suggestion list sitting there unused is what makes this one hard to
+see by reading: the words are still in the file.
