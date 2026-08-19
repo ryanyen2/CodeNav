@@ -231,3 +231,22 @@ def test_a_session_that_is_never_answered_carries_on(tmp_path, monkeypatch):
     (codoc / "tree.bindings.json").write_text(json.dumps({"by_event": {"e-1": {}}}))
     monkeypatch.setattr(agent.time, "sleep", lambda _s: None)
     assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.01) is False
+
+
+def test_a_derived_recording_keeps_its_checkpoints():
+    # `derive` copies everything but the frames through from the source manifest,
+    # which is how a checkpoint set on the neutral recording reaches both arms.
+    # Set it after deriving and the two conditions can disagree about where the
+    # session pauses, which is a difference between the arms that is not the
+    # manipulation.
+    src = (Path(__file__).resolve().parent / "record.py").read_text()
+    assert '{k: v for k, v in manifest.items() if k != "frames"}' in src
+    assert 'manifest.get("checkpoints"' in src
+
+
+def test_the_store_is_carried_at_a_checkpoint():
+    # The daemon comes back at a stop and projects the tree from the store. The
+    # store is otherwise carried once at the end, so a stop without it shows a
+    # tree with none of the plan in it.
+    src = (Path(__file__).resolve().parent / "record.py").read_text()
+    assert "scan(workspace, with_index=at_stop)" in src

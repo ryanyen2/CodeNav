@@ -629,6 +629,9 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     watching = (workspace / ".codoc").is_dir()
     previous = base
     derived = []
+    stops = {int(n) for n in manifest.get("checkpoints", [])}
+    if stops:
+        print(f"  stopping at frame(s) {sorted(stops)}")
     for frame in manifest["frames"]:
         mark = _codoc_newest(workspace) if watching else 0.0
         src = frames / f"{frame['n']:04d}"
@@ -652,10 +655,19 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
 
         waited = 0.0
         last = frame is manifest["frames"][-1]
-        if watching and (last or frame["n"] % settle_every == 0):
+        # A checkpoint is a place playback STOPS and the daemon comes back, so
+        # whatever the daemon is about to project has to have finished being
+        # written. Settling there is not an optimisation, it is the difference
+        # between a participant meeting a plan and meeting half of one.
+        at_stop = frame["n"] in stops
+        if watching and (last or at_stop or frame["n"] % settle_every == 0):
             waited = _wait_for_daemon(workspace, mark, settle, timeout)
 
-        current = scan(workspace)
+        # The store is carried once, at the end, because it is most of the bytes
+        # and nobody sees it. A checkpoint needs it too: the daemon restarts there
+        # and projects the tree from the STORE, so a stale one at that moment
+        # shows the participant a tree with none of the plan in it.
+        current = scan(workspace, with_index=at_stop)
         writes = [r for r, h in current.items() if previous.get(r) != h]
         deletes = [r for r in previous if r not in current]
         dest_dir = out / f"{frame['n']:04d}"

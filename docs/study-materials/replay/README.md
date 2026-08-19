@@ -301,19 +301,25 @@ there for an answer.
 3. Let it implement, run the tests, and finish.
 4. `derive` into each condition as before.
 
-### Cut it
+### Cut it, BEFORE deriving
 
 ```
-python3 record.py checkpoint frames/scribe/codoc 23 \
+python3 record.py checkpoint frames/scribe/neutral 23 \
   --says "I have sketched this as a plan in the tree. Accept the parts you want
           and I will build them."
 ```
 
+On the NEUTRAL frames, and before `derive`, because `derive` needs to know. The
+daemon restarts at a checkpoint and projects the tree from the STORE, and the
+store is otherwise carried once at the very end, since it is most of the bytes and
+nobody sees it. A checkpoint with a stale store shows the participant a tree with
+none of the plan in it. `derive` therefore keeps the store at each stop, settles
+the daemon there whatever `--settle-every` says, and copies the checkpoints
+through to each condition, so both arms pause at the same point in the same work.
+
 The frame number is a judgement about the session, not something to infer from
 file writes: it is the frame after the plan has landed and before the first edit
-of the implementation. Watch the recording back and pick it. Run the same command
-on the baseline frames with the same number, so the two arms pause at the same
-point in the same work.
+of the implementation. Watch the recording back and pick it.
 
 `checkpoint` with no frame numbers clears them, and a recording with none plays
 straight through exactly as it always did.
