@@ -19,6 +19,8 @@ What it checks, in order:
     rejecting a proposal      drops it, and the feature keeps the words it had
     editing a description     lands in the store and is what the tree exports
     commenting on a feature   becomes a directive an agent can act on
+    the queued work           is visible in status, not only in a file
+    committing                keeps the edit they made rather than reverting it
 
 It exits non-zero on the first failure and says which of the four broke.
 """
@@ -181,6 +183,44 @@ def check_comment(workspace: Path) -> None:
     ok("a comment becomes a directive in the realize queue")
 
 
+def check_queue_is_visible(workspace: Path) -> None:
+    """The queued work has to be visible somewhere the participant looks.
+
+    A directive sitting in a file nobody surfaces is the same to a participant as
+    no directive at all, and the study would record them as having asked for
+    something and got nothing.
+    """
+    done = subprocess.run(["codoc", "status"], cwd=workspace, capture_output=True,
+                          text=True, timeout=300)
+    if done.returncode != 0:
+        raise Broken(f"codoc status failed: {done.stderr.strip()[:200]}")
+    report = (done.stdout + done.stderr).lower()
+    if "realiz" not in report and "pending" not in report and "await" not in report:
+        raise Broken("status says nothing about the work the comment queued:\n"
+                     + done.stdout.strip()[:400])
+    state = json.loads((workspace / ".codoc" / "status.json").read_text()).get("state")
+    ok(f"the queued work is visible in status (state {state!r})")
+
+
+def check_commit_leaves_them_consistent(workspace: Path) -> None:
+    """Committing is how a participant finishes, and it must not undo anything.
+
+    The tree is a derived export the daemon owns, so a commit that ran a reflect
+    pass and reverted the participant's own edit would be the worst possible
+    ending: their work is gone and the git history says they did it.
+    """
+    subprocess.run(["git", "add", "-A"], cwd=workspace, capture_output=True, timeout=120)
+    done = subprocess.run(["git", "commit", "-q", "-m", "Ship the reviewed change"],
+                          cwd=workspace, capture_output=True, text=True, timeout=120)
+    if done.returncode != 0 and "nothing to commit" not in (done.stdout + done.stderr):
+        raise Broken(f"the commit failed: {(done.stdout + done.stderr).strip()[:200]}")
+    sync(workspace)
+    exported = (workspace / ".codoc" / "tree.codoc").read_text()
+    if "The reviewer added this sentence." not in exported:
+        raise Broken("committing and syncing lost the participant's own edit")
+    ok("committing and syncing keeps the edit they made")
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
@@ -195,7 +235,8 @@ def main(argv: list[str]) -> int:
     shutil.copytree(source, workspace, symlinks=True)
     print(f"driving a copy of {source.name}")
     try:
-        for check in (check_accept, check_reject, check_edit, check_comment):
+        for check in (check_accept, check_reject, check_edit, check_comment,
+                      check_queue_is_visible, check_commit_leaves_them_consistent):
             check(workspace)
     except Broken as error:
         print(f"  {FAIL}  {error}")
