@@ -345,8 +345,44 @@ if [ "$CHECK_ONLY" = 1 ]; then
       if git -C "$WORK/$w" for-each-ref --format='%(refname)' refs/study 2>/dev/null | grep -q .; then
         ok "$w: it is being snapshotted, so the session can be replayed"
       else
+        # Say WHICH of the four things it is. "Nothing is snapshotting it" is
+        # true and useless: every cause below has a different fix, and the person
+        # reading it is usually the participant, on a call, minutes before a
+        # session. Everything needed to tell them apart is already on this
+        # machine.
         bad "$w: nothing is snapshotting it, so that session could not be replayed"
         FAILED=1
+        if ! git -C "$WORK/$w" rev-parse --git-dir >/dev/null 2>&1; then
+          echo "          It is not a git repository, or git refuses to read it."
+          echo "          Run: git -C $WORK/$w status"
+          echo "          If it says dubious ownership, run the command it prints."
+        elif [ "$(setting_on_disk "$w" codocStudyLogger.snapshots)" = "False" ]; then
+          echo "          Recording is switched off in $WORK/$w/.vscode/settings.json."
+          echo "          Set codocStudyLogger.snapshots back to true."
+        elif find "$HOME/codoc-study/session-logs/snapshots" -name snapshot.lock \
+                  -path "*/$w/*" -mmin -1 2>/dev/null | grep -q .; then
+          echo "          Another VS Code window has $w open and is recording it."
+          echo "          Close every window but one, then reopen the folder."
+        else
+          why="$(grep -h '"ev":"snapshot"' "$log" 2>/dev/null | grep '"ok":false' \
+                 | tail -1 | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
+          if [ -n "$why" ]; then
+            echo "          git refused the snapshot: $why"
+          else
+            # Usually the log is simply older than the folder. The log lives in
+            # session-logs/ and survives a folder being deleted and set up again,
+            # so "the logger has run there" can be true of a workspace that has
+            # never been opened since. Opening it is the whole fix, and it is the
+            # cheap one, so it goes first.
+            echo "          Most likely it has not been opened since it was set up."
+            echo "          Open $WORK/$w in VS Code, answer the trust prompt, wait"
+            echo "          half a minute, then run ./setup.sh --check again."
+            ver="$(code --list-extensions --show-versions 2>/dev/null \
+                   | grep -i '^codoc.codoc-study-logger@' | head -1)"
+            echo "          If it still fails, tell the researcher this line:"
+            echo "          logger ${ver:-not reported by VS Code}"
+          fi
+        fi
       fi
     fi
   done

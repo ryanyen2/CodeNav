@@ -171,7 +171,12 @@ class Snapshotter {
                 if (this.failed !== why) {
                     this.failed = why;
                     this.log(`snapshot failed: ${why}`);
-                    this.onEvent({ ev: 'snapshot', ok: false, why: 'git' });
+                    // The reason travels with the event. It used to go only to the
+                    // output channel, which nobody opens, so a workspace that was
+                    // never snapshotted said "nothing is snapshotting it" and gave
+                    // no way to find out why. The interaction log is the one place
+                    // that is always collected.
+                    this.onEvent({ ev: 'snapshot', ok: false, why: 'git', detail: why });
                 }
             }
         }
