@@ -81,6 +81,12 @@ in the record beside it.
 an empty directory and compares the result against the workspace the recording
 ended in, file by file. A recording that does not pass `check` is not shipped.
 
+What the scribe recording actually contains, as a worked example: 42 frames,
+1,094 seconds of real session compressed to 180 of playback at 6.1x, three
+pending ADD proposals the daemon raised, and a tree that visibly catches up with
+the code twice during the replay. The round trip reproduces the recorded end
+state across 39 files.
+
 Two more gates run against a finished recording. `test_handover.py` drives a copy
 of the derived workspace through accepting a proposal, rejecting one, editing a
 description and leaving a comment, and fails if any of them sets off nothing. The
