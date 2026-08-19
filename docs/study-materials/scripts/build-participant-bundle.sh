@@ -166,6 +166,13 @@ if [ "$MISSING" = 1 ]; then
   echo "  (record them with replay/record-session.sh before a real session)"
 fi
 
+# What this bundle is, in the bundle. setup.sh prints it before anything else, so
+# a participant pasting their output says which download it came from without
+# being asked, and a stale copy is one line rather than an afternoon.
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%MZ)" \
+  "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+  > "$STAGE/bundle.stamp"
+
 ( cd "$OUT" && rm -f codoc-study-bundle.zip && zip -qr codoc-study-bundle.zip codoc-study-bundle )
 rm -rf "$STAGE"
 

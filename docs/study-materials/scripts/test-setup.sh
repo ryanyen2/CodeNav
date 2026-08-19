@@ -836,6 +836,23 @@ rm -rf "$CM"
 # The participant reviews a change that was recorded in advance. If setup stops
 # unpacking it, or the bundle stops carrying it, the session looks normal right
 # up to the point where there is nothing to replay and no task to do.
+printf '\n\033[1m%s\033[0m\n' "Which download this is"
+# The bundle is one unversioned zip at one URL, so a machine set up from last
+# week's download looks exactly like one set up this morning, and the failures
+# that follow read as new faults. Twice they were read that way.
+case "$(cat "$SETUP")" in
+  *bundle.stamp*) ok "setup says which bundle it came from" ;;
+  *) bad "nothing in the output says which download a machine was set up from" ;;
+esac
+case "$(cat "$SETUP")" in
+  *"older than 2026-08-19"*) ok "and a download too old to carry one says so" ;;
+  *) bad "a stale download would run silently" ;;
+esac
+case "$(cat "$HERE/build-participant-bundle.sh")" in
+  *'> "$STAGE/bundle.stamp"'*) ok "and the builder writes one into the bundle" ;;
+  *) bad "the bundle carries no stamp, so setup can never print one" ;;
+esac
+
 printf '\n\033[1m%s\033[0m\n' "The recorded session"
 case "$(cat "$SETUP")" in
   *'cp -R "$HERE/replay" "$WORK/replay"'*) ok "setup unpacks the recorded session" ;;

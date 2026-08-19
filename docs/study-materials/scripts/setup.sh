@@ -277,6 +277,21 @@ lang_on_disk()      { setting_on_disk "$1" codocStudyLogger.lang; }
 # ---------------------------------------------------------------- prerequisites
 step "Checking what you already have"
 
+# Which bundle this is, first, so every pasted line of output says so.
+#
+# The download is one unversioned zip at one URL, on purpose: a versioned name is
+# a name somebody can be sent while a different one is on the page. The cost is
+# that a machine set up from last week's download is indistinguishable from one
+# set up this morning, and the failures that follow look like new faults rather
+# than like a stale copy. Twice now they have been read as new faults.
+STAMP="$(cat "$HERE/bundle.stamp" 2>/dev/null | head -1)"
+if [ -n "$STAMP" ]; then
+  note "bundle $STAMP"
+else
+  warn "this download is older than 2026-08-19. Download it again from your study"
+  echo  "          page before you go on: the setup it runs has since been fixed."
+fi
+
 case "$(uname -s)" in
   Darwin|Linux) ok "operating system is $(uname -s)" ;;
   *) bad "this script needs macOS or Linux. On Windows, run it inside WSL."; exit 1 ;;
