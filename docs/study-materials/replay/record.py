@@ -51,7 +51,16 @@ SKIP_SUFFIXES = {".pyc", ".pyo"}
 # replay and never during a recording. Counting it would make a correct replay
 # look like it had produced a file the recording did not, and its contents are a
 # timestamp, so two correct replays would also disagree with each other.
-SKIP_FILES = {".codoc/replay.stamp"}
+# Never snapshotted. `replay.stamp` is the player's own. The rest is state that
+# belongs to whichever process is running right now: SQLite's write-ahead log and
+# shared-memory sidecars are meaningless without the database they were written
+# beside, the loop lock and the daemon's pid file describe a process that will not
+# exist when the frame is replayed, and a recorded pid file would make the
+# player's own daemon guard fire against a daemon that died weeks ago.
+SKIP_FILES = {
+    ".codoc/replay.stamp", ".codoc/loop.lock", ".codoc/watch.pid",
+}
+SKIP_FILE_SUFFIXES = (".db-wal", ".db-shm", ".db-journal", ".lock", ".pid", ".log")
 
 # Never snapshotted, whatever else changes. A recording is copied into every
 # participant's workspace and then collected back, so a key that got into a frame
@@ -65,7 +74,7 @@ SECRET_SUFFIXES = {".pem", ".key"}
 
 
 def _skip(rel: str, with_index: bool) -> bool:
-    if rel in SKIP_FILES:
+    if rel in SKIP_FILES or rel.endswith(SKIP_FILE_SUFFIXES):
         return True
     name = Path(rel).name
     if name in SECRET_NAMES or Path(rel).suffix in SECRET_SUFFIXES:
@@ -368,7 +377,8 @@ def _wait_for_daemon(workspace: Path, mark: float, settle: float, timeout: float
 
 
 def derive(frames: Path, workspace: Path, out: Path, settle: float,
-           timeout: float, settle_every: int = 1, after: str = "") -> int:
+           timeout: float, settle_every: int = 1, after: str = "",
+           pace: bool = False) -> int:
     """Replay the neutral recording into one condition and record its response.
 
     `settle_every` is how many code frames go in before the daemon is given time
@@ -406,6 +416,13 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
                 shutil.copy2(path, dest)
         for rel in frame.get("deletes", []):
             (workspace / rel).unlink(missing_ok=True)
+
+        # Without pacing the frames go in as fast as the disk allows, the daemon
+        # coalesces the lot into one pass, and the description moves once at the
+        # very end. A participant then watches nothing happen for three minutes
+        # and everything happen at once, which is not what codoc does.
+        if pace and frame["delay_s"]:
+            time.sleep(min(frame["delay_s"], 20.0))
 
         waited = 0.0
         last = frame is manifest["frames"][-1]
@@ -496,6 +513,9 @@ def main(argv: list[str]) -> int:
                    help="how long to wait for one Loop A pass before moving on")
     d.add_argument("--settle-every", type=int, default=1,
                    help="how many frames go in before the daemon is given time")
+    d.add_argument("--pace", action="store_true",
+                   help="wait each frame's own playback delay before the next one, "
+                        "so the daemon gets the gaps it would really get")
     d.add_argument("--after", default="",
                    help="a command to run in the workspace after the last frame, "
                         "for a condition whose record is written by an agent "
@@ -506,7 +526,7 @@ def main(argv: list[str]) -> int:
         return watch(args.workspace, args.raw, args.interval)
     if args.command == "derive":
         return derive(args.frames, args.workspace, args.out, args.settle,
-                      args.timeout, max(1, args.settle_every), args.after)
+                      args.timeout, max(1, args.settle_every), args.after, args.pace)
     return build(args.raw, args.transcript, args.frames, args.seconds)
 
 

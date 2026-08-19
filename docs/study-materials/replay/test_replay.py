@@ -109,6 +109,25 @@ class SecretTest(unittest.TestCase):
             self.assertEqual(sorted(record.scan(root, with_index=True)), ["scribe/lines.py"])
 
 
+class TransientTest(unittest.TestCase):
+    def test_no_process_state_reaches_a_frame(self):
+        # SQLite's write-ahead log is meaningless without the database it was
+        # written beside, and the first derivation captured one on its own. A
+        # recorded pid file is worse: the player refuses to run while a daemon
+        # owns the workspace, and it would be refusing because of a process that
+        # died weeks earlier on somebody else's machine.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(root, ".codoc/tree.doc.json", "{}")
+            write(root, ".codoc/codoc.db", "sqlite")
+            write(root, ".codoc/codoc.db-wal", "log")
+            write(root, ".codoc/codoc.db-shm", "shared")
+            write(root, ".codoc/loop.lock", "")
+            write(root, ".codoc/watch.pid", '{"pid": 1}')
+            self.assertEqual(sorted(record.scan(root)),
+                             [".codoc/codoc.db", ".codoc/tree.doc.json"])
+
+
 class BuildTest(unittest.TestCase):
     def build(self, tmp: Path, seconds: float = 30.0) -> dict:
         raw, frames = tmp / "raw", tmp / "frames"
