@@ -21,6 +21,22 @@ Fourth, what to do while it works, and what is left to them.
 The prompt is in `replay/requests/tally.txt`, and it is word for word the request
 the participant is given to paste.
 
+## The page names the commands, from 2026-08-20
+
+Every problem below is confirmed by RUNNING the project, and none of them is reachable
+by reading. The task page now names the commands to run once the change is in — the
+same in both conditions and both languages, and matched between the projects as far as
+the two changes allow: each names the command that runs the fixtures and the settings
+file the change added, and tally names two more because its change added a second way
+to view the same numbers and scribe's did not —
+because a participant who did not think to run anything scored zero for a reason that
+has nothing to do with the way of working they were given.
+
+The page still says nothing about anything being wrong, names no line to look at, and
+asks for no report of what was found: the durable trace stays in the record they leave
+behind. Rate detection against this higher floor from this date, and do not pool it
+with earlier sessions without saying so (`analysis-plan.md` carries the same note).
+
 ## The three planted problems
 
 Rated 0 to 2, blind to condition, on the scale in `../scribe/STUDY.md`. None of

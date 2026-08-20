@@ -158,9 +158,32 @@ as a proportion of that project's maximum, so the two projects can be pooled.
 | Time to the first correct detection, and coverage at fifteen minutes | The interaction log and the transcript, against the moment the participant took over. That moment is `at_ms` in `.claude-study/handover.json`, which `agent.py` writes in both conditions. `.codoc/replay.stamp` carries the same instant but only where there is a `.codoc` directory to write it into, so it is the codoc arm's copy and not the shared one. Fifteen minutes of a twenty-minute task is close to the end of it, so the number is nearly the final coverage. |
 | **False alarms** | The count and the notes in the dashboard. The decoy, plus any correct part of the change the participant called wrong. A blank is a gap the dashboard names before the call ends, because none and not-asked are different answers. |
 | Who settled each problem | Directed by the participant, accepted deliberately, or standing and never noticed. The merged stream and the codoc ledger. |
-| **Which route they took, per problem** | Found by reading the agent's own account, or found by reviewing the change. The recorded agent mentions all three planted problems somewhere in 54 blocks and 14,235 characters of its own prose, and both conditions get that text in the scrollback. The two are different abilities and only the second is what codoc is for, so they are coded separately rather than added together. |
+| **Which route they took, per problem** | Found by reading the agent's own account, found by reviewing the change, or found by running the project. The third became a real route on 2026-08-20, when the task page started naming the commands to run once the change is in — see the note below. Found by reading, found by reviewing, and found by running are different abilities and only the second is what codoc is for, so they are coded separately rather than added together. Historic wording: found by reading the agent's own account, or found by reviewing the change. The recorded agent mentions all three planted problems somewhere in 54 blocks and 14,235 characters of its own prose, and both conditions get that text in the scrollback. The two are different abilities and only the second is what codoc is for, so they are coded separately rather than added together. |
 | Whether they found it and shipped it anyway | A distinct outcome from never finding it, which is why who-settled-it sits beside detection rather than folded into it. |
 | **A durable written trace, per problem** | Whether the record they finished with says what was decided about it. In codoc that is an accept or a reject in the change ledger, or an authored change to the feature's description, in both cases after the handover stamp. In the baseline it is a line in `CLAUDE.md`. Either side may have authored the words, because the claim is that decisions persist rather than that typing happens in a particular pane. From `scoring/ledger-actions.py` and the merged stream. |
+
+### The page names the commands, from 2026-08-20
+
+Both planted problems in each project are reachable from a terminal in under a minute
+and neither is reachable by reading. Before this change the task page printed what the
+fixtures produce BEFORE the change and left the participant to think of running them
+again; somebody who did not think of it scored zero for a reason that has nothing to do
+with the way of working they were given, which is the comparison the study exists to
+make.
+
+The page now names the commands to run once the change is in — the same shape for both
+projects, the same words in both conditions, and in both languages. It does NOT say
+that anything is wrong, does not say which line to look at, and does not ask them to
+report what they found on the page: the trace stays where it was, in the record they
+leave behind.
+
+Two consequences for the analysis, and neither is optional to report:
+
+- **Detection is measured against a higher floor from this date.** Sessions before and
+  after it are not pooled for detection coverage without saying so.
+- **"Found by running" is now a route the page prompted**, so it is not evidence about
+  the condition in the way the other two are. It is coded, and it is not counted
+  towards the codoc-vs-baseline comparison on its own.
 
 ## Is the record true at the end  (serves RQ2, and it is the headline)
 

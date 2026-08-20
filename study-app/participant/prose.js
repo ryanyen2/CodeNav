@@ -189,6 +189,7 @@ other-bank.csv: 13 rows, 3 months, 0 duplicates, 0 transfers, 3 uncategorised, 1
             lead: 'When it says it has finished, run these yourself.',
             commands: Object.freeze([
                 ['.venv/bin/tally check fixtures/', 'The same three exports as above'],
+                ['cat tally/rules.toml', 'The settings the change added'],
                 ['.venv/bin/tally summarise fixtures/boundary.csv -', 'boundary.csv in full, printed rather than written'],
                 ['.venv/bin/tally summarise fixtures/boundary.csv - --by-week', 'The same seven payments, a week at a time'],
             ]),
