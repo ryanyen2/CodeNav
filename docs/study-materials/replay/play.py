@@ -26,14 +26,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from record import (SKIP_DIRS, SKIP_DIR_SUFFIXES, Leaked, check_no_leak,  # noqa: E402
-                    scan, scrub)
+from record import (REPLAY_RETARGETED, SKIP_DIRS, SKIP_DIR_SUFFIXES,  # noqa: E402
+                    Leaked, check_no_leak, scan, scrub)
 
 DIM, RESET = "\033[2m", "\033[0m"
 
@@ -54,6 +56,50 @@ def daemon_pid(workspace: Path) -> int | None:
     return pid
 
 
+# ── the agent's presence, on the participant's clock ─────────────────────────
+#
+# `.codoc/activity.json` is the file every live surface reads: the avatar on the
+# feature being touched, the shimmer on the node, the mark in the explorer. Its
+# whole schema is leases — `epoch.open` is trusted for ninety seconds since the
+# last write, a touch counts as live for thirty, a feature's phase for two minutes
+# — because an agent killed with Esc never fires the hook that would clear them,
+# and without the leases the editor would animate a session that ended last week.
+#
+# Which is exactly what a recorded copy of the file IS. Derived hours or days
+# earlier, it names a session whose every timestamp is far outside every lease, so
+# the editor reads it, finds nothing live in it, and correctly draws nothing.
+#
+# So the timestamps are moved onto the participant's clock as the file is written,
+# by the offset that puts its newest moment at now. Relative order and relative age
+# are preserved — a file read three frames ago still reads as older than the one
+# being written — which is the whole of what the leases are measuring. Nothing else
+# in the file is touched: what happened is codoc's record, and only WHEN it happened
+# is being retargeted, for the same reason the scrollback's paths are.
+_ISO_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
+
+
+def _parse_iso(text: str) -> datetime | None:
+    try:
+        stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+def restamp_activity(raw: str, now: datetime | None = None) -> str:
+    """Slide every timestamp in an activity.json forward, newest one to now."""
+    now = now or datetime.now(timezone.utc)
+    stamps = [s for s in (_parse_iso(m) for m in _ISO_RE.findall(raw)) if s]
+    if not stamps:
+        return raw
+    shift = now - max(stamps)
+    def move(m: re.Match) -> str:
+        parsed = _parse_iso(m.group(0))
+        return (parsed + shift).isoformat() if parsed else m.group(0)
+    return _ISO_RE.sub(move, raw)
+
+
 def copy_tree(src: Path, workspace: Path) -> list[str]:
     written = []
     for dirpath, dirnames, filenames in os.walk(src):
@@ -64,7 +110,10 @@ def copy_tree(src: Path, workspace: Path) -> list[str]:
             rel = full.relative_to(src)
             dest = workspace / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(full, dest)
+            if rel.as_posix() in REPLAY_RETARGETED:
+                dest.write_text(restamp_activity(full.read_text(errors="replace")))
+            else:
+                shutil.copy2(full, dest)
             written.append(str(rel))
     return written
 

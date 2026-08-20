@@ -125,19 +125,85 @@ describe('property: I-idempotence — a projection vs itself yields zero command
     });
 });
 
-describe('property: I1 — a vanished heading is NEVER a retire', () => {
-    it('deleting an arbitrary subset of headings emits no retire command', () => {
+describe('property: a vanished heading retires only once the deletion HOLDS', () => {
+    // Deleting a heading used to emit nothing at all (the old invariant I1), which made
+    // the commonest destructive gesture in the surface silent: the node came back on the
+    // next projection and nothing said why. Absence now retires — but only after the
+    // guards below have ruled out the transients it used to be confused with.
+
+    it('a FIRST absence emits no retire — it may be a cut waiting for its paste', () => {
         for (const seed of SEEDS) {
             const rng = mulberry32(seed);
-            // Baseline: live features (nothing flagged retired).
             const base = randomSpecs(rng).map(s => ({ ...s, retired: false, fid: s.fid ?? `f-${rng()}` }));
             const prev = featureUnits(specsToDoc(base));
-            // Next: keep a random subset (simulate backspace-merge / select-all delete /
-            // a mid-edit transient) — still nothing flagged retired.
             const next = featureUnits(specsToDoc(base.filter(() => rng() < 0.5)));
-            const cmds = commandsForSettle(prev, next, 't');
-            expect(cmds.filter(c => c.kind === 'retire')).toEqual([]);
+            // No confirmedAbsent: this settle is the first to miss them.
+            expect(commandsForSettle(prev, next, 't').filter(c => c.kind === 'retire')).toEqual([]);
         }
+    });
+
+    it('an absence confirmed by a second settle retires exactly what went', () => {
+        for (const seed of SEEDS) {
+            const rng = mulberry32(seed);
+            // Distinct titles, so a survivor never contains a deleted one's words and
+            // the A1 merge guard cannot fire for reasons this property is not about.
+            const base = randomSpecs(rng).map((s, i) => ({
+                ...s, retired: false, fid: `f-${i}`, title: `Feature number ${i} unique`,
+            }));
+            if (base.length < 2) continue;
+            // Delete ONE — well under the wipe ratio, and unambiguously a deletion.
+            const goneIdx = int(rng, 0, base.length - 1);
+            const goneFid = base[goneIdx].fid;
+            const prev = featureUnits(specsToDoc(base));
+            const next = featureUnits(specsToDoc(base.filter((_u, i) => i !== goneIdx)));
+            const retires = commandsForSettle(prev, next, 't', undefined, '', new Set([goneFid]));
+            expect(retires.filter(c => c.kind === 'retire').map(c => c.feature_id)).toEqual([goneFid]);
+        }
+    });
+
+    it('A2 — a settle that would take most of the tree retires nothing', () => {
+        for (const seed of SEEDS) {
+            const rng = mulberry32(seed);
+            const base = randomSpecs(rng).map((s, i) => ({
+                ...s, retired: false, fid: `f-${i}`, title: `Feature number ${i} unique`,
+            }));
+            if (base.length < 3) continue;
+            const prev = featureUnits(specsToDoc(base));
+            const next = featureUnits(specsToDoc([]));       // select-all + delete
+            const all = new Set(base.map(b => b.fid));       // and it held
+            expect(commandsForSettle(prev, next, 't', undefined, '', all)
+                .filter(c => c.kind === 'retire')).toEqual([]);
+        }
+    });
+
+    it('A1 — a heading whose words merged into a neighbour is not a deletion', () => {
+        // Backspace at the start of a heading folds it into the block above: the node is
+        // gone, the words are not. A deletion takes the words with it.
+        const base = [
+            { fid: 'f-0', title: 'Preparing extracted text', paras: ['first'], retired: false, level: 0, localId: null },
+            { fid: 'f-1', title: 'Page furniture removal', paras: ['second'], retired: false, level: 0, localId: null },
+        ];
+        const prev = featureUnits(specsToDoc(base as never));
+        // f-1 is gone, but its title now sits inside f-0's prose — the merge.
+        const merged = [{
+            ...base[0], paras: ['first', 'Page furniture removal second'],
+        }];
+        const next = featureUnits(specsToDoc(merged as never));
+        expect(commandsForSettle(prev, next, 't', undefined, '', new Set(['f-1']))
+            .filter(c => c.kind === 'retire')).toEqual([]);
+    });
+
+    it('and a real deletion of the same node still retires it', () => {
+        // The A1 guard has to be a discrimination, not a blanket refusal: the same two
+        // nodes, with the words actually gone, retire.
+        const base = [
+            { fid: 'f-0', title: 'Preparing extracted text', paras: ['first'], retired: false, level: 0, localId: null },
+            { fid: 'f-1', title: 'Page furniture removal', paras: ['second'], retired: false, level: 0, localId: null },
+        ];
+        const prev = featureUnits(specsToDoc(base as never));
+        const next = featureUnits(specsToDoc([base[0]] as never));
+        expect(commandsForSettle(prev, next, 't', undefined, '', new Set(['f-1']))
+            .filter(c => c.kind === 'retire').map(c => c.feature_id)).toEqual(['f-1']);
     });
 });
 

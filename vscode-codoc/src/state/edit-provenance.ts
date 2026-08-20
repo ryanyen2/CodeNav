@@ -24,7 +24,7 @@
  * per open document and the hub keeps one per tab.
  */
 import {
-    settleCommands, type Baseline, type FeatureUnit,
+    settleCommands, settleBaseline, absentFids, type Baseline, type FeatureUnit,
 } from './commands-from-doc';
 import { advanceKnown, pruneKnown, emptyKnownStore, type KnownStore } from './known-store';
 import type { CommandEntry } from './edits-channel';
@@ -43,6 +43,9 @@ export class EditProvenance {
     private history: Baseline[] = [];
     private fallback: FeatureUnit[] | null = null;
     private optimistic: KnownStore = emptyKnownStore();
+    /** Fids missing at the LAST settle. A deletion has to hold across two of them
+     *  before it retires anything — see `settle`. */
+    private absent: ReadonlySet<string> = new Set();
 
     /** `session` names this editing session — a window, or a browser tab. It rides on every
      *  command so the daemon can tell a burst of this author's own edits (their base
@@ -92,8 +95,20 @@ export class EditProvenance {
         unobservedFallback?: () => FeatureUnit[],
     ): CommandEntry[] {
         const fallback = this.fallback ?? unobservedFallback?.() ?? [];
+        // A deletion is acted on when it HOLDS. A heading is missing for a moment in the
+        // middle of edits that were never about deleting it — between a cut and its
+        // paste, inside an undo storm — so the first settle that misses a fid only
+        // remembers it, and the second one retires it. The set is carried against the
+        // baseline this settle actually cites, so the question asked twice is the same
+        // question.
+        const missing = absentFids(
+            settleBaseline(this.history, citedBaselineId, fallback), next);
+        const confirmed = new Set([...missing].filter(fid => this.absent.has(fid)));
         const commands = settleCommands(this.history, citedBaselineId, fallback, next,
-                                        token, this.optimistic, this.session);
+                                        token, this.optimistic, this.session, confirmed);
+        // Only still-missing fids stay armed: a node that came back (the paste landed,
+        // the undo was undone) has to earn its retire again from the beginning.
+        this.absent = missing;
         // A citation only moves forward (the editor stamps it on adopt), so baselines older
         // than this one are dead — dropping them keeps the live ones inside the window, so
         // a burst of daemon passes between two settles cannot push out the baseline the

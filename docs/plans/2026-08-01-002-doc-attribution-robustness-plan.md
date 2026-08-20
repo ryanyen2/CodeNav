@@ -90,7 +90,25 @@ parent resolution), and D was only spot-checked.
 Three load-bearing invariants, each now asserted by property tests over a large
 random corpus (well-formed **and** deliberately malformed), not just fixtures.
 
-- **I1 — No destruction by absence.** A feature is retired *only* by an explicit
+- **I1 — SUPERSEDED 2026-08-19. Absence retires again, with class A excluded by
+  name.** I1 as written below made the commonest destructive gesture in the surface
+  silent: selecting a heading and deleting it emitted nothing, said nothing, and the
+  node returned on the next projection. In a document whose subject is editing a
+  feature tree that is not a safe default, it is an unusable one, and it reached a
+  participant. What replaced it keeps the class-A protection and drops the blanket:
+  a deletion must HOLD across two settles (A3, A5), must not take more than half the
+  tree at once (A2), and must take the heading's words with it rather than fold them
+  into a neighbour (A1). A4 — deleting a title character by character — retires,
+  because it is a deletion. The `retired` flag still retires on the false→true
+  transition and is now the way to retire a node you want to keep reading.
+  See `state/commands-from-doc.ts` and the properties in
+  `virtual-user.props.test.ts`, where "never emits a retire" became "only ever names
+  a feature that is gone from the document it was diffed from".
+
+  The original text follows, because the failure it describes is still real and the
+  guards above are what stand in for it:
+
+- **I1 (original) — No destruction by absence.** A feature is retired *only* by an explicit
   `retired` flag transition (false→true) on a node that STAYS in the doc — the
   `~ retire` gesture. A heading that merely vanished (taxonomy class A) is a
   **no-op**. Destruction is a gesture, never a geometry.

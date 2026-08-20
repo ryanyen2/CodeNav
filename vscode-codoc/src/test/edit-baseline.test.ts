@@ -16,6 +16,8 @@
  *   - a baseline moves only for a feature that ADOPTED the projection.
  */
 import { describe, it, expect } from 'vitest';
+import { EditProvenance } from '../state/edit-provenance';
+import type { FeatureUnit } from '../state/commands-from-doc';
 import {
     featureBlocks, ftKey, capturedFids, rebaseCaptured, settledPendingFids,
     type FeatureText,
@@ -285,5 +287,57 @@ describe('the underline survives a settle, and stops at CJK boundaries', () => {
             humanBase: { title: current.title, paras: ['Rounds once at the summary'] },
         });
         expect(withFallback.some(c => c.channel === 'human' && c.edit === 'add')).toBe(true);
+    });
+});
+
+// ── Deleting a heading, across two settles ───────────────────────────────────
+//
+// Absence retires, but not on the settle that first notices it. A heading is
+// missing for a moment in the middle of edits that were never about deleting it
+// — between a cut and its paste, inside an undo storm — and acting on the first
+// frame of one of those destroys a feature and detaches its bindings, which is
+// the class the 2026-08-01 robustness plan was written for. The deletion has to
+// hold. EditProvenance is where "hold" is remembered, so it is tested here rather
+// than through the pure diff.
+describe('a deletion retires when it holds, and not before', () => {
+    const unit = (fid: string, title: string): FeatureUnit => ({
+        fid, localId: null, title, description: '', parentId: null,
+        retired: false, realized: true,
+    });
+    const TREE = [unit('f-1', 'Alpha feature one'), unit('f-2', 'Beta feature two'),
+                  unit('f-3', 'Gamma feature three')];
+
+    const retires = (cmds: readonly { kind: string; feature_id?: string }[]): string[] =>
+        cmds.filter(c => c.kind === 'retire').map(c => c.feature_id!);
+
+    it('says nothing the first time a heading is missing', () => {
+        const p = new EditProvenance('s');
+        p.observe(TREE, 1);
+        expect(retires(p.settle(TREE.slice(0, 2), 1, 't1'))).toEqual([]);
+    });
+
+    it('retires it when the next settle still misses it', () => {
+        const p = new EditProvenance('s');
+        p.observe(TREE, 1);
+        p.settle(TREE.slice(0, 2), 1, 't1');                      // first absence
+        expect(retires(p.settle(TREE.slice(0, 2), 1, 't2'))).toEqual(['f-3']);
+    });
+
+    it('a node that comes back has to earn its retire again', () => {
+        // The paste landed, or the undo was undone. Two absences that were not
+        // consecutive are not a deletion held for two settles.
+        const p = new EditProvenance('s');
+        p.observe(TREE, 1);
+        p.settle(TREE.slice(0, 2), 1, 't1');                      // gone
+        expect(retires(p.settle(TREE, 1, 't2'))).toEqual([]);      // back
+        expect(retires(p.settle(TREE.slice(0, 2), 1, 't3'))).toEqual([]);  // gone again — first
+        expect(retires(p.settle(TREE.slice(0, 2), 1, 't4'))).toEqual(['f-3']);
+    });
+
+    it('never retires the whole tree, however long it is missing', () => {
+        const p = new EditProvenance('s');
+        p.observe(TREE, 1);
+        p.settle([], 1, 't1');
+        expect(retires(p.settle([], 1, 't2'))).toEqual([]);
     });
 });

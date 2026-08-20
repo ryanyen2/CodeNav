@@ -1,8 +1,14 @@
 {
   "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",
   "session_id": "9f2c1d84-6b70-4a15-9c3e-2d8b7a614f03",
-  "checkpoints": [6],
-  "checkpoint_says": "● The settings layer is in. Before I wire the rest of it up, take a look at how this is being described and tell me what you want kept.",
+  "checkpoints": [
+    5,
+    11
+  ],
+  "checkpoint_says": [
+    "● That is the plan. Accept the parts you want and I will build them; reject anything you would rather I did differently.",
+    "● The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code — have a look at what it changed before you try it out."
+  ],
   "steps": [
     {
       "delay_s": 4.0,
@@ -43,9 +49,50 @@
     {
       "delay_s": 6.0,
       "say": [
+        "● Before I write it, here is the shape I have in mind. I have sketched",
+        "  it into the tree as three features so you can see where each piece would",
+        "  live and say what you want kept.",
+        "",
+        "  · Conversion settings — the values every rule reads, gathered as plain",
+        "    data instead of module constants.",
+        "  · Configuration files — an optional scribe.toml, found by walking up from",
+        "    the working directory, with defaults for every document and sections",
+        "    that override them for one.",
+        "  · Conversion reports — a note written beside each converted document",
+        "    saying what the conversion did to it."
+      ],
+      "propose": [
+        {
+          "kind": "add_node",
+          "title": "Conversion settings",
+          "description": "Gathers the values each rule reads — the repeat share and edge margin furniture removal uses, the hyphen prefixes reflow keeps — as plain data passed in, instead of constants each module owns. Every rule keeps working unchanged when nothing is configured, because the defaults are the values it reads today.",
+          "before": "f-26e009f7",
+          "rationale": "plan: the rules cannot take per-document values while each one owns its own constants"
+        },
+        {
+          "kind": "add_node",
+          "title": "Configuration files",
+          "description": "Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at.",
+          "before": "f-26e009f7",
+          "rationale": "plan: the request is to configure a conversion without editing the source"
+        },
+        {
+          "kind": "add_node",
+          "title": "Conversion reports",
+          "description": "Writes a note beside each converted document saying what the conversion did to it: what was removed as furniture, which words were rejoined, which characters were replaced. It goes to a file rather than the terminal so it is still there when somebody wonders where a line went.",
+          "parent": "f-26e009f7",
+          "rationale": "plan: the request asks to be told what the conversion actually did"
+        }
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "say": [
         "  Write({{WORKSPACE}}/scribe/settings.py)"
       ],
-      "write": { "scribe/settings.py": "files/settings.py" }
+      "write": {
+        "scribe/settings.py": "files/settings.py"
+      }
     },
     {
       "delay_s": 7.0,
@@ -55,7 +102,9 @@
         "  [defaults] section sets the values for every document and a",
         "  [document.\"name\"] section overrides them for one."
       ],
-      "write": { "scribe/config.py": "files/config.py" }
+      "write": {
+        "scribe/config.py": "files/config.py"
+      }
     },
     {
       "delay_s": 5.0,
@@ -64,7 +113,9 @@
         "● I've set repeat_share to 0.4 in the defaults, which is what catches the",
         "  appendix header on a five page document."
       ],
-      "write": { "scribe.toml": "files/scribe.toml" }
+      "write": {
+        "scribe.toml": "files/scribe.toml"
+      }
     },
     {
       "delay_s": 6.0,
@@ -73,7 +124,9 @@
         "● report.md goes next to the Markdown rather than to the terminal, so it is",
         "  still there when somebody wonders where a line went."
       ],
-      "write": { "scribe/report.py": "files/report.py" }
+      "write": {
+        "scribe/report.py": "files/report.py"
+      }
     },
     {
       "delay_s": 5.0,
@@ -81,7 +134,9 @@
         "  Edit({{WORKSPACE}}/scribe/cli.py)",
         "● The command loads the config once and applies it before converting."
       ],
-      "write": { "scribe/cli.py": "files/cli.py" }
+      "write": {
+        "scribe/cli.py": "files/cli.py"
+      }
     },
     {
       "delay_s": 6.0,

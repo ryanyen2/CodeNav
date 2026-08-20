@@ -300,10 +300,18 @@ script/scribe/
   files/…           the file contents a step writes
 ```
 
-and each step is `{"say": [...], "delay_s": n, "write": {path: source}, "delete": [...]}`.
-`{{WORKSPACE}}` in a `say` line becomes the participant's own path when it plays.
-`checkpoints` and `checkpoint_says` go at the top level, so a written session
-declares where it stops rather than being cut afterwards.
+and each step is `{"say": [...], "delay_s": n, "write": {path: source}, "delete":
+[...], "propose": [...]}`. `{{WORKSPACE}}` in a `say` line becomes the
+participant's own path when it plays. `checkpoints` and `checkpoint_says` go at
+the top level, so a written session declares where it stops rather than being cut
+afterwards.
+
+`record-session.sh write scribe` runs the whole thing: the script into neutral
+frames, then each condition derived from a workspace unpacked clean for it. It is
+one command rather than three because the order is load bearing in a way that is
+invisible when it goes wrong — the checkpoints have to exist before `derive` sees
+them, and deriving into the workspace the last run ended in records a session in
+which nothing changes.
 
 ```
 python3 record.py simulate script/scribe <a clean workspace> frames/scribe/neutral
@@ -313,6 +321,47 @@ python3 record.py derive frames/scribe/neutral <codoc workspace> frames/scribe/c
 The same gate applies as to a recorded one: the scrollback is read by BOTH arms,
 so a script that names either tool is refused rather than shipped, and the round
 trip still has to reproduce the state the script left.
+
+### The plan is proposed, not narrated
+
+A step's `propose` list is the plan the agent puts IN the tree — `[{kind, title,
+description, parent|before|after, rationale}]`, which is `codoc propose`'s own
+vocabulary. The proposals are declared in the script and MADE during `derive`,
+because proposing needs a store and the neutral workspace has none. The baseline
+arm has no `.codoc/` at all, so they are skipped there, and that is the
+manipulation rather than a gap.
+
+Without this there is no plan step, only Loop A reacting after the code has
+already landed — which arrives too late to answer, describes what happened rather
+than what is intended, and is tagged `code drift` where a plan is tagged `agent
+plan`. A participant asked to accept a plan was being shown the aftermath of one.
+
+Bind nothing. The code does not exist when the plan is proposed, so a `--bind`
+would name a symbol that is not there and be dropped; the accepted nodes get their
+bindings from the reflective pass once the code lands, which is the thing the
+study is measuring rather than something to arrange in advance.
+
+### The agent has to be visible while it works
+
+codoc draws an agent working — an avatar on the feature being touched, the node
+shimmering, the file marked in the explorer — and every one of those reads
+`.codoc/activity.json`, which only the Claude Code hooks write. A replay has no
+hooks, so the whole live half of the surface was dark for the three minutes a
+participant spends comparing it against a terminal.
+
+`derive` therefore makes the calls a real session makes: `codoc.agent.hook` is the
+code that writes that file in production and is handed the same payloads, built
+from what each frame actually did — reads and shell commands out of the
+scrollback, writes out of the frame's own file list. Whatever it writes lands in
+the frame like any other `.codoc/` file, so the recording still holds codoc's
+output rather than ours.
+
+The player then moves that file's timestamps onto the participant's clock as it
+writes it (`play.restamp_activity`), keeping the relative ages. It has to: the
+file is entirely leases — an epoch trusted for ninety seconds, a touch for thirty
+— so a verbatim copy says the agent stopped working days ago, which is true of the
+recording and false of what the participant is watching. It is the only file the
+round trip compares by presence rather than by bytes (`record.REPLAY_RETARGETED`).
 
 ## Recording a session the participant works THROUGH
 
@@ -337,18 +386,27 @@ there for an answer.
 
 ### Cut it, BEFORE deriving
 
+A written session declares its stops (`checkpoints` and `checkpoint_says` in
+`session.json`), and `simulate` writes them into the manifest. `checkpoint` is for
+changing them on a recording that already exists:
+
 ```
-python3 record.py checkpoint frames/scribe/neutral 23 \
-  --says "I have sketched this as a plan in the tree. Accept the parts you want
-          and I will build them."
+python3 record.py checkpoint frames/scribe/neutral 5 11 \
+  --says "That is the plan. Accept the parts you want and I will build them." \
+  --says "The build is in and the tests pass. Look at what codoc changed."
 ```
+
+One `--says` per stop, in order — two stops ask two different questions, and
+repeating the first at the second sends the participant back to a decision that is
+already behind them. A single one is used at every stop, which is what a one-stop
+recording means by it.
 
 On the NEUTRAL frames, and before `derive`, because `derive` needs to know. The
 daemon restarts at a checkpoint and projects the tree from the STORE, and the
 store is otherwise carried once at the very end, since it is most of the bytes and
 nobody sees it. A checkpoint with a stale store shows the participant a tree with
-none of the plan in it. `derive` therefore keeps the store at each stop, settles
-the daemon there whatever `--settle-every` says, and copies the checkpoints
+none of the plan in it. `derive` therefore keeps the store at each stop, holds the
+daemon there for far longer than `--settle` (see below), and copies the checkpoints
 through to each condition, so both arms pause at the same point in the same work.
 
 The frame number is a judgement about the session, not something to infer from
@@ -358,15 +416,51 @@ of the implementation. Watch the recording back and pick it.
 `checkpoint` with no frame numbers clears them, and a recording with none plays
 straight through exactly as it always did.
 
+### `derive` answers each stop, because the rest of the recording follows from it
+
+At a checkpoint `derive` records the frame — so the frame the player stops on still
+has the question in it — and then ACCEPTS what is pending, which is what a
+participant is about to do. Two things depend on it.
+
+Everything after the cut has to have been recorded against a store in which the
+answer landed, or a participant who accepts puts their store into a state the
+recording never saw. And a plan node binds nothing when it is proposed, because
+the code does not exist yet: leave it pending and the reflective pass meets the
+same new code with no feature claiming it and proposes its own node for it. The
+participant then answers a plan and its duplicate, one tagged `agent plan` and one
+`code drift`, describing the same thing in different words. An accepted node is
+what the pass attaches the code TO.
+
+### A stop is worth nothing if it stops too early, or has nothing in it
+
+The player waits only while something is outstanding, so a checkpoint the
+condition raised no proposal and no rewrite at plays straight past — the
+participant never gets the moment and nothing says the moment was missing. `derive`
+reports the count per stop, and says so loudly when it is zero. It is reported
+rather than failed: whether a stop is worth having is a judgement about the study.
+
+It also holds much longer at a stop than between frames (`STOP_SETTLE_FACTOR`).
+The daemon debounces before starting a pass, so a frame that wrote no code — the
+one that runs the tests, which is exactly where a "look at what changed" stop goes
+— looks quiet while the pass for the frame before it has not begun. A recording
+stopped one frame early for precisely this reason: the rewrite it was stopping to
+show landed in the frame after the stop.
+
 ### What happens at the checkpoint
 
 The player stops writing, deletes `.codoc/replay.lock` so the editor's daemon
-comes back, prints what the agent "says", and waits until one of the pending
-proposals has been answered. Then it takes the workspace back and plays on.
+comes back, prints what the agent "says" at that stop, and waits until one of the
+outstanding things has been answered — a pending proposal, or an unresolved
+rewrite, since the second stop has rewrites to keep or restore rather than
+proposals to accept. Then it takes the workspace back and plays on.
 
 A participant who REJECTS has diverged from the recording, and that is the most
-interesting thing they can do rather than a failure to handle: the session
-continues with the live agent from there, and which way they went is recorded.
+interesting thing they can do rather than a failure to handle. The player reads
+the VERDICT and not just the count, so it can tell: on a rejection it stops there,
+says so in the agent's voice, and the live assistant takes the session on. Playing
+the next segment instead would reinstate the plan they just turned down — quietly,
+because the checkpoint frame carries the store — and the record would say they
+accepted it.
 
 If nobody answers within fifteen minutes the player carries on regardless. A
 session that hangs because somebody did not click is worse than one that

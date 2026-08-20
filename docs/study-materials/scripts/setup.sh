@@ -1182,11 +1182,18 @@ step "Checking that both workspaces work"
 # is written out rather than "did it exit zero", because a project that quietly
 # converted nothing also exits zero.
 check_project() {
-  local name="$1" command="$2" expect_run="$3" expect_tests="$4"
-  local out n
+  local name="$1" command="$2" noun="$3" expect_tests="$4"
+  local out n want
+  # How many there ARE, not a number written down here. The check means "it converted
+  # everything, not nothing", and a literal says that only until somebody adds a
+  # fixture. One was added — scribe's survey.txt, which the task's own before-figures
+  # need — and every participant's setup then failed on a workspace that was correct,
+  # reporting the run rather than the stale expectation.
+  want="$(ls "$WORK/$name/fixtures" 2>/dev/null | wc -l | tr -d ' ')"
+  [ "${want:-0}" -gt 0 ] || { bad "$name has no fixtures to convert"; FAILED=1; return; }
   out="$(cd "$WORK/$name" && eval "$command" 2>&1 | tail -1)"
   case "$out" in
-    *"$expect_run"*) ok "$name runs: $out" ;;
+    *"checked $want $noun"*) ok "$name runs: $out" ;;
     *) bad "$name did not run as expected. It printed: $out"; FAILED=1 ;;
   esac
   n="$(cd "$WORK/$name" && ./.venv/bin/python -m pytest tests/ -q 2>&1 | tail -1)"
@@ -1205,8 +1212,8 @@ check_project() {
     git clean -fdq -e .venv >/dev/null 2>&1 )
 }
 
-check_project scribe './.venv/bin/scribe check fixtures/' "checked 3 documents" 54
-check_project tally  './.venv/bin/tally check fixtures/'  "checked 3 statements" 43
+check_project scribe './.venv/bin/scribe check fixtures/' documents  54
+check_project tally  './.venv/bin/tally check fixtures/'  statements 43
 
 # Only the codoc arm has a feature document. Asking the other one for it would
 # report a failure on a workspace that is exactly right.

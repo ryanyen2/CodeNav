@@ -375,41 +375,115 @@ WAIT_TIMEOUT_S = 900.0
 
 
 def pending_proposals(workspace: Path) -> int:
-    """How many proposals are waiting for a verdict, as the editor counts them."""
+    """How much is waiting for the participant, as the editor counts it.
+
+    TWO kinds, because the two checkpoints ask two different things and only one
+    of them is a proposal. At the plan stop the agent has put nodes in the tree and
+    they are pending events. At the build stop the loop has REWRITTEN descriptions
+    to match code that already landed — those are applied, not proposed, and what
+    is outstanding is the Keep / Restore verdict on each. Counting only the first
+    made the second checkpoint pass straight through the moment it is there for.
+
+    `by_event` is nested under `proposals` in the sidecar and was read from the top
+    level, so this returned 0 whatever was pending and the player never waited at
+    any checkpoint at all. Both keys are read here, and the shape is asserted by
+    `test_replay.py` so a sidecar rename cannot quietly restore the same silence.
+    """
     path = workspace / ".codoc" / "tree.bindings.json"
     try:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return 0
-    return len(data.get("by_event") or {})
+    proposals = (data.get("proposals") or {}).get("by_event") or {}
+    return len(proposals) + len(data.get("auto_edits") or {})
+
+
+def verdicts(workspace: Path) -> list[bool]:
+    """Every accept/reject this workspace has recorded, oldest first.
+
+    Both channels, because either may hold one: the editor APPENDS to
+    `inbox.host.jsonl` (it has no cross-process lock) and the daemon folds that
+    into `inbox.json` under the lock. A verdict read from only one of them is a
+    verdict missed for as long as the fold takes.
+    """
+    codoc = workspace / ".codoc"
+    out: list[bool] = []
+    try:
+        data = json.loads((codoc / "inbox.json").read_text())
+        out += [bool(v.get("accept")) for v in data.get("verdicts", [])]
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    try:
+        for line in (codoc / "inbox.host.jsonl").read_text().splitlines():
+            if line.strip():
+                out.append(bool(json.loads(line).get("accept")))
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    return out
+
+
+# What the participant did at a stop, and what the player should do about it.
+ANSWERED = "answered"       # they agreed; the next segment is what follows from it
+DIVERGED = "diverged"       # they rejected; the recording is no longer their session
+NOTHING = "nothing"         # there was nothing to answer, so there was no stop
+UNANSWERED = "unanswered"   # nobody clicked inside the timeout
 
 
 def wait_for_an_answer(workspace: Path, asked: str,
-                       timeout: float = WAIT_TIMEOUT_S) -> bool:
-    """Hold until the proposals raised by the last segment have been answered.
+                       timeout: float = WAIT_TIMEOUT_S) -> str:
+    """Hold at a checkpoint until the participant has answered it.
 
-    Returns False if nothing was answered before the timeout, which is treated as
-    "carry on": a session that stalls forever because somebody did not click is
-    worse than one that continues without the answer.
+    Returns which of the four above happened. `UNANSWERED` is treated as carry on:
+    a session that stalls forever because somebody did not click is worse than one
+    that continues without the answer.
+
+    A REJECT is reported as `DIVERGED` rather than folded in with an accept. The
+    two are not the same event: everything after the cut was recorded against a
+    store in which the plan is live, so playing on after a rejection reinstates the
+    plan the participant just turned down — quietly, because the checkpoint frame
+    carries the store. They would watch their own decision be undone, and the
+    session record would say they accepted a plan they rejected.
     """
     before = pending_proposals(workspace)
     if not before:
-        return True
+        return NOTHING
+    seen = len(verdicts(workspace))
     print(f"\n{asked}", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if pending_proposals(workspace) < before:
-            return True
+        given = verdicts(workspace)[seen:]
+        if any(v is False for v in given):
+            return DIVERGED
+        if pending_proposals(workspace) < before or given:
+            return ANSWERED
         time.sleep(WAIT_POLL_S)
-    return False
+    return UNANSWERED
+
+
+DEFAULT_ASK = ("I have sketched this as a plan in the tree. Accept the parts you "
+               "want and I will build them.")
+
+
+def checkpoint_texts(manifest: dict, stops: int) -> list[str]:
+    """What the agent says at each stop, one per stop.
+
+    A recording with two stops asks two different questions, so the manifest may
+    carry a list. A single string is used at every stop, which is what a one-stop
+    recording means by it, and a list too short falls back the same way rather
+    than stopping the session over a missing sentence.
+    """
+    says = manifest.get("checkpoint_says")
+    if isinstance(says, str):
+        says = [says]
+    says = [s for s in (says or []) if str(s).strip()]
+    return [says[i] if i < len(says) else (says[-1] if says else DEFAULT_ASK)
+            for i in range(max(stops, 0))]
 
 
 def play_staged(workspace: Path, frames: Path, speed: float) -> int:
     manifest = json.loads((frames / "manifest.json").read_text())
     spans = player.segments(manifest)
-    asked = manifest.get("checkpoint_says") or (
-        "I have sketched this as a plan in the tree. Accept the parts you want and "
-        "I will build them.")
+    asks = checkpoint_texts(manifest, len(spans) - 1)
     for i, span in enumerate(spans):
         last = i == len(spans) - 1
         hand_over(workspace)
@@ -423,8 +497,15 @@ def play_staged(workspace: Path, frames: Path, speed: float) -> int:
             hand_back(workspace)
         if code:
             return code
-        if not last:
-            wait_for_an_answer(workspace, asked)
+        if last:
+            continue
+        answer = wait_for_an_answer(workspace, asks[i])
+        if answer == DIVERGED:
+            # From here the recording is somebody else's session. The live agent
+            # takes it on, which is the whole point of a rejection being allowed.
+            print("\n● Understood — I will leave that as it is and we can work "
+                  "from here.", flush=True)
+            return 0
     return 0
 
 

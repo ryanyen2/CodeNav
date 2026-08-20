@@ -1687,6 +1687,17 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-saved-flash::after {
     animation: ce-saved-in 180ms ease-out;
 }
 .ce-transient-notice.leaving { opacity: 0; transition: opacity 280ms ease-out; }
+/* A notice that carries its own fix. The button is the one thing in it worth
+   clicking, so it takes the theme's button hue and the text stays plain. */
+.ce-transient-notice.has-action { display: inline-flex; align-items: center; gap: 12px; }
+.ce-notice-action {
+    flex: none;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--vscode-button-border, transparent);
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    font: 11.5px var(--font-body, var(--vscode-font-family));
+}
+.ce-notice-action:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
 
 /* ───────────────────────────────────────────────────────────────────────────
    W2 — History (blame) stance: who last changed each feature, tinted by author

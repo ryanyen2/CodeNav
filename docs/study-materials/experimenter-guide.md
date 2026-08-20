@@ -252,13 +252,23 @@ open one terminal inside VS Code. That is the whole setting up, and the other
 condition is the same shape. A condition that costs more setting up than the other
 one differs from it in something the study is not comparing.
 
-Nobody starts the daemon by hand any more. The launcher `./claude-study` stops it
-before the recorded session plays, because the player will not write into a
-workspace a live daemon owns. It starts the daemon again behind the session
-afterwards, with its output going to `.codoc/watch.log` rather than to a terminal
-somebody is watching. Until the first turn has run there is no daemon at all, and
-that is fine for the reading part. Everything the extension shows comes from
-files, so the description opens and reads normally without one.
+Nobody starts the daemon by hand. The player declares itself with
+`.codoc/replay.lock` while it writes, and the extension stands its daemon down for
+as long as that file is there and starts one again when it goes — one owner
+throughout, and the handover is a file rather than a race.
+
+The extension no longer takes that on trust. It re-checks the same invariant on
+every `.codoc/` change and on a slow timer, because each of the edges it used to
+rely on can be missed silently and permanently: a freshly unpacked workspace opens
+untrusted and the trust grant lands before the extension activates, or the lock is
+created and deleted while the window is still loading, or the file watcher drops
+an event. The symptom of any of them is the same and names none of them — you
+accept a proposal and are told the verdict was not picked up. That reached a
+participant.
+
+If it ever does again, the notice now carries the fix: **Start codoc**, on the
+notice itself. The same thing is on the command palette as "codoc: Start the
+daemon".
 
 Check two things before going on. The description opens, and it lists 15 features
 for scribe or 23 for tally.
@@ -443,6 +453,28 @@ them from there rather than retyping.
 Which folder carries codoc for this participant is in the table in Part 3. There
 is no daemon to start and no frames argument to get right. Setup wrote the
 recording for that folder's own condition into the launcher when it made it.
+
+#### The session stops twice, and both stops are theirs to answer
+
+The recording is cut at the two points the agent has something to ask, and
+playback waits at each one until the participant answers. They are not told a
+recording exists and there is nothing for you to start or resume: the player
+hands the workspace back at a stop, so the daemon is live and the editor is
+theirs, and it takes the workspace back and plays on when they have answered.
+
+1. **The plan.** The agent has read the code and put what it intends into the
+   tree as three features, tagged `agent plan`. It waits for accept or reject.
+2. **What the build did.** The code has landed and the tests pass, and codoc has
+   brought the descriptions of the features it touched back in line with it.
+   Those arrive as rewrites to keep or restore rather than as proposals.
+
+If nobody answers within fifteen minutes the recording carries on regardless, on
+the grounds that a session hung on an unmade click is worse than one that
+continues without it.
+
+In the baseline arm both stops are the agent asking in the terminal and the
+participant answering there. That difference is the manipulation; nothing else
+about the two arms may differ.
 
 #### What to say when the agent starts working
 

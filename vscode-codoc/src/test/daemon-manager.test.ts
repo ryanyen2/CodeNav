@@ -124,14 +124,51 @@ describe('one writer at a time', () => {
     });
 
     it('starts one again when the lock goes', () => {
-        expect(src).toMatch(/onDidDelete\(\(\) => maybeStartDaemon\(\)\)/);
+        expect(src).toMatch(/onDidDelete\(\(\) => reconcileDaemon\(\)\)/);
     });
 
     it('and never starts one while the lock is still there', () => {
-        // Activation and the trust grant both go through maybeStartDaemon, so the
-        // guard belongs in it rather than at each call site.
-        const fn = src.slice(src.indexOf('const maybeStartDaemon'),
-                             src.indexOf('maybeStartDaemon();'));
+        // Every path to a spawn goes through reconcileDaemon, so the guard belongs
+        // in it rather than at each call site.
+        const fn = src.slice(src.indexOf('const reconcileDaemon'),
+                             src.indexOf('reconcileDaemon();'));
         expect(fn).toMatch(/replay\.lock/);
+    });
+});
+
+describe('the daemon is an invariant, not an event', () => {
+    // It used to be started on three edges — activation, the trust grant, and the
+    // replay lock going away — and never asked about again. Each of those can be
+    // missed, silently and permanently: a study workspace opens untrusted and the
+    // grant lands before this extension activates; the replay lock is created and
+    // deleted while the window is still loading; a recursive file watcher drops an
+    // event, which it is allowed to do. The symptom is the same in all of them and
+    // names none: you accept a proposal and are told the verdict was not picked up.
+    // That reached a participant with no way back short of quitting the editor.
+    const src = readFileSync(resolve(__dirname, '../extension.ts'), 'utf8');
+
+    it('re-checks on every .codoc change', () => {
+        expect(src).toMatch(/state\.onDidChange\(\(\) => reconcileDaemon\(\)\)/);
+    });
+
+    it('re-checks on a timer, for a window where nothing else happens', () => {
+        expect(src).toMatch(/setInterval\(reconcileDaemon, DAEMON_RECONCILE_MS\)/);
+        expect(src).toMatch(/clearInterval\(daemonTicker\)/);
+    });
+
+    it('offers a person the recovery the notice points at', () => {
+        expect(src).toMatch(/registerCommand\('codoc\.startDaemon'/);
+        // A person asking is a reason to try again whatever happened last time.
+        const fn = src.slice(src.indexOf("registerCommand('codoc.startDaemon'"),
+                             src.indexOf("registerCommand('codoc.startDaemon'") + 1400);
+        expect(fn).toMatch(/resetDaemonBackoff\(\)/);
+    });
+
+    it('backs off rather than respawning a daemon that cannot start', () => {
+        // The same timer that makes it self-healing would respawn a daemon dying
+        // on startup every few seconds forever, writing one traceback per try.
+        const mgr = readFileSync(resolve(__dirname, '../daemon/daemon-manager.ts'), 'utf8');
+        expect(mgr).toMatch(/if \(daemonGaveUp\(\)\) return false/);
+        expect(mgr).toMatch(/MAX_FAST_EXITS/);
     });
 });

@@ -13,14 +13,36 @@
  *   • a fid whose description changed                                     → `set_description`
  *   • a fid whose parent changed                                          → `move`
  *
- * DESTRUCTION IS EXPLICIT, NEVER INFERRED FROM ABSENCE (invariant I1). A fid that was
- * in the baseline but is gone from the settled doc is a NO-OP — not a retire. A heading
- * vanishes for many innocent reasons under char-by-char editing (backspace at the start
- * of a heading merges it up, select-all-delete, a mid-edit transient before the next
- * keystroke), and none of them mean "destroy this feature and detach its bindings". The
- * only retire signal is the `retired` attr the `~ retire` toolbar sets — a node that
- * STAYS in the doc, flagged. This is the robustness fix for the accidental-retire class
- * (see docs/plans/2026-08-01-002-doc-attribution-robustness-plan.md).
+ * DELETING A HEADING RETIRES ITS FEATURE — and the transients that made that dangerous
+ * are distinguished rather than lumped in with it.
+ *
+ * The rule used to be invariant I1: absence is a NO-OP, and the only retire signal is the
+ * `retired` attr the `~ retire` toolbar sets on a node that STAYS in the doc. That was
+ * the fix for a real class of bug (docs/plans/2026-08-01-002), where a heading vanishing
+ * for any reason destroyed a feature and detached its bindings. It was also unusable:
+ * selecting a heading and pressing Delete emitted nothing, said nothing, and the node
+ * came back on the next projection. In a surface whose whole subject is editing a tree,
+ * the commonest destructive gesture there is did nothing and explained nothing.
+ *
+ * So absence retires, and each transient the old loop could not tell from a deletion is
+ * now named and excluded (taxonomy A of that plan):
+ *
+ *   A1 backspace-merge   the heading's WORDS survive, folded into a neighbour's prose.
+ *                        A deletion takes the words with it; a merge does not. Checked
+ *                        by looking for the title in the surviving text (`mergedAway`).
+ *   A2 select-all-delete every heading goes at once. A person deleting one node is not
+ *                        deleting the tree, so a settle that would retire more than
+ *                        `WIPE_RATIO` of it retires nothing (`looksLikeAWipe`).
+ *   A3 cut-then-paste    gone between the cut and the paste.
+ *   A5 undo/redo storms  the doc flips through shapes that are nobody's intent.
+ *                        Both are absences that do not LAST: the caller only passes a
+ *                        fid here once it has been absent across two settles
+ *                        (`confirmedAbsent`, held by EditProvenance).
+ *
+ * A4 — deleting a title character by character — is left to retire, because it is one.
+ *
+ * The `retired` flag still works and still retires on the false→true transition; it is
+ * now the way to retire a node you want to keep reading while you decide.
  *
  * PLANNED NODES ARE NOT THE HUMAN'S. An agent's proposed ADD is materialized into the
  * document (state/agent-proposals.ts) so it can be read where it will land rather than in
@@ -191,12 +213,61 @@ function addCommandId(localId: string): string {
  * the daemon correlates them on the same pass (apply commands in order). For a settle
  * that only renames/re-describes existing features, no add/move is produced.
  */
+/** A settle that would retire more than this share of the tree is a wipe, not a
+ *  decision. Select-all-delete is the case; so is a paste that replaces everything. */
+const WIPE_RATIO = 0.5;
+
+/** Text reduced to the letters and digits in it, for asking "are these the same words".
+ *  Case, punctuation and spacing all move under the edits this has to see through. */
+function words(text: string): string {
+    return (text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/**
+ * A1: the heading did not go, it MERGED. Backspace at the start of a heading folds it
+ * into the block above, so its words are still on the page while the heading node is not.
+ *
+ * A deletion takes the words with it, which is what separates the two. Titles of one or
+ * two characters are exempt from the check — they match by accident against almost
+ * anything — and are treated as deletions.
+ */
+function mergedAway(gone: FeatureUnit, survivors: readonly FeatureUnit[]): boolean {
+    const needle = words(gone.title);
+    if (needle.length < 3) return false;
+    return survivors.some(u => words(u.title).includes(needle)
+                            || words(u.description).includes(needle));
+}
+
+/** The baseline fids that are not in the settled doc. Pure, and exported so the caller
+ *  can hold the previous settle's set without reaching inside the diff. */
+export function absentFids(prev: readonly FeatureUnit[],
+                           next: readonly FeatureUnit[]): Set<string> {
+    const here = new Set<string>();
+    for (const u of next) if (u.fid) here.add(u.fid);
+    const gone = new Set<string>();
+    for (const u of prev) if (u.fid && !here.has(u.fid)) gone.add(u.fid);
+    return gone;
+}
+
+/** A2: too much of the tree went at once for this to be somebody removing a node. */
+function looksLikeAWipe(gone: ReadonlySet<string>, prev: readonly FeatureUnit[]): boolean {
+    const known = prev.filter(u => u.fid).length;
+    if (!known) return false;
+    return gone.size > Math.max(1, Math.floor(known * WIPE_RATIO));
+}
+
 export function commandsForSettle(
     prev: FeatureUnit[],
     next: FeatureUnit[],
     token: string,
     known?: KnownStore,
     session = '',
+    /** Fids the caller has already seen absent at an EARLIER settle. A first absence
+     *  is never acted on: it is as likely to be a cut waiting for its paste, or one
+     *  frame of an undo storm, as it is a deletion. Empty (the default) therefore
+     *  retires nothing by absence, which is what every existing caller and test means
+     *  by not passing it. */
+    confirmedAbsent: ReadonlySet<string> = new Set(),
 ): CommandEntry[] {
     const out: CommandEntry[] = [];
     const beforeByFid = new Map<string, FeatureUnit>();
@@ -294,8 +365,21 @@ export function commandsForSettle(
         }
     }
 
-    // NO absence loop: a fid gone from the settled doc is NOT retired (I1). Destruction
-    // flows only from the explicit `retired` flag handled above.
+    // A heading the author deleted, retired — once the deletion has held. Everything
+    // that makes this safe is above: `confirmedAbsent` has already survived a settle
+    // (A3, A5), `looksLikeAWipe` refuses a settle that would take the tree with it
+    // (A2), and `mergedAway` tells a backspace-merge from a deletion by whether the
+    // words went too (A1).
+    const gone = absentFids(prev, next);
+    if (!looksLikeAWipe(gone, prev)) {
+        for (const fid of gone) {
+            if (!confirmedAbsent.has(fid)) continue;
+            const b = beforeByFid.get(fid);
+            if (!b || b.retired) continue;      // already retired: nothing to say
+            if (mergedAway(b, next)) continue;  // A1 — its words are still on the page
+            out.push({ id: commandId('retire', fid, token), kind: 'retire', feature_id: fid });
+        }
+    }
     return out;
 }
 
@@ -456,6 +540,7 @@ export function settleCommands(
     token: string,
     known?: KnownStore,
     session = '',
+    confirmedAbsent: ReadonlySet<string> = new Set(),
 ): CommandEntry[] {
     const cited = baselineId != null ? history.find(b => b.id === baselineId) : undefined;
     // When the citation cannot be resolved, fall back to the OLDEST baseline still
@@ -468,5 +553,18 @@ export function settleCommands(
     const prevUnits = cited ? cited.units
         : history.length ? history[0].units
         : fallbackUnits;
-    return commandsForSettle(prevUnits, nextUnits, token, known, session);
+    return commandsForSettle(prevUnits, nextUnits, token, known, session, confirmedAbsent);
+}
+
+/** The baseline a settle diffs against, resolved the same way `settleCommands` resolves
+ *  it. Exported so a caller tracking absences across settles asks the same question of
+ *  the same baseline — computing "what is missing" against a different one would arm or
+ *  disarm the retire for reasons that have nothing to do with what the author did. */
+export function settleBaseline(
+    history: readonly Baseline[],
+    baselineId: number | undefined,
+    fallbackUnits: FeatureUnit[],
+): FeatureUnit[] {
+    const cited = baselineId != null ? history.find(b => b.id === baselineId) : undefined;
+    return cited ? cited.units : history.length ? history[0].units : fallbackUnits;
 }

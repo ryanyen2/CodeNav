@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.9
+
+### Fixed
+
+- **Deleting a node did nothing, and said nothing.** Selecting a heading in the doc view
+  and deleting it emitted no command at all: the store never heard, and the next
+  projection drew the node straight back. Editing the raw `tree.codoc` looked like it
+  worked and did not — that file is a read-only export the daemon rewrites, so the
+  deletion sat in the buffer until it was overwritten. Absence retires now.
+
+  It was suppressed on purpose. A heading vanishes for reasons that are not deletions —
+  a backspace at the start of one merges it into the block above, select-all-delete takes
+  every heading for a frame, a cut is gone until its paste lands — and inferring
+  destruction from any of them detaches a feature's bindings for a keystroke. Those cases
+  are now told apart rather than lumped together: a deletion has to hold across two
+  settles, must not take more than half the tree at once, and must take the heading's
+  words with it rather than fold them into a neighbour. Deleting a title character by
+  character still retires, because it is a deletion. `~ retire` still works and is now
+  the way to retire a node you want to keep reading while you decide.
+
+- **A verdict could go nowhere, permanently, with no way back.** The daemon was started on
+  three events — the window activating, the workspace being trusted, a replay handing the
+  files back — and never asked about again. Missing any one of them is silent: a folder
+  opened untrusted grants trust before the extension loads, a lock is created and deleted
+  while the window is still starting, a file watcher drops an event. The symptom was the
+  same in every case and named none of them, `Verdict not picked up`, with nothing to do
+  about it but quit. The daemon is now re-checked on every `.codoc/` change and on a
+  timer, and backs off rather than respawning one that cannot start. The notice says
+  `codoc is not running` and carries a **Start codoc** button; the same thing is on the
+  palette as `codoc: Start the daemon`.
+
+- **A proposed node moved when you accepted it.** The editor draws a proposed node at the
+  rank it would take, immediately before its anchor — and the store then filed it first,
+  because naming only what a node goes *before* meant "put it at the top". Two nodes
+  proposed before the same anchor also landed on the same rank, which is not an order at
+  all. `before` now means immediately before; putting a node first is still said by naming
+  the node it goes before.
+
+
 ## 0.2.7
 
 Fixes reported from using 0.2.6, and the study instrument that goes with them.

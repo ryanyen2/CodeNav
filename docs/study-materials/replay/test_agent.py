@@ -18,6 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent  # noqa: E402
 import play as player  # noqa: E402
 
+# docs/study-materials/replay → the repository root.
+REPO = Path(__file__).resolve().parents[3]
+
 
 # ── the request, as it is typed ──────────────────────────────────────────────
 
@@ -197,11 +200,45 @@ def test_a_checkpoint_outside_the_recording_is_ignored():
         == [(0, 4), (4, 10)]
 
 
-def test_waiting_ends_when_a_proposal_is_answered(tmp_path, monkeypatch):
+def sidecar(tmp_path, *, proposals=(), auto_edits=()):
+    """A sidecar in the shape `codoc_file/render.py` actually writes.
+
+    Written out rather than abbreviated, because the abbreviation is what hid the
+    bug: `by_event` is nested under `proposals`, the player read it from the top
+    level, and so `pending_proposals` returned 0 whatever was outstanding and no
+    checkpoint ever waited for anybody. A fixture that agrees with the reader
+    instead of with the writer proves nothing about the two meeting.
+    """
     codoc = tmp_path / ".codoc"
-    codoc.mkdir()
-    bindings = codoc / "tree.bindings.json"
-    bindings.write_text(json.dumps({"by_event": {"e-1": {}, "e-2": {}}}))
+    codoc.mkdir(exist_ok=True)
+    path = codoc / "tree.bindings.json"
+    path.write_text(json.dumps({
+        "version": 6,
+        "proposals": {"by_feature": {}, "by_event": {e: {} for e in proposals},
+                      "by_parent": {}},
+        "auto_edits": {f: {"at": "x", "prev": "y"} for f in auto_edits},
+    }))
+    return path
+
+
+def test_the_sidecar_fixture_matches_what_codoc_writes():
+    # The shape above is asserted against the renderer that produces it, so a
+    # rename there fails here rather than silently restoring "nothing is ever
+    # pending" — which is a checkpoint that does not stop, in a study whose whole
+    # point is the moment it stops at.
+    render = (REPO / "codoc" / "codoc_file" / "render.py").read_text()
+    assert '"proposals": _proposals_map(' in render
+    assert '"auto_edits": _auto_edits(' in render
+    assert 'return {"by_feature": by_feature, "by_event": by_event' in render
+
+
+def _verdict(tmp_path, accept):
+    with (tmp_path / ".codoc" / "inbox.host.jsonl").open("a") as fh:
+        fh.write(json.dumps({"event_id": "e-1", "accept": accept}) + "\n")
+
+
+def test_waiting_ends_when_a_proposal_is_answered(tmp_path, monkeypatch):
+    bindings = sidecar(tmp_path, proposals=["e-1", "e-2"])
     assert agent.pending_proposals(tmp_path) == 2
 
     # One answered is enough: the participant has engaged with the plan, which is
@@ -211,26 +248,81 @@ def test_waiting_ends_when_a_proposal_is_answered(tmp_path, monkeypatch):
 
     def answer_after_one_poll(_s: float) -> None:
         calls["n"] += 1
-        bindings.write_text(json.dumps({"by_event": {"e-2": {}}}))
+        bindings.write_text(json.dumps({
+            "proposals": {"by_event": {"e-2": {}}}, "auto_edits": {}}))
 
     monkeypatch.setattr(agent.time, "sleep", answer_after_one_poll)
-    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=5.0) is True
+    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=5.0) == agent.ANSWERED
     assert calls["n"] == 1
 
 
-def test_nothing_pending_means_nothing_to_wait_for(tmp_path):
-    (tmp_path / ".codoc").mkdir()
-    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.1) is True
+def test_a_rejection_is_not_an_answer_to_carry_on_from(tmp_path, monkeypatch):
+    # Everything after the cut was recorded against a store in which the plan is
+    # LIVE, and the checkpoint frame carries the store — so playing on after a
+    # rejection reinstates the plan the participant just turned down, quietly. They
+    # would watch their own decision be undone, and the record would say they
+    # accepted a plan they rejected.
+    sidecar(tmp_path, proposals=["e-1"])
+
+    def reject_after_one_poll(_s: float) -> None:
+        _verdict(tmp_path, False)
+
+    monkeypatch.setattr(agent.time, "sleep", reject_after_one_poll)
+    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=5.0) == agent.DIVERGED
+
+
+def test_an_accept_read_from_either_channel_counts(tmp_path, monkeypatch):
+    # The editor APPENDS to inbox.host.jsonl because it holds no cross-process
+    # lock; the daemon folds that into inbox.json under the lock. Reading only one
+    # of them misses a verdict for as long as the fold takes.
+    sidecar(tmp_path, proposals=["e-1"])
+    (tmp_path / ".codoc" / "inbox.json").write_text(
+        json.dumps({"verdicts": [{"event_id": "e-1", "accept": True}]}))
+    assert agent.verdicts(tmp_path) == [True]
+    _verdict(tmp_path, True)
+    assert agent.verdicts(tmp_path) == [True, True]
+
+
+def test_a_stop_with_nothing_in_it_is_not_a_stop(tmp_path):
+    sidecar(tmp_path)
+    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.1) == agent.NOTHING
+
+
+def test_an_unanswered_rewrite_is_something_to_wait_for(tmp_path):
+    # The second checkpoint is not about proposals. The loop has already REWRITTEN
+    # the descriptions of the features the build touched — applied, not proposed —
+    # and what is outstanding is the Keep / Restore verdict on each. Counting only
+    # proposals made that stop pass straight through the thing it exists for.
+    sidecar(tmp_path, auto_edits=["f-1", "f-2", "f-3"])
+    assert agent.pending_proposals(tmp_path) == 3
 
 
 def test_a_session_that_is_never_answered_carries_on(tmp_path, monkeypatch):
     # A study that hangs forever because somebody did not click is worse than one
     # that goes on without the answer.
-    codoc = tmp_path / ".codoc"
-    codoc.mkdir()
-    (codoc / "tree.bindings.json").write_text(json.dumps({"by_event": {"e-1": {}}}))
+    sidecar(tmp_path, proposals=["e-1"])
     monkeypatch.setattr(agent.time, "sleep", lambda _s: None)
-    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.01) is False
+    assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.01) == agent.UNANSWERED
+
+
+# ── what the agent says at each stop ─────────────────────────────────────────
+
+def test_one_says_is_used_at_every_stop():
+    # What every recording made before two stops existed means by a single string.
+    assert agent.checkpoint_texts({"checkpoint_says": "answer it"}, 2) \
+        == ["answer it", "answer it"]
+
+
+def test_each_stop_gets_its_own_words():
+    # Two stops ask two different questions — "here is the plan" and "here is what
+    # the build did to the descriptions". Repeating the first at the second would
+    # send the participant back to a decision already behind them.
+    assert agent.checkpoint_texts({"checkpoint_says": ["the plan", "the diffs"]}, 2) \
+        == ["the plan", "the diffs"]
+
+
+def test_a_stop_with_nothing_said_still_says_something():
+    assert agent.checkpoint_texts({}, 1) == [agent.DEFAULT_ASK]
 
 
 def test_a_derived_recording_keeps_its_checkpoints():

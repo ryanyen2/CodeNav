@@ -1,543 +1,165 @@
 {
-  "recorded_at": "2026-08-19T15:07:30.070245+00:00",
-  "recorded_root": "/Users/r4yen/codoc-recording/scribe-neutral",
-  "real_duration_s": 1389.2,
-  "idle_removed_s": 211.7,
+  "recorded_at": "2026-08-20T00:37:13.746376+00:00",
+  "recorded_root": "{{WORKSPACE}}",
+  "authored": true,
+  "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",
+  "real_duration_s": 61.0,
+  "idle_removed_s": 0.0,
   "idle_cap_s": 120.0,
-  "playback_duration_s": 180.0,
-  "speed": 6.54,
+  "playback_duration_s": 61.0,
+  "speed": 1.0,
+  "checkpoints": [
+    5,
+    11
+  ],
+  "checkpoint_says": [
+    "\u25cf That is the plan. Accept the parts you want and I will build them; reject anything you would rather I did differently.",
+    "\u25cf The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code \u2014 have a look at what it changed before you try it out."
+  ],
   "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/scribe/neutral",
-  "derived_at": "2026-08-19T15:18:07.488429+00:00",
+  "derived_at": "2026-08-20T00:42:47.376092+00:00",
   "frames": [
     {
       "n": 1,
-      "at_s": 192.53,
-      "delay_s": 18.345,
-      "writes": [
-        "scribe/config.py"
-      ],
+      "at_s": 4.0,
+      "delay_s": 4.0,
+      "writes": [],
       "deletes": [],
-      "terminal": "> Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.\nI'll start by exploring the repository to understand the current structure.\n  Bash(find . -type f -not -path \"./.git/*\" | head -50)\n  Bash(cat NOTES.md 2>/dev/null || ls)\n  Bash(find . -type f -not -path \"./.git/*\" -not -path \"./.venv/*\" -not -path \"./scribe)\n  Bash(cat README.md && echo \"=== PYPROJECT ===\" && cat pyproject.toml)\n  Read({{WORKSPACE}}/scribe/convert.py)\n  Read({{WORKSPACE}}/scribe/cli.py)\n  Read({{WORKSPACE}}/scribe/furniture.py)\n  Read({{WORKSPACE}}/scribe/paragraphs.py)\n  Read({{WORKSPACE}}/scribe/blocks.py)\n  Read({{WORKSPACE}}/scribe/notes.py)\n  Read({{WORKSPACE}}/scribe/text.py)\n  Read({{WORKSPACE}}/scribe/lines.py)\nNow the tests and the `__init__`:\n  Read({{WORKSPACE}}/tests/test_rules.py)\n  Read({{WORKSPACE}}/tests/test_documents.py)\n  Read({{WORKSPACE}}/scribe/__init__.py)\nLet me get a baseline before changing anything.\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -5)\n  Bash(mkdir -p /tmp/scribe-baseline && for f in fixtures/*.txt; do n=$(basename \"$f\" .)\n54 tests pass and I have the baseline output saved. One thing I can already see: `fixtures/report.txt` converts to `report.md`, so a conversion report literally named `report.md` would overwrite it. Let me confirm and check the fixtures.\n  Bash(head -30 fixtures/report.txt; echo \"=== MEMO ===\"; head -12 fixtures/memo.txt)\n  Bash(.venv/bin/python -c \"import tomllib, sys; print('tomllib ok', sys.version)\")\nEverything checks out: `tomllib` is stdlib on 3.11+, so a TOML config needs no new dependencies. Let me start with the config module.\n  Bash(grep -rn \"KEEP_HYPHEN\\|MAX_HEADING_WORDS\\|REPEAT_SHARE\\|EDGE\\|MIN_PAGE\\|SUBSTITU)\nNo test touches the constants directly, so I can move them into config as long as the function signatures stay compatible.\n  Bash(cat > {{WORKSPACE}}/scribe/config.py <<'PYEOF'\n\"\"\"The settings the rules read, a)",
+      "terminal": "> Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.\n\n\u25cf I'll start by seeing how the rules get their values today.\n  Read({{WORKSPACE}}/scribe/convert.py)\n  Read({{WORKSPACE}}/scribe/furniture.py)",
       "settled_after_s": 0.0
     },
     {
       "n": 2,
-      "at_s": 224.93,
-      "delay_s": 4.953,
-      "writes": [
-        "scribe/config.py"
-      ],
+      "at_s": 9.0,
+      "delay_s": 5.0,
+      "writes": [],
       "deletes": [],
-      "terminal": "  Bash(cat >> {{WORKSPACE}}/scribe/config.py <<'PYEOF'\n\n\n# \u2500\u2500 reading the file \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500)\nConfig parsing works. Let me tidy a redundancy and check the error paths.\n  Edit({{WORKSPACE}}/scribe/config.py)\n  Edit({{WORKSPACE}}/scribe/config.py)",
+      "terminal": "  Read({{WORKSPACE}}/scribe/paragraphs.py)\n  Read({{WORKSPACE}}/scribe/cli.py)\n\u25cf Each rule reads a module constant of its own: REPEAT_SHARE and EDGE in\n  furniture, the keep-hyphen prefixes in paragraphs. Nothing reads a file, so\n  the only way to convert one awkward document differently is to edit the\n  source.",
       "settled_after_s": 0.0
     },
     {
       "n": 3,
-      "at_s": 235.04,
-      "delay_s": 1.546,
-      "writes": [
-        "scribe/config.py"
-      ],
+      "at_s": 13.0,
+      "delay_s": 4.0,
+      "writes": [],
       "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -c \"\nfrom scribe import config\nbad = [\n '[furniture]\\nedge = tr)",
+      "terminal": "\u25cf The five page survey is the case you mean. Its appendix carries its own\n  header over two pages of five, which is under the share a line has to\n  reach, so it survives into the prose.\n  Bash(.venv/bin/scribe convert fixtures/survey.txt - | sed -n '18,20p')",
       "settled_after_s": 0.0
     },
     {
       "n": 4,
-      "at_s": 236.05,
-      "delay_s": 0.154,
-      "writes": [
-        "scribe/config.py"
-      ],
+      "at_s": 16.0,
+      "delay_s": 3.0,
+      "writes": [],
       "deletes": [],
-      "terminal": "Now the rules. Starting with `furniture.py`:",
+      "terminal": "  \u23bf  Appendix A: Site Photographs           Marine Institute\n\u25cf Confirmed. I'll gather the values into settings that can come from a file,\n  and write a note beside each conversion saying what happened.",
       "settled_after_s": 0.0
     },
     {
       "n": 5,
-      "at_s": 265.23,
-      "delay_s": 4.461,
-      "writes": [
-        "scribe/furniture.py"
-      ],
+      "at_s": 22.0,
+      "delay_s": 6.0,
+      "writes": [],
       "deletes": [],
-      "terminal": "  Bash(cat > {{WORKSPACE}}/scribe/furniture.py <<'PYEOF'\n\"\"\"Page furniture: the lines t)\nNow `paragraphs.py` and `blocks.py`:",
+      "terminal": "\u25cf Before I write it, here is the shape I have in mind. I have sketched\n  it into the tree as three features so you can see where each piece would\n  live and say what you want kept.\n\n  \u00b7 Conversion settings \u2014 the values every rule reads, gathered as plain\n    data instead of module constants.\n  \u00b7 Configuration files \u2014 an optional scribe.toml, found by walking up from\n    the working directory, with defaults for every document and sections\n    that override them for one.\n  \u00b7 Conversion reports \u2014 a note written beside each converted document\n    saying what the conversion did to it.",
+      "propose": [
+        {
+          "kind": "add_node",
+          "title": "Conversion settings",
+          "description": "Gathers the values each rule reads \u2014 the repeat share and edge margin furniture removal uses, the hyphen prefixes reflow keeps \u2014 as plain data passed in, instead of constants each module owns. Every rule keeps working unchanged when nothing is configured, because the defaults are the values it reads today.",
+          "before": "f-26e009f7",
+          "rationale": "plan: the rules cannot take per-document values while each one owns its own constants"
+        },
+        {
+          "kind": "add_node",
+          "title": "Configuration files",
+          "description": "Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at.",
+          "before": "f-26e009f7",
+          "rationale": "plan: the request is to configure a conversion without editing the source"
+        },
+        {
+          "kind": "add_node",
+          "title": "Conversion reports",
+          "description": "Writes a note beside each converted document saying what the conversion did to it: what was removed as furniture, which words were rejoined, which characters were replaced. It goes to a file rather than the terminal so it is still there when somebody wonders where a line went.",
+          "parent": "f-26e009f7",
+          "rationale": "plan: the request asks to be told what the conversion actually did"
+        }
+      ],
       "settled_after_s": 0.0
     },
     {
       "n": 6,
-      "at_s": 284.38,
-      "delay_s": 2.928,
+      "at_s": 28.0,
+      "delay_s": 6.0,
       "writes": [
-        "scribe/paragraphs.py"
+        "scribe/settings.py"
       ],
       "deletes": [],
-      "terminal": "  Bash(python3 - <<'PYEOF'\nfrom pathlib import Path\n\np = Path(\"scribe/paragraphs.py\")\ns)",
+      "terminal": "  Write({{WORKSPACE}}/scribe/settings.py)",
       "settled_after_s": 0.0
     },
     {
       "n": 7,
-      "at_s": 305.21,
-      "delay_s": 3.184,
+      "at_s": 35.0,
+      "delay_s": 7.0,
       "writes": [
-        "scribe/blocks.py",
-        "scribe/notes.py",
-        "scribe/text.py"
+        "scribe/config.py"
       ],
       "deletes": [],
-      "terminal": "  Bash(python3 - <<'PYEOF'\nfrom pathlib import Path\n\np = Path(\"scribe/blocks.py\")\nsrc =)\nLet me verify the substitution table is byte-equivalent to the original (I rewrote two invisible characters as escapes):\n  Bash(.venv/bin/python -c \"\nimport subprocess, ast\nold_src = subprocess.run(['git','sh)",
+      "terminal": "  Write({{WORKSPACE}}/scribe/config.py)\n\u25cf scribe.toml is optional, discovered from the working directory upwards. A\n  [defaults] section sets the values for every document and a\n  [document.\"name\"] section overrides them for one.",
       "settled_after_s": 0.0
     },
     {
       "n": 8,
-      "at_s": 337.45,
-      "delay_s": 4.929,
+      "at_s": 40.0,
+      "delay_s": 5.0,
       "writes": [
-        "scribe/convert.py"
+        "scribe.toml"
       ],
       "deletes": [],
-      "terminal": "Now `convert.py`, threading settings through and recording what happened:\n  Bash(cat > {{WORKSPACE}}/scribe/convert.py <<'PYEOF'\n\"\"\"Putting the rules together, i)\nAll 54 tests pass. Now the critical check \u2014 the refactor must not change any output:\n  Bash(mkdir -p /tmp/scribe-after && for f in fixtures/*.txt; do n=$(basename \"$f\" .txt)\n  Bash(git stash list; .venv/bin/scribe check fixtures/)\nOutput is byte-identical. The README claims `8 paragraphs` for report.txt but I see 12 \u2014 let me check whether that predates my change:",
+      "terminal": "  Write({{WORKSPACE}}/scribe.toml)\n\u25cf I've set repeat_share to 0.4 in the defaults, which is what catches the\n  appendix header on a five page document.",
       "settled_after_s": 0.0
     },
     {
       "n": 9,
-      "at_s": 384.82,
-      "delay_s": 7.242,
+      "at_s": 46.0,
+      "delay_s": 6.0,
       "writes": [
         "scribe/report.py"
       ],
       "deletes": [],
-      "terminal": "  Bash(cd /tmp && rm -rf scribe-orig && git clone -q {{WORKSPACE}} scribe-orig && cd sc)\nConfirmed \u2014 counts match HEAD exactly; the README's \"8 paragraphs\" was already stale. Now the conversion report. Note the naming problem I flagged: `fixtures/report.txt` already converts to `report.md`, so a literal `report.md` would overwrite it.\n  Bash(cat > {{WORKSPACE}}/scribe/report.py <<'PYEOF'\n\"\"\"The note written beside each c)\n  Bash(.venv/bin/python -c \"\nfrom pathlib import Path\nfrom scribe.report import name_fo)\nFound a bug \u2014 `a.b.md` loses part of its name and could collide with another document's report. Fixing:",
+      "terminal": "  Write({{WORKSPACE}}/scribe/report.py)\n\u25cf report.md goes next to the Markdown rather than to the terminal, so it is\n  still there when somebody wonders where a line went.",
       "settled_after_s": 0.0
     },
     {
       "n": 10,
-      "at_s": 397.94,
-      "delay_s": 2.006,
+      "at_s": 51.0,
+      "delay_s": 5.0,
       "writes": [
-        "scribe/report.py"
+        "scribe/cli.py"
       ],
       "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/scribe/report.py)\n  Bash(.venv/bin/python -c \"\nfrom pathlib import Path\nfrom scribe.report import name_fo)\nNow wiring it into the CLI:",
+      "terminal": "  Edit({{WORKSPACE}}/scribe/cli.py)\n\u25cf The command loads the config once and applies it before converting.",
       "settled_after_s": 0.0
     },
     {
       "n": 11,
-      "at_s": 417.13,
-      "delay_s": 2.934,
-      "writes": [
-        "scribe/cli.py"
-      ],
+      "at_s": 57.0,
+      "delay_s": 6.0,
+      "writes": [],
       "deletes": [],
-      "terminal": "  Bash(cat > {{WORKSPACE}}/scribe/cli.py <<'PYEOF'\n\"\"\"The command.\n\n    scribe convert )\nLet me see an actual conversion report:\n  Bash(cd /tmp && rm -rf demo && mkdir demo && cp {{WORKSPACE}}/fixtures/*.txt demo/ &&)\nThe report is genuinely useful. Now let me verify per-document config actually changes behaviour end to end:\n  Bash(cd /tmp/demo && cat > scribe.toml <<'EOF'\n# Defaults for every document in this )",
+      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q)\n  \u23bf  ...................................................... 54 passed\n  Bash(.venv/bin/scribe check fixtures/)\n  \u23bf  handbook.txt: 4 pages, 9 headings, 10 paragraphs, 3 bullets, 0 notes, 12 lines of furniture\n     memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furniture\n     report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture\n     survey.txt: 5 pages, 3 headings, 10 paragraphs, 0 bullets, 0 notes, 10 lines of furniture\n     checked 4 documents",
       "settled_after_s": 0.0
     },
     {
       "n": 12,
-      "at_s": 494.86,
-      "delay_s": 11.883,
+      "at_s": 61.0,
+      "delay_s": 4.0,
       "writes": [
-        "tests/test_config.py"
+        "CLAUDE.md"
       ],
       "deletes": [],
-      "terminal": "Per-document overrides work. Let me confirm the other documents in the same run are unaffected, and that the report records the override:\n  Bash(cd /tmp/demo && {{WORKSPACE}}/.venv/bin/scribe convert handbook.txt >/dev/null &)\nBoth work correctly. Now let me add tests for the new behaviour, in the style of the existing suite:\n  Bash(cat > {{WORKSPACE}}/tests/test_config.py <<'PYEOF'\n\"\"\"The config file, and the s)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 13,
-      "at_s": 519.08,
-      "delay_s": 3.703,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "All pass, but I left some junk in one test and a weak assertion in another. Let me fix both:\n  Edit({{WORKSPACE}}/tests/test_config.py)\n  Edit({{WORKSPACE}}/tests/test_config.py)\n  Edit({{WORKSPACE}}/tests/test_config.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 14,
-      "at_s": 521.1,
-      "delay_s": 0.309,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/tests/test_config.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 15,
-      "at_s": 524.13,
-      "delay_s": 0.463,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -m pytest tests/test_config.py -q 2>&1 | tail -20)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 16,
-      "at_s": 533.23,
-      "delay_s": 1.391,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "Now tests for the report, including the overwrite hazard:",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 17,
-      "at_s": 560.51,
-      "delay_s": 4.17,
-      "writes": [
-        "tests/test_report.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(cat > {{WORKSPACE}}/tests/test_report.py <<'PYEOF'\n\"\"\"The note written beside ea)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3 && git status --short)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 18,
-      "at_s": 592.82,
-      "delay_s": 4.939,
-      "writes": [
-        "scribe.toml"
-      ],
-      "deletes": [],
-      "terminal": "97 tests pass. Now a config file template at the repo root, doubling as the reference for every setting:\n  Bash(cat > {{WORKSPACE}}/scribe.toml <<'PYEOF'\n# scribe settings.\n#\n# Everything here)\nLet me verify the documented syntax actually works by uncommenting every example in the template:\n  Bash(cd /tmp && sed 's/^# \\([a-z_]* = \\|\"\u2122\"\\|\\[text.extra\\]\\|\\[document\\)/\\1/' {{WORK)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 19,
-      "at_s": 622.09,
-      "delay_s": 4.475,
-      "writes": [
-        "README.md"
-      ],
-      "deletes": [],
-      "terminal": "My sed was unreliable. Let me test the documented syntax directly instead:\n  Bash(cd /tmp && cat > uncommented.toml <<'EOF'\n[furniture]\nedge = 2\nrepeat_share = 0.)\nEvery documented example works. Now updating the README:\n  Edit({{WORKSPACE}}/README.md)\n  Edit({{WORKSPACE}}/README.md)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 20,
-      "at_s": 626.12,
-      "delay_s": 0.616,
-      "writes": [
-        "README.md"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/README.md)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 21,
-      "at_s": 636.21,
-      "delay_s": 1.543,
-      "writes": [
-        "README.md"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3 && rm -rf /tmp/scribe-final )",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 22,
-      "at_s": 659.41,
-      "delay_s": 3.547,
-      "writes": [
-        "scribe/cli.py"
-      ],
-      "deletes": [],
-      "terminal": "A real difference, and one I introduced: the old CLI printed the summary line to **stdout** even when piping Markdown there, so `scribe convert x.txt - > x.md` wrote the stats line into the Markdown. Let me fix that properly rather than restore it:\n  Edit({{WORKSPACE}}/scribe/cli.py)\nThe tool notes the file changed on disk since my last read \u2014 let me verify the whole file is as intended:\n  Read({{WORKSPACE}}/scribe/cli.py)\nFile is as intended. Now re-verifying the Markdown itself is unchanged, with the summary line accounted for:\n  Bash(rm -rf /tmp/scribe-final && mkdir -p /tmp/scribe-final && for f in fixtures/*.tx)\n  Bash(.venv/bin/scribe convert fixtures/memo.txt - 2>/dev/null | tail -2; echo \"--- st)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 23,
-      "at_s": 682.59,
-      "delay_s": 3.544,
-      "writes": [
-        "tests/test_report.py"
-      ],
-      "deletes": [],
-      "terminal": "Markdown body is byte-identical and stdout is now clean. Let me pin that behaviour with a test:\n  Edit({{WORKSPACE}}/tests/test_report.py)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3)\n  Bash(git status --short && echo \"--- stray artifacts in fixtures? ---\" && ls fixtures)\n98 pass, no stray artifacts. Let me review the rule-module diffs to confirm the refactor is clean:\n  Bash(git diff scribe/blocks.py scribe/notes.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 24,
-      "at_s": 941.79,
-      "delay_s": 18.345,
-      "writes": [
-        "scribe/config.py"
-      ],
-      "deletes": [],
-      "terminal": "Clean, minimal diffs with the reasoning kept next to each rule. Final end-to-end verification:\n  Bash(.venv/bin/scribe check fixtures/ && echo && echo \"=== error handling ===\" && cd )\n  Bash(cd /tmp && rm -rf demo2 && mkdir demo2 && cp {{WORKSPACE}}/fixtures/handbook.txt)\nThe report is doing its job \u2014 it surfaced that `keep_all_hyphens` turned \"work-ing\" into a wrong guess in that demo. Final review of the README and a full run:\n  Read({{WORKSPACE}}/README.md)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3; echo \"--- files ---\"; git s)\nAll three pieces are done, 98 tests pass (54 existing, all untouched), and the converted Markdown is byte-identical to before.\n\n## What I did\n\n**Settings (`scribe/config.py`)** \u2014 one frozen dataclass per rule module, with defaults that are exactly the values the module constants had, and a `Settings` holding all of them. Rules now receive settings instead of reaching for a constant:\n\n```python\ndef looks_like_note(text, from_bottom, settings: NoteSettings = SETTINGS) -> bool:\n    return from_bottom <= settings.foot_zone and bool(NOTE_LINE.match(text))\n```\n\nThe default argument keeps every existing call site working, which is why the 54 original tests needed no edits. The reasoning comments stayed next to the rules they explain; `config.py` carries only the short \"what it costs when it's wrong\" version.\n\n**Config file** \u2014 `scribe.toml`, found by walking up from the document, with `--config` to override. Top-level tables are defaults; `[document.\"NAME\"]` tables override per document, `NAME` being a name or glob. `tomllib` is stdlib on 3.11+, so no new dependency. A misspelled key is an error naming it (`unknown setting 'repeat_shore'. Known settings: ...`) rather than a line that quietly does nothing, and per-document sections are validated at load, so a typo in a section nobody exercises still fails on the first run. The committed `scribe.toml` has every setting commented out at its default, so it changes nothing and doubles as the reference.\n\n**The report** \u2014 `<name>.report.md` beside the Markdown, listing the lossy decisions: lines dropped as furniture (with repeat counts), words rejoined across line breaks, footnotes moved, and which settings were in force. No timestamp, so a change in it is a change in the conversion rather than in the clock.\n\n## Three things worth your attention\n\n**I could not call it `report.md`.** `fixtures/report.txt` already converts to `report.md`, so a report by that name would silently overwrite the conversion output. I used `<stem>.report.md` (`report.report.md`), which is ugly for that one file. If you'd rather have the literal name, renaming the fixture is the way \u2014 say the word and I'll do it.\n\n**I changed one existing behaviour.** The old CLI printed the summary line to stdout even when the Markdown was going there, so `scribe convert x.txt - > x.md` wrote statistics into the document. I moved it to stderr and pinned it with a test. It's a one-line revert if you'd rather keep parity.\n\n**Two things I left alone.** The regexes that recognise headings, bullets, notes and page numbers stay code \u2014 the parsers read their capture groups by number, so a mistyped pattern in a config file would fail somewhere far from the typo. And the README's example line said `8 paragraphs` where the code has always produced `12`; I corrected the text, having confirmed against `HEAD` that the count itself didn't change.\n\nOne loose end I did not act on: `convert` now drops two untracked files into `fixtures/` instead of one, and the repo has no `.gitignore`. Adding one felt like scope creep, but it's worth a line if these are going to be generated in place.\n> The five-page report I ran this on keeps a running header that only appears on two of its pages. Make the repeat threshold a setting like the others, and pick a default that catches that case.\nLet me first reproduce the case before changing anything \u2014 a five-page document with a header on only two pages.\n  Bash(.venv/bin/python -c \"\nfrom scribe.lines import read\nfrom scribe import furniture)\nReproduced \u2014 threshold is 3, the header appears on 2 pages, so it survives. Let me look at what each candidate default would do across document lengths before picking one:\n  Bash(.venv/bin/python -c \"\nprint('pages | 0.6 (now) | 0.5 | 0.4 | 0.34')\nfor p in [3,)\nThe table makes the choice clear. `0.5` only catches the five-page case by truncation (2.5 \u2192 2) and would miss a six- or seven-page report with the same problem; `0.4` is exactly 2/5 and holds for nearby lengths. Let me implement that, plus the floor as a real setting:\n  Edit({{WORKSPACE}}/scribe/config.py)\nNow let me make the config reader add file context to those errors:\n  Edit({{WORKSPACE}}/scribe/config.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 25,
-      "at_s": 948.86,
-      "delay_s": 1.081,
-      "writes": [
-        "scribe/config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/scribe/furniture.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 26,
-      "at_s": 954.91,
-      "delay_s": 0.925,
-      "writes": [
-        "scribe/furniture.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -c \"\nfrom scribe.lines import read\nfrom scribe import furniture)\nThe case is fixed and body text survives. Now checking the fixtures didn't shift:",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 27,
-      "at_s": 980.11,
-      "delay_s": 3.852,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(rm -rf /tmp/scribe-thresh && mkdir -p /tmp/scribe-thresh && for f in fixtures/*.)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -15)\nThe guard test fired exactly as intended. Let me update it with the argument for the change, and add the regression tests:\n  Edit({{WORKSPACE}}/tests/test_config.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 28,
-      "at_s": 999.28,
-      "delay_s": 2.931,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/tests/test_config.py)\n  Bash(.venv/bin/python -m pytest tests/test_config.py -q 2>&1 | tail -25)\n`PLACES` ran out at 40 pages. Let me generate digit-free page tags instead:",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 29,
-      "at_s": 1016.44,
-      "delay_s": 2.623,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/tests/test_config.py)\n  Bash(.venv/bin/python -m pytest tests/test_config.py -q 2>&1 | tail -20)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3 && rm -rf /tmp/scribe-t2 && )",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 30,
-      "at_s": 1039.81,
-      "delay_s": 3.573,
-      "writes": [
-        "scribe.toml"
-      ],
-      "deletes": [],
-      "terminal": "106 pass and fixtures are unchanged. Updating the config template:\n  Edit({{WORKSPACE}}/scribe.toml)\n  Bash(.venv/bin/python -c \"\nfrom scribe import config\nfrom pathlib import Path\nc = con)\n  Bash(cd /tmp && rm -rf five && mkdir five && cd five && {{WORKSPACE}}/.venv/bin/pytho)\n  Bash(cd /tmp/five && sed -n '/## Lines removed/,$p' five.report.md)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 31,
-      "at_s": 1064.02,
-      "delay_s": 3.701,
-      "writes": [
-        "README.md"
-      ],
-      "deletes": [],
-      "terminal": "Let me verify the escape hatch \u2014 restoring the old conservative behaviour:\n  Bash(cd /tmp/five && rm -f five.md five.report.md && printf '[furniture]\\nrepeat_shar)\nNow a short note in the README about the change and its escape hatch:\n  Edit({{WORKSPACE}}/README.md)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3; echo \"--- diff of the rule )",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 32,
-      "at_s": 1169.95,
-      "delay_s": 16.194,
-      "writes": [
-        "scribe/config.py"
-      ],
-      "deletes": [],
-      "terminal": "Done. 106 tests pass, and your five-page case is fixed.\n\n## What was actually wrong\n\nThe threshold was two things, only one of which was a setting:\n\n```python\nthreshold = max(2, int(len(doc.pages) * REPEAT_SHARE))\n```\n\nThe hardcoded `2` is a floor \u2014 the fewest pages a line must appear on. That's now `min_repeats`. But the floor wasn't what caught your document: at five pages the share gave `int(5 \u00d7 0.6) = 3`, and your header appears on two. So exposing the floor alone would have changed nothing, and the default share had to move too.\n\n## Why 0.4 and not 0.5\n\nI laid the thresholds out before choosing:\n\n| pages | 0.6 (was) | 0.5 | 0.4 (now) |\n|---|---|---|---|\n| 5 | 3 | 2 | 2 |\n| 6 | 3 | 3 | 2 |\n| 7 | 4 | 3 | 2 |\n| 40 | 24 | 20 | 16 |\n\n`0.5` catches your report, but only because `int(2.5)` truncates to 2 \u2014 a six-page report with the same problem would still slip through and you'd be back here. `0.4` is two pages in five exactly, and holds for six and seven. There's a test pinning each.\n\n**The cost, so it's on the record:** this makes furniture stripping more aggressive on long documents. A line near the page edge repeating on 16 pages of 40 is now furniture where it previously took 24 \u2014 and `furniture.py` warns that a genuine heading eaten this way is gone before anything can rescue it. If your corpus has section titles that repeat over long chapters, `repeat_share = 0.6` in `scribe.toml` puts it back; I verified that path restores the old behaviour exactly. The conversion report lists what was dropped, so a heading lost this way is visible rather than silent.\n\nYour three fixtures are byte-identical under the new default \u2014 at three and four pages the floor was already the binding constraint, so nothing moved.\n\n## Two things I added beyond the ask\n\n`min_repeats` is refused below 2, and `repeat_share` outside 0\u20131, with the file and section named. A threshold of 1 would make every line near a page edge furniture and empty the document rather than tidy it \u2014 worth a guard on a knob I was newly exposing. The check lives on the settings class, so it holds however the settings are built, not just when they come from a file.\n\nI also fixed a test helper of my own from the previous round: it built pages numbered `line 1`, `line 2`, and the repeat rule folds digits before comparing, so the whole body counted as one repeated line. The tests passed, but on their fixture rather than on the rule. Body text is worded now.\n> Two more small things and then I am done.\n\n1. In the report, list the notes in the order they appear in the finished document, and number them so I can cross-reference them against the Markdown.\n2. Put the keep-hyphen prefix list in the config too, and start it empty. I would rather opt in per document than carry a list nobody chose.\nTwo focused changes. Let me first check what the empty hyphen list will do to the fixtures:\n  Bash(grep -n -- \"-$\" fixtures/*.txt)\n  Bash(grep -n \"\\[\\^\" /tmp/scribe-base-body/report.md)\nNo fixture uses a kept prefix, so emptying the list shouldn't move them \u2014 I'll verify after. Let me check what references the note fields:\n  Bash(grep -rn \"note_numbers\\|keep_hyphen\" scribe/ tests/ scribe.toml README.md)\nStarting with the empty hyphen list:\n  Edit({{WORKSPACE}}/scribe/config.py)\n  Read({{WORKSPACE}}/scribe/paragraphs.py)\n  Edit({{WORKSPACE}}/scribe/paragraphs.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 33,
-      "at_s": 1182.05,
-      "delay_s": 1.85,
-      "writes": [
-        "scribe/paragraphs.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | grep -E \"^(FAILED|[0-9]+ (passed|fai)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 34,
-      "at_s": 1202.21,
-      "delay_s": 3.082,
-      "writes": [
-        "tests/test_rules.py"
-      ],
-      "deletes": [],
-      "terminal": "The two expected failures. Let me update them \u2014 the second is an original policy test that this change deliberately reverses:\n  Edit({{WORKSPACE}}/tests/test_rules.py)\n  Edit({{WORKSPACE}}/tests/test_config.py)\n  Edit({{WORKSPACE}}/tests/test_config.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 35,
-      "at_s": 1206.25,
-      "delay_s": 0.618,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "Now the opt-in test alongside the existing hyphen setting tests:",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 36,
-      "at_s": 1214.33,
-      "delay_s": 1.235,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/tests/test_config.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 37,
-      "at_s": 1224.43,
-      "delay_s": 1.544,
-      "writes": [
-        "tests/test_config.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3 && rm -rf /tmp/scribe-h && m)\nNow the config template \u2014 the old list becomes something to opt into:",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 38,
-      "at_s": 1238.58,
-      "delay_s": 2.163,
-      "writes": [
-        "scribe.toml"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/scribe.toml)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 39,
-      "at_s": 1261.93,
-      "delay_s": 3.57,
-      "writes": [
-        "scribe/convert.py"
-      ],
-      "deletes": [],
-      "terminal": "Now the note list in the report. First, storing the notes with their text, in document order:\n  Edit({{WORKSPACE}}/scribe/convert.py)\n  Edit({{WORKSPACE}}/scribe/convert.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 40,
-      "at_s": 1265.96,
-      "delay_s": 0.616,
-      "writes": [
-        "scribe/convert.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/scribe/report.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 41,
-      "at_s": 1276.07,
-      "delay_s": 1.546,
-      "writes": [
-        "scribe/report.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/scribe/report.py)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3; cd /tmp && rm -rf notes && )",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 42,
-      "at_s": 1281.11,
-      "delay_s": 0.77,
-      "writes": [
-        "scribe/report.py"
-      ],
-      "deletes": [],
-      "terminal": "",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 43,
-      "at_s": 1317.45,
-      "delay_s": 5.555,
-      "writes": [
-        "tests/test_report.py"
-      ],
-      "deletes": [],
-      "terminal": "Now a test that pins document order rather than numeric order \u2014 the case where they differ:\n  Edit({{WORKSPACE}}/tests/test_report.py)\n  Bash(sed -i '' 's/^from pathlib import Path$/import re\\nfrom pathlib import Path/' te)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 44,
-      "at_s": 1321.48,
-      "delay_s": 0.616,
-      "writes": [
-        "tests/test_report.py"
-      ],
-      "deletes": [],
-      "terminal": "",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 45,
-      "at_s": 1346.74,
-      "delay_s": 3.862,
-      "writes": [
-        "tests/test_report.py"
-      ],
-      "deletes": [],
-      "terminal": "My 20-page fixture tripped the furniture rule \u2014 identical filler on every page, and digit-folding made the notes themselves look repeated. The fixture's fault, not the code's. Let me make the pages genuinely distinct:\n  Edit({{WORKSPACE}}/tests/test_report.py)\n  Edit({{WORKSPACE}}/tests/test_report.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 46,
-      "at_s": 1351.79,
-      "delay_s": 0.772,
-      "writes": [
-        "tests/test_report.py"
-      ],
-      "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/tests/test_report.py)",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 47,
-      "at_s": 1361.89,
-      "delay_s": 1.544,
-      "writes": [
-        "tests/test_report.py"
-      ],
-      "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -m pytest tests/test_report.py -q 2>&1 | tail -20)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3; .venv/bin/python -c \"\nfrom )",
-      "settled_after_s": 0.0
-    },
-    {
-      "n": 48,
-      "at_s": 1389.16,
-      "delay_s": 4.169,
-      "writes": [
-        "CLAUDE.md",
-        "README.md"
-      ],
-      "deletes": [],
-      "terminal": "114 pass. Final verification of both changes end to end:\n  Bash(rm -rf /tmp/scribe-fin && mkdir -p /tmp/scribe-fin && for f in fixtures/*.txt; d)\n  Bash(.venv/bin/python -c \"\nfrom scribe import config\nfrom pathlib import Path\nc = con)\n  Edit({{WORKSPACE}}/README.md)\n  Bash(.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3; echo \"=== opt-in demo ===\";)\nBoth work. Final review of the changed report section:\n  Bash(sed -n '/if result.collected_notes/,$p' scribe/report.py; echo \"=== status ===\";)\nBoth done. 114 tests pass, and the fixture Markdown is still byte-identical to where we started.\n\n## 1. Notes in the report\n\nThey're now a numbered list in document order, with an excerpt of each:\n\n```\n1. `[^1]` The 2019 report describes the method in full.\n2. `[^2]` Provisional flights are excluded from the means in section...\n```\n\nThe left-hand number is the position in the Markdown's footnote list; the marker is the label the note actually carries. Those look redundant here because your source numbers its notes 1, 2, 3 \u2014 but they come apart when a document restarts numbering on each page, and that's exactly when you need to cross-reference by position. There's a test built on two pages whose notes run 2 then 1, asserting the report's order matches the Markdown's rather than being sorted.\n\nThe ordering was already correct; what was missing was any guarantee it would stay that way. The notes are now recorded in the same loop that writes the definition lines, so the report can't drift out of step with the document.\n\nLong notes are cut at a word, and past twelve the rest are counted \u2014 a twenty-note document still gives a report under 45 lines.\n\n## 2. `keep_hyphen` empty by default\n\nThe list of twelve prefixes is gone from the code and lives in the config, starting empty. \"well-\" and \"being\" now rejoin as \"wellbeing\" until you say otherwise:\n\n```toml\n[paragraphs]\nkeep_hyphen = [\"well\", \"self\"]     # verified: gives well-being, self-esteem\n```\n\n`scribe.toml` still carries the old twelve on a commented line, framed as somewhere to start rather than a recommendation. Since the conversion report lists every word it rejoined, that list is where you'd find the prefixes your corpus actually needs.\n\nNone of your three fixtures contain a break on one of those prefixes, so the output didn't move \u2014 but **this does change conversions of documents that do**, silently and in the body text. Worth a spot-check on anything already converted with compounds in it.\n\n## One thing to know about the test suite\n\nThis reversed a policy the original suite asserted directly \u2014 `test_a_real_compound_keeps_its_hyphen` was one of the 54 tests I inherited. I rewrote it to assert the new default and to point at the opt-in test, rather than deleting it. The defaults guard in `test_config.py` now records both changed defaults and the argument for each, so the next person to touch them hits the same friction.\n\nI also fixed a fixture trap in my own new tests: a twenty-page document built from one template made every line a repeat, and the furniture rule stripped the notes off the pages before anything looked for them. The test failed loudly, which is the only reason I caught it \u2014 the pages carry distinct wording now.",
+      "terminal": "\u25cf Done. The rules take their values from settings now, scribe.toml sets them,\n  and each conversion writes a report.md saying what it did. The survey's\n  appendix header is gone and the other three documents are unchanged.",
       "settled_after_s": 0.0
     }
   ]

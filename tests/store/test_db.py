@@ -340,3 +340,73 @@ def test_store_reopen_persists(tmp_path):
     s2 = Store(tmp_path / "codoc.db").open()
     assert s2.get_feature(f.id).title == "Persisted"
     s2.close()
+
+
+# ── Sibling anchors: what "before B" means ───────────────────────────────────
+#
+# The editor materializes a proposed node at the rank it would take — exactly at
+# its `beforeId` (`plan-materialize.insertAt`) — and the whole promise of an
+# in-place proposal is that the node the reader judged is the node they get.
+# `before_id` alone used to mean FIRST, so a plan drawn in the middle of the tree
+# jumped to the top the moment it was accepted, and two nodes proposed before the
+# same anchor both landed on the same rank.
+
+def _kids(store, parent=None):
+    return [f.title for f in sorted(
+        (f for f in store.list_features() if not f.retired and f.parent_id == parent),
+        key=lambda f: f.rank)]
+
+
+def _put(store, title, parent=None, after="", before=""):
+    f = Feature(title=title, parent_id=parent,
+                rank=store.rank_between(parent, after, before))
+    store.upsert_feature(f)
+    return f
+
+
+def test_before_alone_means_immediately_before_that_sibling(store):
+    a = _put(store, "A")
+    b = _put(store, "B")
+    _put(store, "C")
+    _put(store, "New", before=b.id)
+    assert _kids(store) == ["A", "New", "B", "C"]
+    assert a.id  # the anchor above New is untouched
+
+
+def test_before_the_first_sibling_still_means_first(store):
+    # How "put it at the top" is said, and it has to keep working: the first
+    # node's own predecessor does not exist, so the gap above it IS the top.
+    a = _put(store, "A")
+    _put(store, "B")
+    _put(store, "New", before=a.id)
+    assert _kids(store) == ["New", "A", "B"]
+
+
+def test_two_nodes_before_the_same_anchor_keep_their_order(store):
+    # A plan proposing several nodes into one place. They all named the same
+    # anchor, all resolved to "first", and all got the same rank — which is not an
+    # order at all, and the tree then drew them in whatever order the store
+    # happened to return.
+    _put(store, "A")
+    b = _put(store, "B")
+    first = _put(store, "One", before=b.id)
+    second = _put(store, "Two", before=b.id)
+    assert first.rank != second.rank
+    assert _kids(store) == ["A", "One", "Two", "B"]
+
+
+def test_naming_both_neighbours_lands_between_them(store):
+    a = _put(store, "A")
+    b = _put(store, "B")
+    _put(store, "New", after=a.id, before=b.id)
+    assert _kids(store) == ["A", "New", "B"]
+
+
+def test_before_a_node_of_another_parent_is_not_a_position(store):
+    # A neighbour that was reparented since the author saw it names nothing here,
+    # so the node appends rather than landing somewhere nobody asked for.
+    top = _put(store, "Top")
+    _put(store, "Child", parent=top.id)
+    other = _put(store, "Other")
+    _put(store, "New", parent=top.id, before=other.id)
+    assert _kids(store, top.id) == ["Child", "New"]

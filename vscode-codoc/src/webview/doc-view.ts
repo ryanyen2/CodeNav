@@ -520,20 +520,51 @@ function beginApplying(group: HTMLElement | null): void {
         const recorded = Object.values(payload.nodes)
             .some(n => n.proposal?.verdictPending);
         endApplying();
-        showTransientNotice(recorded
-            ? 'Recorded — this one waits for a pass that can hand code work to the agent '
-              + '(a live Claude session, or run `codoc sync`).'
-            : 'Verdict not picked up — is `codoc watch` (or a Claude session) running?');
+        if (recorded) {
+            showTransientNotice(
+                'Recorded — this one waits for a pass that can hand code work to the agent '
+                + '(a live Claude session, or run `codoc sync`).');
+            return;
+        }
+        // Nothing read the verdict, which in practice means the daemon is not
+        // running. Naming `codoc watch` told the reader to go and diagnose a
+        // process they were never asked to start, in a surface with no terminal
+        // — so the notice carries the fix instead of the diagnosis. The host
+        // reconciles the daemon on its own too; this is for the person who is
+        // looking at a click that did nothing and wants it to work NOW.
+        showTransientNotice(
+            'Nothing picked that up — codoc is not running.',
+            { label: 'Start codoc', kind: 'start-daemon' });
     }, 5000);
 }
 
 /** A small self-dismissing notice pinned bottom-center — the honest channel for
- *  "your click did not take effect" (W3). One at a time; newest wins. */
-function showTransientNotice(text: string): void {
+ *  "your click did not take effect" (W3). One at a time; newest wins.
+ *
+ *  An `action` makes it the recovery as well as the report: a notice that says
+ *  what went wrong and leaves the reader to find the fix elsewhere is only half
+ *  of the message. A notice carrying one stays up longer, since it is now
+ *  something to act on rather than something to read. */
+function showTransientNotice(
+    text: string, action?: { label: string; kind: string },
+): void {
     document.querySelector('.ce-transient-notice')?.remove();
     const n = el('div', 'ce-transient-notice', text);
+    if (action) {
+        n.classList.add('has-action');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ce-notice-action';
+        b.textContent = action.label;
+        b.addEventListener('click', () => {
+            vscode.postMessage({ kind: action.kind });
+            n.remove();
+        });
+        n.append(b);
+    }
     document.body.append(n);
-    window.setTimeout(() => { n.classList.add('leaving'); window.setTimeout(() => n.remove(), 300); }, 6000);
+    const linger = action ? 14000 : 6000;
+    window.setTimeout(() => { n.classList.add('leaving'); window.setTimeout(() => n.remove(), 300); }, linger);
 }
 function endApplying(): void {
     if (applyingTimer) { clearTimeout(applyingTimer); applyingTimer = 0; }

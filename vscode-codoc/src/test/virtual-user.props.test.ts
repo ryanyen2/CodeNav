@@ -354,7 +354,19 @@ class ModelHost {
     /** settleDoc: diff against the baseline the settle CITES, apply, then record what was
      *  sent (the host's own order — a command that never reached the log never happened). */
     settle(doc: PMNode, cited: number | undefined): CommandEntry[] {
-        const cmds = this.provenance.settle(featureUnits(doc), cited, `t${++this.emissions}`);
+        const units = featureUnits(doc);
+        const cmds = this.provenance.settle(units, cited, `t${++this.emissions}`);
+        // The invariant that replaced "never retires": a retire may only ever name a
+        // feature that is NOT in the document it was diffed from. Asserted here, at the
+        // one place that can see both, so every seed and every clock interleaving in the
+        // suite below is checking it — a retire for a heading still on the page would be
+        // the destruction-by-accident class coming back.
+        const present = new Set(units.filter(u => u.fid).map(u => u.fid!));
+        for (const c of cmds) {
+            if (c.kind === 'retire' && present.has(c.feature_id!)) {
+                throw new Error(`retired ${c.feature_id} while it was still in the doc`);
+            }
+        }
         this.store.apply(cmds);
         this.provenance.record(cmds);
         return cmds;
@@ -512,17 +524,31 @@ describe('virtual user — keystrokes and settles are different events', () => {
         }
     });
 
-    it('I1: messy editing never emits a retire, however the clocks interleave', () => {
-        // The crown jewel, now under a debounce and a lagging projection rather than
-        // the instant-acceptance model. Deleting a heading, joining blocks, undoing
-        // past a projection — none of it may destroy a feature.
-        let edited = 0;
+    it('a retire only ever names a feature that is gone, however the clocks interleave', () => {
+        // This was "messy editing never emits a retire" — the crown jewel of the
+        // 2026-08-01 robustness plan, which killed destruction-by-absence outright.
+        // Absence retires again now (deleting a heading did nothing and said nothing,
+        // which is unusable in a surface for editing a tree), so the property is no
+        // longer "never" but "only what actually went":
+        //
+        //   • never a feature still in the document it was diffed from — asserted in
+        //     ModelHost.settle, so it holds for every seed and every interleaving here;
+        //   • never most of the tree in one settle (select-all, replace-everything paste);
+        //   • and rare, because the transients are excluded rather than acted on.
+        //
+        // The rarity bound is the part that would catch a guard coming loose: these are
+        // scripts of RANDOM character deletions, so a few do genuinely delete a short
+        // heading and hold it, but a fuzzer that starts retiring in a third of its runs
+        // has stopped telling deletions from typing.
+        let edited = 0, scriptsThatRetired = 0;
         for (const seed of SEEDS) {
             const s = runScript(seed, { steps: 30, settleEvery: 3, projectionLag: 2 });
-            expect(s.retires).toBe(0);
+            expect(s.retires).toBeLessThanOrEqual(1);   // two seeded features, wipe guard
+            if (s.retires) scriptsThatRetired++;
             edited += s.edited;
         }
         expect(edited).toBeGreaterThan(500);   // anti-vacuity: the scripts really edited
+        expect(scriptsThatRetired).toBeLessThan(SEEDS.length * 0.15);
     });
 
     it('N3: a settle that changed nothing emits nothing', () => {

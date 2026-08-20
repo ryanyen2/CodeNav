@@ -221,10 +221,62 @@ class DeriveTest(unittest.TestCase):
             replayed = tmp / "replayed"
             replayed.mkdir()
             play.play(replayed, out, 1000.0, False, True, False)
-            self.assertEqual(record.scan(replayed), record.scan(ws))
+            # `activity.json` is exempt by name (record.REPLAY_RETARGETED): the
+            # player moves its timestamps onto the participant's clock, so byte
+            # equality there would mean the presence surface was dead on arrival.
+            self.assertEqual(record.comparable(record.scan(replayed)),
+                             record.comparable(record.scan(ws)))
             self.assertEqual((replayed / "scribe" / "notes.py").read_text(), "renumbered\n")
             self.assertTrue((replayed / "CLAUDE.md").exists(),
                             "the condition's own description has to survive the derivation")
+
+    def test_a_derive_that_recorded_no_reaction_fails(self):
+        # The recording exists to show a description catching up with code. A
+        # derive in which nothing under `.codoc/` ever moved recorded a daemon that
+        # did nothing, and it looks exactly like a good one — right frame count,
+        # right code, right end state — until a participant watches three minutes
+        # of a tree that never changes.
+        #
+        # It happened: the presence work opened an agent epoch and left it open,
+        # and an open epoch is the signal that tells `codoc watch` to stand down
+        # mid-implementation. So this is a gate rather than a line of output.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, neutral, ws, out = tmp / "raw", tmp / "neutral", tmp / "ws", tmp / "out"
+            # A session that writes only code — no condition machinery answers it.
+            fake_recording(raw, [
+                {"at_s": 0, "files": {"scribe/lines.py": "one\n"}},
+                {"at_s": 1, "files": {"scribe/lines.py": "two\n"}},
+            ])
+            record.build(raw, None, neutral, seconds=0.01)
+            ws.mkdir()
+            play.play(ws, neutral, 1000.0, False, True, False)
+            play.reset(ws, neutral)
+            # `.codoc/` present = a condition whose machinery is a daemon, so its
+            # silence is a fault. Without it this is the neutral stage, which is
+            # supposed to be silent.
+            (ws / ".codoc").mkdir(exist_ok=True)
+            self.assertEqual(
+                record.derive(neutral, ws, out, settle=0.0, timeout=0.0), 1,
+                "a codoc derive that produced no tree movement must fail")
+
+    def test_the_presence_file_does_not_count_as_the_tree_moving(self):
+        # `derive` writes activity.json itself, one frame at a time, for the agent's
+        # presence. Counting it would report movement in every frame of exactly the
+        # recording this gate exists to catch.
+        src = (Path(__file__).resolve().parent / "record.py").read_text()
+        self.assertIn("w not in REPLAY_RETARGETED", src)
+        self.assertIn(".codoc/activity.json", src)
+
+    def test_each_frame_is_a_turn_that_ends(self):
+        # The daemon reconciles on the epoch's FALLING edge. A derive that opens
+        # the epoch for the presence and never closes it suppresses every Loop A
+        # pass in the recording.
+        src = (Path(__file__).resolve().parent / "record.py").read_text()
+        self.assertIn("_end_turn(workspace, session)", src)
+        # And what the FRAME carries is the working state, not the state after the
+        # turn ended — or the participant never sees the agent at work.
+        self.assertIn("write_bytes(working)", src)
 
     def test_the_conditions_own_record_pass_lands_in_the_last_frame(self):
         # The baseline's record is written by an agent at the end of a session

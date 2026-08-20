@@ -28,7 +28,7 @@ import {
     WorkspaceUntrustedError, ProvisionCancelledError,
 } from './setup/provision';
 import { bootstrapCredentials, syncCredentialsToEnv, SECRET_OPENAI_KEY } from './setup/credentials';
-import { startDaemon, stopDaemon, reapStaleLock } from './daemon/daemon-manager';
+import { startDaemon, stopDaemon, reapStaleLock, resetDaemonBackoff } from './daemon/daemon-manager';
 import { SETUP_STEPS, needsSetup } from './setup/setup-flow';
 import { DEFAULT_HUB_PORT, hubUrl, serveCommandLine } from './serve/serve-manager';
 
@@ -41,6 +41,11 @@ function outputChannel(): vscode.OutputChannel {
 
 /** Once-per-session guard so the first-run "Set up codoc" nudge isn't shown on every reload. */
 let _setupOffered = false;
+
+/** How often the daemon invariant is re-checked when nothing else has happened.
+ *  Slow on purpose: every other trigger is an edge that already fires, and this is
+ *  only the backstop for a window where none of them did. */
+const DAEMON_RECONCILE_MS = 15_000;
 
 /**
  * The setup workspace root: a `.codoc/`-bearing root if one is already known
@@ -230,9 +235,33 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     // ── Managed daemon lifecycle ──────────────────────────────────────────────
-    // On activate: if trusted + initialized + provisioned, reap a stale lock then
-    // start the warm daemon. The user never runs `codoc watch` by hand (KTD3).
-    const maybeStartDaemon = (): void => {
+    // The user never runs `codoc watch` by hand (KTD3), so this window owning the
+    // daemon is not a convenience: it is the only thing that drains a verdict.
+    //
+    // It used to be started on three EDGES — activation, trust being granted, and
+    // the replay lock going away — and never asked about again. Every one of those
+    // can be missed, and each miss is silent and permanent:
+    //
+    //   • the folder opens untrusted (which a freshly unpacked study workspace
+    //     always is) and the trust grant arrives before this extension activates;
+    //   • the replay lock is created and deleted while the window is still loading,
+    //     so both watcher events land on nobody;
+    //   • the watcher drops an event, which a recursive file watcher is permitted
+    //     to do;
+    //   • the daemon starts and then exits for a reason of its own.
+    //
+    // The symptom is the same in all four and says nothing about any of them: you
+    // accept a proposal and are told the verdict was not picked up. That reached a
+    // participant, with no way back short of quitting the editor.
+    //
+    // So the daemon is a RECONCILED invariant rather than a sequence of events:
+    // trusted, initialized, provisioned, nobody else writing, no live daemon → start
+    // one. Asked on every edge as before, on every `.codoc/` change, and on a slow
+    // timer so a window where nothing at all happens still recovers. `startDaemon`
+    // is idempotent (it defers to a live lock and to a child we already own), and it
+    // backs off after repeated fast exits so a daemon that cannot start is not
+    // respawned forever.
+    const reconcileDaemon = (): void => {
         if (!vscode.workspace.isTrusted) return;
         const rootDir = state.rootDir;
         if (!rootDir) return;
@@ -244,10 +273,45 @@ export function activate(context: vscode.ExtensionContext): void {
         reapStaleLock(rootDir);
         startDaemon(context, execs.codoc, rootDir);
     };
-    maybeStartDaemon();
+    reconcileDaemon();
     // Trust may be granted after activation — start the daemon then.
     context.subscriptions.push(
-        vscode.workspace.onDidGrantWorkspaceTrust(() => maybeStartDaemon()),
+        vscode.workspace.onDidGrantWorkspaceTrust(() => reconcileDaemon()),
+        // Any `.codoc/` movement is a cheap moment to re-check the invariant: the
+        // state already watches those files, so this costs one existsSync and one
+        // lock read on a path the editor is walking anyway.
+        state.onDidChange(() => reconcileDaemon()),
+    );
+    const daemonTicker = setInterval(reconcileDaemon, DAEMON_RECONCILE_MS);
+    context.subscriptions.push({ dispose: () => clearInterval(daemonTicker) });
+
+    // The recovery a person can reach for, and what the "verdict not picked up"
+    // notice points at. It also clears the crash-loop budget, because somebody
+    // asking is a reason to try again whatever happened last time.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codoc.startDaemon', () => {
+            const rootDir = state.rootDir;
+            if (!rootDir) {
+                void vscode.window.showWarningMessage('No codoc workspace is open.');
+                return;
+            }
+            if (fs.existsSync(path.join(rootDir, '.codoc', 'replay.lock'))) {
+                void vscode.window.showInformationMessage(
+                    'Another process is writing this workspace right now, so codoc is '
+                    + 'standing down until it has finished.');
+                return;
+            }
+            resetDaemonBackoff();
+            const execs = cachedExecutables(context);
+            if (!execs) {
+                void vscode.commands.executeCommand('codoc.setup');
+                return;
+            }
+            reapStaleLock(rootDir);
+            const spawned = startDaemon(context, execs.codoc, rootDir);
+            void vscode.window.showInformationMessage(
+                spawned ? 'codoc is running.' : 'codoc was already running.');
+        }),
     );
 
     // ── Handing the workspace to another writer, and taking it back ───────────
@@ -267,7 +331,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         replayLock,
         replayLock.onDidCreate(() => stopDaemon()),
-        replayLock.onDidDelete(() => maybeStartDaemon()),
+        replayLock.onDidDelete(() => reconcileDaemon()),
     );
 
     // ── Secrets: OpenAI key change → re-mirror .env + restart the daemon ───────

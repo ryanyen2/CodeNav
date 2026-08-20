@@ -42,6 +42,36 @@ let _ownerId: string | undefined;
 /** The repo's `.codoc` dir for the daemon we own, so `stopDaemon` can find the lock. */
 let _codocDir: string | undefined;
 
+// ── Crash-loop backoff ────────────────────────────────────────────────────────
+//
+// `reconcileDaemon` calls this on a timer, so "start it if it isn't running" is
+// asked over and over rather than once. That is what makes the daemon survive a
+// missed watcher event — and it is also what would respawn a daemon that dies on
+// startup, forever, a few seconds apart, writing the same traceback into the
+// output channel until somebody notices.
+//
+// So a spawn that dies quickly counts against a budget. Past it we stop trying and
+// say so once; a spawn that lives longer than the window clears the count, because
+// a daemon that ran for a minute and then exited is a different event from one that
+// could never start. `startDaemon` called directly (a command, a trust grant) resets
+// the budget: that is a person asking, and the answer to a person is to try again.
+const FAST_EXIT_MS = 5_000;
+const MAX_FAST_EXITS = 3;
+let _fastExits = 0;
+let _spawnedAt = 0;
+let _gaveUpAnnounced = false;
+
+/** Clear the crash-loop budget — for an explicit, person-initiated start. */
+export function resetDaemonBackoff(): void {
+    _fastExits = 0;
+    _gaveUpAnnounced = false;
+}
+
+/** True when repeated fast exits have stopped us retrying (reconcile should stand down). */
+export function daemonGaveUp(): boolean {
+    return _fastExits >= MAX_FAST_EXITS;
+}
+
 /** The shared "codoc" OutputChannel (same name as provision.ts reuses). */
 let _channel: vscode.OutputChannel | undefined;
 function outputChannel(): vscode.OutputChannel {
@@ -133,6 +163,8 @@ export function startDaemon(
     const codocDir = path.join(rootDir, '.codoc');
     if (!fs.existsSync(codocDir)) return false;           // repo not initialized yet
 
+    if (daemonGaveUp()) return false;                     // crash-looping → stop trying
+
     const id = windowId(context);
     const existing = readLock(codocDir);
     if (!shouldSpawn(existing, id, isPidAlive)) return false; // live owner exists → defer
@@ -159,12 +191,25 @@ export function startDaemon(
     child.on('error', err => channel.appendLine(`codoc watch failed to start: ${err.message}`));
     child.on('exit', (code, signal) => {
         channel.appendLine(`codoc watch exited (code ${code ?? '—'}, signal ${signal ?? '—'})`);
+        if (Date.now() - _spawnedAt < FAST_EXIT_MS) {
+            _fastExits += 1;
+            if (_fastExits >= MAX_FAST_EXITS && !_gaveUpAnnounced) {
+                _gaveUpAnnounced = true;
+                channel.appendLine(
+                    `codoc: ${_fastExits} starts in a row exited within ${FAST_EXIT_MS / 1000}s — `
+                    + 'not starting it again on its own. Run "codoc: Start the daemon" '
+                    + 'once the cause is fixed.');
+            }
+        } else {
+            _fastExits = 0;   // it ran; whatever ended it is not a startup failure
+        }
         if (_child === child) {
             _child = undefined;
             if (_codocDir && _ownerId) removeOwnedLock(_codocDir, _ownerId);
         }
     });
 
+    _spawnedAt = Date.now();
     _child = child;
     _ownerId = id;
     _codocDir = codocDir;

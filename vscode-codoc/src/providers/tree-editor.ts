@@ -278,6 +278,13 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                 case 'open-code-diff':
                     await this.openCodeDiff(document, msg.files, msg.baseSha, msg.title);
                     return;
+                case 'start-daemon':
+                    // The recovery offered by the "nothing picked that up" notice. The
+                    // command owns the whole decision (trust, provisioning, the replay
+                    // lock, the crash-loop budget) so the webview does not have to know
+                    // any of it — it only knows the click happened.
+                    await vscode.commands.executeCommand('codoc.startDaemon');
+                    return;
                 case 'open-link':
                     // Consult strand: open the external page in the browser. The
                     // Consult signal is specified as `https://` links only, so a

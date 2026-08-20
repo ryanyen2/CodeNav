@@ -1,0 +1,8 @@
+# Settings for scribe. Every value here is optional; leave one out and scribe
+# uses the value it always used.
+
+[defaults]
+# A line has to repeat near the edge of this share of the pages before it counts
+# as page furniture. Lower catches an appendix that carries its own header.
+repeat_share = 0.4
+

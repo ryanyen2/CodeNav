@@ -205,12 +205,44 @@ the agent asking in the terminal and the participant answering there.
 That difference IS the manipulation, so nothing else may differ: not the length of
 the reading pages, not the number of steps to start, not the time.
 
-## Open, and to be decided before recording
+## Decided, and built (2026-08-19)
 
-- Whether the plan checkpoint has a wrong node in it as well, so that accepting
-  the plan wholesale is itself a decision with a cost. Argument for: it makes the
-  plan step a real review rather than a click. Argument against: two planted
-  problems in one session may be one too many to attribute cleanly.
+- **The plan checkpoint is all correct.** No wrong node. The session keeps ONE
+  planted problem — the repeat-share misinterpretation — so a participant's
+  detection is attributable to it rather than split across two. It makes the plan
+  stop closer to a click than to a review, and that is the trade taken.
+- **Both stops are in.** `script/scribe/session.json` declares `checkpoints: [5,
+  11]` and one `checkpoint_says` per stop: the plan, then what the build did to
+  the descriptions. A single string still means "the same at every stop", which is
+  what a one-stop recording wants.
+- **The plan is proposed, not narrated.** A script step carries a `propose` list
+  in `codoc propose`'s own vocabulary, made during `derive` because proposing
+  needs a store the neutral workspace does not have. The three nodes land tagged
+  `agent plan` — as against Loop A's `code drift` — which is the difference
+  between a plan and its aftermath, visible in the tree without a legend.
+- **The agent is visible while it works.** `derive` drives `codoc.agent.hook` with
+  payloads built from each frame, so `.codoc/activity.json` is written by the code
+  that writes it in production, and the player moves its timestamps onto the
+  participant's clock. Without it every live surface — the avatar, the shimmer,
+  the explorer mark — was dark for the whole replay.
+
+Three things had to be fixed for any of it to work, and each was silent:
+
+- The checkpoint never waited. `pending_proposals` read `by_event` from the top of
+  the sidecar, where it has never been — it is nested under `proposals` — so it
+  returned 0 whatever was outstanding and every stop passed straight through.
+  The second stop also has nothing PROPOSED to answer, only rewrites to keep or
+  restore, so it counts `auto_edits` as well.
+- An open agent epoch is what tells `codoc watch` to stand down. Opening one for
+  the presence and leaving it open suppressed every Loop A pass in the recording:
+  twelve frames in which the description never once caught up with the code. A
+  frame is now a TURN — opened, worked, ended — and what the frame carries is the
+  working state, put back after the daemon has had its falling edge.
+- A derive that produced no tree movement now FAILS rather than reporting it.
+
+## Open
+
 - Whether `tally` gets the same shape or a different misinterpretation. It should
   be the same shape, since the projects are matched, but its ambiguity has to be
-  found in its own domain.
+  found in its own domain. `record-session.sh write tally` is ready for it; the
+  script under `script/tally/` is not written yet.

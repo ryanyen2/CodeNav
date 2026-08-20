@@ -2,7 +2,7 @@
   "name": "codoc",
   "displayName": "codoc",
   "description": "Feature-tree navigator and transaction queue for codoc",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "publisher": "codoc",
   "license": "MIT",
   "repository": {
@@ -127,6 +127,10 @@
       {
         "command": "codoc.repair",
         "title": "codoc: Repair / re-run setup"
+      },
+      {
+        "command": "codoc.startDaemon",
+        "title": "codoc: Start the daemon"
       },
       {
         "command": "codoc.sync",

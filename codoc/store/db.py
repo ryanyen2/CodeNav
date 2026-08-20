@@ -538,6 +538,21 @@ class Store:
             return ""
         return f.rank
 
+    def _rank_preceding(self, parent_id: str | None, rank: str) -> str:
+        """The rank of the live sibling immediately before ``rank``, or "" if none.
+
+        What makes "before B" mean the gap above B rather than the top of the list.
+        """
+        if parent_id is None:
+            row = self.conn.execute(
+                "SELECT rank FROM features WHERE parent_id IS NULL AND retired = 0 "
+                "AND rank < ? ORDER BY rank DESC LIMIT 1", (rank,)).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT rank FROM features WHERE parent_id = ? AND retired = 0 "
+                "AND rank < ? ORDER BY rank DESC LIMIT 1", (parent_id, rank)).fetchone()
+        return row[0] if row else ""
+
     def rank_between(
         self, parent_id: str | None, after_id: str = "", before_id: str = ""
     ) -> str:
@@ -549,13 +564,27 @@ class Store:
         "After A, before B" still means what its author meant.
 
         Both ids empty means *no opinion about order* — a plain reparent, or a
-        caller that predates ordering — and appends. Placing a node FIRST is said
-        by naming what it goes before, which the client always knows.
+        caller that predates ordering — and appends.
+
+        `before_id` ALONE means immediately before that sibling, not first among
+        all of them. It used to mean first, and the surface disagreed: the editor
+        materializes a proposed node at the rank it would take (`plan-materialize.
+        insertAt`, which places it exactly at its `beforeId`), so a plan drawn in
+        the middle of the tree jumped to the top the moment it was accepted. The
+        one promise the in-place proposal makes is that the node the reader judged
+        is the node they get, and this broke it. It also gave every node proposed
+        `before` the same anchor an identical rank, since they all resolved to the
+        same "first".
+
+        Placing a node first is still said the same way — by naming what it goes
+        before, which is then the first node, whose own predecessor does not exist.
         """
         from codoc.model.rank import RankError, append_after, between
 
         after = self._sibling_rank(parent_id, after_id)
         before = self._sibling_rank(parent_id, before_id)
+        if not after and before:
+            after = self._rank_preceding(parent_id, before)
         if not after and not before:
             return self.rank_for_append(parent_id)
         if after and before and after >= before:

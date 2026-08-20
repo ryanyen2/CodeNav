@@ -72,6 +72,22 @@ SKIP_FILES = {
 }
 SKIP_FILE_SUFFIXES = (".db-wal", ".db-shm", ".db-journal", ".lock", ".pid", ".log")
 
+# Recorded, replayed, and DELIBERATELY not byte-identical afterwards.
+#
+# The round trip's question is whether a participant reviews the state the planted
+# problems were rated against, so it compares the replayed workspace with the one
+# the recording ended in, file by file. `activity.json` cannot answer that question
+# by its bytes: it is entirely leases — an epoch trusted for ninety seconds, a touch
+# for thirty — and the player moves its timestamps onto the participant's clock so
+# the editor reads it as the live session it is standing in for (`play.restamp_activity`).
+# Copied verbatim it would say the agent stopped working days ago, which is true of
+# the recording and false of what the participant is watching.
+#
+# It is named here rather than skipped from the scan, because it MUST be recorded
+# and it MUST be replayed. What is exempt is only the comparison of its bytes.
+REPLAY_RETARGETED = {".codoc/activity.json"}
+
+
 # Never snapshotted, whatever else changes. A recording is copied into every
 # participant's workspace and then collected back, so a key that got into a frame
 # would be handed to twelve people and travel home again. The study has been close
@@ -126,6 +142,11 @@ WORKSPACE_TOKEN = "{{WORKSPACE}}"
 # how much was removed and it is meant to be reported alongside the factor.
 IDLE_CAP_S = 120.0
 RESIDUAL = re.compile(r"codoc|\.mcp\.json|CLAUDE\.md", re.I)
+
+
+def comparable(files: dict[str, str]) -> dict[str, str]:
+    """A scan with the retargeted files dropped, for comparing two workspaces."""
+    return {k: v for k, v in files.items() if k not in REPLAY_RETARGETED}
 
 
 class Leaked(Exception):
@@ -524,6 +545,18 @@ def build(raw: Path, transcript: Path | None, frames: Path, seconds: float) -> i
 # settled before the daemon had woken up.
 NOTICE_GRACE_S = 6.0
 
+# How much longer to hold at a CHECKPOINT than between ordinary frames.
+#
+# Between frames, being a little early costs nothing: the daemon catches up during
+# the next one and the participant sees it happen, which is the point. At a stop it
+# costs the stop. The daemon debounces before it starts a pass, so a frame that
+# wrote no code — the one that runs the tests, which is exactly where the second
+# stop goes — looks quiet while the pass for the frame BEFORE it has not begun.
+# The first good recording stopped one frame early for precisely this reason: the
+# rewrite it was stopping to show up landed in frame 12, and the stop was at 11.
+STOP_SETTLE_FACTOR = 4.0
+STOP_SETTLE_FLOOR_S = 20.0
+
 
 def _codoc_newest(workspace: Path) -> float:
     codoc = workspace / ".codoc"
@@ -603,9 +636,206 @@ def _quiesce(workspace: Path) -> bool:
     return True
 
 
+# ── the agent's presence, and its plan ───────────────────────────────────────
+#
+# Two things a participant should see that the frames did not carry.
+#
+# THE PRESENCE. codoc draws an agent working — an avatar on the feature being
+# touched, the file marked in the explorer, the node shimmering — and every one of
+# those reads `.codoc/activity.json`, which only the Claude Code hooks write. The
+# recording has no hooks: the neutral session ran in a workspace with no `.codoc/`
+# at all, and `derive` replays FILES into a workspace with no agent in it. So the
+# whole live half of the surface was dark for three minutes while the participant
+# was being asked to compare it against a terminal. It is not that the feature was
+# broken; nothing was telling it anything had happened.
+#
+# The fix is not to author the file. It is to make the calls a real session makes:
+# `codoc.agent.hook` is the code that writes activity.json in production, and it is
+# handed the same payloads here, built from what the frame actually did. Whatever
+# it writes lands in the frame like any other `.codoc/` file, so the recording
+# still holds codoc's own output rather than ours.
+#
+# THE PLAN. `codoc propose` is how an agent puts a plan in the tree before it
+# writes code. It needs a tree, and the neutral workspace has none — so the script
+# declares the proposals and they are made HERE, in the condition that has a store
+# to make them in. The baseline arm has no `.codoc/`, so it skips them, which is
+# the manipulation rather than a gap.
+
+_READ_RE = re.compile(r"^\s{2}Read\((.+)\)\s*$", re.M)
+_BASH_RE = re.compile(r"^\s{2}Bash\((.+)\)\s*$", re.M)
+
+
+def _frame_tools(frame: dict, workspace: Path) -> list[tuple[str, dict]]:
+    """The tool calls a frame stands for, as hook payload inputs.
+
+    Reads and shell commands come from the scrollback, because that is where the
+    agent said it made them; writes come from the frame's own file list, because
+    that is the ground truth about what changed. Both are turned into the absolute
+    paths of the workspace being derived into.
+    """
+    text = frame.get("terminal") or ""
+    calls: list[tuple[str, dict]] = []
+    for raw in _READ_RE.findall(text):
+        rel = raw.replace(WORKSPACE_TOKEN, "").lstrip("/").strip()
+        if rel:
+            calls.append(("Read", {"file_path": str(workspace / rel)}))
+    for cmd in _BASH_RE.findall(text):
+        calls.append(("Bash", {"command": cmd.strip()}))
+    for rel in frame.get("writes", []):
+        # `.codoc/` is codoc's own output, not something the agent typed.
+        if rel.startswith(".codoc/"):
+            continue
+        calls.append(("Edit", {"file_path": str(workspace / rel)}))
+    return calls
+
+
+def _drive_hook(workspace: Path, frame: dict, session: str, phase: str) -> None:
+    """Record this frame's tool calls in activity.json, via codoc's own hook.
+
+    Best effort: a recording that cannot import codoc is still a valid recording,
+    it just has no presence in it, and failing the derive over that would be worse
+    than the thing it is fixing.
+    """
+    codoc_dir = str(workspace / ".codoc")
+    try:
+        from codoc.agent import hook
+    except ImportError:
+        return
+    handler = hook.handle_pre_tool if phase == "pre" else hook.handle_post_tool
+    for tool_name, tool_input in _frame_tools(frame, workspace):
+        payload = {"session_id": session, "tool_name": tool_name,
+                   "tool_input": tool_input}
+        try:
+            handler(payload, codoc_dir)
+        except Exception as exc:      # noqa: BLE001 — never fail a derive over presence
+            print(f"    (presence: {tool_name} → {exc})")
+
+
+def _end_turn(workspace: Path, session: str) -> None:
+    """Close the epoch, which is what makes the daemon react.
+
+    A FRAME IS A TURN, and this is its falling edge. Without it the derive records
+    a daemon that did nothing at all, because an open epoch is precisely the signal
+    that tells `codoc watch` to stand down: an agent is mid-implementation, and
+    running a drift pass against half-written code is what produced duplicate nodes
+    and re-amended prose the agent had just typed. Opening the epoch to get the
+    presence and never closing it suppressed every Loop A pass in the recording —
+    twelve frames in which the description never once caught up with the code,
+    which is the one thing the participant is there to watch.
+
+    So each frame opens the turn, does its work, and ends it, exactly as a real
+    session does. What the FRAME carries is the working state (see `derive`): the
+    participant sees the agent at work, and the daemon still gets its falling edge.
+    """
+    try:
+        from codoc.agent import hook
+    except ImportError:
+        return
+    try:
+        hook.handle_stop({"session_id": session}, str(workspace / ".codoc"))
+    except Exception as exc:          # noqa: BLE001
+        print(f"    (presence: end of turn → {exc})")
+
+
+def _open_session(workspace: Path, session: str, request: str) -> None:
+    """Open the agent epoch, so activity.json reads as a live session.
+
+    Without it every touch is recorded against a closed epoch and the editor is
+    right to ignore the lot: `isAgentActive` gates the whole live surface on the
+    epoch being open, which is exactly the check that stops a dead session
+    animating forever.
+    """
+    try:
+        from codoc.agent import hook
+    except ImportError:
+        return
+    try:
+        hook.handle_session_start({"session_id": session}, str(workspace / ".codoc"))
+        hook.handle_user_prompt({"session_id": session, "prompt": request},
+                                str(workspace / ".codoc"))
+    except Exception as exc:          # noqa: BLE001
+        print(f"    (presence: session start → {exc})")
+
+
+def _outstanding(workspace: Path) -> int:
+    """What a participant would have to answer here — proposals AND rewrites.
+
+    The same count `agent.py.pending_proposals` waits on, so what this reports
+    about a recording is what the player will do with it.
+    """
+    path = workspace / ".codoc" / "tree.bindings.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return 0
+    return (len((data.get("proposals") or {}).get("by_event") or {})
+            + len(data.get("auto_edits") or {}))
+
+
+def _answer_the_plan(workspace: Path, codoc_bin: str) -> int:
+    """Accept what is pending at a checkpoint, as the participant is about to.
+
+    THIS IS WHAT MAKES THE NEXT SEGMENT CONSISTENT. The recording is cut where the
+    agent stops to ask, and everything after the cut has to have been recorded
+    against a store in which the answer has landed — otherwise a participant who
+    accepts the plan puts their store into a state the recording never saw.
+
+    It is also what stops the plan being proposed twice. A plan node binds nothing
+    when it is proposed, because the code does not exist yet; leave it pending and
+    the reflective pass meets the same new code with no feature claiming it and
+    proposes its own node for it. The participant then answers a plan and its
+    duplicate, one tagged `agent plan` and one `code drift`, describing the same
+    thing in different words. Accepting first is not a convenience — an accepted
+    node is what the pass attaches the code TO.
+
+    Called AFTER the checkpoint frame has been recorded, so the frame the player
+    stops on still carries the plan pending and the store that goes with it. The
+    verdict is the participant's to give.
+    """
+    ids = _pending_event_ids(workspace)
+    for eid in ids:
+        done = subprocess.run([codoc_bin, "accept", eid, "--root", str(workspace)],
+                              capture_output=True, text=True, timeout=300)
+        if done.returncode:
+            print(f"    (accept {eid} failed: {done.stderr.strip()[:160]})")
+    return len(ids)
+
+
+def _pending_event_ids(workspace: Path) -> list[str]:
+    """The proposals awaiting a verdict, read the way the editor reads them."""
+    path = workspace / ".codoc" / "tree.bindings.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return sorted((data.get("proposals") or {}).get("by_event") or {})
+
+
+def _run_proposals(workspace: Path, frame: dict, codoc_bin: str) -> int:
+    """Author the frame's plan proposals with `codoc propose`. Returns how many."""
+    plan = frame.get("propose") or []
+    made = 0
+    for p in plan:
+        argv = [codoc_bin, "propose", p.get("kind", "add_node"), "--root", str(workspace)]
+        for flag, key in (("--title", "title"), ("--description", "description"),
+                          ("--parent", "parent"), ("--feature", "feature"),
+                          ("--after", "after"), ("--before", "before"),
+                          ("--rationale", "rationale")):
+            if p.get(key):
+                argv += [flag, str(p[key])]
+        for b in p.get("bind") or []:
+            argv += ["--bind", b]
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+        if done.returncode:
+            print(f"    (propose failed: {done.stderr.strip()[:160]})")
+        else:
+            made += 1
+    return made
+
+
 def derive(frames: Path, workspace: Path, out: Path, settle: float,
            timeout: float, settle_every: int = 1, after: str = "",
-           pace: bool = False) -> int:
+           pace: bool = False, codoc_bin: str = "codoc") -> int:
     """Replay the neutral recording into one condition and record its response.
 
     `settle_every` is how many code frames go in before the daemon is given time
@@ -628,13 +858,23 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
         shutil.copy2(workspace / rel, dest)
 
     watching = (workspace / ".codoc").is_dir()
+    session = "replay-" + uuid.uuid4().hex[:12]
+    if watching:
+        _open_session(workspace, session, manifest.get("request", ""))
     previous = base
     derived = []
+    outstanding: list[tuple[int, int]] = []
     stops = {int(n) for n in manifest.get("checkpoints", [])}
     if stops:
         print(f"  stopping at frame(s) {sorted(stops)}")
     for frame in manifest["frames"]:
         mark = _codoc_newest(workspace) if watching else 0.0
+        # The touch is recorded BEFORE the file lands, as the real hook does, so
+        # what a participant sees is the agent going to a feature and then the
+        # feature changing — not both at once, which reads as a report rather
+        # than as somebody working.
+        if watching:
+            _drive_hook(workspace, frame, session, "pre")
         src = frames / f"{frame['n']:04d}"
         if src.exists():
             for path in src.rglob("*"):
@@ -646,6 +886,19 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
                 shutil.copy2(path, dest)
         for rel in frame.get("deletes", []):
             (workspace / rel).unlink(missing_ok=True)
+        working = None
+        if watching:
+            _drive_hook(workspace, frame, session, "post")
+            made = _run_proposals(workspace, frame, codoc_bin)
+            if made:
+                print(f"    proposed {made} node(s) into the tree")
+            # The frame carries the agent AT WORK, and the daemon needs the turn to
+            # be over. Both are true of a real session at different moments, and a
+            # frame is one moment — so the working state is kept here and put back
+            # after the daemon has had its falling edge and settled.
+            live = workspace / ".codoc" / "activity.json"
+            working = live.read_bytes() if live.exists() else None
+            _end_turn(workspace, session)
 
         # Without pacing the frames go in as fast as the disk allows, the daemon
         # coalesces the lot into one pass, and the description moves once at the
@@ -662,12 +915,16 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
         # between a participant meeting a plan and meeting half of one.
         at_stop = frame["n"] in stops
         if watching and (last or at_stop or frame["n"] % settle_every == 0):
-            waited = _wait_for_daemon(workspace, mark, settle, timeout)
+            quiet = (max(settle * STOP_SETTLE_FACTOR, STOP_SETTLE_FLOOR_S)
+                     if at_stop else settle)
+            waited = _wait_for_daemon(workspace, mark, quiet, timeout)
 
         # The store is carried once, at the end, because it is most of the bytes
         # and nobody sees it. A checkpoint needs it too: the daemon restarts there
         # and projects the tree from the STORE, so a stale one at that moment
         # shows the participant a tree with none of the plan in it.
+        if working is not None:
+            (workspace / ".codoc" / "activity.json").write_bytes(working)
         current = scan(workspace, with_index=at_stop)
         writes = [r for r, h in current.items() if previous.get(r) != h]
         # A file carried only at a checkpoint is not gone at the next frame, it is
@@ -689,6 +946,17 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
         moved = [w for w in writes if w.startswith(".codoc/")]
         print(f"  frame {frame['n']:>3}  +{len(writes)} -{len(deletes)}"
               f"  {len(moved)} under .codoc  settled in {waited:.0f}s")
+
+        # The answer the participant is about to give, given here so the rest of
+        # the recording is what follows FROM it. After the frame is recorded, so
+        # the frame they stop on still has the question in it.
+        if watching and at_stop:
+            outstanding.append((frame["n"], _outstanding(workspace)))
+            answered = _answer_the_plan(workspace, codoc_bin)
+            if answered:
+                print(f"    accepted {answered} proposal(s), as a participant will")
+                _wait_for_daemon(workspace, _codoc_newest(workspace), settle, timeout)
+                previous = scan(workspace, with_index=True)
 
     # The condition's own record-updating machinery, for a condition whose
     # machinery is not a daemon. In the baseline that is the documentation
@@ -733,8 +1001,42 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     }, indent=2))
     if (frames / "transcript.jsonl").exists():
         shutil.copy2(frames / "transcript.jsonl", out / "transcript.jsonl")
-    touched = sum(1 for f in derived if any(w.startswith(".codoc/") for w in f["writes"]))
+    # What "the description moved" counts, and why it is a GATE rather than a note.
+    #
+    # `activity.json` is excluded because this derive writes it itself, one frame at
+    # a time, for the presence — counting it would report movement in every frame of
+    # a recording where the daemon never ran at all. Which is not hypothetical: the
+    # presence work opened an agent epoch and left it open, and an open epoch is
+    # exactly the signal that tells `codoc watch` to stand down. Twelve frames were
+    # derived, every one of them carried a `.codoc/` write, and the tree never moved
+    # once. The recording looked fine and was worthless: a participant would have
+    # watched a description that never caught up with the code, in a study about
+    # whether descriptions catch up with code.
+    #
+    # So a codoc-condition derive that produced no movement fails here. The
+    # experimenter finds out now, and not from a pilot.
+    def moved(f: dict) -> bool:
+        return any(w.startswith(".codoc/") and w not in REPLAY_RETARGETED
+                   for w in f["writes"])
+    touched = sum(1 for f in derived if moved(f))
     print(f"{len(derived)} frames, the description moved in {touched} of them")
+    if watching and not touched:
+        print("the daemon never reacted — nothing under .codoc/ changed in any "
+              "frame. This recording shows a description that never catches up "
+              "with the code, which is the thing it exists to show.", file=sys.stderr)
+        return 1
+    # A stop with nothing to answer does not stop. The player waits only while
+    # something is outstanding, so a checkpoint the condition raised no proposal
+    # and no rewrite at plays straight past — the participant never gets the
+    # moment, and nothing anywhere says the moment was missing. Reported rather
+    # than failed: whether a stop is worth having is a judgement about the study,
+    # and it is the experimenter's.
+    for n, count in outstanding:
+        if count:
+            print(f"  stop at frame {n}: {count} thing(s) to answer")
+        else:
+            print(f"  stop at frame {n}: NOTHING to answer, so playback will not "
+                  f"wait there", file=sys.stderr)
     return 0
 
 
@@ -854,11 +1156,17 @@ def simulate(script_dir: Path, workspace: Path, out: Path) -> int:
             said = [f"> {script['request']}", ""] + said
         terminal = "\n".join(said)
         check_no_leak(terminal, "", f"step {i} of the script")
-        frames.append({
+        entry = {
             "n": i, "at_s": round(at, 3), "delay_s": round(delay, 3),
             "writes": sorted(writes), "deletes": sorted(deletes),
             "terminal": terminal,
-        })
+        }
+        # The plan the agent puts in the tree. It is declared here and MADE during
+        # `derive`, because proposing needs a store and the neutral workspace has
+        # none — see the note above `_run_proposals`.
+        if step.get("propose"):
+            entry["propose"] = step["propose"]
+        frames.append(entry)
         previous = current
         print(f"  step {i:>3}  +{len(writes)} -{len(deletes)}  {delay:.1f}s")
 
@@ -869,6 +1177,7 @@ def simulate(script_dir: Path, workspace: Path, out: Path) -> int:
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "recorded_root": WORKSPACE_TOKEN,
         "authored": True,
+        "request": script.get("request", ""),
         "real_duration_s": round(at, 1),
         "idle_removed_s": 0.0,
         "idle_cap_s": IDLE_CAP_S,
@@ -894,7 +1203,7 @@ def simulate(script_dir: Path, workspace: Path, out: Path) -> int:
     return 0
 
 
-def checkpoint(frames: Path, at: list[int], says: str) -> int:
+def checkpoint(frames: Path, at: list[int], says: list[str]) -> int:
     """Cut a finished recording at the points the agent stops to ask.
 
     Kept out of `build` on purpose. Where the agent paused is a judgement about
@@ -913,7 +1222,13 @@ def checkpoint(frames: Path, at: list[int], says: str) -> int:
     if at:
         manifest["checkpoints"] = sorted(set(at))
         if says:
-            manifest["checkpoint_says"] = says
+            # One `--says` per stop, in order. A session with two stops asks two
+            # different questions — "here is the plan, what do you want" and "here
+            # is what the build did to the descriptions" — and repeating the first
+            # at the second would tell the participant to answer something that is
+            # already behind them. A single string still works and is used at every
+            # stop, which is what a one-stop recording wants.
+            manifest["checkpoint_says"] = says[0] if len(says) == 1 else list(says)
     else:
         manifest.pop("checkpoints", None)
         manifest.pop("checkpoint_says", None)
@@ -999,8 +1314,9 @@ def main(argv: list[str]) -> int:
     c.add_argument("frames", type=Path)
     c.add_argument("at", type=int, nargs="*",
                    help="frame numbers; none clears the checkpoints")
-    c.add_argument("--says", default="",
-                   help="what the agent says while it waits for the answer")
+    c.add_argument("--says", action="append", default=[],
+                   help="what the agent says while it waits for the answer; "
+                        "repeat once per stop, in order")
 
     d = sub.add_parser("derive", help="replay a neutral recording into one condition")
     d.add_argument("frames", type=Path)
@@ -1019,6 +1335,9 @@ def main(argv: list[str]) -> int:
                    help="a command to run in the workspace after the last frame, "
                         "for a condition whose record is written by an agent "
                         "rather than by a daemon")
+    d.add_argument("--codoc", default="codoc",
+                   help="the codoc command used to author the script's plan "
+                        "proposals into this condition's tree")
 
     args = parser.parse_args(argv)
     if args.command == "watch":
@@ -1031,7 +1350,8 @@ def main(argv: list[str]) -> int:
         return checkpoint(args.frames, args.at, args.says)
     if args.command == "derive":
         return derive(args.frames, args.workspace, args.out, args.settle,
-                      args.timeout, max(1, args.settle_every), args.after, args.pace)
+                      args.timeout, max(1, args.settle_every), args.after, args.pace,
+                      args.codoc)
     return build(args.raw, args.transcript, args.frames, args.seconds)
 
 
