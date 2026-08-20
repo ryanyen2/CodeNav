@@ -441,10 +441,12 @@ const VIEWS = {
         <p>${esc(t('ui.task.lead', TASK.lead))}</p>
         <ol class="do">
           <li>${esc(t('ui.task.send.1', 'Start your coding agent in a terminal.'))}
-            ${cmd('./claude-study')}</li>
+            ${cmd('./start-session')}</li>
           <li>${esc(t('ui.task.send.2', 'Copy this and paste it in.'))}
             ${block(p.prompt, t('ui.task.copy', 'Copy'))}</li>
           <li>${esc(t('ui.task.send.3', 'Watch it work. It takes a few minutes.'))}</li>
+          <li>${esc(t('ui.task.send.4', 'To talk to it again later, run this in the same terminal.'))}
+            ${cmd('./claude-study')}</li>
         </ol>
 
         <h2>${esc(t('ui.task.then', 'What happens then'))}</h2>

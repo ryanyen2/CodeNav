@@ -1002,19 +1002,17 @@ for name in $PROJECTS; do
 export CLAUDE_CONFIG_DIR="$d/.claude-study"
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
 
-# The first turn of the session is the change under review. It is recorded once
-# and played back, so everybody reviews the same code and nobody waits forty
-# minutes for an agent to type. `agent.py` takes the request, plays it, and
-# leaves the session where the assistant picks it up, so every turn after the
-# first is the real assistant with the change's own context.
-# Only when it is started the way a session starts it, with no arguments. The
-# setup check runs \`./claude-study -p ...\` to prove the key works, and without
-# this that check would play the session's one recording into the workspace days
-# before anybody sat down.
-if [ \$# -eq 0 ] && [ ! -f "$d/.claude-study/handover.json" ] && [ -f "$frames_dir/manifest.json" ]; then
-  python3 "$WORK/replay/agent.py" play "$d" "$frames_dir" || exit \$?
-fi
-
+# This launcher does ONE thing: start the assistant. Playing the recorded session
+# is \`./start-session\`, beside it.
+#
+# It used to do both, and the coupling cost a participant their session. The
+# recording only counts as played once \`play_staged\` returns, which is after BOTH
+# stops — so an interrupted replay, or one whose stop waited out its cap, left no
+# handover record, and the next \`./claude-study\` started the recording again from
+# the beginning. Somebody typing into what they thought was their assistant got the
+# replay instead, every time, with no way out of it. Separating them means an
+# interrupted replay costs you the replay and not the assistant.
+#
 # Unquoted on purpose: empty expands to no argument at all, and an empty array
 # does not on the bash macOS ships.
 RESUME=""
@@ -1026,6 +1024,57 @@ exec claude \$RESUME \\
   "\$@"
 LAUNCHER
   chmod +x "$d/claude-study"
+
+  # ── the recorded session, on its own ────────────────────────────────────────
+  # Separate from the launcher so that interrupting it costs the replay and not
+  # the assistant, and so it can be run again if it was.
+  cat > "$d/start-session" <<REPLAY
+#!/usr/bin/env bash
+# Start the session: the participant asks for the change, and it is made.
+#
+# NAMED FOR WHAT IT DOES, not for how it does it. The participant runs this and is
+# never told a recording exists — a script called \`replay\` in their own folder
+# tells them, before they have read a line of the change. The assistant afterwards
+# is \`./claude-study\`, which this does not start.
+#
+#   ./start-session            this workspace's session
+#   ./start-session --list     what is on this machine (rehearsal)
+#   ./start-session <project>  another one (rehearsal)
+export CLAUDE_CONFIG_DIR="$d/.claude-study"
+
+FRAMES="$frames_dir"
+if [ "\${1:-}" = "--list" ]; then
+  echo "recordings in $WORK/replay/frames:"
+  for m in "$WORK"/replay/frames/*/*/manifest.json; do
+    [ -f "\$m" ] || continue
+    p="\$(basename "\$(dirname "\$(dirname "\$m")")")"
+    a="\$(basename "\$(dirname "\$m")")"
+    echo "  \$p/\$a"
+  done
+  echo "this workspace plays: $name/$(condition_for "$name")"
+  exit 0
+fi
+if [ -n "\${1:-}" ] && [ "\${1#-}" = "\$1" ]; then
+  FRAMES="$WORK/replay/frames/\$1"
+  [ -d "\$FRAMES" ] || FRAMES="$WORK/replay/frames/\$1/$(condition_for "$name")"
+  shift          # it named a recording, so it is not an argument for the player
+fi
+[ -f "\$FRAMES/manifest.json" ] || { echo "no recording at \$FRAMES" >&2; exit 1; }
+
+# Playing a recording into a workspace RESTORES it to the recording's starting
+# state first, so anything already done here goes. Said out loud rather than
+# discovered, because the folder somebody runs this in twice is usually the one
+# they had been working in.
+if [ -f "$d/.claude-study/handover.json" ]; then
+  echo "This workspace has already played its recording."
+  echo "Running it again resets the project to before the change and replays it."
+  printf "Type 'replay' to do that, anything else to stop: "
+  read -r answer
+  [ "\$answer" = "replay" ] || exit 0
+fi
+exec python3 "$WORK/replay/agent.py" play "$d" "\$FRAMES" "\$@"
+REPLAY
+  chmod +x "$d/start-session"
 
   # Told to git when the workspace was unpacked, not here, because the verify
   # step is not the only thing that reads it and the filing step runs first.

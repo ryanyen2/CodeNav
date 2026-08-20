@@ -128,7 +128,7 @@ def copy_tree(src: Path, workspace: Path) -> list[str]:
 #
 # `.claude-study/` (the profile, the handover record, the captured welcome) is already
 # safe because `scan` skips it as a directory; this is the file beside it.
-PARTICIPANT_FILES = {"claude-study"}
+PARTICIPANT_FILES = {"claude-study", "start-session"}
 
 
 def reset(workspace: Path, frames: Path) -> None:

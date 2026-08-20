@@ -395,26 +395,38 @@ anything it did.
 Nothing on the page says the change is wrong, and nothing says what to check.
 Either would hand over the thing being measured.
 
-### What `./claude-study` does on the first run
+### Two commands: `./start-session` plays it, `./claude-study` is the assistant
 
-`./claude-study` is a launcher that setup writes into each project folder. On its
-first run with no arguments, when the folder holds no `.claude-study/handover.json`
-and a recording for that folder is present, it hands the turn to
-`~/codoc-study/replay/agent.py`, which does five things:
+Setup writes both into each project folder, and they are separate on purpose.
+
+`./start-session` hands the turn to `~/codoc-study/replay/agent.py`, which does
+five things:
 
 1. It prints the assistant's own opening screen, recorded on that machine during
    setup and kept in `.claude-study/welcome.ansi`.
 2. It takes the request in an input box of its own.
 3. It stops the codoc daemon if one is running, because the player will not write
    into a workspace a live daemon owns.
-4. It plays the recording, which takes about three minutes.
-5. It writes `.claude-study/handover.json` and starts the daemon again in the
-   background.
+4. It plays the recording, stopping twice for the participant to answer.
+5. It writes `.claude-study/handover.json` and gives the workspace back.
 
-The launcher then runs the real assistant with `--continue`, so every turn after
-the first is live and carries the recorded session's context. The handover file is
-what stops the first turn happening twice. Once it exists, every later run goes
-straight to the assistant.
+`./claude-study` then runs the real assistant, with `--continue` once a handover
+record exists, so it carries the recorded session's context and every turn is live
+— with MCP, autocomplete and everything else a normal session has.
+
+They used to be one command, and the coupling cost a participant their session. The
+handover record is only written once the recording has played all the way through,
+which is after BOTH stops — so an interrupted replay, or one whose stop waited out
+its cap, left no record, and the next `./claude-study` started the recording again
+from the beginning. Somebody typing into what they thought was their assistant got
+the replay instead, every time. Now an interrupted replay costs the replay and not
+the assistant: `./claude-study` starts a session either way, and `./start-session`
+can be run again.
+
+`./start-session --list` shows which recordings are on the machine, and it takes a
+project name for a rehearsal in a scratch folder. Run in a folder that has already
+played its recording it asks before doing anything, because replaying restores the
+project to before the change.
 
 The recorded frames carry the request as the agent's own first line, so what plays
 is the recorded request rather than the text that was typed. A participant who
@@ -443,9 +455,10 @@ them from there rather than retyping.
 4. They read the project page, then the page about the way of working. Five
    minutes each. Answer questions, but do not add to either page.
 
-5. On the task page they start the agent with `./claude-study` and paste in the
-   request the page gives them. It works for about three minutes. Let them watch
-   it.
+5. On the task page they start the agent with `./start-session` and paste in the
+   request the page gives them. It works for about three minutes, stopping twice
+   for them to answer. Let them watch it. Afterwards `./claude-study` is the
+   assistant, and the page tells them so.
 
 6. Twenty minutes from there. Say "about ten minutes gone" once, at the halfway
    point, and call time at twenty.
@@ -698,13 +711,15 @@ folder whether the session it reviews is there. Note it on the session sheet
 either way, because that participant did not review the same change as everybody
 else.
 
-**It stopped partway.** They run `./claude-study` again. The handover record is
+**It stopped partway.** They run `./start-session` again. The handover record is
 only written once the recording has played all the way through, so a run that was
 interrupted starts again from the beginning, restoring the starting state as it
 goes, and the participant sees nothing a second run does not show them again.
+`./claude-study` is unaffected either way — it starts the assistant, not the
+recording.
 
 **The change is already in the folder.** `./setup.sh --check` says the session has
-already been played there. Somebody has run `./claude-study` in that folder, and
+already been played there. Somebody has run `./start-session` in that folder, and
 the change is sitting in it before the participant has asked for anything. Do not
 run the session there. Delete `~/codoc-study` and run `./setup.sh` with their code
 and order again.

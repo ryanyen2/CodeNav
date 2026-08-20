@@ -196,6 +196,7 @@ export const ZH_HANS = Object.freeze({
     'ui.task.send.2': '复制这段，粘贴进去。',
     'ui.task.copy': '复制',
     'ui.task.send.3': '看着它做。要几分钟。',
+    'ui.task.send.4': '之后要再跟它说话，在同一个终端里运行这个。',
     'ui.task.mins1': '大约十分钟',
     'ui.task.mins2': '大约十分钟',
     'ui.task.clock': '总共二十分钟。这个页面上没有计时器。快到时间时研究员会告诉你。',

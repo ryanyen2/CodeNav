@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.14
+
+### Fixed
+
+- **A plan appeared in the tree pane at once and in the document half a minute later.**
+  The doc skips its reload when the baseline text and the proposal set are both
+  unchanged — reloading on an echo would only reset the caret — and neither half of
+  that test could see a plan ADD. `renderTreeFromDoc` skips `proposed` nodes by design,
+  so a materialized plan renders to the text of a document without it; and the signature
+  only covered amends. The signature now covers every proposal the host materializes,
+  keyed on its anchors too, since re-anchoring moves a plan node on screen.
+
+
 ## 0.2.13
 
 ### Fixed

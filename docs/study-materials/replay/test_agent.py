@@ -385,10 +385,12 @@ def test_the_launcher_survives_a_reset(tmp_path):
     ws.mkdir()
     (ws / "code.py").write_text("edited\n")
     (ws / "claude-study").write_text("#!/bin/sh\n")
+    (ws / "start-session").write_text("#!/bin/sh\n")
     (ws / "leftover.py").write_text("from a previous run\n")
 
     player.reset(ws, frames)
 
     assert (ws / "claude-study").exists(), "the participant's launcher was deleted"
+    assert (ws / "start-session").exists(), "the replay script deleted itself mid-run"
     assert (ws / "code.py").read_text() == "one\n", "the code was not reset"
     assert not (ws / "leftover.py").exists(), "a stale file survived the reset"

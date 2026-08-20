@@ -679,18 +679,35 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
         return pos;
     }
 
-    /** Signature of the reviewable AMENDs (the proposals the host materializes as
-     *  engine marks in the payload doc). Changes when a proposal appears, mutates,
-     *  or resolves — the setDoc reload trigger keys on it so the marks render/clear
-     *  even when the baseline `tree.codoc` text is unchanged (notably on reject).
+    /** Signature of every proposal the host MATERIALIZES into the payload doc — the
+     *  amends it renders as engine marks, and the adds and retires `plan-materialize`
+     *  writes in as nodes. Changes when one appears, mutates, or resolves, and the
+     *  setDoc reload trigger keys on it.
      *
-     *  Same predicate as agentAmendsFrom, which is what it has to mirror: a `yours`
-     *  amend (the author's own deferred edit) that materializes but never re-triggers
-     *  a reload would show its marks only by luck of a co-occurring text change. */
+     *  It has to cover adds and retires, not just amends, because NEITHER of the two
+     *  things that decide a reload can see a plan node otherwise. `renderTreeFromDoc`
+     *  skips `proposed` nodes on purpose — that guard is what keeps an agent's words
+     *  out of `tree.codoc` — so a materialized plan renders to exactly the text of a
+     *  document without it, and `sameText` is true. With adds missing from the
+     *  signature too, the skip fired and the plan never entered the editor: the tree
+     *  pane, which redraws from the payload with no gate in front of it, showed the
+     *  plan at once while the doc sat unchanged until some unrelated write forced a
+     *  reload half a minute later. A participant met the plan in one pane and not the
+     *  other, in the surface whose whole argument is reading a plan where it will land.
+     *
+     *  Anchors are in the key because they decide WHERE a plan node is drawn: a
+     *  proposal re-anchored without its text changing has moved on screen, which is a
+     *  redraw.
+     *
+     *  Same predicate as agentAmendsFrom for the amends it mirrors: a `yours` amend
+     *  that materializes but never re-triggers a reload would show its marks only by
+     *  luck of a co-occurring text change. */
     function proposalsSig(): string {
         return currentSuggestions
-            .filter(s => s.direction !== 'doc-ahead' && s.kind === 'amend')
-            .map(s => `${s.id}:${s.titleNew ?? ''}:${s.descNew ?? ''}`)
+            .filter(s => s.direction !== 'doc-ahead'
+                      && (s.kind === 'amend' || s.kind === 'add' || s.kind === 'retire'))
+            .map(s => [s.id, s.kind, s.titleNew ?? '', s.descNew ?? '',
+                       s.parentId ?? '', s.afterId ?? '', s.beforeId ?? ''].join(':'))
             .join('|');
     }
 
