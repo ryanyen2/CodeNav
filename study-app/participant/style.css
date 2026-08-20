@@ -409,6 +409,13 @@ pre.sample.bad { border-left: 2px solid var(--line-strong, var(--line)); padding
 .asks { margin: 8px 0 0; padding-left: 20px; }
 .asks li { margin-bottom: 8px; }
 
+/* The commands to run once the change is in. One per line with its reason
+   beside it, because a participant reads this while looking at a terminal and
+   has to be able to find the next one without re-reading the paragraph. */
+.runs { list-style: none; margin: 8px 0 6px; padding: 0; }
+.runs li { margin-bottom: 8px; }
+.runs li .fine { display: block; margin-top: 2px; }
+
 .rule { font-size: 14px; color: var(--ink-soft); margin: 0 0 18px; }
 
 /* ── the tutorial ─────────────────────────────────────────────────────────── */

@@ -462,6 +462,13 @@ const VIEWS = {
         <pre class="sample">${esc(p.repl.before)}</pre>
         <p class="fine">${esc(t(`project.${step.project}.repl.caption`, p.repl.caption))}</p>
 
+        <p>${esc(t(`project.${step.project}.repl.after.lead`, p.repl.after.lead))}</p>
+        <ul class="runs">${p.repl.after.commands.map(([c, why], i) => `
+          <li>${cmd(c)}
+            <span class="fine">${esc(t(`project.${step.project}.repl.after.${i}`, why))}</span></li>`).join('')}
+        </ul>
+        <p class="fine">${esc(t(`project.${step.project}.repl.after.caption`, p.repl.after.caption))}</p>
+
         <p class="rule">${esc(t('ui.task.clock',
         'Twenty minutes in all. There is no clock on this page. The researcher will '
         + 'tell you when time is nearly up.'))}</p>`;

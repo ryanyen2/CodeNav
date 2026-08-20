@@ -206,6 +206,18 @@ export const ZH_HANS = Object.freeze({
     'project.scribe.repl.caption': 'furniture 是这个项目对重复页眉和页码的叫法。某条规则开始去掉更多 furniture，就说明它从某个地方多去掉了东西。',
     'project.tally.repl.lead': '把三份示例流水都汇总一遍，每份会打印一行。下面是现在的输出，也就是任何改动之前的样子。',
     'project.tally.repl.caption': 'boundary.csv 是最刁钻的一份：里面每一笔都是月末发生、下个月初才入账的。',
+    // 只说要跑哪几条命令，不说会看到什么。两处埋的问题都只有跑起来才看得见，
+    // 读代码是读不出来的；没想到去跑一下的人，得零分的原因跟他用的是哪种工作
+    // 方式毫无关系。两个条件下这几行完全一样。
+    'project.scribe.repl.after.lead': '等它说做完了，自己把下面这几条跑一遍。',
+    'project.scribe.repl.after.0': '还是上面那四份文档',
+    'project.scribe.repl.after.1': '这次改动新加的设置',
+    'project.scribe.repl.after.caption': '把第一条的输出和上面那张表一行一行对着看，再把两者都和设置里写的对照一遍。凡是动了的数字，都是这次改动动的。逐个判断它该不该动，不该动的就改回来。',
+    'project.tally.repl.after.lead': '等它说做完了，自己把下面这几条跑一遍。',
+    'project.tally.repl.after.0': '还是上面那三份流水',
+    'project.tally.repl.after.1': 'boundary.csv 的完整汇总，直接打印出来而不写文件',
+    'project.tally.repl.after.2': '同样这七笔，改成一周一周地看',
+    'project.tally.repl.after.caption': '把第一条的输出和上面那张表一行一行对着看，后两条则互相对着看。凡是动了的数字，都是这次改动动的。逐个判断它该不该动，不该动的就改回来。',
     'ui.task.then': '接下来会发生什么',
     'ui.task.stage1': '它会先读一遍项目，然后回来告诉你它打算怎么做。你来回答它。',
     'ui.task.stage2': '它开始改。看着哪些地方在动，读一读它说自己做了什么。',

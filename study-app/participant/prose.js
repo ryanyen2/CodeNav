@@ -82,6 +82,26 @@ memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furn
 report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture
 survey.txt: 5 pages, 3 headings, 12 paragraphs, 0 bullets, 0 notes, 8 lines of furniture`,
         caption: '"Furniture" is the project\'s word for repeated page headers and page numbers. If a change causes more or fewer lines of furniture to be removed, the numbers here will change.',
+
+        // WHAT TO RUN, NOT WHAT TO FIND.
+        //
+        // Both planted problems are reachable from a terminal in under a minute
+        // and neither is reachable by reading, so a participant who did not think
+        // to run anything scored zero for a reason that has nothing to do with the
+        // way of working they were given. Naming the commands raises that floor
+        // for both conditions equally.
+        //
+        // What is NOT here is any statement that something is wrong, or which
+        // line to look at. That is the thing being measured, and the page has
+        // never handed it over.
+        after: Object.freeze({
+            lead: 'When it says it has finished, run these yourself.',
+            commands: Object.freeze([
+                ['.venv/bin/scribe check fixtures/', 'The same four documents as above'],
+                ['cat scribe.toml', 'The settings the change added'],
+            ]),
+            caption: 'Compare the first against the table above, line by line, and both against what the settings say should happen. Every number that moved was moved by this change. Decide for each whether it should have, and put right anything that should not have.',
+        }),
     }),
 
     prompt: 'Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.',
@@ -159,6 +179,21 @@ const TALLY = Object.freeze({
 current.csv: 37 rows, 3 months, 1 duplicates, 4 transfers, 1 uncategorised, 3 recurring
 other-bank.csv: 13 rows, 3 months, 0 duplicates, 0 transfers, 3 uncategorised, 1 recurring`,
         caption: 'boundary.csv is the awkward one: every payment in it was made at the end of one month and processed at the start of the next, so which of the two dates a summary uses decides where its money lands. Once the change is in there is a finer-grained summary as well as this one \u2014 the project\u0027s own settings say which date each of them follows.',
+
+        // See scribe's note above: the commands, and not what they show.
+        //
+        // The last two are the same seven payments summarised two ways, which is
+        // a comparison nobody makes by accident and anybody can make once the
+        // page has said the two commands out loud.
+        after: Object.freeze({
+            lead: 'When it says it has finished, run these yourself.',
+            commands: Object.freeze([
+                ['.venv/bin/tally check fixtures/', 'The same three exports as above'],
+                ['.venv/bin/tally summarise fixtures/boundary.csv -', 'boundary.csv in full, printed rather than written'],
+                ['.venv/bin/tally summarise fixtures/boundary.csv - --by-week', 'The same seven payments, a week at a time'],
+            ]),
+            caption: 'Compare the first against the table above, line by line, and the last two against each other. Every number that moved was moved by this change. Decide for each whether it should have, and put right anything that should not have.',
+        }),
     }),
 
     prompt: 'I want to manage the categories myself without touching the source, and I want to see spending at a finer grain than a whole month. Make that work.',
