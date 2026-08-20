@@ -118,6 +118,19 @@ def copy_tree(src: Path, workspace: Path) -> list[str]:
     return written
 
 
+# Files the PARTICIPANT owns, which the recording knows nothing about and must not
+# take with it. `reset` deletes everything the base state does not contain, which is
+# right for code and wrong for the things setup.sh put in the folder for the person
+# using it. `claude-study` is the launcher they start the session with: replaying
+# deleted it, so the first thing a participant did after the recording — go back to
+# the terminal and run it again — answered "no such file or directory", with their
+# session in the middle of it.
+#
+# `.claude-study/` (the profile, the handover record, the captured welcome) is already
+# safe because `scan` skips it as a directory; this is the file beside it.
+PARTICIPANT_FILES = {"claude-study"}
+
+
 def reset(workspace: Path, frames: Path) -> None:
     """Put the workspace back to the state the recording started from."""
     base = frames / "base"
@@ -125,8 +138,9 @@ def reset(workspace: Path, frames: Path) -> None:
         raise SystemExit(f"no base state in {frames}")
     wanted = scan(base)
     for rel in scan(workspace):
-        if rel not in wanted:
-            (workspace / rel).unlink(missing_ok=True)
+        if rel in wanted or rel in PARTICIPANT_FILES:
+            continue
+        (workspace / rel).unlink(missing_ok=True)
     # Not covered by the scan, and a stale one would report a handover that never
     # happened, so scoring would count the recording's own ledger events as the
     # participant's.

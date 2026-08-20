@@ -340,9 +340,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-40105706",
+        "fid": "f-84ead829",
         "localId": "",
-        "version": "00000001787187517179-00000000000000000000-default",
+        "version": "00000001787196836503-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -362,15 +362,15 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-40105706"
+        "ownerId": "f-84ead829"
       }
     },
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-0a45f48d",
+        "fid": "f-fe30f52a",
         "localId": "",
-        "version": "00000001787187517180-00000000000000000000-default",
+        "version": "00000001787196836504-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -390,7 +390,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-0a45f48d"
+        "ownerId": "f-fe30f52a"
       }
     },
     {
@@ -426,7 +426,7 @@
       "attrs": {
         "fid": "f-97014b50",
         "localId": "",
-        "version": "00000001787187552639-00000000000000000000-default",
+        "version": "00000001787196869794-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -454,19 +454,7 @@
       "content": [
         {
           "type": "text",
-          "text": "`check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it."
-        }
-      ],
-      "attrs": {
-        "ownerId": "f-97014b50"
-      }
-    },
-    {
-      "type": "paragraph",
-      "content": [
-        {
-          "type": "text",
-          "text": "It loads the nearest `scribe.toml` and applies its default settings before conversion, so documents can use configured rules without editing the source."
+          "text": "`check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it. Before running a workflow, it applies the configured defaults so conversion rules can vary without editing the source."
         }
       ],
       "attrs": {
@@ -476,9 +464,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-5a03ffc1",
+        "fid": "f-0f1b9127",
         "localId": "",
-        "version": "00000001787187526472-00000000000000000000-default",
+        "version": "00000001787196843096-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -498,7 +486,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-5a03ffc1"
+        "ownerId": "f-0f1b9127"
       }
     },
     {

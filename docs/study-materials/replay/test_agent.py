@@ -342,3 +342,28 @@ def test_the_store_is_carried_at_a_checkpoint():
     # tree with none of the plan in it.
     src = (Path(__file__).resolve().parent / "record.py").read_text()
     assert "scan(workspace, with_index=at_stop)" in src
+
+
+# ── what the replay must not take with it ────────────────────────────────────
+
+def test_the_launcher_survives_a_reset(tmp_path):
+    # `reset` deletes whatever the base state does not contain, which is right for
+    # code and wrong for the things setup.sh put in the folder for the participant.
+    # It deleted `claude-study`, so the first thing somebody did after the recording
+    # — go back to the terminal and start the agent again — answered "no such file
+    # or directory", mid-session, with no way to get it back.
+    frames = tmp_path / "frames"
+    (frames / "base").mkdir(parents=True)
+    (frames / "base" / "code.py").write_text("one\n")
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "code.py").write_text("edited\n")
+    (ws / "claude-study").write_text("#!/bin/sh\n")
+    (ws / "leftover.py").write_text("from a previous run\n")
+
+    player.reset(ws, frames)
+
+    assert (ws / "claude-study").exists(), "the participant's launcher was deleted"
+    assert (ws / "code.py").read_text() == "one\n", "the code was not reset"
+    assert not (ws / "leftover.py").exists(), "a stale file survived the reset"

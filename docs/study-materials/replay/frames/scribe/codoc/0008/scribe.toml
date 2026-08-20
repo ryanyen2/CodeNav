@@ -1,8 +1,8 @@
 # Settings for scribe. Every value here is optional; leave one out and scribe
 # uses the value it always used.
 
-[defaults]
-# A line has to repeat near the edge of this share of the pages before it counts
-# as page furniture. Lower catches an appendix that carries its own header.
+[document."survey.txt"]
+# The survey's appendix carries its own header over two of its five pages, which
+# is under the share a line has to repeat on before it counts as page furniture.
+# Every other document keeps the value it has always used.
 repeat_share = 0.4
-

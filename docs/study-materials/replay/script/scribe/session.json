@@ -110,8 +110,9 @@
       "delay_s": 5.0,
       "say": [
         "  Write({{WORKSPACE}}/scribe.toml)",
-        "● I've set repeat_share to 0.4 in the defaults, which is what catches the",
-        "  appendix header on a five page document."
+        "● I've put repeat_share 0.4 under [document.\"survey.txt\"] rather than in the",
+        "  defaults, so the appendix header is caught on the survey and every other",
+        "  document keeps the value it has always used."
       ],
       "write": {
         "scribe.toml": "files/scribe.toml"
@@ -142,13 +143,7 @@
       "delay_s": 6.0,
       "say": [
         "  Bash(.venv/bin/python -m pytest tests/ -q)",
-        "  ⎿  ...................................................... 54 passed",
-        "  Bash(.venv/bin/scribe check fixtures/)",
-        "  ⎿  handbook.txt: 4 pages, 9 headings, 10 paragraphs, 3 bullets, 0 notes, 12 lines of furniture",
-        "     memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furniture",
-        "     report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture",
-        "     survey.txt: 5 pages, 3 headings, 10 paragraphs, 0 bullets, 0 notes, 10 lines of furniture",
-        "     checked 4 documents"
+        "  ⎿  ...................................................... 54 passed"
       ]
     },
     {

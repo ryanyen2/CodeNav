@@ -47,7 +47,7 @@
 
       `check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it.
 
-+   - Conversion reports  ⟨e-e3918ef2⟩
++   - Conversion reports  ⟨e-b7fccd73⟩
 +       Writes a note beside each converted document saying what the conversion did to it: what was removed as furniture, which words were rejoined, which characters were replaced. It goes to a file rather than the terminal so it is still there when somebody wonders where a line went.
 +       agent plan · plan: the request asks to be told what the conversion actually did
 
@@ -67,10 +67,10 @@
 - Package identity metadata  ⟨f-837b6393⟩
     Names the package and its version: scribe turns text pulled out of a PDF into clean Markdown.
 
-+ - Conversion settings  ⟨e-497fe704⟩
++ - Conversion settings  ⟨e-2a05146e⟩
 +     Gathers the values each rule reads — the repeat share and edge margin furniture removal uses, the hyphen prefixes reflow keeps — as plain data passed in, instead of constants each module owns. Every rule keeps working unchanged when nothing is configured, because the defaults are the values it reads today.
 +     agent plan · plan: the rules cannot take per-document values while each one owns its own constants
 
-+ - Configuration files  ⟨e-a89baf26⟩
++ - Configuration files  ⟨e-adea9283⟩
 +     Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at.
 +     agent plan · plan: the request is to configure a conversion without editing the source

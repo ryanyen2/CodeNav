@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.10
+
+### Fixed
+
+- **The replay left the workspace claiming an agent was still working.** Every surface
+  keyed on that stayed on long after the session ended: the presence avatar, "running
+  pytest" in the status, and — the one people noticed — the realize ghost, which dims a
+  feature's prose to the faint ink while an agent is still writing it. A participant took
+  the handover and found the document greyed out, narrating work that had finished
+  minutes earlier. The recording now ends its turn where the agent actually stops: at the
+  end, and at each checkpoint. Ending it at a checkpoint matters on its own, because the
+  second stop exists for reading what the build did to the descriptions, and leaving the
+  turn open there ghosted the very sentence it was asking about.
+
+- **Replaying deleted the participant's launcher.** The reset removes whatever the
+  recorded starting state does not contain, which is right for code and wrong for the
+  files setup.sh puts in the folder for the person using it. `claude-study` was one of
+  them, so the first thing anybody did after the recording — go back to the terminal and
+  start the agent again — answered "no such file or directory", mid-session.
+
+- **The workspace check asserted a fixture count that a new fixture had made stale**, so
+  setup failed on a workspace that was correct. It counts what is in `fixtures/` now.
+
+
 ## 0.2.9
 
 ### Fixed

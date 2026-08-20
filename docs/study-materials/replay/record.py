@@ -868,6 +868,8 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
     if stops:
         print(f"  stopping at frame(s) {sorted(stops)}")
     for frame in manifest["frames"]:
+        last = frame is manifest["frames"][-1]
+        at_stop = frame["n"] in stops
         mark = _codoc_newest(workspace) if watching else 0.0
         # The touch is recorded BEFORE the file lands, as the real hook does, so
         # what a participant sees is the agent going to a feature and then the
@@ -896,8 +898,24 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
             # be over. Both are true of a real session at different moments, and a
             # frame is one moment — so the working state is kept here and put back
             # after the daemon has had its falling edge and settled.
+            #
+            # EXCEPT AT A STOP, AND ON THE LAST FRAME. Restoring
+            # the working state there leaves the workspace claiming an agent is
+            # mid-edit for as long as the leases last — and everything keyed on that
+            # stays on: the presence avatar, "running pytest" in the status, and the
+            # realize-ghost that dims a feature's prose to the faint ink while the
+            # agent is still working on it. A participant took the handover and found
+            # a document greyed out, narrating an agent that had finished minutes ago.
+            # Letting the last turn END is also what fires the ghost→ink reveal, which
+            # is the moment the surface exists to show.
             live = workspace / ".codoc" / "activity.json"
-            working = live.read_bytes() if live.exists() else None
+            # At a checkpoint the agent has stopped to ASK: it is waiting for the
+            # participant, not editing. The second stop exists for reading what the
+            # build did to the descriptions, and leaving the turn open there ghosts
+            # the very prose it is asking them to review — faint ink on the sentence
+            # under review, which is the one thing that stop must not do.
+            working = None if (last or at_stop) else (
+                live.read_bytes() if live.exists() else None)
             _end_turn(workspace, session)
 
         # Without pacing the frames go in as fast as the disk allows, the daemon
@@ -908,12 +926,10 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
             time.sleep(min(frame["delay_s"], 20.0))
 
         waited = 0.0
-        last = frame is manifest["frames"][-1]
         # A checkpoint is a place playback STOPS and the daemon comes back, so
         # whatever the daemon is about to project has to have finished being
         # written. Settling there is not an optimisation, it is the difference
         # between a participant meeting a plan and meeting half of one.
-        at_stop = frame["n"] in stops
         if watching and (last or at_stop or frame["n"] % settle_every == 0):
             quiet = (max(settle * STOP_SETTLE_FACTOR, STOP_SETTLE_FLOOR_S)
                      if at_stop else settle)

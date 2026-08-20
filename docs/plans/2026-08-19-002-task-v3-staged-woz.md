@@ -240,6 +240,45 @@ Three things had to be fixed for any of it to work, and each was silent:
   working state, put back after the daemon has had its falling edge.
 - A derive that produced no tree movement now FAILS rather than reporting it.
 
+## The planted problem, remade (2026-08-19, late)
+
+The original one could not fire, and the arithmetic says why. Furniture needs a line
+to repeat on `max(2, int(pages * repeat_share))` pages, and that floor of 2 dominates
+every fixture under five pages — so `repeat_share` 0.4 and 0.6 give the SAME threshold
+for handbook (4pp), memo (2pp) and report (3pp), and differ only on the survey (5pp),
+which is the document it was meant to fix. Measured, not reasoned: before and after
+the change, the only figure that moves is the survey's, in the intended direction.
+`edge` moves nothing either, and `MAX_HEADING_WORDS` only bites below 6, which no
+agent would plausibly choose. **These fixtures cannot carry a tuned-constant trap**:
+none of them contains genuine content that is both near a page edge and repeated.
+
+So the misinterpretation moved from a value to a WIRING mistake, which the fixtures
+do reveal. `scribe.toml` now scopes the change to the document that needs it:
+
+    [document."survey.txt"]
+    repeat_share = 0.4
+
+and `cli.py` applies `conf.defaults` once at startup and never calls `_apply` for the
+document being converted — so the per-document section is parsed, validated, reported,
+and silently ignored. The agent's own closing line claims "the survey's appendix header
+is gone". It is not.
+
+- **Tests pass** — 54 of them, measured with the defect in place.
+- **Invisible by reading**: the config parses, the report prints, and the feature
+  description asserts the correct behaviour ("the settings passed to every rule must
+  remain tied to the document being converted").
+- **Obvious by running**: `check fixtures/` prints the survey at 12 paragraphs and 8
+  lines of furniture — exactly the before-figures on the task page. Corrected, it
+  prints 10 and 10.
+- The agent no longer runs `check fixtures/` in the recording, so the figures are not
+  in the scrollback to be read. Running it is the participant's move.
+
+**Still to do before analysis:** `scoring/claims/scribe.json` describes the v2 defects
+(D1/D2/D4) and its C1 probe tests a furniture threshold that is no longer touched. It
+needs one claim for this defect — "a document's own section in scribe.toml changes how
+that document is converted" — with a probe that runs a conversion under a scoped config.
+Scoring is wrong until that lands; running a session is not affected.
+
 ## Open
 
 - Whether `tally` gets the same shape or a different misinterpretation. It should

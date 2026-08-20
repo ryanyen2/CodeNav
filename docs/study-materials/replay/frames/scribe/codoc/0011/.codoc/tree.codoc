@@ -39,10 +39,10 @@
 
       So `ﬁ` becomes `fi` and a curly `’` becomes `'`. This loses typographic fidelity on purpose — the output is meant to be grepped, diffed, and pasted, and none of those work well against characters you cannot type.
 
-- Conversion settings  ⟨f-40105706⟩
+- Conversion settings  ⟨f-84ead829⟩
     Gathers the values each rule reads — the repeat share and edge margin furniture removal uses, the hyphen prefixes reflow keeps — as plain data passed in, instead of constants each module owns. Every rule keeps working unchanged when nothing is configured, because the defaults are the values it reads today.
 
-- Configuration files  ⟨f-0a45f48d⟩
+- Configuration files  ⟨f-fe30f52a⟩
     Finds an optional scribe.toml by walking up from the working directory, and turns it into settings: a defaults section for every document, and sections that override it for one document by name. Unknown sections, unknown names and wrong value types are rejected before a conversion starts rather than being guessed at.
 
 - Running conversions  ⟨f-26e009f7⟩
@@ -51,11 +51,9 @@
   - Command-line conversion interface  ⟨f-97014b50⟩
       `convert report.txt` writes `report.md` beside it; `convert report.txt -` prints it instead.
 
-      `check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it.
+      `check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it. Before running a workflow, it applies the configured defaults so conversion rules can vary without editing the source.
 
-      It loads the nearest `scribe.toml` and applies its default settings before conversion, so documents can use configured rules without editing the source.
-
-  - Conversion reports  ⟨f-5a03ffc1⟩
+  - Conversion reports  ⟨f-0f1b9127⟩
       Writes a note beside each converted document saying what the conversion did to it: what was removed as furniture, which words were rejoined, which characters were replaced. It goes to a file rather than the terminal so it is still there when somebody wonders where a line went.
 
 - Checking conversion  ⟨f-d7982be6⟩

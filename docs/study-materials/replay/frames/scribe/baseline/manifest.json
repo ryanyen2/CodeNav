@@ -1,5 +1,5 @@
 {
-  "recorded_at": "2026-08-20T00:37:13.746376+00:00",
+  "recorded_at": "2026-08-20T03:24:33.242266+00:00",
   "recorded_root": "{{WORKSPACE}}",
   "authored": true,
   "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",
@@ -17,7 +17,7 @@
     "\u25cf The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code \u2014 have a look at what it changed before you try it out."
   ],
   "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/scribe/neutral",
-  "derived_at": "2026-08-20T00:42:47.376092+00:00",
+  "derived_at": "2026-08-20T03:31:51.943184+00:00",
   "frames": [
     {
       "n": 1,
@@ -117,7 +117,7 @@
         "scribe.toml"
       ],
       "deletes": [],
-      "terminal": "  Write({{WORKSPACE}}/scribe.toml)\n\u25cf I've set repeat_share to 0.4 in the defaults, which is what catches the\n  appendix header on a five page document.",
+      "terminal": "  Write({{WORKSPACE}}/scribe.toml)\n\u25cf I've put repeat_share 0.4 under [document.\"survey.txt\"] rather than in the\n  defaults, so the appendix header is caught on the survey and every other\n  document keeps the value it has always used.",
       "settled_after_s": 0.0
     },
     {
@@ -148,7 +148,7 @@
       "delay_s": 6.0,
       "writes": [],
       "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q)\n  \u23bf  ...................................................... 54 passed\n  Bash(.venv/bin/scribe check fixtures/)\n  \u23bf  handbook.txt: 4 pages, 9 headings, 10 paragraphs, 3 bullets, 0 notes, 12 lines of furniture\n     memo.txt: 2 pages, 0 headings, 7 paragraphs, 0 bullets, 0 notes, 0 lines of furniture\n     report.txt: 3 pages, 8 headings, 12 paragraphs, 6 bullets, 2 notes, 6 lines of furniture\n     survey.txt: 5 pages, 3 headings, 10 paragraphs, 0 bullets, 0 notes, 10 lines of furniture\n     checked 4 documents",
+      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q)\n  \u23bf  ...................................................... 54 passed",
       "settled_after_s": 0.0
     },
     {
