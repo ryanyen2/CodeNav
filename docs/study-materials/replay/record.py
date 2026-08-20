@@ -615,6 +615,31 @@ def _wait_for_daemon(workspace: Path, mark: float, settle: float, timeout: float
     return waited
 
 
+def _started_before(pid: int, pidfile: Path) -> bool:
+    """Whether `pid` has been running since at least when `pidfile` was written.
+
+    False for a pid that does not exist, and for one whose process is younger than
+    the file naming it — which is exactly the recycled-pid case.
+    """
+    try:
+        elapsed = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                                 capture_output=True, text=True, timeout=10).stdout.strip()
+        written = pidfile.stat().st_mtime
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if not elapsed:
+        return False                      # no such process
+    # [[dd-]hh:]mm:ss, oldest field first.
+    days, _, clock = elapsed.rpartition("-")
+    parts = [float(p) for p in clock.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0.0)
+    age = parts[0] * 3600 + parts[1] * 60 + parts[2] + (float(days or 0) * 86400)
+    # A second of slack: `ps` reports whole seconds and the file was written right
+    # after the process started, so an exactly-simultaneous pair can round apart.
+    return (time.time() - age) <= written + 1.0
+
+
 def _quiesce(workspace: Path) -> bool:
     """Stop the workspace's daemon, so its end state stops changing.
 
@@ -627,6 +652,21 @@ def _quiesce(workspace: Path) -> bool:
         raw = pidfile.read_text().strip()
         pid = int(json.loads(raw)["pid"]) if raw.startswith("{") else int(raw)
     except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        return False
+    # A PID IS NOT AN IDENTITY. The file names a number, and by the time anyone
+    # reads it that number may belong to something else — pids are recycled, and
+    # after a reboot the counter restarts low and walks straight back through the
+    # range a stale pidfile is naming. Signalling one unchecked killed an unrelated
+    # process a test had just started, which is the same class of fault 0.2.15
+    # fixed inside the daemon.
+    #
+    # The check is AGE, not name. A process that took over a recycled pid started
+    # after the file that names it was written, so a start time later than the
+    # pidfile's is proof this is somebody else. Comparing the command line instead
+    # would only recognise a real `codoc watch`, and the thing standing in for the
+    # daemon is not always one — that is a fact about how it was launched, not
+    # about whether it is the process this file means.
+    if not _started_before(pid, pidfile):
         return False
     try:
         os.kill(pid, signal.SIGTERM)
@@ -956,11 +996,36 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
         deletes = [r for r in previous
                    if r not in current and not _final_only(r)]
         dest_dir = out / f"{frame['n']:04d}"
+        # A FRAME MAY NOT NAME A WRITE IT DOES NOT CARRY. The manifest is what the
+        # player replays from, so a listed write with no bytes behind it is a file
+        # the recording promises and the participant never receives — and it is
+        # invisible: the derive prints the count from the list, the round trip is
+        # the only thing that looks at the disk, and a workspace can be missing
+        # `tally/settings.py` while every log line says twelve frames of twelve.
+        # It happened to that file and to enough of frame 11's tree that the
+        # replayed document had none of the plan in it.
+        #
+        # The workspace is the source, and the NEUTRAL frame is the fallback: the
+        # code half of every frame came from there, so a file the workspace can no
+        # longer hand over can still be recovered as recorded. Anything neither can
+        # produce stops the derive, because continuing writes a recording whose
+        # first honest reader is a participant.
+        carried = []
         for rel in writes:
             dest = dest_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(workspace / rel, dest)
-        derived.append({**frame, "writes": sorted(writes), "deletes": sorted(deletes),
+            for source in (workspace / rel, src / rel):
+                try:
+                    shutil.copy2(source, dest)
+                    break
+                except (FileNotFoundError, IsADirectoryError):
+                    continue
+            if not dest.is_file():
+                print(f"    could not carry {rel} into frame {frame['n']}",
+                      file=sys.stderr)
+                return 1
+            carried.append(rel)
+        derived.append({**frame, "writes": sorted(carried), "deletes": sorted(deletes),
                         "settled_after_s": round(waited, 1)})
         # Keep what a checkpoint carried in the picture of "what is there", so the
         # next frame compares against reality rather than re-writing it.
@@ -1033,12 +1098,13 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
                 shutil.copy2(workspace / rel, dest)
             derived[-1]["writes"] = sorted(set(derived[-1]["writes"]) | set(writes))
         print(f"  it wrote {len(writes)} file(s) in {waited:.0f}s")
-        # The daemon is NOT stopped here. `_quiesce` reads a pid out of a file and
-        # signals it, and a pid is not an identity — in a test run that pidfile can
-        # name a process the suite is about to start, which is how adding a kill on
-        # this line made a later test's subprocess die. Stopping it belongs to
-        # whoever owns the workspace afterwards: `record-session.sh check` does it
-        # before comparing, and `fresh_workspace` does it before reusing.
+        # And then STOP it, because the end state has to hold still to mean
+        # anything. A daemon left running keeps amending the workspace for as long
+        # as it lives — the pass after this one is an LLM call that lands minutes
+        # later — so the round trip was comparing a fixed recording against a moving
+        # workspace and failing every time, whatever the recording had done.
+        # `_quiesce` verifies the pid really is a `codoc watch` before signalling it.
+        _quiesce(workspace)
 
     final = scan(workspace, with_index=True)
     last = out / "final"

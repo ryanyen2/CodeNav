@@ -544,7 +544,11 @@ uv python install 3.11 >/dev/null 2>&1 && ok "Python 3.11 is available to uv" ||
 
 # ----------------------------------------------------------------------- codoc
 step "Installing the codoc command"
-WHEEL="$(ls "$HERE"/codoc-*.whl 2>/dev/null | head -1)"
+# NEWEST, not first. `head -1` is alphabetical, so a folder holding both 0.2.14 and
+# 0.2.15 installs 0.2.14 — and unzipping a new bundle over an old one is exactly how
+# a folder comes to hold both. That silently reinstalled the stale wheel over a fixed
+# one, and the only symptom was the bug the new wheel fixes, still happening.
+WHEEL="$(ls "$HERE"/codoc-*.whl 2>/dev/null | sort -V | tail -1)"
 if [ -z "$WHEEL" ]; then bad "no codoc wheel found next to this script"; exit 1; fi
 uv tool install --force --python 3.11 "$WHEEL" >/dev/null 2>&1 \
   && ok "installed $(basename "$WHEEL")" || { bad "could not install the codoc wheel"; exit 1; }
@@ -1213,7 +1217,8 @@ done
 
 # ------------------------------------------------------------------- extension
 step "Installing the VS Code extension"
-VSIX="$(ls "$HERE"/codoc-[0-9]*.vsix 2>/dev/null | head -1)"
+# Newest, for the reason spelled out at the wheel above.
+VSIX="$(ls "$HERE"/codoc-[0-9]*.vsix 2>/dev/null | sort -V | tail -1)"
 LOGGER="$(ls "$HERE"/codoc-study-logger-*.vsix 2>/dev/null | head -1)"
 if [ -z "$VSIX" ] || [ -z "$LOGGER" ]; then
   bad "a .vsix is missing from the bundle"

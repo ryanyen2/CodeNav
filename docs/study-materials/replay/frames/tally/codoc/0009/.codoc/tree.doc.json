@@ -408,9 +408,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-eab995f4",
+        "fid": "f-05ba0e1e",
         "localId": "",
-        "version": "00000001787198864857-00000000000000000000-default",
+        "version": "00000001787241397846-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -430,15 +430,15 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-eab995f4"
+        "ownerId": "f-05ba0e1e"
       }
     },
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-e943df8c",
+        "fid": "f-59baa388",
         "localId": "",
-        "version": "00000001787198864867-00000000000000000000-default",
+        "version": "00000001787241397857-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -454,11 +454,11 @@
       "content": [
         {
           "type": "text",
-          "text": "Decides which period a transaction belongs to, for a month and for a week. Which date decides is set for each summary separately, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends."
+          "text": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends."
         }
       ],
       "attrs": {
-        "ownerId": "f-e943df8c"
+        "ownerId": "f-59baa388"
       }
     },
     {
@@ -560,9 +560,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-e6b8a022",
+        "fid": "f-a2bf47b5",
         "localId": "",
-        "version": "00000001787198864868-00000000000000000000-default",
+        "version": "00000001787241397858-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -582,7 +582,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-e6b8a022"
+        "ownerId": "f-a2bf47b5"
       }
     },
     {

@@ -230,6 +230,69 @@ class DeriveTest(unittest.TestCase):
             self.assertTrue((replayed / "CLAUDE.md").exists(),
                             "the condition's own description has to survive the derivation")
 
+    def test_a_frame_never_names_a_write_it_does_not_carry(self):
+        # The manifest is what the player replays from, so a listed write with no
+        # bytes behind it is a file the recording promises and the participant
+        # never gets. It is silent from every side except the disk: the derive
+        # counts the list, and the round trip is the only thing that looks. A tally
+        # recording shipped a frame naming `tally/settings.py` and not holding it,
+        # so the replayed workspace could not import the package it was reviewing.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, neutral, ws, out = tmp / "raw", tmp / "neutral", tmp / "ws", tmp / "out"
+            fake_recording(raw, SESSION)
+            record.build(raw, None, neutral, seconds=0.01)
+            ws.mkdir()
+            play.play(ws, neutral, 1000.0, False, True, False)
+            play.reset(ws, neutral)
+
+            self.assertEqual(record.derive(neutral, ws, out, settle=0.0, timeout=0.0), 0)
+            manifest = json.loads((out / "manifest.json").read_text())
+            for frame in manifest["frames"]:
+                for rel in frame["writes"]:
+                    self.assertTrue((out / f"{frame['n']:04d}" / rel).is_file(),
+                                    f"frame {frame['n']} names {rel} and does not carry it")
+
+    def test_a_write_the_workspace_lost_is_recovered_from_the_neutral_frame(self):
+        # The code half of every frame came from the neutral recording, so a file
+        # the workspace can no longer hand over is still recoverable as recorded.
+        # Falling back is right where guessing would not be: the fallback is the
+        # same bytes the frame was made from.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, neutral, ws, out = tmp / "raw", tmp / "neutral", tmp / "ws", tmp / "out"
+            fake_recording(raw, SESSION)
+            record.build(raw, None, neutral, seconds=0.01)
+            ws.mkdir()
+            play.play(ws, neutral, 1000.0, False, True, False)
+            play.reset(ws, neutral)
+
+            # Unreadable in the workspace at the moment the frame is cut.
+            real_copy = record.shutil.copy2
+
+            def lose_notes(source, dest, *args, **kwargs):
+                # Only while a FRAME is being cut — the base copy at the top of the
+                # derive is a different question, and failing it would test nothing
+                # about recovery.
+                cutting_a_frame = (str(dest).startswith(str(out))
+                                   and not str(dest).startswith(str(out / "base")))
+                from_the_workspace = str(source).startswith(str(ws))
+                if (cutting_a_frame and from_the_workspace
+                        and str(source).endswith("scribe/notes.py")):
+                    raise FileNotFoundError(source)
+                return real_copy(source, dest, *args, **kwargs)
+
+            record.shutil.copy2 = lose_notes
+            try:
+                self.assertEqual(record.derive(neutral, ws, out, settle=0.0, timeout=0.0), 0)
+            finally:
+                record.shutil.copy2 = real_copy
+
+            replayed = tmp / "replayed"
+            replayed.mkdir()
+            play.play(replayed, out, 1000.0, False, True, False)
+            self.assertEqual((replayed / "scribe" / "notes.py").read_text(), "renumbered\n")
+
     def test_a_derive_that_recorded_no_reaction_fails(self):
         # The recording exists to show a description catching up with code. A
         # derive in which nothing under `.codoc/` ever moved recorded a daemon that
@@ -447,6 +510,33 @@ class QuiesceTest(unittest.TestCase):
                 if proc.poll() is None:
                     proc.kill()
                 proc.wait(timeout=5)
+
+    def test_a_pid_the_file_cannot_mean_is_left_alone(self):
+        """A pidfile names a number, and numbers are recycled. A process that
+        started AFTER the file naming it cannot be the process it means, and
+        signalling it kills somebody else's work — which is what happened here:
+        a fixture pidfile from one test named a pid a later test's subprocess was
+        given, and stopping it made that test hang until its timeout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "ws"
+            (ws / ".codoc").mkdir(parents=True)
+            # Written first, so anything started after it is by definition not it.
+            (ws / ".codoc" / "watch.pid").write_text(json.dumps({"pid": 999999}))
+            time.sleep(1.1)
+            bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+            try:
+                (ws / ".codoc" / "watch.pid").write_text(
+                    json.dumps({"pid": bystander.pid}), )
+                os.utime(ws / ".codoc" / "watch.pid",
+                         (time.time() - 60, time.time() - 60))
+                self.assertFalse(record._quiesce(ws),
+                                 "a pid younger than the file naming it is not the daemon")
+                time.sleep(0.5)
+                self.assertIsNone(bystander.poll(), "it killed an unrelated process")
+            finally:
+                if bystander.poll() is None:
+                    bystander.kill()
+                bystander.wait(timeout=5)
 
     def test_quiescing_a_workspace_with_no_daemon_is_fine(self):
         with tempfile.TemporaryDirectory() as tmp:

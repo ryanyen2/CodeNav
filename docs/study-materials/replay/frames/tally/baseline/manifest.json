@@ -1,5 +1,5 @@
 {
-  "recorded_at": "2026-08-20T04:02:19.166082+00:00",
+  "recorded_at": "2026-08-20T15:43:00.492505+00:00",
   "recorded_root": "{{WORKSPACE}}",
   "authored": true,
   "request": "I want to manage the categories myself without touching the source, and I want to see spending at a finer grain than a whole month. Make that work.",
@@ -17,7 +17,7 @@
     "\u25cf The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code \u2014 have a look at what it changed before you try it out."
   ],
   "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/tally/neutral",
-  "derived_at": "2026-08-20T04:06:17.010012+00:00",
+  "derived_at": "2026-08-20T15:48:51.705686+00:00",
   "frames": [
     {
       "n": 1,
@@ -61,7 +61,7 @@
       "delay_s": 6.0,
       "writes": [],
       "deletes": [],
-      "terminal": "\u25cf Before I write it, here is the shape I have in mind. I have sketched it into\n  the tree as three features so you can see where each piece would live and say\n  what you want kept.\n\n  \u00b7 Rule settings \u2014 every value the rules read, in one file you edit rather\n    than constants spread through the modules.\n  \u00b7 Statement periods \u2014 a month and a week, each lined up on whichever date\n    that summary is read against.\n  \u00b7 Weekly spending summary \u2014 the same summary at a finer grain, written\n    beside the monthly one rather than over it.",
+      "terminal": "\u25cf Before I write it, here is the shape I have in mind. I have sketched it into\n  the tree as three features so you can see where each piece would live and say\n  what you want kept.\n\n  \u00b7 Rule settings \u2014 every value the rules read, in one file you edit rather\n    than constants spread through the modules.\n  \u00b7 Statement periods \u2014 the month lined up on the date a payment was made,\n    the week on the date the bank posted it.\n  \u00b7 Weekly spending summary \u2014 the same summary at a finer grain, written\n    beside the monthly one rather than over it.",
       "propose": [
         {
           "kind": "add_node",
@@ -73,7 +73,7 @@
         {
           "kind": "add_node",
           "title": "Statement periods",
-          "description": "Decides which period a transaction belongs to, for a month and for a week. Which date decides is set for each summary separately, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends.",
+          "description": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends.",
           "before": "f-007dec9d",
           "rationale": "plan: a finer grain than a month needs a period the summary can be grouped by"
         },

@@ -48,21 +48,20 @@ weeks. Checked as C6.
 | **1** | Notices the weekly view uses a different date, without joining it to the monthly one. |
 | **0** | Does not find it. |
 
-**Where each condition meets it — and a change that is written but NOT YET
-recorded (2026-08-20).** In the frames as they SHIP today, the plan says only
-*which date decides is set for each summary separately*: it names the question and
-not the answer, so the codoc document is VAGUER at this point than the scrollback
-beside it, where step 7 says the choice outright. Both arms therefore meet D1 in
-the transcript and in `rules.toml`, and the codoc arm gains nothing here.
+**Where each condition meets it (2026-08-20, in the shipped frames).** Both arms are
+told the same thing in the same words at the same moment: the plan step says *the
+month lined up on the date a payment was made, the week on the date the bank posted
+it*, in the terminal both arms read and — in the codoc arm — in the proposed
+`Statement periods` node they answer at the first stop, still there at the second when
+the build is reviewed. It previously said only *which date decides is set for each
+summary separately*, which named the question and not the answer, so the codoc
+document was VAGUER than the scrollback beside it.
 
-`replay/script/tally/session.json` has been changed so the plan says *the month
-lined up on the date a payment was made, the week on the date the bank posted it*,
-in the terminal both arms read and in the proposed `Statement periods` node the
-codoc arm answers at the first stop. **That change reaches participants only after
-`record-session.sh write tally` is re-run and the frames pass `check`** — the
-2026-08-20 re-derive was reverted because its second stop produced no tree movement
-and its final document was missing the plan nodes. Until then, score D1 against the
-shipped recording.
+What the codoc arm gains is not the fact but its PLACE: in the record, at the node
+that owns the decision, next to a `Transaction period assignment` node that still says
+a transaction is counted in the month it was made. The two nodes are both true and
+only together do they say that one payment can land in a month and a week that
+disagree — which is what a **2** on this problem requires.
 
 **codoc cannot state a value that lives in a config file.** `_INCLUDED_PATTERNS`
 in `codoc/pipelines/indexing/cocoindex_app.py` is `.py`/`.ts` only, so `rules.toml`
@@ -99,8 +98,8 @@ run, so one unknown shop means no summary at all and nothing written. Checked as
 **Re-scoped 2026-08-20.** As written this was "the record says one thing and the
 code does another": the description was to go on claiming the uncategorised bucket
 after the code had stopped doing it. That is not what the recording landed. Loop A
-amended the sentence to *goes to the configured uncategorised bucket, or stops the
-run with the full list when the rules require it* — which is not false, and never says that the
+amended the sentence to *goes to an uncategorised bucket when configured to continue,
+or stops the run with every unmatched merchant listed* — which is not false, and never says that the
 shipped `rules.toml` chose `stop`. It cannot: `.toml` is not indexed, so the pass
 that wrote the sentence never read the value (see the note under D1). So the failure a participant meets
 is a record that has gone vague at exactly the point a reader consults it: both
@@ -120,11 +119,11 @@ called for.
 | **0** | Does not find it. |
 
 **Re-check this after any re-derive.** codoc's half of the recording is not
-authored, so the sentence above is whatever the daemon wrote on the day. The
-2026-08-20 prompt change asks an amend to name the value a policy took rather than
-report that it is configurable; if a later derive makes the description say `stop`
-outright, D3 stops being a defect and becomes a disclosure — score it as such, or
-drop it, rather than rating a record that is now correct.
+authored, so the sentence above is whatever the daemon wrote on the day, and it has
+already changed wording once between derives while staying the same defect. If a
+later derive makes the description say `stop` outright, D3 stops being a defect and
+becomes a disclosure — score it as such, or drop it, rather than rating a record that
+is now correct.
 
 ### D0. The decoy
 
