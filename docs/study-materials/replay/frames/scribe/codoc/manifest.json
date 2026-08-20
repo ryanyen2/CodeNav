@@ -1,5 +1,5 @@
 {
-  "recorded_at": "2026-08-20T03:24:33.242266+00:00",
+  "recorded_at": "2026-08-20T16:00:47.242803+00:00",
   "recorded_root": "{{WORKSPACE}}",
   "authored": true,
   "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",
@@ -17,7 +17,7 @@
     "\u25cf The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code \u2014 have a look at what it changed before you try it out."
   ],
   "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/scribe/neutral",
-  "derived_at": "2026-08-20T03:34:54.721565+00:00",
+  "derived_at": "2026-08-20T16:03:43.757745+00:00",
   "frames": [
     {
       "n": 1,
@@ -113,7 +113,7 @@
           "rationale": "plan: the request asks to be told what the conversion actually did"
         }
       ],
-      "settled_after_s": 15.0
+      "settled_after_s": 39.0
     },
     {
       "n": 6,
@@ -133,14 +133,6 @@
       "delay_s": 7.0,
       "writes": [
         ".codoc/activity.json",
-        ".codoc/realize.json",
-        ".codoc/realize.md",
-        ".codoc/realized.jsonl",
-        ".codoc/revisions.json",
-        ".codoc/status.json",
-        ".codoc/tree.bindings.json",
-        ".codoc/tree.doc.json",
-        ".codoc/tree.index.json",
         "scribe/config.py"
       ],
       "deletes": [],
@@ -153,6 +145,8 @@
       "delay_s": 5.0,
       "writes": [
         ".codoc/activity.json",
+        ".codoc/realize.json",
+        ".codoc/realize.md",
         ".codoc/realized.jsonl",
         ".codoc/revisions.json",
         ".codoc/status.json",
@@ -161,12 +155,9 @@
         ".codoc/tree.index.json",
         "scribe.toml"
       ],
-      "deletes": [
-        ".codoc/realize.json",
-        ".codoc/realize.md"
-      ],
+      "deletes": [],
       "terminal": "  Write({{WORKSPACE}}/scribe.toml)\n\u25cf I've put repeat_share 0.4 under [document.\"survey.txt\"] rather than in the\n  defaults, so the appendix header is caught on the survey and every other\n  document keeps the value it has always used.",
-      "settled_after_s": 1.0
+      "settled_after_s": 0.0
     },
     {
       "n": 9,
@@ -174,13 +165,18 @@
       "delay_s": 6.0,
       "writes": [
         ".codoc/activity.json",
+        ".codoc/realized.jsonl",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
+        ".codoc/tree.doc.json",
         ".codoc/tree.index.json",
         "scribe/report.py"
       ],
-      "deletes": [],
+      "deletes": [
+        ".codoc/realize.json",
+        ".codoc/realize.md"
+      ],
       "terminal": "  Write({{WORKSPACE}}/scribe/report.py)\n\u25cf report.md goes next to the Markdown rather than to the terminal, so it is\n  still there when somebody wonders where a line went.",
       "settled_after_s": 0.0
     },
@@ -205,21 +201,17 @@
         ".codoc/cocoindex.db/mdb/data.mdb",
         ".codoc/cocoindex.db/mdb/lock.mdb",
         ".codoc/codoc.db",
-        ".codoc/lancedb/code_chunks.lance/_deletions/17-23-3741386006881022736.arrow",
-        ".codoc/lancedb/code_chunks.lance/_transactions/14-b50774cd-7fa9-4b9b-be3f-a0c5d8aaf16d.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/15-a8e871d5-2acd-487d-a32e-1a2cff08b021.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/15-e5e27ab7-c648-40ab-8e99-fb9717b5c377.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/17-712b2ab1-5a6c-41d2-a581-7e76e9e9c1b1.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/18-a9932d8f-3da9-4f43-9d4e-b27c6cb8f604.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/18-e9e32ddb-7430-46ca-b0a2-7768be23ff56.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/20-141c10a6-783b-46f7-984d-f4d9b9d13046.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/21-3c1e4c12-ede6-4db3-a001-e93c3fb4ebc0.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/21-aacb6985-bbc8-4338-bc51-7490ba89836e.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/23-21146930-3446-4ffc-a517-27190bb55f5b.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/24-12116196-4197-4493-8cbb-198bdbb0edda.txn",
-        ".codoc/lancedb/code_chunks.lance/_transactions/24-2de656ec-4124-4279-aa96-afaab0a99539.txn",
-        ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551589.manifest",
-        ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551590.manifest",
+        ".codoc/lancedb/code_chunks.lance/_deletions/15-20-8764972717077831857.arrow",
+        ".codoc/lancedb/code_chunks.lance/_transactions/14-ce0ddb14-a6f5-46b1-9db8-8f0012f1fa72.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/15-2f737112-ab2d-4e4d-b03b-94fe881ae57c.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/15-a5902906-9221-4b91-8073-754750b52238.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/17-cc283b54-29e9-4894-8db9-dbb7556c382b.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/18-52b62316-2c0a-46ec-b569-a24f28899aa0.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/18-e41616cb-96f3-47be-bbd8-e2ed6d5d3bb2.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/20-632709b5-f584-415d-a81e-049c3814e22c.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/21-48ad7bf9-03c3-4419-ba4f-8243b9a8d9a8.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/22-5ce346c5-d9e1-49ef-8b21-ad70fd590bf3.txn",
+        ".codoc/lancedb/code_chunks.lance/_transactions/22-f196604c-1726-4328-9bee-30c85d49d279.txn",
         ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551591.manifest",
         ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551592.manifest",
         ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551593.manifest",
@@ -230,14 +222,13 @@
         ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551598.manifest",
         ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551599.manifest",
         ".codoc/lancedb/code_chunks.lance/_versions/18446744073709551600.manifest",
-        ".codoc/lancedb/code_chunks.lance/data/00000100111010000010111002ae514361b742e1327eeb8371.lance",
-        ".codoc/lancedb/code_chunks.lance/data/010010101001001000111001aaebfd41c4b787e37715a3671d.lance",
-        ".codoc/lancedb/code_chunks.lance/data/0101000000111011100011104378234b9e8c1bd9d8993bd118.lance",
-        ".codoc/lancedb/code_chunks.lance/data/010111000000111101100111b11a6a4675a64ce5bf9efcb18f.lance",
-        ".codoc/lancedb/code_chunks.lance/data/01011101001011111101000143f5ae4c799f0a8817c15a499e.lance",
-        ".codoc/lancedb/code_chunks.lance/data/011000001010011100101101cb51174d84a571bb7e61fa7140.lance",
-        ".codoc/lancedb/code_chunks.lance/data/01101000101111000101011113e81f40e49b2aa7f174685786.lance",
-        ".codoc/lancedb/code_chunks.lance/data/0111010011010000101000003ad3b949978a2500f19eead71e.lance",
+        ".codoc/lancedb/code_chunks.lance/data/0000000010101101111101109ba7004c5bbc6735db0d29ce47.lance",
+        ".codoc/lancedb/code_chunks.lance/data/00001011010001011011111069ef674f589d8e060445e47b95.lance",
+        ".codoc/lancedb/code_chunks.lance/data/000111001001100100111011eb71e04c2b87afc591153e8acd.lance",
+        ".codoc/lancedb/code_chunks.lance/data/001010111000001111100010542174495989ba0a361a561aad.lance",
+        ".codoc/lancedb/code_chunks.lance/data/0011011001000100001110100e271d4064b5cbbca700fcf16e.lance",
+        ".codoc/lancedb/code_chunks.lance/data/010100100000111111000011360b55483287ee34437f36cc89.lance",
+        ".codoc/lancedb/code_chunks.lance/data/100110100000100011100101705de0453eb31af0c778a7e88c.lance",
         ".codoc/revisions.json",
         ".codoc/status.json",
         ".codoc/tree.bindings.json",
@@ -247,7 +238,7 @@
       ],
       "deletes": [],
       "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q)\n  \u23bf  ...................................................... 54 passed",
-      "settled_after_s": 18.0
+      "settled_after_s": 51.0
     },
     {
       "n": 12,

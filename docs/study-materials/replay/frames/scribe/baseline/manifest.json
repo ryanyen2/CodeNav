@@ -1,5 +1,5 @@
 {
-  "recorded_at": "2026-08-20T03:24:33.242266+00:00",
+  "recorded_at": "2026-08-20T16:00:47.242803+00:00",
   "recorded_root": "{{WORKSPACE}}",
   "authored": true,
   "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",
@@ -17,7 +17,7 @@
     "\u25cf The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code \u2014 have a look at what it changed before you try it out."
   ],
   "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/scribe/neutral",
-  "derived_at": "2026-08-20T03:31:51.943184+00:00",
+  "derived_at": "2026-08-20T16:05:12.403636+00:00",
   "frames": [
     {
       "n": 1,

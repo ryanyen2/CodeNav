@@ -16,7 +16,7 @@ Code: `scribe/lines.py::Document`, `scribe/lines.py::Document.lines`, `scribe/li
 
 Drops the running header, the footer, and the page number.
 
-A line counts as furniture when it sits near the top or bottom of a page and the same text repeats on at least 60% of pages. Repetition is the only signal available, which has two consequences worth knowing: a one-page letter can never show it, so its header stays; and a real heading that happens to repeat is thrown away with the furniture. This runs before headings are looked for, so nothing later can rescue it.
+A line counts as furniture when it sits near the top or bottom of a page and the same text repeats on at least 60% of pages — that share and the width of the edge are the two values `scribe.toml` can move, and the CLI moves them by rebinding `REPEAT_SHARE` and `EDGE` before converting. Repetition is the only signal available, which has two consequences worth knowing: a one-page letter can never show it, so its header stays; and a real heading that happens to repeat is thrown away with the furniture. This runs before headings are looked for, so nothing later can rescue it.
 
 Code: `scribe/furniture.py::EDGE`, `scribe/furniture.py::MIN_PAGE`, `scribe/furniture.py::PAGE_NUMBER`, `scribe/furniture.py::REPEAT_SHARE`, `scribe/furniture.py::__module__`, `scribe/furniture.py::_near_edge`, `scribe/furniture.py::_normalise`, `scribe/furniture.py::find_repeated`, `scribe/furniture.py::is_page_number`, `scribe/furniture.py::strip`
 
@@ -64,47 +64,49 @@ So `ﬁ` becomes `fi` and a curly `’` becomes `'`. This loses typographic fide
 
 Code: `scribe/text.py::SUBSTITUTIONS`, `scribe/text.py::__module__`, `scribe/text.py::normalise`
 
-## Adjusting rule thresholds without editing source
+## Configuring the rules
 
-The tuning constants above used to be the only way to change a threshold, which meant a single awkward document needed scribe's source edited on its behalf. These features let a `scribe.toml` beside the input override them instead, for the document where the built-in number is wrong and everything else is right.
+The tuning numbers used to be module constants, so bending one for a single awkward document meant editing the source. These features gather them into one object that a file can supply, while leaving the library usable with no file at all: absent a config, every document converts exactly as it did before.
 
-### Rule settings
+### Rule settings values
 
-Gathers the values a rule reads — `repeat_share`, `edge`, `keep_hyphen` — into one `Settings` object instead of scattered module constants, so they can come from a file.
-
-`Settings`'s defaults are the same numbers the rules always used, so a document with no override behaves exactly as it did before this existed. `keep_hyphen` is carried on `Settings` and accepted as a config key, but nothing yet applies it back to `paragraphs.KEEP_HYPHEN`; of the three, only `repeat_share` and `edge` currently reach a rule.
+One frozen dataclass holding the values the rules use — `repeat_share`, `edge`, `keep_hyphen` — with the built-in defaults as its field defaults, so the no-config path is the old behaviour by construction rather than by convention. `merged` drops `None` overrides, which lets a partly-filled config section be layered over the defaults without spelling out the values it does not care about.
 
 Code: `scribe/settings.py::DEFAULTS`, `scribe/settings.py::Settings`, `scribe/settings.py::Settings.merged`, `scribe/settings.py::__module__`
 
-### Conversion configuration file
+### Configuration file discovery and parsing
 
-Reads an optional `scribe.toml`, found by walking up from the current directory: a `[defaults]` section for every document, and a `[document."name"]` section for one document that needs something different.
+Finds the nearest `scribe.toml` at or above a starting directory and reads it into defaults plus per-document overrides, keyed by file name. A `[document."survey.txt"]` section is merged over `[defaults]`, which is merged over the built-ins.
 
-Without a file, every document converts exactly as it did before this existed, which is what keeps the library usable with no config at all. Unknown keys and out-of-range values raise `ConfigError` rather than being silently ignored. `Config.for_document` merges a document's own section over `[defaults]`, but the CLI (below) currently applies only `[defaults]` to the rules, once, before it knows which document is being converted — a `[document."name"]` override does not yet change what a rule does, only what the report says it did. The repository's own `scribe.toml` is this gap in practice: its `[document."survey.txt"]` entry lowers `repeat_share` to 0.4 so the appendix header — which repeats over only two of the survey's five pages — finally counts as furniture, but converting `survey.txt` still runs at the built-in 0.6 and the header survives; only the generated report claims 0.4 was used.
+Unknown keys and out-of-range values are rejected rather than ignored: a misspelled setting that silently did nothing would look exactly like a rule that does not work, and the file exists precisely for people who are already puzzled by the output. The repo's own `scribe.toml` is the worked example — the survey's appendix carries a header over only two of its five pages, under the default 60% repeat share.
 
-Code: `scribe/config.py::CONFIG_NAME`, `scribe/config.py::Config`, `scribe/config.py::Config.for_document`, `scribe/config.py::ConfigError`, `scribe/config.py::KNOWN`, `scribe/config.py::__module__`, `scribe/config.py::_checked`, `scribe/config.py::find`, `scribe/config.py::load`
-
-## Running conversions
-
-The ways to actually run it: convert one file, print the result instead of writing it, or check a whole folder without touching anything. Converting a file to disk also writes a short report beside it, recording what the rules did and which settings ran.
-
-### Command-line conversion interface
-
-`convert survey.txt` writes `survey.md` beside it, plus a `report.md` describing the conversion; `convert survey.txt -` prints the Markdown instead and skips the report, since there is no fixed file to write it to.
-
-`check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it — and, unlike `convert`, it does not load `scribe.toml` at all, so it always runs at the built-in thresholds.
-
-The report's path is the input's own directory plus the literal name `report.md`, not the input's name — so converting a file already called `report.txt` overwrites the Markdown `convert` just wrote with the report a moment later, and converting two different documents into the same folder makes the second report overwrite the first. `scribe convert fixtures/report.txt` currently loses its own output this way.
-
-Code: `scribe/cli.py::__module__`, `scribe/cli.py::_apply`, `scribe/cli.py::_convert_one`, `scribe/cli.py::main`
+Code: `scribe/config.py::CONFIG_NAME`, `scribe/config.py::Config`, `scribe/config.py::Config.for_document`, `scribe/config.py::ConfigError`, `scribe/config.py::KNOWN`, `scribe/config.py::_checked`, `scribe/config.py::__module__`, `scribe/config.py::find`, `scribe/config.py::load`, `scribe.toml`
 
 ### Conversion report
 
-Writes a short Markdown note beside the converted file: how many pages and paragraphs, what each rule removed or kept, and which settings produced that.
-
-Written to disk rather than printed, so it is still there when somebody opens the Markdown a week later and wonders where a line went — the reason `render` takes the settings as well as the result, even though `_apply` (above) does not yet guarantee they are the settings that ran.
+A short Markdown note written beside the output saying what the rules did: how much furniture went, how many headings were promoted, how many bullets and footnotes there are, and which settings produced that. It is written to a file rather than printed because the question it answers — "where did that line go?" — is usually asked a week later, by somebody looking at the Markdown and not at a terminal.
 
 Code: `scribe/report.py::__module__`, `scribe/report.py::render`, `scribe/report.py::write_report`
+
+## Running conversions
+
+The ways to actually run it: convert one file, print the result instead of writing it, or check a whole folder without touching anything.
+
+### Command-line conversion interface
+
+`convert report.txt` writes `report.md` beside it, plus a conversion report; `convert report.txt -` prints the Markdown instead and writes nothing.
+
+`check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it.
+
+Settings are loaded once at startup from the nearest `scribe.toml` to the working directory, and a bad config file fails the run before any document is touched. `_apply` then rebinds the module constants the rules read — the rules themselves still read module globals, so the settings object is plumbed no further than this one function.
+
+Three limits of the current wiring, all live:
+
+- Only `conf.defaults` is applied. Per-document settings are computed in `_convert_one` but reach the report only, so a `[document."..."]` override is described in the report without having changed the conversion.
+- `keep_hyphen` is carried by `Settings` and accepted in the config file, but nothing applies it; `paragraphs.KEEP_HYPHEN` is still the only list in play.
+- The report is always written as `report.md` next to the output, so converting a second document into the same folder overwrites the first one's report — and converting a file actually named `report.txt` overwrites its own Markdown.
+
+Code: `scribe/cli.py::__module__`, `scribe/cli.py::_apply`, `scribe/cli.py::_convert_one`, `scribe/cli.py::main`
 
 ## Checking conversion
 
@@ -116,7 +118,7 @@ Runs three sample documents end to end.
 
 Each covers something the others cannot: `report.txt` has furniture, footnotes and numbered headings; `memo.txt` has none of them, which is what makes keeping a running header a live option rather than a hypothetical; `handbook.txt` has deep numbering and a numbered list that must not turn into headings. The fixtures are the specification.
 
-A fourth fixture, `fixtures/survey.txt`, exists for the settings and configuration feature above — an appendix header that repeats over too few of its pages to clear the built-in threshold — but it is not yet part of this suite.
+There is a fourth fixture, `fixtures/survey.txt`, whose appendix carries its own header across two of its five pages — the case the per-document `repeat_share` in `scribe.toml` exists for. No test reads it yet, and neither the config loading, the settings object, nor the conversion report has tests.
 
 Code: `tests/test_documents.py::FIXTURES`, `tests/test_documents.py::__module__`, `tests/test_documents.py::md`, `tests/test_documents.py::test_a_numbered_list_does_not_become_headings`, `tests/test_documents.py::test_a_paragraph_broken_across_a_page_is_rejoined`, `tests/test_documents.py::test_a_two_page_memo_keeps_its_first_line`, `tests/test_documents.py::test_a_word_split_across_a_line_break_is_whole_again`, `tests/test_documents.py::test_a_word_split_across_a_page_is_handled_the_same_way`, `tests/test_documents.py::test_bullets_are_a_tight_list`, `tests/test_documents.py::test_converting_twice_gives_the_same_thing`, `tests/test_documents.py::test_decimals_survive`, `tests/test_documents.py::test_deep_numbering_becomes_deep_headings`, `tests/test_documents.py::test_footnotes_are_collected_at_the_end`, `tests/test_documents.py::test_headings_carry_their_depth`, `tests/test_documents.py::test_ligatures_are_normalised`, `tests/test_documents.py::test_no_document_ends_up_empty`, `tests/test_documents.py::test_no_form_feed_survives`, `tests/test_documents.py::test_no_three_blank_lines_in_a_row`, `tests/test_documents.py::test_the_bullet_character_is_recognised`, `tests/test_documents.py::test_the_memo_has_no_headings`, `tests/test_documents.py::test_the_page_numbers_are_gone`, `tests/test_documents.py::test_the_running_header_is_gone_from_the_report`
 

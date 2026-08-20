@@ -340,9 +340,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-84ead829",
+        "fid": "f-4906a9f7",
         "localId": "",
-        "version": "00000001787196836503-00000000000000000000-default",
+        "version": "00000001787241726179-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -362,15 +362,15 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-84ead829"
+        "ownerId": "f-4906a9f7"
       }
     },
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-fe30f52a",
+        "fid": "f-d0c29954",
         "localId": "",
-        "version": "00000001787196836504-00000000000000000000-default",
+        "version": "00000001787241726180-00000000000000000000-default",
         "level": 0,
         "realized": true
       },
@@ -390,7 +390,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-fe30f52a"
+        "ownerId": "f-d0c29954"
       }
     },
     {
@@ -426,7 +426,7 @@
       "attrs": {
         "fid": "f-97014b50",
         "localId": "",
-        "version": "00000001787196869794-00000000000000000000-default",
+        "version": "00000001787241767055-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -442,7 +442,7 @@
       "content": [
         {
           "type": "text",
-          "text": "`convert report.txt` writes `report.md` beside it; `convert report.txt -` prints it instead."
+          "text": "The ways to actually run it: convert one file, print the result instead of writing it, or check a whole folder without touching anything. It loads the nearest `scribe.toml` so each document can use its own rules before conversion."
         }
       ],
       "attrs": {
@@ -454,7 +454,7 @@
       "content": [
         {
           "type": "text",
-          "text": "`check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it. Before running a workflow, it applies the configured defaults so conversion rules can vary without editing the source."
+          "text": "`check fixtures/` converts every file in a folder and writes nothing, printing a line per document. That is the fast way to see what a rule change does to the whole corpus before committing to it."
         }
       ],
       "attrs": {
@@ -464,9 +464,9 @@
     {
       "type": "featureHeading",
       "attrs": {
-        "fid": "f-0f1b9127",
+        "fid": "f-c1d945c3",
         "localId": "",
-        "version": "00000001787196843096-00000000000000000000-default",
+        "version": "00000001787241739430-00000000000000000000-default",
         "level": 1,
         "realized": true
       },
@@ -486,7 +486,7 @@
         }
       ],
       "attrs": {
-        "ownerId": "f-0f1b9127"
+        "ownerId": "f-c1d945c3"
       }
     },
     {

@@ -1,5 +1,5 @@
 {
-  "recorded_at": "2026-08-20T03:24:33.242266+00:00",
+  "recorded_at": "2026-08-20T16:00:47.242803+00:00",
   "recorded_root": "{{WORKSPACE}}",
   "authored": true,
   "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",

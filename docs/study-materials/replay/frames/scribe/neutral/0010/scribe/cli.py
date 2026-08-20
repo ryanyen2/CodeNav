@@ -78,3 +78,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"unknown command: {command}", file=sys.stderr)
     return 2
+
+
+# Kept from before this change: `python -m scribe.cli` is how the tests and the
+# checking tools reach the command without the installed console script.
+if __name__ == "__main__":
+    raise SystemExit(main())
