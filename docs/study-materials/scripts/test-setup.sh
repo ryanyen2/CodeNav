@@ -900,13 +900,31 @@ esac
 printf '\n\033[1m%s\033[0m\n' "The first turn"
 # The participant asks for the change themselves and does not know a recording
 # exists. Everything below is a way that could stop being true silently.
-case "$(cat "$SETUP")" in
-  *'agent.py" play'*) ok "the launcher takes the first turn" ;;
-  *) bad "the launcher no longer plays the recording, so a live agent would" ;;
+# The two scripts setup writes are checked SEPARATELY, because keeping them apart is
+# the property. `claude-study` played the recording whenever no handover record was
+# present, and that record is only written once playback returns — after both stops —
+# so an interrupted replay left the launcher replaying on every later run, and
+# somebody typing into what they thought was their assistant got the recording
+# instead, every time.
+LAUNCHER_BODY="$(awk '/cat > "\$d\/claude-study" <<LAUNCHER/,/^LAUNCHER$/' "$SETUP")"
+START_BODY="$(awk '/cat > "\$d\/start-session" <<REPLAY/,/^REPLAY$/' "$SETUP")"
+case "$START_BODY" in
+  *'agent.py" play'*) ok "start-session takes the first turn" ;;
+  *) bad "nothing plays the recording, so a live agent would" ;;
 esac
-case "$(cat "$SETUP")" in
-  *'[ \$# -eq 0 ]'*) ok "and only when it is started the way a session starts it" ;;
-  *) bad "the setup check would play the recording days before the session" ;;
+case "$LAUNCHER_BODY" in
+  *'agent.py'*) bad "the launcher can still play the recording, so the setup check would" ;;
+  *) ok "and the launcher cannot, whatever it is handed" ;;
+esac
+case "$START_BODY" in
+  *'read -r answer'*) ok "and asks before replaying over work already done" ;;
+  *) bad "a second run would reset the project with no warning" ;;
+esac
+# A participant is never told a recording exists. A script in their own folder called
+# `replay` tells them, before they have read a line of the change.
+case "$START_BODY$LAUNCHER_BODY" in
+  *replay-session*) bad "the script's own name tells the participant it is a recording" ;;
+  *) ok "and neither script is named for the recording" ;;
 esac
 case "$(cat "$SETUP")" in
   *'handover.json'*) ok "and only once" ;;
