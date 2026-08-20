@@ -84,6 +84,7 @@ import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, stagg
 import { icon } from '../icons';
 import type { FeaturePhase } from '../../state/activity-model';
 import type { ThreadsData, AgentStep } from '../protocol';
+import { consequenceOf } from '../../state/grammar';
 
 export interface WholeDocEditorOptions {
     controller: AuthorController;
@@ -1160,12 +1161,18 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
      *  maps, so the minimap and the row can never tell different stories. */
     function railSignalsFor(fid: string, attrs: Record<string, unknown>): RailSignals {
         const phase = currentPhases[fid];
-        const hasProposal = currentSuggestions.some(s =>
+        const proposal = currentSuggestions.find(s =>
             s.featureId === fid && (s.kind === 'amend' || s.kind === 'retire' || s.kind === 'move'));
+        const hasProposal = !!proposal;
         return {
             busy: currentBusy.has(fid),
             activeMode: phase === 'editing' ? 'write' : phase === 'reflecting' ? 'read' : null,
             proposalOp: hasProposal ? 'amend' : null,
+            // Whether accepting would BUILD — the same bit the prose channel reads, so
+            // the rail tick and the paragraph name the same party (see STATE_CHANNEL).
+            proposalBuilds: proposal
+                ? consequenceOf(proposal.writesCode, proposal.tag) === 'build'
+                : undefined,
             autoEdit: !!currentAutoEdits[fid],
             sent: currentHeld.has(fid),
             // Same fact the row badge and the prose read: whose words the hold is for.

@@ -206,3 +206,90 @@ class TestAPlanNeverAutoApplies:
         plan = _amend(fid, "Something else entirely, in another voice.")
         plan.realized = False
         assert should_auto_apply(plan, store) is False
+
+
+_BASE = ("Counts a transaction in the month it was made, not the month the bank posted "
+         "it. A card payment on the 31st that posts on the 2nd belongs to the month you "
+         "remember spending it in.")
+_LONGER = _BASE + " Weeks are lined up on the posting date instead."
+
+
+def _workspace(tmp_path):
+    cd = tmp_path / ".codoc"
+    cd.mkdir()
+    return str(cd)
+
+
+def _seed(codoc_dir):
+    from codoc.loop.apply import apply_op
+    from codoc.model.event import NodeOp, NodeOpKind
+    from codoc.store.db import open_store
+    with open_store(codoc_dir) as store:
+        apply_op(NodeOp(kind=NodeOpKind.ADD_NODE, title="Transaction month assignment",
+                        description=_BASE), store, source="loop_a", applied=True)
+        return next(f.id for f in store.list_features()).__str__()
+
+
+# ── plan-ness is one fact, and it was recorded in two places ──────────────────
+
+class TestAPlanSaysSoInTheLedger:
+    """`builds=True` set `realized=False` and left `source` at the reflection default,
+    so the same event answered "is this a plan?" two different ways depending on which
+    field you asked. `render` asks both — `writes_code` off `realized`, the origin tag
+    off `source` — and printed the two answers side by side: "Accept & build" beside an
+    origin claiming the code already did this."""
+
+    def _tag(self, codoc_dir, event_id):
+        from codoc.codoc_file.render import _source_tag
+        from codoc.store.db import open_store
+        with open_store(codoc_dir) as store:
+            return _source_tag(store.get_event(event_id))
+
+    def test_a_plan_amend_is_tagged_a_plan(self, tmp_path):
+        from codoc.mcp.tools import propose_amend
+        from codoc.model.event import PLAN_SOURCE
+
+        cd = _workspace(tmp_path)
+        fid = _seed(cd)
+        res = propose_amend(cd, feature_id=fid, description=_LONGER, builds=True,
+                            rationale="the grain becomes configurable")
+        assert res["applied"] is False          # a plan always awaits a verdict
+        assert self._tag(cd, res["event_id"]) == "agent plan"
+
+        from codoc.store.db import open_store
+        with open_store(cd) as store:
+            assert store.get_event(res["event_id"]).source == PLAN_SOURCE
+
+    def test_a_reflection_amend_is_still_a_reflection(self, tmp_path):
+        """The other direction matters just as much: a reflection marked as a plan asks
+        the agent to rewrite code to match a description derived from that very code."""
+        from codoc.mcp.tools import propose_amend
+
+        cd = _workspace(tmp_path)
+        fid = _seed(cd)
+        res = propose_amend(cd, feature_id=fid, description=_LONGER, builds=False,
+                            rationale="the code already changed")
+        assert self._tag(cd, res["event_id"]) == "agent reflection"
+
+    def test_an_explicit_source_still_wins(self, tmp_path):
+        """Only the DEFAULT is derived — a caller that names a source is obeyed."""
+        from codoc.mcp.tools import propose_amend
+        from codoc.store.db import open_store
+
+        cd = _workspace(tmp_path)
+        fid = _seed(cd)
+        res = propose_amend(cd, feature_id=fid, description=_LONGER, builds=True,
+                            source="loop_a", rationale="x")
+        with open_store(cd) as store:
+            assert store.get_event(res["event_id"]).source == "loop_a"
+
+    def test_a_plan_ADD_is_tagged_a_plan_too(self, tmp_path):
+        """`plan_add` always carried PLAN_SOURCE; `propose_add(realized=False)` is the
+        same proposal by another door and did not."""
+        from codoc.mcp.tools import propose_add
+
+        cd = _workspace(tmp_path)
+        _seed(cd)
+        res = propose_add(cd, title="Weekly windows", description="Not written yet.",
+                          realized=False)
+        assert self._tag(cd, res["event_id"]) == "agent plan"

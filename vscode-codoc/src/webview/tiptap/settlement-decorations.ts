@@ -155,6 +155,14 @@ export function claimTitle(c: Claim): string {
             ? 'You accepted this. No code behind it yet.'
             : 'The plan you accepted removed this. No code behind it yet.';
     }
+    // A code claim awaiting a verdict is an OFFER, not a report, and the difference is
+    // the whole of what the reader has to do about it. `landed` says "this is how things
+    // are"; `proposed` says "the tree can be made to say this, if you agree".
+    if (c.stage === 'proposed') {
+        return c.edit === 'add'
+            ? 'The code changed. Proposed wording to match it — accepting writes no code.'
+            : 'The code no longer covers this. Proposed for removal from the tree.';
+    }
     if (c.edit === 'add') return 'This is what the code now says.';
     // The plan-dropped case is the reason the whole model exists, and it is the one
     // reading a bare red ghost cannot give: without it the reader sees only that a

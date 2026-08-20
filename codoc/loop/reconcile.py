@@ -21,6 +21,7 @@ from __future__ import annotations
 from codoc.codoc_file.diff import CodocDiff, diff_codoc
 from codoc.codoc_file.doc_parse import parse_doc_file
 from codoc.codoc_file.parse import parse_tree_file
+from codoc.model.event import NodeOpKind
 from codoc.codoc_file.render import write_sidecar, write_tree
 from codoc.store.db import Store, open_store
 
@@ -37,6 +38,24 @@ def has_pending_user_edits(codoc_dir: str) -> bool:
     batch before deciding whether to run a loop)."""
     with open_store(codoc_dir) as store:
         return not pending_user_edits(store, codoc_dir).is_empty()
+
+
+def _orphan_add_titles(doc_parsed, store: Store) -> set[str]:
+    """Titles of doc nodes naming a feature id the store has never heard of.
+
+    A node the AUTHOR just created carries no fid — identity is the webview's
+    ``local_id`` until Loop B mints one. So a node that does declare a fid, and whose
+    fid matches no feature at all (``include_retired`` — a retired one is a different
+    case, already handled in ``diff_codoc``), cannot be an authored ADD. It is debris:
+    a projection rendered from a different store (a rebuilt workspace, a restored
+    backup, a replayed fixture) whose ids never existed here.
+
+    Matching is by TITLE because an ADD op carries the node's ``local_id`` and not its
+    fid, and there is no need to widen ``NodeOp`` for a guard this narrow.
+    """
+    known = {f.id for f in store.list_features(include_retired=True)}
+    return {n.title for n in doc_parsed.nodes
+            if n.id and n.id not in known and n.title.strip()}
 
 
 def doc_edits_ahead(doc_parsed, store: Store) -> bool:
@@ -65,9 +84,27 @@ def doc_edits_ahead(doc_parsed, store: Store) -> bool:
     if d.is_empty():
         return False
     doc_nodes = {n.id: n for n in doc_parsed.nodes if n.id}
+    # Titles of doc nodes that DECLARE a feature id the store has never heard of —
+    # not live, not retired. See `_orphan_add_titles`; these are the one ADD shape
+    # that is debris rather than intent, and the version stamp cannot rule on them
+    # because an ADD op carries no feature_id to look a stamp up by.
+    orphan_adds = _orphan_add_titles(doc_parsed, store)
     for op in d.user_ops:
         fid = op.feature_id
         if not fid:
+            # An ADD is the one op the staleness check below cannot reach: it has no
+            # feature_id, so there is no stamp to compare and every ADD fell through
+            # to "intent". That is right for a node the author just typed (no fid at
+            # all — the webview mints a local_id and the fid arrives when Loop B
+            # applies the ADD) and WRONG for a node whose fid names a feature the
+            # store does not have, which is the projection being foreign or stale,
+            # never something a person wrote. Yielding to it wedges BOTH derived
+            # files permanently and self-perpetuates: the render that would replace
+            # the orphan is the render being skipped, so nothing can ever clear it.
+            # This is the same call the tree.codoc branch below already makes — the
+            # store is authoritative, so re-render and let the workspace self-heal.
+            if op.kind is NodeOpKind.ADD_NODE and op.title in orphan_adds:
+                continue
             return True  # a genuinely new authored node — always intent
         node = doc_nodes.get(fid)
         feature = store.get_feature(fid)

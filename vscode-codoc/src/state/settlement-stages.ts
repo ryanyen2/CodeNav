@@ -30,6 +30,7 @@
  */
 import { PMNode, NODE_FEATURE_HEADING, NODE_PARAGRAPH, inlineRunsToText, type FeatureHeadingAttrs } from './pm-doc';
 import { mdDisplayText } from './display-space';
+import { consequenceOf } from './grammar';
 import { planRuns, descParas, type PlanNode } from './plan-materialize';
 import type { FeatureText, BlockRuns } from './settlement';
 import type { AutoEdit, HoldDetail } from './bindings-model';
@@ -45,6 +46,11 @@ export interface FeatureStages {
     humanBase?: FeatureText;
     code?: { layerId: string; prev: FeatureText };
     plan?: { layerId: string; stage: 'proposed'; runs: BlockRuns[] };
+    /** A pending REFLECTION — Loop A saw the code change and offers the tree new
+     *  wording. Structurally identical to `plan` (materialized old-and-new runs
+     *  awaiting a verdict) and drawn in a different channel, because the words are the
+     *  codebase's and not a plan's. Same shape so `claimsFor` can walk them together. */
+    reflected?: { layerId: string; stage: 'proposed'; runs: BlockRuns[] };
     /** An ACCEPTED plan the code has not caught up with — see `FeatureLayers.accepted`.
      *  Shipped from the queued directive, because the proposal row it came from is
      *  deleted the moment the verdict applies. */
@@ -64,6 +70,18 @@ export interface StagedProposal {
     titleNew: string;
     descOld: string;
     descNew: string;
+    /** True when accepting this proposal is a BUILD request — the prose describes code
+     *  that does not exist yet (`realized === false` upstream, surfaced as
+     *  `writesCode === 'build'`). It decides which CHANNEL draws the proposal, and it
+     *  is the same bit `grammar.consequenceOf` reads for the button verb, so the words
+     *  and the colour can never tell different stories.
+     *
+     *  False means a REFLECTION: Loop A watched the code change and offers the tree new
+     *  wording to match. Those were drawn in the plan channel with everything else, so a
+     *  node nobody had planned came up gray-and-struck-through — the plan's ink on the
+     *  codebase's claim. The palette says green/red is always what the code did; a
+     *  reflection is exactly that, still awaiting a verdict. */
+    builds: boolean;
 }
 
 /** The text a set of block runs adds up to — what the materialized document holds. */
@@ -188,7 +206,11 @@ export function buildStages(
         // `planned` to be the new text alone would make the human diff read every
         // displaced sentence still on screen as something the author had just typed.
         s.planned = concatRuns(runs);
-        s.plan = { layerId: p.layerId, stage: 'proposed', runs };
+        // WHICH channel draws it follows what accepting would do, not the mere fact of
+        // being pending. A build request is the plan's words (gray); a reflection is the
+        // codebase's (green/red ground), awaiting a verdict rather than landed.
+        if (p.builds) s.plan = { layerId: p.layerId, stage: 'proposed', runs };
+        else s.reflected = { layerId: p.layerId, stage: 'proposed', runs };
     }
     return out;
 }
@@ -243,7 +265,7 @@ export function stagedProposals(
     suggestions: readonly {
         kind: string; id: string; featureId: string | null; eventId?: string;
         titleOld?: string; titleNew?: string; descOld?: string; descNew?: string;
-        verdictPending?: boolean;
+        verdictPending?: boolean; writesCode?: 'build' | 'remove' | null; tag?: string;
     }[],
 ): StagedProposal[] {
     const out: StagedProposal[] = [];
@@ -256,6 +278,9 @@ export function stagedProposals(
             kind: s.kind, key, layerId: s.eventId ?? s.id,
             titleOld: s.titleOld ?? '', titleNew: s.titleNew ?? '',
             descOld: s.descOld ?? '', descNew: s.descNew ?? '',
+            // Via `consequenceOf` rather than a bare `writesCode === 'build'` so the
+            // tag fallback for an older daemon's payload is applied in ONE place.
+            builds: consequenceOf(s.writesCode, s.tag) === 'build',
         });
     }
     return out;

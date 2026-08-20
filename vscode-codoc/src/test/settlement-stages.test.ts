@@ -21,7 +21,7 @@ const doc = (): PMNode => makeDoc([
 ]);
 
 const amend = (over: Partial<StagedProposal> = {}): StagedProposal => ({
-    kind: 'amend', key: 'f-1', layerId: 'e-9',
+    kind: 'amend', key: 'f-1', layerId: 'e-9', builds: true,
     titleOld: 'Uploads', titleNew: 'Uploads',
     descOld: 'It retries five times.', descNew: 'It retries five times. It then backs off.',
     ...over,
@@ -218,7 +218,7 @@ describe('a plan amend is the PLAN\'s words, on every paragraph', () => {
         // ⌘S prompt on prose nobody had touched.
         const doc = makeDoc([head('f-1', 'Uploads'), para(P1, 'f-1'), para(P2, 'f-1')]);
         const p: StagedProposal = {
-            kind: 'amend', key: 'f-1', layerId: 'e-9',
+            kind: 'amend', key: 'f-1', layerId: 'e-9', builds: true,
             titleOld: 'Uploads', titleNew: 'Uploads',
             descOld: `${P1}\n\n${P2}`, descNew: `${NEW1}\n\n${P2}`,
         };
@@ -241,7 +241,7 @@ describe('a plan amend is the PLAN\'s words, on every paragraph', () => {
         // swallowed every word the plan had put there.
         const doc = makeDoc([head('f-1', 'Uploads'), para(P1, 'f-1')]);
         const p: StagedProposal = {
-            kind: 'amend', key: 'f-1', layerId: 'e-9',
+            kind: 'amend', key: 'f-1', layerId: 'e-9', builds: true,
             titleOld: 'Uploads', titleNew: 'Uploads', descOld: P1, descNew: NEW1,
         };
         const stages = buildStages(doc, [p], {},

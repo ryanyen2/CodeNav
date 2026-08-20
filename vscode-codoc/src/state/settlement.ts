@@ -249,6 +249,18 @@ export interface FeatureLayers {
      *  tracked-change engine materialized the proposal into the document. */
     plan?: { layerId: string; stage: 'proposed'; runs: BlockRuns[] };
     /**
+     * An unanswered REFLECTION's runs — same geometry as `plan` (old and new both
+     * materialized), different channel. Loop A watched the code change and offers the
+     * tree new wording; the words are the CODEBASE's, so they take the code channel's
+     * ground rather than a plan's gray. Only the stage differs from a landed code
+     * claim: `proposed` says a verdict is still owed.
+     *
+     * It is a separate field rather than a flag on `plan` so that a feature can hold
+     * both at once without one overwriting the other — a planned amend and a drift
+     * amend on the same node are different claims by different parties.
+     */
+    reflected?: { layerId: string; stage: 'proposed'; runs: BlockRuns[] };
+    /**
      * A plan the reader ACCEPTED, whose code has not landed yet. `prev` is the wording
      * it replaced.
      *
@@ -545,6 +557,8 @@ export function claimsFor(f: FeatureLayers): Claim[] {
     const humanStage: Stage = f.committed ? 'committed' : 'open';
     const planRunsFor = new Map<string, DiffRun[]>();
     if (f.plan) for (const b of f.plan.runs) planRunsFor.set(keyOf(b.block), b.runs);
+    const reflectedRunsFor = new Map<string, DiffRun[]>();
+    if (f.reflected) for (const b of f.reflected.runs) reflectedRunsFor.set(keyOf(b.block), b.runs);
 
     for (const st of blockStages(f)) {
         const planRuns = diffFor(st.block, 'plan')(st.projected, st.planned);
@@ -628,9 +642,17 @@ export function claimsFor(f: FeatureLayers): Claim[] {
             }
         }
 
-        // ── plan: the materialized proposal's own runs, carried through typing ─
-        const runs = planRunsFor.get(keyOf(st.block));
-        if (f.plan && runs) {
+        // ── plan / reflection: the materialized proposal's own runs, carried
+        //    through typing. One geometry, two channels — which one is decided
+        //    upstream by whether accepting would BUILD (settlement-stages).
+        for (const [layer, channel] of [
+            [f.plan, 'plan' as Channel] as const,
+            [f.reflected, 'code' as Channel] as const,
+        ]) {
+            if (!layer) continue;
+            const runs = (channel === 'plan' ? planRunsFor : reflectedRunsFor)
+                .get(keyOf(st.block));
+            if (!runs) continue;
             for (const s of materializedSpans(runs)) {
                 // SPLIT, never voided. A proposal is text you are meant to edit in
                 // place before accepting it, so typing inside one is ordinary use —
@@ -638,7 +660,7 @@ export function claimsFor(f: FeatureLayers): Claim[] {
                 // words rather than swallowing them or vanishing.
                 for (const h of mapSpan(humanRuns, s.start, s.end)) {
                     if (h.start >= h.end) continue;
-                    out.push({ channel: 'plan', stage: f.plan.stage, edit: s.edit, block: st.block, start: h.start, end: h.end, removed: s.removed, layerId: f.plan.layerId });
+                    out.push({ channel, stage: layer.stage, edit: s.edit, block: st.block, start: h.start, end: h.end, removed: s.removed, layerId: layer.layerId });
                 }
             }
         }

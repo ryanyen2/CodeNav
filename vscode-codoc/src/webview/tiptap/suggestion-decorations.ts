@@ -26,7 +26,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import {
-    directionLabel, directionActions, directionOrigin, directionNote,
+    directionLabel, directionActions, directionOrigin, directionNote, originLabel, originNote,
     consequenceOf, consequenceVerb, consequenceNote, leavesForAgent, verdictHints,
 } from '../../state/grammar';
 import { icon } from '../icons';
@@ -147,14 +147,14 @@ function verdictStrip(
     }
 
     if (s.direction !== 'doc-ahead') {
-        const dir = elc('span', 'ce-tc-dir', directionOrigin(s.direction));
+        const dir = elc('span', 'ce-tc-dir', originLabel(s.direction, s.tag));
         // The tag names the origin in the daemon's vocabulary ("code drift", "agent
         // plan"); on a deferred edit of the reader's own it only repeats the chip, so
         // the hover carries the REASON instead — the one sentence that explains why
         // words they typed are sitting here un-applied.
         dir.title = s.direction === 'yours'
             ? directionNote(s.direction)
-            : directionLabel(s.direction) + (s.tag ? ' · ' + s.tag : '');
+            : originNote(s.direction, s.tag) + (s.tag ? ' · ' + s.tag : '');
         row.append(dir);
     }
     // The consequence, in one plain sentence, only where it is not the boring one.

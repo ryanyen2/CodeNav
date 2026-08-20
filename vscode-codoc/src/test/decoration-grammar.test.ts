@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { directionOrigin } from '../state/grammar';
+import { directionOrigin, originLabel, originNote } from '../state/grammar';
 
 const css = readFileSync(resolve(__dirname, '../webview/doc-view.css'), 'utf8');
 const sugg = readFileSync(resolve(__dirname, '../webview/tiptap/suggestion-decorations.ts'), 'utf8');
@@ -17,13 +17,24 @@ const sugg = readFileSync(resolve(__dirname, '../webview/tiptap/suggestion-decor
 describe('U6 — code→codoc diff carries a non-color direction label (R8)', () => {
     it('the verdict strip emits a plain-text origin label, not just a colour/tooltip', () => {
         expect(sugg).toMatch(/ce-tc-dir/);
-        expect(sugg).toMatch(/directionOrigin\(s\.direction\)/);
+        expect(sugg).toMatch(/originLabel\(s\.direction, s\.tag\)/);
     });
     it('the words live in the grammar, not in the decoration layer', () => {
         // They were hard-coded here as the literal "from code" for EVERY proposal —
         // including the reader's own deferred edit, which is not from code at all.
         expect(directionOrigin('code-ahead')).toBe('from code');
         expect(directionOrigin('yours')).not.toMatch(/from code/);
+    });
+    // Every machine proposal resolves the same way, so `directionFromActor` maps them
+    // all to `code-ahead` — and the label read off the direction alone therefore said
+    // "from code" on a PLAN, whose whole premise is that the code does not say this
+    // yet. The node then carried "from code" beside "Accept & build".
+    it('a plan does not claim to come from code', () => {
+        expect(originLabel('code-ahead', 'agent plan')).not.toMatch(/from code/);
+        expect(originLabel('code-ahead', 'agent plan')).toMatch(/plan/);
+        expect(originLabel('code-ahead', 'code drift')).toBe('from code');
+        expect(originLabel('code-ahead', 'agent reflection')).toBe('from code');
+        expect(originNote('code-ahead', 'agent plan')).toMatch(/code to be written/);
     });
     it('the label has a CSS rule so it renders muted text (not hue-dependent)', () => {
         expect(css).toMatch(/\.ce-tc-dir\s*\{/);

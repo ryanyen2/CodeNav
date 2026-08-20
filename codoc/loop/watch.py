@@ -719,10 +719,17 @@ def run_watch(
     if migrate_ok:
         _render(codoc_dir)
 
-    # Absorb any IDE host ops that queued in edits.host.jsonl while the daemon was down
-    # (no watch event fires for a file that already existed at startup, so this is the
-    # only place they get merged + applied). A Loop B pass merges the log and drains it.
-    if migrate_ok and host_ops_path(codoc_dir).exists():
+    # Absorb any IDE input that queued while the daemon was down. No watch event fires
+    # for a file that already EXISTED at startup, so this is the only place these get
+    # applied — and the gate used to name `edits.host.jsonl` alone, which silently lost
+    # every OTHER channel. A verdict is the one that bites: click Accept with no daemon
+    # up, restart the daemon, and the verdict sits in inbox.json forever — the click
+    # registered, the IDE says "waiting to apply", and nothing ever applies it. All four
+    # channels are Loop B inputs and all four are drained by the same pass.
+    if migrate_ok and any(p.exists() for p in (host_ops_path(codoc_dir),
+                                               edits_path(codoc_dir),
+                                               inbox_path(codoc_dir),
+                                               host_verdicts_path(codoc_dir))):
         try:
             res = run_loop_b(root_dir, codoc_dir, realize=not (no_realize or dry_run))
             printer(f"▸ startup edits  {res.summary()}")

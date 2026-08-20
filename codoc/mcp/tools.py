@@ -545,9 +545,28 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
         return out
 
 
+def _origin_source(explicit: str | None, is_plan: bool) -> str:
+    """The ledger ``source`` for an agent-authored proposal.
+
+    Plan-ness is recorded TWICE and the two were written independently: ``realized is
+    False`` says the prose describes code that does not exist yet, and ``source`` says
+    which channel authored the proposal. ``builds=True`` set only the first, so a plan
+    amend went into the ledger tagged ``loop_a_agent`` — an agent REFLECTION — and
+    ``render._source_tag`` duly labelled it "agent reflection". The node then said two
+    contradictory things at once: "Accept & build" (read off ``realized``) beside an
+    origin claiming the code already did this (read off ``source``). Same event, two
+    fields, opposite stories.
+
+    An explicit ``source`` from the caller still wins; only the DEFAULT is derived.
+    """
+    if explicit is not None:
+        return explicit
+    return PLAN_SOURCE if is_plan else LOOP_A_AGENT_SOURCE
+
+
 def propose_add(codoc_dir: str, *, title: str, description: str = "",
                 parent_id: str | None = None, binds: list[str] | None = None,
-                rationale: str = "", source: str = LOOP_A_AGENT_SOURCE,
+                rationale: str = "", source: str | None = None,
                 realized: bool | None = None, caused_by: str = "",
                 actor: str = "", after_id: str = "", before_id: str = "") -> dict:
     """``after_id``/``before_id`` name the siblings the new node goes between — the same
@@ -557,12 +576,13 @@ def propose_add(codoc_dir: str, *, title: str, description: str = "",
                 parent_id=parent_id, bindings=_parse_binds(binds),
                 rationale=rationale, realized=realized,
                 after_id=after_id, before_id=before_id)
-    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
+    return _apply_single(codoc_dir, op, source=_origin_source(source, realized is False),
+                         caused_by=caused_by, actor=actor)
 
 
 def propose_amend(codoc_dir: str, *, feature_id: str, title: str | None = None,
                   description: str | None = None, rationale: str = "",
-                  source: str = LOOP_A_AGENT_SOURCE, caused_by: str = "",
+                  source: str | None = None, caused_by: str = "",
                   actor: str = "", builds: bool = False) -> dict:
     """Propose new wording for an existing feature.
 
@@ -584,7 +604,8 @@ def propose_amend(codoc_dir: str, *, feature_id: str, title: str | None = None,
     op = NodeOp(kind=NodeOpKind.AMEND, feature_id=feature_id, title=title,
                 description=description, rationale=rationale,
                 realized=False if builds else None)
-    return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
+    return _apply_single(codoc_dir, op, source=_origin_source(source, builds),
+                         caused_by=caused_by, actor=actor)
 
 
 def propose_move(codoc_dir: str, *, feature_id: str, parent_id: str | None,

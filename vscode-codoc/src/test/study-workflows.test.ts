@@ -151,7 +151,7 @@ describe('the participant edits a planned node before deciding', () => {
     it('their typing reads as THEIRS — blue over the grey, not more grey', () => {
         const clean = tree();
         const proposals: StagedProposal[] = [{
-            kind: 'add', key: 'e-add', layerId: 'e-add',
+            kind: 'add', key: 'e-add', layerId: 'e-add', builds: true,
             titleOld: '', titleNew: planAdd.title, descOld: '', descNew: planAdd.description,
         }];
         const stages = buildStages(clean, proposals, {});
@@ -294,7 +294,11 @@ describe('the loop rewrites a description while the participant is elsewhere', (
 
     it('composes with a proposal on the SAME feature — three channels, no stand-down', () => {
         const proposals = stagedProposals([{
-            kind: 'amend', id: 'e-9', eventId: 'e-9', featureId: 'f-2',
+            // `writesCode: 'build'` is what makes this a PLAN rather than a reflection,
+            // and it is load-bearing for the assertion below: a proposal that writes no
+            // code is the CODEBASE's claim and draws in the code channel, so without it
+            // there is no plan channel on screen and only two channels compose.
+            kind: 'amend', id: 'e-9', eventId: 'e-9', featureId: 'f-2', writesCode: 'build',
             titleOld: 'Rounding', titleNew: 'Rounding',
             descOld: 'Totals round once, at the summary.',
             descNew: 'Totals round once, at the summary. Line items are never rounded.',
@@ -304,5 +308,29 @@ describe('the loop rewrites a description while the participant is elsewhere', (
         const live: FeatureText = { title: planned.title, paras: [planned.paras[0] + ' Is that right?'] };
         const claims = claimsFor({ ...stages['f-2'], live });
         expect(new Set(claims.map(c => c.channel))).toEqual(new Set(['code', 'plan', 'human']));
+    });
+
+    // A pending REFLECTION is not a plan, and the surface used to draw it as one: Loop A
+    // watched the code change, offered the tree new wording, and it arrived gray and
+    // struck through on a node the reader had never planned. Gray is the plan's ink; the
+    // codebase's is the ground. This is the same routing the row and the rail make
+    // (STATE_CHANNEL.reflected), so the two panes cannot disagree about who spoke.
+    it('a drift proposal is the CODE channel — the plan\'s gray is never spent on it', () => {
+        const proposals = stagedProposals([{
+            kind: 'amend', id: 'e-7', eventId: 'e-7', featureId: 'f-2',
+            tag: 'code drift', writesCode: null,
+            titleOld: 'Rounding', titleNew: 'Rounding',
+            descOld: 'Totals round once, at the summary.',
+            descNew: 'Totals round once, at the summary. Line items are never rounded.',
+        } as Suggestion]);
+        expect(proposals[0].builds).toBe(false);
+        const stages = buildStages(tree(), proposals, {});
+        expect(stages['f-2'].reflected).toBeTruthy();
+        expect(stages['f-2'].plan).toBeUndefined();
+        const live = stages['f-2'].planned!;
+        const claims = claimsFor({ ...stages['f-2'], live });
+        expect(claims.length).toBeGreaterThan(0);
+        expect(claims.every(c => c.channel !== 'plan')).toBe(true);
+        expect(claims.some(c => c.channel === 'code' && c.stage === 'proposed')).toBe(true);
     });
 });

@@ -579,6 +579,11 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
     color: var(--st-plan); opacity: var(--st-plan-accepted);
     animation: breathe 2.6s ease-in-out infinite;
 }
+/* reflected — the code changed and new wording is OFFERED for a verdict. The code
+   channel, like `rewritten`, because the words are the codebase's; outlined rather than
+   filled because unlike `rewritten` it has not been applied to anything yet. It used to
+   share `proposed`'s plan-gray, which put a plan's ink on a node nobody had planned. */
+.badge.reflected { color: var(--st-code-add); opacity: 0.75; }
 /* rewritten — the loop changed this to match code that already moved. The CODE
    channel, and the row shows it now because the rail always did. */
 .badge.rewritten { color: var(--st-code-add); }
@@ -2118,6 +2123,9 @@ body.vscode-high-contrast .row.busy .title {
    hue alone. */
 .ce-tick.st-proposed { background: var(--st-plan); opacity: var(--st-plan-proposed); }
 .ce-tick.st-planned  { background: var(--st-plan); opacity: var(--st-plan-accepted); }
+/* a reflection awaiting a verdict: the codebase's claim, not yet taken — code channel,
+   at the unsettled weight the other `proposed` states use. */
+.ce-tick.st-reflected { background: var(--st-code-add); opacity: var(--st-plan-proposed); }
 /* an unasked loop rewrite: the codebase changed the prose — the code channel */
 .ce-tick.st-rewritten { background: var(--st-code-add); }
 .ce-tick.st-sent { background: var(--st-human); }
@@ -2156,6 +2164,7 @@ body.vscode-using-screen-reader .ce-tick.st-working, body.vscode-using-screen-re
 }
 .ce-rail-legend:hover { color: var(--vscode-foreground); border-color: var(--vscode-foreground); }
 body.vscode-high-contrast .ce-tick.st-proposed,
+body.vscode-high-contrast .ce-tick.st-reflected,
 body.vscode-high-contrast .ce-tick.st-rewritten,
 body.vscode-high-contrast .ce-tick.st-sent,
 body.vscode-high-contrast .ce-tick.st-working,
@@ -2800,6 +2809,38 @@ body.vscode-using-screen-reader .ce-settle.human.open { animation: none; }
        highlighted line instead of a row of separate chips. */
     padding: 0.08em 0; border-radius: 2px;
     box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+
+/* Words still on screen that the CODE no longer has. A `cut` is not a `del`: the text
+   is present and this channel proposes it go, so it is struck WHERE IT STANDS over the
+   removal ground rather than reprinted as a ghost. The code channel had no `cut` rule
+   at all, because until reflections were drawn here every code claim was already
+   applied — a materialized one would have rendered as untouched prose, reporting a
+   removal by showing nothing. */
+.ce-settle.code.cut {
+    background: color-mix(in srgb, var(--st-code-del) var(--st-ground), transparent);
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, var(--st-code-del) 70%, transparent);
+    padding: 0.08em 0; border-radius: 2px;
+    box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+
+/* A code claim AWAITING A VERDICT. `landed` is what the code says and there is nothing
+   to do about it; `proposed` is the tree being offered the codebase's wording and a
+   verdict still owed. Same hue — it is the same party's claim — at a lighter ground,
+   under a dotted rule that means "not taken yet". Without the distinction an offer and
+   a fact were the same green. */
+.ce-settle.code.proposed {
+    background: color-mix(in srgb, currentColor 0%, transparent);
+    border-bottom: 1px dotted color-mix(in srgb, var(--st-code-add) 60%, transparent);
+}
+.ce-settle.code.proposed.add {
+    background: color-mix(in srgb, var(--st-code-add) calc(var(--st-ground) * 0.6), transparent);
+}
+.ce-settle.code.proposed.cut {
+    background: color-mix(in srgb, var(--st-code-del) calc(var(--st-ground) * 0.6), transparent);
+    border-bottom-color: color-mix(in srgb, var(--st-code-del) 60%, transparent);
 }
 
 /* ── deletions: the words, not a caret ───────────────────────────────────────── */

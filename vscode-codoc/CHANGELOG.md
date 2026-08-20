@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.2.16
+
+### Fixed
+
+- **The document froze while the store kept moving, and the difference was inked as
+  yours.** Every render asks whether `tree.doc.json` holds authored edits the store has
+  not absorbed, and yields if it does. It proves "not authored" from each heading's
+  version stamp — but an ADD carries no feature id, so there is no stamp to look up and
+  every ADD fell through to "someone typed this". That is right for a node an author just
+  typed, which has no id yet by construction, and exactly backwards for a node naming a
+  feature id the store has never had: a projection left over from a rebuilt, restored or
+  replayed workspace. The cost was not one skipped render. The write that would have
+  replaced the stale node was the write being skipped, so both derived files froze at that
+  moment and could never recover while the store advanced past them — and the editor,
+  diffing live text against a baseline stuck in the past, attributed the whole difference
+  to whoever was typing. An accepted plan came back as ordinary prose in the author's blue.
+  A node naming an unknown feature is now read as debris and the workspace re-renders
+  itself, the same call the read-only `tree.codoc` export already made.
+
+- **A verdict clicked while no daemon was running was never applied — restarting did not
+  help.** No watch event fires for a file that already existed when the daemon starts, so
+  startup is the only chance to pick up input that queued while it was down. The gate
+  named `edits.host.jsonl` and nothing else, silently dropping the other three Loop B
+  channels. Accepting with the daemon down therefore parked the verdict in `inbox.json`
+  forever: the click registered, the IDE said "waiting to apply", and nothing ever applied
+  it. All four channels are drained at startup now.
+
+- **A plan told the ledger it was a plan in one field and a reflection in another.**
+  `builds=True` set `realized=False` and left `source` at the reflection default, so the
+  same event answered "is this a plan?" differently depending on which field you asked —
+  and the surface asks both. The button read the first and said "Accept & build"; the
+  origin chip read the second and said "from code", on a proposal whose whole premise is
+  that the code does NOT say this yet. Plan-ness now sets both, and the origin chip reads
+  the daemon's origin tag rather than a direction that maps every machine proposal to the
+  same value.
+
+- **A change nobody planned was drawn as a plan.** Loop A watches the code change and
+  offers the tree new wording to match; those proposals went into the plan channel with
+  everything else and arrived faded and struck through — a plan's gray on a node the
+  reader had never planned, in a surface whose whole promise is that gray means a plan and
+  green and red mean the code. Which channel draws a pending proposal now follows what
+  accepting it would DO, so a reflection takes the code channel's ground at a lighter
+  weight with a verdict still owed. The tree rows and the minimap rail make the same
+  split, and the code channel gained the removal styling it never needed until now.
+
 ## 0.2.15
 
 ### Fixed

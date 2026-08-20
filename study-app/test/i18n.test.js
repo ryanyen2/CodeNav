@@ -156,6 +156,14 @@ test('every briefing, start instruction and page string is translated', () => {
         // something it should not have, and what it prints before anything moves.
         t(`project.${name}.repl.lead`, project.repl.lead);
         t(`project.${name}.repl.caption`, project.repl.caption);
+        // And the commands to run once the change is in. Walked, not listed,
+        // because a project gaining a fourth command would otherwise show as one
+        // English line in the middle of a Chinese instruction — at the moment the
+        // participant is looking at a terminal rather than at the page.
+        t(`project.${name}.repl.after.lead`, project.repl.after.lead);
+        t(`project.${name}.repl.after.caption`, project.repl.after.caption);
+        project.repl.after.commands.forEach(([, why], i) =>
+            t(`project.${name}.repl.after.${i}`, why));
     }
     // The request itself is NOT translated. It is pasted into an agent working
     // in a codebase whose identifiers are English, and a translated request

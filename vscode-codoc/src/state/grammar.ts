@@ -51,6 +51,37 @@ export function directionOrigin(d: Direction): string {
     return _never;
 }
 
+/**
+ * The words the origin chip PRINTS, given both axes.
+ *
+ * `Direction` answers WHO RESOLVES this, and it has three values because that is how
+ * many answers the question has. It was also being asked a second question it cannot
+ * answer — WHERE THE WORDS CAME FROM — and every machine proposal resolves the same
+ * way (`directionFromActor` maps every non-human actor to `code-ahead`), so every
+ * machine proposal printed "from code". Including a PLAN, whose entire premise is that
+ * the code does NOT say this yet. The node then carried "from code" beside
+ * "Accept & build": one chip claiming the work was done, the button beside it asking
+ * for the work to be done.
+ *
+ * The daemon already answers the second question — `render._source_tag` ships "agent
+ * plan" / "agent reflection" / "code drift" / "your edit" — so the label reads the tag
+ * and the hue keeps reading the direction. A payload with no tag falls back to the old
+ * wording, which is what those rows meant.
+ */
+export function originLabel(d: Direction, tag?: string): string {
+    if (d !== 'code-ahead') return directionOrigin(d);
+    return (tag ?? '').includes('plan') ? 'from a plan' : directionOrigin(d);
+}
+
+/** One sentence for the hover: where these words came from, and what that implies. */
+export function originNote(d: Direction, tag?: string): string {
+    if (d === 'code-ahead' && (tag ?? '').includes('plan')) {
+        return 'An agent proposed this wording before the code exists. '
+            + 'Accepting asks for the code to be written.';
+    }
+    return directionNote(d);
+}
+
 /** The non-colour direction marker (REQUIRED for colourblind parity, R8 — the hue is
  *  never the only signal): the glyph plus `directionOrigin`. */
 export function directionLabel(d: Direction): string {

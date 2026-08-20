@@ -191,3 +191,77 @@ def test_legacy_doc_without_stamps_stays_conservative(codoc):
 
     with open_store(codoc) as s:
         assert safe_write_tree(s, codoc) is False
+
+
+# ── the render wedge: a projection whose ids the store never had ──────────────
+#
+# `doc_edits_ahead` yields the render to authored edits the store has not absorbed,
+# and proves "not authored" from the heading's version stamp. An ADD carries no
+# feature_id, so there is no stamp to look up and every ADD fell through to "intent".
+# For a node the author just typed that is right. For a node that NAMES a feature id
+# the store has never heard of it is exactly backwards, and the cost is not one bad
+# render: the write that would replace the orphan is the write being skipped, so
+# tree.codoc and tree.doc.json freeze at that moment and cannot recover while the
+# store keeps advancing. The webview then diffs live text against a frozen baseline
+# and attributes the difference to whoever is typing.
+
+def _project(codoc, store):
+    """Write the daemon's projection and read it back, as a render pass would."""
+    from codoc.codoc_file.doc_parse import parse_doc_file
+    from codoc.loop.loop_b import write_tree_doc
+    write_tree_doc(store, codoc)
+    return parse_doc_file(codoc)
+
+
+def test_an_orphan_projection_is_not_authored_intent(tmp_path):
+    """A workspace rebuilt / restored / replayed keeps the titles and mints new ids.
+    Every node of the OLD projection then names a feature this store has never had."""
+    from codoc.loop.reconcile import doc_edits_ahead
+
+    old = tmp_path / "old" / ".codoc"
+    old.mkdir(parents=True)
+    with open_store(str(old)) as s:
+        s.upsert_feature(Feature(title="Rounding", description="Totals round once."))
+        doc = _project(str(old), s)
+        assert doc_edits_ahead(doc, s) is False      # projection matches its own store
+
+    new = tmp_path / "new" / ".codoc"
+    new.mkdir(parents=True)
+    with open_store(str(new)) as s2:
+        s2.upsert_feature(Feature(title="Rounding", description="Totals round twice."))
+        assert doc_edits_ahead(doc, s2) is False, (
+            "a doc node naming a feature id the store has never had is debris from a "
+            "foreign projection, not something a person wrote — yielding to it wedges "
+            "both derived files permanently"
+        )
+
+
+def test_a_genuinely_new_authored_node_is_still_intent(codoc):
+    """The guard above must not swallow the case it was written for. A node the author
+    typed carries NO feature id — identity is the webview's local_id until Loop B mints
+    one — and that absence is exactly what separates it from the orphan above."""
+    import json
+
+    from codoc.codoc_file.doc_parse import doc_path, parse_doc_file
+    from codoc.loop.reconcile import doc_edits_ahead
+
+    with open_store(codoc) as s:
+        s.upsert_feature(Feature(title="Rounding", description="Totals round once."))
+        _project(codoc, s)
+        raw = json.loads(doc_path(codoc).read_text())
+
+        def blank_identity(node):
+            """Turn one projected heading into a freshly-typed one: no fid, a local_id."""
+            if isinstance(node, dict):
+                if node.get("type") == "featureHeading":
+                    attrs = dict(node.get("attrs") or {})
+                    attrs["fid"] = ""
+                    attrs["localId"] = "n-typed"
+                    attrs.pop("version", None)
+                    return {**node, "attrs": attrs}
+                if node.get("content"):
+                    return {**node, "content": [blank_identity(c) for c in node["content"]]}
+            return node
+
+        doc_path(codoc).write_text(json.dumps(blank_identity(raw)))
+        assert doc_edits_ahead(parse_doc_file(codoc), s) is True

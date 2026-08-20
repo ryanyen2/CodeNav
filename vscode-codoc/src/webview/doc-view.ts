@@ -1572,6 +1572,12 @@ function appendRow(parent: HTMLElement, id: string): void {
     const signals = {
         activeMode: n.activeMode,
         proposalOp: n.proposal?.op ?? null,
+        // See STATE_CHANNEL.reflected: a proposal that writes no code is the
+        // CODEBASE's claim, not a plan's, and takes the code channel's ink here
+        // exactly as it does in the document.
+        proposalBuilds: n.proposal
+            ? consequenceOf(n.proposal.writesCode, n.proposal.tag) === 'build'
+            : undefined,
         divergent: !!divergent[id],
         autoEdit: !!(payload.autoEdits ?? {})[id],
         sent: awaitingAI.has(id) && !draftSet.has(id),

@@ -41,7 +41,7 @@
 import type { IconName } from '../webview/icons';
 
 export type FeatureState =
-    | 'working' | 'proposed' | 'rewritten' | 'agreed' | 'sent' | 'staged'
+    | 'working' | 'proposed' | 'reflected' | 'rewritten' | 'agreed' | 'sent' | 'staged'
     | 'planned' | 'settled';
 
 /** Which settlement channel a state belongs to — the ONE thing that decides its ink.
@@ -50,6 +50,15 @@ export type FeatureState =
 export const STATE_CHANNEL: Record<FeatureState, 'human' | 'plan' | 'code' | null> = {
     working: null,
     proposed: 'plan',
+    // Split from `proposed` for exactly the reason `agreed` is split from `sent`: same
+    // lifecycle position, different party, and the party is the thing the colour
+    // reports. A pending REFLECTION is the codebase's claim on the wording — Loop A
+    // watched the code change and offers the tree new words. Filing it under `proposed`
+    // put a plan's gray on a node nobody had planned, in a pane whose whole promise is
+    // that gray means a plan. It is the same fix as the prose channel's
+    // (settlement-stages routes a non-building proposal to the code channel); the row
+    // has to agree with the paragraph or the reader learns to trust neither.
+    reflected: 'code',
     rewritten: 'code',
     agreed: 'plan',
     sent: 'human',
@@ -63,6 +72,12 @@ export interface FeatureSignals {
     activeMode?: 'write' | 'read' | null;
     /** A pending agent proposal on this feature (any op). */
     proposalOp?: 'amend' | 'retire' | 'add' | 'move' | null;
+    /** Whether accepting that proposal is a BUILD request (the prose describes code
+     *  that does not exist yet) rather than a reflection of code that already changed.
+     *  Same bit the document reads via `grammar.consequenceOf`; it decides which of
+     *  `proposed` / `reflected` the feature is in, and so which channel's ink the row
+     *  takes. Absent ⇒ treated as a plan, the pre-existing reading. */
+    proposalBuilds?: boolean;
     /** The proposal arrived from realizing a DIFFERENT edit of yours — worth saying,
      *  but it is still just "proposed"; it does not earn its own glyph. */
     divergent?: boolean;
@@ -92,7 +107,7 @@ export interface FeatureSignals {
 
 export function featureState(s: FeatureSignals): FeatureState {
     if (s.activeMode) return 'working';
-    if (s.proposalOp) return 'proposed';
+    if (s.proposalOp) return s.proposalBuilds === false ? 'reflected' : 'proposed';
     if (s.autoEdit) return 'rewritten';
     if (s.sent) return s.holdOrigin === 'plan' ? 'agreed' : 'sent';
     if (s.staged) return 'staged';
@@ -128,6 +143,14 @@ export function stateBadge(state: FeatureState, s: FeatureSignals = {}): StateBa
                 title: (s.divergent
                     ? 'Review this: the agent changed it while implementing another of your edits. '
                     : 'The agent proposes a change here. ')
+                    + 'Hover the feature to accept or reject it.',
+            };
+        case 'reflected':
+            return {
+                cls: 'reflected',
+                icon: 'diamond',
+                title: 'The code changed and codoc proposes wording to match. '
+                    + 'Accepting updates the tree only — no code is written. '
                     + 'Hover the feature to accept or reject it.',
             };
         case 'rewritten':
@@ -215,7 +238,8 @@ export function railState(s: RailSignals): RailState {
 export const RAIL_STATE_LABEL: Record<RailState, string> = {
     busy: 'being rewritten right now (hands off — it updates itself)',
     working: 'the agent is in this feature\'s code',
-    proposed: 'an agent change awaits your verdict',
+    proposed: 'an agent plan awaits your verdict — accepting asks for code',
+    reflected: 'the code changed; new wording awaits your verdict (no code written)',
     rewritten: 'codoc rewrote this — review Keep / Restore',
     agreed: 'a plan you accepted — no code behind it yet',
     sent: 'your edit, sent to the agent — being realized',
