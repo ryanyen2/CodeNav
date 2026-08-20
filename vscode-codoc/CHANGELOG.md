@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.12
+
+### Fixed
+
+- **An accepted plan had nowhere to live**, so the three-channel grammar went blank at
+  the moment a verdict made it interesting, and an agent waiting on a verdict never moved
+  after the user said yes. A plan that amends a description also drew in the reader's own
+  ink rather than the plan's, and leaving a comment lit edit decorations over prose nobody
+  had touched. See docs/plans/2026-08-20-001-plan-channel-and-one-palette.md.
+
+
 ## 0.2.11
 
 ### Fixed
