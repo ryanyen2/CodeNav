@@ -4,32 +4,32 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "You had a short report written beside the Markdown. What does it list?",
+      "question": "Your change added a report beside the Markdown output. What does the report show?",
       "options": [
         {
           "letter": "a",
-          "text": "How long each rule took to run"
+          "text": "What scribe changed: lines removed, words rejoined, and notes moved"
         },
         {
           "letter": "b",
-          "text": "The original text, with everything the conversion removed crossed out"
+          "text": "How long each step of the conversion took"
         },
         {
           "letter": "c",
-          "text": "The lines it removed, the words it rejoined, and the notes it moved"
+          "text": "The parts of the document scribe could not handle"
         },
         {
           "letter": "d",
-          "text": "The parts of the document the conversion could not handle"
+          "text": "A comparison of the original and converted text side by side"
         }
       ],
-      "answer": "c"
+      "answer": "a"
     },
     {
       "n": 2,
       "band": "Extension",
       "difficulty": "easy",
-      "question": "You had the rules' settings taken out of the code. Where are they set now?",
+      "question": "Where are the conversion settings stored now?",
       "options": [
         {
           "letter": "a",
@@ -37,15 +37,15 @@
         },
         {
           "letter": "b",
-          "text": "In each rule module, at the top, as before"
+          "text": "In the code, where they were before"
         },
         {
           "letter": "c",
-          "text": "On the command line, given again on every run"
+          "text": "On the command line, given on every run"
         },
         {
           "letter": "d",
-          "text": "In an environment variable read when the program starts"
+          "text": "In an environment variable"
         }
       ],
       "answer": "a"
@@ -53,77 +53,77 @@
     {
       "n": 3,
       "band": "Rationale",
-      "difficulty": "medium",
-      "question": "You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?",
+      "difficulty": "easy",
+      "question": "A document has no settings file. What happens when you convert it?",
       "options": [
         {
           "letter": "a",
-          "text": "It keeps its hyphen, exactly as before"
+          "text": "It works the same as before, using the default rules"
         },
         {
           "letter": "b",
-          "text": "It loses its hyphen, because the list of prefixes that keep one is now empty by default"
+          "text": "Scribe refuses to convert it"
         },
         {
           "letter": "c",
-          "text": "The line break is kept along with the hyphen"
+          "text": "It skips all the rules and just joins lines"
         },
         {
           "letter": "d",
-          "text": "The run refuses until the document says which it wants"
+          "text": "It creates a settings file with empty values"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     },
     {
       "n": 4,
       "band": "Change",
-      "difficulty": "medium",
-      "question": "The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?",
+      "difficulty": "easy",
+      "question": "What did the change do to the furniture threshold — the share of pages a header has to appear on before it is removed?",
       "options": [
         {
           "letter": "a",
-          "text": "`[^1]` and `[^2]`, which is what the Markdown holds"
+          "text": "Moved it into the settings file so you can change it per document"
         },
         {
           "letter": "b",
-          "text": "`[^1]` beside both, so the marker does not tell them apart"
+          "text": "Kept it the same but made it stricter"
         },
         {
           "letter": "c",
-          "text": "No markers at all, only the text of each note"
+          "text": "Removed it, so all repeated lines are removed"
         },
         {
           "letter": "d",
-          "text": "One entry, because the two notes are treated as the same note"
+          "text": "Did not change it at all"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     },
     {
       "n": 5,
       "band": "Rationale",
-      "difficulty": "hard",
-      "question": "Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?",
+      "difficulty": "medium",
+      "question": "If you lower the furniture threshold so that fewer repeats are needed, what else could that affect?",
       "options": [
         {
           "letter": "a",
-          "text": "Nothing; furniture and headings never look at the same lines"
+          "text": "A real heading that repeats across pages could be removed as furniture"
         },
         {
           "letter": "b",
-          "text": "Page numbers can no longer be used to order the sections"
+          "text": "Nothing, because furniture and headings are completely separate"
         },
         {
           "letter": "c",
-          "text": "A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents"
+          "text": "Page numbers would stop being removed"
         },
         {
           "letter": "d",
-          "text": "The first page loses its heading, because there is nothing before it to compare against"
+          "text": "The document would get longer"
         }
       ],
-      "answer": "c"
+      "answer": "a"
     }
   ],
   "tally": [
@@ -131,48 +131,48 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "You had a weekly view added beside the monthly one. What does it show for each week?",
+      "question": "Your change added a weekly view. What does each week show?",
       "options": [
         {
           "letter": "a",
-          "text": "Only a total, with no breakdown"
+          "text": "A breakdown by category and a total, the same as a month gets"
         },
         {
           "letter": "b",
-          "text": "One line for each transaction, in date order"
+          "text": "Only a total, with no breakdown"
         },
         {
           "letter": "c",
-          "text": "The difference from the week before, as a percentage"
+          "text": "One line for each transaction"
         },
         {
           "letter": "d",
-          "text": "A breakdown by category and a total, the same as a month gets"
+          "text": "The difference from the previous week"
         }
       ],
-      "answer": "d"
+      "answer": "a"
     },
     {
       "n": 2,
       "band": "Extension",
       "difficulty": "easy",
-      "question": "You had the merchant rules taken out of the code. Where does a colleague add a rule for a new shop now?",
+      "question": "Where does a colleague add a rule for a new shop now?",
       "options": [
         {
           "letter": "a",
-          "text": "In the settings file, which is where every rule now lives"
+          "text": "In the settings file, which is where the rules now live"
         },
         {
           "letter": "b",
-          "text": "In the code, in the list of rules, as before"
+          "text": "In the code, in the same list as before"
         },
         {
           "letter": "c",
-          "text": "On the command line, giving the shop and the category on every run"
+          "text": "On the command line, on every run"
         },
         {
           "letter": "d",
-          "text": "In the statement itself, by editing what the shop is called"
+          "text": "In the bank export file itself"
         }
       ],
       "answer": "a"
@@ -180,49 +180,49 @@
     {
       "n": 3,
       "band": "Rationale",
-      "difficulty": "medium",
-      "question": "In the weekly view you had added, what does tally no longer look at when it decides two rows are the same row twice?",
+      "difficulty": "easy",
+      "question": "A shop on the statement matches no rule in the settings file. What happens?",
       "options": [
         {
           "letter": "a",
-          "text": "The date"
+          "text": "It goes under uncategorised"
         },
         {
           "letter": "b",
-          "text": "The amount"
+          "text": "The run stops with an error"
         },
         {
           "letter": "c",
-          "text": "The merchant"
+          "text": "It is left out of the summary entirely"
         },
         {
           "letter": "d",
-          "text": "The category"
+          "text": "It is matched to the closest rule"
         }
       ],
-      "answer": "c"
+      "answer": "a"
     },
     {
       "n": 4,
       "band": "Change",
-      "difficulty": "medium",
-      "question": "You had the merchant rules moved into a file you can edit. What happens now when a shop on the statement matches no rule in that file?",
+      "difficulty": "easy",
+      "question": "The monthly view uses the date you made the payment. What date does the weekly view use?",
       "options": [
         {
           "letter": "a",
-          "text": "It goes to the uncategorised bucket, and the run finishes"
+          "text": "The same date — when you made the payment"
         },
         {
           "letter": "b",
-          "text": "The run stops, and no summary is written at all"
+          "text": "The date the bank processed the payment"
         },
         {
           "letter": "c",
-          "text": "It is filed under the rule whose wording is closest to it"
+          "text": "Whichever date comes first"
         },
         {
           "letter": "d",
-          "text": "It is left out, and the rest of the summary still prints"
+          "text": "The date is not used — it just counts seven days"
         }
       ],
       "answer": "b"
@@ -230,27 +230,27 @@
     {
       "n": 5,
       "band": "Rationale",
-      "difficulty": "hard",
-      "question": "Your change lines the weekly view up on the date the bank posted a transaction, while the monthly view still files it by the date it was made. What else does that affect?",
+      "difficulty": "easy",
+      "question": "If the monthly and weekly views use different dates, what can happen?",
       "options": [
         {
           "letter": "a",
-          "text": "Nothing, because the two views count the same transactions either way"
+          "text": "A payment could appear in January in the monthly view but February in the weekly view"
         },
         {
           "letter": "b",
-          "text": "A transaction the bank has not posted yet can no longer appear at all"
+          "text": "Nothing, because they always add up to the same total"
         },
         {
           "letter": "c",
-          "text": "One transaction can land in January in the monthly view and in February in the weekly one, so the two summaries of one statement disagree"
+          "text": "Some payments would be counted twice"
         },
         {
           "letter": "d",
-          "text": "Transactions made at a weekend are left out, because the bank posts them later"
+          "text": "Weekend payments would be left out"
         }
       ],
-      "answer": "c"
+      "answer": "a"
     }
   ]
 }

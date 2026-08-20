@@ -2,7 +2,7 @@
   "name": "codoc",
   "displayName": "codoc",
   "description": "Feature-tree navigator and transaction queue for codoc",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "publisher": "codoc",
   "license": "MIT",
   "repository": {

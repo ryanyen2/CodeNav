@@ -210,41 +210,41 @@ questions are not separating the arms.
 
 ### Purpose: what it is for, and where it stops
 
-**Q1. (easy) You really did buy the same £3 coffee twice on the same day at the same shop. What does the summary show?**
-- a) Both, because they are two separate purchases
-- b) **One, because nothing in the row tells a real repeat from a repeated row** ✓
-- c) Both, with the second marked as a possible duplicate
-- d) It stops and asks which one to keep
+**Q1. (easy) You bought the same £3 coffee twice on the same day at the same shop. What does the summary show?**
+- a) **One, because the two rows look identical and one is treated as a duplicate** ✓
+- b) Both, because they are two separate purchases
+- c) Both, with the second one flagged as a possible duplicate
+- d) Neither, because duplicates are removed entirely
 
 ### Rationale: which way it went, and why
 
-**Q2. (medium) A row whose description mentions a transfer is left out of duplicate removal. Why?**
-- a) Because a transfer is not spending, so it never reaches the totals anyway
-- b) **Because the two legs of a move between your own accounts look exactly like a duplicate** ✓
-- c) Because the two legs arrive on different dates and would never collide
-- d) Because the bank marks transfers already, so the rule is not needed
+**Q2. (easy) You move £300 from your current account to your savings account. How does tally treat this?**
+- a) **Leaves it out, because it is a transfer, not spending** ✓
+- b) Counts it as spending in a transfers category
+- c) Counts it as spending, because it left the current account
+- d) Asks you whether to include it
 
-**Q4. (hard) A bank export lists every amount as a positive number, spending included. What does tally do?**
-- a) Refuses the file, because the direction cannot be known from it
-- b) Leaves the amounts alone and reads the direction from a separate column
-- c) **Takes the file's own shape as the convention and flips every sign** ✓
-- d) Treats the largest amounts as spending and the rest as money coming in
+**Q4. (easy) A shop name does not match anything on the list. What happens to that payment?**
+- a) **It goes under uncategorised** ✓
+- b) It is left out of the summary
+- c) Tally stops and reports an error
+- d) It is put in the category closest to its name
 
 ### Change: what happened, and what it cost
 
-**Q3. (medium) Amounts are rounded once at the summary rather than on every transaction. What does that give up?**
-- a) Speed, because every exact amount has to be carried until the end
-- b) **Agreeing line by line with a printed receipt** ✓
-- c) Being able to show the totals in another currency
-- d) Accuracy, because many small amounts drift further apart this way
+**Q3. (easy) You make a payment on the last day of January. The bank processes it on the first day of February. Which month does the summary put it in?**
+- a) **January, because tally uses the date you made the payment** ✓
+- b) February, because tally uses the date the bank processed it
+- c) Both months, split equally
+- d) Whichever month the bank says
 
 ### Extension: what a further change would need
 
-**Q5. (hard) You add a rule for one coffee shop, but a broader "cafe" rule already matches it. What decides which one applies?**
-- a) The more specific pattern wins, whichever order they are in
-- b) **Where it sits in the list, because the first pattern that matches wins** ✓
-- c) Both apply, and the amount is split between them
-- d) Neither: two matching rules send it to the uncategorised bucket
+**Q5. (easy) The list of shop names is written into the code. What is the problem with that?**
+- a) **You have to change the code to add a new shop** ✓
+- b) The list cannot be shared with other people
+- c) The list is too slow to search
+- d) The list cannot handle shops with similar names
 
 ## The after-task questions
 
@@ -258,41 +258,41 @@ for band and level for level. The reasoning for both is written out once, in
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) You had a weekly view added beside the monthly one. What does it show for each week?**
-- a) Only a total, with no breakdown
-- b) One line for each transaction, in date order
-- c) The difference from the week before, as a percentage
-- d) **A breakdown by category and a total, the same as a month gets** ✓
-
-### Rationale: why that way and not the other
-
-**Q3. (medium) In the weekly view you had added, what does tally no longer look at when it decides two rows are the same row twice?**
-- a) The date
-- b) The amount
-- c) **The merchant** ✓
-- d) The category
-
-**Q5. (hard) Your change lines the weekly view up on the date the bank posted a transaction, while the monthly view still files it by the date it was made. What else does that affect?**
-- a) Nothing, because the two views count the same transactions either way
-- b) A transaction the bank has not posted yet can no longer appear at all
-- c) **One transaction can land in January in the monthly view and in February in the weekly one, so the two summaries of one statement disagree** ✓
-- d) Transactions made at a weekend are left out, because the bank posts them later
-
-### Change: what it cost, and what it touched
-
-**Q4. (medium) You had the merchant rules moved into a file you can edit. What happens now when a shop on the statement matches no rule in that file?**
-- a) It goes to the uncategorised bucket, and the run finishes
-- b) **The run stops, and no summary is written at all** ✓
-- c) It is filed under the rule whose wording is closest to it
-- d) It is left out, and the rest of the summary still prints
+**Q1. (easy) Your change added a weekly view. What does each week show?**
+- a) **A breakdown by category and a total, the same as a month gets** ✓
+- b) Only a total, with no breakdown
+- c) One line for each transaction
+- d) The difference from the previous week
 
 ### Extension: what a next person needs
 
-**Q2. (easy) You had the merchant rules taken out of the code. Where does a colleague add a rule for a new shop now?**
-- a) **In the settings file, which is where every rule now lives** ✓
-- b) In the code, in the list of rules, as before
-- c) On the command line, giving the shop and the category on every run
-- d) In the statement itself, by editing what the shop is called
+**Q2. (easy) Where does a colleague add a rule for a new shop now?**
+- a) **In the settings file, which is where the rules now live** ✓
+- b) In the code, in the same list as before
+- c) On the command line, on every run
+- d) In the bank export file itself
+
+### Rationale: why that way and not the other
+
+**Q3. (easy) A shop on the statement matches no rule in the settings file. What happens?**
+- a) **It goes under uncategorised** ✓
+- b) The run stops with an error
+- c) It is left out of the summary entirely
+- d) It is matched to the closest rule
+
+### Change: what it cost, and what it touched
+
+**Q4. (easy) The monthly view uses the date you made the payment. What date does the weekly view use?**
+- a) **The same date — when you made the payment** ✓
+- b) The date the bank processed the payment
+- c) Whichever date comes first
+- d) The date is not used — it just counts seven days
+
+**Q5. (easy) If the monthly and weekly views use different dates, what can happen?**
+- a) **A payment could appear in January in the monthly view but February in the weekly view** ✓
+- b) Nothing, because they always add up to the same total
+- c) Some payments would be counted twice
+- d) Weekend payments would be left out
 
 ## Where it does not match scribe, and by how much
 

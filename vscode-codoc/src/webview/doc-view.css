@@ -809,6 +809,12 @@ ins[data-change-id], del[data-change-id], span[data-change-id] {
     flex: 1; min-width: 0; height: 100%;
     display: flex; flex-direction: column;
 }
+/* Author `display` beats the UA `[hidden] { display: none }` rule (same override the
+   ask bar and the find widget already carry). Without this, `editor.hidden = true` in
+   renderHistory() was a no-op: the live doc kept painting as a second `flex: 1` child
+   of .doc-host beside the past page, so scrubbing back showed today's prose and the
+   reconstruction superimposed — two centred measures fighting for one column. */
+.codoc-whole-editor[hidden] { display: none; }
 /* The formatting bar recedes: same paper as the doc, a single hairline beneath it,
    generous side padding so it lines up with the top menu bar — no heavy grey band. */
 .codoc-whole-editor .ce-toolbar {
@@ -1380,6 +1386,12 @@ body.vscode-using-screen-reader .ce-verdict.waiting .ce-icon { animation: none; 
     position: absolute; right: 16px; left: auto; width: var(--cmt-w, 296px);
     max-width: calc(100% - 32px); z-index: 6;
 }
+/* The popover form of the same card. It is appended to document.body and positioned
+   from viewport coords, so it must be `fixed` and must drop the margin form's
+   right-inset — otherwise the rule above pins it to the window's right edge and the
+   inline `left` fights it. Above the margin stack, since it is the on-demand answer to
+   a hover the reader just made. */
+.ce-cmt-pop { position: fixed; right: auto; z-index: 40; }
 .ce-cmt-card {
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-editorWidget-border, color-mix(in srgb, var(--vscode-foreground) 14%, transparent));

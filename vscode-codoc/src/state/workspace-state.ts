@@ -7,8 +7,9 @@
  * Status bar reflects .codoc/status.json's lifecycle state:
  *   $(loading~spin) implementing…   – realizing  (agent writing code)
  *   $(pencil) applying tree edits…  – tree_dirty (codoc edited, code pending)
- *   $(play) N queued, not running   – awaiting_impl (accepted edits queued in
- *                                      .codoc/realize.md with nothing draining them)
+ *   $(play) N queued, no agent      – awaiting_impl (accepted edits queued in
+ *                                      .codoc/realize.md with no coding-agent session
+ *                                      draining them; says nothing about the daemon)
  *   $(bell) N proposals             – code_drift (code changed, review pending)
  *   $(check) N                      – in_sync
  *   $(sync) not initialized         – no .codoc dir

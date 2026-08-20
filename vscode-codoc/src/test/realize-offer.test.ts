@@ -116,7 +116,7 @@ describe('which lease answers "is a session live?"', () => {
     });
 });
 
-describe('the waiting status bar says nothing is running it', () => {
+describe('the waiting status bar names the missing agent, not a dead daemon', () => {
     const base: StatusBarInput = {
         initialized: true, provisioning: false, agentActive: false, agentFileCount: 0,
         state: 'awaiting_impl', pending: 3, detail: '', featureCount: 12,
@@ -124,7 +124,10 @@ describe('the waiting status bar says nothing is running it', () => {
 
     it('does not read as work in progress', () => {
         const v = statusBarView(base);
-        expect(v.text).toContain('not running');
+        expect(v.text).toContain('queued, no agent');
+        // The daemon-scoped sentence belongs to the daemonDown branch alone. Saying it
+        // here sent authors hunting for a dead daemon that was visibly printing passes.
+        expect(v.text).not.toContain('daemon not running');
         expect(v.tooltip).toContain('nothing is implementing them');
         expect(v.warn).toBe(true);
     });

@@ -47,7 +47,7 @@ describe('statusBarView', () => {
     it('warns (background) only on awaiting_impl', () => {
         const awaiting = statusBarView(base({ state: 'awaiting_impl', pending: 2 }));
         expect(awaiting.warn).toBe(true);
-        expect(awaiting.text).toContain('2 queued, not running');
+        expect(awaiting.text).toContain('2 queued, no agent');
 
         for (const state of ['in_sync', 'code_drift', 'tree_dirty', 'realizing'] as const) {
             expect(statusBarView(base({ state, pending: 1 })).warn).toBe(false);
@@ -88,7 +88,7 @@ describe('the pill when the daemon is not consuming edits', () => {
         // The lifecycle came from a status.json only the daemon updates. Showing
         // "in sync" here is repeating a dead process's last words.
         const v = statusBarView({ ...base, daemonDown: true });
-        expect(v.text).toContain('not running');
+        expect(v.text).toContain('daemon not running');
         expect(v.warn).toBe(true);
         expect(v.tooltip).toContain('codoc watch');
     });

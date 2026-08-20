@@ -470,8 +470,8 @@ const VIEWS = {
         <p class="fine">${esc(t(`project.${step.project}.repl.after.caption`, p.repl.after.caption))}</p>
 
         <p class="rule">${esc(t('ui.task.clock',
-        'Twenty minutes in all. There is no clock on this page. The researcher will '
-        + 'tell you when time is nearly up.'))}</p>`;
+        'You should be able to complete the whole task in about 20 minutes. There is no timer '
+        + 'on this page. The researcher will let you know when you are nearly out of time.'))}</p>`;
     },
 
     // Grouped by what each block measures, with the groups named. An unbroken

@@ -4,48 +4,48 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "A three-page report repeats its section title at the top of every page. It is a real heading, not a running header. What does scribe do with it?",
+      "question": "A page header appears on every page of a three-page document. What does scribe do with it?",
       "options": [
         {
           "letter": "a",
-          "text": "Keeps it as a heading, because it is numbered like the others"
+          "text": "Removes it, because it repeats on most pages"
         },
         {
           "letter": "b",
-          "text": "Drops it, because it repeats near the edge of most pages and that is all scribe can see"
+          "text": "Keeps it, because it is real text"
         },
         {
           "letter": "c",
-          "text": "Keeps the first one and drops the repeats"
+          "text": "Keeps the first one and removes the rest"
         },
         {
           "letter": "d",
-          "text": "Keeps it, and marks the repeats for review"
+          "text": "Turns it into a heading"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     },
     {
       "n": 2,
       "band": "Rationale",
-      "difficulty": "medium",
-      "question": "A word is split across a line break as `well-` then `being`. What comes out?",
+      "difficulty": "easy",
+      "question": "The word \"well-being\" is split across two lines as \"well-\" then \"being\". What does scribe produce?",
       "options": [
         {
           "letter": "a",
-          "text": "`wellbeing`, because a hyphen at a line end is the typesetter's, not the writer's"
+          "text": "wellbeing, with the hyphen removed"
         },
         {
           "letter": "b",
-          "text": "`well-being`, because a short list of prefixes is allowed to keep its hyphen"
+          "text": "well-being, with the hyphen kept"
         },
         {
           "letter": "c",
-          "text": "`well- being`, because the break is preserved along with the hyphen"
+          "text": "well- being, with the line break still there"
         },
         {
           "letter": "d",
-          "text": "`well-being`, because a dictionary is consulted for the compound"
+          "text": "well being, with both the hyphen and line break removed"
         }
       ],
       "answer": "b"
@@ -53,77 +53,77 @@
     {
       "n": 3,
       "band": "Change",
-      "difficulty": "medium",
-      "question": "Footnote markers used to be found after any full stop, and the rule was tightened. What was going wrong?",
+      "difficulty": "easy",
+      "question": "What does scribe do with page numbers?",
       "options": [
         {
           "letter": "a",
-          "text": "A marker at the very end of a paragraph was being missed"
+          "text": "Removes them along with other page furniture"
         },
         {
           "letter": "b",
-          "text": "Two markers next to each other were being read as one"
+          "text": "Keeps them at the bottom of each page"
         },
         {
           "letter": "c",
-          "text": "Every decimal number in the document was being read as a footnote reference"
+          "text": "Moves them to the end of the document"
         },
         {
           "letter": "d",
-          "text": "A page number at the foot of a page was being taken for a marker"
+          "text": "Turns them into section numbers"
         }
       ],
-      "answer": "c"
+      "answer": "a"
     },
     {
       "n": 4,
       "band": "Rationale",
-      "difficulty": "hard",
-      "question": "Page furniture is removed before anything looks for headings. What does that ordering cost?",
+      "difficulty": "medium",
+      "question": "A heading like \"3.1 Sites\" appears on most pages of a document. What happens to it?",
       "options": [
         {
           "letter": "a",
-          "text": "Nothing: the two rules never look at the same lines"
+          "text": "It is removed as page furniture, because it repeats on most pages"
         },
         {
           "letter": "b",
-          "text": "Page numbers can no longer be used to order the sections"
+          "text": "It is kept as a heading, because it is numbered"
         },
         {
           "letter": "c",
-          "text": "A real heading that repeats on most pages is gone before the heading rule can see it"
+          "text": "The first one is kept and the repeats are removed"
         },
         {
           "letter": "d",
-          "text": "A heading on the first page is missed, because there is nothing before it to compare against"
+          "text": "It is kept, because furniture removal happens after heading detection"
         }
       ],
-      "answer": "c"
+      "answer": "a"
     },
     {
       "n": 5,
       "band": "Extension",
-      "difficulty": "hard",
-      "question": "You want the running header kept on a one-page letter but still dropped from a long report. What stands in the way?",
+      "difficulty": "easy",
+      "question": "A one-page document has a header at the top. Can scribe detect and remove it?",
       "options": [
         {
           "letter": "a",
-          "text": "Markdown has no way to mark a line as a page header"
+          "text": "No, because the header needs to repeat across pages to be detected"
         },
         {
           "letter": "b",
-          "text": "Repetition across pages is the only signal there is, and one page cannot show it"
+          "text": "Yes, because it is at the top of the page"
         },
         {
           "letter": "c",
-          "text": "The header is removed before anything could tell the two documents apart"
+          "text": "Yes, if you tell scribe what to remove"
         },
         {
           "letter": "d",
-          "text": "The page number would have to be kept along with it"
+          "text": "No, because one-page documents are not supported"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     }
   ],
   "tally": [
@@ -131,126 +131,126 @@
       "n": 1,
       "band": "Purpose",
       "difficulty": "easy",
-      "question": "You really did buy the same £3 coffee twice on the same day at the same shop. What does the summary show?",
+      "question": "You bought the same £3 coffee twice on the same day at the same shop. What does the summary show?",
       "options": [
         {
           "letter": "a",
-          "text": "Both, because they are two separate purchases"
+          "text": "One, because the two rows look identical and one is treated as a duplicate"
         },
         {
           "letter": "b",
-          "text": "One, because nothing in the row tells a real repeat from a repeated row"
+          "text": "Both, because they are two separate purchases"
         },
         {
           "letter": "c",
-          "text": "Both, with the second marked as a possible duplicate"
+          "text": "Both, with the second one flagged as a possible duplicate"
         },
         {
           "letter": "d",
-          "text": "It stops and asks which one to keep"
+          "text": "Neither, because duplicates are removed entirely"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     },
     {
       "n": 2,
       "band": "Rationale",
-      "difficulty": "medium",
-      "question": "A row whose description mentions a transfer is left out of duplicate removal. Why?",
+      "difficulty": "easy",
+      "question": "You move £300 from your current account to your savings account. How does tally treat this?",
       "options": [
         {
           "letter": "a",
-          "text": "Because a transfer is not spending, so it never reaches the totals anyway"
+          "text": "Leaves it out, because it is a transfer, not spending"
         },
         {
           "letter": "b",
-          "text": "Because the two legs of a move between your own accounts look exactly like a duplicate"
+          "text": "Counts it as spending in a transfers category"
         },
         {
           "letter": "c",
-          "text": "Because the two legs arrive on different dates and would never collide"
+          "text": "Counts it as spending, because it left the current account"
         },
         {
           "letter": "d",
-          "text": "Because the bank marks transfers already, so the rule is not needed"
+          "text": "Asks you whether to include it"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     },
     {
       "n": 3,
       "band": "Change",
-      "difficulty": "medium",
-      "question": "Amounts are rounded once at the summary rather than on every transaction. What does that give up?",
+      "difficulty": "easy",
+      "question": "You make a payment on the last day of January. The bank processes it on the first day of February. Which month does the summary put it in?",
       "options": [
         {
           "letter": "a",
-          "text": "Speed, because every exact amount has to be carried until the end"
+          "text": "January, because tally uses the date you made the payment"
         },
         {
           "letter": "b",
-          "text": "Agreeing line by line with a printed receipt"
+          "text": "February, because tally uses the date the bank processed it"
         },
         {
           "letter": "c",
-          "text": "Being able to show the totals in another currency"
+          "text": "Both months, split equally"
         },
         {
           "letter": "d",
-          "text": "Accuracy, because many small amounts drift further apart this way"
+          "text": "Whichever month the bank says"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     },
     {
       "n": 4,
       "band": "Rationale",
-      "difficulty": "hard",
-      "question": "A bank export lists every amount as a positive number, spending included. What does tally do?",
+      "difficulty": "easy",
+      "question": "A shop name does not match anything on the list. What happens to that payment?",
       "options": [
         {
           "letter": "a",
-          "text": "Refuses the file, because the direction cannot be known from it"
+          "text": "It goes under uncategorised"
         },
         {
           "letter": "b",
-          "text": "Leaves the amounts alone and reads the direction from a separate column"
+          "text": "It is left out of the summary"
         },
         {
           "letter": "c",
-          "text": "Takes the file's own shape as the convention and flips every sign"
+          "text": "Tally stops and reports an error"
         },
         {
           "letter": "d",
-          "text": "Treats the largest amounts as spending and the rest as money coming in"
+          "text": "It is put in the category closest to its name"
         }
       ],
-      "answer": "c"
+      "answer": "a"
     },
     {
       "n": 5,
       "band": "Extension",
-      "difficulty": "hard",
-      "question": "You add a rule for one coffee shop, but a broader \"cafe\" rule already matches it. What decides which one applies?",
+      "difficulty": "easy",
+      "question": "The list of shop names is written into the code. What is the problem with that?",
       "options": [
         {
           "letter": "a",
-          "text": "The more specific pattern wins, whichever order they are in"
+          "text": "You have to change the code to add a new shop"
         },
         {
           "letter": "b",
-          "text": "Where it sits in the list, because the first pattern that matches wins"
+          "text": "The list cannot be shared with other people"
         },
         {
           "letter": "c",
-          "text": "Both apply, and the amount is split between them"
+          "text": "The list is too slow to search"
         },
         {
           "letter": "d",
-          "text": "Neither: two matching rules send it to the uncategorised bucket"
+          "text": "The list cannot handle shops with similar names"
         }
       ],
-      "answer": "b"
+      "answer": "a"
     }
   ]
 }

@@ -278,41 +278,41 @@ score either way.
 
 ### Purpose: what it is for, and where it stops
 
-**Q1. (easy) A three-page report repeats its section title at the top of every page. It is a real heading, not a running header. What does scribe do with it?**
-- a) Keeps it as a heading, because it is numbered like the others
-- b) **Drops it, because it repeats near the edge of most pages and that is all scribe can see** ✓
-- c) Keeps the first one and drops the repeats
-- d) Keeps it, and marks the repeats for review
+**Q1. (easy) A page header appears on every page of a three-page document. What does scribe do with it?**
+- a) **Removes it, because it repeats on most pages** ✓
+- b) Keeps it, because it is real text
+- c) Keeps the first one and removes the rest
+- d) Turns it into a heading
 
 ### Rationale: which way it went, and why
 
-**Q2. (medium) A word is split across a line break as `well-` then `being`. What comes out?**
-- a) `wellbeing`, because a hyphen at a line end is the typesetter's, not the writer's
-- b) **`well-being`, because a short list of prefixes is allowed to keep its hyphen** ✓
-- c) `well- being`, because the break is preserved along with the hyphen
-- d) `well-being`, because a dictionary is consulted for the compound
+**Q2. (easy) The word "well-being" is split across two lines as "well-" then "being". What does scribe produce?**
+- a) wellbeing, with the hyphen removed
+- b) **well-being, with the hyphen kept** ✓
+- c) well- being, with the line break still there
+- d) well being, with both the hyphen and line break removed
 
-**Q4. (hard) Page furniture is removed before anything looks for headings. What does that ordering cost?**
-- a) Nothing: the two rules never look at the same lines
-- b) Page numbers can no longer be used to order the sections
-- c) **A real heading that repeats on most pages is gone before the heading rule can see it** ✓
-- d) A heading on the first page is missed, because there is nothing before it to compare against
+**Q4. (medium) A heading like "3.1 Sites" appears on most pages of a document. What happens to it?**
+- a) **It is removed as page furniture, because it repeats on most pages** ✓
+- b) It is kept as a heading, because it is numbered
+- c) The first one is kept and the repeats are removed
+- d) It is kept, because furniture removal happens after heading detection
 
 ### Change: what happened, and what it cost
 
-**Q3. (medium) Footnote markers used to be found after any full stop, and the rule was tightened. What was going wrong?**
-- a) A marker at the very end of a paragraph was being missed
-- b) Two markers next to each other were being read as one
-- c) **Every decimal number in the document was being read as a footnote reference** ✓
-- d) A page number at the foot of a page was being taken for a marker
+**Q3. (easy) What does scribe do with page numbers?**
+- a) **Removes them along with other page furniture** ✓
+- b) Keeps them at the bottom of each page
+- c) Moves them to the end of the document
+- d) Turns them into section numbers
 
 ### Extension: what a further change would need
 
-**Q5. (hard) You want the running header kept on a one-page letter but still dropped from a long report. What stands in the way?**
-- a) Markdown has no way to mark a line as a page header
-- b) **Repetition across pages is the only signal there is, and one page cannot show it** ✓
-- c) The header is removed before anything could tell the two documents apart
-- d) The page number would have to be kept along with it
+**Q5. (easy) A one-page document has a header at the top. Can scribe detect and remove it?**
+- a) **No, because the header needs to repeat across pages to be detected** ✓
+- b) Yes, because it is at the top of the page
+- c) Yes, if you tell scribe what to remove
+- d) No, because one-page documents are not supported
 
 ## The after-task questions
 
@@ -336,41 +336,41 @@ They are matched to tally's set one for one, band for band and level for level.
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) You had a short report written beside the Markdown. What does it list?**
-- a) How long each rule took to run
-- b) The original text, with everything the conversion removed crossed out
-- c) **The lines it removed, the words it rejoined, and the notes it moved** ✓
-- d) The parts of the document the conversion could not handle
-
-### Rationale: why that way and not the other
-
-**Q3. (medium) You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?**
-- a) It keeps its hyphen, exactly as before
-- b) **It loses its hyphen, because the list of prefixes that keep one is now empty by default** ✓
-- c) The line break is kept along with the hyphen
-- d) The run refuses until the document says which it wants
-
-**Q5. (hard) Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?**
-- a) Nothing; furniture and headings never look at the same lines
-- b) Page numbers can no longer be used to order the sections
-- c) **A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents** ✓
-- d) The first page loses its heading, because there is nothing before it to compare against
-
-### Change: what it cost, and what it touched
-
-**Q4. (medium) The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?**
-- a) `[^1]` and `[^2]`, which is what the Markdown holds
-- b) **`[^1]` beside both, so the marker does not tell them apart** ✓
-- c) No markers at all, only the text of each note
-- d) One entry, because the two notes are treated as the same note
+**Q1. (easy) Your change added a report beside the Markdown output. What does the report show?**
+- a) **What scribe changed: lines removed, words rejoined, and notes moved** ✓
+- b) How long each step of the conversion took
+- c) The parts of the document scribe could not handle
+- d) A comparison of the original and converted text side by side
 
 ### Extension: what a next person needs
 
-**Q2. (easy) You had the rules' settings taken out of the code. Where are they set now?**
+**Q2. (easy) Where are the conversion settings stored now?**
 - a) **In a settings file that scribe looks for near the document** ✓
-- b) In each rule module, at the top, as before
-- c) On the command line, given again on every run
-- d) In an environment variable read when the program starts
+- b) In the code, where they were before
+- c) On the command line, given on every run
+- d) In an environment variable
+
+### Rationale: why that way and not the other
+
+**Q3. (easy) A document has no settings file. What happens when you convert it?**
+- a) **It works the same as before, using the default rules** ✓
+- b) Scribe refuses to convert it
+- c) It skips all the rules and just joins lines
+- d) It creates a settings file with empty values
+
+### Change: what it cost, and what it touched
+
+**Q4. (easy) What did the change do to the furniture threshold — the share of pages a header has to appear on before it is removed?**
+- a) **Moved it into the settings file so you can change it per document** ✓
+- b) Kept it the same but made it stricter
+- c) Removed it, so all repeated lines are removed
+- d) Did not change it at all
+
+**Q5. (medium) If you lower the furniture threshold so that fewer repeats are needed, what else could that affect?**
+- a) **A real heading that repeats across pages could be removed as furniture** ✓
+- b) Nothing, because furniture and headings are completely separate
+- c) Page numbers would stop being removed
+- d) The document would get longer
 
 ## Matching `tally`
 

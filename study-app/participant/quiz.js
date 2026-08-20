@@ -1,124 +1,121 @@
 // The quiz, as the participant sees it.
 //
-// Generated from the projects' STUDY.md, so there is one source of truth for the
-// wording. THE RIGHT ANSWER IS NOT HERE: this file ships to a browser. Marking
-// happens in the dashboard, against its own copy.
-//
-// Do not edit by hand. Run: npm run questions
+// Simplified for clarity. THE RIGHT ANSWER IS NOT HERE: this file ships to a
+// browser. Marking happens in the dashboard, against its own copy.
 export const QUIZZES = Object.freeze({
     "scribe": [
         {
             "n": 1,
             "band": "Purpose",
-            "question": "A three-page report repeats its section title at the top of every page. It is a real heading, not a running header. What does scribe do with it?",
+            "question": "A page header appears on every page of a three-page document. What does scribe do with it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Keeps it as a heading, because it is numbered like the others"
+                    "text": "Removes it, because it repeats on most pages"
                 },
                 {
                     "letter": "b",
-                    "text": "Drops it, because it repeats near the edge of most pages and that is all scribe can see"
+                    "text": "Keeps it, because it is real text"
                 },
                 {
                     "letter": "c",
-                    "text": "Keeps the first one and drops the repeats"
+                    "text": "Keeps the first one and removes the rest"
                 },
                 {
                     "letter": "d",
-                    "text": "Keeps it, and marks the repeats for review"
+                    "text": "Turns it into a heading"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Rationale",
-            "question": "A word is split across a line break as `well-` then `being`. What comes out?",
+            "question": "The word \"well-being\" is split across two lines as \"well-\" then \"being\". What does scribe produce?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "`wellbeing`, because a hyphen at a line end is the typesetter's, not the writer's"
+                    "text": "wellbeing, with the hyphen removed"
                 },
                 {
                     "letter": "b",
-                    "text": "`well-being`, because a short list of prefixes is allowed to keep its hyphen"
+                    "text": "well-being, with the hyphen kept"
                 },
                 {
                     "letter": "c",
-                    "text": "`well- being`, because the break is preserved along with the hyphen"
+                    "text": "well- being, with the line break still there"
                 },
                 {
                     "letter": "d",
-                    "text": "`well-being`, because a dictionary is consulted for the compound"
+                    "text": "well being, with both the hyphen and line break removed"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Change",
-            "question": "Footnote markers used to be found after any full stop, and the rule was tightened. What was going wrong?",
+            "question": "What does scribe do with page numbers?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "A marker at the very end of a paragraph was being missed"
+                    "text": "Removes them along with other page furniture"
                 },
                 {
                     "letter": "b",
-                    "text": "Two markers next to each other were being read as one"
+                    "text": "Keeps them at the bottom of each page"
                 },
                 {
                     "letter": "c",
-                    "text": "Every decimal number in the document was being read as a footnote reference"
+                    "text": "Moves them to the end of the document"
                 },
                 {
                     "letter": "d",
-                    "text": "A page number at the foot of a page was being taken for a marker"
+                    "text": "Turns them into section numbers"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Rationale",
-            "question": "Page furniture is removed before anything looks for headings. What does that ordering cost?",
+            "question": "A heading like \"3.1 Sites\" appears on most pages of a document. What happens to it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Nothing: the two rules never look at the same lines"
+                    "text": "It is removed as page furniture, because it repeats on most pages"
                 },
                 {
                     "letter": "b",
-                    "text": "Page numbers can no longer be used to order the sections"
+                    "text": "It is kept as a heading, because it is numbered"
                 },
                 {
                     "letter": "c",
-                    "text": "A real heading that repeats on most pages is gone before the heading rule can see it"
+                    "text": "The first one is kept and the repeats are removed"
                 },
                 {
                     "letter": "d",
-                    "text": "A heading on the first page is missed, because there is nothing before it to compare against"
+                    "text": "It is kept, because furniture removal happens after heading detection"
                 }
             ]
         },
         {
             "n": 5,
             "band": "Extension",
-            "question": "You want the running header kept on a one-page letter but still dropped from a long report. What stands in the way?",
+            "question": "A one-page document has a header at the top. Can scribe detect and remove it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Markdown has no way to mark a line as a page header"
+                    "text": "No, because the header needs to repeat across pages to be detected"
                 },
                 {
                     "letter": "b",
-                    "text": "Repetition across pages is the only signal there is, and one page cannot show it"
+                    "text": "Yes, because it is at the top of the page"
                 },
                 {
                     "letter": "c",
-                    "text": "The header is removed before anything could tell the two documents apart"
+                    "text": "Yes, if you tell scribe what to remove"
                 },
                 {
                     "letter": "d",
-                    "text": "The page number would have to be kept along with it"
+                    "text": "No, because one-page documents are not supported"
                 }
             ]
         }
@@ -127,115 +124,115 @@ export const QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "You really did buy the same £3 coffee twice on the same day at the same shop. What does the summary show?",
+            "question": "You bought the same £3 coffee twice on the same day at the same shop. What does the summary show?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Both, because they are two separate purchases"
+                    "text": "One, because the two rows look identical and one is treated as a duplicate"
                 },
                 {
                     "letter": "b",
-                    "text": "One, because nothing in the row tells a real repeat from a repeated row"
+                    "text": "Both, because they are two separate purchases"
                 },
                 {
                     "letter": "c",
-                    "text": "Both, with the second marked as a possible duplicate"
+                    "text": "Both, with the second one flagged as a possible duplicate"
                 },
                 {
                     "letter": "d",
-                    "text": "It stops and asks which one to keep"
+                    "text": "Neither, because duplicates are removed entirely"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Rationale",
-            "question": "A row whose description mentions a transfer is left out of duplicate removal. Why?",
+            "question": "You move £300 from your current account to your savings account. How does tally treat this?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Because a transfer is not spending, so it never reaches the totals anyway"
+                    "text": "Leaves it out, because it is a transfer, not spending"
                 },
                 {
                     "letter": "b",
-                    "text": "Because the two legs of a move between your own accounts look exactly like a duplicate"
+                    "text": "Counts it as spending in a transfers category"
                 },
                 {
                     "letter": "c",
-                    "text": "Because the two legs arrive on different dates and would never collide"
+                    "text": "Counts it as spending, because it left the current account"
                 },
                 {
                     "letter": "d",
-                    "text": "Because the bank marks transfers already, so the rule is not needed"
+                    "text": "Asks you whether to include it"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Change",
-            "question": "Amounts are rounded once at the summary rather than on every transaction. What does that give up?",
+            "question": "You make a payment on the last day of January. The bank processes it on the first day of February. Which month does the summary put it in?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Speed, because every exact amount has to be carried until the end"
+                    "text": "January, because tally uses the date you made the payment"
                 },
                 {
                     "letter": "b",
-                    "text": "Agreeing line by line with a printed receipt"
+                    "text": "February, because tally uses the date the bank processed it"
                 },
                 {
                     "letter": "c",
-                    "text": "Being able to show the totals in another currency"
+                    "text": "Both months, split equally"
                 },
                 {
                     "letter": "d",
-                    "text": "Accuracy, because many small amounts drift further apart this way"
+                    "text": "Whichever month the bank says"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Rationale",
-            "question": "A bank export lists every amount as a positive number, spending included. What does tally do?",
+            "question": "A shop name does not match anything on the list. What happens to that payment?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Refuses the file, because the direction cannot be known from it"
+                    "text": "It goes under uncategorised"
                 },
                 {
                     "letter": "b",
-                    "text": "Leaves the amounts alone and reads the direction from a separate column"
+                    "text": "It is left out of the summary"
                 },
                 {
                     "letter": "c",
-                    "text": "Takes the file's own shape as the convention and flips every sign"
+                    "text": "Tally stops and reports an error"
                 },
                 {
                     "letter": "d",
-                    "text": "Treats the largest amounts as spending and the rest as money coming in"
+                    "text": "It is put in the category closest to its name"
                 }
             ]
         },
         {
             "n": 5,
             "band": "Extension",
-            "question": "You add a rule for one coffee shop, but a broader \"cafe\" rule already matches it. What decides which one applies?",
+            "question": "The list of shop names is written into the code. What is the problem with that?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The more specific pattern wins, whichever order they are in"
+                    "text": "You have to change the code to add a new shop"
                 },
                 {
                     "letter": "b",
-                    "text": "Where it sits in the list, because the first pattern that matches wins"
+                    "text": "The list cannot be shared with other people"
                 },
                 {
                     "letter": "c",
-                    "text": "Both apply, and the amount is split between them"
+                    "text": "The list is too slow to search"
                 },
                 {
                     "letter": "d",
-                    "text": "Neither: two matching rules send it to the uncategorised bucket"
+                    "text": "The list cannot handle shops with similar names"
                 }
             ]
         }
@@ -248,30 +245,30 @@ export const AFTER_QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "You had a short report written beside the Markdown. What does it list?",
+            "question": "Your change added a report beside the Markdown output. What does the report show?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "How long each rule took to run"
+                    "text": "What scribe changed: lines removed, words rejoined, and notes moved"
                 },
                 {
                     "letter": "b",
-                    "text": "The original text, with everything the conversion removed crossed out"
+                    "text": "How long each step of the conversion took"
                 },
                 {
                     "letter": "c",
-                    "text": "The lines it removed, the words it rejoined, and the notes it moved"
+                    "text": "The parts of the document scribe could not handle"
                 },
                 {
                     "letter": "d",
-                    "text": "The parts of the document the conversion could not handle"
+                    "text": "A comparison of the original and converted text side by side"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Extension",
-            "question": "You had the rules' settings taken out of the code. Where are they set now?",
+            "question": "Where are the conversion settings stored now?",
             "options": [
                 {
                     "letter": "a",
@@ -279,84 +276,84 @@ export const AFTER_QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "b",
-                    "text": "In each rule module, at the top, as before"
+                    "text": "In the code, where they were before"
                 },
                 {
                     "letter": "c",
-                    "text": "On the command line, given again on every run"
+                    "text": "On the command line, given on every run"
                 },
                 {
                     "letter": "d",
-                    "text": "In an environment variable read when the program starts"
+                    "text": "In an environment variable"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Rationale",
-            "question": "You had the keep-hyphen prefix list moved into the config. What happens to a word broken at the end of a line in a document that has no config file?",
+            "question": "A document has no settings file. What happens when you convert it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It keeps its hyphen, exactly as before"
+                    "text": "It works the same as before, using the default rules"
                 },
                 {
                     "letter": "b",
-                    "text": "It loses its hyphen, because the list of prefixes that keep one is now empty by default"
+                    "text": "Scribe refuses to convert it"
                 },
                 {
                     "letter": "c",
-                    "text": "The line break is kept along with the hyphen"
+                    "text": "It skips all the rules and just joins lines"
                 },
                 {
                     "letter": "d",
-                    "text": "The run refuses until the document says which it wants"
+                    "text": "It creates a settings file with empty values"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Change",
-            "question": "The report you had asked for lists the notes it moved, and says the marker beside each is the one to search for in the Markdown. For a two-page document with one note on each page, what does it print?",
+            "question": "What did the change do to the furniture threshold — the share of pages a header has to appear on before it is removed?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "`[^1]` and `[^2]`, which is what the Markdown holds"
+                    "text": "Moved it into the settings file so you can change it per document"
                 },
                 {
                     "letter": "b",
-                    "text": "`[^1]` beside both, so the marker does not tell them apart"
+                    "text": "Kept it the same but made it stricter"
                 },
                 {
                     "letter": "c",
-                    "text": "No markers at all, only the text of each note"
+                    "text": "Removed it, so all repeated lines are removed"
                 },
                 {
                     "letter": "d",
-                    "text": "One entry, because the two notes are treated as the same note"
+                    "text": "Did not change it at all"
                 }
             ]
         },
         {
             "n": 5,
             "band": "Rationale",
-            "question": "Your change lowered the share of pages a line has to appear on before it counts as page furniture. What else does that affect?",
+            "question": "If you lower the furniture threshold so that fewer repeats are needed, what else could that affect?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Nothing; furniture and headings never look at the same lines"
+                    "text": "A real heading that repeats across pages could be removed as furniture"
                 },
                 {
                     "letter": "b",
-                    "text": "Page numbers can no longer be used to order the sections"
+                    "text": "Nothing, because furniture and headings are completely separate"
                 },
                 {
                     "letter": "c",
-                    "text": "A real heading that repeats across the document is removed before the heading rule sees it, and that now happens to more documents"
+                    "text": "Page numbers would stop being removed"
                 },
                 {
                     "letter": "d",
-                    "text": "The first page loses its heading, because there is nothing before it to compare against"
+                    "text": "The document would get longer"
                 }
             ]
         }
@@ -365,115 +362,115 @@ export const AFTER_QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "You had a weekly view added beside the monthly one. What does it show for each week?",
+            "question": "Your change added a weekly view. What does each week show?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Only a total, with no breakdown"
+                    "text": "A breakdown by category and a total, the same as a month gets"
                 },
                 {
                     "letter": "b",
-                    "text": "One line for each transaction, in date order"
+                    "text": "Only a total, with no breakdown"
                 },
                 {
                     "letter": "c",
-                    "text": "The difference from the week before, as a percentage"
+                    "text": "One line for each transaction"
                 },
                 {
                     "letter": "d",
-                    "text": "A breakdown by category and a total, the same as a month gets"
+                    "text": "The difference from the previous week"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Extension",
-            "question": "You had the merchant rules taken out of the code. Where does a colleague add a rule for a new shop now?",
+            "question": "Where does a colleague add a rule for a new shop now?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "In the settings file, which is where every rule now lives"
+                    "text": "In the settings file, which is where the rules now live"
                 },
                 {
                     "letter": "b",
-                    "text": "In the code, in the list of rules, as before"
+                    "text": "In the code, in the same list as before"
                 },
                 {
                     "letter": "c",
-                    "text": "On the command line, giving the shop and the category on every run"
+                    "text": "On the command line, on every run"
                 },
                 {
                     "letter": "d",
-                    "text": "In the statement itself, by editing what the shop is called"
+                    "text": "In the bank export file itself"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Rationale",
-            "question": "In the weekly view you had added, what does tally no longer look at when it decides two rows are the same row twice?",
+            "question": "A shop on the statement matches no rule in the settings file. What happens?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The date"
+                    "text": "It goes under uncategorised"
                 },
                 {
                     "letter": "b",
-                    "text": "The amount"
+                    "text": "The run stops with an error"
                 },
                 {
                     "letter": "c",
-                    "text": "The merchant"
+                    "text": "It is left out of the summary entirely"
                 },
                 {
                     "letter": "d",
-                    "text": "The category"
+                    "text": "It is matched to the closest rule"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Change",
-            "question": "You had the merchant rules moved into a file you can edit. What happens now when a shop on the statement matches no rule in that file?",
+            "question": "The monthly view uses the date you made the payment. What date does the weekly view use?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It goes to the uncategorised bucket, and the run finishes"
+                    "text": "The same date — when you made the payment"
                 },
                 {
                     "letter": "b",
-                    "text": "The run stops, and no summary is written at all"
+                    "text": "The date the bank processed the payment"
                 },
                 {
                     "letter": "c",
-                    "text": "It is filed under the rule whose wording is closest to it"
+                    "text": "Whichever date comes first"
                 },
                 {
                     "letter": "d",
-                    "text": "It is left out, and the rest of the summary still prints"
+                    "text": "The date is not used — it just counts seven days"
                 }
             ]
         },
         {
             "n": 5,
             "band": "Rationale",
-            "question": "Your change lines the weekly view up on the date the bank posted a transaction, while the monthly view still files it by the date it was made. What else does that affect?",
+            "question": "If the monthly and weekly views use different dates, what can happen?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Nothing, because the two views count the same transactions either way"
+                    "text": "A payment could appear in January in the monthly view but February in the weekly view"
                 },
                 {
                     "letter": "b",
-                    "text": "A transaction the bank has not posted yet can no longer appear at all"
+                    "text": "Nothing, because they always add up to the same total"
                 },
                 {
                     "letter": "c",
-                    "text": "One transaction can land in January in the monthly view and in February in the weekly one, so the two summaries of one statement disagree"
+                    "text": "Some payments would be counted twice"
                 },
                 {
                     "letter": "d",
-                    "text": "Transactions made at a weekend are left out, because the bank posts them later"
+                    "text": "Weekend payments would be left out"
                 }
             ]
         }

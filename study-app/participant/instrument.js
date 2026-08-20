@@ -52,7 +52,7 @@ export const PRESTUDY = Object.freeze([
     // explain itself. The page still does not say which answer excludes, or the
     // answer stops being honest.
     { id: 'readsDiff', type: 'choice',
-      label: 'When an AI proposes a change across several files, how often do you read the diff before accepting',
+      label: 'When an AI suggests a code change, how often do you read it before accepting',
       options: ['Always', 'Usually', 'About half the time', 'Rarely', 'Never'] },
 ]);
 
@@ -201,29 +201,29 @@ export const AFTER_CONDITION = Object.freeze([
       description: 'How insecure, discouraged, irritated, stressed and annoyed — versus secure, gratified, content and relaxed — did you feel during the task?' },
 
     // Understanding and control.
-    { id: 'ctl1', c: 'control', text: 'I always knew what the agent had changed, and why.' },
-    { id: 'ctl2', c: 'control', text: 'I could steer the work toward what I wanted.' },
-    { id: 'ctl3', c: 'control', text: 'I felt in control of the overall editing process.' },
-    { id: 'ctl4', c: 'control', text: 'I lost track of the state of the codebase while the agent worked.', reverse: true },
-    { id: 'ctl5', c: 'control', text: 'The agent made decisions that were mine to make.', reverse: true },
+    { id: 'ctl1', c: 'control', text: 'I knew what the agent changed.' },
+    { id: 'ctl2', c: 'control', text: 'I could guide the agent toward what I wanted.' },
+    { id: 'ctl3', c: 'control', text: 'I felt in control of the process.' },
+    { id: 'ctl4', c: 'control', text: 'I lost track of what the code looked like while the agent worked.', reverse: true },
+    { id: 'ctl5', c: 'control', text: 'The agent made choices I should have made myself.', reverse: true },
 
     // Alignment.
-    { id: 'ali1', c: 'align', text: 'What the agent produced matched what I intended.' },
-    { id: 'ali2', c: 'align', text: 'This way of working helped me build a clearer picture of the codebase.' },
-    { id: 'ali3', c: 'align', text: 'I could move between changing code and checking it without losing my place.' },
+    { id: 'ali1', c: 'align', text: 'The result matched what I asked for.' },
+    { id: 'ali2', c: 'align', text: 'This way of working helped me understand the codebase.' },
+    { id: 'ali3', c: 'align', text: 'I could switch between editing and checking without getting lost.' },
 
     // The written description.
-    { id: 'doc1', c: 'doc', text: 'Whenever I checked, the written description matched the code.' },
-    { id: 'doc2', c: 'doc', text: 'Keeping the written description current felt like busywork.', reverse: true },
-    { id: 'doc3', c: 'doc', text: 'The effort I spent writing things down paid off within this session.' },
-    { id: 'doc4', c: 'doc', text: 'If I came back in a month, what is written down would get me back up to speed.' },
-    { id: 'doc5', c: 'doc', text: 'When I needed to know why something was built a certain way, I could find out quickly.' },
+    { id: 'doc1', c: 'doc', text: 'The written description matched the code.' },
+    { id: 'doc2', c: 'doc', text: 'Keeping the description up to date felt like extra work for nothing.', reverse: true },
+    { id: 'doc3', c: 'doc', text: 'Writing things down was worth the effort.' },
+    { id: 'doc4', c: 'doc', text: 'If I came back in a month, what is written down would help me catch up.' },
+    { id: 'doc5', c: 'doc', text: 'I could quickly find out why something was built a certain way.' },
 
     // Review and trust.
-    { id: 'rev1', c: 'review', text: 'I was confident the code produced was correct.' },
+    { id: 'rev1', c: 'review', text: 'I was confident the code was correct.' },
     { id: 'rev2', c: 'review', text: 'I could reject or change anything I disagreed with.' },
-    { id: 'rev3', c: 'review', text: 'I accepted changes I had not really reviewed.', reverse: true },
-    { id: 'rev4', c: 'review', text: 'I could tell which parts of the result I still needed to check.' },
+    { id: 'rev3', c: 'review', text: 'I accepted changes without really checking them.', reverse: true },
+    { id: 'rev4', c: 'review', text: 'I could tell which parts still needed checking.' },
 ]);
 
 /**
@@ -328,11 +328,11 @@ export function constructScore(answers, constructId) {
  */
 export const MANIPULATION_CHECK = Object.freeze([
     { id: 'noticedChange', type: 'choice',
-      label: 'Did you notice the written description changing while the agent worked',
+      label: 'Did you notice the description changing while the agent worked',
       options: ['Yes, often', 'Once or twice', 'No'] },
     { id: 'openQ', type: 'longtext',
-      label: 'Anything about this way of working that helped or got in the way',
-      placeholder: 'A sentence or two. This is the answer we quote in the paper.' },
+      label: 'Was there anything about this way of working that helped or got in the way',
+      placeholder: 'A sentence or two is enough.' },
 ]);
 
 /**
@@ -346,18 +346,18 @@ export const MANIPULATION_CHECK = Object.freeze([
  */
 export const SIGNOFF = Object.freeze([
     { id: 'correct', type: 'choice',
-      label: 'Is the change you just made correct and complete?',
+      label: 'Is the change correct and complete?',
       options: ['Yes', 'Mostly', 'Not sure', 'No'] },
     { id: 'confidence', type: 'scale5',
-      label: 'How confident are you in that answer',
+      label: 'How confident are you',
       low: 'Not at all', high: 'Completely' },
     { id: 'grounds', type: 'multi',
-      label: 'What is that resting on? Pick everything that applies.',
+      label: 'How do you know? Pick everything that applies.',
       options: ['I ran the tests', 'I read the diff', 'I read the description',
-                'The agent said it was done', 'I ran the project and looked at the output'] },
+                'The agent said it was done', 'I ran the project and checked the output'] },
     { id: 'unsure', type: 'longtext',
-      label: 'Is there any part of it you are less sure about?',
-      placeholder: 'A sentence is enough, and "no" is a real answer.' },
+      label: 'Is there any part you are less sure about?',
+      placeholder: 'A sentence is enough. "No" is a fine answer.' },
 ]);
 
 /**
@@ -421,13 +421,13 @@ export const REFLECTION = Object.freeze([
  * is overhead. A list on which the tool could only win would measure the list.
  */
 export const SCENARIOS = Object.freeze([
-    { id: 's1', text: 'Adding a feature to code somebody else wrote' },
-    { id: 's2', text: 'Changing how something already works, when other parts of the code depend on it' },
-    { id: 's3', text: 'Tracking down a bug you can already reproduce' },
-    { id: 's4', text: 'Writing something new, in a file that does not exist yet' },
-    { id: 's5', text: 'Reviewing a change somebody else made, and deciding whether to approve it' },
-    { id: 's6', text: 'Coming back to a project you have not opened in six months' },
-    { id: 's7', text: 'A small fix you have to ship within the hour' },
+    { id: 's1', text: 'Adding a feature to code someone else wrote' },
+    { id: 's2', text: 'Changing something that other parts of the code depend on' },
+    { id: 's3', text: 'Fixing a bug you can already reproduce' },
+    { id: 's4', text: 'Writing something new in a file that does not exist yet' },
+    { id: 's5', text: 'Reviewing a change someone else made' },
+    { id: 's6', text: 'Coming back to a project after a long time away' },
+    { id: 's7', text: 'A small fix you need to ship within the hour' },
 ]);
 
 /**
@@ -448,39 +448,39 @@ export const INTERVIEW = Object.freeze([
         title: 'Comparing the two',
         questions: [
             { id: 'workflow', rq: 'RQ1, RQ2',
-              label: 'How did the way you worked differ between the two — both in understanding the codebase and in making changes to it?' },
+              label: 'How did the two ways of working feel different?' },
             { id: 'strategy', rq: 'RQ2',
-              label: 'Did you go about editing differently in each? If so, why — was it about staying in control, or something else?' },
+              label: 'Did you do anything differently in each one? Why?' },
             { id: 'tracking', rq: 'RQ1',
-              label: 'Which one made it easier to keep track of changes across the codebase?' },
+              label: 'Which one made it easier to keep track of what changed?' },
             { id: 'keepingUp', rq: 'RQ1',
-              label: 'The agent changes things quickly. In which one could you keep up with what had changed?' },
+              label: 'The agent changes things fast. In which one could you keep up?' },
             { id: 'thinking', rq: 'RQ1',
-              label: 'Did having the description in a different shape — a chat, or a tree of features — change how you thought about the codebase, or how you talked to the agent?' },
+              label: 'Did the description format — a tree of features vs a flat file — change how you thought about the code?' },
         ],
     },
     {
         id: 'trust',
-        title: 'Trust, and disagreeing',
+        title: 'Trust',
         questions: [
             { id: 'whyChanged', rq: 'RQ1',
               label: 'Did you understand why the agent made the changes it made?' },
             { id: 'disagreed', rq: 'RQ2',
-              label: 'Was there a point where you disagreed with it? What did each way of working give you to settle that?' },
+              label: 'Was there a point where you disagreed with the agent? What did you do about it?' },
             { id: 'verified', rq: 'RQ2',
-              label: 'How did you check that what it did was what you meant?' },
+              label: 'How did you check that what it did was correct?' },
         ],
     },
     {
         id: 'adoption',
-        title: 'Whether you would use it',
+        title: 'Would you use it',
         questions: [
             { id: 'fit', rq: null,
-              label: 'Where would something like codoc fit in the work you actually do?' },
+              label: 'Where would something like this fit in your day-to-day work?' },
             { id: 'blocking', rq: null,
-              label: 'What would have to be different before you would use it day to day?' },
+              label: 'What would need to change before you would use it every day?' },
             { id: 'prefer', rq: null,
-              label: 'What would make you pick one over the other?' },
+              label: 'Which one would you pick, and why?' },
         ],
     },
 ]);

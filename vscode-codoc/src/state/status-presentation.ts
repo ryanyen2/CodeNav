@@ -82,7 +82,7 @@ export function statusBarView(input: StatusBarInput): StatusBarView {
     // stale file's claim. This is the second "you owe an action" state.
     if (input.daemonDown) {
         return {
-            text: '$(warning) codoc: not running',
+            text: '$(warning) codoc: daemon not running',
             tooltip: 'Your tree edits are saved but nothing is applying them. '
                 + 'Start the daemon in a terminal: codoc watch  (or run codoc sync once).',
             command: 'codoc.open',
@@ -128,9 +128,16 @@ export function statusBarView(input: StatusBarInput): StatusBarView {
         // `input.detail` is deliberately NOT preferred here: the daemon writes
         // "N change(s) ready to implement — run /codoc:sync", which is the same
         // half-truth in the one place with room to correct it.
+        //
+        // It must NOT say "not running", though: that is the daemon-scoped sentence the
+        // branch above owns, and here the daemon is typically alive and healthy — it is
+        // the thing that WROTE this state, one Loop B pass at a time. Authors read the
+        // two as one claim and went looking for a dead daemon in a terminal that was
+        // visibly printing passes. What is missing is a coding-agent session to drain
+        // the queue, so that is what the words name.
         const one = pending === 1;
         return {
-            text: `$(play) codoc: ${pending} queued, not running`,
+            text: `$(play) codoc: ${pending} queued, no agent`,
             tooltip: `${pending} accepted tree edit${one ? '' : 's'} ${one ? 'is' : 'are'} queued in `
                 + `.codoc/realize.md and nothing is implementing ${one ? 'it' : 'them'}. `
                 + 'Run "codoc: Implement queued changes now", or /codoc:sync in a live agent session.',

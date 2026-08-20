@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.17
+
+### Fixed
+
+- **Scrubbing back in History drew the past page and the live document on top of each
+  other.** Entering the past hides the editor and renders a separate read-only
+  reconstruction beside it — `editor.hidden = viewing` — and that line had never once
+  worked. The user agent's `[hidden] { display: none }` rule is user-agent origin, so the
+  editor's own `display: flex` outranked it and the property did nothing. Two `flex: 1`
+  prose columns then shared one pane: today's words and the reconstruction superimposed,
+  each carrying its own strikethroughs and red/green grounds, lines physically overlapping
+  lines. The rest of the webview already knew this trap — the ask bar, the find widget and
+  the timeline each carry an explicit `[hidden] { display: none }` with a comment saying
+  why — and the document surface was the one that never got one. A test now holds all
+  three, since the failure is invisible to a node-env harness and to the eye until
+  something is hidden.
+
+- **Hovering a commented sentence showed nothing.** It only tinted the words. The tint is
+  a link between a sentence and its margin card, and margin cards are only drawn where the
+  whitespace beside the prose can hold one without covering it — which at most window
+  widths it cannot. So on those widths hovering lit a highlight and connected it to
+  nothing, and the note was reachable only through the small marker at the end of the
+  span. Hovering the words now opens the thread as a popover wherever no card is already
+  holding it. Three things in that path were fixed to make it land: the popover reused the
+  margin card's stylesheet rule, which pins the card to the prose column's right inset —
+  wrong for an element positioned against the viewport; the focus class could not reach a
+  popover, because it is only ever looked for inside the document surface; and the
+  marker's own tooltip promised "click to keep open" while its mouseleave closed the
+  pinned card a pixel later.
+
+- **The status bar said the daemon was not running while the daemon was running.** "N
+  queued, not running" is the queued-directive state: `realize.md` holds work and no
+  coding-agent session is draining it. It says nothing about the daemon — and it is
+  written BY the daemon, one Loop B pass at a time, so it appears precisely when the
+  daemon is healthy. The words collided with the genuine daemon-down pill, which reads
+  "not running" too, and authors read the two as one claim and went looking for a dead
+  process in a terminal that was visibly printing passes. The queue now says `N queued, no
+  agent` and the daemon says `daemon not running`; each sentence has one subject.
+
 ## 0.2.16
 
 ### Fixed

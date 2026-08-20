@@ -445,7 +445,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                 handlers: {
                     peek: (thread, at) => openThreadCard(thread, at, false),
                     open: (thread, at) => openThreadCard(thread, at, true),
-                    close: dismissThreadCard,
+                    // Only the peeked card. The marker's own tooltip promises "click to
+                    // keep open", and its mouseleave was closing the pinned card one
+                    // pixel later — so the promise was never kept.
+                    close: dismissHoverThreadCard,
                 },
             }),
             AutoEditDecorations.configure({
@@ -1705,9 +1708,29 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     // what lets the reserved column go away without the conversation going with it.
     surface.addEventListener('mouseover', ev => {
         const span = (ev.target as HTMLElement)?.closest?.('.codoc-comment') as HTMLElement | null;
-        setCommentFocus(span?.dataset.threadId ?? null);
+        const id = span?.dataset.threadId ?? null;
+        setCommentFocus(id);
+        if (!id || !span) { dismissHoverThreadCard(); return; }
+        // Hovering the WORDS has to reach the note, not just tint it. It used to only
+        // add `.here` — which lights a margin card, and at the widths where no margin
+        // card exists (most of them) lit nothing at all: the reader saw a highlighted
+        // clause with no way to read what was said about it short of finding the small
+        // ❝ marker at its end. Where a card is already hanging in the margin the tint
+        // IS the answer and a popover would duplicate it.
+        if (surface.querySelector(`.ce-cmt-card[data-thread-id="${CSS.escape(id)}"]`)) return;
+        const thread = currentComments.find(t => t.id === id);
+        if (!thread || pinnedThreadCard) return;   // a pinned card is the reader's, not ours to replace
+        if (hoverThreadCard === id) return;        // already showing this one
+        hoverThreadCard = id;
+        openThreadCard(thread, span, false);
     });
-    surface.addEventListener('mouseleave', () => setCommentFocus(null));
+    surface.addEventListener('mouseout', ev => {
+        // Leaving the span itself (not merely crossing into a child of it).
+        const from = (ev.target as HTMLElement)?.closest?.('.codoc-comment');
+        const to = (ev.relatedTarget as HTMLElement | null)?.closest?.('.codoc-comment, .ce-cmt-card');
+        if (from && !to) dismissHoverThreadCard();
+    });
+    surface.addEventListener('mouseleave', () => { setCommentFocus(null); dismissHoverThreadCard(); });
     surface.addEventListener('click', ev => {
         const span = (ev.target as HTMLElement)?.closest?.('.codoc-comment') as HTMLElement | null;
         const id = span?.dataset.threadId;
@@ -1722,13 +1745,33 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
      *  can hold one, which on most window widths it cannot, so for most readers the
      *  marker IS the comment surface. */
     let closeThreadCard: (() => void) | null = null;
+    // Which thread the floating card is showing, and whether the reader pinned it by
+    // clicking. Hover must never yank a pinned card away, and must not re-open the one
+    // it is already showing on every mousemove within the same span.
+    let hoverThreadCard: string | null = null;
+    let pinnedThreadCard = false;
     function openThreadCard(thread: CommentThread, at: HTMLElement, pinned: boolean): void {
         closeThreadCard?.();
-        closeThreadCard = showCard(at, buildMarginCard(thread), { pinned });
+        const card = buildMarginCard(thread);
+        // The popover lives on document.body, outside `surface` — so give it the focus
+        // class here, since setCommentFocus can only reach cards inside the surface.
+        card.classList.add('here', 'ce-cmt-pop');
+        card.addEventListener('mouseenter', () => setCommentFocus(thread.id));
+        closeThreadCard = showCard(at, card, { pinned });
+        hoverThreadCard = pinned ? null : thread.id;
+        pinnedThreadCard = pinned;
     }
     function dismissThreadCard(): void {
         closeThreadCard?.();
         closeThreadCard = null;
+        hoverThreadCard = null;
+        pinnedThreadCard = false;
+    }
+    /** Close only a card the pointer opened — a pinned one is the reader's. */
+    function dismissHoverThreadCard(): void {
+        if (pinnedThreadCard) return;
+        if (hoverThreadCard === null) return;
+        dismissThreadCard();
     }
 
     function commentMarkRange(threadId: string): { from: number; to: number } | null {
