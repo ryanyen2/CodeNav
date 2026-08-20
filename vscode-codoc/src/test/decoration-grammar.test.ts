@@ -117,9 +117,12 @@ describe('a proposed retire covers the whole node', () => {
         expect(rule).toMatch(/opacity/);
         expect(rule).not.toMatch(/line-through/);
     });
-    it('both panes strike a proposed retire in the SAME direction hue', () => {
-        expect(css).toMatch(/\.row\.has-retire \.title\s*\{[^}]*var\(--dir-review\)/);
-        expect(css).toMatch(/\.ce-retire-proposed\s*\{[^}]*var\(--dir-review\)/);
+    it('both panes strike a proposed retire in the SAME channel ink — the plan\'s', () => {
+        // A retire is a PROPOSAL: an agent's words about what should go. So it reads in
+        // the plan channel, in both panes, and not in the review-blue that is now the
+        // author's own ink everywhere else.
+        expect(css).toMatch(/\.row\.has-retire \.title\s*\{[^}]*var\(--st-plan\)/);
+        expect(css).toMatch(/\.ce-retire-proposed\s*\{[^}]*var\(--st-plan\)/);
     });
     it('an unlanded edit of the user\'s own is called out before they accept', () => {
         expect(sugg).toMatch(/you edited this/);
@@ -144,11 +147,16 @@ describe('one badge per feature (feature-state.ts)', () => {
 });
 
 describe('U6 — lifecycle/stage indicator is orthogonal to the change-mark diff (R9 / KTD4)', () => {
-    it('the "being realized" dot rides the STAGED phase colour (--ce-staged), never the review direction hue', () => {
+    it('the "being realized" dot is inked by WHOSE words are waiting, not by one status hue', () => {
+        // A hold is reached two ways — you committed an edit, or you accepted an agent's
+        // plan — and they are the human and plan channels. One sage green for both said
+        // neither, and said it in the colour the code channel uses for what the codebase
+        // actually did.
+        expect(css).toMatch(/\.ce-pending-dot\.human\s*\{[^}]*var\(--st-human\)/);
+        expect(css).toMatch(/\.ce-pending-dot\.plan\s*\{[^}]*var\(--st-plan\)/);
         const m = css.match(/\.ce-pending-dot\s*\{[^}]*\}/);
         expect(m).not.toBeNull();
-        expect(m![0]).toContain('--ce-staged');           // staged & sent = green phase
-        expect(m![0]).not.toContain('--dir-review');       // NOT the agent-review (code-ahead) hue
+        expect(m![0]).not.toContain('--ce-staged');        // green is the CODE channel now
     });
     it('the engine\'s ins/del marks are STRUCTURAL only — the plan channel paints them', () => {
         // They used to carry a per-author tint, and that was one of three competing
@@ -199,13 +207,13 @@ describe('settlement — one visual axis per channel, so claims compose', () => 
 });
 
 describe('U6 — one direction hue, no per-op rainbow (cohesion R7)', () => {
-    it('tree-pane proposals key off the single --dir-review direction hue', () => {
-        expect(css).toMatch(/\.row\.proposal[\s\S]{0,250}var\(--dir-review\)/);
+    it('tree-pane proposals key off the plan channel, the same one the prose uses', () => {
+        expect(css).toMatch(/\.row\.proposal[\s\S]{0,300}var\(--st-plan\)/);
     });
-    it('the in-situ proposal surfaces key off the same --dir-review, not an op-specific hue', () => {
-        // placeholder (add/move) rail + proposed-retire strike — one direction hue for both
-        expect(css).toMatch(/\.ce-ghost-feature\s*\{[^}]*var\(--dir-review\)/);
-        expect(css).toMatch(/\.ce-retire-proposed\s*\{[^}]*var\(--dir-review\)/);
+    it('the in-situ proposal surfaces key off the same channel, not an op-specific hue', () => {
+        // placeholder (add/move) rail + proposed-retire strike — one channel ink for both
+        expect(css).toMatch(/\.ce-ghost-feature\s*\{[^}]*var\(--st-plan\)/);
+        expect(css).toMatch(/\.ce-retire-proposed\s*\{[^}]*var\(--st-plan\)/);
     });
 });
 
@@ -218,17 +226,33 @@ describe('the edit lifecycle is one cohesive ramp', () => {
         expect(css).toMatch(/--ce-staged:\s*#6fae74/);   // staged & sent = sage
     });
 
-    it('the human channel inherits the editing phase colour rather than minting a hue', () => {
+    it('the human channel keeps the editing phase colour, so nobody is retrained', () => {
         // The captured family's rail, dot and caret are gone — their state is the
-        // settlement model's human channel now — but the PHASE colour is the same one,
-        // so a reader who learned the old surface has not been retrained for nothing.
-        expect(css).toMatch(/--st-human:\s*var\(--ce-editing\)/);
+        // settlement model's human channel now — but the value is the same blue, so a
+        // reader who learned the old surface has not been retrained for nothing.
+        expect(css).toMatch(/--st-human:\s*#5aa6e0/);
+        expect(css).toMatch(/--ce-editing:\s*#5aa6e0/);
     });
 
-    it('pending (staged) still keys off --ce-staged — a distinct phase from editing', () => {
-        const pend = css.match(/\.ce-pending-dot\s*\{[^}]*\}/)?.[0] ?? '';
-        expect(pend).toContain('--ce-staged');
-        expect(pend).not.toContain('--ce-editing');
+    it('the pending chip is the human channel, not a fourth "staged" phase', () => {
+        // "Staged & sent" was a phase of its own, in sage. But the fact it reports is
+        // whose claim is outstanding, which is a CHANNEL — and sage is the code
+        // channel's. So the phase collapsed into the channel it always belonged to,
+        // with fill-vs-outline carrying how far along it is.
+        const pend = css.match(/\.ce-pending-dot\.human\s*\{[^}]*\}/)?.[0] ?? '';
+        expect(pend).toContain('--st-human');
+        expect(pend).not.toContain('--ce-staged');
+    });
+
+    it('no status surface reports a CHANNEL in a hue another channel owns', () => {
+        // The regression this exists to catch: a surface being re-hued in isolation and
+        // landing back on somebody else's colour. Every status mark on the tree rows,
+        // the minimap rail and the pending chip must name a channel token.
+        for (const sel of ['.badge.proposed', '.badge.sent', '.badge.staged',
+                           '.ce-tick.st-proposed', '.ce-tick.st-sent', '.ce-tick.st-rewritten']) {
+            const rule = css.match(new RegExp(sel.replace(/[.]/g, '\\.') + '\\s*\\{[^}]*\\}'))?.[0] ?? '';
+            expect(rule, sel).toMatch(/var\(--st-(human|plan|code-add|code-del)\)/);
+        }
     });
 
     it('intensity ramps: unsent BREATHES, everything settled is static', () => {

@@ -184,7 +184,7 @@ describe('claimsFor — the three channels on one paragraph', () => {
         const live = ft('T', 'It retries five times. It then backs off. Measure it.');
         const claims = claimsFor({
             code: { layerId: 'e-1', prev: ft('T', 'It retries twice.') },
-            plan: { layerId: 'e-9', stage: 'accepted', runs: [{ block: { kind: 'para', index: 0 }, runs: sentenceDiff(projected.paras[0], planned.paras[0]) }] },
+            plan: { layerId: 'e-9', stage: 'proposed', runs: [{ block: { kind: 'para', index: 0 }, runs: sentenceDiff(projected.paras[0], planned.paras[0]) }] },
             projected, planned, live,
         });
         expect(new Set(claims.map(c => c.channel))).toEqual(new Set(['code', 'plan', 'human']));
@@ -338,5 +338,86 @@ describe('a node whose prose is gone entirely', () => {
         const del = claims.find(c => c.removed?.includes('waits longer'));
         expect(del).toBeDefined();
         expect(del!.block.kind).toBe('title');
+    });
+});
+
+// ─── composition: what may stack, and what may never ─────────────────────────
+
+describe('the composition matrix — the point of one axis per channel', () => {
+    const at = (c: Claim[], ch: Claim['channel']): Claim[] => c.filter(x => x.channel === ch);
+    const covers = (c: Claim[], text: string, word: string): boolean =>
+        c.some(x => x.edit !== 'del' && text.slice(x.start, x.end).includes(word));
+
+    it('PLANNED, THEN BUILT DIFFERENTLY: the plan\'s gray with the build\'s ground under it', () => {
+        // The one combination the whole model exists for. The reader accepted a plan; the
+        // agent implemented it; Loop A reflected what the code actually says. What they
+        // need to see is not "changed" but WHERE the two disagree — and nothing had to be
+        // written for it: two channels drew two properties of the same words.
+        const prev = ft('Uploads', 'It retries five times.');            // before the plan
+        const projected = ft('Uploads', 'It retries five times. It backs off exponentially.');
+        const claims = claimsFor({
+            projected, live: projected,
+            // the plan the reader accepted, still unbuilt
+            accepted: { layerId: 'hold:f-1', prev },
+            // …and the loop's own reflection of what the code turned out to say
+            code: { layerId: 'auto:1', prev: ft('Uploads', 'It retries five times. It backs off linearly.') },
+        });
+        const text = projected.paras[0];
+        expect(covers(at(claims, 'plan'), text, 'backs off')).toBe(true);
+        // The code channel reports the sentence the build actually produced.
+        expect(at(claims, 'code').length).toBeGreaterThan(0);
+    });
+
+    it('never inks a span blue over a green ground — those cannot both be true', () => {
+        // Both diffs run INTO `projected`, so they can name the same sentence: the loop
+        // rewrote a description and the author's queued edit changed it too. Drawn
+        // together that is "you wrote this" and "the codebase wrote this" about one
+        // sentence, with no way for the reader to tell which half is lying.
+        const projected = ft('Uploads', 'It retries five times.');
+        const claims = claimsFor({
+            projected, live: projected,
+            humanBase: ft('Uploads', 'It retries twice.'),
+            code: { layerId: 'auto:1', prev: ft('Uploads', 'It retries twice.') },
+        });
+        const text = projected.paras[0];
+        const inked = at(claims, 'human').filter(c => c.edit !== 'del');
+        const grounded = at(claims, 'code').filter(c => c.edit !== 'del');
+        expect(inked.length).toBeGreaterThan(0);          // the author's claim stands…
+        for (const h of inked) {
+            for (const g of grounded) {
+                if (h.block.kind !== g.block.kind) continue;
+                expect(h.start < g.end && g.start < h.end, text).toBe(false);
+            }
+        }
+    });
+
+    it('an accepted plan is the PLAN\'s words, never inked as the reader\'s own', () => {
+        // The hold set holds both kinds of queued work, and reading a plan-origin hold as
+        // `humanBase` put the agent's accepted wording in the author's blue.
+        const prev = ft('Uploads', 'It retries five times.');
+        const projected = ft('Uploads', 'It retries five times. It then backs off.');
+        const claims = claimsFor({ projected, live: projected, accepted: { layerId: 'hold:f-1', prev } });
+        expect(at(claims, 'human')).toEqual([]);
+        expect(at(claims, 'plan').every(c => c.stage === 'accepted')).toBe(true);
+    });
+
+    it('the author\'s own hold stays THEIRS when a proposal lands on top of it', () => {
+        // Two parties waiting on one feature. The plan's sentence must not join the
+        // author's ink just because the human diff spans it.
+        const projected = ft('Uploads', 'It retries five times.');
+        const planned = ft('Uploads', 'It retries five times. It then backs off.');
+        const claims = claimsFor({
+            projected, planned, live: planned,
+            humanBase: ft('Uploads', 'It retries twice.'),
+            plan: { layerId: 'e-9', stage: 'proposed', runs: [{
+                block: { kind: 'para', index: 0 },
+                runs: sentenceDiff(projected.paras[0], planned.paras[0]),
+            }] },
+        });
+        const text = planned.paras[0];
+        expect(covers(at(claims, 'human'), text, 'backs off')).toBe(false);
+        expect(covers(at(claims, 'plan'), text, 'backs off')).toBe(true);
+        // …and what the author DID write is still theirs.
+        expect(covers(at(claims, 'human'), text, 'five times')).toBe(true);
     });
 });

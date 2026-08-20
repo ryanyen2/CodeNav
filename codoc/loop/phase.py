@@ -35,6 +35,7 @@ from codoc.doclang import (
 )
 from codoc.loop.edits import (
     DRIFT_BINDING_LOST,
+    ORIGIN_HUMAN,
     Directive,
     hold_set,
     read_drift,
@@ -227,11 +228,22 @@ def _hold_detail(directives: list[Directive],
                  features_by_id: dict[str, Feature],
                  lang: DocLanguage | None = None) -> dict[str, dict]:
     """Per-held-feature detail (the former ``render._hold_detail``, centralized):
-    the queued directive's ``kind`` + a plain-language gloss + the AMEND baseline,
-    keyed by feature id. Every manifest directive's feature is in the hold set, so
-    this is exactly the held-features-with-a-directive subset of ``holds``. First
-    directive per feature wins; a gone/retired feature is skipped."""
+    the queued directive's ``kind`` + a plain-language gloss + the AMEND baseline +
+    its ``origin``, keyed by feature id. Every manifest directive's feature is in the
+    hold set, so this is exactly the held-features-with-a-directive subset of ``holds``.
+    First directive per feature wins (the oldest — its baseline is the earliest wording
+    the queue displaced, which is the right thing to diff against); a gone/retired
+    feature is skipped.
+
+    ``origin`` is the ONE field not taken from the first directive: a feature holding
+    both the author's own queued edit and an accepted plan reports ``human``. The
+    IDE draws origin as authorship — the author's ink or the plan's opacity — and
+    "first in the manifest" is arrival order, which is not evidence about whose words
+    these are. Erring toward the person is the same rule ``model.event.outranks``
+    states for the same reason: they are the one party who can be asked."""
     out: dict[str, dict] = {}
+    human_held = {d.feature_id for d in directives
+                  if d.feature_id and d.origin == ORIGIN_HUMAN}
     for d in directives:
         if not d.feature_id or d.feature_id in out:
             continue
@@ -250,6 +262,12 @@ def _hold_detail(directives: list[Directive],
                                       lang or resolve(None)),
             ),
             "baseline": d.baseline,
+            # WHOSE words are waiting ("human" | "plan" — edits.Directive.origin). The
+            # IDE draws the two in different channels: the author's own unlanded edit is
+            # their ink, an accepted plan is the plan's opacity. Without it the surface
+            # has to guess, and guessing means inking the agent's accepted wording as
+            # something the reader typed.
+            "origin": ORIGIN_HUMAN if d.feature_id in human_held else d.origin,
         }
     return out
 

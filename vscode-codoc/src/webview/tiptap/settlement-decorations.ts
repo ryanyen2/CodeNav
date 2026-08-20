@@ -139,9 +139,17 @@ export function claimTitle(c: Claim): string {
             : 'You wrote this, and it is with the agent.';
     }
     if (c.channel === 'plan') {
-        return c.stage === 'proposed'
-            ? 'Proposed wording — nothing is built yet. Accept or reject it on the heading.'
-            : 'Planned and accepted. No code behind it yet.';
+        if (c.stage === 'proposed') {
+            return c.edit === 'add'
+                ? 'Proposed wording — nothing is built yet. Accept or reject it on the heading.'
+                : 'Proposed for removal — still here until you answer on the heading.';
+        }
+        // Accepted, and the code has not caught up. Where a code ground shows through
+        // this, the two together are the answer to "was it built as agreed?" — which is
+        // the one question no single mark can carry.
+        return c.edit === 'add'
+            ? 'You accepted this. No code behind it yet.'
+            : 'The plan you accepted removed this. No code behind it yet.';
     }
     return c.edit === 'add'
         ? 'This is what the code now says.'

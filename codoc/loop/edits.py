@@ -225,6 +225,11 @@ class Intent:
     description: str | None = None
 
 
+# Directive.origin — WHOSE words the queue is holding. See the field's own comment.
+ORIGIN_HUMAN = "human"
+ORIGIN_PLAN = "plan"
+
+
 @dataclass
 class Directive:
     id: str            # d-… (model.ids.new_directive_id)
@@ -265,6 +270,20 @@ class Directive:
                           #   mint: a held draft has not caused any code change yet, so
                           #   anchoring it at mint would name a commit the work never
                           #   started from. "" whenever git could not answer.
+    # ── whose words are waiting (the settlement plan channel) ─────────────────
+    # "human" (the default) — the author typed this and the code has not caught up.
+    # "plan"  — the author ACCEPTED an agent's proposal and the code has not caught up.
+    #
+    # The same lifecycle position, and the surface must not draw them alike: one is the
+    # reader's own ink, the other is the agent's plan they agreed to. Before this field
+    # the difference was unrecoverable the instant the accept landed — the proposal row
+    # is deleted on apply, so "planned and accepted, nothing built yet" had no source
+    # left to be derived from and the plan's words silently became ordinary prose.
+    #
+    # It also decides HAND-OFF: accepting a plan IS the explicit gesture, so a
+    # plan-origin directive never waits in the held-draft state for a ⌘S that is not
+    # coming (see the hand-off derivation in loop_b).
+    origin: str = ORIGIN_HUMAN
 
 
 def edits_path(codoc_dir: str | Path) -> Path:
@@ -844,7 +863,8 @@ def write_manifest(codoc_dir: str | Path, directives: list[Directive]) -> Path:
          # produces a manifest this parser still accepts.
          **({"asked": d.asked} if d.asked else {}),
          **({"session_id": d.session_id} if d.session_id else {}),
-         **({"base_sha": d.base_sha} if d.base_sha else {})}
+         **({"base_sha": d.base_sha} if d.base_sha else {}),
+         **({"origin": d.origin} if d.origin and d.origin != ORIGIN_HUMAN else {})}
         for d in directives
     ]})
     return dest
@@ -858,7 +878,8 @@ def _parse_manifest(data: dict) -> list[Directive]:
                       ts=int(d.get("ts") or 0),
                       asked=d.get("asked") or "",
                       session_id=d.get("session_id") or "",
-                      base_sha=d.get("base_sha") or "")
+                      base_sha=d.get("base_sha") or "",
+                      origin=d.get("origin") or ORIGIN_HUMAN)
             for d in data.get("directives", [])]
 
 

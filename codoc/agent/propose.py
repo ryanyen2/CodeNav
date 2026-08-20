@@ -49,6 +49,7 @@ def propose_plan(
     binds: list[str] | None = None,
     after_id: str = "",
     before_id: str = "",
+    builds: bool = True,
 ) -> str:
     """Create a plan proposal (``applied=False`` Event) and re-render the tree.
 
@@ -75,6 +76,13 @@ def propose_plan(
         order stated as neighbour IDENTITIES rather than an index, so a sibling added or
         retired before the proposal is accepted cannot change where the node lands. Both
         empty means no opinion about order, which appends.
+    builds:
+        Whether this proposal describes code that does not exist yet (the default —
+        this IS the plan-authoring path). It is what makes accepting queue the work:
+        a plan node is born ``realized=False`` and Loop B mints a realize directive
+        for it. Pass ``False`` for the other case — an ``amend`` that merely restates
+        code which already changed — where asking the agent to build it would mean
+        rewriting code to match a description derived from that very code.
 
     Returns
     -------
@@ -109,11 +117,19 @@ def propose_plan(
         rationale=rationale,
         after_id=after_id,
         before_id=before_id,
-        # A plan ADD_NODE is an explicit, not-yet-built placeholder: born
-        # unrealized (parity with mcp.tools.plan_add) so the lifecycle flips it
-        # realized only when code first binds, and so Loop B treats accepting it
-        # as a build request. A plan that already cites code stays realized.
-        realized=False if (op_kind is NodeOpKind.ADD_NODE and not parsed_binds) else None,
+        # A plan node is an explicit, not-yet-built request: born unrealized (parity
+        # with mcp.tools.plan_add / propose_amend's `builds`) so Loop B treats accepting
+        # it as a build request — and, for an ADD, so the lifecycle flips it realized
+        # only when code first binds. A plan that already cites code stays realized.
+        #
+        # AMEND belongs here too, and its absence was a hole: this whole entry point is
+        # documented as "author an agent PLAN proposal" and stamps `source=plan`, yet an
+        # amended plan was indistinguishable from a reflection, so accepting it queued
+        # nothing at all. The IDE's own button already said "Accept & build" for it (the
+        # `plan` tag), which made the two halves of the surface disagree about what the
+        # click would do.
+        realized=(False if (builds and op_kind in (NodeOpKind.ADD_NODE, NodeOpKind.AMEND)
+                            and not parsed_binds) else None),
     )
 
     with open_store(codoc_dir) as store:

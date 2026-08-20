@@ -34,7 +34,8 @@ codoc accept <e-id>         # CLI verdict path — mirrors the IDE Accept (then 
 codoc reject <e-id>         # CLI verdict path — mirrors the IDE Reject
 codoc history <feature>     # one feature's blame timeline (who/when/why, by id or title fragment)
 codoc reflect               # recovery-grade state reconciliation (used by the Stop hook)
-codoc propose <kind>        # author a plan proposal from the shell (humans/tests)
+codoc propose <kind>        # author a plan proposal from the shell (humans/tests); --reflects
+                            #   marks one that restates code that already changed
 codoc install-hooks         # (re)install the CC hooks + MCP registration
 codoc realize               # implement the realize queue NOW, foreground (SDK or CLI engine)
 codoc migrate               # one-time idempotent workspace heal (migrate tree.doc.json comments into the store + converge duplicate features + track config.json + install /codoc:* commands that shipped after this workspace was wired); also runs on daemon startup
@@ -289,22 +290,39 @@ strikes the words it proposes to remove; an AMEND shows old and new together. On
 a MOVE keeps a ghost, because the node itself stays put until the verdict lands and
 both ends have to be visible at once.
 
-**Three channels, one grammar** (`state/settlement.ts`; design doc
-`docs/plans/2026-08-19-003-settlement-three-channels.md`). Every unsettled span is
+**Three channels, one grammar** (`state/settlement.ts`; design docs
+`docs/plans/2026-08-19-003-settlement-three-channels.md` and
+`docs/plans/2026-08-20-001-plan-channel-and-one-palette.md`). Every unsettled span is
 a *claim* — a range, a channel, a stage — and each channel owns a different
 property of the text, so they stack on the same words without a legend:
 
 - **human → the INK.** Blue; pulsing while it is still yours to send, steady once
   handed off. Ink ONLY — your own removals are not drawn, because you are the one
-  who removed them; the other two channels do report theirs. Its base is what the
-  CODE last agreed with, never the last projection — after ⌘S the daemon echoes
-  your edit back, and a diff against that is empty exactly when the mark becomes
-  true.
-- **plan → the OPACITY.** Faded gray, solider once accepted. Materialized into the
-  doc, so a `proposed` node attr guards three paths that would otherwise author the
-  agent's words as yours: `featureUnits`, `renderTreeFromDoc`, `inlineRunsToText`.
+  who removed them; the other two channels do report theirs. It walks TWO hops, never
+  one (`humanBase → projected → … → live`), because a single diff to `live` swallows
+  every word a materialized plan put on the page and inks the agent's proposal as
+  yours.
+- **plan → the OPACITY.** Faded gray, solider once accepted. A `proposed` plan is
+  materialized into the doc, so a `proposed` node attr guards three paths that would
+  otherwise author the agent's words as yours: `featureUnits`, `renderTreeFromDoc`,
+  `inlineRunsToText`. An `accepted` plan comes from the queued DIRECTIVE
+  (`hold_detail.origin == "plan"`), because accepting deletes the proposal it would
+  otherwise be read from.
 - **code → the GROUND.** Green behind what the codebase added, red behind what it
   cut, at sentence granularity.
+
+Composition is the specification. Planned wording with a red ground under it means
+*this was agreed and the build did not keep it* — the thing the model exists to say.
+Blue ink on a green ground is **impossible** and is kept so by construction: the
+code claim yields wherever the author also claims. The full matrix is in
+`settlement.ts`'s header and pinned by `settlement.test.ts`.
+
+**The same palette on all four surfaces** — the prose, the margin marker, the tree
+rows and the minimap rail. Blue is always the author, gray is always a plan, green
+and red are always what the code did. The rows and the rail used to have ramps of
+their own in which "sent" was green (the code's colour, on a promise the code had not
+kept) and "proposed" was blue (the author's colour, on words nobody in the room had
+written); `railState` now delegates to `featureState` rather than paralleling it.
 
 Nothing forces a verdict: claims are DERIVED, never stored, so an unanswered
 proposal simply stops being offered. The margin marker (`state/node-status.ts`)

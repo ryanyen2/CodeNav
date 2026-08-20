@@ -66,11 +66,46 @@
        high-contrast block below pins legible floors. */
     --ce-editing: #5aa6e0;   /* captured — calmer than rgb(0,142,255)            */
     --ce-del:     #e0b46a;   /* pure deletion caret — softer amber                */
-    --ce-staged:  #6fae74;   /* staged & sent — sage, matches --dir-await          */
+    /* --ce-staged is NO LONGER A STATUS HUE. It said "staged & sent" in sage, which is
+       the same green the code channel uses for "the codebase added this" — so a queued
+       edit of the AUTHOR'S and a change the CODEBASE made wore one colour, and the
+       reader had no way to tell a promise from a fact. Every status surface now takes
+       its ink from the channel that owns the fact (see CHANNEL INKS below): the
+       author's edits are blue wherever they appear, an unanswered or accepted plan is
+       gray, and green/red is reserved for what the code actually did. What still reads
+       from this token is the small set of "this action produces code" affordances,
+       which are buttons, not claims about text. */
+    --ce-staged:  #6fae74;
     /* authorship ink: the human is the DEFAULT author → neutral, no hue. This frees
        blue for the code-ahead direction and resolves the ink-vs-direction collision (H5).
        Agent inks are PASTEL, never neon (P1/§E.2) — they only appear when an agent is
        actually present, so the resting doc stays near-monochrome and an arriving avatar lands. */
+    /* ── CHANNEL INKS — the whole status palette, and there is no other ───────
+       state/settlement.ts says every unsettled span belongs to one of three channels.
+       These are their colours, and they are used IDENTICALLY in the prose, in the
+       margin marker, on the tree rows and on the minimap rail — because those four
+       surfaces report the same three facts and used to report them in four palettes:
+       the prose in these, the marker in these, the tree rows in a blue/sage/blue ramp
+       of their own, and the rail in blue/amber/sage. A reader who learned one had
+       learned nothing about the others.
+
+         human → blue          your words; the code does not say them yet
+         plan  → gray          an agent's words, proposed or agreed; nothing is built
+         code  → green / red   what the codebase actually did
+
+       The STAGE rides a second axis per channel and never a second hue: outline vs
+       fill on a marker, opacity on plan text, add vs cut on the ground. */
+    --st-human: #5aa6e0;                    /* the author's ink — calm blue          */
+    --st-plan:  var(--vscode-foreground);   /* the doc's own ink; opacity carries it */
+    --st-code-add: #6f9e78;   /* muted garden green — the codebase added this        */
+    --st-code-del: #c07b7b;   /* dusty rose — the codebase no longer says this       */
+    /* The two plan stages, as the only thing that separates them. */
+    --st-plan-proposed: 0.42;
+    --st-plan-accepted: 0.66;
+    /* Grounds stay low: a diff background sits UNDER body text without competing. */
+    --st-ground: 16%;
+    --st-ground-hc: 34%;
+
     --ink-human:  var(--vscode-foreground);
     --ink-claude: #b9a3e8;   /* soft lilac */
     --ink-codex:  #8fc0a0;   /* soft mint  */
@@ -291,8 +326,12 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 }
 /* status language (U5): code-ahead review → review hue, doc-ahead implement → await hue,
    in-progress (applying / realizing) → structural accent. Same two hues as the U3 grammar. */
-.toolbar .status.code_drift .dot { background: var(--dir-review); opacity: 1; }
-.toolbar .status.awaiting_impl .dot { background: var(--dir-await); opacity: 1; }
+/* The two status dots are the two channels the daemon can be behind on, so they take
+   those channels' inks: the code moved ahead of the tree (green — the codebase did
+   something), or the tree is holding work the code has not caught up with (blue — a
+   claim somebody made). They were review-blue and sage, which is the two hues swapped. */
+.toolbar .status.code_drift .dot { background: var(--st-code-add); opacity: 1; }
+.toolbar .status.awaiting_impl .dot { background: var(--st-human); opacity: 1; }
 .toolbar .status.tree_dirty .dot { background: var(--accent); opacity: 1; }
 .toolbar .status.realizing .dot { background: var(--accent); opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
@@ -468,7 +507,7 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .row.retired .title { text-decoration: line-through; opacity: 0.55; }
 /* a proposed retire strikes the tree row's title in the SAME direction hue the doc
    pane strikes its heading with — one fact, one colour, whichever pane you are in. */
-.row.has-retire .title { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
+.row.has-retire .title { text-decoration: line-through; color: var(--st-plan); opacity: 0.62; }
 .row.unrealized .title { font-style: italic; opacity: 0.78; }
 
 /* The tree's echo of the ordinal chip a walkthrough stop wears on its doc heading
@@ -486,14 +525,14 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 
 .amend-inline {
     font-family: var(--vscode-editor-font-family); font-size: 11.5px;
-    color: var(--dir-review); margin-left: 12px; opacity: 0.88;
+    color: var(--st-plan); margin-left: 12px; opacity: calc(var(--st-plan-proposed) + 0.3);
     flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%;
 }
 /* A live row with a pending change carries the same signals a proposal ROW does: the
    one `proposed` badge plus the shape (strike for retire, → new title for amend). The
    background washes are gone — with three shades of the same tint in the tree, "this
    row is tinted" stopped meaning anything, and hover already answers "which row". */
-.row.has-amend:hover, .row.has-retire:hover { background: color-mix(in srgb, var(--dir-review) 9%, transparent); }
+.row.has-amend:hover, .row.has-retire:hover { background: color-mix(in srgb, var(--st-plan) 7%, transparent); }
 
 .badge { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-left: 10px; }
 /* Lifecycle badges (U3) now host an inline Phosphor glyph (P0/§C.1) instead of a bare dot:
@@ -516,18 +555,35 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
 .badge.working.write { background: var(--vscode-foreground); animation: pulse 1.4s ease-in-out infinite; }
 .badge.working.read { background: var(--fg-muted); }
 
-/* proposed — waiting on your verdict. The one state that blocks on the human, so it
-   takes the direction hue (code-ahead review blue) and a hollow diamond. */
-.badge.proposed { color: var(--dir-review); }
+/* proposed — an agent's words, waiting on your verdict. The PLAN channel, so it is the
+   plan's gray at the plan's proposed opacity, and a hollow diamond. It used to be
+   review-blue, which is the author's ink: the surface said "yours" about a sentence
+   nobody in the room had written. */
+.badge.proposed {
+    color: var(--st-plan);
+    opacity: calc(var(--st-plan-proposed) + 0.28);   /* legible at 6px; still faded */
+}
 
-/* sent — handed off, the agent will implement it. Filled diamond (§C.1 "fill = phase"),
-   staged hue, a slow breathe: queued, not running. */
+/* sent — your edit, handed off. The HUMAN channel: same blue as the ink on the words
+   themselves, filled (§C.1 "fill = phase"), a slow breathe meaning queued not running.
+   It was sage green, which now means "the codebase did this" — the opposite of a
+   promise the codebase has not kept yet. */
 .badge.sent {
-    color: color-mix(in srgb, var(--ce-staged) 90%, transparent);
+    color: color-mix(in srgb, var(--st-human) 90%, transparent);
     animation: breathe 2.6s ease-in-out infinite;
 }
-/* staged — recorded here only, not sent. The calmest member of the ramp. */
-.badge.staged { color: color-mix(in srgb, var(--ce-editing) 80%, transparent); }
+/* agreed — a plan you accepted, queued, nothing built. Same lifecycle position as
+   `sent`, different AUTHOR, and the colour is the thing reporting the author: the
+   plan's gray, filled because it has been handed off. */
+.badge.agreed {
+    color: var(--st-plan); opacity: var(--st-plan-accepted);
+    animation: breathe 2.6s ease-in-out infinite;
+}
+/* rewritten — the loop changed this to match code that already moved. The CODE
+   channel, and the row shows it now because the rail always did. */
+.badge.rewritten { color: var(--st-code-add); }
+/* staged — yours, recorded here only, not sent. Same channel, one step earlier. */
+.badge.staged { color: color-mix(in srgb, var(--st-human) 80%, transparent); }
 @keyframes breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.95; } }
 
 /* (the tree-pane refs pill was removed — code refs now live in the doc threads line, U4) */
@@ -538,12 +594,14 @@ body.focus-dimming .tree .row.hover-peek { opacity: 1; }
    page. Direction stays the ONE code-ahead hue; the background wash and the origin-tag
    chip are gone (they made every proposal shout before the reader knew what it was). */
 .row.proposal .pglyph { width: 14px; text-align: center; flex-shrink: 0; font: 12px var(--vscode-editor-font-family); }
-.row.proposal .pglyph { color: var(--dir-review); }
+/* A proposed node in the tree is the PLAN channel, drawn the way plan text is drawn in
+   the prose: the doc's own ink, faded. Nothing here is a second hue. */
+.row.proposal .pglyph { color: var(--st-plan); opacity: var(--st-plan-accepted); }
 .row.proposal .ghost-title {
     font-style: italic;
-    color: color-mix(in srgb, var(--dir-review) 62%, var(--fg-muted));
+    color: var(--st-plan); opacity: var(--st-plan-proposed);
 }
-.row.proposal:hover { background: color-mix(in srgb, var(--dir-review) 10%, transparent); }
+.row.proposal:hover { background: color-mix(in srgb, var(--st-plan) 7%, transparent); }
 
 /* ONE resolution surface per row, on hover — same rule for a proposal row and a live
    row carrying an amend/retire, so there is never a second always-lit pair elsewhere. */
@@ -952,12 +1010,15 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
 }
 /* the pending marker: a DIAMOND glyph (P0/§C.1 "sent"), slow breathe — the heading-pane
    twin of the tree row's .badge.sent. Means "queued for /codoc:sync", NOT "running now".
-   Hosts the inline icon, fills with the staged hue. */
+   Inked by WHOSE words are waiting, because a hold is reached two ways and they are not
+   the same thing to a reader: you committed an edit (your blue), or you accepted an
+   agent's plan (the plan's gray). One sage green for both said neither. */
 .ce-pending-dot {
     display: inline-flex; align-items: center;
-    color: color-mix(in srgb, var(--ce-staged) 90%, transparent);
     animation: breathe 2.6s ease-in-out infinite;
 }
+.ce-pending-dot.human { color: color-mix(in srgb, var(--st-human) 90%, transparent); }
+.ce-pending-dot.plan  { color: var(--st-plan); opacity: var(--st-plan-accepted); }
 /* withdraw ✕ — cancels the AI realization (keeps the text). Quiet until hover. */
 /* Withdraw sits with the verdicts on the "revealed on hover" tier: the diamond states
    the fact, the ✕ is the action, and an always-lit action beside every queued heading
@@ -975,25 +1036,14 @@ body.vscode-high-contrast .codoc-feature-heading.ce-code-touched {
     background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
 }
 
-/* Pending-intent rail + underline — the in-situ "what did I edit that's queued, and
-   did codoc recognise it" signal. The RAIL is a calm 2px accent tick in the left
-   margin of a held feature's description block: scanning down the tree, pending work
-   is visible at a glance with no panel (the ::before keeps it in the gutter, so no
-   reflow vs un-railed blocks). Its native `title` carries the plain-language gloss of
-   WHAT codoc understood. The UNDERLINE marks the bold "focus" runs codoc treats as the
-   actionable request, so a misread shows at the word. Both are STATIC — the appearance
-   itself is the recognition feedback (re-animating on every payload would jank) — and
-   ride the staged/green phase colour, so nothing here needs a motion gate. */
-.ce-pending-rail { position: relative; }
-.ce-pending-rail::before {
-    content: ''; position: absolute; left: -10px; top: 0.15em; bottom: 0.15em;
-    width: 2px; border-radius: 1px;
-    background: color-mix(in srgb, var(--ce-staged) 65%, transparent);
-}
-.ce-intent-underline {
-    text-decoration: underline dotted color-mix(in srgb, var(--ce-staged) 70%, transparent);
-    text-decoration-thickness: 1px; text-underline-offset: 3px;
-}
+/* The pending-intent rail and its dotted underline are GONE, along with the diff that
+   drew them (hold-decorations.ts). They marked what the author had changed in a held
+   feature — which is the human channel of the settlement model, computed a second time,
+   from a different baseline, in the code channel's green. Two answers to one question
+   that agreed only by luck, and one of them was painted in the other channel's colour.
+   With no baseline the underline fell back to the author's **bold** runs, so leaving a
+   COMMENT lit up emphasis nobody had touched. The blue ink on the words themselves says
+   it once, correctly. */
 /* (the tree-row twin .badge.staged now hosts a circle-dashed glyph — see the badges block) */
 /* The loop-rewrite margin rail and its in-prose diff are gone: that IS the settlement
    model's code channel now (`.ce-settle.code`, a green/red ground), so the only thing
@@ -1081,7 +1131,7 @@ body.vscode-high-contrast .ce-tick.active { background: var(--vscode-contrastBor
     position: relative; padding-left: 14px; user-select: none;
     /* dashed rail = "not in the code yet" (TEXTURE, never a new hue) — the same
        language as the unrealized node's hollow dashed ring. */
-    border-left: 1px dashed color-mix(in srgb, var(--dir-review) 40%, transparent);
+    border-left: 1px dashed color-mix(in srgb, var(--st-plan) 34%, transparent);
 }
 /* HC floor: the low-% dashed rail vanishes under high contrast — pin it, and drop the
    opacity dimming, so a proposed node is still distinguishable there. */
@@ -1110,11 +1160,11 @@ body.vscode-high-contrast .ce-ghost-desc { color: var(--vscode-foreground); opac
    are unreadable, and the reader still has to judge what they are losing — and a
    dashed removal rail runs down the block so the extent of the node is unmistakable.
    Scoped to the feature's own blocks: children are promoted by apply.py, not retired. */
-.codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--dir-review); opacity: 0.75; }
+.codoc-feature-heading.ce-retire-proposed { text-decoration: line-through; color: var(--st-plan); opacity: var(--st-plan-accepted); }
 .ce-retire-proposed-body {
     opacity: 0.5;
     padding-left: 10px;
-    border-left: 1px dashed color-mix(in srgb, var(--dir-review) 45%, transparent);
+    border-left: 1px dashed color-mix(in srgb, var(--st-plan) 38%, transparent);
 }
 /* best-effort: the bindings/consult line is a widget between the heading and the
    prose, so it can only be reached by adjacency — dim it too when it is there. */
@@ -1662,7 +1712,9 @@ body.vscode-high-contrast .ce-palette-row.active { outline: 1px solid var(--vsco
 .codoc-feature-heading.ce-saved-flash::after {
     content: '✓ saved';
     font: 11px var(--font-mono);
-    color: color-mix(in srgb, var(--ce-staged) 90%, transparent);
+    /* Your prose landed — the human channel's ink, not the code channel's green: no
+       code was written, and saying so in green would claim one was. */
+    color: color-mix(in srgb, var(--st-human) 90%, transparent);
     margin-left: 8px;
     vertical-align: 2px;
     animation: ce-saved-in 180ms ease-out;
@@ -1703,10 +1755,15 @@ body.vscode-using-screen-reader .codoc-feature-heading.ce-saved-flash::after {
    W2 — History (blame) stance: who last changed each feature, tinted by author
    ROLE (authorship hue, deliberately NOT the direction palette).
    ─────────────────────────────────────────────────────────────────────────── */
+/* Authorship maps onto the same three channels, because it is the same three parties
+   seen from a different question ("who wrote this" rather than "who is ahead"): the
+   person, an agent, and codoc's own loop. History stance draws inline blame BESIDE
+   settlement claims, so a fourth palette in that one view was the worst place to keep
+   one — an agent's words in green read as "the codebase added this". */
 :root {
-    --blame-human: var(--vscode-descriptionForeground, #8a8a8a);
-    --blame-agent: var(--ce-staged, #6fae74);
-    --blame-loop:  var(--vscode-charts-blue, #5aa6e0);
+    --blame-human: var(--st-human);
+    --blame-agent: var(--st-plan);
+    --blame-loop:  var(--st-code-add);
 }
 /* the resting "who · when" label after a heading */
 .ce-blame-who {
@@ -2051,19 +2108,27 @@ body.vscode-high-contrast .row.busy .title {
 }
 
 /* ── minimap states (ce-toc-rail): the rail IS the status strip ────────────────
-   Same encodings as the in-document decorations — review-blue for "awaiting your
-   verdict", amber for "codoc rewrote, review it", sage for "sent", the captured
-   blue for "yours, staged", hollow-dashed for planned (already the unrealized
-   tick), a pulse for live agent work, a shimmer for busy. The tick's title names
-   the state in words (RAIL_STATE_LABEL), so no reading rests on hue alone. */
-.ce-tick.st-proposed { background: var(--dir-review); }
-.ce-tick.st-rewritten { background: var(--ce-del); }
-.ce-tick.st-sent { background: var(--ce-staged); }
+   The SAME three channel inks the prose and the row badges use, which is what makes
+   the rail readable at all: a tick is six pixels with no text on it, so its colour has
+   to be a colour the reader has already learned somewhere they could read the words.
+   It used to have its own ramp — review-blue proposed, amber rewritten, sage sent,
+   captured-blue staged — that shared no hue-to-meaning with either of the other two
+   surfaces. Filled vs outlined carries the stage, exactly as on the margin marker. The
+   tick's title still names the state in words (RAIL_STATE_LABEL), so nothing rests on
+   hue alone. */
+.ce-tick.st-proposed { background: var(--st-plan); opacity: var(--st-plan-proposed); }
+.ce-tick.st-planned  { background: var(--st-plan); opacity: var(--st-plan-accepted); }
+/* an unasked loop rewrite: the codebase changed the prose — the code channel */
+.ce-tick.st-rewritten { background: var(--st-code-add); }
+.ce-tick.st-sent { background: var(--st-human); }
+.ce-tick.st-agreed { background: var(--st-plan); opacity: var(--st-plan-accepted); }
 .ce-tick.st-staged {
     background: transparent;
-    outline: 1px dashed color-mix(in srgb, var(--ce-editing) 80%, transparent);
+    outline: 1px dashed color-mix(in srgb, var(--st-human) 80%, transparent);
 }
-.ce-tick.st-working { background: var(--ce-editing); animation: ce-tick-pulse 1.4s ease-in-out infinite; }
+/* `working` is not a claim — it is an agent being somewhere right now. Neutral plus
+   MOTION, the same way the row badge says it, so it never spends a channel's hue. */
+.ce-tick.st-working { background: var(--vscode-foreground); animation: ce-tick-pulse 1.4s ease-in-out infinite; }
 .ce-tick.st-busy {
     background: linear-gradient(90deg,
         color-mix(in srgb, var(--vscode-foreground) 25%, transparent),
@@ -2691,22 +2756,9 @@ body.vscode-high-contrast .ce-cmt-anchor-mark { border-color: var(--vscode-contr
    whose meanings were not guessable and which vanished when stacked. No per-channel
    badge in the prose either — the margin marker (node-status.ts) is where a node's
    state is reported, and reporting it twice teaches the reader to trust neither. */
-:root {
-    --st-human: var(--ce-editing);              /* the author's ink — calm blue      */
-    --st-plan:  var(--vscode-foreground);       /* plan text is the doc's own ink,    */
-                                                /*   distinguished by opacity alone   */
-    --st-code-add: #6f9e78;   /* muted garden green — the codebase added this        */
-    --st-code-del: #c07b7b;   /* dusty rose — the codebase no longer says this        */
-    /* Opacity is the plan channel's only axis, so its two stages are the two values
-       here and nothing else changes between them: proposed is barely there, accepted
-       has been agreed to and reads closer to ordinary prose — while still not being it. */
-    --st-plan-proposed: 0.42;
-    --st-plan-accepted: 0.66;
-    /* Grounds stay low: a diff background has to sit UNDER body text without
-       competing with it, and these are read across a whole paragraph, not a chip. */
-    --st-ground: 16%;
-    --st-ground-hc: 34%;
-}
+/* The tokens live in the design-system block at the top of this file, beside the rest
+   of the palette, because the tree rows and the minimap rail read them too — the three
+   channels are the status vocabulary of every surface here, not of the prose alone. */
 
 /* ── human: the ink ──────────────────────────────────────────────────────────── */
 .ce-settle.human { color: var(--st-human); }
@@ -2763,6 +2815,7 @@ body.vscode-using-screen-reader .ce-settle.human.open { animation: none; }
     text-decoration-color: color-mix(in srgb, var(--st-code-del) 70%, transparent);
 }
 .ce-settle-ghost.plan { opacity: calc(var(--st-plan-proposed) * 0.9); }
+.ce-settle-ghost.plan.accepted { opacity: calc(var(--st-plan-accepted) * 0.9); }
 
 /* High contrast: hues carry no meaning that is not also carried by ink weight or the
    strike, but the grounds must still be visible, so they are pinned up rather than

@@ -559,3 +559,132 @@ def test_propose_add_lands_between_the_siblings_it_names(codoc_dir):
     _accept_all(codoc_dir)
 
     assert _order(codoc_dir) == ["Alpha", "Beta", "Gamma"]
+
+
+# ─── the plan-first loop: an amendment can be a BUILD request ─────────────────
+
+def test_plan_amend_accept_queues_the_work(codoc_dir):
+    """THE plan-first hole: `/codoc:plan` defaults to amending an existing feature
+    ("most tasks change what a feature does"), and every accepted amend used to be
+    read as the tree catching up to code that already changed. So accepting a plan
+    made of amendments queued NOTHING — no directive, no realize.md, no
+    awaiting_impl — and the session had nothing to resume from. `builds=True` says
+    which kind of amendment this is."""
+    from codoc.loop import inbox
+    from codoc.loop.edits import ORIGIN_PLAN, read_manifest
+    from codoc.loop.loop_b import realize_path
+
+    f = _seed(codoc_dir, title="Statements", description="Reads CSV rows.")
+    res = tools.propose_amend(codoc_dir, feature_id=f.id, builds=True,
+                              description="Reads CSV rows and normalizes amounts to cents.",
+                              rationale="plan: normalize to cents")
+    eid = res["event_id"]
+
+    # The IDE must be able to say what accepting will DO, before it is clicked.
+    sidecar = json.loads(
+        (__import__("pathlib").Path(codoc_dir) / "tree.bindings.json").read_text())
+    assert sidecar["proposals"]["by_feature"][f.id]["writes_code"] == "build"
+
+    inbox.append_verdict(codoc_dir, eid, accept=True)
+    out = tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=5, poll_interval=0.01)
+    assert [a["feature_id"] for a in out["accepted"]] == [f.id]
+    assert out["deferred"] == []
+
+    queued = [d for d in read_manifest(codoc_dir) if d.feature_id == f.id]
+    assert len(queued) == 1
+    d = queued[0]
+    assert d.kind == "amend"
+    # Accepting IS the hand-off gesture — a plan directive must never sit in the
+    # held-draft state waiting for a ⌘S that is not coming.
+    assert d.handed_off is True
+    assert realize_path(codoc_dir).exists()
+    # …and the queue records WHOSE words are waiting, so the IDE can draw the
+    # accepted plan in the plan channel instead of inking it as the reader's own.
+    assert d.origin == ORIGIN_PLAN
+    # The wording it replaces is kept, because that is what the plan's gray is
+    # measured against once the proposal row is gone.
+    assert d.baseline == "Reads CSV rows."
+
+    # …and the IDE reads all of that from the sidecar, which is the only place it can:
+    # the proposal row the "an agent wrote this" fact lived on was deleted by the accept.
+    sidecar = json.loads(
+        (__import__("pathlib").Path(codoc_dir) / "tree.bindings.json").read_text())
+    hold = sidecar["hold_detail"][f.id]
+    assert hold["origin"] == "plan"
+    assert hold["baseline"] == "Reads CSV rows."
+
+
+def test_reflection_amend_still_asks_for_no_code(codoc_dir):
+    """The other half of the distinction, and the reason it needs a flag: a plain
+    amend restates code that already changed. Minting a directive for it would tell
+    the agent to rewrite code to match a description derived from that very code."""
+    from codoc.loop import inbox
+    from codoc.loop.edits import ORIGIN_HUMAN, read_manifest
+
+    f = _seed(codoc_dir, title="Statements", description="Reads CSV rows.")
+    # Big enough to be reviewed rather than auto-applied — the triage is about SIZE,
+    # which is orthogonal to the plan/reflection question this test is about.
+    eid = tools.propose_amend(
+        codoc_dir, feature_id=f.id,
+        description="Reads CSV and TSV rows, skipping the header and coercing every "
+                    "amount column into a signed integer number of cents.")["event_id"]
+    sidecar = json.loads(
+        (__import__("pathlib").Path(codoc_dir) / "tree.bindings.json").read_text())
+    assert sidecar["proposals"]["by_feature"][f.id]["writes_code"] is None
+
+    inbox.append_verdict(codoc_dir, eid, accept=True)
+    tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=5, poll_interval=0.01)
+    assert read_manifest(codoc_dir) == []
+    # (and nothing claims a plan origin, so no gray lands on the reader's document)
+    assert all(d.origin == ORIGIN_HUMAN for d in read_manifest(codoc_dir))
+
+
+def test_await_reports_a_deferred_accept_instead_of_waiting_out_the_timeout(codoc_dir):
+    """A daemon running --dry / --no-realize leaves a code-implying accept in the
+    inbox with its proposal still in the store — indistinguishable, to the old poll
+    loop, from a user who has not clicked. It waited out the full 24h timeout on a
+    plan the user had already accepted. Now it says so."""
+    from pathlib import Path
+
+    from codoc.loop import inbox
+    from codoc.loop.loop_b import run_loop_b
+
+    from codoc.loop.watch import write_pidfile
+
+    eid = tools.plan_add(codoc_dir, title="Dark mode")["event_id"]
+    inbox.append_verdict(codoc_dir, eid, accept=True)
+    # The daemon's suppressed pass: applies nothing code-implying, leaves the verdict.
+    run_loop_b(str(Path(codoc_dir).parent), codoc_dir, realize=False)
+    assert [v.event_id for v in inbox.read_verdicts(codoc_dir)] == [eid]
+    # …and a daemon owns the repo, so the daemonless fallback drain (which forces
+    # realize=True and would undo the deferral) correctly stands down. This is the
+    # only configuration in which the deadlock is reachable, and it is a real one.
+    write_pidfile(codoc_dir)
+
+    out = tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=5, poll_interval=0.01)
+
+    assert out["deferred"] == [eid]
+    assert out["pending"] == [] and out["timed_out"] is False
+    assert "--no-realize" in out["note"]
+
+
+def test_accepted_plan_add_reports_its_origin_too(codoc_dir):
+    """An accepted placeholder is the same fact as an accepted amendment — words the
+    reader agreed to that no code stands behind — and the IDE needs the same answer for
+    it. Its baseline is empty because a new node replaced nothing, which is a real
+    value here and not a missing one: the whole node is the plan's."""
+    from codoc.loop import inbox
+    from codoc.loop.edits import ORIGIN_PLAN
+
+    eid = tools.plan_add(codoc_dir, title="Backoff",
+                         description="It waits longer each time.")["event_id"]
+    inbox.append_verdict(codoc_dir, eid, accept=True)
+    out = tools.await_verdicts(codoc_dir, event_ids=[eid], timeout=5, poll_interval=0.01)
+    fid = out["accepted"][0]["feature_id"]
+
+    sidecar = json.loads(
+        (__import__("pathlib").Path(codoc_dir) / "tree.bindings.json").read_text())
+    hold = sidecar["hold_detail"][fid]
+    assert hold["kind"] == "add_node"
+    assert hold["origin"] == ORIGIN_PLAN
+    assert hold["baseline"] == ""

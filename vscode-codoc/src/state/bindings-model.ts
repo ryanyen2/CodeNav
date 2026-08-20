@@ -104,6 +104,16 @@ export interface HoldDetail {
     /** The feature's description BEFORE this edit (AMEND only) — the IDE diffs it against
      *  the live text to underline what the author changed. Empty for ADD/RETIRE/steer. */
     baseline?: string;
+    /** WHOSE words the queue is holding (`codoc/loop/edits.Directive.origin`):
+     *  `"human"` (the default, and what an older daemon's silence means) = the author
+     *  typed this and the code has not caught up; `"plan"` = the author ACCEPTED an
+     *  agent's plan and the code has not caught up.
+     *
+     *  Same lifecycle position, two different authorships, and the surface must not
+     *  draw them alike — one is the reader's own ink, the other is the plan's opacity.
+     *  It is also the only thing left that can tell them apart: the proposal row that
+     *  would have said "an agent wrote this" is deleted by the accept. */
+    origin?: 'human' | 'plan';
 }
 
 /** One See-Also neighbour (v5, `feature_see_also` slice): a coupled feature ranked by

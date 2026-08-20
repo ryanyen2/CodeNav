@@ -44,6 +44,39 @@
  * on the same words without a legend: planned text that the build then altered is gray
  * (still the plan's words) with a red ground under the part that did not survive.
  *
+ * ## What may stack, and what may never
+ *
+ * Composition is the design, so the combinations are the specification. Read a span as
+ * its INK (who wrote it) over its GROUND (what the codebase did with it):
+ *
+ *   ground \ ink │  none            blue (human)          gray (plan)
+ *   ─────────────┼──────────────────────────────────────────────────────────────
+ *   none         │  settled prose   you wrote it,          planned; nothing is
+ *                │                  not built yet          built yet
+ *   green (add)  │  the codebase    ✗ IMPOSSIBLE           planned, and the build
+ *                │  added this                             put these words in
+ *   red (cut)    │  the codebase    ✗ IMPOSSIBLE           planned, and the build
+ *                │  dropped this                           did NOT keep it
+ *
+ * The bottom-right cell is the one the whole model exists for: *this is what we agreed
+ * to, and here is where what got built came out different*. Nothing is written to
+ * produce it — it falls out of two channels drawing two properties of the same words.
+ *
+ * The two ✗ cells are contradictions, not merely unusual. "You wrote this" and "the
+ * codebase wrote this" cannot both be true of one sentence, and a reader looking at
+ * blue-on-green has no way to tell which half is lying. Three rules keep them empty:
+ *
+ *   1. Human and code claims are computed against the same text (`projected`) and the
+ *      code claim yields wherever the human also claims. The author is the one party
+ *      who can be asked, so they win — the same rule `model.event.outranks` states.
+ *   2. A code claim is ALL OR NOTHING through the author's later typing, so editing
+ *      inside a code-surfaced sentence voids it rather than splitting it.
+ *   3. Human claims are the INSERTED runs of a diff, and inserted text is by
+ *      construction absent from the `same` regions any other channel maps through.
+ *
+ * Human and plan cannot collide either, for (3)'s reason in both directions: the plan
+ * lives strictly between the two texts the human channel is measured across.
+ *
  * ## Where the coordinates come from
  *
  * The three channels do NOT share a baseline, and pretending they did is what forced
@@ -184,8 +217,32 @@ export interface FeatureLayers {
     /** The loop rewrote this description on its own authority; `prev` is what it
      *  displaced. The rewrite is ALREADY in `projected`. */
     code?: { layerId: string; prev: FeatureText };
-    /** A materialized proposal's own runs, per block, in `planned` coordinates. */
-    plan?: { layerId: string; stage: 'proposed' | 'accepted'; runs: BlockRuns[] };
+    /** An UNANSWERED proposal's own runs, per block, in `planned` coordinates — both
+     *  the displaced wording and the proposed wording are on screen, because the
+     *  tracked-change engine materialized the proposal into the document. */
+    plan?: { layerId: string; stage: 'proposed'; runs: BlockRuns[] };
+    /**
+     * A plan the reader ACCEPTED, whose code has not landed yet. `prev` is the wording
+     * it replaced.
+     *
+     * It is a separate field from `plan` because it has a different GEOMETRY, and that
+     * is not a detail: accepting APPLIES the proposal, so the plan's words are in
+     * `projected` and the words they displaced are gone from the page. A materialized
+     * proposal has both sides present; this has one. Reusing `plan.runs` for it would
+     * draw the displaced sentence a second time, over text that is not there.
+     *
+     * Without this the accepted stage was unreachable. Every plan claim came from the
+     * pending-proposal list, and accepting DELETES that row — so the plan's wording
+     * silently became ordinary prose at the exact moment it started being a promise the
+     * codebase had not kept yet, and the one composition the reader most needs after an
+     * agent works (planned wording, with the build's own green and red under the parts
+     * that came out differently) could never be drawn at all.
+     *
+     * Source: the queued realize directive's baseline, with `origin: "plan"` saying the
+     * queue is holding an agent's accepted plan rather than the author's own typing
+     * (`hold_detail`, `codoc/loop/edits.Directive.origin`).
+     */
+    accepted?: { layerId: string; prev: FeatureText };
     /** True once the author handed their edits off (⌘S) — flips `open` to `committed`
      *  without recomputing anything. */
     committed?: boolean;
@@ -362,6 +419,9 @@ interface BlockStages {
     planned: string;
     /** The last wording the code agreed with — see `FeatureLayers.humanBase`. */
     humanBase: string;
+    /** What an ACCEPTED plan replaced — see `FeatureLayers.accepted`. Like `humanBase`
+     *  it is a sibling of `projected`, not an ancestor: the plan is already applied. */
+    acceptedPrev: string;
     live: string;
 }
 
@@ -388,19 +448,23 @@ function blockStages(f: FeatureLayers): BlockStages[] {
     const projectedToPrev = alignParas(prev.paras, f.projected.paras);
     // Paired to LIVE directly, not through the chain: the human base is a sibling of
     // `projected`, not an ancestor of it — it is what the code last agreed with, which
-    // may be older than anything the daemon has since projected.
+    // may be older than anything the daemon has since projected. The accepted plan's
+    // displaced wording is a sibling in the same sense, and pairs the same way.
     const toHumanBase = alignParas(humanBase.paras, f.live.paras);
+    const acceptedPrev = f.accepted?.prev ?? f.projected;
+    const toAccepted = alignParas(acceptedPrev.paras, f.live.paras);
 
     const out: BlockStages[] = [{
         block: { kind: 'title' },
         prev: prev.title, projected: f.projected.title, planned: planned.title,
-        humanBase: humanBase.title, live: f.live.title,
+        humanBase: humanBase.title, acceptedPrev: acceptedPrev.title, live: f.live.title,
     }];
     for (let i = 0; i < f.live.paras.length; i++) {
         const p = toPlanned[i];
         const j = p === null ? null : plannedToProjected[p] ?? null;
         const k = j === null ? null : projectedToPrev[j] ?? null;
         const h = toHumanBase[i];
+        const a = toAccepted[i];
         out.push({
             block: paraRef(i),
             live: f.live.paras[i],
@@ -408,6 +472,7 @@ function blockStages(f: FeatureLayers): BlockStages[] {
             projected: j === null ? '' : f.projected.paras[j] ?? '',
             prev: k === null ? '' : prev.paras[k] ?? '',
             humanBase: h === null ? '' : humanBase.paras[h] ?? '',
+            acceptedPrev: a === null ? '' : acceptedPrev.paras[a] ?? '',
         });
     }
     return out;
@@ -455,16 +520,38 @@ export function claimsFor(f: FeatureLayers): Claim[] {
         const humanRuns = diffFor(st.block, 'human')(st.planned, st.live);
         const toLive = forwardMap(humanRuns);
 
+        // The author's ALREADY-APPLIED edit, in live coordinates — hop (a) of the human
+        // channel (see below). Computed here, ahead of the code channel, because the
+        // code channel has to know about it: both are diffs INTO `projected`, so they
+        // can name the same words, and blue ink over a green ground is a cell of the
+        // grammar that must stay empty. See `humanAdds`.
+        const humanApplied = f.humanBase && st.humanBase !== st.projected
+            ? spansOf(diffFor(st.block, 'human')(st.humanBase, st.projected))
+            : [];
+
         // ── code: computed against `projected`, carried forward into live ────
         if (f.code && st.prev !== st.projected) {
             const point = (off: number): number =>
                 toLive(forwardMap(planRuns)(off, BEFORE), BEFORE);
+            // The author's own added spans, in the SAME (projected) coordinates the code
+            // diff runs in, so the overlap test below is a plain interval test.
+            const humanAdds = humanApplied.filter(s => s.edit === 'add');
             for (const s of spansOf(diffFor(st.block, 'code')(st.prev, st.projected))) {
                 if (s.edit === 'del') {
                     const at = point(s.start);
                     out.push({ channel: 'code', stage: 'landed', edit: 'del', block: st.block, start: at, end: at, removed: s.removed, layerId: f.code.layerId });
                     continue;
                 }
+                // A sentence the AUTHOR also claims is not a sentence the code report is
+                // about. This is the same all-or-nothing rule as below, applied one hop
+                // earlier: `humanBase → projected` and `prev → projected` are two diffs
+                // into the same text, so a description the loop rewrote and the author
+                // then edited can have both channels naming the same words. Drawn, that
+                // is blue ink on a green ground — "you wrote this" and "the codebase
+                // wrote this" about one sentence, which cannot both be true and gives the
+                // reader no way to tell which half is lying. The author wins: they are
+                // the one party who can be asked.
+                if (humanAdds.some(h => h.start < s.end && s.start < h.end)) continue;
                 // ALL OR NOTHING, and deliberately so. The code channel reports what
                 // the codebase says, at the granularity of a sentence. The moment the
                 // author edits inside that sentence it is no longer the sentence the
@@ -476,6 +563,31 @@ export function claimsFor(f: FeatureLayers): Claim[] {
                 if (covered(hops) !== s.end - s.start) continue;
                 for (const h of hops) {
                     out.push({ channel: 'code', stage: 'landed', edit: 'add', block: st.block, start: h.start, end: h.end, layerId: f.code.layerId });
+                }
+            }
+        }
+
+        // ── plan/accepted: agreed wording the code has not caught up with ────
+        //
+        // Same geometry as the code channel — the words are in `projected` and what
+        // they displaced is gone — and the OPPOSITE drop rule, which is the plan
+        // channel's rule throughout: SPLIT. A fragment of the plan the author has since
+        // edited around is still the plan's, and voiding the whole span would drop the
+        // gray at the moment it matters most, when the reader is comparing what was
+        // agreed against what the build produced.
+        if (f.accepted && st.acceptedPrev !== st.projected) {
+            const point = (off: number): number =>
+                toLive(forwardMap(planRuns)(off, BEFORE), BEFORE);
+            for (const s of spansOf(diffFor(st.block, 'plan')(st.acceptedPrev, st.projected))) {
+                if (s.edit === 'del') {
+                    const at = point(s.start);
+                    out.push({ channel: 'plan', stage: 'accepted', edit: 'del', block: st.block, start: at, end: at, removed: s.removed, layerId: f.accepted.layerId });
+                    continue;
+                }
+                for (const h of mapSpan(planRuns, s.start, s.end)
+                    .flatMap(x => mapSpan(humanRuns, x.start, x.end))) {
+                    if (h.start >= h.end) continue;
+                    out.push({ channel: 'plan', stage: 'accepted', edit: 'add', block: st.block, start: h.start, end: h.end, layerId: f.accepted.layerId });
                 }
             }
         }
@@ -495,9 +607,46 @@ export function claimsFor(f: FeatureLayers): Claim[] {
             }
         }
 
-        // ── human: everything between what the code agreed with and what is on screen ─
-        if (st.humanBase !== st.live) {
-            for (const s of spansOf(diffFor(st.block, 'human')(st.humanBase, st.live))) {
+        // ── human: the author's own words, in TWO hops, never one ────────────
+        //
+        // The single diff `humanBase → live` is the obvious form and it is wrong the
+        // moment a plan is on screen: the plan's sentences are in `live` and not in
+        // `humanBase`, so they come back as text the author had just typed — the
+        // agent's proposal inked blue and offered for ⌘S. The chain the text actually
+        // walked has a stage in the middle, and the honest decomposition follows it:
+        //
+        //   humanBase ──(a) applied edit──▶ projected ──plan──▶ planned ──(b) typing──▶ live
+        //
+        // (a) is what the author already handed over — the daemon applied it, so it is
+        // in `projected` — carried forward into live coordinates. (b) is what is on
+        // screen and not in the store yet. Neither can pick up the plan's words,
+        // because the plan lives strictly between them.
+        //
+        // With no hold baseline `humanBase === planned`, (a) is empty and (b) is the
+        // whole of it — the ordinary case is unchanged.
+        if (humanApplied.length) {
+            const point = (off: number): number =>
+                toLive(forwardMap(planRuns)(off, BEFORE), BEFORE);
+            for (const s of humanApplied) {
+                if (s.edit === 'del') {
+                    const at = point(s.start);
+                    out.push({ channel: 'human', stage: 'committed', edit: 'del', block: st.block, start: at, end: at, removed: s.removed, layerId: LOCAL_EDIT_LAYER });
+                    continue;
+                }
+                // SPLIT, like the plan channel and unlike the code channel: these are
+                // the author's OWN words, so a fragment of them that survived a later
+                // edit is still theirs. Voiding the span the way a code claim is voided
+                // would drop the author's ink the moment a proposal touched the same
+                // sentence — the one span they most need to see is still outstanding.
+                for (const h of mapSpan(planRuns, s.start, s.end)
+                    .flatMap(x => mapSpan(humanRuns, x.start, x.end))) {
+                    if (h.start >= h.end) continue;
+                    out.push({ channel: 'human', stage: 'committed', edit: 'add', block: st.block, start: h.start, end: h.end, layerId: LOCAL_EDIT_LAYER });
+                }
+            }
+        }
+        if (st.planned !== st.live) {
+            for (const s of spansOf(humanRuns)) {
                 out.push({ channel: 'human', stage: humanStage, edit: s.edit, block: st.block, start: s.start, end: s.end, removed: s.removed, layerId: LOCAL_EDIT_LAYER });
             }
         }
@@ -515,8 +664,16 @@ export function claimsFor(f: FeatureLayers): Claim[] {
         ? paraRef(f.live.paras.length - 1) : { kind: 'title' };
     const lastLen = lastLive.kind === 'para'
         ? (f.live.paras[lastLive.index] ?? '').length : f.live.title.length;
+    // The same two hops the in-block human claims walk (see above): a paragraph the
+    // author's applied edit removed is measured against `projected` and anchored
+    // through the plan, and one their unsent typing removed is measured against
+    // `planned`. Measuring both against `live` in one step would report every
+    // paragraph a plan proposes to ADD as one the author had deleted.
     const dropped: Orphan[] = [
-        ...orphansBetween((f.humanBase ?? planned).paras, f.live.paras, i => i, 'human', LOCAL_EDIT_LAYER, humanStage),
+        ...(f.humanBase
+            ? orphansBetween(f.humanBase.paras, f.projected.paras, projectedToLive(f), 'human', LOCAL_EDIT_LAYER, 'committed')
+            : []),
+        ...orphansBetween(planned.paras, f.live.paras, i => i, 'human', LOCAL_EDIT_LAYER, humanStage),
         ...(f.code ? orphansBetween(f.code.prev.paras, f.projected.paras, projectedToLive(f), 'code', f.code.layerId, 'landed') : []),
     ];
     for (const o of dropped) {

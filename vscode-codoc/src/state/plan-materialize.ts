@@ -101,8 +101,7 @@ function plannedHeading(p: PlanNode, level: number): PMNode {
  *  never has to fall back to position. */
 function plannedParas(p: PlanNode): PMNode[] {
     const m = mark(MARK_INSERTION, p.changeId, p.authorId);
-    const paras = p.description ? p.description.split(/\n{2,}/) : [];
-    return paras.map(t => paragraphNode(markedAll(t, m), p.changeId));
+    return descParas(p.description).map(t => paragraphNode(markedAll(t, m), p.changeId));
 }
 
 /**
@@ -229,6 +228,25 @@ function parentLevel(blocks: readonly PMNode[], parentId: string | null): number
 }
 
 /**
+ * Split a stored description into the paragraph blocks the editor holds it as.
+ *
+ * The ONE place that answers "where do this description's blocks divide", so a plan's
+ * runs and the materialized document can never disagree about it. `plannedParas` above
+ * splits the same way, and `settlement-stages.textOf` does too.
+ *
+ * It takes RAW stored text, deliberately: a paragraph break is `\n\n` in the store and
+ * the display-space projection collapses EVERY newline to one atom char, so splitting
+ * after that projection can never find a break. That is not hypothetical — it is the
+ * bug this function exists to make unrepeatable: a two-paragraph amend produced ONE
+ * planned block against the editor's two, every later paragraph came back unpaired,
+ * and the whole of it was reported as text the author had just typed. Split first,
+ * project each piece second.
+ */
+export function descParas(description: string): string[] {
+    return description ? description.split(/\n{2,}/) : [];
+}
+
+/**
  * The per-block diff runs a materialized plan contributes, for `settlement.claimsFor`.
  *
  * A planned ADD is wholly new, so every block is one insertion run — which is what
@@ -236,33 +254,36 @@ function parentLevel(blocks: readonly PMNode[], parentId: string | null): number
  * AMEND is the real diff of its two texts, at the granularity each block is judged in
  * (a title by word, prose by sentence — a word diff of a rewritten claim shreds both
  * versions into fragments the reader has to reassemble before they can agree).
+ *
+ * Descriptions arrive ALREADY SPLIT into paragraphs and already in display space (see
+ * `descParas`); this function never splits, because the coordinate space it is handed
+ * cannot be split correctly.
  */
 export function planRuns(
     kind: 'add' | 'amend' | 'retire',
-    titleOld: string, titleNew: string, descOld: string, descNew: string,
+    titleOld: string, titleNew: string,
+    descOld: readonly string[], descNew: readonly string[],
 ): BlockRuns[] {
     const whole = (s: string, t: DiffRun['t']): DiffRun[] => (s ? [{ t, s }] : []);
-    const paras = (s: string): string[] => (s ? s.split(/\n{2,}/) : []);
 
     if (kind === 'add') {
         return [
             { block: { kind: 'title' }, runs: whole(titleNew, 'ins') },
-            ...paras(descNew).map((t, i) => ({ block: { kind: 'para' as const, index: i }, runs: whole(t, 'ins') })),
+            ...descNew.map((t, i) => ({ block: { kind: 'para' as const, index: i }, runs: whole(t, 'ins') })),
         ];
     }
     if (kind === 'retire') {
         return [
             { block: { kind: 'title' }, runs: whole(titleOld, 'del') },
-            ...paras(descOld).map((t, i) => ({ block: { kind: 'para' as const, index: i }, runs: whole(t, 'del') })),
+            ...descOld.map((t, i) => ({ block: { kind: 'para' as const, index: i }, runs: whole(t, 'del') })),
         ];
     }
-    const oldParas = paras(descOld), newParas = paras(descNew);
-    const n = Math.max(oldParas.length, newParas.length);
+    const n = Math.max(descOld.length, descNew.length);
     return [
         { block: { kind: 'title' }, runs: wordDiff(titleOld, titleNew) },
         ...Array.from({ length: n }, (_u, i) => ({
             block: { kind: 'para' as const, index: i },
-            runs: sentenceDiff(oldParas[i] ?? '', newParas[i] ?? ''),
+            runs: sentenceDiff(descOld[i] ?? '', descNew[i] ?? ''),
         })),
     ];
 }

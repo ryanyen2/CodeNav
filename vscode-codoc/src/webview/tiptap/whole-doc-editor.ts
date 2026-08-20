@@ -806,6 +806,9 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             planLayers: new Map(Object.entries(next)
                 .filter(([, st]) => !!st.plan)
                 .map(([key, st]) => [key, st.plan!.layerId])),
+            agreedLayers: new Map(Object.entries(next)
+                .filter(([, st]) => !!st.accepted)
+                .map(([key, st]) => [key, st.accepted!.layerId])),
             present: new Set(featureBlocks(editor.getJSON() as unknown as PMNode).keys()),
         };
         const landed = fulfilments(
@@ -1148,6 +1151,8 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             proposalOp: hasProposal ? 'amend' : null,
             autoEdit: !!currentAutoEdits[fid],
             sent: currentHeld.has(fid),
+            // Same fact the row badge and the prose read: whose words the hold is for.
+            holdOrigin: currentHoldDetail[fid]?.origin,
             staged: currentDrafts.has(fid),
             realized: attrs.realized === false ? false : true,
             retired: !!attrs.retired,

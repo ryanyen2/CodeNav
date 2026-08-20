@@ -11,21 +11,52 @@
  * and what to do about it.
  *
  * ORDER (first match wins) and why:
- *   working  — the agent is in this feature's code right now. The most volatile fact
- *              on screen and the one that explains why anything else is changing.
- *   proposed — a pending agent change is waiting on your verdict. The only state that
- *              blocks on the human, so it outranks everything downstream of it.
- *   sent     — you handed an edit off; the agent will implement it. Nothing to do.
- *   staged   — you edited but have not sent it. Something to do (⌘S), but yours.
- *   planned  — accepted intent with no code behind it yet. A standing condition, not
- *              an event: carried by the italic/dimmed title, no glyph at all.
- *   settled  — nothing to say. Draw nothing.
+ *   working   — the agent is in this feature's code right now. The most volatile fact
+ *               on screen and the one that explains why anything else is changing.
+ *   proposed  — a pending agent change is waiting on your verdict. The only state that
+ *               blocks on the human, so it outranks everything downstream of it.
+ *   rewritten — the loop rewrote this on its own authority; Keep / Restore is owed.
+ *   agreed    — you accepted an agent's PLAN and no code is behind it yet.
+ *   sent      — you handed YOUR edit off; the agent will implement it. Nothing to do.
+ *   staged    — you edited but have not sent it. Something to do (⌘S), but yours.
+ *   planned   — an unrealized placeholder nothing is queued for. A standing condition,
+ *               not an event: carried by the italic/dimmed title, no glyph at all.
+ *   settled   — nothing to say. Draw nothing.
+ *
+ * ## The badge is a CHANNEL, and the channel decides the colour
+ *
+ * `state/settlement.ts` sorts every unsettled thing into three channels — the author's
+ * (blue ink), a plan's (gray), the codebase's (green/red ground) — and this row reports
+ * the same facts in the margin of a different pane. It used to report them in a palette
+ * of its own: proposed in review-blue (the author's colour), sent in sage (the
+ * codebase's), staged in the author's blue. Two of those three named the wrong party.
+ *
+ * So each state here belongs to a channel and takes that channel's ink, and the two
+ * states that were one — `sent` and `agreed` — are split because they differ in exactly
+ * the thing the colour is reporting: whose words the queue is holding. Same lifecycle
+ * position; not the same fact.
  *
  * Pure and unit-tested (feature-state.test.ts); the DOM lives in doc-view.ts.
  */
 import type { IconName } from '../webview/icons';
 
-export type FeatureState = 'working' | 'proposed' | 'sent' | 'staged' | 'planned' | 'settled';
+export type FeatureState =
+    | 'working' | 'proposed' | 'rewritten' | 'agreed' | 'sent' | 'staged'
+    | 'planned' | 'settled';
+
+/** Which settlement channel a state belongs to — the ONE thing that decides its ink.
+ *  `null` = not a claim at all (an agent working right now is a fact about the present,
+ *  not about who is ahead), so it spends no channel's hue and says itself in motion. */
+export const STATE_CHANNEL: Record<FeatureState, 'human' | 'plan' | 'code' | null> = {
+    working: null,
+    proposed: 'plan',
+    rewritten: 'code',
+    agreed: 'plan',
+    sent: 'human',
+    staged: 'human',
+    planned: 'plan',
+    settled: null,
+};
 
 export interface FeatureSignals {
     /** The agent is touching this feature's bound code right now. */
@@ -37,6 +68,16 @@ export interface FeatureSignals {
     divergent?: boolean;
     /** Handed off: the agent will implement it. */
     sent?: boolean;
+    /** WHOSE words the queue is holding, when `sent` (sidecar `hold_detail[fid].origin`;
+     *  `codoc/loop/edits.Directive.origin`). `'plan'` = you accepted an agent's plan;
+     *  anything else = your own committed edit. It is the only thing separating the two,
+     *  because both are "applied to the store, waiting on the code" and the proposal row
+     *  that would have said "an agent wrote this" is deleted by the accept. */
+    holdOrigin?: 'human' | 'plan';
+    /** The loop rewrote this description on its own authority and a Keep / Restore
+     *  verdict is owed. The rail has always shown it; the row did not, so the two panes
+     *  disagreed about a feature the codebase had just changed under the reader. */
+    autoEdit?: boolean;
     /** Recorded locally, not yet handed off. */
     staged?: boolean;
     /** False ⇒ accepted intent with no code behind it yet. */
@@ -52,7 +93,8 @@ export interface FeatureSignals {
 export function featureState(s: FeatureSignals): FeatureState {
     if (s.activeMode) return 'working';
     if (s.proposalOp) return 'proposed';
-    if (s.sent) return 'sent';
+    if (s.autoEdit) return 'rewritten';
+    if (s.sent) return s.holdOrigin === 'plan' ? 'agreed' : 'sent';
     if (s.staged) return 'staged';
     if (s.realized === false) return 'planned';
     return 'settled';
@@ -88,11 +130,27 @@ export function stateBadge(state: FeatureState, s: FeatureSignals = {}): StateBa
                     : 'The agent proposes a change here. ')
                     + 'Hover the feature to accept or reject it.',
             };
+        case 'rewritten':
+            return {
+                cls: 'rewritten',
+                icon: 'diamond',
+                title: 'codoc rewrote this to match code that already changed. '
+                    + 'Keep it, or restore your wording, in the document.',
+            };
+        case 'agreed':
+            return {
+                cls: 'agreed',
+                icon: 'diamond-fill',
+                title: 'The plan you accepted is queued — nothing to do. '
+                    + (s.queuedIntent
+                        ? `The agent will ${s.queuedIntent}.`
+                        : 'No code is behind it yet.'),
+            };
         case 'sent':
             return {
                 cls: 'sent',
                 icon: 'diamond-fill',
-                title: 'Sent to the agent — nothing to do. '
+                title: 'Your edit is with the agent — nothing to do. '
                     + (s.queuedIntent
                         ? `It will ${s.queuedIntent}.`
                         : 'It will change the code to match.'),
@@ -127,31 +185,30 @@ export const PLANNED_TITLE = 'Planned. No code has been written for this yet.';
 // rewritten under the reader right now (busy — translating / the agent applying),
 // and an unresolved loop rewrite awaiting its Keep/Restore verdict (rewritten).
 
-export type RailState =
-    | 'busy' | 'working' | 'proposed' | 'rewritten'
-    | 'sent' | 'staged' | 'planned' | 'retired' | 'settled';
+export type RailState = FeatureState | 'busy' | 'retired';
 
 export interface RailSignals extends FeatureSignals {
     /** The section is being rewritten right now (translation batch pending /
      *  agent applying) — outranks everything: it explains why the rest moves. */
     busy?: boolean;
-    /** An unasked loop rewrite awaits its Keep/Restore verdict. */
-    autoEdit?: boolean;
     retired?: boolean;
 }
 
-/** First match wins — same discipline as `featureState`, and the two agree on the
- *  shared states so a row badge and its rail tick can never tell different stories. */
+/**
+ * First match wins — and the ordering is `featureState`'s, extended at both ends
+ * rather than restated.
+ *
+ * It used to be a parallel copy, and the copy had drifted: the rail knew about a loop
+ * rewrite and the row did not, so a feature the codebase had just changed under the
+ * reader was marked in one pane and silent in the other. Delegating means they cannot
+ * drift again — `rewritten` and `agreed` reached the row by being added once, here's
+ * two extra states being the only thing this function still decides.
+ */
 export function railState(s: RailSignals): RailState {
     if (s.busy) return 'busy';
-    if (s.activeMode) return 'working';
-    if (s.proposalOp) return 'proposed';
-    if (s.autoEdit) return 'rewritten';
-    if (s.sent) return 'sent';
-    if (s.staged) return 'staged';
-    if (s.realized === false) return 'planned';
-    if (s.retired) return 'retired';
-    return 'settled';
+    const state = featureState(s);
+    if (state === 'settled' && s.retired) return 'retired';
+    return state;
 }
 
 /** One glossary line per rail state — the legend popover + each tick's hover. */
@@ -160,7 +217,8 @@ export const RAIL_STATE_LABEL: Record<RailState, string> = {
     working: 'the agent is in this feature\'s code',
     proposed: 'an agent change awaits your verdict',
     rewritten: 'codoc rewrote this — review Keep / Restore',
-    sent: 'sent to the agent — being realized',
+    agreed: 'a plan you accepted — no code behind it yet',
+    sent: 'your edit, sent to the agent — being realized',
     staged: 'your edit, recorded but not sent (⌘S sends)',
     planned: 'planned — no code behind it yet',
     retired: 'retired',

@@ -241,26 +241,27 @@ describe('settledPendingFids — an edit undone stops being pending', () => {
     });
 });
 
-describe('the underline survives a settle, and stops at CJK boundaries', () => {
-    it('changedRange does not swallow a Chinese paragraph around an insertion', async () => {
-        const { changedRange } = await import('../webview/tiptap/hold-decorations');
+describe('the ink survives a settle, and stops at CJK boundaries', () => {
+    it('a Chinese description does not light up whole around an English insertion', async () => {
+        // The pilot bug: five English words typed into a Chinese description marked the
+        // ENTIRE node, because word-snapping grew outward to the previous space and a
+        // script that writes without spaces has none. It used to be `changedRange`'s job
+        // (hold-decorations); the settlement model answers it with script-aware word
+        // tokens, so the guarantee is pinned against the diff that draws the ink now.
+        const { wordDiff } = await import('../state/doc-diff');
         const base = '将提取的文本流转换为带编号的页面和行，因为下游策略模块需要自行判断；空白页会被保留。';
         const cur = '将提取的文本流转换为带编号的页面和行，因为下游策略模块需要自行判断, but how to determine this；空白页会被保留。';
-        const r = changedRange(base, cur);
-        expect(r).not.toBeNull();
-        const marked = cur.slice(r!.start, r!.end);
-        // The insertion, snapped to at most a couple of neighbouring characters —
-        // NOT the whole paragraph, which is what whitespace-only word-snapping
-        // produced for a script that writes without spaces.
-        expect(marked).toContain('but how to determine this');
-        expect(marked).not.toContain('将提取的文本流');
-        expect(marked).not.toContain('空白页会被保留');
+        const inked = wordDiff(base, cur).filter(r => r.t === 'ins').map(r => r.s).join('');
+        expect(inked).toContain('but how to determine this');
+        expect(inked).not.toContain('将提取的文本流');
+        expect(inked).not.toContain('空白页会被保留');
     });
 
-    it('Latin snapping still grows to whole words', async () => {
-        const { changedRange } = await import('../webview/tiptap/hold-decorations');
-        const r = changedRange('the quick brown fox', 'the quicker brown fox');
-        expect('the quicker brown fox'.slice(r!.start, r!.end)).toBe('quicker');
+    it('Latin still inks whole words', async () => {
+        const { wordDiff } = await import('../state/doc-diff');
+        const inked = wordDiff('the quick brown fox', 'the quicker brown fox')
+            .filter(r => r.t === 'ins').map(r => r.s).join('');
+        expect(inked).toBe('quicker');
     });
 
     it('a held draft keeps its diff after the local baseline adopts', () => {

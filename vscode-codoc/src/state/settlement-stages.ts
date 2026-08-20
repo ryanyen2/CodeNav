@@ -30,8 +30,8 @@
  */
 import { PMNode, NODE_FEATURE_HEADING, NODE_PARAGRAPH, inlineRunsToText, type FeatureHeadingAttrs } from './pm-doc';
 import { mdDisplayText } from './display-space';
-import { planRuns, type PlanNode } from './plan-materialize';
-import type { FeatureText, BlockRuns, Stage } from './settlement';
+import { planRuns, descParas, type PlanNode } from './plan-materialize';
+import type { FeatureText, BlockRuns } from './settlement';
 import type { AutoEdit, HoldDetail } from './bindings-model';
 
 /** What the host knows; the editor adds `live` and `committed`. Plain data — it
@@ -44,7 +44,11 @@ export interface FeatureStages {
      *  without it the author's own ink would clear the instant it became true. */
     humanBase?: FeatureText;
     code?: { layerId: string; prev: FeatureText };
-    plan?: { layerId: string; stage: 'proposed' | 'accepted'; runs: BlockRuns[] };
+    plan?: { layerId: string; stage: 'proposed'; runs: BlockRuns[] };
+    /** An ACCEPTED plan the code has not caught up with — see `FeatureLayers.accepted`.
+     *  Shipped from the queued directive, because the proposal row it came from is
+     *  deleted the moment the verdict applies. */
+    accepted?: { layerId: string; prev: FeatureText };
 }
 
 /** One proposal, as much of it as the stages need. Mirrors `Suggestion` without
@@ -56,7 +60,6 @@ export interface StagedProposal {
      *  and `proposed` is what identifies it — see plan-materialize). */
     key: string;
     layerId: string;
-    stage: Stage & ('proposed' | 'accepted');
     titleOld: string;
     titleNew: string;
     descOld: string;
@@ -75,12 +78,13 @@ function concatRuns(blocks: readonly BlockRuns[]): FeatureText {
     return out;
 }
 
-/** Split a stored description the way the renderer round-trips it, in display space. */
+/** Split a stored description the way the renderer round-trips it, in display space.
+ *
+ *  Split FIRST, project each paragraph second — never the other way round. Display
+ *  space collapses every newline to one atom char, so a `\n\n` split taken after the
+ *  projection can never match. See `plan-materialize.descParas`. */
 function textOf(title: string, description: string): FeatureText {
-    return {
-        title: mdDisplayText(title),
-        paras: (description ? description.split(/\n{2,}/) : []).map(mdDisplayText),
-    };
+    return { title: mdDisplayText(title), paras: descParas(description).map(mdDisplayText) };
 }
 
 /**
@@ -139,18 +143,44 @@ export function buildStages(
     }
 
     for (const [fid, d] of Object.entries(holdDetail)) {
-        if (!d.baseline || !texts.has(fid)) continue;
+        if (!texts.has(fid)) continue;
+        // A plan ADD replaced NOTHING, so its empty baseline is a real value rather
+        // than a missing one: the whole node is the plan's words. Reading it as "no
+        // baseline, nothing to draw" left an accepted placeholder rendering as ordinary
+        // settled prose the moment it was minted — the one node on the page where every
+        // word is unbuilt. Only `add_node` gets this reading; for any other kind an
+        // empty baseline genuinely means the daemon did not record one.
+        const wholeNode = d.origin === 'plan' && d.kind === 'add_node';
+        if (!d.baseline && !wholeNode) continue;
         // The queued directive's pre-edit description. The TITLE is the current one:
         // the hold carries only the description, and inventing a title diff from its
-        // absence would mark a rename nobody made.
-        at(fid).humanBase = textOf(texts.get(fid)!.title, d.baseline);
+        // absence would mark a rename nobody made — except for a whole new node, where
+        // the title is as new as the prose and has no earlier form to hold on to.
+        const prev = wholeNode && !d.baseline
+            ? { title: '', paras: [] }
+            : textOf(texts.get(fid)!.title, d.baseline ?? '');
+        // WHOSE words the queue is holding decides which channel draws them, and there
+        // is nothing else left to decide it from: both are "applied to the store, not
+        // yet in the code", and the proposal row that would have said "this came from
+        // an agent" is deleted by the accept itself. `origin` is the daemon answering
+        // the question directly (codoc/loop/edits.Directive.origin).
+        //
+        // An older daemon ships no `origin`. Reading that as the author's own edit is
+        // the safe default: it keeps the pre-existing behaviour exactly, and the failure
+        // it risks (an accepted plan drawn in the author's ink) is the one the surface
+        // already had, rather than a new one where the author's words go gray.
+        if (d.origin === 'plan') at(fid).accepted = { layerId: `hold:${fid}`, prev };
+        else at(fid).humanBase = prev;
     }
 
     for (const p of proposals) {
         if (p.kind === 'move') continue;   // a move changes rank, not text — no claim
         const s = at(p.key);
+        // Paragraphs are split from the RAW text and each piece projected into display
+        // space — the order matters and getting it backwards is the bug that made a
+        // multi-paragraph amend read as the author's own typing (see `descParas`).
         const runs = planRuns(p.kind, mdDisplayText(p.titleOld), mdDisplayText(p.titleNew),
-            mdDisplayText(p.descOld), mdDisplayText(p.descNew));
+            descParas(p.descOld).map(mdDisplayText), descParas(p.descNew).map(mdDisplayText));
         // `planned` is the CONCATENATION of those runs, not the proposal's new text —
         // and the difference is the whole reason this is computed here rather than
         // guessed. The tracked-change engine materializes an amend as old AND new
@@ -158,7 +188,7 @@ export function buildStages(
         // `planned` to be the new text alone would make the human diff read every
         // displaced sentence still on screen as something the author had just typed.
         s.planned = concatRuns(runs);
-        s.plan = { layerId: p.layerId, stage: p.stage, runs };
+        s.plan = { layerId: p.layerId, stage: 'proposed', runs };
     }
     return out;
 }
@@ -200,12 +230,20 @@ export function planNodesFrom(
  * A proposal whose verdict is already recorded but not yet drained is EXCLUDED. The
  * reader has answered; showing them the question again for as long as the round trip
  * takes is how a surface teaches people that their clicks do not register.
+ *
+ * Every proposal here is `proposed`, and that is not a simplification: a proposal only
+ * exists while it is unanswered. The plan channel's OTHER stage — accepted, and waiting
+ * on the code — cannot be read from this list at all, because accepting deletes the row
+ * it would have been read from. It comes from the queued directive instead (see the
+ * `holdDetail` branch of `buildStages`). A `stage` field here used to be filled from an
+ * `accepted` flag on the suggestion that nothing ever set, so the second stage was
+ * unreachable and the plan's gray vanished at the click.
  */
 export function stagedProposals(
     suggestions: readonly {
         kind: string; id: string; featureId: string | null; eventId?: string;
         titleOld?: string; titleNew?: string; descOld?: string; descNew?: string;
-        verdictPending?: boolean; accepted?: boolean;
+        verdictPending?: boolean;
     }[],
 ): StagedProposal[] {
     const out: StagedProposal[] = [];
@@ -216,10 +254,6 @@ export function stagedProposals(
         if (!key) continue;
         out.push({
             kind: s.kind, key, layerId: s.eventId ?? s.id,
-            // Accepted-but-unbuilt is the second plan stage; the surface reads it as
-            // "agreed, still not real", which is a different thing to be told than
-            // "somebody is waiting on you".
-            stage: s.accepted ? 'accepted' : 'proposed',
             titleOld: s.titleOld ?? '', titleNew: s.titleNew ?? '',
             descOld: s.descOld ?? '', descNew: s.descNew ?? '',
         });

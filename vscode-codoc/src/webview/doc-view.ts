@@ -1568,14 +1568,20 @@ function appendRow(parent: HTMLElement, id: string): void {
     // unrealized ring, amend/retire chip — all true, none ranked, so the row read as a
     // legend nobody had. They are stages of one lifecycle; only the furthest-along one
     // changes what to do next, and it is the only one drawn.
+    const hold = (payload.holdDetail ?? {})[id];
     const signals = {
         activeMode: n.activeMode,
         proposalOp: n.proposal?.op ?? null,
         divergent: !!divergent[id],
+        autoEdit: !!(payload.autoEdits ?? {})[id],
         sent: awaitingAI.has(id) && !draftSet.has(id),
+        // WHOSE words the queue is holding, so the row's ink names the same party the
+        // prose does. Without it an accepted plan wore the author's blue here while the
+        // document drew it gray — two panes disagreeing about who wrote a sentence.
+        holdOrigin: hold?.origin,
         staged: draftSet.has(id),
         realized: n.realized,
-        queuedIntent: (payload.holdDetail ?? {})[id]?.intent,
+        queuedIntent: hold?.intent,
     };
     const state = featureState(signals);
     titleWrap.title = state === 'planned' ? PLANNED_TITLE : 'Open in the document editor';

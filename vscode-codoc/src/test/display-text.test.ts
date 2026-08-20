@@ -14,7 +14,6 @@ import { describe, it, expect } from 'vitest';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import { codocSchema } from '../webview/tiptap/schema';
 import { ATOM_CHAR, alignParas, mdDisplayText, paraDisplayText } from '../webview/tiptap/display-text';
-import { buildHoldDecorations } from '../webview/tiptap/hold-decorations';
 import { featureBlocks } from '../state/edit-baseline';
 import { buildSettlementDecorations } from '../webview/tiptap/settlement-decorations';
 import type { PMNode } from '../state/pm-doc';
@@ -68,45 +67,11 @@ describe('display projections', () => {
     });
 });
 
-describe('hold underline — chip paragraphs diff precisely (formerly blacked out)', () => {
-    it('underlines the changed words at the right doc positions in a paragraph with a chip', () => {
-        const doc = docOf(
-            heading('f-a', 'Fan-out'),
-            para(text('See '), chip, text(' for fan-out later.')),
-        );
-        const set = buildHoldDecorations(doc, new Set(['f-a']), undefined, {
-            'f-a': {
-                kind: 'amend',
-                intent: 'update fan-out',
-                baseline: 'See [dispatch()](codoc:fanout.py#dispatch) for fan-out now.',
-            },
-        });
-        const underline = set.find().find(d => attrsOf(d)?.class === 'ce-intent-underline');
-        expect(underline).toBeTruthy();
-        expect(doc.textBetween(underline!.from, underline!.to, ' ', '¤')).toBe('later.');
-    });
-
-    it('keeps the underline on the edited paragraph when a new paragraph is inserted above it', () => {
-        const doc = docOf(
-            heading('f-a', 'Fan-out'),
-            para(text('Alpha beta.')),
-            para(text('Brand new paragraph.')),
-            para(text('Gamma delta plus.')),
-        );
-        const set = buildHoldDecorations(doc, new Set(['f-a']), undefined, {
-            'f-a': { kind: 'amend', intent: 'x', baseline: 'Alpha beta.\n\nGamma delta.' },
-        });
-        const spans = set.find()
-            .filter(d => attrsOf(d)?.class === 'ce-intent-underline')
-            .map(d => doc.textBetween(d.from, d.to, ' ', '¤'));
-        // The inserted paragraph reads as fully new; the edited one underlines its
-        // changed tail — NOT the whole paragraph (the old index-pairing bug diffed
-        // it against the wrong baseline neighbour).
-        expect(spans).toContain('Brand new paragraph.');
-        expect(spans).toContain('delta plus.');
-        expect(spans).not.toContain('Gamma delta plus.');
-    });
-});
+// (The `hold underline` block that stood here is gone with the underline itself. It
+// pinned two properties — a chip is ONE position, and paragraphs pair by CONTENT — for
+// a second diff hold-decorations kept of the author's pending edit. Both properties are
+// pinned below against the layer that draws that ink now, which is the point of having
+// one model rather than two that agree by luck.)
 
 describe('the human channel — chips and alignment, through the real decoration layer', () => {
     /** The host half of the stages, from a baseline doc: `projected` in DISPLAY space,

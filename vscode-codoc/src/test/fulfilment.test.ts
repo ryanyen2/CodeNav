@@ -48,38 +48,93 @@ describe('noticing that an edit of yours was built', () => {
 
 describe('noticing that a plan was built', () => {
     const offered = snap({ planLayers: new Map([['f-1', 'e-9']]), present: new Set(['f-1']) });
-
-    it('fires when the layer stops being offered but its node stands', () => {
-        const got = fulfilments(offered, snap({ present: new Set(['f-1']) }), none, NOW);
-        expect(got.get('f-1')![0].channel).toBe('plan');
+    const agreed = snap({
+        held: new Set(['f-1']),
+        agreedLayers: new Map([['f-1', 'hold:f-1']]),
+        present: new Set(['f-1']),
     });
 
-    it('does NOT fire when the node left with it — that is a rejection', () => {
-        // Saying "built" about a proposal the reader declined is a lie about their own
-        // decision, and the ring filling is the surface making it.
+    it('does NOT fire when the reader ACCEPTS — accepting is not building', () => {
+        // The whole point of the accepted stage. The proposal stops being offered and
+        // becomes a queued directive; nothing has been written. Filling the ring here
+        // told the reader their plan was done at the moment they agreed to it.
+        expect(fulfilments(offered, agreed, none, NOW).size).toBe(0);
+    });
+
+    it('does NOT fire when the reader REJECTS — that is their decision, not a build', () => {
+        // Every amend and retire leaves its node in the tree, so "the proposal is gone
+        // and the node is still here" was true of a rejection too, and the ring filled
+        // on one. Now a rejection goes nowhere: no agreed layer ever appears.
+        expect(fulfilments(offered, snap({ present: new Set(['f-1']) }), none, NOW).size).toBe(0);
         expect(fulfilments(offered, snap(), none, NOW).size).toBe(0);
+    });
+
+    it('fires when the AGREED plan\'s directive closes — the code caught up', () => {
+        const built = snap({ present: new Set(['f-1']) });
+        expect(fulfilments(agreed, built, none, NOW).get('f-1')!.map(f => f.channel))
+            .toEqual(['plan']);
+    });
+
+    it('credits the PLAN, not the reader, when an accepted plan leaves the hold set', () => {
+        // Both transitions fire on the same payload — the feature leaves the hold set
+        // AND the agreed layer goes — and only one of them is true. The words were the
+        // agent's; saying "the code now says what YOU wrote" is the error the origin
+        // distinction exists to prevent.
+        const built = snap({ present: new Set(['f-1']) });
+        expect(fulfilments(agreed, built, none, NOW).get('f-1')!.map(f => f.channel))
+            .toEqual(['plan']);
+    });
+
+    it('does not fire while the plan is still agreed and unbuilt', () => {
+        expect(fulfilments(agreed, agreed, none, NOW).size).toBe(0);
     });
 
     it('does not fire while the same layer is still on offer', () => {
         expect(fulfilments(offered, offered, none, NOW).size).toBe(0);
     });
 
-    it('fires when a DIFFERENT layer replaces it — the first one resolved', () => {
-        const next = snap({ planLayers: new Map([['f-1', 'e-10']]), present: new Set(['f-1']) });
-        expect(fulfilments(offered, next, none, NOW).get('f-1')![0].channel).toBe('plan');
+    it('reports an accepted ADD once it is built, under the id the store minted', () => {
+        // The gap that used to be pinned here as a deliberate silence. An add proposal is
+        // filed under its own EVENT id and that id is gone the moment it resolves — so
+        // watching the OFFER could never tell an accepted add from a rejected one. The
+        // agreed set is keyed by the feature's real id, which only an ACCEPT produces, so
+        // the question is answered by where the plan went instead of by what vanished.
+        const addOffered = snap({ planLayers: new Map([['e-add', 'e-add']]), present: new Set(['e-add']) });
+        const addAgreed = snap({
+            held: new Set(['f-new']),
+            agreedLayers: new Map([['f-new', 'hold:f-new']]),
+            present: new Set(['f-new']),
+        });
+        expect(fulfilments(addOffered, addAgreed, none, NOW).size).toBe(0);   // accepted ≠ built
+        expect(fulfilments(addAgreed, snap({ present: new Set(['f-new']) }), none, NOW)
+            .get('f-new')!.map(f => f.channel)).toEqual(['plan']);
+    });
+
+    it('stays silent for a REJECTED add, which leaves with its node', () => {
+        const addOffered = snap({ planLayers: new Map([['e-add', 'e-add']]), present: new Set(['e-add']) });
+        expect(fulfilments(addOffered, snap(), none, NOW).size).toBe(0);
     });
 });
 
-describe('both slots can land at once', () => {
-    it('records the plan AND the edit that rode with it', () => {
-        const got = fulfilments(
-            snap({ held: new Set(['f-1']), planLayers: new Map([['f-1', 'e-9']]) }),
-            snap({ present: new Set(['f-1']) }),
-            none, NOW,
+describe('both slots can be lit at once', () => {
+    it('the marker draws two filled rings when both channels have landed', () => {
+        // Not from one payload: a feature's landing is credited to ONE channel per
+        // transition, because crediting the reader with an agent's accepted words is
+        // exactly the error `agreedLayers` exists to prevent. But a node can be built
+        // twice over time — a plan, and later an edit of the reader's own — and the
+        // marker has to hold both, because "this was planned and built" and "what you
+        // wrote is now in the code" are two different things to be told.
+        const both = mergeFulfilments(
+            new Map([['f-1', [{ channel: 'plan' as const, at: NOW - 1000, diverged: 'none' as const }]]]),
+            fulfilments(
+                snap({ held: new Set(['f-1']) }),
+                snap({ present: new Set(['f-1']) }),
+                none, NOW,
+            ),
+            NOW, FULFILMENT_TTL_MS,
         );
-        expect(got.get('f-1')!.map(f => f.channel).sort()).toEqual(['human', 'plan']);
-        // …and the marker draws both rings, filled.
-        const s = nodeStatus([], got.get('f-1')!, NOW);
+        expect(both.get('f-1')!.map(f => f.channel).sort()).toEqual(['human', 'plan']);
+        const s = nodeStatus([], both.get('f-1')!, NOW);
         expect(s.human).toBe('fulfilled');
         expect(s.plan).toBe('fulfilled');
         expect(statusGlyphs(s).map(g => g.slot)).toEqual(['human', 'plan']);
@@ -124,16 +179,8 @@ describe('mergeFulfilments — remember briefly, then let go', () => {
     });
 });
 
-describe('what it deliberately does not guess', () => {
-    it('emits no marker for a resolved ADD, rather than a wrong one', () => {
-        // An add proposal is filed under its own EVENT id — it has no feature yet — so
-        // once it resolves that id is gone from the document either way: accepted, it
-        // returns as a real node under a freshly minted fid; rejected, it is simply gone.
-        // Silence is the honest answer until the ledger's `caused_by` reaches the webview.
-        const offered = snap({ planLayers: new Map([['e-add', 'e-add']]), present: new Set(['e-add']) });
-        const accepted = snap({ present: new Set(['f-new']) });   // came back under a new id
-        const rejected = snap({ present: new Set() });
-        expect(fulfilments(offered, accepted, none, NOW).size).toBe(0);
-        expect(fulfilments(offered, rejected, none, NOW).size).toBe(0);
-    });
-});
+// (The "deliberately does not guess" block is gone with the gap it described. An
+// accepted ADD used to produce no marker at all, because the only signal available was
+// its proposal vanishing — which happens identically on accept and on reject. The
+// agreed set is keyed by the id the STORE minted, which only an accept produces, so the
+// two are now distinguishable and the accepted add gets its ring. Pinned above.)

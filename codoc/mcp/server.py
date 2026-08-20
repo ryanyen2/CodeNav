@@ -148,18 +148,27 @@ def codoc_propose_add(title: str, description: str = "", parent_id: str | None =
 @mcp.tool
 def codoc_propose_amend(feature_id: str, title: str | None = None,
                         description: str | None = None, rationale: str = "",
-                        caused_by: str = "") -> dict:
+                        caused_by: str = "", builds: bool = False) -> dict:
     """Propose editing a feature's title and/or description (e.g. its meaning
     shifted). Small description edits apply immediately; larger ones are reviewed.
 
     The DEFAULT way to record a change to existing intent, including a planned one:
     write the description as it should read once the change lands. The user reviews
     it as a tracked-change diff on their own prose, per feature, rather than as a
-    new node appearing next to it."""
+    new node appearing next to it.
+
+    Set `builds=True` when the description says what the feature WILL do and the code
+    does not do it yet — a PLAN, as opposed to a reflection of code that already
+    changed. It changes what accepting means: a plan amendment queues a realize
+    directive (the work shows up in `.codoc/realize.md` and the IDE says "build"),
+    a reflection just reconciles the wording. Getting this wrong in either direction
+    is costly — a plan marked as a reflection is accepted and then never built, and a
+    reflection marked as a plan asks the agent to rewrite code to match a description
+    that came from that very code."""
     cd, err = _need_dir()
     return err or tools.propose_amend(cd, feature_id=feature_id, title=title,
                                       description=description, rationale=rationale,
-                                      caused_by=caused_by)
+                                      caused_by=caused_by, builds=builds)
 
 
 @mcp.tool

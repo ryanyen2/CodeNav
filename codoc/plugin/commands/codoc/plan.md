@@ -37,8 +37,12 @@ genuinely separate thing a reader would look for under its own name. "It's a new
 function/file/class" is not the test; a new helper inside an existing feature's job
 is an amend, not an add.
 
-- To amend: `codoc_propose_amend(feature_id, description=…, rationale=…)` — write
-  the description as it should read AFTER the change, not as a note about the change.
+- To amend: `codoc_propose_amend(feature_id, description=…, rationale=…,
+  builds=True)` — write the description as it should read AFTER the change, not as a
+  note about the change. **`builds=True` is not optional here**: it is what marks the
+  amendment as a PLAN (code that does not exist yet) rather than a reflection of code
+  that already changed. Only a plan amendment queues the work on accept; without the
+  flag the user accepts your plan and nothing is queued for you to implement.
   Reuse `codoc_propose_move` when the task also relocates a feature.
 - To add: `codoc_plan_add(title, description, parent_id?, binds?, rationale)`. These
   enter the tree as **unrealized placeholders** — the IDE draws them dimmed, in the
@@ -57,21 +61,31 @@ is an amend, not an add.
 - Then call `codoc_await_verdicts(event_ids=[…])` with the `event_id`s returned by
   your `codoc_plan_add` / `codoc_propose_*` calls. **This blocks your turn** until
   the user clicks Accept/Reject in the IDE — do not write any code while it waits.
-  It returns `{accepted:[{event_id, feature_id, title}], rejected, pending}`.
+  It returns `{accepted:[{event_id, feature_id, title}], rejected, deferred, pending}`.
   - If everything was rejected (or it timed out with nothing accepted), report that
     and stop — there is nothing to implement.
+  - `deferred` means the user DID accept and the daemon is refusing to apply it
+    (`codoc watch --dry` / `--no-realize`). Say so, quoting the returned `note`, and
+    stop — do not re-propose; the proposal is still there and a second one would
+    double it.
 
 ## 4. Implement the accepted nodes (same turn, one at a time)
-For each entry in `accepted` (now live but **unrealized** placeholders), implement
-it and reflect it **before** starting the next — this makes the IDE doc view fill
-in each feature as you finish, one skeleton resolving at a time, rather than all at
-once:
+Each entry in `accepted` is now live and asking for code. Implement it and reflect
+it **before** starting the next — this makes the IDE doc view fill in each feature
+as you finish, one at a time, rather than all at once:
 - Call `codoc_realize_progress(done=i-1, total=N, current="<title>")` as you start
   feature *i*, so the IDE shows "implementing i of N".
 - Write the smallest code change that satisfies the node's intent.
-- Immediately call `codoc_attach(feature_id, binds=["file.py::symbol", …])` (or
-  `codoc_reflect`) to bind that code to the accepted node. **Binding flips the
-  placeholder to realized** and resolves its skeleton in the doc view.
+- Immediately bind the code you wrote, and how you close the item depends on which
+  kind of plan node it was:
+  - an accepted **plan ADD** is an unrealized placeholder — `codoc_attach(feature_id,
+    binds=["file.py::symbol", …])` flips it realized and closes its directive on that
+    structural evidence alone.
+  - an accepted **plan AMEND** targets a feature that already has code, so nothing
+    structural can prove the new intent landed. Close it by CITING it:
+    `codoc_reflect(..., caused_by="<its ⟨d-…⟩ id from .codoc/realize.md>")`. Binding
+    alone will not close it, and it must not — any unrelated edit touches an amended
+    feature.
 - If you implemented anything that wasn't in the plan, include `add_node` ops via
   `codoc_reflect` so it surfaces as a new proposal for the user.
 - After the last one, call `codoc_realize_progress(done=N, total=N)`.
@@ -81,9 +95,9 @@ once:
   the missing code and re-bind, or tell the user which planned features remain
   unrealized and why.
 - The same call returns `queued_directives`. Accepting your plan queued a
-  directive per node in `.codoc/realize.md`; **binding each node closes its
-  directive automatically**, so after step 4 the queue should hold only work that
-  arrived from OUTSIDE your plan — most often a description the user edited while
+  directive per node in `.codoc/realize.md`; step 4 closes each one (a placeholder by
+  binding, an amendment by citation), so after step 4 the queue should hold only work
+  that arrived from OUTSIDE your plan — most often a description the user edited while
   you were implementing. If `queued_directives` is non-empty:
   - Read `.codoc/realize.md` and implement each remaining item now, reflecting it
     with `caused_by="<its ⟨d-…⟩ id>"` (that citation is what closes it) — this is

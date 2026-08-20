@@ -12,13 +12,22 @@
  * ever show you is your edit silently ceasing to be marked. The one outcome you were
  * waiting for is the one it cannot report.
  *
- * So this watches the TRANSITION and remembers it briefly. Two signals, both already on
- * the wire, neither invented for this:
+ * So this watches the TRANSITION and remembers it briefly. The signals are already on
+ * the wire; what each one means is the whole of the logic:
  *
- *   • a feature LEAVES the hold set — its queued directive landed, so the edit that
- *     put it there has been built.
- *   • a plan layer STOPS BEING OFFERED while its node is still in the tree — accepted
- *     and applied, rather than rejected (a rejected node leaves with it).
+ *   • a feature leaves the HOLD SET — its queued directive landed, so whatever put it
+ *     there has been built. Which channel that acknowledges depends on whose words the
+ *     queue was holding (`hold_detail.origin`), which is why the snapshot carries the
+ *     two kinds of hold separately.
+ *   • a plan leaves the AGREED set — the reader accepted it and its directive has now
+ *     closed. That is the plan channel being built.
+ *
+ * A proposal being withdrawn from the offer is NOT one of them, and used to be. It
+ * fired on ACCEPT, which is a moment when nothing has been built — and it fired on
+ * REJECT too, for any proposal whose node stays in the tree (every amend and retire),
+ * so declining an agent's wording filled the ring that means "this was planned, and it
+ * has been built". Accepting now moves the plan into the agreed set instead of out of
+ * the model, so the two are told apart by where it went rather than guessed at.
  *
  * And it records whether what landed matches what was asked for, because "built" and
  * "built as written" are different answers and the second one is the one nobody
@@ -35,14 +44,19 @@ import type { DiffMark, Fulfilment } from './node-status';
 export interface Snapshot {
     /** Features whose edits are with the agent (the daemon's hold set). */
     held: ReadonlySet<string>;
-    /** Plan layers currently on offer, by the feature key they are filed under. */
+    /** Plan layers currently on offer, by the feature key they are filed under. Kept
+     *  only so an offer that turns into an agreement is not read as one appearing from
+     *  nowhere; a layer leaving THIS map acknowledges nothing by itself. */
     planLayers: ReadonlyMap<string, string>;
+    /** Plans the reader ACCEPTED whose code has not landed, by feature key. A layer
+     *  leaving this one, with its node still in the tree, is the plan being built. */
+    agreedLayers: ReadonlyMap<string, string>;
     /** Feature keys present in the document. */
     present: ReadonlySet<string>;
 }
 
 export function emptySnapshot(): Snapshot {
-    return { held: new Set(), planLayers: new Map(), present: new Set() };
+    return { held: new Set(), planLayers: new Map(), agreedLayers: new Map(), present: new Set() };
 }
 
 /** The direction the build diverged, from the code claims standing on that feature at
@@ -78,23 +92,17 @@ export function fulfilments(
         // A feature that left the document did not get built; it was retired, or the
         // reader deleted the node. Nothing to acknowledge.
         if (!next.present.has(key)) continue;
+        // The hold set holds BOTH kinds of queued work. If this feature was holding an
+        // accepted plan, the landing belongs to the plan channel — the agreed pass
+        // below reports it — and crediting the reader with words an agent wrote is the
+        // error the whole origin distinction exists to prevent.
+        if (prev.agreedLayers.has(key)) continue;
         push(key, { channel: 'human', at: now, diverged: divergenceOf(claimsByFeature(key)) });
     }
 
-    for (const [key, layer] of prev.planLayers) {
-        if (next.planLayers.get(key) === layer) continue;
-        // Gone WITH its node ⇒ rejected (or the node was retired). A rejection is not a
-        // fulfilment and must not fill the ring; the reader declined it and the surface
-        // saying "built" would be a lie about their own decision.
-        //
-        // KNOWN GAP, deliberately left as a silence rather than a guess: this test cannot
-        // see an accepted ADD. An add proposal is filed under its own EVENT id (it has no
-        // feature yet), and once it resolves that id is gone from the document either way
-        // — accepted, it comes back as a real node under a freshly minted fid; rejected,
-        // it is simply gone. So an accepted add produces no fulfilment marker instead of a
-        // wrong one. Telling the two apart needs the ledger's `caused_by`, which the
-        // sidecar records but the payload does not yet carry to the webview; the fix is to
-        // ship the `changes` slice and match `add_node` events citing this layer.
+    for (const [key, layer] of prev.agreedLayers) {
+        if (next.agreedLayers.get(key) === layer) continue;
+        // Gone WITH its node ⇒ retired, or the reader deleted it. Not a build.
         if (!next.present.has(key)) continue;
         // Both slots can land together — a plan that was built, carrying an edit of
         // yours built with it — and they are separate slots in the marker, so this

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { materializePlan, insertAt, subtreeEnd, planRuns, type PlanNode } from '../state/plan-materialize';
+import { materializePlan, insertAt, subtreeEnd, planRuns, descParas, type PlanNode } from '../state/plan-materialize';
 import { featureUnits, commandsForSettle } from '../state/commands-from-doc';
 import { renderTreeFromDoc } from '../state/doc-serialize';
 import {
@@ -165,22 +165,39 @@ describe('anchoring helpers', () => {
 
 describe('planRuns — what the settlement layer is handed', () => {
     it('makes a whole planned add read as one insertion per block', () => {
-        const runs = planRuns('add', '', 'Backoff', '', 'One.\n\nTwo.');
+        const runs = planRuns('add', '', 'Backoff', [], descParas('One.\n\nTwo.'));
         expect(runs.map(r => r.runs.map(x => x.t))).toEqual([['ins'], ['ins'], ['ins']]);
         expect(runs.length).toBe(3);
     });
 
     it('makes a planned retire read as one deletion per block', () => {
-        const runs = planRuns('retire', 'Retries', '', 'It retries twice.', '');
+        const runs = planRuns('retire', 'Retries', '', descParas('It retries twice.'), []);
         expect(runs.every(r => r.runs.every(x => x.t === 'del'))).toBe(true);
     });
 
     it('diffs an amend by word in the title and by sentence in the prose', () => {
         const runs = planRuns('amend', 'Retry policy', 'Retry budget',
-            'It retries twice. It gives up.', 'It retries five times. It gives up.');
+            descParas('It retries twice. It gives up.'),
+            descParas('It retries five times. It gives up.'));
         expect(runs[0].runs.some(r => r.t === 'ins' && r.s.includes('budget'))).toBe(true);
         const prose = runs[1].runs;
         expect(prose.some(r => r.t === 'ins' && r.s.includes('five times'))).toBe(true);
         expect(prose.some(r => r.t === 'same' && r.s.includes('gives up'))).toBe(true);
+    });
+
+    it('gives a multi-paragraph amend ONE block per paragraph, matching the document', () => {
+        // The bug this pins: `planRuns` used to split its own argument on `\n\n`, and
+        // the caller handed it DISPLAY-space text where every newline is already one
+        // atom char — so the split never matched, the whole description became a single
+        // planned block against the editor's several, and every paragraph after the
+        // first came back unpaired and was inked as text the author had just typed.
+        const runs = planRuns('amend', 'T', 'T',
+            descParas('One.\n\nTwo.'), descParas('One changed.\n\nTwo.'));
+        expect(runs.map(r => r.block)).toEqual([
+            { kind: 'title' }, { kind: 'para', index: 0 }, { kind: 'para', index: 1 },
+        ]);
+        // …and each block's runs concatenate back to exactly that paragraph's old+new,
+        // which is what `settlement-stages.concatRuns` relies on to build `planned`.
+        expect(runs[2].runs.map(r => r.s).join('')).toBe('Two.');
     });
 });

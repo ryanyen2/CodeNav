@@ -8,6 +8,11 @@
  * pure contracts the badge rides on: the host→payload mapping (heldFeatures) and the
  * decoration builder (buildHoldDecorations marks only held feature headings).
  *
+ * The rail + underline this file used to pin are GONE: they were the human channel of
+ * `state/settlement.ts` drawn a second time, from their own diff, in the code channel's
+ * hue — see the hold-decorations header. What is pinned here is what survived: one chip
+ * per held heading, inked by whoever is waiting.
+ *
  * The toolbar/bubble removals (Editing/Suggesting toggle, pen/pencil) and the
  * no-flicker commit behavior are editor-runtime concerns (a live TipTap view / DOM) —
  * covered by manual EDH verification, not this node harness.
@@ -15,7 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import { Node as PMModelNode } from '@tiptap/pm/model';
 import { codocSchema } from '../webview/tiptap/schema';
-import { buildHoldDecorations, changedRange } from '../webview/tiptap/hold-decorations';
+import { buildHoldDecorations, pendingTitle } from '../webview/tiptap/hold-decorations';
 import { heldFeatures, emptySidecar, type SidecarData } from '../state/bindings-model';
 
 function twoFeatureDoc(): PMModelNode {
@@ -41,17 +46,18 @@ describe('U3 — heldFeatures (host → payload mapping)', () => {
     });
 });
 
-describe('U3 — buildHoldDecorations (the "being realized" badge + pending rail)', () => {
-    it('decorates a held feature: heading node + chip + a rail on its description block', () => {
+describe('U3 — buildHoldDecorations (the "queued for the agent" chip)', () => {
+    it('decorates a held feature: heading node hook + trailing chip. Nothing on the prose', () => {
         const set = buildHoldDecorations(twoFeatureDoc(), new Set(['f-a']));
-        // f-a held → heading node deco + trailing chip widget + 1 rail on "Login and
-        // sessions." (no bold → no underline); f-b untouched.
-        expect(set.find().length).toBe(3);
+        // The description block is deliberately untouched — the settlement layer owns
+        // what the author changed, and marking it here too was two answers to one
+        // question that agreed only by luck.
+        expect(set.find().length).toBe(2);
     });
 
     it('decorates every held feature when more than one is awaiting realization', () => {
         const set = buildHoldDecorations(twoFeatureDoc(), new Set(['f-a', 'f-b']));
-        expect(set.find().length).toBe(6); // 2 features × (heading node + chip + rail)
+        expect(set.find().length).toBe(4); // 2 features × (heading node + chip)
     });
 
     it('is empty when nothing is held (a pure-doc edit shows no badge — AE1)', () => {
@@ -89,27 +95,20 @@ function classesOf(set: ReturnType<typeof buildHoldDecorations>): string[] {
     return set.find().map(d => attrsOf(d)?.class).filter(Boolean) as string[];
 }
 
-describe('pending-intent rail + underline (the in-situ "what is queued" signal)', () => {
-    it('rails the held feature description block AND underlines its bold focus run', () => {
-        const classes = classesOf(buildHoldDecorations(heldDocWithBold(), new Set(['f-a'])));
-        expect(classes).toContain('ce-pending-rail');
-        expect(classes).toContain('ce-intent-underline');
-    });
-
-    it('shows neither rail nor underline when the feature is not held', () => {
-        const classes = classesOf(buildHoldDecorations(heldDocWithBold(), new Set(['f-other'])));
-        expect(classes).not.toContain('ce-pending-rail');
+describe('the chip does not mark the prose', () => {
+    it('leaves a held feature\'s bold focus runs alone', () => {
+        // The comment bug, in miniature. A steer directive (what a comment becomes)
+        // carries no baseline, so the old underline fell back to marking every bold run
+        // in the feature — lighting up text nobody had touched, in the code channel's
+        // green, because somebody had left a note.
+        const classes = classesOf(buildHoldDecorations(heldDocWithBold(), new Set(['f-a']),
+            undefined, { 'f-a': { kind: 'steer', intent: 'address your note' } }));
         expect(classes).not.toContain('ce-intent-underline');
+        expect(classes).not.toContain('ce-pending-rail');
+        expect(classes).toContain('ce-realizing');
     });
 
-    it("carries the intent gloss as the rail's hover title (recognition, not just a count)", () => {
-        const set = buildHoldDecorations(heldDocWithBold(), new Set(['f-a']), undefined,
-            { 'f-a': { kind: 'amend', intent: 'update the code to match your new intent' } });
-        const rail = set.find().find(d => attrsOf(d)?.class === 'ce-pending-rail');
-        expect(attrsOf(rail)?.title).toContain('update the code to match your new intent');
-    });
-
-    it('underlines the text the author CHANGED when a baseline is provided', () => {
+    it('leaves the prose alone even when a baseline IS available', () => {
         const doc = codocSchema().nodeFromJSON({
             type: 'doc',
             content: [
@@ -119,58 +118,43 @@ describe('pending-intent rail + underline (the in-situ "what is queued" signal)'
         });
         const set = buildHoldDecorations(doc, new Set(['f-a']), undefined,
             { 'f-a': { kind: 'amend', intent: 'x', baseline: 'Login and sessions.' } });
-        expect(classesOf(set)).toContain('ce-intent-underline'); // the changed tail is marked
+        // settlement.ts draws this, in the author's blue, from the projection the
+        // daemon wrote — not from a second diff taken here.
+        expect(classesOf(set)).not.toContain('ce-intent-underline');
     });
 });
 
-describe('changedRange (pending-change word diff)', () => {
-    it('is null when the text is unchanged', () => {
-        expect(changedRange('abc def', 'abc def')).toBeNull();
-    });
-    it('spans an inserted word', () => {
-        const cur = 'rewards poems by length.';
-        const r = changedRange('rewards by length.', cur)!;
-        expect(r).not.toBeNull();
-        expect(cur.slice(r.start, r.end)).toContain('poems');
-    });
-    it('spans a replaced word', () => {
-        const cur = 'the slow fox';
-        const r = changedRange('the quick fox', cur)!;
-        expect(cur.slice(r.start, r.end)).toContain('slow');
-    });
-    it('is null for a pure trailing deletion (nothing added in current)', () => {
-        expect(changedRange('one two three', 'one two')).toBeNull();
+describe('the chip is inked by whoever is waiting', () => {
+    it('names the author when the queue holds their own edit', () => {
+        expect(pendingTitle({ kind: 'amend', intent: 'x', origin: 'human' }, false))
+            .toContain('Your edit');
     });
 
-    it('stable episode-start baseline keeps the WHOLE change visible across iterations', () => {
-        // The field bug: iterating eroded the baseline to the previous keystroke, so the
-        // diff collapsed and the decoration vanished. With the daemon freezing the baseline
-        // at episode start, the diff vs that stable baseline spans the entire addition even
-        // 3 edits deep — and an eroded baseline visibly collapses it (why the freeze matters).
-        const current = 'Caches values. Should also cache reads, writes, and evictions.';
-        const stable = changedRange('Caches values.', current)!;
-        expect(current.slice(stable.start, stable.end))
-            .toContain('Should also cache reads, writes, and evictions');
-        const eroded = changedRange('Caches values. Should also cache reads, writes, and', current);
-        const erodedSpan = eroded ? current.slice(eroded.start, eroded.end) : '';
-        expect(erodedSpan.length).toBeLessThan(current.slice(stable.start, stable.end).length);
+    it('names the plan when the queue holds one the author accepted', () => {
+        // Same lifecycle position, different authorship — and the reader is owed the
+        // difference, because one of them is words they wrote and one is not.
+        expect(pendingTitle({ kind: 'amend', intent: 'x', origin: 'plan' }, false))
+            .toContain('The plan you accepted');
+    });
+
+    it('reads a daemon that predates `origin` as the author\'s own', () => {
+        expect(pendingTitle({ kind: 'amend', intent: 'x' }, false)).toContain('Your edit');
     });
 });
-
 
 describe('W3: session-aware pending wording', () => {
     it('says "lands on the next agent turn" while a session is live', () => {
-        const set = buildHoldDecorations(heldDocWithBold(), new Set(['f-a']), undefined,
-            { 'f-a': { kind: 'amend', intent: 'x' } }, true);
-        const rail = set.find().find(d => attrsOf(d)?.class === 'ce-pending-rail');
-        expect(attrsOf(rail)?.title).toContain('Lands on the next agent turn');
-        expect(attrsOf(rail)?.title).not.toContain('/codoc:sync');
+        const t = pendingTitle({ kind: 'amend', intent: 'x' }, true);
+        expect(t).toContain('lands on the next agent turn');
+        expect(t).not.toContain('/codoc:sync');
     });
 
-    it('says "awaiting /codoc:sync" when no session is live', () => {
-        const set = buildHoldDecorations(heldDocWithBold(), new Set(['f-a']), undefined,
-            { 'f-a': { kind: 'amend', intent: 'x' } }, false);
-        const rail = set.find().find(d => attrsOf(d)?.class === 'ce-pending-rail');
-        expect(attrsOf(rail)?.title).toContain('/codoc:sync');
+    it('says "run /codoc:sync" when no session is live', () => {
+        expect(pendingTitle({ kind: 'amend', intent: 'x' }, false)).toContain('/codoc:sync');
+    });
+
+    it('carries the intent gloss, so the chip reports RECOGNITION and not just a count', () => {
+        expect(pendingTitle({ kind: 'amend', intent: 'update the code to match your new intent' }, false))
+            .toContain('update the code to match your new intent');
     });
 });

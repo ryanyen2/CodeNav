@@ -650,6 +650,12 @@ def propose(
     bind: list[str] = typer.Option(None, "--bind", help="Binding as file.py::symbol_path (repeatable)."),
     after: str = typer.Option(None, "--after", help="Place it after this sibling feature id (add_node / move_node)."),
     before: str = typer.Option(None, "--before", help="Place it before this sibling feature id (add_node / move_node)."),
+    builds: bool = typer.Option(
+        True, "--builds/--reflects",
+        help="--builds (default): this describes code that does not exist yet, so "
+             "accepting queues the work. --reflects: it restates code that already "
+             "changed, so accepting only updates the tree.",
+    ),
 ):
     """Author an agent plan proposal in the codoc feature tree.
 
@@ -684,6 +690,7 @@ def propose(
             binds=list(bind) if bind else [],
             after_id=after or "",
             before_id=before or "",
+            builds=builds,
         )
         typer.echo(f"✓ Proposal created  ⟨{eid}⟩")
         typer.echo("  Accept it in the VS Code IDE (inline action on the diff block).")

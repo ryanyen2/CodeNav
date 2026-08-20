@@ -188,7 +188,12 @@ def _proposals_map(store: Store, voted: set[str] | None = None) -> dict[str, dic
             by_feature[op.feature_id] = {
                 "op": "amend", "event_id": e.id, "tag": tag, "rationale": op.rationale,
                 "title": op.title, "description": op.description,
-                "writes_code": None,   # a reflection amend restates code that already changed
+                # A reflection amend restates code that already changed and asks for
+                # nothing; a PLAN amend (realized=False — see mcp.tools.propose_amend's
+                # `builds`) says what the feature will do once the work lands, so
+                # accepting it is a build request exactly like accepting a plan
+                # placeholder. Both are AMENDs and only this flag separates them.
+                "writes_code": "build" if op.realized is False else None,
                 **prov,
             }
         elif op.kind is NodeOpKind.ADD_NODE:

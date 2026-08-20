@@ -120,3 +120,22 @@ def test_proposed_plan_accepted_builds_directive(repo):
     s = open_store(codoc_dir)
     assert s.pending_events() == []
     s.close()
+
+
+def test_cli_plan_amend_is_a_build_request(repo):
+    """`codoc propose amend` is the PLAN-authoring path (it stamps source=plan and the
+    IDE already labels its button "Accept & build"), so it must be born unrealized —
+    which is what makes accepting it queue the work. Without it the two halves of the
+    surface disagreed: the button promised a build and the loop queued nothing."""
+    root, codoc_dir, parent_id = repo
+
+    eid = propose_plan(root, kind="amend", feature_id=parent_id,
+                       description="Reads CSV rows and normalizes to cents.")
+    with open_store(codoc_dir) as s:
+        assert s.get_event(eid).op.realized is False
+
+    # …and `--reflects` is the other case: the tree catching up to code that moved.
+    eid2 = propose_plan(root, kind="amend", feature_id=parent_id, builds=False,
+                        description="Reads CSV and TSV rows.")
+    with open_store(codoc_dir) as s:
+        assert s.get_event(eid2).op.realized is None

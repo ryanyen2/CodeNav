@@ -612,8 +612,35 @@ which is what lets them stack on the same words without a legend:
 | channel | axis | meaning |
 |---|---|---|
 | `human` | INK — blue | you wrote it; the code does not say it yet. Pulsing while unsent (`open`), steady once handed off (`committed`). **Ink only — no diff view:** your own removals are not drawn (you removed them), while the other two channels do report theirs. The claim is still emitted, so a deletion-only edit still reaches the marker. |
-| `plan` | OPACITY — faded | an agent proposes it; nothing is built. Solider once `accepted`. |
+| `plan` | OPACITY — faded | an agent's words. `proposed` = awaiting your verdict, materialized old-AND-new. `accepted` = solider, and sourced from the queued DIRECTIVE rather than the proposal, because accepting deletes the proposal row (see below). |
 | `code` | GROUND — green / red | it surfaced back from code that exists (`landed`), at sentence granularity. |
+
+**The palette is the same on all four surfaces** — the prose, the margin marker, the
+tree rows and the minimap rail. It was not: the rows and the rail each had a ramp of
+their own in which "sent" was the code channel's green and "proposed" was the author's
+blue, so two of three states named the wrong party. `feature-state.STATE_CHANNEL` maps
+every row state to its channel, `railState` DELEGATES to `featureState` (it used to be a
+parallel copy and had drifted), and `working` spends no channel hue at all — an agent
+being somewhere right now is not a claim about who is ahead, so it is neutral plus
+motion. Inline blame reads the same three inks, since it is the same three parties seen
+from a different question and History draws it beside settlement claims.
+
+**What may stack, and what may never.** Composition is the design, so the combinations
+are the specification. Ink over ground:
+
+| ground \ ink | none | blue (human) | gray (plan) |
+|---|---|---|---|
+| none | settled prose | you wrote it, not built yet | planned; nothing built yet |
+| green (add) | the codebase added this | **✗ impossible** | planned, and the build put these words in |
+| red (cut) | the codebase dropped this | **✗ impossible** | **planned, and the build did not keep it** |
+
+The bottom-right cell is what the model exists for. The two ✗ cells are contradictions —
+"you wrote this" and "the codebase wrote this" cannot both be true of one sentence, and
+the reader cannot tell which half is lying — kept empty by three rules: human and code
+claims are both diffs into `projected` and the CODE claim yields wherever the human also
+claims (`outranks`, in the surface); a code claim is all-or-nothing through later typing;
+and human claims are the inserted runs of a diff, which are by construction absent from
+the `same` regions other channels map through.
 
 Modules: `state/settlement.ts` (the model, pure), `state/settlement-stages.ts`
 (the host half that rides the payload as `stages`), `webview/tiptap/settlement-
@@ -635,6 +662,27 @@ Load-bearing details:
   projects it straight back, so a human diff against `projected` is empty and the
   blue ink would vanish at the exact moment it becomes true. The base is
   `hold_detail.baseline` once held, the editor's frozen baseline before that.
+- **The human channel walks TWO hops, never one.** `humanBase → live` in a single diff
+  is wrong the moment a plan is on screen: the plan's sentences are in `live` and not in
+  `humanBase`, so they came back as the author's own typing — the agent's proposal inked
+  blue and offered for ⌘S. It follows the chain instead: (a) `humanBase → projected`,
+  what the author already handed over, carried forward; (b) `planned → live`, what is on
+  screen and not in the store. The plan lives strictly between them.
+- **Paragraph splits happen in RAW text, never in display space.** Display space
+  collapses every newline to one atom char, so a `\n\n` split taken after the projection
+  can never match — a multi-paragraph amend produced ONE planned block against the
+  editor's several, every later paragraph came back unpaired, and the whole of it was
+  reported as text the author had just typed. `plan-materialize.descParas` is the one
+  place that answers where a description's blocks divide, and `planRuns` takes paragraph
+  ARRAYS so the mistake cannot be re-made through its signature.
+- **An accepted plan is sourced from the QUEUE, not the proposal.** Accepting deletes
+  the proposal row, so `stage: 'accepted'` was unreachable and the plan's wording became
+  ordinary prose at the click. A `Directive` records `origin` (`human` | `plan`,
+  surfaced via `hold_detail`), and a plan-origin hold routes its `baseline` to
+  `FeatureLayers.accepted` (gray) instead of `humanBase` (blue). `accepted` is a
+  separate field because its GEOMETRY differs: accepting APPLIES the wording, so the new
+  side is on screen and the displaced side is gone — one side, like the code channel,
+  where a materialized proposal has both.
 - **Opposite drop rules, opposite reasons.** A `code` claim is ALL-OR-NOTHING: it
   reports what the codebase says at sentence granularity, so once the author edits
   inside that sentence it is not the sentence the report was about. A `plan` claim
@@ -651,11 +699,14 @@ Load-bearing details:
 - **Fulfilment is the exception** (`state/fulfilment.ts`) and structurally so: it
   is the moment the difference DISAPPEARS, so a pure function of the claims could
   only ever show a realized edit's mark silently ceasing to be drawn. Watched as a
-  transition (a feature leaving the hold set; a plan layer no longer offered while
-  its node stands) and remembered for 30 minutes. *Known gap:* an accepted ADD
-  produces no marker — its event id leaves the document whether accepted or
-  rejected, and telling them apart needs the ledger's `caused_by`, which the
-  sidecar records but the payload does not yet carry to the webview.
+  transition and remembered for 30 minutes. It watches the AGREED set, not the offer:
+  proposal→agreed is an accept (nothing built, no ring), proposal→gone is a rejection
+  (likewise), agreed→gone with the node standing is the directive closing, and a feature
+  leaving the hold set is the author's own edit unless that hold was plan-origin. Firing
+  on the offer disappearing was wrong twice over — it filled the ring at the click, and
+  it filled it on a REJECTED amend or retire, whose node stays in the tree. It also
+  closes the old known gap: an accepted ADD is now reported, because the agreed set is
+  keyed by the id the STORE minted and only an accept produces one.
 
 **A plan is written INTO the document** (`state/plan-materialize.ts`). A proposed
 ADD used to be a widget beside the doc: honest about being a proposal, dishonest

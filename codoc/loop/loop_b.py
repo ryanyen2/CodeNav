@@ -312,6 +312,14 @@ class LoopBResult:
     # webview correlates its in-progress node back to the store fid (KTD8) so it adopts
     # the right node without title/order guessing. Echoed back via the host (U4).
     fids_by_local: dict[str, str] = field(default_factory=dict)
+    # The realize QUEUE changed this pass (a directive minted, superseded, withdrawn, or
+    # closed on evidence). The sidecar's `holds` / `hold_detail` slices are derived from
+    # that queue, so this is what tells `run_loop_b` the projection the IDE reads is now
+    # stale and has to be rewritten before the pass returns. Without it every caller that
+    # is not the watch daemon (the daemonless verdict drain, `codoc sync`, the Stop hook,
+    # the hub) left the surface one full pass behind: an accepted plan queued its work and
+    # the document went on showing nothing until something unrelated happened to re-render.
+    queue_changed: bool = False
     error: str = ""
 
     def summary(self) -> str:
@@ -1148,16 +1156,57 @@ def run_loop_b(root_dir: str, codoc_dir: str, *, dry_run: bool = False,
         # as an appended op is seen this pass and never lost to a lock-less RMW race (U9).
         edits_channel.merge_host_ops(codoc_dir)
         with open_store(codoc_dir) as store:
-            return _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run, realize=realize)
+            res = _apply_edits(store, root_dir, codoc_dir, dry_run=dry_run, realize=realize)
+            # Re-project the derived sidecar when the queue moved — see
+            # `LoopBResult.queue_changed`. Only the SIDECAR: `tree.codoc` is the prose
+            # export and rewriting it here would re-open the H1 question (never clobber
+            # un-applied human edits) for no gain, since the queue is not prose.
+            if res.queue_changed and not dry_run:
+                from codoc.codoc_file.render import write_sidecar
+                write_sidecar(store, codoc_dir)
+            return res
+
+
+def _is_plan_op(op: NodeOp) -> bool:
+    """True if this proposal describes code that DOES NOT EXIST YET, so accepting it is
+    a build request rather than a reconciliation.
+
+    ``realized is False`` is the whole test, and it reads the same on both kinds it can
+    appear on:
+
+    * ADD_NODE  — a plan placeholder: a feature nothing is bound to yet.
+    * AMEND     — a plan AMENDMENT: the description as it will read once the work lands.
+
+    The second half was missing, and its absence was a hole straight through the
+    plan-first loop. ``/codoc:plan`` tells the agent to DEFAULT to
+    ``codoc_propose_amend`` ("most tasks change what an existing feature does rather
+    than introducing a new unit of intent"), and every accepted amend was classified as
+    "the tree catching up to code that already changed" — so accepting a plan queued no
+    directive, wrote no ``realize.md``, never reached ``awaiting_impl``, and
+    ``codoc_plan_status`` answered "all realized" over work nobody had started. The user
+    accepted the plan and nothing moved.
+
+    A plain reflection amend (``realized is None``) is unaffected: it restates code that
+    already exists and must NOT ask for the code to be rewritten to match a description
+    derived from that very code.
+    """
+    return (op.kind in (NodeOpKind.ADD_NODE, NodeOpKind.AMEND)
+            and op.realized is False)
+
+
+def _origin_of(cause: str, plan_causes: set[str]) -> str:
+    """Whose words a directive is holding — see ``edits.Directive.origin``."""
+    return (edits_channel.ORIGIN_PLAN if cause and cause in plan_causes
+            else edits_channel.ORIGIN_HUMAN)
 
 
 def _accept_implies_realize(op: NodeOp) -> bool:
     """True if ACCEPTING this proposal would hand code work to the agent — a delete-code
-    retire (the agent removes the code) or a plan ADD (realized=False, an explicit build
-    request). These are deferred on a non-realize pass; every other accept reconciles the
-    tree to code that already exists and applies normally."""
+    retire (the agent removes the code) or a plan node (:func:`_is_plan_op`). These are
+    deferred on a non-realize pass; every other accept reconciles the tree to code that
+    already exists and applies normally."""
     return ((op.kind is NodeOpKind.RETIRE_NODE and op.delete_code)
-            or (op.kind is NodeOpKind.ADD_NODE and op.realized is False))
+            or _is_plan_op(op))
 
 
 def _amended_verdict_op(op: NodeOp, verdict) -> NodeOp:
@@ -1180,6 +1229,11 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # (op, feature_id-or-"", caused_by) per code-implying edit — feature_id feeds
     # the doc-wins hold set, caused_by the causality chain (suggestion/event id).
     directive_ops: list[tuple[NodeOp, str, str]] = []
+    # The `caused_by` ids of directives minted by ACCEPTING an agent's plan — the
+    # `origin` of the resulting Directive (see edits.Directive.origin). Keyed on the
+    # cause rather than the feature so a feature can hold the author's own edit and an
+    # accepted plan in the same pass without one relabelling the other.
+    plan_origin_causes: set[str] = set()
 
     # 0. Snapshot EVERYTHING this pass diffs against, BEFORE any store mutation —
     #    captured as one explicit object so the ordering invariant is structural,
@@ -1206,6 +1260,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # seeded from the pre-cancellation manifest, so a dry pass still drains the
     # request (withdraw is a real intent, not a directive to defer).
     res.canceled = _apply_cancellations(root_dir, codoc_dir)
+    res.queue_changed = res.queue_changed or bool(res.canceled)
 
     # Deletion is an EXPLICIT `retire` command now (U4 emits one when the human deletes
     # a node in the webview), applied via apply_op in step 0.5 — not inferred from a
@@ -1451,7 +1506,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
                 # A command-driven retire supersedes prior pending directives for the
                 # feature (add+retire churn — INV1/N15), mirroring the text retire path.
                 if op.kind is NodeOpKind.RETIRE_NODE and op.feature_id:
-                    _supersede_directives(root_dir, codoc_dir, {op.feature_id})
+                    if _supersede_directives(root_dir, codoc_dir, {op.feature_id}):
+                        res.queue_changed = True
                 elif op.kind is NodeOpKind.AMEND and op.feature_id:
                     # A fresh AMEND coalesces with this feature's earlier held draft
                     # (one directive per feature, never a stack) — the same coalesce the
@@ -1505,6 +1561,16 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             # editable ghost's title/description) — folded in HERE so both the apply
             # and any directive minted below speak the edited text, not the proposed.
             accepted_op = _amended_verdict_op(e.op, v)
+            # The wording this plan REPLACES, captured before the apply overwrites it.
+            # It is the base the plan channel's gray is measured from once the proposal
+            # row is gone (sidecar `hold_detail.baseline` + `origin: "plan"`), which is
+            # the only way "planned and accepted, nothing built yet" can still be drawn
+            # after the verdict lands. `setdefault` so a still-pending episode keeps the
+            # stable baseline it has been diffed against all along.
+            if _is_plan_op(accepted_op) and accepted_op.feature_id:
+                prior = store.get_feature(accepted_op.feature_id)
+                if prior is not None:
+                    baselines.setdefault(prior.id, prior.description or "")
             # Atomic: apply the accept AND delete its event as one unit. Without this a
             # kill -9 between the two (the verdict is drained only at pass end) re-reads
             # the still-present verdict next pass and re-accepts — and an ADD, whose op
@@ -1535,16 +1601,23 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
                 else:
                     for b in store.bindings_for_feature(accepted_op.feature_id):
                         store.delete_binding(b.file, b.symbol_path)
-            elif accepted_op.kind is NodeOpKind.ADD_NODE and accepted_op.realized is False:
-                # An accepted PLAN placeholder (realized=False) is a build request →
-                # mint a directive. Every other accepted proposal (a descriptive AMEND
-                # reflecting code that already changed, an ADD binding existing code, a
-                # MOVE) reconciles the tree to EXISTING code — it must NOT mint a realize
-                # directive (that would tell the agent to re-write code to match a
-                # description derived from that very code). This deliberately does NOT
-                # route through edit_mints_directive, whose AMEND→always-True is for the
-                # doc-AUTHORING path, not for reconciling-to-code accepts.
+            elif _is_plan_op(accepted_op):
+                # An accepted PLAN node (realized=False — a placeholder ADD, or an AMEND
+                # describing what the feature will do once the work lands) is a build
+                # request → mint a directive. Every other accepted proposal (a
+                # descriptive AMEND reflecting code that already changed, an ADD binding
+                # existing code, a MOVE) reconciles the tree to EXISTING code — it must
+                # NOT mint a realize directive (that would tell the agent to re-write
+                # code to match a description derived from that very code). This
+                # deliberately does NOT route through edit_mints_directive, whose
+                # AMEND→always-True is for the doc-AUTHORING path, not for
+                # reconciling-to-code accepts.
                 directive_ops.append((accepted_op, fid, e.id))
+                # The accept IS the hand-off gesture, and the queue has to say so: this
+                # directive is the agent's plan the reader agreed to, not the reader's
+                # own unsent typing, and the two are the same lifecycle position drawn
+                # in different inks (see Directive.origin).
+                plan_origin_causes.add(e.id)
         else:
             store.delete_event(e.id)
             res.rejected += 1
@@ -1754,7 +1827,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # (U7 / FIX E), so the coalesce set is just the command-driven AMEND fids.
     edited_fids = set(command_amend_fids)
     if edited_fids and not dry_run:
-        _supersede_directives(root_dir, codoc_dir, edited_fids)
+        if _supersede_directives(root_dir, codoc_dir, edited_fids):
+            res.queue_changed = True
 
     if dry_run:
         status.refresh_status(codoc_dir, store)
@@ -1774,7 +1848,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     # Dead features, ledger-cited implementations, and realized plan placeholders:
     # close the queue on evidence of the work rather than on someone deleting
     # realize.md.
-    prune_satisfied_directives(store, root_dir, codoc_dir)
+    if prune_satisfied_directives(store, root_dir, codoc_dir):
+        res.queue_changed = True
     # A thread whose directive LANDED resolves itself — the half of the comment lifecycle
     # that never existed: a note went out and nothing ever came back, so "sent" was the
     # last thing a thread could say no matter what the agent did with it.
@@ -1803,10 +1878,12 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
         all_directives = existing + [
             edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause,
                                     text=text, baseline=baselines.get(fid, ""), handed_off=False,
-                                    ts=minted_ts, asked=asked_text, session_id=asked_session)
+                                    ts=minted_ts, asked=asked_text, session_id=asked_session,
+                                    origin=_origin_of(cause, plan_origin_causes))
             for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
         ]
         edits_channel.write_manifest(codoc_dir, all_directives)
+        res.queue_changed = True
         status.refresh_status(codoc_dir, store)
         return res
 
@@ -1824,7 +1901,8 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
     all_directives = existing + [
         edits_channel.Directive(id=did, feature_id=fid, kind=kind, caused_by=cause, text=text,
                                 baseline=baselines.get(fid, ""), handed_off=False, ts=minted_ts,
-                                asked=asked_text, session_id=asked_session)
+                                asked=asked_text, session_id=asked_session,
+                                origin=_origin_of(cause, plan_origin_causes))
         for did, (text, fid, cause, kind) in zip(res.directive_ids, rendered)
     ]
     for d in all_directives:
@@ -1834,11 +1912,15 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
                       # demoting it mid-realization would break the caused_by chain.
         if d.feature_id in force_draft_fids:
             d.handed_off = False  # lossy block `lower` (KTD2) → held until confirmed
-        elif d.kind in _EXPLICIT_REALIZE_KINDS or d.kind.startswith("block:"):
-            # An explicit / deterministic code request realizes on mint: a steer (note
-            # to the agent), a RETIRE (the destructive ~), a plan ADD (realized=False),
-            # or a block `lower` (a diagram/latex edit has an UNAMBIGUOUS code delta —
-            # not the prose ambiguity the held-draft default guards against).
+        elif (d.origin == edits_channel.ORIGIN_PLAN
+              or d.kind in _EXPLICIT_REALIZE_KINDS or d.kind.startswith("block:")):
+            # An explicit / deterministic code request realizes on mint: an ACCEPTED PLAN
+            # (the accept IS the gesture — there is no second ⌘S coming, and a plan
+            # amendment's kind is the same "amend" a held prose draft has, so origin is
+            # the only thing that can tell them apart), a steer (note to the agent), a
+            # RETIRE (the destructive ~), a plan ADD (realized=False), or a block `lower`
+            # (a diagram/latex edit has an UNAMBIGUOUS code delta — not the prose
+            # ambiguity the held-draft default guards against).
             d.handed_off = True
         else:
             # AMEND (a prose description edit) — held until its feature is explicitly
@@ -1881,6 +1963,7 @@ def _apply_edits(store, root_dir, codoc_dir, *, dry_run, realize=True) -> LoopBR
             pass
     # Manifest (its no-realize.md-but-drafts state is the source of truth for drafts).
     edits_channel.write_manifest(codoc_dir, all_directives)
+    res.queue_changed = True
     # W8: tell each comment which directive its note became, now that the ids exist.
     # After the manifest write, so a crash between the two leaves a thread that says
     # "sent" without a directive — recoverable and honest — rather than one that cites

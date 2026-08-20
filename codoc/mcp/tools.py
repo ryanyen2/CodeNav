@@ -563,9 +563,27 @@ def propose_add(codoc_dir: str, *, title: str, description: str = "",
 def propose_amend(codoc_dir: str, *, feature_id: str, title: str | None = None,
                   description: str | None = None, rationale: str = "",
                   source: str = LOOP_A_AGENT_SOURCE, caused_by: str = "",
-                  actor: str = "") -> dict:
+                  actor: str = "", builds: bool = False) -> dict:
+    """Propose new wording for an existing feature.
+
+    ``builds`` is the plan-vs-reflection distinction, and it is the difference between
+    two opposite requests that look identical on the wire:
+
+    * ``builds=False`` (default) — a REFLECTION. The code already changed; this is the
+      tree catching up. Accepting reconciles the description and asks for no code work.
+    * ``builds=True`` — a PLAN. The description says what the feature WILL do; the code
+      does not do it yet. Accepting is a build request: it queues a realize directive,
+      the IDE says so on the button, and the plan's wording stays in the plan channel
+      (faded, not the reader's own ink) until the code catches up.
+
+    ``/codoc:plan`` uses the second, and defaults to amending rather than adding because
+    most tasks change what an existing feature does. Before ``builds`` existed there was
+    no way to say it: every amend was read as a reflection, so accepting a plan made
+    entirely of amends queued nothing and the session had nothing to resume from.
+    """
     op = NodeOp(kind=NodeOpKind.AMEND, feature_id=feature_id, title=title,
-                description=description, rationale=rationale)
+                description=description, rationale=rationale,
+                realized=False if builds else None)
     return _apply_single(codoc_dir, op, source=source, caused_by=caused_by, actor=actor)
 
 
@@ -746,8 +764,16 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
     comment and never performed — verdicts that landed before the first poll came
     back as empty lists with no error.
 
+    A verdict that has landed but that the loop is REFUSING to apply resolves as
+    ``deferred`` rather than being waited on. The daemon defers a code-implying accept
+    on a ``--dry`` / ``--no-realize`` pass, leaving the verdict in the inbox and the
+    proposal in the store — which is exactly the state this loop treats as "still
+    awaiting the user", so it used to spin until the (24 hour) timeout while the user
+    stared at a plan they had already accepted. Nothing here can clear it; saying so and
+    returning is the only honest move.
+
     Returns ``{accepted:[{event_id, feature_id, title}], rejected:[event_id],
-    pending:[event_id], timed_out}``.
+    deferred:[event_id], pending:[event_id], timed_out}``.
     """
     import time as _time
 
@@ -756,7 +782,15 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
     targets = list(dict.fromkeys(event_ids))  # de-dupe, preserve order
     accepted: list[dict] = []
     rejected: list[str] = []
+    deferred: list[str] = []
     resolved: set[str] = set()
+    # How many consecutive polls have seen a verdict sitting un-applied on a proposal
+    # that is still in the store. One poll is not evidence — the daemon's Loop B takes a
+    # moment, and the ordinary case passes through this state on its way to applied.
+    # Two consecutive sightings across a full poll interval means nobody is going to
+    # apply it (see the docstring): the loop is refusing, not lagging.
+    stuck: dict[str, int] = {}
+    DEFER_POLLS = 2
     deadline = _time.monotonic() + max(0.0, timeout)
     root_dir = str(Path(codoc_dir).resolve().parent)
 
@@ -771,10 +805,25 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
             pass
 
     def _observe() -> None:
+        # Verdicts that HAVE landed on disk, so a proposal still in the store can be
+        # told apart from one nobody has answered yet.
+        voted = {v.event_id for v in inbox_read(codoc_dir)}
         with loop_lock(codoc_dir), open_store(codoc_dir) as store:
             for eid in targets:
-                if eid in resolved or store.get_event(eid) is not None:
-                    continue  # already answered / still awaiting its verdict
+                if eid in resolved:
+                    continue
+                if store.get_event(eid) is not None:
+                    if eid not in voted:
+                        stuck.pop(eid, None)
+                        continue          # genuinely still awaiting the user
+                    # Answered, and the proposal is STILL here. Give the loop one more
+                    # poll to be mid-pass, then stop pretending the user hasn't clicked.
+                    stuck[eid] = stuck.get(eid, 0) + 1
+                    if stuck[eid] < DEFER_POLLS:
+                        continue
+                    deferred.append(eid)
+                    resolved.add(eid)
+                    continue
                 done = store.applied_event_for_cause(eid)
                 if done is not None:
                     fid = done.op.feature_id
@@ -800,8 +849,17 @@ def await_verdicts(codoc_dir: str, *, event_ids: list[str],
     # bound file is really written, and codoc_realize_progress narrates the pass.
 
     pending = [e for e in targets if e not in resolved]
-    return {"ok": True, "accepted": accepted, "rejected": rejected,
-            "pending": pending, "timed_out": bool(pending)}
+    out = {"ok": True, "accepted": accepted, "rejected": rejected,
+           "deferred": deferred, "pending": pending, "timed_out": bool(pending)}
+    if deferred:
+        out["note"] = (
+            f"{len(deferred)} accepted proposal(s) are not being applied: the codoc "
+            "daemon is running with --dry / --no-realize, which defers a code-implying "
+            "accept. The user HAS accepted — tell them the daemon is suppressing "
+            "realization (restart `codoc watch` without those flags, or run "
+            "`codoc sync`) rather than waiting or re-proposing."
+        )
+    return out
 
 
 def plan_status(codoc_dir: str) -> dict:

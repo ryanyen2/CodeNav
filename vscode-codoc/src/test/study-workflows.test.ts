@@ -151,7 +151,7 @@ describe('the participant edits a planned node before deciding', () => {
     it('their typing reads as THEIRS — blue over the grey, not more grey', () => {
         const clean = tree();
         const proposals: StagedProposal[] = [{
-            kind: 'add', key: 'e-add', layerId: 'e-add', stage: 'proposed',
+            kind: 'add', key: 'e-add', layerId: 'e-add',
             titleOld: '', titleNew: planAdd.title, descOld: '', descNew: planAdd.description,
         }];
         const stages = buildStages(clean, proposals, {});
