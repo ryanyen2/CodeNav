@@ -19,6 +19,7 @@ const CODE = 'p-abcdefghjkmn';
 const CODE2 = 'p-nmkjhgfedcba';
 const CODE3 = 'p-qrstuvwxyz23';
 const CODE4 = 'p-23456789abcd';
+const CODE5 = 'p-3456789abcde';
 const hosts = emulatorHosts();
 const cfg = { apiKey: 'emulator-key', projectId: PROJECT, hosts };
 
@@ -55,7 +56,7 @@ const edit = (t) => ({ ev: 'edit', surface: 'code', file: 'a.py', t, active: tru
 before(async () => {
     // The experimenter creates the participant in advance. Here that is done with
     // an unauthenticated admin write, which the emulator allows.
-    for (const code of [CODE, CODE2, CODE3, CODE4]) {
+    for (const code of [CODE, CODE2, CODE3, CODE4, CODE5]) {
         await adminWrite(`participants?documentId=${code}`, {
             createdAt: { integerValue: String(Date.now()) },
             released: { booleanValue: false },
@@ -151,6 +152,37 @@ test('a second machine on one code is told the slot is taken', async () => {
     });
     assert.equal(await second.start(), false, 'the second machine does not think it registered');
     assert.ok(errors.some((e) => /another machine/.test(e)), errors.join('; '));
+});
+
+test('a real mirror takes back a code a dead run left claimed', async () => {
+    // The failure this whole change is about, end to end and against the real
+    // rules. A pilot run on this machine claimed the code days ago under an
+    // account that no longer exists anywhere, and the participant's editor was
+    // then refused every batch it tried to send. It now asks for the slot, the
+    // rules grant it because nothing has been heard from that account for a day,
+    // and the session mirrors.
+    const twoDaysAgo = String(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await adminWrite(`participants/${CODE5}/devices?documentId=mirror`, {
+        uid: { stringValue: 'an-account-from-a-pilot-run' },
+        kind: { stringValue: 'mirror' },
+        registeredAt: { integerValue: twoDaysAgo },
+    });
+
+    const logPath = makeLog(Array.from({ length: 8 }, (_, i) => edit(i * 20_000)));
+    const errors = [];
+    const m = new Mirror({
+        logPath, code: CODE5, condition: 'codoc',
+        client: new FirestoreRest(cfg),
+        onError: (e) => errors.push(e),
+    });
+
+    assert.equal(await m.start(), true, `start failed: ${errors.join('; ')}`);
+    assert.ok(errors.some((e) => /taken it over/.test(e)),
+        `it says what it did: ${errors.join('; ')}`);
+    assert.ok((await m.flush(true)).sent > 0, `nothing sent: ${errors.join('; ')}`);
+
+    const batches = await adminList(`participants/${CODE5}/sessions/codoc/batches`);
+    assert.equal((batches.documents || []).length, 1, 'and the batch is really there');
 });
 
 test('the rules refuse a batch for a code that was never created', async () => {

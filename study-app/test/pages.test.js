@@ -65,12 +65,28 @@ export const getDocs = async (ref) => ({
 export const query = (c) => c;
 export const orderBy = () => ({});
 export const serverTimestamp = () => 0;
-export const onSnapshot = (ref, cb) => {
+export const onSnapshot = (ref, cb, err) => {
+  // The error callback is kept as well as the data one. A test that could only
+  // deliver data could not tell the page's "nothing has arrived" from its
+  // "the read was refused", which for a long time were the same page.
   globalThis.__snaps = globalThis.__snaps || [];
-  globalThis.__snaps.push({ ref, cb });
+  globalThis.__snaps.push({ ref, cb, err });
   return () => {};
 };
 `;
+
+/**
+ * One device slot the way a snapshot delivers it.
+ *
+ * A slot is a document with fields, not just an id, because whether the editor is
+ * sending is read off the time it last sent. Passing no fields is a slot claimed
+ * by something older than the heartbeat, which is a real state and the one that
+ * cost a pilot.
+ */
+const slot = (id, fields = {}) => ({
+    id,
+    data: () => ({ uid: `uid-${id}`, kind: id, registeredAt: 1, ...fields }),
+});
 
 async function loadPage(page, storage, code = 'p-abcdefghjkmn') {
     const dir = mkdtempSync(join(tmpdir(), 'page-'));
@@ -258,17 +274,64 @@ test('it says which half of the handoff has not landed', async () => {
         .find((s) => s.ref.path === 'participants/p-abcdefghjkmn/devices');
     assert.ok(devices, 'the dashboard watches the device slots');
 
-    devices.cb({ docs: [{ id: 'browser' }] });
+    devices.cb({ docs: [slot('browser')] });
     const text = document.querySelector('#handoff').textContent;
     assert.match(text, /They have opened it/);
     assert.match(text, /editor has not reported/,
         'the expensive failure is the one named');
 
-    devices.cb({ docs: [{ id: 'browser' }, { id: 'mirror' }] });
+    devices.cb({ docs: [slot('browser'), slot('mirror', { lastSeenAt: Date.now() })] });
     const settled = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
-    assert.match(settled, /page open and their editor is reporting/);
+    assert.match(settled, /page open and their editor is sending/);
     assert.ok(document.querySelector('#handoff').classList.contains('settled'),
         'it gets out of the way once both have landed');
+});
+
+test('a claimed slot that has sent nothing is not called a working editor', async () => {
+    // A whole pilot was lost to the opposite of this. A run on the researcher's
+    // own machine had taken the code's mirror slot under a throwaway account, so
+    // the slot existed, the dashboard said the editor was reporting, and not one
+    // action was ever written. The slot existing and the editor sending are two
+    // different claims, and only the second one is worth a green dot.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+    const devices = (window.__snaps || [])
+        .find((s) => s.ref.path === 'participants/p-abcdefghjkmn/devices');
+
+    // Claimed by something old enough to predate the heartbeat.
+    devices.cb({ docs: [slot('browser'), slot('mirror')] });
+    let said = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
+    assert.ok(!document.querySelector('#handoff').classList.contains('settled'),
+        'a slot on its own does not settle the card');
+    assert.match(said, /Release the code/, 'and it says what to do about it');
+
+    // Claimed by a machine that sent something and then went quiet.
+    devices.cb({ docs: [
+        slot('browser'),
+        slot('mirror', { lastSeenAt: Date.now() - 40 * 60_000 }),
+    ] });
+    said = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
+    assert.match(said, /sent nothing for 40 minutes/, 'it says how long, not just that');
+    assert.match(said, /another machine holds this code/, 'and the likely reason');
+});
+
+test('a refused read says so rather than drawing a quiet afternoon', async () => {
+    // The dashboard used to treat a subscription error as an empty list, so a
+    // permission problem and a session nobody had started drew the same page.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+    const devices = (window.__snaps || [])
+        .find((s) => s.ref.path === 'participants/p-abcdefghjkmn/devices');
+    devices.err?.({ code: 'permission-denied' });
+    const said = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
+    assert.match(said, /could not be read \(permission-denied\)/);
+    assert.match(said, /signed in as an experimenter/, 'and what to try');
 });
 
 test('the handoff card does not carry a key, and says so', async () => {
@@ -504,7 +567,7 @@ test('a code can be released when a participant changes machine', async () => {
     });
     const devices = (window.__snaps || [])
         .find((s) => s.ref.path === 'participants/p-abcdefghjkmn/devices');
-    devices.cb({ docs: [{ id: 'browser' }, { id: 'mirror' }] });
+    devices.cb({ docs: [slot('browser'), slot('mirror', { lastSeenAt: Date.now() })] });
 
     // Only offered once something is actually holding a slot.
     document.querySelector('#handoff-more').click();

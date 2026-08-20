@@ -74,6 +74,15 @@ const state = {
     keys: {},
     answers: {},
     devices: [],
+    // The device documents themselves, not just which slots exist. A slot that
+    // was claimed once and a machine that is still sending look identical from
+    // the ids alone, and telling them apart is the whole point of the card.
+    deviceDocs: {},
+    // Why a subscription stopped, when one does. An empty list used to be drawn
+    // for a refused read and for a session nobody has started, so a permission
+    // problem read as a quiet afternoon.
+    batchError: null,
+    deviceError: null,
     assessment: null,
     project: 'scribe',
 };
@@ -397,6 +406,9 @@ function select(code) {
     state.selected = code;
     state.actions = [];
     state.devices = [];
+    state.deviceDocs = {};
+    state.batchError = null;
+    state.deviceError = null;
     renderRoster();
     renderDetail();
     watchBatches();
@@ -414,8 +426,20 @@ function watchDevices() {
     if (state.unsubDevices) state.unsubDevices();
     state.unsubDevices = onSnapshot(
         collection(db, `participants/${state.selected}/devices`),
-        (snap) => { state.devices = snap.docs.map((d) => d.id); renderHandoff(); },
-        () => { state.devices = []; renderHandoff(); },
+        (snap) => {
+            state.devices = snap.docs.map((d) => d.id);
+            state.deviceDocs = Object.fromEntries(snap.docs.map((d) => [d.id, d.data()]));
+            state.deviceError = null;
+            renderHandoff();
+        },
+        (err) => {
+            // Say so. Clearing the list and redrawing, which is what happened
+            // before, drew the same card as a participant who has not started.
+            state.devices = [];
+            state.deviceDocs = {};
+            state.deviceError = err.code || err.message || 'read refused';
+            renderHandoff();
+        },
     );
 }
 
@@ -427,9 +451,14 @@ function watchBatches() {
         (snap) => {
             state.actions = snap.docs.flatMap((d) => d.data().actions || []);
             state.actions.sort((a, b) => a.t - b.t);
+            state.batchError = null;
             renderSession();
         },
-        () => { state.actions = []; renderSession(); },
+        (err) => {
+            state.actions = [];
+            state.batchError = err.code || err.message || 'read refused';
+            renderSession();
+        },
     );
 }
 
@@ -675,18 +704,77 @@ function renderHandoff() {
     if (!p) return;
 
     const browser = state.devices.includes('browser');
-    const mirror = state.devices.includes('mirror');
-    el.classList.toggle('settled', browser && mirror);
+    const mirror = mirrorHealth();
+    el.classList.toggle('settled', browser && mirror.sending);
 
-    if (browser && mirror) {
+    if (browser && mirror.sending) {
         el.innerHTML = `<div class="hs">
             <span class="tick">●</span> They have the page open and their editor is
-            reporting. <button class="link-btn" id="handoff-more">show the link again</button>
+            sending. <button class="link-btn" id="handoff-more">show the link again</button>
         </div>`;
         $('#handoff-more').onclick = () => { el.classList.remove('settled'); renderOpenHandoff(el, p, browser, mirror); };
         return;
     }
     renderOpenHandoff(el, p, browser, mirror);
+}
+
+/**
+ * Whether the participant's editor is actually sending, as opposed to having
+ * registered once.
+ *
+ * The slot existing was read as "their editor is reporting" for the whole pilot,
+ * and it is not the same claim. A pilot run on the researcher's own machine had
+ * taken the slot under a throwaway account, so the slot existed, the dot was
+ * green, and not one action was ever written. The mirror now stamps the slot every
+ * time it sends, so the time it was last heard from is the honest signal, and a
+ * slot with no stamp on it is one that was claimed by something older than the
+ * heartbeat.
+ *
+ * Five minutes of quiet, because the mirror writes at most once a minute and only
+ * when it has something to send, so a participant reading code for two minutes is
+ * not a problem to report.
+ */
+function mirrorHealth() {
+    const held = state.devices.includes('mirror');
+    const seen = Number(state.deviceDocs.mirror?.lastSeenAt || 0);
+    const quietFor = seen ? Date.now() - seen : null;
+    return {
+        held,
+        seen,
+        quietFor,
+        sending: held && quietFor !== null && quietFor < 5 * 60_000,
+    };
+}
+
+// Redraw the handoff card on a timer as well as on a snapshot.
+//
+// Whether the editor is sending is a statement about how long ago it last sent, so
+// it goes stale on its own. A mirror that stops sending produces no snapshot to
+// react to, and without a clock the card would keep claiming everything is fine
+// for the rest of the session.
+setInterval(() => { if (state.view === 'participant') renderHandoff(); }, 30_000);
+
+/** One sentence about the editor, and what to do if it is the bad one. */
+function mirrorLine(mirror) {
+    if (state.deviceError) {
+        return `Their machines could not be read (${esc(state.deviceError)}), so this
+            says nothing either way. Check that you are signed in as an experimenter.`;
+    }
+    if (!mirror.held) {
+        return 'Their editor has not reported. Until it does, nothing they do in it '
+            + 'arrives here.';
+    }
+    if (mirror.sending) return 'Their editor is sending.';
+    if (!mirror.seen) {
+        return 'Their editor claimed this code before it started reporting when it '
+            + 'last sent, which means the claim is older than the current logger. '
+            + 'Release the code and have them restart the editor.';
+    }
+    return `Their editor claimed this code but has sent nothing for
+        ${Math.round(mirror.quietFor / 60_000)} minutes. Early in a session that is
+        normal, because it only sends when there is something to send. If a session
+        is under way, the likely cause is that another machine holds this code, so
+        release it and have them restart the editor.`;
 }
 
 function renderOpenHandoff(el, p, browser, mirror) {
@@ -716,9 +804,7 @@ function renderOpenHandoff(el, p, browser, mirror) {
         </div>
         <p class="give-note">Here so you can read it back to them if they get
         stuck. You do not need to send it.</p>
-        <p class="give-note">${dot(mirror)} ${mirror
-            ? 'Their editor is reporting.'
-            : 'Their editor has not reported. Until it does, nothing they do in it arrives here.'}</p>
+        <p class="give-note">${dot(mirror.sending)} ${mirrorLine(mirror)}</p>
         ${state.devices.length ? `<p class="give-note">
           <button class="link-btn" id="release">release this code</button>
           — if they have changed machine, or reinstalled. Their editor says to ask
@@ -1183,7 +1269,11 @@ function renderSession() {
 
     if (!state.actions.length) {
         chart.innerHTML = `<div class="empty" style="padding:34px">
-            Nothing has arrived for this condition yet. It appears here as it happens.
+            ${state.batchError
+                ? `This condition could not be read (${esc(state.batchError)}). Check
+                   that you are signed in as an experimenter. Nothing is missing
+                   from the participant's own copy either way.`
+                : 'Nothing has arrived for this condition yet. It appears here as it happens.'}
         </div>`;
         $('#ribbon').innerHTML = '';
         return;

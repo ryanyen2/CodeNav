@@ -267,6 +267,98 @@ test('a slot held by another machine is reported, not mistaken for success', asy
         'it says what is wrong and what to do about it');
 });
 
+test('a slot left behind by an older run is taken over rather than given up on', async () => {
+    // The case that cost a week of empty dashboards. A pilot run on the same
+    // machine signed in as a throwaway account, took the code's mirror slot, and
+    // exited, and the participant's own editor then had every batch refused. The
+    // mirror asks for the slot instead of stopping, and the rules decide whether
+    // it gets it, which is why the fake says yes here and no in the test below.
+    const dir = tmpdir();
+    const logPath = writeLog(dir, [edit(0)]);
+    const inner = fakeClient();
+    const errors = [];
+    const asked = [];
+    const client = {
+        written: inner.written,
+        restore() {}, signIn: inner.signIn,
+        async createDocument(c, id, d) {
+            if (id === 'mirror') return { created: false, existed: true };
+            return inner.createDocument(c, id, d);
+        },
+        async getDocument() { return null; },   // a slot we are not allowed to read
+        async updateDocument(path, data) { asked.push({ path, data }); return { updated: true }; },
+    };
+    const m = new Mirror({ logPath, code: 'p-x', client, onError: (e) => errors.push(e) });
+
+    assert.equal(await m.start(), true, 'it holds the slot after taking it over');
+    assert.equal(asked.length, 1, 'it asked for the slot once');
+    assert.equal(asked[0].data.uid, m.state.uid, 'and asked for it in its own name');
+    assert.ok(errors.some((e) => /taken it over/.test(e)),
+        'and says what happened, because a takeover is worth reading about');
+    assert.ok((await m.flush(true)).sent > 0, 'and the session then mirrors');
+});
+
+test('a slot another machine is still using is left alone', async () => {
+    // The rules refuse the write while the holder is still being heard from, so a
+    // second machine cannot take a live session's slot out from under it. What
+    // the mirror does with a refusal is say so and keep the local log.
+    const dir = tmpdir();
+    const logPath = writeLog(dir, [edit(0)]);
+    const inner = fakeClient();
+    const errors = [];
+    const client = {
+        written: inner.written,
+        restore() {}, signIn: inner.signIn,
+        async createDocument(c, id, d) {
+            if (id === 'mirror') return { created: false, existed: true };
+            return inner.createDocument(c, id, d);
+        },
+        async getDocument() { return null; },
+        async updateDocument() { return { updated: false, status: 403, body: 'PERMISSION_DENIED' }; },
+    };
+    const m = new Mirror({ logPath, code: 'p-x', client, onError: (e) => errors.push(e) });
+
+    assert.equal(await m.start(), false);
+    assert.equal((await m.flush(true)).sent, 0, 'and nothing is sent under a code it does not hold');
+    assert.ok(errors.some((e) => /still using it/.test(e)),
+        'it says the other machine is live and what to do about it');
+    assert.ok(errors.some((e) => /local log keeps everything/.test(e)),
+        'and that nothing has been lost');
+});
+
+test('the slot records when this machine was last heard from', async () => {
+    // Holding a slot and sending from it look identical on the dashboard without
+    // this, which is exactly how a session that mirrored nothing showed a green
+    // dot for two hours.
+    const dir = tmpdir();
+    const logPath = writeLog(dir, [edit(0), edit(20_000)]);
+    const inner = fakeClient();
+    const beats = [];
+    const client = {
+        written: inner.written,
+        restore() {}, signIn: inner.signIn, createDocument: inner.createDocument,
+        async getDocument() { return null; },
+        async updateDocument(path, data) { beats.push({ path, data }); return { updated: true }; },
+    };
+    const m = new Mirror({ logPath, code: 'p-x', client });
+    await m.start();
+    assert.ok((await m.flush(true)).sent > 0);
+    assert.equal(beats.length, 0,
+        'no heartbeat straight after registering, which already wrote the time');
+
+    // A minute of session, without waiting one. The throttle is deliberate: the
+    // slot is a signal about whether anything is arriving, and a write per batch
+    // would cost more than the signal is worth.
+    m.lastSeenSentAt = Date.now() - 120_000;
+    appendLog(logPath, [edit(40_000)]);
+    assert.ok((await m.flush(true)).sent > 0);
+    assert.equal(beats.length, 1, 'one heartbeat for the later send');
+    assert.equal(beats[0].path, 'participants/p-x/devices/mirror');
+    assert.ok(beats[0].data.lastSeenAt > 0, 'carrying the time it sent');
+    assert.deepEqual(Object.keys(beats[0].data), ['lastSeenAt'],
+        'and nothing else, so a heartbeat can never rewrite who holds the slot');
+});
+
 test('a restart reclaiming its own slot is not mistaken for a conflict', async () => {
     const dir = tmpdir();
     const logPath = writeLog(dir, [edit(0), edit(20_000)]);

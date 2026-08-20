@@ -23,6 +23,15 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$HOME/codoc-study"
+
+# Where the study's own database lives. Up here because --check reads it too, to
+# ask who holds the participant's mirror slot, and --check never reaches the part
+# of the script that fetches keys.
+#
+# The key is the public web configuration. It names the project and grants
+# nothing; the security rules are the protection.
+FIREBASE_KEY="AIzaSyCeIFBc8HhCmtw9-pXjUm1qT3CUyo5GbkY"
+FIRESTORE="https://firestore.googleapis.com/v1/projects/codoc-11b10/databases/(default)/documents"
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
@@ -189,6 +198,64 @@ wiring_check() {
     else
       echo "          Run setup again: ./setup.sh <your code> <your order>"
     fi
+    FAILED=1
+  fi
+}
+
+# Whether anything this folder recorded has actually reached the researcher.
+#
+# Everything else about the mirror can be checked by looking at files, and looking
+# at files is what told us nothing for a week. A slot claimed by an old pilot run
+# on this same machine refused every batch under the participant's code, the local
+# log kept growing, the editor said so on an output channel nobody opens, and the
+# dashboard drew a green dot the whole time. So this asks the two questions that
+# were never asked: has this folder ever sent anything, and does the code's mirror
+# slot belong to this machine.
+mirror_check() {
+  local w="$1" log="$2" code state sent uid token held
+  code="$(filed_under "$WORK/$w")"
+  state="$log.mirror.json"
+  sent="$(python3 -c "
+import json,sys
+try: print(json.load(open(sys.argv[1])).get('seq', 0))
+except Exception: print(0)" "$state" 2>/dev/null)"
+  if [ "${sent:-0}" -gt 0 ]; then
+    ok "$w has sent $sent batches to the researcher"
+  else
+    bad "$w has recorded $(wc -c < "$log" | tr -d ' ') bytes and sent none of it"
+    FAILED=1
+  fi
+
+  # Who holds the slot. The rules let a slot be read by the machine that holds it
+  # and by nobody else, so a read that comes back empty is the answer, not a
+  # failure to get one.
+  uid="$(python3 -c "
+import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('uid',''), d.get('refreshToken',''))
+except Exception: print('')" "$HOME/codoc-study/session-logs/mirror-identity.json" 2>/dev/null)"
+  [ -n "$code" ] && [ -n "${uid% *}" ] || return 0
+  token="$(curl -s -X POST \
+    "https://securetoken.googleapis.com/v1/token?key=$FIREBASE_KEY" \
+    -H 'content-type: application/json' \
+    -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"${uid#* }\"}" \
+    | python3 -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))" 2>/dev/null)"
+  [ -n "$token" ] || { note "could not reach the study's database to check the mirror slot"; return 0; }
+  held="$(curl -s -H "authorization: Bearer $token" \
+    "$FIRESTORE/participants/$code/devices/mirror" \
+    | python3 -c "
+import sys,json
+try: print(((json.load(sys.stdin).get('fields') or {}).get('uid') or {}).get('stringValue',''))
+except Exception: print('')" 2>/dev/null)"
+  if [ "$held" = "${uid% *}" ]; then
+    ok "$w: the code $code is registered to this machine"
+  else
+    bad "$w: the code $code is registered to a different machine, so what this"
+    echo  "          folder records will be refused. If that other machine has not"
+    echo  "          sent anything for a day the editor takes the code back on its"
+    echo  "          own when you restart it. Otherwise ask the researcher to"
+    echo  "          release the code."
     FAILED=1
   fi
 }
@@ -472,7 +539,7 @@ MCP_PY
   for w in $PROJECTS; do
     log="$HOME/codoc-study/session-logs/interaction-$w.jsonl"
     if [ -s "$log" ]; then
-      :
+      mirror_check "$w" "$log"
     else
       note "$w has not been opened in VS Code yet. Nothing to do: you open it"
       echo  "          together on the day. When you do, answer YES to \"Do you trust"
@@ -807,9 +874,6 @@ step "Fetching this session's keys"
 # the price of not pasting. It is why these are keys issued FOR the study, with a
 # hard spend cap, revoked when the sessions end — and why the dashboard has a
 # Revoke button for the day one leaks.
-FIREBASE_KEY="AIzaSyCeIFBc8HhCmtw9-pXjUm1qT3CUyo5GbkY"
-FIRESTORE="https://firestore.googleapis.com/v1/projects/codoc-11b10/databases/(default)/documents"
-
 # What went wrong, in the database's own words. A refusal and a code with no keys
 # yet are one message on this screen and two different fixes on the researcher's,
 # so the reason has to survive as far as the person who has to act on it.

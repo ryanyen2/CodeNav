@@ -12,7 +12,7 @@
 // the honest claim is about the recording and analysis chain rather than about
 // whether the extension emits these events at the right moments. The extension
 // has its own tests for that.
-import { writeFileSync, mkdtempSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { toSequence } from '../../docs/study-materials/logger/actions-vocab.js';
@@ -85,19 +85,34 @@ function rawSession(condition, startedAt) {
     return ev;
 }
 
-const MACHINE = mkdtempSync(join(tmpdir(), 'pilot-machine-'));
+// Who this machine is, in a directory that survives between runs.
+//
+// It used to be a fresh temporary directory per run, which looked tidy and was
+// the bug that cost us a week of empty dashboards. A fresh directory means a
+// fresh anonymous sign-in, and a fresh sign-in claims the participant's
+// claim-once mirror slot as a different account, so the real editor on this
+// machine was then refused every batch it tried to send under that code. Keeping
+// the identity in one place makes a pilot run look like what it is, which is one
+// more program on the same machine as the editor.
+const IDENTITY_DIR = process.env.PILOT_MACHINE_DIR
+    || join(tmpdir(), 'codoc-pilot-machine');
+mkdirSync(IDENTITY_DIR, { recursive: true });
+const IDENTITY = join(IDENTITY_DIR, 'mirror-identity.json');
+
+// The logs themselves are per run, because each run writes its own session and
+// the read offset has to start at zero for the bytes to be sent at all.
+const LOGS = mkdtempSync(join(tmpdir(), 'pilot-logs-'));
 
 async function mirrorOne(code, condition, raw) {
-    // One directory for both conditions, because a participant has one machine.
-    // Using a fresh one per condition is what surfaced the identity bug, and
-    // modelling it correctly is what proves the fix.
-    const dir = MACHINE;
-    const logPath = join(dir, `interaction-${condition}.jsonl`);
+    const logPath = join(LOGS, `interaction-${condition}.jsonl`);
     writeFileSync(logPath, `${raw.map((r) => JSON.stringify(r)).join('\n')}\n`);
 
     const problems = [];
     const mirror = new Mirror({
-        logPath, config: CONFIG,   // statePath per log, identity shared: the real layout
+        // State per log and identity per machine, which is the real layout. Using
+        // a fresh identity per condition is what surfaced the original bug, so it
+        // is modelled correctly here rather than worked around.
+        logPath, identityPath: IDENTITY, config: CONFIG,
         code, condition, onError: (m) => problems.push(m),
     });
     await mirror.start();
@@ -109,6 +124,14 @@ async function mirrorOne(code, condition, raw) {
 async function main() {
     const code = process.argv[2];
     if (!code) { console.error('usage: node scripts/pilot-run.mjs <code>'); process.exit(2); }
+
+    console.error(`pilot machine identity: ${IDENTITY}`);
+    console.error(`This run signs in as that account and claims the mirror slot on `
+        + `${code}. Use a code you are willing to spend, and do not use a code a `
+        + `participant is going to sit down with, because their editor would then `
+        + `find the slot taken. Re-running against the same code sends the same `
+        + `byte ranges, which Firestore refuses as already written, so a second run `
+        + `reports no problems and adds no data.`);
 
     const t0 = Date.parse('2026-08-15T14:00:00Z');
     const report = {};

@@ -54,6 +54,7 @@ export class Mirror {
         this.client = opts.client || new FirestoreRest(opts.config, opts.fetchImpl);
         this.state = this._loadState();
         this.registered = false;
+        this.lastSeenSentAt = 0;
         this.timer = null;
     }
 
@@ -69,6 +70,10 @@ export class Mirror {
         return {
             offset: perLog.offset || 0,
             seq: perLog.seq || 0,
+            // Dropping this used to make the first flush after a restart look
+            // overdue, which is harmless, but it also meant the state file grew a
+            // field the code no longer read, so it is carried through on purpose.
+            lastSentAt: perLog.lastSentAt || 0,
             uid: identity.uid || perLog.uid || null,
             refreshToken: identity.refreshToken || perLog.refreshToken || null,
         };
@@ -116,33 +121,94 @@ export class Mirror {
                 this.state.refreshToken = refreshToken;
                 this._saveState();
             }
+            const now = Date.now();
             const res = await this.client.createDocument(
                 `participants/${this.code}/devices`, 'mirror',
-                { uid: this.state.uid, kind: 'mirror', registeredAt: Date.now() },
+                { uid: this.state.uid, kind: 'mirror', registeredAt: now, lastSeenAt: now },
             );
             // "Already exists" is the normal answer on a restart, when the slot is
             // this machine's own. It is also the answer when the slot belongs to
-            // somebody else, and those two cases must not be confused: every
-            // batch would then be refused, one permission error at a time, with
-            // nothing saying why. So when the slot was already there, check whose
-            // it is.
+            // somebody else, and those two cases must not be confused, because
+            // every batch would then be refused one permission error at a time
+            // with nothing saying why. So when the slot was already there, find
+            // out whose it is.
             if (res && res.existed && this.client.getDocument) {
                 const held = await this.client.getDocument(
                     `participants/${this.code}/devices/mirror`);
                 if (!held || held.uid !== this.state.uid) {
-                    this.registered = false;
-                    this.onError('this code\'s mirror slot belongs to another machine. '
-                        + 'Ask the experimenter to release the code, then restart.');
-                    return false;
+                    return this._takeOverSlot();
                 }
             }
             this.registered = true;
+            this.lastSeenSentAt = now;
             return true;
         } catch (err) {
             this.onError(`not mirroring yet, will keep trying: ${err.message}`);
             this.registered = false;
             return false;
         }
+    }
+
+    /**
+     * Take a mirror slot that another machine claimed and then abandoned.
+     *
+     * A slot read as absent, when the create just said it exists, can only mean
+     * the holder is a different account, because the rules let a slot be read by
+     * its holder and by the experimenter and by nobody else. That happens for one
+     * ordinary reason, which is that a pilot run or a test run on this same
+     * machine signed in as a throwaway account and claimed the slot first, and
+     * whoever sits down afterwards is then locked out of their own code.
+     *
+     * So the mirror asks for the slot instead of giving up. The rules grant the
+     * write only when the current holder has not been heard from for a day, so
+     * the decision is made in one place that both machines can see, and a
+     * genuinely live second machine still cannot steal a slot out from under the
+     * first one. Whichever way it goes, the participant reads a sentence that
+     * says what to do about it.
+     */
+    async _takeOverSlot() {
+        this.registered = false;
+        if (!this.client.updateDocument) {
+            this.onError('this code\'s mirror slot belongs to another machine. '
+                + 'Ask the experimenter to release the code, then restart.');
+            return false;
+        }
+        const now = Date.now();
+        const res = await this.client.updateDocument(
+            `participants/${this.code}/devices/mirror`,
+            { uid: this.state.uid, kind: 'mirror', registeredAt: now, lastSeenAt: now },
+        );
+        if (res && res.updated) {
+            this.registered = true;
+            this.lastSeenSentAt = now;
+            this.onError('this code\'s mirror slot had been left behind by an older '
+                + 'run, so this machine has taken it over. Mirroring is on.');
+            return true;
+        }
+        this.onError('this code\'s mirror slot belongs to another machine that is '
+            + 'still using it. Ask the experimenter to release the code, then '
+            + 'restart. The local log keeps everything in the meantime.');
+        return false;
+    }
+
+    /**
+     * Say that this machine is still here.
+     *
+     * Holding a slot and sending nothing look identical on the dashboard without
+     * it, so the time of the last send is written onto the slot. It is also what
+     * lets a later run tell an abandoned slot from a live one. Sent at most once a
+     * minute, and a failure is ignored, because a heartbeat that blocks a session
+     * would be worse than no heartbeat.
+     */
+    async _touchSlot() {
+        if (!this.registered || !this.client.updateDocument) return;
+        const now = Date.now();
+        if (now - (this.lastSeenSentAt || 0) < 60_000) return;
+        this.lastSeenSentAt = now;
+        try {
+            await this.client.updateDocument(
+                `participants/${this.code}/devices/mirror`, { lastSeenAt: now });
+        } catch { /* the batches are the data; the heartbeat is only a signal */ }
     }
 
     /** Everything written to the log since the last successful send. */
@@ -221,6 +287,7 @@ export class Mirror {
         this.state.seq += 1;
         this.state.lastSentAt = Date.now();
         this._saveState();
+        await this._touchSlot();
         return { sent: actions.length };
     }
 

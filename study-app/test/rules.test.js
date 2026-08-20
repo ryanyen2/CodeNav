@@ -95,6 +95,58 @@ test('a slot that is already taken cannot be claimed by someone else', async () 
     await assertFails(claim(anon('u2'), CODE, 'browser', 'u2'));
 });
 
+test('the machine holding a slot can record that it is still sending', async () => {
+    // The dashboard could not tell a machine that was sending from one that
+    // registered once and stopped, and for a whole pilot it drew the same green
+    // dot for both. The mirror stamps its own slot every time it sends, so the
+    // rules have to let the holder write to a slot that is claimed once.
+    const db = anon('u1');
+    await claim(db, CODE, 'mirror', 'u1');
+    await assertSucceeds(setDoc(doc(db, `participants/${CODE}/devices/mirror`),
+        { lastSeenAt: Date.now() }, { merge: true }));
+});
+
+test('a slot nobody has been heard from for a day can be taken over', async () => {
+    // What locked a participant out of their own code. A pilot run on the
+    // researcher's machine signed in as a throwaway account, claimed the mirror
+    // slot, and exited, and the editor that sat down afterwards had every batch
+    // refused with only an output channel to say so. After a day the slot is
+    // treated as abandoned, so the editor takes it back without anybody being
+    // called.
+    const twoDays = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    await env.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), `participants/${CODE}/devices/mirror`),
+            { uid: 'a-throwaway-account', kind: 'mirror', registeredAt: twoDays });
+    });
+    await assertSucceeds(setDoc(doc(anon('u2'), `participants/${CODE}/devices/mirror`),
+        { uid: 'u2', kind: 'mirror', registeredAt: Date.now(), lastSeenAt: Date.now() }));
+});
+
+test('a slot whose holder is still sending cannot be taken over', async () => {
+    // The other half of the same rule, and the reason the day is in it. Two
+    // machines can hold a code at once by mistake, and the one that is actually
+    // recording the session must not lose its slot to the one that is not.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), `participants/${CODE}/devices/mirror`), {
+            uid: 'the-live-machine',
+            kind: 'mirror',
+            registeredAt: Date.now() - 3 * 24 * 60 * 60 * 1000,
+            lastSeenAt: Date.now() - 30_000,
+        });
+    });
+    await assertFails(setDoc(doc(anon('u2'), `participants/${CODE}/devices/mirror`),
+        { uid: 'u2', kind: 'mirror', registeredAt: Date.now(), lastSeenAt: Date.now() }));
+});
+
+test('a slot claimed today cannot be taken over, heartbeat or not', async () => {
+    // A browser slot never stamps itself, because the page has nothing to send.
+    // Falling back to when it was claimed is what keeps an hour-old slot safe
+    // from anybody else holding the code.
+    await assertSucceeds(claim(anon('u1'), CODE, 'browser', 'u1'));
+    await assertFails(setDoc(doc(anon('u2'), `participants/${CODE}/devices/browser`),
+        { uid: 'u2', kind: 'browser', registeredAt: Date.now() }));
+});
+
 test('a code that does not exist cannot be registered against', async () => {
     await assertFails(claim(anon('u1'), 'p-zzzzzzzzzzzz', 'browser', 'u1'));
 });

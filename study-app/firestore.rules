@@ -51,6 +51,15 @@ service cloud.firestore {
       return slot == 'setup';
     }
 
+    // A day of silence. Slots older than this are treated as abandoned, and the
+    // two ways a slot says it is alive are both read, because only the mirror
+    // writes lastSeenAt and every slot writes registeredAt when it is claimed.
+    // Reading registeredAt as well is what stops a browser slot claimed an hour
+    // ago from being taken by anybody else holding the code.
+    function abandonedBefore() {
+      return request.time.toMillis() - 86400000;
+    }
+
     function participantExists(code) {
       return exists(/databases/$(database)/documents/participants/$(code));
     }
@@ -134,17 +143,44 @@ service cloud.firestore {
                       && participantOpen(code)
                       && request.resource.data.uid == request.auth.uid
                       && noIdentifyingFields();
-        // A writer slot is claimed once. Releasing is the experimenter's job, and
-        // it is how a participant who lost their browser storage gets back in.
-        // The setup slot is the exception: it is retaken on every run, because
-        // setup is meant to be safe to run again and its account is thrown away
-        // each time. It grants no more than a free slot already would.
+        // A writer slot is claimed once, and releasing it is the experimenter's
+        // job, which is how a participant who lost their browser storage gets
+        // back in. Three exceptions are allowed, and each one exists because a
+        // participant was otherwise locked out of their own code.
+        //
+        // First, the setup slot is retaken on every run, because setup is meant
+        // to be safe to run again and its account is thrown away each time. It
+        // grants no more than a free slot already would.
+        //
+        // Second, the machine that holds a writer slot may write over it, which
+        // is how the mirror records the time it was last heard from. A researcher
+        // can then tell a machine that is still sending from one that registered
+        // once and stopped, and those two look identical without it.
+        //
+        // Third, anybody holding the code may take a writer slot whose holder has
+        // not been heard from for a day. The case that made it necessary is a
+        // pilot run or a test run that signed in as a throwaway account, claimed
+        // the mirror slot, and exited, after which the person who sat down next
+        // had every batch under their own code refused and only the experimenter
+        // could repair it. A day is long enough that a second machine which is
+        // genuinely in use cannot take the slot from the first. A slot written
+        // before the heartbeat existed carries no lastSeenAt, reads as zero, and
+        // is therefore reclaimable as soon as the day has passed since it was
+        // claimed, which is the repair we want for the codes already spent.
         allow update: if isExperimenter()
                       || (request.auth != null
                           && isFetchSlot(slot)
                           && participantOpen(code)
                           && request.resource.data.uid == request.auth.uid
-                          && noIdentifyingFields());
+                          && noIdentifyingFields())
+                      || (request.auth != null
+                          && isSlot(slot)
+                          && participantOpen(code)
+                          && request.resource.data.uid == request.auth.uid
+                          && noIdentifyingFields()
+                          && (resource.data.uid == request.auth.uid
+                              || (resource.data.get('lastSeenAt', 0) < abandonedBefore()
+                                  && resource.data.get('registeredAt', 0) < abandonedBefore())));
         allow delete: if isExperimenter();
       }
 

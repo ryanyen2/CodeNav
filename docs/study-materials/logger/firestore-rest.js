@@ -2,9 +2,10 @@
 //
 // Deliberately not the Firebase SDK. The logger is one short file a participant
 // can read before agreeing to run it, and it has no dependencies. Pulling in the
-// SDK would cost both, and the mirror only ever does three things: sign in
-// anonymously, refresh that sign-in, and create a document. All three are one
-// HTTP call each, and fetch is built in.
+// SDK would cost both, and the mirror only ever does four things: sign in
+// anonymously, refresh that sign-in, create a document, and overwrite a couple of
+// fields on the one document it owns. Each of those is one HTTP call, and fetch is
+// built in.
 //
 // The API key here is the public web configuration. It identifies the project and
 // grants nothing. The security rules are the protection.
@@ -136,6 +137,35 @@ export class FirestoreRest {
         if (r.status === 409) return { created: false, existed: true };
         const body = await safeText(r);
         throw new Error(`write failed (${r.status}) ${body.slice(0, 200)}`);
+    }
+
+    /**
+     * Overwrite the named fields of one document that already exists.
+     *
+     * The mirror uses this for two things, and both are about the slot it holds
+     * rather than about the session. It writes the time it was last heard from,
+     * so a researcher can tell a machine that is reporting from a slot that was
+     * merely claimed once. And when it finds the slot held by an account it does
+     * not have, it tries this anyway, because the rules allow the write only when
+     * the holder has gone quiet for a day. So whether a takeover is allowed is
+     * decided by the rules rather than guessed at here, and the mirror never has
+     * to read a document that belongs to somebody else.
+     */
+    async updateDocument(pathname, data) {
+        const token = await this.token();
+        const mask = Object.keys(data)
+            .map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
+        const url = `${this.hosts.firestore}/projects/${this.projectId}`
+            + `/databases/(default)/documents/${pathname}?${mask}`
+            + '&currentDocument.exists=true';
+        const r = await this.fetch(url, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+            body: JSON.stringify({ fields: encodeFields(data) }),
+        });
+        if (r.ok) return { updated: true };
+        const body = await safeText(r);
+        return { updated: false, status: r.status, body: body.slice(0, 200) };
     }
 
     /** Read one document, or null when it is absent or not readable. */
