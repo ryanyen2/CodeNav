@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.11
+
+### Fixed
+
+- **"Restore mine" restored nothing you could see.** The verdict on a loop rewrite emitted
+  a `set_description` from the host and left the document alone, so the store kept the
+  loop's wording, every projection re-rendered it, and a button labelled Restore visibly
+  did nothing. The restore is an edit of the DOCUMENT now, which reaches the store by the
+  ordinary settle — with a base_text the editor can vouch for, your own ink on the words,
+  and the same held-draft gate, so reverting still never silently dispatches an agent.
+
+
 ## 0.2.10
 
 ### Fixed

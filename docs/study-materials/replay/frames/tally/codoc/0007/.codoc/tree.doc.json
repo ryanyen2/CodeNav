@@ -1,0 +1,841 @@
+{
+  "type": "doc",
+  "content": [
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-d3d321d7",
+        "localId": "",
+        "version": "00000001787026352350-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading bank statements"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Every bank exports its transactions differently: different column names, and no agreement on whether money going out is negative. These features read whatever arrived and turn it into one common shape, so that every rule after this point can be written once instead of once per bank."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-d3d321d7"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-ae4276ec",
+        "localId": "",
+        "version": "00000001787026352351-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Bank export row reader"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Reads the CSV and maps its columns onto a common row."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-ae4276ec"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Column names are matched against an ordered list of aliases, most specific first, so a file with both `transaction date` and `date` uses the one that means what it says. A row that cannot be read is skipped rather than guessed at — parsing here, judgement later."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-ae4276ec"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-1755b881",
+        "localId": "",
+        "version": "00000001787026352351-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Money handling policies"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Two decisions about money that everything downstream depends on: which direction is negative, and when the rounding happens."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-1755b881"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-a1579194",
+        "localId": "",
+        "version": "00000001787026352351-00000000000000000000-default",
+        "level": 2,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Summary total rounding"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Rounds once, at the summary, not on every transaction."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-a1579194"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Two hundred transactions rounded individually drift by a few pence; rounded once at the end they do not. The cost is that the totals no longer agree line by line with a printed receipt, which is the thing you would want if you were reconciling against one."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-a1579194"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-b2477df7",
+        "localId": "",
+        "version": "00000001787026352352-00000000000000000000-default",
+        "level": 2,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Transaction sign normalization"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Makes spending negative and money coming in positive, whatever the bank did."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-b2477df7"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "One bank writes a £12 coffee as `-12.00`; another writes `12.00` and puts the direction in a separate column. If almost every amount in the file is positive, that is taken as the second convention and every sign is flipped. It is a guess, made rather than asked about, so that every rule after this sees one convention."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-b2477df7"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-4958abff",
+        "localId": "",
+        "version": "00000001787026352352-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Applying transaction policies"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "With the rows in one shape, these are the rules that decide what actually counts as spending: which month it lands in, what is really a duplicate, what is a transfer rather than a purchase, and which category it belongs to."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-4958abff"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-edbdedcc",
+        "localId": "",
+        "version": "00000001787026352352-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Transaction month assignment"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Counts a transaction in the month it was made, not the month the bank posted it."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-edbdedcc"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "A card payment on the 31st that posts on the 2nd belongs to the month you remember spending it in. The alternative — posting dates — would make the summary agree with the bank statement instead, which is a different thing to want."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-edbdedcc"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-6257cf6a",
+        "localId": "",
+        "version": "00000001787026506386-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Transfer-aware duplicate filtering"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Drops repeated rows so they do not inflate the totals."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-6257cf6a"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Same made date, same amount, same description (ignoring case) counts as one. Nothing in a row says whether it was sent twice or bought twice, so buying the same coffee twice in one day is counted once — the cost of not double-counting everything else. Transfers are the exception: moving £500 from current to savings shows up as two rows that look exactly like a duplicate, and dropping one would leave a £500 payment that never happened. Transfers are also left out of spending, because the money is still yours."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-6257cf6a"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-0bb3f871",
+        "localId": "",
+        "version": "00000001787026352353-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Merchant category assignment"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Puts each transaction in a category by matching its description against an ordered list of patterns."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-0bb3f871"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "The first pattern that matches wins, so specific ones sit before broad ones — a rule for one coffee shop has to come before the general `cafe` rule or it never fires. Anything unmatched goes to an uncategorised bucket, so the summary still adds up and the gap is visible instead of silent."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-0bb3f871"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-03a5a80d",
+        "localId": "",
+        "version": "00000001787026352353-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Refund netting policy"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Takes money that came back off the category it was spent in."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-03a5a80d"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "A £40 refund on a £100 coat leaves £60 of clothing, not £100 of clothing and £40 of income. Refunds are recognised by their positive sign, so income has to be excluded by category before this runs, or a salary would look like a refund of something."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-03a5a80d"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-7298ca42",
+        "localId": "",
+        "version": "00000001787026352354-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Recurring payment detection"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Finds the fixed commitments — rent, a subscription — by looking for the same description at the same amount in at least three different months."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-7298ca42"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Both the description and the amount have to match, or a weekly supermarket shop would look like a subscription. Three months rather than two, so a coincidence does not become a commitment."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-7298ca42"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-eab995f4",
+        "localId": "",
+        "version": "00000001787198864857-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Rule settings"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Gathers every value the rules read — the merchant patterns, what happens to a merchant nothing matches, which date each summary is lined up on — into one file the reader edits instead of constants spread through the modules. Nothing supplies a default for a missing value: a file with a piece missing stops the run and says which piece."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-eab995f4"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-e943df8c",
+        "localId": "",
+        "version": "00000001787198864867-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Statement periods"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Decides which period a transaction belongs to, for a month and for a week. Which date decides is set for each summary separately, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-e943df8c"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-007dec9d",
+        "localId": "",
+        "version": "00000001787026352354-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Producing a monthly spending summary"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "What comes out at the end: totals per category per month, and the ways to ask for them."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-007dec9d"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-b62f4884",
+        "localId": "",
+        "version": "00000001787026352354-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Monthly spending summary"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Adds the transactions up into monthly category totals, and reports what it did with the rest: how many rows it read, what it dropped as duplicates, what it treated as transfers, what it could not categorise, and which payments look recurring."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-b62f4884"
+      }
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "The policies run before the adding up, so the totals and the notes underneath them are telling the same story. Reordering that changes the numbers."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-b62f4884"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-ebd24159",
+        "localId": "",
+        "version": "00000001787026352355-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Command-line summary interface"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "`tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-ebd24159"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-e6b8a022",
+        "localId": "",
+        "version": "00000001787198864868-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Weekly spending summary"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "The same summary at a finer grain, grouped into weeks and written beside the monthly one rather than over it, so both are readable at once. Recurring payments stay counted in months whichever summary is being read, because that is about when a commitment falls."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-e6b8a022"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-19871689",
+        "localId": "",
+        "version": "00000001786934243486-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Checking statements"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "These features verify that statement reading, transaction policies, and monthly summaries continue to behave correctly across focused rule cases and complete sample statements."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-19871689"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-ab426731",
+        "localId": "",
+        "version": "00000001786934243489-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Rule contract test suite"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Keeps the behavior of each transaction rule explicit, including the cases where one policy can change another policy’s result. The suite uses small common rows so changes to parsing, normalization, categorization, and summaries fail at the rule boundary instead of being hidden in a larger end-to-end example."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-ab426731"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-049a2cad",
+        "localId": "",
+        "version": "00000001786934230599-00000000000000000000-default",
+        "level": 2,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Imported transaction contracts"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Checks that bank-exported values become usable transactions without guessing when a row is unreadable, and that spending signs and dates have the expected meaning afterward. Made dates determine the spending month even when posting happens later, while a transaction date takes precedence when both dates are exported so month-end spending is not shifted."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-049a2cad"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-0c151d76",
+        "localId": "",
+        "version": "00000001786934230599-00000000000000000000-default",
+        "level": 2,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Transfer-safe duplicate contracts"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Checks that duplicate removal drops only repeated transactions while preserving different rows and both legs of an own-account transfer. A transfer pair has the same shape as a duplicate, but removing one leg would make money appear to have been spent."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-0c151d76"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-ab27c3cd",
+        "localId": "",
+        "version": "00000001786934230600-00000000000000000000-default",
+        "level": 2,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Category and refund contracts"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Checks that merchant rules use the first matching pattern and keep unmatched spending in an uncategorised bucket instead of stopping the summary. Refunds are then netted against the category’s spending, so category assignment must remain available before the refund calculation."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-ab27c3cd"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-fe4343ef",
+        "localId": "",
+        "version": "00000001786934230600-00000000000000000000-default",
+        "level": 2,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Recurring payment contracts"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Checks that a payment is called recurring only when the same merchant and amount appear across three months, while changing amounts or having only two months does not qualify. This keeps ordinary variable shopping from being mistaken for a fixed commitment."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-fe4343ef"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-94fd0e4f",
+        "localId": "",
+        "version": "00000001786934230600-00000000000000000000-default",
+        "level": 2,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Summary amount contracts"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Checks that monetary totals are rounded once after the amounts have been added together. Rounding each row first could make several fractions total a penny more than the true sum."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-94fd0e4f"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-5c762fd7",
+        "localId": "",
+        "version": "00000001786934243489-00000000000000000000-default",
+        "level": 1,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "End-to-end statement summarization checks"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Protects the complete statement-to-monthly-summary behavior across the sample banks, including empty input, differing columns, made-date boundaries, sign conversion, transfers, duplicates, refunds, recurring payments, uncategorised transactions, and stable output. The fixtures keep these cases together because each statement exercises a different part of the real summarization flow, so changing the pipeline without preserving its policy order or visible results will fail here."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-5c762fd7"
+      }
+    },
+    {
+      "type": "featureHeading",
+      "attrs": {
+        "fid": "f-80e81830",
+        "localId": "",
+        "version": "00000001787007125393-00000000000000000000-default",
+        "level": 0,
+        "realized": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Package identity metadata"
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Identifies the Tally package and records its current version so tools and users can recognize the installed release. The module also states that Tally turns bank exports into a monthly summary."
+        }
+      ],
+      "attrs": {
+        "ownerId": "f-80e81830"
+      }
+    }
+  ]
+}

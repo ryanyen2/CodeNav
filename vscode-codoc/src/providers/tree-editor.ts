@@ -305,7 +305,7 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
                     // the dwell used to give. Revert = restore the previous wording as
                     // an ordinary authored edit (the daemon classifies it; since the
                     // code already moved, that can queue reconciliation work).
-                    await this.resolveAutoEdit(document, msg.fid, msg.at, !!msg.keep, msg.prev ?? '');
+                    await this.resolveAutoEdit(msg.fid, msg.at);
                     post();
                     return;
                 case 'translate-tree':
@@ -489,28 +489,20 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
      * take — so the daemon's classifier decides honestly whether restoring the old
      * claim implies code work now that the code has moved on.
      */
-    private async resolveAutoEdit(
-        document: vscode.TextDocument, fid: string, at: string, keep: boolean, prev: string,
-    ): Promise<void> {
+    private async resolveAutoEdit(fid: string, at: string): Promise<void> {
+        // Keep is the whole verdict on this side: the rewrite is acknowledged and the
+        // strip clears. RESTORE is not emitted here at all.
+        //
+        // It used to be. The host built a `set_description` carrying the previous
+        // wording and left the document alone, so the store kept the loop's sentence,
+        // every projection re-rendered it, and a button labelled "Restore mine" changed
+        // nothing a reader could see. The restore is now an edit of the DOCUMENT
+        // (`structure-commands.restoreFeatureDescription`), which reaches the store by
+        // the ordinary settle — with a base_text the editor can vouch for instead of one
+        // re-derived from possibly-stale text here, the author's own ink on the words,
+        // and the same held-draft gate, since a settle-authored description edit already
+        // goes through it. Reverting words still never silently dispatches an agent.
         await this.markAutoEditSeen(fid, at);
-        if (keep || !fid || !prev.trim()) return;
-        // base_text = the loop's rewrite — the value this command replaces — so the
-        // daemon's three-way merge sees a clean edit, not a conflict with itself.
-        const { features } = parseTreeCodoc(document.getText());
-        const current = features.find(f => f.id === fid)?.description ?? '';
-        await this.emitCommands(document, [{
-            id: `c-set_description-${fid}-${this.settleToken()}`,
-            kind: 'set_description',
-            feature_id: fid,
-            base_text: current,
-            session: this.sessionTag,
-            payload: { description: prev },
-        }]);
-        this.savedPending(document).set(fid, Date.now());
-        // Same held-draft gate as a settle-authored description edit: if the daemon
-        // classifies the restore as code-implying, the directive stays held until the
-        // author hands it off — reverting words must not silently dispatch an agent.
-        await this.markDrafts(document, [fid]);
     }
 
     // ── unasked loop rewrites: which ones the reader has caught up on (v6) ──────

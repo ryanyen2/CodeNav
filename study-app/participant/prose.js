@@ -158,7 +158,7 @@ const TALLY = Object.freeze({
         before: `boundary.csv: 7 rows, 3 months, 0 duplicates, 0 transfers, 0 uncategorised, 0 recurring
 current.csv: 37 rows, 3 months, 1 duplicates, 4 transfers, 1 uncategorised, 3 recurring
 other-bank.csv: 13 rows, 3 months, 0 duplicates, 0 transfers, 3 uncategorised, 1 recurring`,
-        caption: 'boundary.csv is the awkward one: every payment in it was made at the end of one month and processed at the start of the next.',
+        caption: 'boundary.csv is the awkward one: every payment in it was made at the end of one month and processed at the start of the next, so which of the two dates a summary uses decides where its money lands. Once the change is in there is a finer-grained summary as well as this one \u2014 the project\u0027s own settings say which date each of them follows.',
     }),
 
     prompt: 'I want to manage the categories myself without touching the source, and I want to see spending at a finer grain than a whole month. Make that work.',

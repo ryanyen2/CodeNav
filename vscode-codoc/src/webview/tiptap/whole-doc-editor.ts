@@ -33,6 +33,7 @@ import {
     newFeatureHeading,
     toggleRetireHeading,
     headingPosForFid,
+    restoreFeatureDescription,
 } from './structure-commands';
 import { SuggestionDecorations, SUGGESTIONS_UPDATED, DependencyDecorations, DEPS_UPDATED } from './suggestion-decorations';
 import { AutoEditDecorations, AUTO_EDITS_UPDATED } from './auto-edit-decorations';
@@ -463,6 +464,14 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
                     },
                     revert: (fid, at, prev) => {
                         delete currentAutoEdits[fid];
+                        // Put the words back in the DOCUMENT. That is what makes this a
+                        // restore rather than a message: `onUpdate` marks the doc dirty,
+                        // the ordinary settle emits the set_description against a baseline
+                        // this editor can vouch for, and the held-draft gate still decides
+                        // whether it reaches an agent. The host used to emit that command
+                        // itself and leave the prose alone, so the store kept the loop's
+                        // wording and the button visibly did nothing.
+                        restoreFeatureDescription(editor, fid, prev);
                         editor.view.dispatch(editor.state.tr.setMeta(AUTO_EDITS_UPDATED, true));
                         scheduleRail();
                         opts.onAutoEditVerdict?.(fid, at, false, prev);

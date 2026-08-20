@@ -399,3 +399,49 @@ export function descriptionBlocksForFid(doc: PMNode, fid: string): PMNode[] {
     }
     return out;
 }
+
+/**
+ * A description string as the paragraph blocks that carry it, owned by `fid`.
+ *
+ * The inverse of the join `featureUnits` does, so text that came out of a feature goes
+ * back into it unchanged. `ownerId` is stamped because prose routes to its feature by
+ * ownership first and position only as a fallback — an unowned paragraph inserted here
+ * would be captured by whatever heading happens to sit above it.
+ */
+export function descriptionBlocks(text: string, fid: string | null): PMNode[] {
+    return (text ? text.split(/\n{2,}/) : [])
+        .map(t => t.trim())
+        .filter(Boolean)
+        .map(t => paragraphNode(textToInlineRuns(t), fid));
+}
+
+/**
+ * `doc` with one feature's description replaced, and nothing else touched.
+ *
+ * This is what makes "Restore mine" a restore. The verdict on a loop rewrite used to
+ * emit a `set_description` command straight from the host and change nothing on screen:
+ * the store still held the loop's wording, the projection kept re-rendering it, and the
+ * reader watched a button labelled Restore do visibly nothing. Putting the words back in
+ * the DOCUMENT instead makes it an ordinary authored edit — the settle that follows
+ * emits the command with a base_text the editor can vouch for, the ink marks it as the
+ * reader's own, and the held-draft gate still decides whether it reaches an agent.
+ *
+ * Pure. A fid that is not in the doc returns it unchanged rather than inventing a node.
+ */
+export function withFeatureDescription(doc: PMNode, fid: string, text: string): PMNode {
+    const blocks = doc.content ?? [];
+    const at = blocks.findIndex(
+        b => b.type === NODE_FEATURE_HEADING
+            && (b.attrs as { fid?: string } | undefined)?.fid === fid);
+    if (at < 0) return doc;
+    let end = at + 1;
+    while (end < blocks.length && blocks[end].type !== NODE_FEATURE_HEADING) end++;
+    return {
+        ...doc,
+        content: [
+            ...blocks.slice(0, at + 1),
+            ...descriptionBlocks(text, fid),
+            ...blocks.slice(end),
+        ],
+    };
+}

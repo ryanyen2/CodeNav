@@ -13,6 +13,7 @@ import { Editor } from '@tiptap/core';
 import { Node as PMModelNode, NodeType } from '@tiptap/pm/model';
 import { TextSelection, Transaction, EditorState } from '@tiptap/pm/state';
 import { newLocalId } from './local-id';
+import { descriptionBlocks } from '../../state/pm-doc';
 
 interface HeadingHit {
     node: PMModelNode;
@@ -191,4 +192,29 @@ export function headingPosForFid(editor: Editor, fid: string): number | null {
         if (found === null && node.type.name === 'featureHeading' && node.attrs.fid === fid) found = offset;
     });
     return found;
+}
+
+/**
+ * Put a feature's description back to `text`, as an ordinary edit of the document.
+ *
+ * This is the whole of "Restore mine". The verdict on a loop rewrite used to emit a
+ * `set_description` from the host and change nothing on screen — the store still held
+ * the loop's wording, the projection kept re-rendering it, and a button labelled Restore
+ * visibly did nothing. Writing the words back HERE makes it the same kind of event as
+ * typing them: `onUpdate` marks the doc dirty, the ordinary settle emits the command
+ * against a baseline the editor can vouch for, the ink shows it as the reader's own, and
+ * the held-draft gate still decides whether it ever reaches an agent.
+ *
+ * Returns false when the fid is not in the document, so a stale verdict is a no-op
+ * rather than an edit somewhere unrelated.
+ */
+export function restoreFeatureDescription(editor: Editor, fid: string, text: string): boolean {
+    const hs = headings(editor);
+    const i = hs.findIndex(h => (h.node.attrs.fid as string | null) === fid);
+    if (i < 0) return false;
+    const start = hs[i].pos + hs[i].node.nodeSize;
+    const end = i + 1 < hs.length ? hs[i + 1].pos : editor.state.doc.content.size;
+    const blocks = descriptionBlocks(text, fid).map(b => editor.schema.nodeFromJSON(b));
+    editor.view.dispatch(editor.state.tr.replaceWith(start, end, blocks));
+    return true;
 }

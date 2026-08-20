@@ -555,7 +555,13 @@ NOTICE_GRACE_S = 6.0
 # The first good recording stopped one frame early for precisely this reason: the
 # rewrite it was stopping to show up landed in frame 12, and the stop was at 11.
 STOP_SETTLE_FACTOR = 4.0
-STOP_SETTLE_FLOOR_S = 20.0
+# 20s was not enough. `_wait_for_daemon` returns on QUIET, and quiet is not the same as
+# finished: the daemon debounces before it starts a pass, so a stop can be handed over
+# in the gap between the last write and the work it causes. scribe cleared it at 18s and
+# tally did not — its four description rewrites landed one frame past the stop, which is
+# the stop that exists to show them. Waiting longer costs derive time and nothing at
+# playback, where the player is waiting for a person anyway.
+STOP_SETTLE_FLOOR_S = 45.0
 
 
 def _codoc_newest(workspace: Path) -> float:

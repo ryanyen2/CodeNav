@@ -1,0 +1,174 @@
+{
+  "request": "I want to manage the categories myself without touching the source, and I want to see spending at a finer grain than a whole month. Make that work.",
+  "session_id": "fed81772-87cf-430f-a9c1-a970c5466701",
+  "checkpoints": [
+    5,
+    11
+  ],
+  "checkpoint_says": [
+    "● That is the plan. Accept the parts you want and I will build them; reject anything you would rather I did differently.",
+    "● The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code — have a look at what it changed before you try it out."
+  ],
+  "steps": [
+    {
+      "delay_s": 4.0,
+      "say": [
+        "● I'll start by seeing where the categories live and how a month is decided.",
+        "  Read({{WORKSPACE}}/tally/categories.py)",
+        "  Read({{WORKSPACE}}/tally/months.py)"
+      ]
+    },
+    {
+      "delay_s": 5.0,
+      "say": [
+        "  Read({{WORKSPACE}}/tally/summary.py)",
+        "  Read({{WORKSPACE}}/tally/cli.py)",
+        "● The merchant patterns are a dict in categories.py and the month comes from",
+        "  the date the payment was MADE, both as module constants. Nothing reads a",
+        "  file, so managing either means editing the source."
+      ]
+    },
+    {
+      "delay_s": 4.0,
+      "say": [
+        "● boundary.csv is the case that decides this. Every payment in it was made at",
+        "  the end of one month and posted at the start of the next, so which date a",
+        "  summary is lined up on changes where the money lands.",
+        "  Bash(.venv/bin/tally check fixtures/)"
+      ]
+    },
+    {
+      "delay_s": 3.0,
+      "say": [
+        "  ⎿  boundary.csv: 7 rows, 3 months, 0 duplicates, 0 transfers, 0 uncategorised, 0 recurring",
+        "● Confirmed. I'll move the rules into a file you edit, and add a weekly summary",
+        "  beside the monthly one."
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "say": [
+        "● Before I write it, here is the shape I have in mind. I have sketched it into",
+        "  the tree as three features so you can see where each piece would live and say",
+        "  what you want kept.",
+        "",
+        "  · Rule settings — every value the rules read, in one file you edit rather",
+        "    than constants spread through the modules.",
+        "  · Statement periods — a month and a week, each lined up on whichever date",
+        "    that summary is read against.",
+        "  · Weekly spending summary — the same summary at a finer grain, written",
+        "    beside the monthly one rather than over it."
+      ],
+      "propose": [
+        {
+          "kind": "add_node",
+          "title": "Rule settings",
+          "description": "Gathers every value the rules read — the merchant patterns, what happens to a merchant nothing matches, which date each summary is lined up on — into one file the reader edits instead of constants spread through the modules. Nothing supplies a default for a missing value: a file with a piece missing stops the run and says which piece.",
+          "before": "f-007dec9d",
+          "rationale": "plan: the categories cannot be managed without editing the source while each module owns its own constants"
+        },
+        {
+          "kind": "add_node",
+          "title": "Statement periods",
+          "description": "Decides which period a transaction belongs to, for a month and for a week. Which date decides is set for each summary separately, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends.",
+          "before": "f-007dec9d",
+          "rationale": "plan: a finer grain than a month needs a period the summary can be grouped by"
+        },
+        {
+          "kind": "add_node",
+          "title": "Weekly spending summary",
+          "description": "The same summary at a finer grain, grouped into weeks and written beside the monthly one rather than over it, so both are readable at once. Recurring payments stay counted in months whichever summary is being read, because that is about when a commitment falls.",
+          "parent": "f-007dec9d",
+          "rationale": "plan: the request is to see spending at a finer grain than a whole month"
+        }
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "write": {
+        "tally/settings.py": "files/tally/settings.py"
+      },
+      "say": [
+        "  Write({{WORKSPACE}}/tally/settings.py)"
+      ]
+    },
+    {
+      "delay_s": 7.0,
+      "write": {
+        "tally/rules.toml": "files/tally/rules.toml"
+      },
+      "say": [
+        "  Write({{WORKSPACE}}/tally/rules.toml)",
+        "● rules.toml is the only place these values live. A merchant nothing matches",
+        "  stops the run and names it, rather than being filed under a bucket nobody",
+        "  reads again."
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "write": {
+        "tally/periods.py": "files/tally/periods.py"
+      },
+      "delete": [
+        "tally/months.py"
+      ],
+      "say": [
+        "  Write({{WORKSPACE}}/tally/periods.py)",
+        "  Bash(rm {{WORKSPACE}}/tally/months.py)",
+        "● months.py becomes periods.py, since it now decides weeks as well. Which date",
+        "  each summary uses is in [periods] — the month on the date it was made, the",
+        "  week on the date the bank posted it."
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "write": {
+        "tally/summary.py": "files/tally/summary.py",
+        "tally/categories.py": "files/tally/categories.py",
+        "tally/dedupe.py": "files/tally/dedupe.py",
+        "tally/money.py": "files/tally/money.py",
+        "tally/recurring.py": "files/tally/recurring.py"
+      },
+      "say": [
+        "  Edit({{WORKSPACE}}/tally/summary.py)",
+        "  Edit({{WORKSPACE}}/tally/categories.py)",
+        "● Every rule takes its settings as an argument now. None of them reads a global."
+      ]
+    },
+    {
+      "delay_s": 5.0,
+      "write": {
+        "tally/cli.py": "files/tally/cli.py",
+        "README.md": "files/README.md",
+        "pyproject.toml": "files/pyproject.toml"
+      },
+      "say": [
+        "  Edit({{WORKSPACE}}/tally/cli.py)",
+        "● `--by-week` on summarise and on check. The weekly file is written beside the",
+        "  monthly one as `.weekly.md`."
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "write": {
+        "tests/test_settings.py": "files/tests/test_settings.py",
+        "tests/test_rules.py": "files/tests/test_rules.py",
+        "tests/test_statements.py": "files/tests/test_statements.py",
+        "tests/test_cli.py": "files/tests/test_cli.py"
+      },
+      "say": [
+        "  Write({{WORKSPACE}}/tests/test_settings.py)",
+        "  Bash(.venv/bin/python -m pytest tests/ -q)",
+        "  ⎿  ....................................... 119 passed"
+      ]
+    },
+    {
+      "delay_s": 4.0,
+      "say": [
+        "● Done. The rules are in tally/rules.toml for you to edit, and `--by-week` gives",
+        "  the same summary a week at a time, lined up on the date the bank posted each",
+        "  payment so it reads next to your statement."
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "project": "tally",
-  "note": "Read scribe.json for what a claim is and how it is rated. Each claim has a sample of its own, holding only the rows that claim is about. They used to share one, and a claim's signal then included a total that moved when a DIFFERENT claim broke, so a correct total read as a broken one. A claim-by-claim audit needs claims that can each be wrong on their own. Two claims are probed against the weekly summary, because the record states them without qualifying which summary it means and the recorded change made the two disagree.",
+  "note": "Read scribe.json for what a claim is and how it is rated. Each claim has a sample of its own, holding only the rows that claim is about. They used to share one, and a claim's signal then included a total that moved when a DIFFERENT claim broke, so a correct total read as a broken one. A claim-by-claim audit needs claims that can each be wrong on their own. Two claims are probed against the weekly summary, because the record states them without qualifying which summary it means and the recorded change made the two disagree. C6 is the planted one: the two summaries are SUPPOSED to differ — a month answers what was spent in January, a week is read beside the bank's statement — so the claim is that each follows the date its own setting names, not that they agree.",
   "sample_command": [
     "python",
     "-m",
@@ -27,7 +27,8 @@
         "savings",
         "excluded",
         "left out"
-      ]
+      ],
+      "planted": null
     },
     {
       "id": "C2",
@@ -56,7 +57,7 @@
         "merchant",
         "amount"
       ],
-      "planted": "D2"
+      "planted": null
     },
     {
       "id": "C3",
@@ -74,12 +75,13 @@
         "made",
         "posted",
         "date"
-      ]
+      ],
+      "planted": null
     },
     {
       "id": "C4",
       "policy": "a merchant matching no rule",
-      "planted": "D3",
+      "planted": null,
       "statement": "A merchant that matches no rule goes to the uncategorised bucket, and the run finishes.",
       "probe": {
         "sample": "unmatched.csv",
@@ -111,13 +113,14 @@
         "net",
         "category",
         "back"
-      ]
+      ],
+      "planted": null
     },
     {
       "id": "C6",
-      "policy": "the two summaries of one statement",
+      "policy": "which date each summary is lined up on",
       "planted": "D1",
-      "statement": "The same transaction is filed in the same period whichever way the statement is summarised, because the date that decides is the date it was made.",
+      "statement": "Each summary is lined up on the date its own setting names, so the weekly one follows the date the bank posted a payment.",
       "probe": {
         "sample": "posted.csv",
         "command": [
@@ -130,17 +133,18 @@
           "--by-week"
         ],
         "signal": "## 2026-W05",
-        "holds_when": "present",
-        "present_means": "a transaction made on the 31st of January is in the week that holds the 31st of January",
-        "absent_means": "the weekly summary files it by the date the bank posted it, so one transaction is in January monthly and February weekly and the two summaries of one statement disagree"
+        "holds_when": "absent",
+        "present_means": "the weekly summary buckets by the date the payment was MADE, so `week = \"posted\"` in rules.toml was read, validated and had no effect — both summaries were handed the month's date",
+        "absent_means": "the week follows the posting date its setting names, so it reads next to the statement the bank sends"
       },
       "find_in_record": [
         "week",
-        "month",
-        "made",
         "posted",
+        "made",
         "date",
-        "period"
+        "period",
+        "rules.toml",
+        "setting"
       ]
     }
   ]
