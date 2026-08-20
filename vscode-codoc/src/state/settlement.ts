@@ -33,6 +33,13 @@
  *   plan  — an agent proposes it; nothing has been built.        → faded GRAY text
  *   code  — it surfaced back from code that already exists.      → green/red BACKGROUND
  *
+ * The human channel is INK ONLY — no diff view. What you removed is not a thing you
+ * need shown back to you; you are the one who removed it, and a ghost of your own
+ * deleted words is a surface narrating your typing. The other two channels report
+ * removals because there somebody ELSE took the words out. The claims still exist in
+ * both cases (a deletion-only edit must still reach the marker); only the drawing
+ * differs, and it differs in one place.
+ *
  * One visual axis per channel (colour / opacity / background) is what lets them stack
  * on the same words without a legend: planned text that the build then altered is gray
  * (still the plan's words) with a red ground under the part that did not survive.
@@ -299,24 +306,21 @@ interface Span0 { edit: Edit; start: number; end: number; removed?: string }
  * A deletion becomes a zero-width point carrying its words, because there is nothing
  * left to underline: "I don't think" → "I| think" is the case that taught this.
  *
- * `ownWork` suppresses the deletion beside a REPLACEMENT, and it is set only for the
- * human channel. "the cat" → "the dog" is one act of editing, and the reader performed
- * it; printing a ghost of "cat" next to their own "dog" tells them something they just
- * did. For the other two channels the same shape means the opposite — somebody else
- * replaced your sentence, and the words they took out are the whole point — so there it
- * is kept. A PURE deletion (no insertion beside it) is reported in every channel: that
- * one leaves nothing on screen to notice at all.
+ * Every channel produces these, INCLUDING the human one, even though the human channel
+ * does not draw them (see `settlement-decorations`). The claim still has to exist: a
+ * feature the author has only deleted from has no added words to ink, so suppressing it
+ * here would leave the model reporting a settled feature and the margin marker saying
+ * nothing about an edit that is real and unsent. What is a rendering decision is kept a
+ * rendering decision.
  */
-function spansOf(runs: readonly DiffRun[], ownWork = false): Span0[] {
+function spansOf(runs: readonly DiffRun[]): Span0[] {
     const out: Span0[] = [];
     let at = 0;
-    runs.forEach((run, i) => {
-        if (run.t === 'same') { at += run.s.length; return; }
-        if (run.t === 'ins') { out.push({ edit: 'add', start: at, end: at + run.s.length }); at += run.s.length; return; }
-        const replacement = runs[i - 1]?.t === 'ins' || runs[i + 1]?.t === 'ins';
-        if (ownWork && replacement) return;
+    for (const run of runs) {
+        if (run.t === 'same') { at += run.s.length; continue; }
+        if (run.t === 'ins') { out.push({ edit: 'add', start: at, end: at + run.s.length }); at += run.s.length; continue; }
         out.push({ edit: 'del', start: at, end: at, removed: run.s });
-    });
+    }
     return out;
 }
 
@@ -493,7 +497,7 @@ export function claimsFor(f: FeatureLayers): Claim[] {
 
         // ── human: everything between what the code agreed with and what is on screen ─
         if (st.humanBase !== st.live) {
-            for (const s of spansOf(diffFor(st.block, 'human')(st.humanBase, st.live), true)) {
+            for (const s of spansOf(diffFor(st.block, 'human')(st.humanBase, st.live))) {
                 out.push({ channel: 'human', stage: humanStage, edit: s.edit, block: st.block, start: s.start, end: s.end, removed: s.removed, layerId: LOCAL_EDIT_LAYER });
             }
         }

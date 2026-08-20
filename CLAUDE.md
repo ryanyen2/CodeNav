@@ -295,9 +295,11 @@ a *claim* — a range, a channel, a stage — and each channel owns a different
 property of the text, so they stack on the same words without a legend:
 
 - **human → the INK.** Blue; pulsing while it is still yours to send, steady once
-  handed off. Its base is what the CODE last agreed with, never the last
-  projection — after ⌘S the daemon echoes your edit back, and a diff against that
-  is empty exactly when the mark becomes true.
+  handed off. Ink ONLY — your own removals are not drawn, because you are the one
+  who removed them; the other two channels do report theirs. Its base is what the
+  CODE last agreed with, never the last projection — after ⌘S the daemon echoes
+  your edit back, and a diff against that is empty exactly when the mark becomes
+  true.
 - **plan → the OPACITY.** Faded gray, solider once accepted. Materialized into the
   doc, so a `proposed` node attr guards three paths that would otherwise author the
   agent's words as yours: `featureUnits`, `renderTreeFromDoc`, `inlineRunsToText`.

@@ -97,6 +97,11 @@ describe('the human channel: what your own editing looks like', () => {
     // These moved here with the marks themselves. `blockDiffSpans` computed them for a
     // decoration layer that no longer exists; `claimsFor` computes them for all three
     // channels at once, so the rules below are stated once instead of per-layer.
+    //
+    // The human channel is INK ONLY — no diff view. The claims below still carry
+    // removals, because a deletion-only edit has no added words to ink and the margin
+    // marker has to know the feature is unsettled; the DRAWING drops them, in one place
+    // (`settlement-decorations`), which is where a rendering decision belongs.
     const ft = (title: string, ...paras: string[]) => ({ title, paras });
     const spans = (base: string, cur: string) =>
         claimsFor({ projected: ft('T', base), live: ft('T', cur) })
@@ -109,35 +114,22 @@ describe('the human channel: what your own editing looks like', () => {
         expect(cur.slice(add.start, add.end)).toContain('OAuth');
     });
 
-    it('a pure deletion is reported at the gap — there is nothing left to cover', () => {
-        const del = spans("I don't think", 'I think').find(c => c.edit === 'del')!;
-        expect(del.removed).toContain("don't");
-        expect(del.start).toBe(del.end);
-        expect(spans("I don't think", 'I think').some(c => c.edit === 'add')).toBe(false);
+    it('a deletion-only edit still produces a claim, so the marker can see it', () => {
+        // Nothing is drawn for it, but a feature you have only deleted from is not
+        // settled — and with no claim the margin would say it was.
+        const out = spans("I don't think", 'I think');
+        expect(out.length).toBeGreaterThan(0);
+        expect(out.some(c => c.edit === 'add')).toBe(false);
     });
 
-    it('a word REPLACEMENT shows only the new word — you just did that', () => {
-        // "the cat" → "the dog" is one act of editing, and the reader performed it;
-        // a ghost of "cat" beside their own "dog" reports back what they just typed.
-        const out = spans('the cat', 'the dog');
-        expect(out.some(c => c.edit === 'add')).toBe(true);
-        expect(out.some(c => c.edit === 'del')).toBe(false);
-    });
-
-    it('…but the SAME shape from the code channel keeps the removed words', () => {
+    it('the SAME shape from the code channel keeps the removed words', () => {
         // There it means somebody else replaced your sentence, and what they took out
-        // is the whole point.
+        // is the whole point — so the code channel does draw its ghost.
         const projected = ft('T', 'the dog');
         const claims = claimsFor({
             code: { layerId: 'e-1', prev: ft('T', 'the cat') }, projected, live: projected,
         });
         expect(claims.some(c => c.channel === 'code' && c.removed?.includes('cat'))).toBe(true);
-    });
-
-    it('a pure deletion alongside a SEPARATE addition is still reported', () => {
-        const out = spans('alpha beta gamma', 'alpha gamma delta');
-        expect(out.some(c => c.edit === 'del')).toBe(true);
-        expect(out.some(c => c.edit === 'add')).toBe(true);
     });
 
     it('no change → nothing', () => {

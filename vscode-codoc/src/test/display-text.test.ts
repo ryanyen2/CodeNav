@@ -138,6 +138,29 @@ describe('the human channel — chips and alignment, through the real decoration
         expect(humanAdds(doc, baseJson)).toContain('resilient ');
     });
 
+    it('draws NO ghost for what you deleted — the human channel is ink only', () => {
+        // You removed those words; showing them back to you is the surface narrating
+        // your own typing. The claim still exists (the margin marker reads it), so this
+        // asserts the RENDERING, which is where the rule belongs.
+        const baseJson = { type: 'doc', content: [
+            heading('f-a', 'Fan-out'),
+            para(text('Alpha beta gamma.')),
+        ] } as PMNode;
+        const doc = docOf(heading('f-a', 'Fan-out'), para(text('Alpha gamma.')));
+        const decos = buildSettlementDecorations(doc, stagesOf(baseJson)).find();
+        expect(decos).toHaveLength(0);
+    });
+
+    it('…while the code channel DOES, because somebody else took the words out', () => {
+        const doc = docOf(heading('f-a', 'Fan-out'), para(text('Alpha gamma.')));
+        const stages = new Map([['f-a', {
+            projected: { title: 'Fan-out', paras: ['Alpha gamma.'] },
+            code: { layerId: 'e-1', prev: { title: 'Fan-out', paras: ['Alpha beta gamma.'] } },
+        }]]);
+        const decos = buildSettlementDecorations(doc, stages).find();
+        expect(decos.length).toBeGreaterThan(0);
+    });
+
     it('keeps the mark anchored when a paragraph is inserted above', () => {
         const baseJson = { type: 'doc', content: [
             heading('f-a', 'Fan-out'),

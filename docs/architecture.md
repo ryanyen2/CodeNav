@@ -611,7 +611,7 @@ which is what lets them stack on the same words without a legend:
 
 | channel | axis | meaning |
 |---|---|---|
-| `human` | INK — blue | you wrote it; the code does not say it yet. Pulsing while unsent (`open`), steady once handed off (`committed`). |
+| `human` | INK — blue | you wrote it; the code does not say it yet. Pulsing while unsent (`open`), steady once handed off (`committed`). **Ink only — no diff view:** your own removals are not drawn (you removed them), while the other two channels do report theirs. The claim is still emitted, so a deletion-only edit still reaches the marker. |
 | `plan` | OPACITY — faded | an agent proposes it; nothing is built. Solider once `accepted`. |
 | `code` | GROUND — green / red | it surfaced back from code that exists (`landed`), at sentence granularity. |
 

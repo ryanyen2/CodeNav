@@ -2734,7 +2734,11 @@ body.vscode-using-screen-reader .ce-settle.human.open { animation: none; }
 
 /* ── deletions: the words, not a caret ───────────────────────────────────────── */
 /* A caret says something went and withholds the one fact you need to decide whether
-   you mind. The removed words are the message, struck where they stood. */
+   you mind. The removed words are the message, struck where they stood.
+
+   Only the PLAN and CODE channels get one. Your own deletions are not drawn at all:
+   you removed those words, and a ghost of them is the surface narrating your typing
+   back to you. The blue ink on what you WROTE is the whole of the human channel. */
 .ce-settle-ghost {
     text-decoration: line-through;
     text-decoration-thickness: 1px;
@@ -2747,7 +2751,6 @@ body.vscode-using-screen-reader .ce-settle.human.open { animation: none; }
     background: color-mix(in srgb, var(--st-code-del) var(--st-ground), transparent);
     text-decoration-color: color-mix(in srgb, var(--st-code-del) 70%, transparent);
 }
-.ce-settle-ghost.human { color: var(--st-human); text-decoration-color: var(--st-human); }
 .ce-settle-ghost.plan { opacity: calc(var(--st-plan-proposed) * 0.9); }
 
 /* High contrast: hues carry no meaning that is not also carried by ink weight or the

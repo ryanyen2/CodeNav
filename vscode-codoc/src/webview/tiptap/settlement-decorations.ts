@@ -18,6 +18,17 @@
  *   plan  → the OPACITY.    faded, as unbuilt things should look. Solider once accepted.
  *   code  → the GROUND.     green behind what the codebase added, red behind what it cut.
  *
+ * ## The human channel has no diff view
+ *
+ * It draws ink and nothing else — no ghost of what you removed. You are the one who
+ * removed it, and showing your own deleted words back to you is the surface narrating
+ * your typing; the reader needs to see what they WROTE, which the ink already is. The
+ * other two channels do report removals, because there somebody else took the words
+ * out and "what did it say before" is exactly the question.
+ *
+ * The claim still exists either way — a deletion-only edit has no added words to ink,
+ * and the margin marker has to know the feature is unsettled. Only the drawing differs.
+ *
  * Planned wording that the build then altered therefore reads exactly as it should
  * without anybody being taught a key: the plan's own faded words, with a red ground
  * under the part that did not survive the build.
@@ -145,6 +156,8 @@ export function claimTitle(c: Claim): string {
  * two-pixel mark tells you something went, and withholds the one fact you need to
  * decide whether you mind. For the code channel especially — where the point is
  * "the codebase dropped this claim" — the words themselves are the message.
+ *
+ * Only the plan and code channels reach here; the human channel is ink only.
  */
 function ghost(c: Claim): HTMLElement {
     const el = document.createElement('span');
@@ -167,6 +180,9 @@ export function buildSettlementDecorations(
         for (const c of claimsFor({ ...st, live: f.text, committed: committed.has(f.key) })) {
             const base = contentStart(f, c);
             if (base === null) continue;
+            // The human channel is ink only — see the header. The claim is still in the
+            // model (the marker reads it); it just is not drawn.
+            if (c.channel === 'human' && c.edit === 'del') continue;
             if (c.edit === 'del') {
                 decos.push(Decoration.widget(base + c.start, () => ghost(c), {
                     side: 1,

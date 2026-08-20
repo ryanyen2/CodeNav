@@ -48,6 +48,18 @@ Planned wording that the build then altered therefore reads exactly as it should
 with no rule written for the combination: the plan's own faded words, with a red
 ground under the part that did not survive. Composition is the design.
 
+**The human channel is ink only — it has no diff view.** What you removed is not
+something you need shown back to you; you are the one who removed it, and a ghost
+of your own deleted words is the surface narrating your typing. What the reader
+needs to see is what they WROTE, which the ink already is. The other two channels
+do report removals, because there somebody else took the words out and "what did
+it say before" is exactly the question being asked.
+
+The claim still exists in both cases — a deletion-only edit has no added words to
+ink, and the margin marker has to know the feature is unsettled — so the model
+emits it and the renderer drops it. A rendering decision is kept a rendering
+decision, in one place.
+
 `state/settlement.ts` is the whole of it — pure, no DOM, no TipTap.
 `webview/tiptap/settlement-decorations.ts` puts it on screen and is deliberately
 thin: build the live text, ask for the claims, draw them.
