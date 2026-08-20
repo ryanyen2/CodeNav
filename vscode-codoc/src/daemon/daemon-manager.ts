@@ -57,6 +57,16 @@ let _codocDir: string | undefined;
 // the budget: that is a person asking, and the answer to a person is to try again.
 const FAST_EXIT_MS = 5_000;
 const MAX_FAST_EXITS = 3;
+/**
+ * The daemon's exit status for "another daemon already owns this repo"
+ * (`codoc.loop.watch.STAND_DOWN_EXIT`). It is a deliberate stand-down and must never
+ * count against the crash budget: it is not a daemon that CANNOT start, it is one
+ * that correctly declined to start twice. Counting it spent the whole budget on
+ * three harmless races — a window reload, a bounce, two windows on one repo — and
+ * left the workspace with no daemon and no retry, which the author sees only as
+ * edits that are accepted and then never picked up by any loop.
+ */
+const STAND_DOWN_EXIT = 3;
 let _fastExits = 0;
 let _spawnedAt = 0;
 let _gaveUpAnnounced = false;
@@ -116,6 +126,36 @@ function isPidAlive(pid: number): boolean {
     }
 }
 
+/**
+ * Is `pid` actually a `codoc watch` process? Mirrors `codoc.loop.watch._is_codoc_daemon`,
+ * and both halves need it for the same reason: a pid is not an identity.
+ *
+ * Pids are recycled, hardest right after a reboot when the counter restarts low and
+ * runs back through the range a stale `watch.pid` from the previous boot is naming.
+ * `isPidAlive` alone then reports a live daemon that is really the user's browser —
+ * and this side fails WORSE than the Python side, because it counts `EPERM` as alive,
+ * so any root-owned process holding the number also wins. The window defers forever,
+ * nothing reaps the lock, and the author sees only edits no loop ever picks up.
+ *
+ * Unknown answers count as NOT a daemon, the same asymmetry the Python side takes: a
+ * false negative costs a second daemon, which the loop lock makes safe and the very
+ * next lock read resolves; a false positive costs a workspace that never syncs again.
+ */
+function isCodocDaemon(pid: number): boolean {
+    try {
+        const out = cp.execFileSync('ps', ['-p', String(pid), '-o', 'command='],
+            { encoding: 'utf8', timeout: 5_000 });
+        return out.includes('codoc') && out.includes('watch');
+    } catch {
+        return false;   // ps failed, or the pid is gone between the two calls
+    }
+}
+
+/** The full test the lock decisions want: a live process that is really our daemon. */
+function ownsWarmDaemon(pid: number): boolean {
+    return isPidAlive(pid) && isCodocDaemon(pid);
+}
+
 /** Write the owner lock for the daemon we just spawned (mirrors the Python format). */
 function writeLock(codocDir: string, pid: number, owner: string): void {
     const lock: WatchLock = { pid, owner, startedAt: Date.now() / 1000 };
@@ -167,7 +207,7 @@ export function startDaemon(
 
     const id = windowId(context);
     const existing = readLock(codocDir);
-    if (!shouldSpawn(existing, id, isPidAlive)) return false; // live owner exists → defer
+    if (!shouldSpawn(existing, id, ownsWarmDaemon)) return false; // live owner exists → defer
 
     const channel = outputChannel();
     if (existing) channel.appendLine(`codoc: reaping stale watch.pid (pid ${existing.pid} dead)`);
@@ -191,7 +231,11 @@ export function startDaemon(
     child.on('error', err => channel.appendLine(`codoc watch failed to start: ${err.message}`));
     child.on('exit', (code, signal) => {
         channel.appendLine(`codoc watch exited (code ${code ?? '—'}, signal ${signal ?? '—'})`);
-        if (Date.now() - _spawnedAt < FAST_EXIT_MS) {
+        if (code === STAND_DOWN_EXIT) {
+            // Someone else owns it. Not our daemon, not a failure, nothing to retry
+            // against — the next reconcile will see the live lock and defer quietly.
+            _fastExits = 0;
+        } else if (Date.now() - _spawnedAt < FAST_EXIT_MS) {
             _fastExits += 1;
             if (_fastExits >= MAX_FAST_EXITS && !_gaveUpAnnounced) {
                 _gaveUpAnnounced = true;
@@ -247,7 +291,7 @@ export function stopDaemon(): void {
 export function reapStaleLock(rootDir: string): boolean {
     const codocDir = path.join(rootDir, '.codoc');
     const lock = readLock(codocDir);
-    if (!lock || isPidAlive(lock.pid)) return false;
+    if (!lock || ownsWarmDaemon(lock.pid)) return false;
     try {
         fs.rmSync(lockPath(codocDir));
         outputChannel().appendLine(`codoc: reaped stale watch.pid (pid ${lock.pid} dead)`);

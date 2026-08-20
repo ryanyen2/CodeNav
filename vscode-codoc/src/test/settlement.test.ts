@@ -391,6 +391,69 @@ describe('the composition matrix — the point of one axis per channel', () => {
         }
     });
 
+    it('a plan CUT keeps the ink of whoever wrote the words it wants gone', () => {
+        // The plan channel owns the opacity; on a cut it owns nothing else. The words
+        // are the AUTHOR'S — sent, not yet in code — and the agent is asking to replace
+        // them. The human claim has to survive underneath, or the surface repaints the
+        // reader's own sentence in the agent's gray at the moment they decide whether to
+        // lose it. A cut is the one place the two channels may name the same words.
+        const humanBase = ft('Uploads', 'It retries five times.');
+        const projected = ft('Uploads', 'It retries five times. I think that is too many.');
+        // The proposal is materialized: both the displaced sentence and its replacement
+        // are on screen, which is what makes the cut a range and not a ghost.
+        const planned = ft('Uploads',
+            'It retries five times. I think that is too many. It retries three times.');
+        const claims = claimsFor({
+            projected, planned, live: planned, humanBase,
+            plan: { layerId: 'e-9', stage: 'proposed', runs: [{
+                block: { kind: 'para', index: 0 },
+                runs: [
+                    { t: 'same', s: 'It retries five times. ' },
+                    { t: 'del', s: 'I think that is too many. ' },
+                    { t: 'ins', s: 'It retries three times.' },
+                ],
+            }] },
+        });
+        const text = planned.paras[0];
+        const cut = at(claims, 'plan').filter(c => c.edit === 'cut');
+        expect(covers(cut, text, 'too many')).toBe(true);
+        // …and the same words are still the author's. Blue ink under a plan's strike.
+        expect(covers(at(claims, 'human'), text, 'too many')).toBe(true);
+        // The plan's OWN wording is not the author's — the add side must stay unclaimed.
+        expect(covers(at(claims, 'human'), text, 'three times')).toBe(false);
+    });
+
+    it('marks a deletion the build made to wording the reader had ACCEPTED', () => {
+        // A `del` prints its own ghost rather than covering text on screen, so there is
+        // nothing for a plan claim to stack on: without `planned` the sentence the reader
+        // agreed to comes back as an anonymous red strike, reading exactly like a line
+        // the codebase dropped that nobody ever promised.
+        const beforePlan = ft('Uploads', 'It retries five times.');
+        const withPlan = ft('Uploads', 'It retries five times. It then backs off.');
+        // the build kept the retries and dropped the backing off
+        const projected = beforePlan;
+        const claims = claimsFor({
+            projected, live: projected,
+            accepted: { layerId: 'hold:f-1', prev: beforePlan },
+            code: { layerId: 'auto:1', prev: withPlan },
+        });
+        const dels = at(claims, 'code').filter(c => c.edit === 'del');
+        expect(dels.length).toBeGreaterThan(0);
+        expect(dels.some(c => (c.removed ?? '').includes('backs off') && c.planned)).toBe(true);
+    });
+
+    it('does not call an ordinary code deletion planned', () => {
+        // The flag is a promise the reader made. With no accepted plan there is no
+        // promise, and stamping every removal with one would make the mark meaningless.
+        const projected = ft('Uploads', 'It retries five times.');
+        const claims = claimsFor({
+            projected, live: projected,
+            code: { layerId: 'auto:1', prev: ft('Uploads', 'It retries five times. It then backs off.') },
+        });
+        expect(at(claims, 'code').filter(c => c.edit === 'del')
+            .every(c => !c.planned)).toBe(true);
+    });
+
     it('an accepted plan is the PLAN\'s words, never inked as the reader\'s own', () => {
         // The hold set holds both kinds of queued work, and reading a plan-origin hold as
         // `humanBase` put the agent's accepted wording in the author's blue.

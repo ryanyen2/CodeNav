@@ -48,6 +48,30 @@ weeks. Checked as C6.
 | **1** | Notices the weekly view uses a different date, without joining it to the monthly one. |
 | **0** | Does not find it. |
 
+**Where each condition meets it — and a change that is written but NOT YET
+recorded (2026-08-20).** In the frames as they SHIP today, the plan says only
+*which date decides is set for each summary separately*: it names the question and
+not the answer, so the codoc document is VAGUER at this point than the scrollback
+beside it, where step 7 says the choice outright. Both arms therefore meet D1 in
+the transcript and in `rules.toml`, and the codoc arm gains nothing here.
+
+`replay/script/tally/session.json` has been changed so the plan says *the month
+lined up on the date a payment was made, the week on the date the bank posted it*,
+in the terminal both arms read and in the proposed `Statement periods` node the
+codoc arm answers at the first stop. **That change reaches participants only after
+`record-session.sh write tally` is re-run and the frames pass `check`** — the
+2026-08-20 re-derive was reverted because its second stop produced no tree movement
+and its final document was missing the plan nodes. Until then, score D1 against the
+shipped recording.
+
+**codoc cannot state a value that lives in a config file.** `_INCLUDED_PATTERNS`
+in `codoc/pipelines/indexing/cocoindex_app.py` is `.py`/`.ts` only, so `rules.toml`
+is never chunked and no Loop A pass can read `month = "made"` out of it. This is
+why D1 had to be carried by the plan rather than by an amend, and why D3 reads the
+way it now does. `prompts/tree_update.txt` was given a rule on 2026-08-20 (*name
+the answer, not just the question*) which covers every decision that lives in code;
+config files need indexing work that was deliberately not done before the study.
+
 ### D2. A local change breaks the coupled pair
 
 The weekly summary compares rows without the merchant, because a week made the
@@ -67,18 +91,40 @@ combined, so a participant who runs the weekly view sees it.
 | **1** | Finds the looser comparison without saying what depends on it. |
 | **0** | Does not find it. |
 
-### D3. The record says one thing and the code does another
+### D3. The record names both answers and never says which one is in force
 
 Moving the merchant rules into a file made an unmatched merchant refuse the whole
-run, so one unknown shop means no summary at all and nothing written. The
-description still says an unmatched merchant goes to the uncategorised bucket and
-the run finishes. Checked as C4.
+run, so one unknown shop means no summary at all and nothing written. Checked as C4.
+
+**Re-scoped 2026-08-20.** As written this was "the record says one thing and the
+code does another": the description was to go on claiming the uncategorised bucket
+after the code had stopped doing it. That is not what the recording landed. Loop A
+amended the sentence to *goes to the configured uncategorised bucket, or stops the
+run with the full list when the rules require it* — which is not false, and never says that the
+shipped `rules.toml` chose `stop`. It cannot: `.toml` is not indexed, so the pass
+that wrote the sentence never read the value (see the note under D1). So the failure a participant meets
+is a record that has gone vague at exactly the point a reader consults it: both
+outcomes are named, the one in force is not, and nothing in the description tells
+them that today one unknown merchant means no summary at all. The rating guide
+below is written against the artifact rather than against the original intent,
+because the blind rater scores what the participant actually saw.
+
+The scale is unchanged in shape — what a **2** requires is that the participant
+end with a record that names the answer, which is the same repair the original
+called for.
 
 | | |
 | --- | --- |
-| **2** | Finds the false claim, and corrects the record rather than only the code. |
-| **1** | Finds the false claim and leaves the record as it is. |
+| **2** | Finds that one unmatched merchant now stops the whole run, and makes the record say so rather than only changing the code or the setting. |
+| **1** | Finds that the run stops and leaves the record naming both outcomes. |
 | **0** | Does not find it. |
+
+**Re-check this after any re-derive.** codoc's half of the recording is not
+authored, so the sentence above is whatever the daemon wrote on the day. The
+2026-08-20 prompt change asks an amend to name the value a policy took rather than
+report that it is configurable; if a later derive makes the description say `stop`
+outright, D3 stops being a defect and becomes a disclosure — score it as such, or
+drop it, rather than rating a record that is now correct.
 
 ### D0. The decoy
 

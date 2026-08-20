@@ -201,6 +201,21 @@ describe('settlement — one visual axis per channel, so claims compose', () => 
         expect(css).toMatch(/\.ce-settle\.cut\s*\{[^}]*line-through/);
     });
 
+    it('lets a CUT keep the ink of whoever wrote the words it wants gone', () => {
+        // The plan's gray is scoped to what the plan WROTE. A cut is somebody else's
+        // sentence, and recolouring it credits the agent with the author's words at the
+        // exact moment the reader decides whether to let the agent delete them.
+        expect(css).toMatch(/\.ce-settle\.plan:not\(\.cut\)\s*\{[^}]*color:/);
+        const planInk = css.match(/^\.ce-settle\.plan\s*\{[^}]*\}/m);
+        expect(planInk?.[0]).not.toContain('color:');
+    });
+
+    it('fades a code deletion of PLANNED wording, so the promise is visible in the ghost', () => {
+        // The one cell of the matrix a `del` cannot reach by stacking: it prints its own
+        // ghost instead of covering text, so there is nothing underneath to tint.
+        expect(css).toMatch(/\.ce-settle-ghost\.code\.planned\s*\{[^}]*opacity:/);
+    });
+
     it('fills a node marker\'s ring to mean the claim reached the code, in both channels', () => {
         expect(css).toMatch(/\.ce-mark \.st-human\.fulfilled,\s*\.ce-mark \.st-plan\.fulfilled\s*\{[^}]*background:/);
     });

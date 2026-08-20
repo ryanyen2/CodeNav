@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.2.15
+
+### Fixed
+
+- **A plan of several amendments applied most of itself instead of asking.** A plan says
+  what a feature WILL do; the amend gate judged it by how much of the old wording it
+  preserved, which is the test for a REFLECTION of code that already changed. The small
+  ones therefore auto-applied: no proposal, so no Accept & build, so no realize directive
+  queued — and the document then diffed the new words against the ones they displaced and
+  painted them in the code channel, reporting a build that had never run. Only the
+  amendment that rewrote enough prose to fail the size test survived as a proposal. A
+  plan now always awaits a verdict, however few words it changes.
+
+- **A plan proposing to CUT a sentence repainted that sentence as the plan's own.** The
+  plan channel owns the opacity; on a cut it now owns nothing else. The words belong to
+  whoever wrote them — the agent is only asking to remove them — so they keep their ink:
+  the body colour for settled prose, the author's blue where the removal lands on words
+  they have not sent yet. "The agent wants to cut a line you just wrote" and "the agent
+  wants to cut a line the loop wrote last week" are different situations and now look it.
+
+- **Wording the reader had accepted, and the build then dropped, came back anonymous.** A
+  deletion prints its own ghost rather than covering text on screen, so there was nothing
+  underneath for the plan channel to tint — the one composition the model exists for was
+  unreachable for removals. Such a ghost now carries the plan's fade over the code's red
+  ground, and says so on hover.
+
+- **The daemon could refuse to start forever, and nothing said so.** `watch.pid` records a
+  pid, and a pid is not an identity: after a reboot the counter restarts low and runs back
+  through the range a stale pidfile is naming, so an unrelated process of the user's made
+  the workspace look permanently watched. `codoc watch` refused, the Stop hook deferred to
+  a daemon that did not exist, and the message named a process to stop that could not be
+  found. Both halves now verify the pid is really a `codoc watch` before believing it, and
+  a pidfile with nothing live behind it is reaped rather than obeyed.
+
+- **Three harmless races disabled the daemon for the life of the window.** Standing down
+  because another daemon already owns the repo exited 0, which the extension's supervisor
+  could not tell from a daemon that crashes on startup; three of them spent the crash-loop
+  budget and it stopped trying, silently. A stand-down now has its own exit status and
+  costs nothing.
+
 ## 0.2.14
 
 ### Fixed

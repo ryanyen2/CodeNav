@@ -1006,6 +1006,40 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
             derived[-1]["writes"] = sorted(set(derived[-1]["writes"]) | set(writes))
             print(f"  it wrote {len(writes)} file(s)")
 
+    # The codoc arm's own record pass is the daemon's LAST Loop A, and the frame
+    # loop does not wait for it. The frames were cut, the derive returned, and
+    # three minutes later the daemon amended two descriptions in the workspace —
+    # including the one sentence that names which date each summary is lined up
+    # on, which is the decision the session exists to have reviewed. The
+    # participant never saw it: it landed after the last frame. The baseline arm
+    # has always had this wait, spelled `after`; the codoc arm was cut off
+    # mid-pass and nothing said so, because a recording missing a description it
+    # never contained looks exactly like one the daemon had nothing to add to.
+    #
+    # Folded into the LAST frame rather than appended as a new one, for the same
+    # reason `after` is: the second stop is the participant reading what the build
+    # did, and a description that arrives after they have stopped reading is a
+    # description they do not read.
+    if watching:
+        print("  waiting for the daemon's last pass")
+        waited = _wait_for_daemon(workspace, _codoc_newest(workspace), settle, timeout)
+        current = scan(workspace)
+        writes = [r for r, h in current.items() if previous.get(r) != h]
+        if writes:
+            dest_dir = out / f"{derived[-1]['n']:04d}"
+            for rel in writes:
+                dest = dest_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(workspace / rel, dest)
+            derived[-1]["writes"] = sorted(set(derived[-1]["writes"]) | set(writes))
+        print(f"  it wrote {len(writes)} file(s) in {waited:.0f}s")
+        # The daemon is NOT stopped here. `_quiesce` reads a pid out of a file and
+        # signals it, and a pid is not an identity — in a test run that pidfile can
+        # name a process the suite is about to start, which is how adding a kill on
+        # this line made a later test's subprocess die. Stopping it belongs to
+        # whoever owns the workspace afterwards: `record-session.sh check` does it
+        # before comparing, and `fresh_workspace` does it before reusing.
+
     final = scan(workspace, with_index=True)
     last = out / "final"
     for rel in final:

@@ -642,7 +642,13 @@ done
 exclude_local() {
   local d="$1" pat
   [ -d "$d/.git" ] || return 0
+  # Every file this script writes into a workspace goes on this list, INCLUDING
+  # the two scripts at its root. `start-session` was added beside `claude-study`
+  # and not added here, so the verify step's `git clean` deleted it from both
+  # workspaces on a machine setup then reported as ready — the participant found
+  # no way to start their session. Same shape as the /codoc:ask loss above.
   for pat in '.vscode/' '.venv/' '.env' '.claude-study/' 'claude-study' \
+             'start-session' \
              '.claude/settings.json' '.claude/settings.local.json' \
              '.claude/commands/'; do
     grep -qxF "$pat" "$d/.git/info/exclude" 2>/dev/null \

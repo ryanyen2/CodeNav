@@ -694,8 +694,20 @@ class WatchTest(unittest.TestCase):
                 write(ws, "scribe/config.py", "config\n")
                 time.sleep(1.0)
             finally:
+                # BOTH stop paths, because only one of them is always deliverable.
+                # A process backgrounded from a script inherits SIGINT set to ignore
+                # — which is why `record.py watch` answers SIGTERM the same way it
+                # answers Ctrl-C — and this suite is run from exactly such a script
+                # by build-participant-bundle.sh. Sending only the interrupt made
+                # the watcher outlive any timeout there while passing every time it
+                # was run by hand, so the test failed where the machine differed
+                # rather than where the code did.
                 proc.send_signal(signal.SIGINT)
-                proc.communicate(timeout=20)
+                try:
+                    proc.communicate(timeout=20)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    proc.communicate(timeout=20)
             self.assertTrue((raw / "base" / "scribe/lines.py").exists())
             snapshots = sorted(raw.glob("[0-9]*.json"))
             self.assertTrue(snapshots, "the new file should have produced a snapshot")

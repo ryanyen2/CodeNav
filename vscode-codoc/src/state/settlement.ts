@@ -44,6 +44,15 @@
  * on the same words without a legend: planned text that the build then altered is gray
  * (still the plan's words) with a red ground under the part that did not survive.
  *
+ * The plan channel owns the opacity, and — for a CUT — nothing else. A plan that
+ * proposes to REMOVE a sentence is not the author of that sentence; somebody else
+ * wrote it, and repainting it in the plan's gray erases exactly the fact the reader
+ * needs to weigh the proposal: whose words are on the block. So a cut is struck and
+ * faded and keeps whatever ink it already had — the body colour when the prose is
+ * settled, the author's blue when the removal lands on words they have not sent yet.
+ * "The agent proposes to cut a line YOU just wrote" and "the agent proposes to cut a
+ * line the loop wrote last week" are different situations and now look it.
+ *
  * ## What may stack, and what may never
  *
  * Composition is the design, so the combinations are the specification. Read a span as
@@ -74,8 +83,13 @@
  *   3. Human claims are the INSERTED runs of a diff, and inserted text is by
  *      construction absent from the `same` regions any other channel maps through.
  *
- * Human and plan cannot collide either, for (3)'s reason in both directions: the plan
- * lives strictly between the two texts the human channel is measured across.
+ * Human and plan cannot collide on an ADD, for (3)'s reason in both directions: the
+ * plan lives strictly between the two texts the human channel is measured across. On a
+ * CUT they collide by design and must — the words a plan proposes to remove are words
+ * that already existed, so they may well be the author's own. That is a legible
+ * composition rather than a contradiction (blue ink, struck and faded: *the agent wants
+ * to drop the line you just wrote*), and it is why the plan channel gives up the ink
+ * axis for cuts and keeps only the opacity.
  *
  * ## Where the coordinates come from
  *
@@ -171,6 +185,19 @@ export interface Claim {
     end: number;
     /** The words this claim removed — present on `del`, which has nothing left to cover. */
     removed?: string;
+    /**
+     * On a CODE claim: these words came from the accepted plan, and the build did not
+     * keep them. It is the one composition a `del` cannot express by stacking, because
+     * a `del` prints its own ghost rather than covering text that is on screen — so
+     * there is nothing for a plan claim to stack ON, and the sentence the reader
+     * agreed to would reprint as an anonymous red ghost, indistinguishable from a
+     * line the codebase dropped that nobody had ever promised.
+     *
+     * Derived, like everything else here: the words are in `code.prev` (the wording
+     * that existed once the plan was applied) and absent from `accepted.prev` (the
+     * wording before it), which is exactly what "the plan put them there" means.
+     */
+    planned?: boolean;
     /** The layer this claim belongs to: a store event id, a directive id, or the
      *  local-edit sentinel. Verdicts, drops and hover text all key on it. */
     layerId: string;
@@ -435,6 +462,8 @@ interface Orphan {
     anchor: BlockRef | null;
     layerId: string;
     stage: Stage;
+    /** See `Claim.planned` — a whole paragraph the plan added and the build dropped. */
+    planned?: boolean;
 }
 
 function paraRef(index: number): BlockRef { return { kind: 'para', index }; }
@@ -482,12 +511,14 @@ function blockStages(f: FeatureLayers): BlockStages[] {
 function orphansBetween(
     base: string[], cur: string[], toLive: (curIndex: number) => number | null,
     channel: Channel, layerId: string, stage: Stage,
+    fromPlan?: (text: string) => boolean,
 ): Orphan[] {
     const pairing = alignParas(base, cur);
     return orphans(base, cur, pairing).map(o => {
         const live = o.anchorIndex === null ? null : toLive(o.anchorIndex);
         return {
             channel, text: base[o.baseIndex], layerId, stage,
+            planned: fromPlan ? fromPlan(base[o.baseIndex]) : undefined,
             anchor: live === null ? null : paraRef(live),
         };
     });
@@ -533,13 +564,18 @@ export function claimsFor(f: FeatureLayers): Claim[] {
         if (f.code && st.prev !== st.projected) {
             const point = (off: number): number =>
                 toLive(forwardMap(planRuns)(off, BEFORE), BEFORE);
+            // Did the accepted plan put these words here? See `Claim.planned`. Only
+            // askable when there IS an accepted plan; with none, a removal is just a
+            // removal and claiming otherwise would put a promise on every deleted line.
+            const fromPlan = (text: string): boolean =>
+                !!f.accepted && !!text.trim() && !st.acceptedPrev.includes(text.trim());
             // The author's own added spans, in the SAME (projected) coordinates the code
             // diff runs in, so the overlap test below is a plain interval test.
             const humanAdds = humanApplied.filter(s => s.edit === 'add');
             for (const s of spansOf(diffFor(st.block, 'code')(st.prev, st.projected))) {
                 if (s.edit === 'del') {
                     const at = point(s.start);
-                    out.push({ channel: 'code', stage: 'landed', edit: 'del', block: st.block, start: at, end: at, removed: s.removed, layerId: f.code.layerId });
+                    out.push({ channel: 'code', stage: 'landed', edit: 'del', block: st.block, start: at, end: at, removed: s.removed, planned: fromPlan(s.removed ?? ''), layerId: f.code.layerId });
                     continue;
                 }
                 // A sentence the AUTHOR also claims is not a sentence the code report is
@@ -674,12 +710,16 @@ export function claimsFor(f: FeatureLayers): Claim[] {
             ? orphansBetween(f.humanBase.paras, f.projected.paras, projectedToLive(f), 'human', LOCAL_EDIT_LAYER, 'committed')
             : []),
         ...orphansBetween(planned.paras, f.live.paras, i => i, 'human', LOCAL_EDIT_LAYER, humanStage),
-        ...(f.code ? orphansBetween(f.code.prev.paras, f.projected.paras, projectedToLive(f), 'code', f.code.layerId, 'landed') : []),
+        ...(f.code ? orphansBetween(f.code.prev.paras, f.projected.paras, projectedToLive(f), 'code', f.code.layerId, 'landed',
+            // A whole paragraph the plan added and the build then dropped — the same
+            // question the in-block deletions ask, asked of the paragraph list.
+            text => !!f.accepted && !!text.trim()
+                && !(f.accepted.prev.paras.some(p => p.includes(text.trim())))) : []),
     ];
     for (const o of dropped) {
         const block = o.anchor ?? lastLive;
         const at = o.anchor ? 0 : lastLen;
-        out.push({ channel: o.channel, stage: o.stage, edit: 'del', block, start: at, end: at, removed: o.text, layerId: o.layerId });
+        out.push({ channel: o.channel, stage: o.stage, edit: 'del', block, start: at, end: at, removed: o.text, planned: o.planned, layerId: o.layerId });
     }
 
     // Stacking order — background, then opacity, then ink — so a consumer that draws

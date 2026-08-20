@@ -121,7 +121,11 @@ function contentStart(f: LiveFeature, c: Claim): number | null {
  *  independent tokens rather than one fused name, so the stylesheet expresses the axes
  *  separately and a claim carrying two channels composes instead of colliding. */
 export function claimClass(c: Claim): string {
-    return `ce-settle ${c.channel} ${c.stage} ${c.edit}`;
+    // `planned` is a fourth token and not a fused stage name for the same reason the
+    // first three are separate: it is an independent fact about the span (the plan put
+    // these words here) that has to compose with whatever the channel already draws,
+    // rather than replace it.
+    return `ce-settle ${c.channel} ${c.stage} ${c.edit}${c.planned ? ' planned' : ''}`;
 }
 
 /** Removed text, made readable: display space carries an object-replacement char per
@@ -151,8 +155,12 @@ export function claimTitle(c: Claim): string {
             ? 'You accepted this. No code behind it yet.'
             : 'The plan you accepted removed this. No code behind it yet.';
     }
-    return c.edit === 'add'
-        ? 'This is what the code now says.'
+    if (c.edit === 'add') return 'This is what the code now says.';
+    // The plan-dropped case is the reason the whole model exists, and it is the one
+    // reading a bare red ghost cannot give: without it the reader sees only that a
+    // line went, not that it is the line they agreed to.
+    return c.planned
+        ? 'You accepted this wording, and the build did not keep it.'
         : 'The code no longer says this.';
 }
 

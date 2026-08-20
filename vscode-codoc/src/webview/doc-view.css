@@ -2779,7 +2779,14 @@ body.vscode-reduce-motion .ce-settle.human.open,
 body.vscode-using-screen-reader .ce-settle.human.open { animation: none; }
 
 /* ── plan: the opacity ───────────────────────────────────────────────────────── */
-.ce-settle.plan { color: var(--st-plan); opacity: var(--st-plan-proposed); }
+/* The ink is scoped to what the plan WROTE. A cut is words somebody else wrote, which
+   the plan is only asking to remove; recolouring them in the plan's gray would credit
+   the agent with the author's sentence at the exact moment the reader is deciding
+   whether to let the agent delete it. A cut keeps the ink it already had — body colour
+   for settled prose, the author's blue where the removal lands on their own unsent
+   words — and says its plan-ness with the strike and the fade instead. */
+.ce-settle.plan:not(.cut) { color: var(--st-plan); }
+.ce-settle.plan { opacity: var(--st-plan-proposed); }
 .ce-settle.plan.accepted { opacity: var(--st-plan-accepted); }
 /* Accepting is the one transition worth animating besides the pulse, because it is a
    thing the reader just DID and the feedback confirms it landed. */
@@ -2816,6 +2823,13 @@ body.vscode-using-screen-reader .ce-settle.human.open { animation: none; }
 }
 .ce-settle-ghost.plan { opacity: calc(var(--st-plan-proposed) * 0.9); }
 .ce-settle-ghost.plan.accepted { opacity: calc(var(--st-plan-accepted) * 0.9); }
+/* Planned wording the build did not keep: the plan's own fade over the code's red
+   ground. This is the bottom-right cell of the grammar's matrix, and a deletion is the
+   one place it cannot be reached by stacking — a `del` prints its own ghost instead of
+   covering text on screen, so there is nothing underneath for a plan claim to tint.
+   Without this the sentence the reader AGREED to came back as an anonymous red strike,
+   reading the same as a line the codebase dropped that nobody had ever promised. */
+.ce-settle-ghost.code.planned { opacity: calc(var(--st-plan-accepted) * 0.9); }
 
 /* High contrast: hues carry no meaning that is not also carried by ink weight or the
    strike, but the grounds must still be visible, so they are pinned up rather than

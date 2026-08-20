@@ -209,6 +209,12 @@ EOF
 }
 
 check() {
+  # Stop the recording workspace's daemon first. The comparison is against that
+  # workspace, and a daemon still running in it keeps amending descriptions after
+  # the last frame was cut — so every codoc check failed on tree.codoc and
+  # status.json whatever the recording had done, which is a check that cannot pass
+  # and therefore says nothing.
+  stop_daemon_in "$ws"
   step "Replaying into a clean copy and comparing"
   scratch="$(mktemp -d)"
   trap 'rm -rf "$scratch"' EXIT

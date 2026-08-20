@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from codoc.loop.apply import apply_op, is_small_amend, preserved_ratio
+from codoc.loop.apply import (
+    apply_op,
+    is_small_amend,
+    preserved_ratio,
+    should_auto_apply,
+)
 from codoc.model.event import ACTOR_HUMAN, NodeOp, NodeOpKind
 from codoc.store.db import open_store
 
@@ -168,3 +173,36 @@ class TestEdges:
     def test_an_amend_with_no_description_is_a_no_op(self, store):
         fid = _feature(store, writer_role=ACTOR_HUMAN)
         assert is_small_amend(NodeOp(kind=NodeOpKind.AMEND, feature_id=fid), store) is True
+
+
+class TestAPlanNeverAutoApplies:
+    """``builds=True`` mints an amend with ``realized=False`` — prose saying what the
+    feature WILL do, whose code does not exist yet. The size test cannot see that
+    distinction, and judging a plan by how much wording it preserved is what let a
+    ``/codoc:plan`` turn apply two of its three amendments outright: no proposal row,
+    so no Accept & build, so no realize directive, and the document then diffed the
+    new words against the displaced ones and painted them in the CODE channel —
+    reporting a build that had never run.
+    """
+
+    def test_a_small_plan_amend_still_awaits_a_verdict(self, store):
+        fid = _feature(store)
+        plan = _amend(fid, BASE + " The queue is drained oldest-first.")
+        plan.realized = False
+        # It IS small — that is the whole trap.
+        assert is_small_amend(plan, store) is True
+        assert should_auto_apply(plan, store) is False
+
+    def test_a_reflection_of_the_same_size_still_auto_applies(self, store):
+        fid = _feature(store)
+        # Same words, `builds=False`: the code already changed and the tree is
+        # catching up. Nothing is being asked of anyone, so nothing waits.
+        reflection = _amend(fid, BASE + " The queue is drained oldest-first.")
+        assert reflection.realized is None
+        assert should_auto_apply(reflection, store) is True
+
+    def test_a_large_plan_amend_is_unchanged(self, store):
+        fid = _feature(store)
+        plan = _amend(fid, "Something else entirely, in another voice.")
+        plan.realized = False
+        assert should_auto_apply(plan, store) is False

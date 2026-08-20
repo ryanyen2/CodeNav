@@ -122,11 +122,21 @@ def is_small_amend(op: NodeOp, store: Store) -> bool:
 
 
 def should_auto_apply(op: NodeOp, store: Store) -> bool:
-    """Safe ops auto-apply; AMEND only when the edit is small; structural never."""
+    """Safe ops auto-apply; AMEND only when the edit is small; structural never.
+
+    A PLAN amend is the exception the size test cannot see. ``builds=True`` mints an
+    amend with ``realized=False`` — prose that says what the feature WILL do, whose
+    code does not exist yet — and that is a request for work, not a reconciliation of
+    work already done. Judging it by how much wording it preserved auto-applied the
+    small ones: no proposal row, so no Accept & build, so no realize directive queued,
+    and the doc then diffed the new words against the displaced ones and painted them
+    in the CODE channel — reporting a build that never happened. A plan always awaits
+    a verdict, however few words it changes.
+    """
     if op.kind not in SAFE_OPS:
         return False
     if op.kind is NodeOpKind.AMEND:
-        return is_small_amend(op, store)
+        return op.realized is not False and is_small_amend(op, store)
     return True
 
 

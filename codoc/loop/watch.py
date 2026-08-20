@@ -147,6 +147,12 @@ def _classify(
     return codoc_touched, doc_touched, inbox_touched, edits_touched, activity_touched, code_files
 
 
+#: Exit status for "another daemon already owns this repo" — a stand-down, not a
+#: failure. Distinct from 0 (which would be indistinguishable from a clean stop) and
+#: from 1 (which a supervisor should treat as a crash). See the guard in `run_watch`.
+STAND_DOWN_EXIT = 3
+
+
 def _pidfile(codoc_dir: str) -> Path:
     return Path(codoc_dir) / "watch.pid"
 
@@ -220,7 +226,7 @@ def daemon_running(codoc_dir: str) -> bool:
     pid = read_pid(codoc_dir)
     if pid is None:
         return False
-    return _pid_alive(pid)
+    return _pid_alive(pid) and _is_codoc_daemon(pid)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -232,6 +238,43 @@ def _pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _is_codoc_daemon(pid: int) -> bool:
+    """True if ``pid`` is actually a ``codoc watch`` process.
+
+    A bare pid is not an identity. Pids are recycled — aggressively so after a
+    reboot, when the counter restarts low and races back through exactly the range a
+    stale ``watch.pid`` from the previous boot is naming. Believing the number alone
+    meant any unrelated process of this user that inherited it made the workspace
+    look permanently watched: `codoc watch` refused to start, the Stop hook stood
+    down waiting for a daemon that did not exist, and the refusal told the reader to
+    "stop the other one first" — a process they could not find because it was their
+    browser. Nothing recovered on its own, and the visible symptom was the quietest
+    one possible: edits accepted by the editor that no loop ever picked up.
+
+    Unknown answers count as NOT a daemon. The cost of a false negative is a second
+    daemon (which the loop lock already makes safe, and which the owner check below
+    then resolves); the cost of a false positive is a workspace that never syncs
+    again. Those are not close.
+    """
+    import os
+    import subprocess
+
+    # The daemon asking about its own pidfile. Whatever this process is, it is the one
+    # that wrote the file — there is no foreign claim to verify, and shelling out to
+    # ask `ps` what we already know would make every liveness probe cost a fork.
+    if pid == os.getpid():
+        return True
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    cmd = out.stdout.strip()
+    return "codoc" in cmd and "watch" in cmd
 
 
 def _store_open_error(codoc_dir: str) -> str | None:
@@ -626,7 +669,20 @@ def run_watch(
     if daemon_running(codoc_dir):
         printer("A codoc daemon is already watching this repo — not starting a second one. "
                 "Stop the other one first (or it may be the VS Code extension's).")
-        return
+        # A DELIBERATE stand-down, and it has to be distinguishable from a crash. The
+        # extension supervises this process and counts every exit inside five seconds
+        # against a crash-loop budget; past three it stops trying for the life of the
+        # window and says so once. Returning 0 here made the two situations identical,
+        # so three harmless races — a window reload, a bounce, two windows on one repo —
+        # spent the whole budget and left the workspace with no daemon and no retry.
+        # `STAND_DOWN_EXIT` is the one exit code that means "nothing is wrong".
+        raise SystemExit(STAND_DOWN_EXIT)
+    # Nothing live is behind the pidfile, so it is debris from a daemon that was killed
+    # rather than stopped (SIGKILL, a machine sleeping, a host crash — `atexit` runs on
+    # none of those). Reap it here rather than leaving it for the extension: a CLI
+    # `codoc watch` has no supervisor to heal it, and the file is about to be ours.
+    if read_pid(codoc_dir) is not None:
+        _pidfile(codoc_dir).unlink(missing_ok=True)
 
     # Fail fast and legibly on an unopenable store instead of looping forever emitting
     # one error per cycle (every open_store inside the loop would raise and be swallowed).

@@ -916,6 +916,19 @@ case "$LAUNCHER_BODY" in
   *'agent.py'*) bad "the launcher can still play the recording, so the setup check would" ;;
   *) ok "and the launcher cannot, whatever it is handed" ;;
 esac
+# Every script setup writes into a workspace has to be in .git/info/exclude, or the
+# verify step's own `git clean` deletes it and the machine reports itself ready with
+# the file gone. That is what happened to `start-session`: written beside
+# `claude-study`, never added to the list, cleaned away in both workspaces. Derived
+# from the setup script rather than spelled out, so the next file added is covered.
+EXCLUDES="$(awk '/^  for pat in/,/; do$/' "$SETUP")"
+for f in $(grep -o 'cat > "\$d/[a-z-]*"' "$SETUP" | sed 's|.*/||; s|"||'); do
+  case "$EXCLUDES" in
+    *"'$f'"*) ok "$f survives the verify step's git clean" ;;
+    *) bad "$f is written into the workspace but not excluded — git clean deletes it" ;;
+  esac
+done
+
 case "$START_BODY" in
   *'read -r answer'*) ok "and asks before replaying over work already done" ;;
   *) bad "a second run would reset the project with no warning" ;;

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -143,3 +144,46 @@ def test_clear_pidfile_leaves_another_daemons_file(codoc_dir):
 def test_clear_pidfile_tolerates_missing(codoc_dir):
     watch.clear_pidfile(codoc_dir)  # no file → no error
     assert not watch._pidfile(codoc_dir).exists()
+
+
+# ── a pid is not an identity ──────────────────────────────────────────────────
+#
+# Pids are recycled, hardest right after a reboot when the counter restarts low and
+# runs back through exactly the range a stale watch.pid from the last boot names. A
+# guard that believes the number alone leaves the workspace permanently "watched" by
+# the user's browser: `codoc watch` refuses, the Stop hook defers to a daemon that is
+# not there, and the author sees only edits that no loop ever picks up.
+
+
+def test_a_live_but_unrelated_process_is_not_a_daemon(codoc_dir):
+    other = subprocess.Popen(["sleep", "30"])
+    try:
+        watch._pidfile(codoc_dir).write_text(
+            json.dumps({"pid": other.pid, "owner": "", "started_at": 0}))
+        assert watch._pid_alive(other.pid) is True   # the pid IS live…
+        assert watch.daemon_running(codoc_dir) is False  # …and is not our daemon
+    finally:
+        other.terminate()
+        other.wait()
+
+
+def test_an_unanswerable_pid_is_not_a_daemon(codoc_dir):
+    # False negatives cost a second daemon, which the loop lock already makes safe.
+    # False positives cost a workspace that never syncs again. Not close.
+    watch._pidfile(codoc_dir).write_text(
+        json.dumps({"pid": _dead_pid(), "owner": "", "started_at": 0}))
+    assert watch.daemon_running(codoc_dir) is False
+
+
+def test_the_daemon_recognises_its_own_pidfile(codoc_dir):
+    # The one pid needing no verification: whoever wrote the file is asking about it.
+    watch.write_pidfile(codoc_dir)
+    assert watch.daemon_running(codoc_dir) is True
+
+
+def test_standing_down_is_not_the_same_exit_as_failing():
+    # The extension supervises this process and counts every exit inside five seconds
+    # against a crash budget; past three it stops trying for the life of the window.
+    # A stand-down has to be tellable from a crash or three harmless races (a reload,
+    # a bounce, two windows on one repo) spend the whole budget silently.
+    assert watch.STAND_DOWN_EXIT not in (0, 1)

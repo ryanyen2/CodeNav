@@ -54,8 +54,8 @@
         "",
         "  · Rule settings — every value the rules read, in one file you edit rather",
         "    than constants spread through the modules.",
-        "  · Statement periods — a month and a week, each lined up on whichever date",
-        "    that summary is read against.",
+        "  · Statement periods — the month lined up on the date a payment was made,",
+        "    the week on the date the bank posted it.",
         "  · Weekly spending summary — the same summary at a finer grain, written",
         "    beside the monthly one rather than over it."
       ],
@@ -70,7 +70,7 @@
         {
           "kind": "add_node",
           "title": "Statement periods",
-          "description": "Decides which period a transaction belongs to, for a month and for a week. Which date decides is set for each summary separately, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends.",
+          "description": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends.",
           "before": "f-007dec9d",
           "rationale": "plan: a finer grain than a month needs a period the summary can be grouped by"
         },

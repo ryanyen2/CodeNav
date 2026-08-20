@@ -89,6 +89,20 @@ feature's history — write it for them, not as a log line.
    - With no such evidence, describe what the code achieves instead of narrating
      a decision — e.g. computes the total on write, so a reader never sees a
      stale number. That is an observation and needs no warrant.
+   - **Name the answer, not just the question.** When code makes a choice a
+     reader could get wrong — which date a period is lined up on, what happens
+     to an unmatched input, how strict a comparison is — say WHICH way it goes
+     now. "Which date decides is set for each summary" tells a reader nothing
+     they can check; "the month is lined up on the date the payment was made and
+     the week on the date the bank posted it" is the same sentence carrying the
+     decision. Moving a constant into a settings file does NOT make the value
+     unsayable: read it from the shipped file and state it. A description that
+     only reports a policy is configurable has hidden the very thing a reviewer
+     opened it to see, and this is the commonest way an amend goes vague — the
+     old prose named a value, the new code took a setting, and the value left.
+     When two related settings can disagree with each other, say so in the node
+     that owns them, because neither one alone is wrong and the reader is only
+     ever shown one at a time.
    - Write every title and description as plain prose with NO double-quote
      characters. These are JSON string values, and a bare `"` inside one makes
      the whole response unparseable.
