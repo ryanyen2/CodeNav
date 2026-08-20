@@ -513,6 +513,24 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     //    The host also does the filtering: the webview only ever receives rewrites that
     //    are still owed attention, which keeps the catch-up count honest by construction.
 
+    /** Append one answered rewrite to `.codoc/reviewed.host.jsonl` — the same
+     *  append-log shape as the verdict and host-op channels, for the same reason: the
+     *  webview holds no cross-process lock, and an append cannot erase anything. */
+    private async appendReviewed(fid: string, at: string): Promise<void> {
+        const root = this.state.rootDir;
+        if (!root) return;
+        const target = path.join(root, '.codoc', 'reviewed.host.jsonl');
+        const line = JSON.stringify({ feature_id: fid, at }) + '\n';
+        try {
+            await fs.appendFile(target, line, 'utf-8');
+        } catch {
+            try {
+                await fs.mkdir(path.dirname(target), { recursive: true });
+                await fs.appendFile(target, line, 'utf-8');
+            } catch { /* best effort: the in-memory set is still authoritative here */ }
+        }
+    }
+
     private seenAutoEdits(): Set<string> {
         return new Set(this.context.workspaceState.get<string[]>(AUTO_SEEN_KEY) ?? []);
     }
@@ -520,6 +538,20 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
     private async markAutoEditSeen(fid: string, at: string): Promise<void> {
         const seen = this.seenAutoEdits();
         seen.add(fid + '@' + at);
+        // And on DISK, because this window's memory is not the only reader.
+        //
+        // A rewrite is answered by Keep as often as by Restore, and Keep changes nothing
+        // else: the document already says what the reader agreed to. Recorded only in
+        // workspaceState, that answer was invisible to everything outside this extension
+        // host — including the study player, which holds a checkpoint until the things
+        // outstanding at it have been answered. A participant clicked Keep, the sidecar
+        // still listed the rewrite, and the recording waited out its full fifteen-minute
+        // cap before handing over — with the live assistant unreachable until it did,
+        // because the handover record is written when playback returns.
+        //
+        // The daemon ignores this file (watch._classify falls through to `_is_code`, and
+        // it is not code), so it costs nothing but the line.
+        void this.appendReviewed(fid, at);
         // Bounded: the set is pruned to what is still on offer on every payload, but a
         // hard cap keeps a pathological session from growing the memento without end.
         await this.context.workspaceState.update(AUTO_SEEN_KEY, [...seen].slice(-400));

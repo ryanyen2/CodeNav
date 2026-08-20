@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.13
+
+### Fixed
+
+- **Answering a rewrite with Keep left no trace outside this window.** Keep is as common
+  an answer as Restore and changes nothing else — the document already says what the
+  reader agreed to — so it was recorded only in the extension's own memory. Anything
+  else waiting on that answer could not see it. The answer is now also appended to
+  `.codoc/reviewed.host.jsonl`, the same append-log shape the verdict and host-op
+  channels already use.
+
+
 ## 0.2.12
 
 ### Fixed

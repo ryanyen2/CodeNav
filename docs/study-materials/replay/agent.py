@@ -389,13 +389,28 @@ def pending_proposals(workspace: Path) -> int:
     any checkpoint at all. Both keys are read here, and the shape is asserted by
     `test_replay.py` so a sidecar rename cannot quietly restore the same silence.
     """
-    path = workspace / ".codoc" / "tree.bindings.json"
+    codoc = workspace / ".codoc"
     try:
-        data = json.loads(path.read_text())
+        data = json.loads((codoc / "tree.bindings.json").read_text())
     except (OSError, json.JSONDecodeError):
         return 0
     proposals = (data.get("proposals") or {}).get("by_event") or {}
-    return len(proposals) + len(data.get("auto_edits") or {})
+    rewrites = data.get("auto_edits") or {}
+
+    # A rewrite the reader has already answered is not outstanding, and the sidecar
+    # cannot say so: the sidecar is the daemon's, and Keep is answered in the editor
+    # and changes nothing else — the document already says what they agreed to. The
+    # extension records the answer in `reviewed.host.jsonl` for exactly this reader.
+    # Without it a participant clicked Keep, the count never moved, and the stop waited
+    # out its full fifteen minutes with the live assistant unreachable behind it.
+    answered = set()
+    try:
+        for line in (codoc / "reviewed.host.jsonl").read_text().splitlines():
+            if line.strip():
+                answered.add(json.loads(line).get("feature_id"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    return len(proposals) + len([f for f in rewrites if f not in answered])
 
 
 def verdicts(workspace: Path) -> list[bool]:

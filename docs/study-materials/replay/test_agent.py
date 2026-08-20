@@ -288,6 +288,31 @@ def test_a_stop_with_nothing_in_it_is_not_a_stop(tmp_path):
     assert agent.wait_for_an_answer(tmp_path, "plan?", timeout=0.1) == agent.NOTHING
 
 
+def test_a_rewrite_the_reader_has_answered_is_not_outstanding(tmp_path):
+    # Keep is as common an answer as Restore and changes nothing else: the document
+    # already says what they agreed to. The sidecar is the DAEMON's and cannot know,
+    # so the extension records the answer in reviewed.host.jsonl. Without that a
+    # participant clicked Keep, this count never moved, and the stop waited out its
+    # full fifteen minutes — with the live assistant unreachable behind it, because
+    # the handover record is only written once playback returns.
+    sidecar(tmp_path, auto_edits=["f-1", "f-2"])
+    assert agent.pending_proposals(tmp_path) == 2
+    (tmp_path / ".codoc" / "reviewed.host.jsonl").write_text(
+        json.dumps({"feature_id": "f-1", "at": "x"}) + "\n")
+    assert agent.pending_proposals(tmp_path) == 1
+
+
+def test_an_answered_rewrite_releases_the_stop(tmp_path, monkeypatch):
+    sidecar(tmp_path, auto_edits=["f-1"])
+
+    def answer_after_one_poll(_s: float) -> None:
+        (tmp_path / ".codoc" / "reviewed.host.jsonl").write_text(
+            json.dumps({"feature_id": "f-1", "at": "x"}) + "\n")
+
+    monkeypatch.setattr(agent.time, "sleep", answer_after_one_poll)
+    assert agent.wait_for_an_answer(tmp_path, "look at it?", timeout=5.0) == agent.ANSWERED
+
+
 def test_an_unanswered_rewrite_is_something_to_wait_for(tmp_path):
     # The second checkpoint is not about proposals. The loop has already REWRITTEN
     # the descriptions of the features the build touched — applied, not proposed —
