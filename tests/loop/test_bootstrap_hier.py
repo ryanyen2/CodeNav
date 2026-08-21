@@ -294,3 +294,123 @@ class TestPerFileTolerance:
         with pytest.raises(RuntimeError, match="every bootstrap call failed"):
             bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
                                        propose_org=lambda *a, **k: [], organize=False)
+
+
+class TestACrowdedFileIsDescribedOverSeveralCalls:
+    """One call cannot name a feature set it is only shown a fraction of.
+
+    A file whose definitions do not fit one prompt at full allowance used to be
+    spent down until they did — 60 characters of each method, and a call asked to
+    name coherent features over evidence it could barely read. It is now split
+    across several calls instead (`loop/payload.py`), and what has to hold is
+    that the file still comes out described ONCE: no symbol named twice, no
+    symbol lost, and each call able to see what the ones before it already named.
+    """
+
+    @staticmethod
+    def _crowded(file: str, count: int) -> list[FakeRow]:
+        """One file's worth of real definitions, too many for a single pass.
+
+        The way to ask for a split is to hand over a file that does not fit —
+        the criterion is the budget itself, so there is no knob here and no
+        constant copied out of `payload.py` to drift from it.
+        """
+        rows = []
+        for i in range(count):
+            body = "\n".join(f"    step_{j}(value)" for j in range(60))
+            nxt = f"func_{(i + 1) % count:03d}"
+            src = f"def func_{i:03d}(value):\n    {nxt}(value)\n{body}\n"
+            rows.append(FakeRow(file=file, symbol_path=f"{file}::func_{i:03d}",
+                                source=src))
+        return rows
+
+    def test_it_becomes_several_calls_that_between_them_see_every_symbol(self, store):
+        rows = self._crowded("wide.py", 200)
+        build_graph(store, rows)
+        seen: list[list[str]] = []
+
+        def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                         why=None, **_kw):
+            seen.append([c["symbol_path"] for c in chunks])
+            return [_add(f"n{len(seen)}", f"Part {len(seen)}",
+                         [(file, c["symbol_path"]) for c in chunks])]
+
+        bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                                   propose_org=lambda *a, **k: [], organize=False)
+
+        assert len(seen) > 1                                  # it did split
+        flat = [sym for call in seen for sym in call]
+        assert sorted(flat) == sorted(r.symbol_path for r in rows)
+        assert len(flat) == len(set(flat))                    # nothing described twice
+
+    def test_each_call_is_told_what_the_ones_before_it_named(self, store):
+        """The passes are slices of one namespace, so a blind one duplicates.
+
+        Avoiding that duplicate is exactly what a single whole-file call bought,
+        which is why the groups run in sequence rather than concurrently.
+        """
+        rows = self._crowded("wide.py", 200)
+        build_graph(store, rows)
+        titles_seen: list[list[str]] = []
+
+        def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                         why=None, **_kw):
+            titles_seen.append(list(existing_titles))
+            n = len(titles_seen)
+            return [_add(f"n{n}", f"Part {n}",
+                         [(file, c["symbol_path"]) for c in chunks])]
+
+        bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                                   propose_org=lambda *a, **k: [], organize=False)
+
+        assert len(titles_seen) > 1
+        assert "Part 1" not in titles_seen[0]
+        for i, titles in enumerate(titles_seen[1:], start=1):
+            assert f"Part {i}" in titles
+
+    def test_a_call_is_shown_the_edges_about_its_own_symbols(self, store):
+        """An edge about a symbol this call is not naming is unusable context —
+        and on a split file there are hundreds of them."""
+        rows = self._crowded("wide.py", 200)
+        build_graph(store, rows)
+        offered: list[tuple[set[str], set[str]]] = []
+
+        def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                         why=None, **_kw):
+            offered.append(({c["symbol_path"] for c in chunks},
+                            {e["symbol"] for e in edges}))
+            return [_add(f"n{len(offered)}", f"Part {len(offered)}",
+                         [(file, c["symbol_path"]) for c in chunks])]
+
+        bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                                   propose_org=lambda *a, **k: [], organize=False)
+
+        assert len(offered) > 1
+        assert any(edges for _syms, edges in offered)   # there ARE edges to scope
+        for syms, edges in offered:
+            assert edges <= syms
+
+    def test_one_failing_part_costs_that_slice_and_not_the_file(self, store):
+        rows = self._crowded("wide.py", 200)
+        build_graph(store, rows)
+        attempts: list[str] = []
+
+        def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                         why=None, **_kw):
+            attempts.append(chunks[0]["symbol_path"])
+            if len(attempts) <= 2:                # both tries at the first part
+                raise ValueError("bad json")
+            return [_add(f"n{len(attempts)}", f"Part {len(attempts)}",
+                         [(file, c["symbol_path"]) for c in chunks])]
+
+        res = bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                                         propose_org=lambda *a, **k: [], organize=False)
+
+        titles = {f.title for f in store.list_features()}
+        assert {t for t in titles if t.startswith("Part ")}   # the rest still ran
+        # The failed slice falls to the coverage net like anything else left out,
+        # so the file is still wholly bound…
+        bound = {(b.file, b.symbol_path) for b in store.all_bindings()}
+        assert bound == {(r.file, r.symbol_path) for r in rows}
+        # …and it is reported once, as the one file it is.
+        assert res.skipped == ["wide.py"]

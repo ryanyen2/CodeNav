@@ -14,6 +14,7 @@ from codoc.loop.payload import (
     PER_CHUNK,
     allowances,
     head,
+    passes,
     shown_sources,
 )
 
@@ -178,3 +179,91 @@ def test_a_decorated_definition_keeps_its_decorator_and_signature():
     src = '@overload\ndef aggregate(self, _: Op, /) -> Angle: ...\n\n@overload\ndef x(): ...\n'
     cut = head(src, 30)
     assert cut.startswith("@overload\ndef aggregate(")
+
+
+# ---------------------------------------------------------------------------
+# When one pass cannot see the set at all (passes)
+# ---------------------------------------------------------------------------
+
+def _methods(owner: str, count: int, size: int) -> dict[str, str]:
+    """One class's methods, each carrying *size* chars of body."""
+    return _sized({f"m.py::{owner}.method_{i:03d}": size for i in range(count)})
+
+
+def _flat(groups: list[dict[str, str]]) -> list[str]:
+    return [path for group in groups for path in group]
+
+
+def test_a_set_that_fits_is_one_pass_showing_every_definition_whole():
+    """The ordinary file, which is nearly every file: one call, nothing cut."""
+    sources = _methods("Store", 40, 200)
+    assert passes(sources) == [sources]
+
+
+def test_a_set_too_large_for_one_pass_becomes_several_that_each_fit():
+    sources = {}
+    for i in range(10):
+        sources.update(_methods(f"Class{i}", 30, PER_CHUNK * 2))
+
+    groups = passes(sources)
+
+    assert len(groups) > 1
+    for group in groups:
+        assert sum(map(len, group.values())) <= BUDGET
+    # Every symbol named exactly once, in the order the caller gave them: a split
+    # may not drop a definition, and passes over a file should read in its order.
+    assert _flat(groups) == list(sources)
+
+
+def test_no_pass_is_shown_half_a_class():
+    """The rule the prompt itself states — a method belongs to its class's feature.
+
+    A pass holding half a class would be asked to name a feature over evidence
+    another pass is holding, which is worse than either conceding or splitting.
+    """
+    sources = {}
+    for i in range(10):
+        sources.update(_methods(f"Class{i}", 30, PER_CHUNK * 2))
+
+    for group in passes(sources):
+        for owner in {p.rsplit("::", 1)[-1].split(".", 1)[0] for p in group}:
+            whole = {p for p in sources if p.startswith(f"m.py::{owner}.")}
+            assert whole <= set(group), f"{owner} was split across passes"
+
+
+def test_one_class_too_large_for_any_pass_gets_a_pass_to_itself():
+    """A 300-method class is one feature; no split makes it two, so it concedes."""
+    sources = dict(_methods("Huge", 300, PER_CHUNK * 2))
+    sources.update(_methods("Small", 5, 200))
+
+    groups = passes(sources)
+
+    assert len(groups) == 2
+    assert set(groups[0]) == {p for p in sources if "Huge." in p}
+    assert set(groups[1]) == {p for p in sources if "Small." in p}
+    # And inside that pass the budget does exactly what it did before.
+    assert max(map(len, groups[0].values())) < PER_CHUNK
+
+
+def test_a_pass_is_cut_the_way_a_single_pass_would_have_been():
+    """Splitting decides WHICH call sees a symbol, never how its source is cut."""
+    sources = _methods("Huge", 300, PER_CHUNK * 2)
+    groups = passes(sources)
+    assert len(groups) == 1                      # one owner, nowhere to split to
+    assert groups[0] == shown_sources(sources)
+
+
+def test_top_level_definitions_are_each_their_own_owner():
+    """A module of free functions has no class to keep whole, so it packs freely."""
+    sources = _sized({f"m.py::func_{i:03d}": PER_CHUNK * 2 for i in range(400)})
+
+    groups = passes(sources)
+
+    assert len(groups) > 1
+    assert _flat(groups) == list(sources)
+    for group in groups:
+        assert sum(map(len, group.values())) <= BUDGET
+
+
+def test_nothing_to_show_is_no_passes_at_all():
+    assert passes({}) == []

@@ -29,7 +29,10 @@ class BootstrapResult:
     batches: int = 0
     # Files whose LLM call could not be used after a retry. Their chunks stay
     # unbound, so the next reconcile proposes them — a gap the user can see and
-    # fill, rather than a bootstrap that produced nothing.
+    # fill, rather than a bootstrap that produced nothing. A file crowded enough
+    # to be described over several calls is named here if ANY of them failed;
+    # which part it was belongs in the warning line, since this is a list of
+    # paths and a caller has to be able to use them as such.
     skipped: list[str] = field(default_factory=list)
 
     def summary(self) -> str:

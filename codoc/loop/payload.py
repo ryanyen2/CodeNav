@@ -26,6 +26,16 @@ A file under the budget is passed through unchanged, so the ordinary case — ev
 file in `test/requests`, `codoc/store/db.py` at 95 chunks — sees exactly what it
 saw before. This only ever takes effect where the alternative was a quarter of a
 megabyte of prompt.
+
+Conceding is the floor, not the goal. A pass that has spent down to 60 characters of
+each method is still being asked to name a feature set it can barely see, so
+`passes` splits such a set across SEVERAL calls instead — and the criterion is the
+budget itself, which is why there is no threshold to pick. A set that fits at full
+allowance is one pass and one call, exactly as before; a set that does not is one
+the model was going to be shown a fraction of. Measured over the 813 files in this
+repo and its corpora, that is 810 files unchanged and three split — `test/altair`'s
+`core.py` (923 definitions, 4 passes), `channels.py` (786, 4) and `api.py` (219, 2)
+— and after the split not one pass has to concede at all.
 """
 from __future__ import annotations
 
@@ -129,6 +139,71 @@ def allowances(
             member_share, top_share = candidate_member, candidate_top
             break
     return {p: (member_share if _is_member(p) else top_share) for p in sources}
+
+
+def passes(
+    sources: Mapping[str, str],
+    *,
+    budget: int = BUDGET,
+    per_chunk: int = PER_CHUNK,
+) -> list[dict[str, str]]:
+    """What each call gets to see, when one call cannot hold the whole set.
+
+    Returns one mapping per pass, in order. **One pass whenever the set fits at
+    full allowance**, which is the criterion and also the reason there is no
+    threshold here to argue about: the point at which a set stops fitting is the
+    point at which the model stops being shown the definitions it is being asked to
+    name, and splitting is strictly better than conceding past it — each group then
+    fits, so each definition is shown whole again.
+
+    Splitting is by TOP-LEVEL OWNER, so a class and its methods are never separated.
+    The prompt binds a method to the feature its class owns; a pass that saw half a
+    class would be asked to name a feature over evidence somebody else is holding.
+    An owner too large to share a pass with anyone gets one to itself and the budget
+    concedes within it, which is the honest answer for a 200-method class: it is one
+    feature, and no split makes it two.
+
+    Owners are packed in the order *sources* presents them, so a caller that hands
+    over its symbols in the order they appear in the file gets passes that are
+    contiguous regions of it — which is how a person reads one.
+    """
+    if not sources:
+        return []
+    full = {path: head(source, per_chunk) for path, source in sources.items()}
+    if sum(map(len, full.values())) <= budget:
+        return [full]
+    groups: list[list[str]] = []
+    current: list[str] = []
+    used = 0
+    for block in _owner_blocks(sources):
+        cost = sum(len(full[path]) for path in block)
+        if current and used + cost > budget:
+            groups.append(current)
+            current, used = [], 0
+        current.extend(block)
+        used += cost
+    if current:
+        groups.append(current)
+    return [
+        shown_sources({path: sources[path] for path in group},
+                      budget=budget, per_chunk=per_chunk)
+        for group in groups
+    ]
+
+
+def _owner_blocks(sources: Mapping[str, str]) -> list[list[str]]:
+    """*sources* keys grouped by the top-level name that owns them, in order."""
+    blocks: dict[str, list[str]] = {}
+    for path in sources:
+        blocks.setdefault(_owner(path), []).append(path)
+    return list(blocks.values())
+
+
+def _owner(symbol_path: str) -> str:
+    """The top-level definition a symbol belongs to — itself, if it is one."""
+    module, separator, name = symbol_path.rpartition("::")
+    top = name.split(".", 1)[0]
+    return f"{module}{separator}{top}" if separator else top
 
 
 def head(source: str, limit: int) -> str:

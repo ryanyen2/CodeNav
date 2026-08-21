@@ -181,6 +181,35 @@ at 95 chunks, `doc-view.ts` at 141. On the crowded ones `channels.py` goes 258k 
 and Loop A across `added` + `modified`, so a commit that lands a generated module
 cannot turn the incremental pass into a half-megabyte call either.
 
+**Conceding is the floor, not the goal** (`passes`). A pass spent down to 60
+characters of each method is still being asked to name a feature set it can barely
+read, so such a set is split across SEVERAL calls instead — and **the criterion is
+the budget itself**, which is why there is no threshold here to argue about: split
+iff the set does not fit at full allowance. A set that fits is one pass and one
+call, exactly as before; a set that does not was going to be shown a fraction of
+itself. Over the 813 files in this repo and its corpora that is 810 unchanged and
+three split — `core.py` (923 definitions → 4 passes), `channels.py` (786 → 4),
+`api.py` (219 → 2) — and after the split not one pass has to concede at all.
+
+- **Split by top-level owner, never mid-class.** The prompt binds a method to the
+  feature its class owns; a pass shown half a class would be asked to name a feature
+  over evidence another pass is holding. An owner too large to share a pass gets one
+  to itself and the budget concedes within it — the honest answer for a 200-method
+  class, which is one feature no split makes two.
+- **Owners pack in the order the caller presents them**, so a caller handing over
+  its symbols in file order gets passes that are contiguous regions of the file.
+- **A file's groups run in SEQUENCE, threading titles forward** (`bootstrap_hier`).
+  They are slices of one namespace, so a group blind to what its predecessor named
+  will name it again — and avoiding that duplicate is what a single whole-file call
+  was buying. Concurrency is unaffected: it is across files, and one file's groups
+  were one call's worth of work.
+- **A group that fails costs its slice, not the file.** Its symbols fall to
+  `_ensure_file_coverage` like anything else the model left out; the warning names
+  which part was lost, and `BootstrapResult.skipped` still names the file, once. The
+  fatal "broken setup" guard therefore counts CALLS — every call failing is a
+  missing key, whereas one part of one file failing is not, however few files the
+  repo has.
+
 ### Whether a large file holds intent (`pipelines/indexing/gate.py`)
 
 The indexer skipped any file over 1.5 MB, reasoning that a minified bundle, a

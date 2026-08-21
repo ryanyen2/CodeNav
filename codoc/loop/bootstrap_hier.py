@@ -32,7 +32,7 @@ from codoc.loop.apply import apply_op
 from codoc.loop.bootstrap import BootstrapResult, _title_from_file
 from codoc.loop.surface import flow_lines
 from codoc.loop.why import commit_rationales
-from codoc.loop.payload import shown_sources
+from codoc.loop.payload import passes
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_feature_id
 from codoc.store.db import Store
@@ -338,6 +338,10 @@ def bootstrap_hier_from_chunks(
     # Always ≥ 1: a non-positive / non-numeric value falls back to 8.
     concurrency = int(conc_env) if conc_env.isdigit() and int(conc_env) > 0 else 8
     failures: list[tuple[str, Exception | None]] = []
+    # Which FILES lost something, separately from which calls failed. A crowded
+    # file is described over several calls, and the reader's unit is the file: the
+    # warning and `skipped` name paths, the fatal guard counts calls.
+    failed_files: set[str] = set()
     executor = None
     if concurrency > 1 and total > 1:
         from concurrent.futures import ThreadPoolExecutor
@@ -351,21 +355,30 @@ def bootstrap_hier_from_chunks(
             prepared = []
             for file in wave:
                 file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
-                shown = shown_sources(
-                    {r.symbol_path: r.source or "" for r in file_rows})
-                chunks = [
-                    {"symbol_path": r.symbol_path, "source": shown[r.symbol_path]}
-                    for r in file_rows
-                ]
+                # Usually one group, so usually one call: a file is split only when
+                # one call could not be shown its definitions at full allowance, and
+                # that is 3 files of the 813 in this repo and its corpora (see
+                # `loop/payload.py`). Splitting by top-level owner keeps a class
+                # whole, so no pass is asked to name a feature over half a class.
+                groups = passes({r.symbol_path: r.source or "" for r in file_rows})
                 edges = _file_edges(file_rows, store)
+                # Each group is shown the edges about ITS OWN symbols. An entry
+                # about a symbol this pass is not naming is context it cannot act
+                # on, and on a split file there are hundreds of them.
+                chunk_groups = [
+                    ([{"symbol_path": path, "source": source}
+                      for path, source in shown.items()],
+                     [e for e in edges if e["symbol"] in shown])
+                    for shown in groups
+                ]
                 # Commit rationale for this file. The first call warms one
                 # repo-wide log; every later file slices the same cached scan,
                 # so this is one subprocess per bootstrap, not one per file.
                 why = commit_rationales(root_dir, [file]) if root_dir else []
-                prepared.append((file, file_rows, chunks, edges, why))
+                prepared.append((file, chunk_groups, why))
 
             def _call(item):
-                """One file's proposal, retried once, then given up on.
+                """One file's proposal, retried once per group, then given up on.
 
                 A bootstrap is a few dozen independent calls, and losing all of
                 them because one sample came back with a stray quote in a
@@ -378,20 +391,46 @@ def bootstrap_hier_from_chunks(
                 A retry is worth its cost because the common causes — a
                 truncated response, a rate limit, a transient network error —
                 do not repeat. What does repeat is a hard configuration problem
-                (no key, no CLI), and that fails every file, which the caller
-                below still treats as fatal.
+                (no key, no CLI), and that fails every call there is, which the
+                caller below still treats as fatal.
+
+                A split file's groups run in SEQUENCE, and each one is told the
+                titles the ones before it minted. They are slices of a single
+                namespace, so a group that cannot see what its predecessor named
+                will name it again — and a duplicate is exactly what a single
+                whole-file call was buying. Concurrency is unaffected: it is
+                across files, and one file's groups were one call's worth of work.
+
+                A group that fails is recorded and the rest still run. Its symbols
+                fall to ``_ensure_file_coverage`` along with anything else the
+                model left out, so a failure costs that slice's prose and not the
+                file's.
                 """
-                file, _rows, chunks, edges, why = item
-                last: Exception | None = None
-                for _attempt in (1, 2):
-                    try:
-                        return propose_file(file, chunks, edges, titles_snapshot,
-                                            repo_name=repo_name, config=config, why=why,
-                                            brief=brief, doc_language=doc_language)
-                    except Exception as exc:  # noqa: BLE001 — per-file tolerance
-                        last = exc
-                failures.append((file, last))
-                return []
+                file, chunk_groups, why = item
+                titles = list(titles_snapshot)
+                ops: list[NodeOp] = []
+                for group_index, (chunks, edges) in enumerate(chunk_groups):
+                    last: Exception | None = None
+                    for _attempt in (1, 2):
+                        try:
+                            got = propose_file(
+                                file, chunks, edges, titles,
+                                repo_name=repo_name, config=config, why=why,
+                                brief=brief, doc_language=doc_language)
+                            break
+                        except Exception as exc:  # noqa: BLE001 — per-file tolerance
+                            last = exc
+                    else:
+                        label = (file if len(chunk_groups) == 1
+                                 else f"{file} (part {group_index + 1} of "
+                                      f"{len(chunk_groups)})")
+                        failures.append((label, last))
+                        failed_files.add(file)
+                        continue
+                    ops.extend(got)
+                    titles.extend(op.title for op in got
+                                  if op.kind is NodeOpKind.ADD_NODE and op.title)
+                return ops
 
             if executor is not None and len(wave) > 1:
                 try:
@@ -407,31 +446,43 @@ def bootstrap_hier_from_chunks(
             else:
                 results = [_call(item) for item in prepared]
 
-            for offset, ((file, file_rows, _c, _e, _w), ops) in enumerate(zip(prepared, results)):
+            for offset, ((file, chunk_groups, _w), ops) in enumerate(zip(prepared, results)):
                 idx = wave_start + offset + 1
+                file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
                 if idx == 1 or idx == total or idx % step == 0:
-                    say(f"  · [{idx}/{total}] {file}")
+                    parts = (f" ({len(chunk_groups)} parts)"
+                             if len(chunk_groups) > 1 else "")
+                    say(f"  · [{idx}/{total}] {file}{parts}")
                 fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
                 ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
                 ops = _ensure_file_coverage(ops, file_rows, file)
                 _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
                 existing_titles.extend(
                     op.title for op in ops if op.kind is NodeOpKind.ADD_NODE and op.title)
-                calls += 1
+                # What this counts is CALLS, so a split file counts as the several
+                # it made — the figure is reported as a cost and would understate it.
+                calls += len(chunk_groups)
     finally:
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
-    # Every file failing is not bad luck, it is a broken setup — no key, no
+    # Every call failing is not bad luck, it is a broken setup — no key, no
     # `claude` CLI, an unreachable endpoint. Tolerating that would hand back a
     # tree of empty filename nodes and call it a success, so it still raises and
     # the caller's transaction rolls back to nothing.
-    if failures and len(failures) == total:
+    #
+    # CALLS is the unit, not files: a crowded file is described over several of
+    # them, so a lost part of it is a partial failure however few files the repo
+    # has, while a missing key loses every call there is.
+    if failures and len(failures) == calls:
         raise RuntimeError(
-            f"every bootstrap call failed ({total}/{total}); last error: {failures[-1][1]}"
+            f"every bootstrap call failed ({calls}/{calls}); last error: {failures[-1][1]}"
         )
     if failures:
-        say(f"  ⚠ {len(failures)} of {total} files could not be described "
+        # Files, not calls, because that is the unit the reader has: one file split
+        # into four parts losing one of them is one file described incompletely, and
+        # the label says which part so the loss is not reported as the whole file's.
+        say(f"  ⚠ {len(failed_files)} of {total} files could not be fully described "
             f"(retried once each): {', '.join(f for f, _ in failures[:5])}"
             + (" …" if len(failures) > 5 else ""))
         # WHY each one failed, not just which. Without this the message names a
@@ -469,5 +520,5 @@ def bootstrap_hier_from_chunks(
         chunks=len(rows),
         features=len(store.list_features()),
         batches=calls,
-        skipped=[f for f, _ in failures],
+        skipped=sorted(failed_files),
     )

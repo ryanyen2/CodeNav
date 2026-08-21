@@ -396,7 +396,10 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   (edits.json + realize.json), payload.py (the per-PASS prompt
              #   budget: how much of each chunk's source a call gets to see,
              #   conceded members-first so one generated module cannot make a
-             #   258,000-char call; a set that fits is passed through unchanged),
+             #   258,000-char call; a set that fits is passed through unchanged,
+             #   and a set that does NOT fit at full allowance is split across
+             #   several calls instead of spent down to 60 chars a method —
+             #   by top-level owner, so no pass is shown half a class),
              #   why.py (grounded rationale for
              #   descriptions: commit messages / realized directives / recorded
              #   rationale — each entry id-stamped so a claim can cite it),
