@@ -22,6 +22,14 @@ in the code and what that means for this feature ("the client retries now, so
 the description's 'one attempt' was wrong"). A person reads this in the
 feature's history — write it for them, not as a log line.
 
+An op that writes a `description` or a `title` may also carry `warrant`: the list
+of evidence ids whose text your stated *why* rests on — `["c2", "a1"]`. The ids
+are printed on each entry of `author_intent` and `why_evidence` below. Cite only
+ids that appear in this prompt, cite an entry only when it actually says what you
+claim, and cite NOTHING when your description makes no why claim at all, which is
+the common case. A reader uses this to check a reason instead of taking it on
+faith, so a citation that does not hold up is worse than none.
+
 ## Rules
 
 1. Return the FEWEST ops that capture the change. **Every chunk in `added` MUST
@@ -89,6 +97,12 @@ feature's history — write it for them, not as a log line.
    - With no such evidence, describe what the code achieves instead of narrating
      a decision — e.g. computes the total on write, so a reader never sees a
      stale number. That is an observation and needs no warrant.
+   - **When you do assert a reason, cite what it rests on** in the op's
+     `warrant` — the ids of the `author_intent` / `why_evidence` entries whose
+     words support it. A why you cannot cite is one you should not be stating, so
+     if nothing in this prompt says it, write the observation instead of the
+     reason. Never cite an entry to dress up a claim it does not make: an
+     unwarranted sentence is a normal thing to write, and a false citation is not.
    - **Name the answer, not just the question.** When code makes a choice a
      reader could get wrong — which date a period is lined up on, what happens
      to an unmatched input, how strict a comparison is — say WHICH way it goes
@@ -136,7 +150,7 @@ Return ONLY this, inside solution tags:
   {"kind": "attach", "feature_id": "f-1a2b", "bindings": [["codoc/loop/diff.py", "codoc/loop/diff.py::compute_changeset"]], "rationale": "same snapshot-diff behavior as the existing node"},
   {"kind": "attach", "feature_id": "f-7e8f", "bindings": [["metrics_utils.py", "metrics_utils.py::print_metrics_table"], ["metrics_utils.py", "metrics_utils.py::format_delta"]], "rationale": "rich terminal rendering belongs to the metrics summary feature"},
   {"kind": "amend", "feature_id": "f-7e8f", "description": "Answers whether a checkpoint is good enough to keep, by aggregating its runs, comparing them against the baseline, and flagging anything that crosses a threshold. The comparison is drawn straight to the terminal by [print_metrics_table()](codoc:metrics_utils.py#print_metrics_table), with coloured deltas and range bars, so a regression is visible without opening a dashboard.", "rationale": "it can draw the comparison now, not just format numbers, so 'display formatting' undersold it"},
-  {"kind": "amend", "feature_id": "f-3c4d", "description": "Holds the queue of edits that are waiting to be implemented. Every write goes through a temporary file and a rename, so a crash in the middle of one can never leave a half-parsed queue on disk. A reader that finds no file at all carries on, because an empty queue and a missing queue mean the same thing.", "rationale": "the write path moved to a temp-file rename, so the old sentence about writing in place was wrong"},
+  {"kind": "amend", "feature_id": "f-3c4d", "description": "Holds the queue of edits that are waiting to be implemented. Every write goes through a temporary file and a rename, so a crash in the middle of one can never leave a half-parsed queue on disk. A reader that finds no file at all carries on, because an empty queue and a missing queue mean the same thing.", "rationale": "the write path moved to a temp-file rename, so the old sentence about writing in place was wrong", "warrant": ["c1"]},
   {"kind": "add_node", "parent_id": "f-09cd", "title": "Relevant subtree selection", "description": "Keeps one tree-update call small enough to stay affordable, by sending only the features whose bindings share a file with the change rather than the whole tree, so the cost of a pass stays flat as the tree grows.", "bindings": [["codoc/loop/subtree.py", "codoc/loop/subtree.py::select_relevant_subtree"]], "rationale": "no existing node covers subtree scoping"}
 ]}
 </solution>
@@ -179,7 +193,9 @@ children). Prefer attaching new chunks here.
   the session that produced this change, most recent last, picked for overlap
   with the changed symbols. A person rarely states a reason outright here, but
   what they asked for usually implies one — read it for the purpose behind the
-  change, and treat it as a stated reason under Rule 7.
+  change, and treat it as a stated reason under Rule 7. Each entry carries an
+  `id` (`a1`…) you cite in `warrant`; this is the STRONGEST source here, because
+  it is a person saying what they wanted while they wanted it.
 - `why_evidence` (optional) — where a reason for this code was actually written
   down. `commits`: subjects and opening paragraphs of recent commits touching
   these files. `directives`: what the author asked for on these features, since
@@ -188,7 +204,10 @@ children). Prefer attaching new chunks here.
   contradicts it, that reversal is itself the thing worth writing down.
   Together these are your warrant for stating a why (Rule 7). A commit that
   touched the file is weaker evidence than a directive aimed at the feature;
-  neither licenses a claim the text does not make.
+  neither licenses a claim the text does not make. Each entry carries an `id`
+  (`c1` for commits, `d1` for directives, `p1` for prior rationale) — put the ones
+  you actually used in the op's `warrant`, and a commit's `sha` is there so a
+  reader can go look at the change it describes.
 
 - `author_voice` (optional) — descriptions this codebase's author wrote
   themselves. Not content: a sample of how they write. Match their sentence

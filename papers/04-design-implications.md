@@ -202,8 +202,68 @@ complete is worse than a number.
 
 **From** [the rationale note](03-rationale-and-why.md).
 
-**To build:** each prose-writing op records which evidence licensed its why, so the
-provenance card can show the warrant rather than only the chain.
+§A gave descriptions a why by going and finding the prose a repo already wrote about
+its own decisions. That closed one gap and opened another. The prompt now carries three
+sources at once, the model writes one paragraph, and nothing recorded which source the
+paragraph rested on — so a description grounded in a commit message and a description
+that outran every source in the block read *identically on the page*. The second is
+precisely the failure the evidence channel exists to prevent, and it had become
+invisible.
+
+**Built.**
+
+| Piece | Where |
+|---|---|
+| Every evidence entry gets a citable id, and a commit keeps the sha the parser was already reading | `codoc/loop/why.py::stamp_ids`, `_parse_log` |
+| The author's live prompt made citable too | `codoc/loop/loop_a.py` (`author_intent` → `{id, asked}`) |
+| Resolving a citation to what the source actually said, and dropping one that names nothing | `codoc/loop/warrant.py` |
+| The stored record | `codoc/model/event.py::Warrant`, `NodeOp.warrant` |
+| Asking for it, with the rules that keep it honest | `codoc/prompts/tree_update.txt` (op schema, Rule 7) |
+| Where the reply is turned into a record rather than trusted as one | `codoc/agent/tree_update.py::_coerce_op` |
+| On the wire, both directions a reader asks from | `codoc/loop/revisions.py::_entry`, `codoc/codoc_file/render.py::_history_feed`, `codoc/cli/main.py::history` |
+| The row on the card | `vscode-codoc/src/state/provenance.ts::warrantRows` |
+| Both halves | `tests/loop/test_warrant.py`, `tests/loop/test_revisions.py`, `tests/codoc_file/test_history_feed.py`, `vscode-codoc/src/test/timeline.test.ts` |
+
+**A chain is not a warrant.** The provenance card already assembled six links —
+sentence → event → directive → prompt → session → commit → diff — and every one of them
+answers *what happened before this claim*. None answers *why should I believe it*. Those
+are different questions, and the second is the one a reader opens the card to ask. The
+new row is `Rests on`, and it quotes the commit message, the request, or the earlier
+recorded note that licensed the stated reason.
+
+**The quote never comes from the model.** The reply carries ids — `warrant: ["c1", "a1"]`
+— and codoc looks each one up in the block it sent. Asking the model to repeat the
+evidence back would let a paraphrase drift toward the claim it is supposed to check, and
+that is the one direction an error must not travel for free. What is stored is the
+resolved quote, so the row on the card is a quotation rather than a summary of one.
+
+**An invented citation leaves the op unwarranted, not falsely warranted.** An id that is
+not in the index — a hallucinated commit, a stale id from a previous pass — resolves to
+nothing and is dropped. There is no error and no retry: a missing warrant is a *normal*
+state, so failing a pass over one would spend a user's tree update on a formality. The
+failure mode is losing a real citation, never gaining a fake one.
+
+**The author's own prompt is the strongest source, so it had to be citable.** §2 of the
+rationale note is explicit that a person saying what they want, while they want it, beats
+a commit message written afterwards. A warrant system that could cite only the three
+recorded sources would warrant only the weaker evidence. `author_intent` is stamped with
+`a1`… at the Loop A call site — not inside `relevant_intent`, because Loop B's directive
+builder consumes that same function's output as plain strings and has no citation to
+make. Rows are ordered by directness rather than by the order the model cited in: the
+ask, then the request, then the commit, then the earlier note.
+
+**Absence is the answer, and it is the common case.** Most descriptions report what code
+achieves and make no claim about a decision — Rule 7 says so, and an observation needs no
+warrant. So no row is drawn, and the prompt says outright to cite nothing when there is
+no why claim. A `Rests on: —` row would turn the ordinary sentence into a defect, which
+is how a reader learns to stop reading a field. Ops that write no prose carry no warrant
+at all: a citation on an `attach` has no claim to support.
+
+**The ground belongs to the reason it was offered for.** One save can produce several
+ops in a single timeline moment. Pairing the card's `Why` row with a neighbouring op's
+warrant would offer evidence for a claim it was never offered for, so the warrant comes
+from the same entry that supplied the reason — and a warrant stands alone only when
+nothing recorded a reason at all.
 
 ## F. The evals that matter
 

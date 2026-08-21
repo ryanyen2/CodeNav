@@ -95,6 +95,32 @@ STRUCTURAL_OPS: frozenset[NodeOpKind] = frozenset(
 )
 
 
+class Warrant(BaseModel):
+    """One piece of evidence a description's stated *why* rests on.
+
+    The change ledger could already assemble a chain — a sentence cites the event
+    that wrote it, the event cites the directive that asked for it, the directive
+    quotes the prompt a person typed. What it could not say is what the sentence was
+    WARRANTED by: which commit message, which request, which earlier recorded reason
+    licensed the claim. Without that a reader can see who wrote a why and not whether
+    to believe it, and a why nobody can check is the one kind of content this document
+    must not carry (see ``loop/why.py``).
+
+    A warrant is RESOLVED, never quoted from the model: the describing pass cites an
+    id from the evidence block it was given, and :mod:`codoc.loop.warrant` looks that
+    id up and records what the evidence actually said. An id that resolves to nothing
+    is dropped, so a fabricated citation leaves the op unwarranted rather than
+    warranted by a source that does not exist.
+
+    ``ref`` is where a reader goes to check: a commit sha, a directive id, a session
+    prompt's feature, or "" when the source has no address of its own.
+    """
+
+    kind: str = ""   # "commit" | "directive" | "intent" | "prior"
+    ref: str = ""    # the address to go check: commit sha, directive/feature id, or ""
+    quote: str = ""  # what that evidence actually said, verbatim and capped
+
+
 class NodeOp(BaseModel):
     kind: NodeOpKind
     feature_id: str | None = None  # target feature; None for ADD_NODE (id minted on apply)
@@ -103,6 +129,12 @@ class NodeOp(BaseModel):
     description: str | None = None  # for ADD_NODE / AMEND
     bindings: list[tuple[str, str]] = Field(default_factory=list)  # (file, symbol_path)
     rationale: str = ""            # one-line justification, shown in proposal hunks
+    # What the prose this op writes RESTS ON — resolved evidence, not the model's own
+    # summary of it (see :class:`Warrant`). Empty is the common and honest case: a
+    # description that states what code achieves rather than why a decision was made
+    # needs no warrant, and inventing one for it would be the exact failure this field
+    # exists to expose. Only ops that write prose carry it.
+    warrant: list[Warrant] = Field(default_factory=list)
     realized: bool | None = None   # ADD_NODE realization (None ⇒ default True); False = plan placeholder
     # Sibling ORDER, given as neighbour identities rather than an index (MOVE_NODE
     # and ADD_NODE). An index is a re-derived positional guess — by the time the op

@@ -36,6 +36,7 @@ from pathlib import Path
 
 from codoc.codoc_file.tree_order import children_map
 from codoc.doclang import language_tag_for, workspace_doc_language
+from codoc.loop.warrant import as_rows as warrant_rows
 from codoc.model.annotation import in_margin
 from codoc.model.hlc import HLC
 from codoc.model.event import (
@@ -328,6 +329,12 @@ def _history_feed(events: list, live_ids: set[str]) -> dict[str, list[dict]]:
         if e.op.rationale:
             r = e.op.rationale.strip()
             entry["rationale"] = (r[:_HISTORY_RATIONALE_CAP] + "…") if len(r) > _HISTORY_RATIONALE_CAP else r
+        # The evidence the prose this event wrote rests on. Carried on the feature's
+        # own history feed as well as the timeline's, because the question is asked at
+        # a paragraph ("can I trust this sentence") at least as often as at a moment.
+        rests = warrant_rows(e.op.warrant)
+        if rests:
+            entry["warrant"] = rests
         bucket.append(entry)
     return out
 

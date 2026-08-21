@@ -335,3 +335,39 @@ def test_an_unchanged_window_is_still_recognised(store, tmp_path):
     write_revisions(store.recent_events(50), tmp_path)
     prior = json.loads(revisions_path(tmp_path).read_text())
     assert _same_window(prior, build_revisions(store.recent_events(50), tmp_path))
+
+
+def test_a_revision_carries_what_its_prose_rests_on(store, tmp_path):
+    """The chain says what happened before a claim; the warrant says what the claim
+    stands on. Both ride the same entry, because a reader dragging the scrubber to the
+    moment a sentence appeared is asking whether to believe it."""
+    from codoc.model.event import Warrant
+
+    fid = _add(store, "Retry policy", "Tries once.")
+    apply_op(
+        NodeOp(kind=NodeOpKind.AMEND, feature_id=fid,
+               description="Retries only on a timeout, because the server can "
+                           "duplicate a non-idempotent post.",
+               rationale="the client retries now",
+               warrant=[Warrant(kind="commit", ref="1a2b3c4d",
+                                quote="Retry only on timeout — the server can duplicate."),
+                        Warrant(kind="intent", quote="add a retry guard to fan-out")]),
+        store, source="loop_a_agent", applied=True, actor="claude-code", mode="auto")
+
+    amend = next(r for r in build_revisions(store.recent_events(50), tmp_path)["revisions"]
+                 if r["kind"] == "amend")
+    assert [w["kind"] for w in amend["warrant"]] == ["commit", "intent"]
+    assert amend["warrant"][0]["ref"] == "1a2b3c4d"
+    # An intent has no address of its own, so the key is absent rather than empty —
+    # the reader can then treat presence as "there is somewhere to go look".
+    assert "ref" not in amend["warrant"][1]
+
+
+def test_a_revision_with_no_warrant_omits_the_key(store, tmp_path):
+    fid = _add(store, "Totals", "Adds numbers.")
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=fid,
+                    description="Computes the total on write."),
+             store, source="user", applied=True, actor=ACTOR_HUMAN, mode=MODE_PEN)
+    amend = next(r for r in build_revisions(store.recent_events(50), tmp_path)["revisions"]
+                 if r["kind"] == "amend")
+    assert "warrant" not in amend

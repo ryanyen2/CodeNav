@@ -145,6 +145,17 @@ from → the code diff itself**. Every link already existed in the ledger; nothi
 them together. The same card hangs off the History stance's per-feature label, so the
 question can be asked at a paragraph as well as at a moment.
 
+A chain is not a **warrant**, and the card carries both. Every link above says what
+happened *before* a claim; none says why to believe it. So a prose-writing op records
+what its stated why RESTS ON (`loop/warrant.py` → `NodeOp.warrant`) and the card quotes
+it as a `Rests on` row. The describing pass cites ids from the evidence it was given
+(`why.py.stamp_ids` puts `c1`/`d1`/`p1` on each entry; `author_intent` carries `a1`…) and
+codoc resolves each id back to what that source actually said — **the quote never comes
+from the model**, and an id naming nothing is dropped, so a fabricated citation leaves the
+op unwarranted rather than falsely warranted. Most descriptions have no warrant and should
+not: an observation about what code achieves makes no claim needing evidence, so nothing
+is drawn (see the assertion register, Rule 7).
+
 **Blame is per SPAN, not per feature** (`state/inline-blame.ts`). A feature is several
 paragraphs written by a person, a loop pass and an agent in turn, so "claude-code edited
 this 3h ago" answers a question nobody asks — the reader is deciding whether to trust one
@@ -381,12 +392,16 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   diff.py (compute_changeset), apply.py, loop_a.py / loop_b.py, edits.py
              #   (edits.json + realize.json), why.py (grounded rationale for
              #   descriptions: commit messages / realized directives / recorded
-             #   rationale), inbox.py, status.py, fsio.py (atomic
+             #   rationale — each entry id-stamped so a claim can cite it),
+             #   warrant.py (resolving those citations back to what the source
+             #   actually said; an id naming nothing is dropped, never invented),
+             #   inbox.py, status.py, fsio.py (atomic
              #   IO), subtree.py, bootstrap_hier.py, title_dedup.py (opt-in semantic
              #   title dedup), migrate.py (one-time store-authoritative workspace
              #   heal), sdk_realize.py / autorealize.py, watch.py,
              #   revisions.py (the timeline transport: applied events + the text each
-             #   displaced + the directives they cite), gitref.py (the commit a
+             #   displaced + the directives they cite + the warrant they rest on),
+             #   gitref.py (the commit a
              #   directive's code work started from — fails soft to ""),
              #   voice.py (the style memory: harvest human rewrites → lessons →
              #   retrieve by context → inject; see "Learning how the author writes"),

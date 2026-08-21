@@ -156,7 +156,8 @@ class TestParsing:
 
     def test_subject_with_newline_body_does_not_leak_into_file_list(self):
         rec = "\x1eabc\x1fSubject here\x1fline one\nline two\x1fsrc/a.py\nsrc/b.py\n"
-        (subject, body, files) = _parse_log(rec)[0]
+        (sha, subject, body, files) = _parse_log(rec)[0]
+        assert sha == "abc"
         assert subject == "Subject here"
         assert body.splitlines() == ["line one", "line two"]
         assert files == ["src/a.py", "src/b.py"]

@@ -33,6 +33,16 @@ simply yields an empty block and the prompt falls back to purpose-only prose
 this runs inside a loop pass whose actual job is keeping bindings correct, and
 missing evidence must never cost a user their tree update.
 
+Every entry carries a stable **id** (``c1``, ``d1``, ``p1``) and, for a commit,
+the **sha** it came from. Finding the evidence was only half the job: a reader
+looking at a stated why still could not tell WHICH of these licensed it, so a
+description that quietly outran its evidence read exactly like one that did not.
+The describing pass now cites the ids it used and :mod:`codoc.loop.warrant`
+resolves them back to what the source actually said — see
+:class:`codoc.model.event.Warrant`. The ids are positional within one block and
+mean nothing across passes; they are a citation handle for a single prompt, not
+an identifier to store.
+
 Every source is capped, and the assembled block is capped again — this text
 rides in the volatile tail of a cache-aligned prompt on every pass, so its size
 is a recurring bill, not a one-time one.
@@ -63,6 +73,7 @@ _MAX_COMMITS = 8            # …and this many across the whole block
 # English is ~100 tokens while 400 characters of Chinese is several times that, so
 # a fixed character cap quietly multiplies the prompt on a CJK repo. Rescaling
 # holds the information budget — and the bill — roughly constant across scripts.
+_SHA_CHARS = 8              # abbreviated commit id, enough to resolve by hand
 _SUBJECT_CHARS = 140
 _BODY_CHARS = 320
 _MAX_DIRECTIVES = 3
@@ -105,7 +116,7 @@ _TRAILER = re.compile(
 )
 
 # One parsed repo-wide log per root, with a TTL. Keyed by resolved path.
-_log_cache: dict[str, tuple[float, list[tuple[str, str, list[str]]]]] = {}
+_log_cache: dict[str, tuple[float, list[tuple[str, str, str, list[str]]]]] = {}
 
 
 def clear_cache() -> None:
@@ -139,24 +150,30 @@ def _run_git_log(root_dir: str | Path) -> str:
     return (proc.stdout or "")[:_LOG_MAX_CHARS]
 
 
-def _parse_log(out: str) -> list[tuple[str, str, list[str]]]:
-    """``(subject, body, files)`` per commit, newest first."""
-    records: list[tuple[str, str, list[str]]] = []
+def _parse_log(out: str) -> list[tuple[str, str, str, list[str]]]:
+    """``(sha, subject, body, files)`` per commit, newest first.
+
+    The sha was always in field 0 of the record and always discarded. It is what
+    turns a quoted commit message into a claim a reader can go check, so a
+    warrant that cites a commit needs it.
+    """
+    records: list[tuple[str, str, str, list[str]]] = []
     for rec in out.split("\x1e"):
         if not rec.strip():
             continue
         parts = rec.split("\x1f")
         if len(parts) < 4:
             continue
+        sha = parts[0].strip()
         subject = parts[1].strip()
         body = parts[2]
         files = [ln.strip() for ln in parts[3].splitlines() if ln.strip()]
         if subject:
-            records.append((subject, body, files))
+            records.append((sha, subject, body, files))
     return records
 
 
-def repo_log(root_dir: str | Path) -> list[tuple[str, str, list[str]]]:
+def repo_log(root_dir: str | Path) -> list[tuple[str, str, str, list[str]]]:
     """The cached, parsed commit window for ``root_dir`` (newest first)."""
     key = str(Path(root_dir).resolve()) if root_dir else ""
     if not key:
@@ -216,7 +233,7 @@ def commit_rationales(
         return []
     budget = dict.fromkeys(wanted, per_file)
     out: list[dict] = []
-    for subject, body, touched in repo_log(root_dir):
+    for sha, subject, body, touched in repo_log(root_dir):
         if len(out) >= limit:
             break
         hits = [f for f in touched if f in wanted and budget.get(f, 0) > 0]
@@ -233,6 +250,10 @@ def commit_rationales(
             budget[f] -= 1
         entry: dict = {"files": sorted(hits),
                        "subject": subject[:char_budget(_SUBJECT_CHARS, subject)]}
+        if sha:
+            # Short form: a warrant is read by a person who will paste it into
+            # `git show`, and seven characters resolve in any repo this size.
+            entry["sha"] = sha[:_SHA_CHARS]
         gist = _body_gist(body)
         if gist:
             entry["why"] = gist
@@ -335,6 +356,28 @@ def prior_rationales(store, feature_ids: set[str] | list[str]) -> list[dict]:
 
 # ─── assembly ───────────────────────────────────────────────────────────────
 
+# Prefix per source. Short on purpose: these ride in a prompt on every pass and
+# the model has to repeat them back, so `c1` costs one token where
+# `commit_evidence_1` costs four.
+ID_PREFIX = {"commits": "c", "directives": "d", "prior": "p"}
+
+
+def stamp_ids(block: dict) -> dict:
+    """Give every evidence entry a citable id, in place.
+
+    Positional within this block only. The prompt asks the model to cite the ids
+    it actually used, and :mod:`codoc.loop.warrant` resolves each back to the
+    entry it names — so the id has to be assigned AFTER trimming, or a citation
+    could name an entry that was dropped for size and the resolver would have to
+    guess whether the model hallucinated it.
+    """
+    for source, prefix in ID_PREFIX.items():
+        for i, entry in enumerate(block.get(source) or (), start=1):
+            if isinstance(entry, dict):
+                entry["id"] = f"{prefix}{i}"
+    return block
+
+
 def _fits(block: dict) -> dict:
     """Trim the assembled block to ``_TOTAL_CHARS``, dropping weakest-source-first.
 
@@ -397,5 +440,5 @@ def gather_why_evidence(
             if prior:
                 block["prior"] = prior
     except Exception:  # noqa: BLE001 — the loop's real work must not fail here
-        return block
-    return _fits(block) if block else {}
+        return stamp_ids(block)
+    return stamp_ids(_fits(block)) if block else {}

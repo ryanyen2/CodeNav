@@ -51,6 +51,7 @@ from pathlib import Path
 
 from codoc.loop.filenames import REVISIONS_FILENAME
 from codoc.loop.fsio import atomic_write_json, read_json
+from codoc.loop.warrant import as_rows
 from codoc.model.event import Event, NodeOpKind
 
 # How many applied events reach the editor. The scan window upstream is 300 (shared with
@@ -94,6 +95,12 @@ def _entry(e: Event) -> dict:
     if op.rationale:
         r = op.rationale.strip()
         out["rationale"] = (r[:_RATIONALE_CAP] + "…") if len(r) > _RATIONALE_CAP else r
+    # What the prose RESTS ON, as opposed to what caused it. `caused_by` and
+    # `rationale` answer "why did this change happen"; a warrant answers "why should
+    # I believe the reason it states" — the one link the provenance chain never had.
+    rests = as_rows(op.warrant)
+    if rests:
+        out["warrant"] = rests
     # The text this op wrote, and the text it displaced. Both sides are needed: forward
     # for "what does it say now", backward for "what did it say then".
     if op.title is not None:

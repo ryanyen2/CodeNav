@@ -8,6 +8,12 @@
  * asked for this sentence?" was a `codoc history` call, a `realize.md` read, and a
  * guess.
  *
+ * One link was still missing, and it was the one a reader actually needs: the chain says
+ * what happened BEFORE a claim, never what the claim is WARRANTED by. A "Rests on" row
+ * closes it, quoting the commit message, request or earlier note that licensed the stated
+ * reason (`codoc/loop/warrant.py`). Its absence is meaningful and common — a description
+ * that reports what code achieves is making no claim that needs a warrant.
+ *
  * This module assembles that chain once, for two callers that ask it from opposite
  * ends — the timeline (about a moment in the tree's history) and the History stance's
  * per-feature label (about this paragraph, right here). Pure: no DOM, no vscode, so
@@ -17,7 +23,7 @@
  * "Session: —" teaches the reader the field is noise, and then they stop reading the
  * rows that do carry something.
  */
-import type { HistoryEntry } from './bindings-model';
+import type { HistoryEntry, WarrantRow } from './bindings-model';
 import { actorLabel, kindPhrase, relativeTime } from './blame-model';
 import { filesTouched, type Moment, type RevisionDirective, type Timeline } from './revision-model';
 
@@ -34,6 +40,36 @@ function directiveRows(d: RevisionDirective): TraceRow[] {
     return rows;
 }
 
+/** How each evidence kind is named to a reader. Phrased as a ground rather than as a
+ *  source table ("Rests on commit …", not "commit"), because the row's job is to say
+ *  what the sentence above it stands on. */
+const GROUND: Record<string, string> = {
+    intent: 'Rests on your ask',
+    directive: 'Rests on a request',
+    commit: 'Rests on commit',
+    prior: 'Rests on an earlier note',
+};
+
+/** One row per piece of evidence the stated why rests on — the answer to "should I
+ *  believe that reason?", which the chain rows never gave.
+ *
+ *  Rendered right after `Why`, because the two are one thought: the reason, then its
+ *  ground. Nothing is drawn when a change has no warrant, and that is the common case
+ *  by design — most descriptions report what the code achieves and make no claim about
+ *  a decision, so a `Rests on: —` row would turn the ordinary into a defect. */
+function warrantRows(warrant: WarrantRow[] | undefined): TraceRow[] {
+    return (warrant ?? [])
+        .filter(w => !!w?.quote)
+        .map(w => {
+            const base = GROUND[w.kind] ?? 'Rests on';
+            // The ref belongs in the LABEL, not the value: a sha is an address the
+            // reader may go type, and burying it in front of the quotation makes them
+            // read past it to reach the words that matter.
+            const label = w.kind === 'commit' && w.ref ? `${base} ${w.ref}` : base;
+            return { label, value: `“${w.quote}”` };
+        });
+}
+
 /** The cause is recorded but its directive has aged out of the bounded logs.
  *
  *  Said explicitly rather than dropped: "we know this had a reason and no longer have
@@ -46,8 +82,15 @@ function forgottenCause(causedBy: string): TraceRow {
 /** The trace for one moment on the timeline. */
 export function momentTrace(moment: Moment, timeline: Timeline): TraceRow[] {
     const rows: TraceRow[] = [];
-    const why = moment.entries.map(e => e.rationale).find(r => !!r);
-    if (why) rows.push({ label: 'Why', value: why });
+    // One moment can hold several ops. The ground has to come from the SAME op that
+    // supplied the reason above it — pairing a Why row with a neighbouring op's warrant
+    // would offer evidence for a claim it was never offered for, which is worse than
+    // showing no ground at all. Only when nothing recorded a reason does a warrant from
+    // any op in the moment stand on its own.
+    const said = moment.entries.find(e => !!e.rationale);
+    if (said?.rationale) rows.push({ label: 'Why', value: said.rationale });
+    const grounded = said ?? moment.entries.find(e => e.warrant?.length);
+    rows.push(...warrantRows(grounded?.warrant));
 
     const d = moment.causedBy ? timeline.directives[moment.causedBy] : undefined;
     if (d) rows.push(...directiveRows(d));
@@ -79,6 +122,7 @@ export function featureTrace(
         value: `${actorLabel(latest.actor)} ${kindPhrase(latest.kind)}${when ? ` · ${when}` : ''}`,
     }];
     if (latest.rationale) rows.push({ label: 'Why', value: latest.rationale });
+    rows.push(...warrantRows(latest.warrant));
     const d = latest.caused_by ? directives[latest.caused_by] : undefined;
     if (d) rows.push(...directiveRows(d));
     else if (latest.caused_by) rows.push(forgottenCause(latest.caused_by));

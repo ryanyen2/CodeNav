@@ -37,6 +37,7 @@ from codoc.loop.title_dedup import (
     semantic_dedup_enabled,
 )
 from codoc.loop.voice import harvest, voice_context
+from codoc.loop.warrant import INTENT_PREFIX
 from codoc.loop.why import gather_why_evidence
 from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
 from codoc.store.db import Store, open_store
@@ -785,7 +786,15 @@ def apply_changeset(
         except Exception:  # noqa: BLE001 — advisory context only
             intents = []
         if intents:
-            changes["author_intent"] = intents
+            # Stamped with citation ids (a1, a2…) the same way the evidence block
+            # is, so a description resting on what the author just asked for can
+            # SAY so — see :mod:`codoc.loop.warrant`. Wrapped here rather than in
+            # `relevant_intent`, because Loop B's directive builder consumes that
+            # same function's output as plain strings and has no citation to make.
+            changes["author_intent"] = [
+                {"id": f"{INTENT_PREFIX}{i}", "asked": t}
+                for i, t in enumerate(intents, start=1)
+            ]
 
     # Why-evidence: the places a real rationale is written down (commit
     # messages, the directive the author handed off, what past passes already

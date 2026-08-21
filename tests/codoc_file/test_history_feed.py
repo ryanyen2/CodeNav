@@ -75,3 +75,38 @@ def test_empty_when_no_events(store, tmp_path):
     store.upsert_feature(Feature(title="Fresh"))
     write_sidecar(store, tmp_path)
     assert _history(tmp_path) == {}  # feature exists but no events touched it
+
+
+def test_history_carries_the_warrant_a_description_rests_on(store, tmp_path):
+    """`rationale` says why the change happened; `warrant` says why its stated reason
+    should be believed. A reader asks the second question at the paragraph at least as
+    often as at a moment on the timeline, so it rides here too."""
+    from codoc.model.event import Warrant
+
+    ev = apply_op(
+        NodeOp(kind=NodeOpKind.ADD_NODE, title="Retry policy",
+               description="Retries only on a timeout, because the server can "
+                           "duplicate a non-idempotent post.",
+               rationale="the client retries now",
+               warrant=[Warrant(kind="commit", ref="1a2b3c4d",
+                                quote="Retry only on timeout — the server can "
+                                      "duplicate a non-idempotent post.")]),
+        store, source="loop_a_agent", applied=True, actor="claude-code", mode="auto")
+
+    write_sidecar(store, tmp_path)
+    (row,) = _history(tmp_path)[ev.op.feature_id][0]["warrant"]
+    assert row["kind"] == "commit"
+    assert row["ref"] == "1a2b3c4d"
+    assert "duplicate a non-idempotent post" in row["quote"]
+
+
+def test_a_change_with_no_warrant_omits_the_key(store, tmp_path):
+    """Absence is the answer and the common case: a description reporting what code
+    achieves makes no claim needing evidence, so an empty list here would read as a
+    missing warrant rather than an unneeded one."""
+    ev = apply_op(NodeOp(kind=NodeOpKind.ADD_NODE, title="Totals",
+                         description="Computes the total on write.",
+                         rationale="new node"),
+                  store, source="user", applied=True, actor="human", mode="pen")
+    write_sidecar(store, tmp_path)
+    assert "warrant" not in _history(tmp_path)[ev.op.feature_id][0]

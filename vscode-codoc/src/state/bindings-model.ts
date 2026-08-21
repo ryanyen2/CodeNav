@@ -213,9 +213,24 @@ export interface AutoEdit {
     rationale: string;
 }
 
+/** One piece of evidence a description's stated *why* rests on (mirrors
+ *  `codoc/model/event.py:Warrant`, wired by `loop/warrant.py:as_rows`).
+ *
+ *  This is the link the provenance chain never had. `caused_by` and `rationale` say why
+ *  a change HAPPENED; a warrant says why the reason it states should be believed —
+ *  which commit message, which request of yours, which earlier recorded note licensed
+ *  it. `quote` is what that source actually said, resolved by codoc rather than
+ *  restated by the model, so it can be trusted as a quotation. `ref` is where to go
+ *  check (a commit sha, a feature id) and is absent when the source has no address. */
+export interface WarrantRow {
+    kind: string;   // commit | directive | intent | prior
+    quote: string;
+    ref?: string;
+}
+
 /** One entry of the W2 `feature_history` blame slice — an applied event on this
  *  feature, newest first. `at` is the HLC string; `rationale`/`caused_by` are the
- *  "why" when the ledger recorded them. */
+ *  "why" when the ledger recorded them, and `warrant` is what that why rests on. */
 export interface HistoryEntry {
     at: string;
     kind: string;
@@ -223,6 +238,7 @@ export interface HistoryEntry {
     mode: string;
     caused_by?: string;
     rationale?: string;
+    warrant?: WarrantRow[];
 }
 
 export interface ProposalsMap {

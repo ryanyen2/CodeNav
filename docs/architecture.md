@@ -115,6 +115,42 @@ check is the SINGLE `phase.is_held` predicate (D5), shared by all three guards (
 `emptied` detection, `suppressed_by_hold`, and `_compute_drift`) so they can't drift
 apart. While `realize.json` exists, applied ops are stamped `caused_by=⟨directive⟩`.
 
+### Warranting a stated why (`loop/why.py` + `loop/warrant.py`)
+
+The describing pass is handed prose the repo already wrote about its own decisions —
+commit messages that touched the changed files, realized directives, previously recorded
+rationale — plus the author's live prompt. That gives a description the material for a
+*why*; it does not record which of it the why rested on, and a description grounded in a
+commit read identically on the page to one that outran every source in the block. A
+**warrant** closes that: `NodeOp.warrant` is a list of `Warrant{kind, ref, quote}`, and
+the provenance card renders each as a `Rests on` row.
+
+Three rules make it worth trusting:
+
+- **Every entry is citable, and ids are per-prompt.** `why.stamp_ids` puts `c1`/`d1`/`p1`
+  on the commit / directive / prior entries and `loop_a` stamps `a1`… on `author_intent`
+  (at the call site, not inside `relevant_intent`, because Loop B's directive builder
+  consumes that same function's output as plain strings and has no citation to make).
+  Stamping happens AFTER `_fits` trims the block, so a citation can never name an entry
+  dropped for size. Ids are a handle for one prompt and are never stored — what is stored
+  is the resolved warrant.
+- **The quote never comes from the model.** The reply carries ids only
+  (`"warrant": ["c1", "a1"]`); `warrant.resolve` looks each up in the index built from the
+  block that was actually sent (`warrant.index_evidence`) and stores what that source
+  said, clipped. Asking the model to repeat the evidence back would let a paraphrase drift
+  toward the claim it is meant to check. Rows are ordered by directness — intent,
+  directive, commit, prior — not by the order cited, mirroring `why.py`'s own hierarchy.
+- **Fail open, never fail false.** An id that resolves to nothing — a hallucinated sha, a
+  stale id from a previous pass — is dropped silently: no error, no retry. A missing
+  warrant is a *normal* state (most descriptions report what code achieves and assert no
+  reason at all, per Rule 7), so a pass must not be spent on the formality. The failure
+  mode is losing a real citation, never gaining a fabricated one. Only prose-writing ops
+  carry one; a citation on an `attach` has no claim to support.
+
+It travels on both surfaces a reader asks from — `revisions.py::_entry` for the timeline
+and `render.py::_history_feed` for the sidecar, each omitting the key entirely when there
+is nothing to say — and `codoc history` echoes it as a `rests on …` line under the reason.
+
 ## Loop B in detail (codoc → code)
 
 `run_loop_b` (1) drains the `edits.json` **`commands`** channel — the
@@ -880,6 +916,13 @@ workflow readable in place:
   with no value are omitted rather than shown empty; a cause whose directive has aged out
   of the bounded logs says so, because "we know this had a reason and no longer have it"
   is a different fact from "this had no reason".
+
+  It also carries the **warrant** — see "Warranting a stated why" below. Every link in
+  that chain says what happened *before* a claim; a `Rests on` row is the only one that
+  says why to believe it, and it quotes the source rather than restating it. The row comes
+  from the same entry that supplied the `Why` above it (`provenance.ts:warrantRows`),
+  because one timeline moment can hold several ops and pairing a reason with a neighbour's
+  evidence would offer that evidence for a claim it was never offered for.
 - **Comments as requested work** (W8). The document never moves for one: margin cards hang
   in the whitespace that already exists and, where it cannot hold a card without covering
   the prose (`marginFits` — the surface is not the viewport, so the old `max-width: 1100px`

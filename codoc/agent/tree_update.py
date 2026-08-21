@@ -18,12 +18,24 @@ from codoc.agent.base import (
 )
 from codoc.config import LLMConfig, fast_llm_config
 from codoc.doclang import DocLanguage
-from codoc.loop import prose
+from codoc.loop import prose, warrant
 from codoc.model.event import NodeOp, NodeOpKind
 
 
-def _coerce_op(raw: dict) -> NodeOp:
+def _coerce_op(raw: dict, warrant_index: dict | None = None) -> NodeOp:
+    """One reply op as a :class:`NodeOp`, with its citations resolved.
+
+    ``warrant_index`` maps the evidence ids that were IN this prompt to what those
+    entries said (:func:`codoc.loop.warrant.index_evidence`). Resolving here rather
+    than trusting the reply is the whole point: the model names a source, codoc
+    records what the source actually contains, and an id that is not in the index —
+    a hallucinated commit, a stale id from an earlier pass — resolves to nothing and
+    is dropped. An op that writes no prose keeps no warrant at all, since a citation
+    on an `attach` has no claim to support.
+    """
     bindings = [tuple(b) for b in raw.get("bindings", []) if len(b) == 2]
+    writes_prose = bool(raw.get("description") or raw.get("title"))
+    cited = warrant.resolve(warrant_index or {}, raw.get("warrant")) if writes_prose else []
     return NodeOp(
         kind=NodeOpKind(raw["kind"]),
         feature_id=raw.get("feature_id"),
@@ -32,6 +44,7 @@ def _coerce_op(raw: dict) -> NodeOp:
         description=raw.get("description"),
         bindings=bindings,
         rationale=raw.get("rationale", ""),
+        warrant=cited,
     )
 
 
@@ -77,6 +90,9 @@ def propose_tree_update(
     )
     prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
     volatile = format_prompt(volatile_tpl, **kwargs)
+    # Built from `changes` itself, so every id the model can see is an id this can
+    # resolve — the index and the prompt cannot drift.
+    warrant_index = warrant.index_evidence(changes)
     import logging
 
     # Whole-response tolerance, the outer half of the per-op tolerance below.
@@ -116,7 +132,7 @@ def propose_tree_update(
         out: list[NodeOp] = []
         for o in ops_raw:
             try:
-                out.append(_coerce_op(o))
+                out.append(_coerce_op(o, warrant_index))
             except Exception as exc:  # noqa: BLE001 — tolerate one bad op, keep the rest
                 logging.getLogger(__name__).warning(
                     "codoc: dropping malformed LLM tree-update op (%s): %r", exc, o)

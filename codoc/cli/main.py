@@ -539,6 +539,12 @@ def history(
             typer.echo(line)
             if e.op.rationale:
                 typer.echo(f"      {e.op.rationale}")
+            # What the prose it wrote RESTS ON. Printed under the rationale because
+            # the two read as one thought — the reason, then the ground for it — and
+            # this command is where an agent with no IDE goes to check a claim.
+            for w in e.op.warrant:
+                ref = f" ({w.ref})" if w.ref else ""
+                typer.echo(f"      rests on {w.kind}{ref}: {_elide(w.quote)}")
             # The displaced wording, one line, elided. This command has always claimed to
             # show what a change replaced (`codoc translate` even points people here for
             # exactly that) and never did: the data was in the row and the reader dropped

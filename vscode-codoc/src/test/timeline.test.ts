@@ -108,6 +108,73 @@ describe('momentTrace', () => {
         expect(momentTrace(t.moments[0], t)).toEqual([]);
     });
 
+    it('says what the stated reason RESTS ON, right after the reason', () => {
+        // The chain rows say what happened before the claim; this row is the only one
+        // that says whether to believe it. Ordered as one thought: reason, then ground.
+        const t = timelineOf([entry({
+            event_id: 'e-1', kind: 'amend', feature_id: 'f-1', actor: 'claude-code',
+            rationale: 'the client retries now',
+            warrant: [
+                { kind: 'commit', ref: '1a2b3c4d', quote: 'Retry only on timeout — the server can duplicate a post.' },
+                { kind: 'intent', quote: 'add a retry guard to fan-out' },
+            ],
+        })]);
+        expect(momentTrace(t.moments[0], t)).toEqual([
+            { label: 'Why', value: 'the client retries now' },
+            { label: 'Rests on commit 1a2b3c4d', value: '“Retry only on timeout — the server can duplicate a post.”' },
+            { label: 'Rests on your ask', value: '“add a retry guard to fan-out”' },
+        ]);
+    });
+
+    it('grounds the reason it actually showed, not a neighbouring op’s', () => {
+        // One save can produce several ops. Pairing the Why row with another entry's
+        // warrant would attribute evidence to a claim it was never offered for.
+        const t = timelineOf([
+            entry({ event_id: 'e-2', kind: 'amend', feature_id: 'f-2', at: hlc(1),
+                    rationale: 'renamed to match the handler' }),
+            entry({ event_id: 'e-1', kind: 'amend', feature_id: 'f-1', at: hlc(0),
+                    rationale: 'the client retries now',
+                    warrant: [{ kind: 'commit', ref: 'aaaaaaaa', quote: 'Retry only on timeout' }] }),
+        ]);
+        const rows = momentTrace(t.moments[0], t);
+        expect(rows[0]).toEqual({ label: 'Why', value: 'renamed to match the handler' });
+        expect(rows.some(r => r.label.startsWith('Rests on'))).toBe(false);
+    });
+
+    it('shows a warrant even when nothing recorded a rationale', () => {
+        const t = timelineOf([entry({
+            event_id: 'e-1', kind: 'amend', feature_id: 'f-1',
+            warrant: [{ kind: 'directive', ref: 'f-1', quote: 'make the queue crash-safe' }],
+        })]);
+        expect(momentTrace(t.moments[0], t)).toEqual([
+            { label: 'Rests on a request', value: '“make the queue crash-safe”' },
+        ]);
+    });
+
+    it('draws nothing for a change with no warrant — the ordinary case', () => {
+        // Most descriptions report what code achieves and make no claim needing
+        // evidence, so a "Rests on: —" row would turn the normal into a defect.
+        const t = timelineOf([entry({ event_id: 'e-1', kind: 'amend', feature_id: 'f-1',
+                                      rationale: 'computes the total on write now' })]);
+        expect(momentTrace(t.moments[0], t)).toEqual([
+            { label: 'Why', value: 'computes the total on write now' },
+        ]);
+    });
+
+    it('drops a quoteless warrant rather than drawing an empty ground', () => {
+        const t = timelineOf([entry({ event_id: 'e-1', kind: 'amend', feature_id: 'f-1',
+                                      warrant: [{ kind: 'commit', ref: 'abc', quote: '' }] })]);
+        expect(momentTrace(t.moments[0], t)).toEqual([]);
+    });
+
+    it('labels an unrecognised evidence kind without inventing a name for it', () => {
+        const t = timelineOf([entry({ event_id: 'e-1', kind: 'amend', feature_id: 'f-1',
+                                      warrant: [{ kind: 'issue', quote: 'from the tracker' }] })]);
+        expect(momentTrace(t.moments[0], t)).toEqual([
+            { label: 'Rests on', value: '“from the tracker”' },
+        ]);
+    });
+
     it('distinguishes a queued request from a completed one', () => {
         const t = timelineOf(
             [entry({ event_id: 'e-1', kind: 'amend', feature_id: 'f-1', caused_by: 'd-q' })],
@@ -200,6 +267,19 @@ describe('featureTrace', () => {
             { label: 'You asked', value: '“make uploads rate-limited”' },
             { label: 'Session', value: '0568a9e3' },
             { label: 'From commit', value: 'deadbeef' },
+        ]);
+    });
+
+    it('grounds the paragraph’s stated reason too', () => {
+        const rows = featureTrace([
+            { at: hlc(0), kind: 'amend', actor: 'claude-code', mode: 'auto',
+              rationale: 'the client retries now',
+              warrant: [{ kind: 'prior', ref: 'f-1', quote: 'the old sentence said one attempt' }] },
+        ], {}, T0);
+        expect(rows).toEqual([
+            { label: 'Last change', value: 'claude-code edited · just now' },
+            { label: 'Why', value: 'the client retries now' },
+            { label: 'Rests on an earlier note', value: '“the old sentence said one attempt”' },
         ]);
     });
 

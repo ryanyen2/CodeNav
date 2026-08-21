@@ -183,7 +183,10 @@ class TestLoopAThreading:
             store.close()
 
         assert res.llm_called
-        assert seen["author_intent"] == ["add a retry guard to fan-out"]
+        # Wrapped with a citation id, so a description that rests on what the
+        # author asked for can name it (see codoc.loop.warrant).
+        assert seen["author_intent"] == [
+            {"id": "a1", "asked": "add a retry guard to fan-out"}]
 
     def test_no_intent_key_when_nothing_captured(self, tmp_path):
         from codoc.loop.diff import ChangeSet, ChunkRef

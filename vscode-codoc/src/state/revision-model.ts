@@ -35,6 +35,7 @@
  *
  * No DOM, no vscode, no TipTap — pure, and unit-tested directly.
  */
+import type { WarrantRow } from './bindings-model';
 import { PMNode, blocksToDescriptionText, inlineRunsToText, NODE_FEATURE_HEADING, NODE_PARAGRAPH } from './pm-doc';
 
 // ── the wire shape (mirrors codoc/loop/revisions.py) ─────────────────────────
@@ -50,6 +51,8 @@ export interface RevisionEntry {
     mode: string;
     caused_by?: string;
     rationale?: string;
+    /** The evidence the prose this op wrote rests on — see `WarrantRow`. */
+    warrant?: WarrantRow[];
     /** What this op wrote. */
     title?: string;
     description?: string;
