@@ -72,6 +72,13 @@ FORMATS: dict[str, str] = {
     ".cfg": "ini",
 }
 
+#: the format names themselves — what an indexed row carries in its `language`
+#: column, so a reader with a row and no filename can still tell a settings chunk
+#: from a code one. Static rather than :func:`available_formats`, which reports what
+#: THIS process can parse: a YAML row indexed on a machine with PyYAML is still a
+#: settings row here.
+FORMAT_NAMES: frozenset[str] = frozenset(FORMATS.values())
+
 # Files with a settings extension that are not a decision anybody authored: package
 # metadata, lock files, and tool manifests. They are machinery — generated or dictated
 # by a tool — and a tree that described them would spend its first nodes on the build.

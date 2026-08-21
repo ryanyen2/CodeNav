@@ -136,12 +136,48 @@ Built:
   here can open. `graph/extract` and `codoc status` needed nothing — see
   docs/architecture.md, "What had to stop asking `codoc.lang`".
 
-Still open:
+Then the two items that were open, and what answering them turned out to require:
 
-1. **The prompt.** A chunk's comments and values reach the pass only once the payload
-   builder includes them, which is the whole point: a description should be able to say
-   `month = "made"` rather than "read from rules.toml".
-2. **Decision 1 above, in practice.** Coverage arithmetic settled by uniformity — a
-   settings section is an indexed chunk, so an unbound one is a real gap — but nothing
-   yet CHECKS that Loop A binds a section to the feature whose code reads it, which is
-   the claim the whole plan rests on.
+1. **The prompt** needed no plumbing. Measured against the real `pyproject.toml`, all
+   seven of its sections were already in the payload at the full per-chunk allowance —
+   a settings chunk is a chunk, which is the dividend of naming them the way code is
+   named. What WAS wrong is one rung below: the budget read a dotted section as a
+   compressible MEMBER. That concession is justified for a method, because the class
+   states what the method is for and a shortened body still lands the reader in the
+   right place; `[tool.pytest.ini_options]` has no such parent. It names a path through
+   a document, its keys ARE the decision, and compressing them first spends the budget
+   on exactly the lines the tree cannot otherwise say. `payload.is_member` now excludes
+   a settings path however deeply it nests.
+2. **Decision 1 in practice** could not be checked because nothing did it. The per-file
+   bootstrap pass asks what a file is FOR, and a settings file answers that with a
+   Configuration junk drawer — a node holding every unrelated decision in the repo,
+   which is the shape the tree exists to avoid. The right answer is usually NO new
+   node: attach the section to the feature whose code reads it, and amend that
+   feature's description to name the value in force. So bootstrap gained a third phase
+   (**1b**, `prompts/bootstrap_settings.txt` + `propose_settings_features`) that runs
+   after every code file — the ordering is the mechanism, since the features it cites
+   must exist first — and is offered the features whose code NAMES the file, by
+   evidence rather than proximity, each with the description an amend has to keep. An
+   `attach`/`amend` citing a feature the pass was never shown is dropped;
+   `_ensure_file_coverage` then leaves that section a node of its own, which is a
+   visible gap instead of prose on the wrong node.
+
+Both halves are pinned where they are deterministic: Phase 1b end-to-end with an
+injected pass (`tests/loop/test_bootstrap_hier.py`), and Loop A carrying a new
+section's comment run and values verbatim into `propose` (`tests/loop/test_loop_a.py`).
+WHICH feature the model picks is its judgment and is deliberately not pinned.
+
+One thing this exposed on the way out: the citation the new prose writes did not work.
+`codoc.openRef` had no way to find `[periods]` — VS Code ships no TOML symbol provider
+and the fallback regex looks for `def` / `class` / `name =` — so clicking a cited value
+opened the file and revealed nothing, which reads as a broken citation rather than a
+missing parser. `vscode-codoc/src/state/settings-sections.ts` mirrors the chunker's
+header grammars (including the `servers[1]` repeat rule and JSON's depth scan) and is
+consulted ahead of both code paths, which are then skipped: a hit from them inside a
+settings file would be coincidence, and landing a reader on an arbitrary line is worse
+than not moving.
+
+Still open, noted rather than fixed: the bridge lens (`state/bridge.ts`, `DECL_RE`,
+scoped to Python and JS/TS) does not mark a settings section as owned by a feature, so
+the code side of the round trip is one-way for these files — the description cites the
+section, the section does not advertise the feature.

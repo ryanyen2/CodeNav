@@ -10,6 +10,8 @@ from codoc.loop.bootstrap_hier import (
     _apply_ops_with_local_ids,
     _ensure_file_coverage,
     _feature_coupling,
+    _only_offered_features,
+    _settings_readers,
     bootstrap_hier_from_chunks,
 )
 from codoc.model.event import NodeOp, NodeOpKind
@@ -459,3 +461,149 @@ class TestACrowdedFileIsDescribedOverSeveralCalls:
         assert bound == {(r.file, r.symbol_path) for r in rows}
         # …and it is reported once, as the one file it is.
         assert res.skipped == ["wide.py"]
+
+# ---------------------------------------------------------------------------
+# Phase 1b — the decisions a settings file holds
+# ---------------------------------------------------------------------------
+
+_READS_IT = 'def summarise():\n    load("rules.toml")\n'
+_PERIODS = '# Which date a summary lines up on.\n[periods]\nmonth = "made"\n'
+
+
+def _settings_rows():
+    """A repo whose summary code reads `tally/rules.toml`, which is indexed."""
+    return [
+        FakeRow("tally/summary.py", "tally/summary.py::summarise", _READS_IT),
+        FakeRow("tally/other.py", "tally/other.py::unrelated", "def unrelated():\n    pass\n"),
+        FakeRow("tally/rules.toml", "tally/rules.toml::periods", _PERIODS,
+                language="toml"),
+    ]
+
+
+def _code_only(file, chunks, edges, existing_titles, *, repo_name, config, why=None, **_kw):
+    return [_add("n1", f"Feat {file}", [(file, c["symbol_path"]) for c in chunks])]
+
+
+def test_a_settings_file_is_described_after_every_code_file(store):
+    """Phase 1b attaches a section to the feature that reads it, and names the value.
+
+    The whole point of indexing the file: the reader of the summary feature asked
+    which date a month is lined up on, and before this pass the answer was in a file
+    the tree could not see.
+    """
+    rows = _settings_rows()
+    build_graph(store, rows)
+    seen: list[tuple[str, list[dict], list[dict]]] = []
+
+    def propose_settings(file, sections, readers, **_kw):
+        seen.append((file, sections, readers))
+        fid = readers[0]["feature_id"]
+        return [
+            NodeOp(kind=NodeOpKind.ATTACH, feature_id=fid,
+                   bindings=[(file, "tally/rules.toml::periods")]),
+            NodeOp(kind=NodeOpKind.AMEND, feature_id=fid,
+                   description="Lines a summary up on the date the payment was made."),
+        ]
+
+    bootstrap_hier_from_chunks(rows, store, propose_file=_code_only,
+                               propose_org=lambda *a, **k: [],
+                               propose_settings=propose_settings)
+
+    assert len(seen) == 1
+    file, sections, readers = seen[0]
+    assert file == "tally/rules.toml"
+    # The values and the comment above them, verbatim — a section shown as a
+    # `symbol_path` alone would leave the pass exactly where the old prose was.
+    assert sections == [{"symbol_path": "tally/rules.toml::periods", "source": _PERIODS}]
+    # Only the feature whose code names the file, and it arrives with the prose an
+    # amend has to keep.
+    assert [r["title"] for r in readers] == ["Feat tally/summary.py"]
+    assert readers[0]["reads_it_in"] == ["tally/summary.py::summarise"]
+    assert readers[0]["description"]
+
+    owner = store.binding_at("tally/rules.toml", "tally/rules.toml::periods")
+    assert owner is not None
+    summary = next(f for f in store.list_features() if f.title == "Feat tally/summary.py")
+    assert owner.feature_id == summary.id
+    assert "payment was made" in summary.description
+
+
+def test_a_settings_file_is_not_offered_to_the_per_file_pass(store):
+    """It would be asked what the file is FOR, and answer with a Configuration node."""
+    rows = _settings_rows()
+    build_graph(store, rows)
+    asked: list[str] = []
+
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config, why=None, **_kw):
+        asked.append(file)
+        return _code_only(file, chunks, edges, existing_titles,
+                          repo_name=repo_name, config=config, why=why)
+
+    bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                              propose_org=lambda *a, **k: [],
+                              propose_settings=lambda *a, **k: [])
+
+    assert "tally/rules.toml" not in asked
+
+
+def test_a_section_no_feature_reads_still_lands_in_the_tree(store):
+    """A pass that returns nothing leaves a node named after the file — a visible,
+    fillable gap rather than a section bound to nothing."""
+    rows = _settings_rows()
+    build_graph(store, rows)
+
+    bootstrap_hier_from_chunks(rows, store, propose_file=_code_only,
+                               propose_org=lambda *a, **k: [],
+                               propose_settings=lambda *a, **k: [])
+
+    owner = store.binding_at("tally/rules.toml", "tally/rules.toml::periods")
+    assert owner is not None
+
+
+def test_a_settings_pass_that_fails_costs_the_values_and_nothing_else(store):
+    """One raised call must not lose the code files' tree — the same tolerance the
+    per-file pass has, for the same reason: the user paid for the rest."""
+    rows = _settings_rows()
+    build_graph(store, rows)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no key")
+
+    res = bootstrap_hier_from_chunks(rows, store, propose_file=_code_only,
+                                     propose_org=lambda *a, **k: [],
+                                     propose_settings=boom)
+
+    assert {f.title for f in store.list_features()} >= {
+        "Feat tally/summary.py", "Feat tally/other.py"}
+    assert res.features >= 2
+    assert store.binding_at("tally/rules.toml", "tally/rules.toml::periods") is not None
+
+
+def test_only_features_that_name_the_file_are_offered(store):
+    """Evidence, not proximity: a module in the same package that never mentions
+    `rules.toml` is not a candidate, so the pass cannot amend prose about it."""
+    rows = _settings_rows()
+    build_graph(store, rows)
+    _apply_ops_with_local_ids(
+        [_add("n1", "Summaries", [("tally/summary.py", "tally/summary.py::summarise")]),
+         _add("n2", "Other", [("tally/other.py", "tally/other.py::unrelated")])],
+        store, {}, source="bootstrap")
+
+    readers = _settings_readers("tally/rules.toml", rows, store)
+
+    assert [r["title"] for r in readers] == ["Summaries"]
+
+
+def test_an_amend_citing_a_feature_the_pass_never_saw_is_dropped():
+    """A hallucinated id would rewrite the description of an unrelated feature, and
+    nothing in the answer distinguishes it from a real one."""
+    ops = [
+        NodeOp(kind=NodeOpKind.AMEND, feature_id="f-real", description="kept"),
+        NodeOp(kind=NodeOpKind.AMEND, feature_id="f-invented", description="dropped"),
+        NodeOp(kind=NodeOpKind.ADD_NODE, feature_id="n1", title="Minted",
+               description="A section nothing reads."),
+    ]
+
+    kept = _only_offered_features(ops, {"f-real"})
+
+    assert [o.feature_id for o in kept] == ["f-real", "n1"]

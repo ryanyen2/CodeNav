@@ -19,6 +19,7 @@ import { BridgeCodeLensProvider } from './providers/bridge-lens';
 import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
 import { bindingsForFeature } from './state/bindings-model';
 import { symbolLeaf } from './state/registry-model';
+import { settingsFormat, settingsSectionLine } from './state/settings-sections';
 import { DependencyFocus } from './providers/focus';
 import { AgentGutter } from './providers/agent';
 import { CodocFileDecorationProvider } from './providers/file-decoration';
@@ -553,8 +554,25 @@ export function activate(context: vscode.ExtensionContext): void {
 
             let targetRange: vscode.Range | null = null;
 
+            // A settings section is found by its own grammar, and only by it. Neither
+            // path below can reach one: no TOML or INI language server ships with VS
+            // Code, so there are no document symbols, and the code regex looks for a
+            // declaration keyword in a file whose declarations are `[periods]`. So a
+            // citation of a configured value — the kind bootstrap's settings pass now
+            // writes into the description a reader opens — silently did not move the
+            // editor at all. The code paths are skipped rather than tried after, because
+            // a hit from them in a settings file would be a coincidence, and landing the
+            // reader somewhere arbitrary is worse than the honest no-op below.
+            const settingsFmt = settingsFormat(file);
+            if (settingsFmt) {
+                const line = settingsSectionLine(doc.getText(), symbol, settingsFmt);
+                if (line >= 0 && line < doc.lineCount) {
+                    targetRange = new vscode.Range(line, 0, line, doc.lineAt(line).text.length);
+                }
+            }
+
             // Try VS Code's document symbol provider for precise range.
-            try {
+            if (!targetRange && !settingsFmt) try {
                 const syms = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
                     'vscode.executeDocumentSymbolProvider', uri
                 );
@@ -568,7 +586,7 @@ export function activate(context: vscode.ExtensionContext): void {
             } catch { /* fall through to regex */ }
 
             // Fallback: regex scan
-            if (!targetRange) {
+            if (!targetRange && !settingsFmt) {
                 const leaf = symbolLeaf(symbol);
                 const re = new RegExp(`(?:def|class|function|const|let|var)\\s+${leaf}\\b|\\b${leaf}\\s*[=:(]`);
                 for (let i = 0; i < doc.lineCount; i++) {

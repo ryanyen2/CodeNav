@@ -8,6 +8,13 @@ batching that produced cross-file junk-drawer nodes and an almost-flat tree:
     unrelated symbols from other files into the same node. It returns a small,
     coherent set of features for that file, optionally nested.
 
+  Phase 1b (settings) — one ``propose_settings_features`` call per settings file
+    the repo's own code reads, after every source file. Its sections are decisions
+    (`month = "made"`), and they belong to the feature whose code reads them — so
+    this pass returns ``attach`` and ``amend`` rather than new nodes, and mints one
+    only for a section nothing accounts for. Running it last is what makes those
+    features and their prose available to cite.
+
   Phase 2 (organize) — one ``propose_organization`` call over all file-level
     features + their call/import coupling, grouping them under a few broad theme
     parents (``add_node`` themes + ``move_node`` of existing features). This is
@@ -26,19 +33,23 @@ from collections import Counter
 
 from codoc.agent.bootstrap_agent import (
     propose_brief, propose_file_features, propose_organization,
+    propose_settings_features,
 )
 from codoc.doclang import DocLanguage
 from codoc.loop.apply import apply_op
 from codoc.loop.bootstrap import BootstrapResult, _title_from_file
 from codoc.loop.surface import flow_lines
 from codoc.loop.why import commit_rationales
-from codoc.loop.payload import passes
+from codoc.loop.payload import passes, shown_sources
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_feature_id
+from codoc.settings_files import FORMAT_NAMES
 from codoc.store.db import Store
 
 _CALLS_CAP = 6           # per-symbol call/called-by edges shown to the file pass
 _COUPLING_CAP = 40       # feature→feature coupling lines shown to the org pass
+_READER_CAP = 8          # candidate features offered to one settings-file pass
+_READER_SYMBOL_CAP = 6   # of one feature's symbols, which of them name the file
 # Chunk source is budgeted per FILE, not per chunk — see `loop/payload.py`. A file
 # that fits is passed through at 600 chars a chunk exactly as before; a generated
 # module of 786 symbols is spent down instead of sending a quarter-megabyte prompt.
@@ -180,6 +191,67 @@ def _ensure_file_coverage(ops: list[NodeOp], file_rows: list, file: str) -> list
 
 
 # ---------------------------------------------------------------------------
+# Phase 1b — the decisions a settings file holds
+# ---------------------------------------------------------------------------
+
+def _settings_readers(file: str, rows: list, store: Store) -> list[dict]:
+    """The features whose code names *file*, with the prose an amend would edit.
+
+    The same evidence the index used to admit the file at all
+    (`pipelines/indexing/settings_scan.py`): a source file that names the basename
+    is a source file that reads it. Here it is applied per SYMBOL rather than per
+    file, so the pass is offered the function that opens `rules.toml` instead of
+    every feature in the module that contains it.
+
+    Each entry carries the current `description` because an amend that cannot see
+    what it is amending either repeats it or throws it away — and the whole point of
+    this pass is to add the value to a paragraph somebody's prose already surrounds.
+    """
+    basename = file.rsplit("/", 1)[-1]
+    found: dict[str, dict] = {}
+    for row in rows:
+        if row.file == file or not row.source or basename not in row.source:
+            continue
+        binding = store.binding_at(row.file, row.symbol_path)
+        if binding is None:
+            continue
+        entry = found.get(binding.feature_id)
+        if entry is None:
+            feature = store.get_feature(binding.feature_id)
+            if feature is None:
+                continue
+            entry = found[binding.feature_id] = {
+                "feature_id": feature.id,
+                "title": feature.title,
+                "description": feature.description or "",
+                "reads_it_in": [],
+            }
+        if len(entry["reads_it_in"]) < _READER_SYMBOL_CAP:
+            entry["reads_it_in"].append(row.symbol_path)
+    # Most symbols first: the module that mentions the file five times is likelier
+    # to be the one that reads it than the one that mentions it in a docstring.
+    ordered = sorted(found.values(), key=lambda e: (-len(e["reads_it_in"]),
+                                                    e["feature_id"]))
+    return ordered[:_READER_CAP]
+
+
+def _only_offered_features(ops: list[NodeOp], offered: set[str]) -> list[NodeOp]:
+    """Drop an ``attach``/``amend`` citing a feature this pass was not shown.
+
+    A hallucinated id is not a small error here: an amend would rewrite the
+    description of some unrelated feature, and there is nothing in the answer to
+    tell one from a real id. What is dropped costs the section its binding, and
+    ``_ensure_file_coverage`` then gives it a node of its own — a visible gap
+    instead of prose on the wrong node.
+    """
+    kept = []
+    for op in ops:
+        if op.kind is NodeOpKind.ADD_NODE or op.feature_id in offered:
+            kept.append(op)
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Phase 2 — feature-level coupling
 # ---------------------------------------------------------------------------
 
@@ -277,6 +349,7 @@ def bootstrap_hier_from_chunks(
     propose_file=propose_file_features,
     propose_org=propose_organization,
     propose_the_brief=propose_brief,
+    propose_settings=propose_settings_features,
     repo_name: str = "codebase",
     config=None,
     organize: bool = True,
@@ -298,7 +371,13 @@ def bootstrap_hier_from_chunks(
     for r in rows:
         by_file.setdefault(r.file, []).append(r)
 
-    files = sorted(by_file)
+    # Settings files are held back for Phase 1b, which needs every code feature to
+    # already exist: a section is attached to the feature that READS it, and a
+    # feature nobody has minted yet cannot be cited.
+    settings_files_seen = sorted(
+        f for f, file_rows in by_file.items()
+        if any(r.language in FORMAT_NAMES for r in file_rows))
+    files = [f for f in sorted(by_file) if f not in settings_files_seen]
     total = len(files)
     # Bootstrap makes ~1 LLM call per file (run in concurrent waves below). On a big
     # repo that still costs — warn, and honour an opt-in hard cap so a user can bound it.
@@ -484,6 +563,38 @@ def bootstrap_hier_from_chunks(
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
+    # Phase 1b: the decisions a settings file holds. Serial, because there are a
+    # handful of these at most and each one reads the features the last one may have
+    # amended. A failure here costs the values and nothing else: the sections still
+    # land on a node, so the tree is the tree it would have been before this pass
+    # existed rather than a tree with a hole in it.
+    for file in settings_files_seen:
+        file_rows = _in_file_order(by_file[file])
+        readers = _settings_readers(file, rows, store)
+        say(f"  · [settings] {file} — "
+            + (f"{len(readers)} feature{'' if len(readers) == 1 else 's'} read it"
+               if readers else "no feature reads it"))
+        shown = shown_sources({r.symbol_path: r.source or "" for r in file_rows})
+        sections = [{"symbol_path": path, "source": source}
+                    for path, source in shown.items()]
+        ops: list[NodeOp] = []
+        try:
+            ops = propose_settings(file, sections, readers, repo_name=repo_name,
+                                   config=config, brief=brief,
+                                   doc_language=doc_language)
+        except Exception as exc:  # noqa: BLE001 — per-file tolerance, as above
+            failures.append((file, exc))
+            failed_files.add(file)
+        else:
+            ops = _only_offered_features(ops, {r["feature_id"] for r in readers})
+        calls += 1
+        fps = {(r.file, r.symbol_path): r.tokens_hash for r in file_rows}
+        ths = {(r.file, r.symbol_path): r.types_hash for r in file_rows}
+        ops = _ensure_file_coverage(ops, file_rows, file)
+        _apply_ops_with_local_ids(ops, store, fps, source="bootstrap", ths=ths)
+        existing_titles.extend(
+            op.title for op in ops if op.kind is NodeOpKind.ADD_NODE and op.title)
+
     # Every call failing is not bad luck, it is a broken setup — no key, no
     # `claude` CLI, an unreachable endpoint. Tolerating that would hand back a
     # tree of empty filename nodes and call it a success, so it still raises and
@@ -500,7 +611,8 @@ def bootstrap_hier_from_chunks(
         # Files, not calls, because that is the unit the reader has: one file split
         # into four parts losing one of them is one file described incompletely, and
         # the label says which part so the loss is not reported as the whole file's.
-        say(f"  ⚠ {len(failed_files)} of {total} files could not be fully described "
+        say(f"  ⚠ {len(failed_files)} of {total + len(settings_files_seen)} files "
+            "could not be fully described "
             f"(retried once each): {', '.join(f for f, _ in failures[:5])}"
             + (" …" if len(failures) > 5 else ""))
         # WHY each one failed, not just which. Without this the message names a

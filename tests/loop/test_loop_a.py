@@ -612,3 +612,42 @@ def test_model_may_not_reattribute_code_the_change_never_touched(store):
     assert still is not None and still.feature_id == owner.id
     moved = store.binding_at("loud.py", "loud.py::fresh")
     assert moved is not None and moved.feature_id == thief.id
+
+# ---------------------------------------------------------------------------
+# A settings section is a chunk like any other
+# ---------------------------------------------------------------------------
+
+def test_a_new_settings_section_reaches_the_pass_with_its_values(store):
+    """The claim the whole config-file plan rests on, in its mechanical half.
+
+    Which feature the section lands on is the model's judgment and cannot be pinned
+    here. What can, and what the plan's failure was really about, is that the pass is
+    SHOWN the decision: the comment above `[periods]` and `month = made` in the
+    prompt, not a bare symbol path that leaves it describing the mechanism again.
+    """
+    from codoc.model.binding import Binding
+
+    summaries = Feature(title="Monthly summaries",
+                        description="The month threshold is read from rules.toml.")
+    store.upsert_feature(summaries)
+    store.upsert_binding(Binding(feature_id=summaries.id, file="tally/summary.py",
+                                 symbol_path="tally/summary.py::summarise",
+                                 fingerprint="h0"))
+    section = ('# A month is lined up on the date the payment was made.\n'
+               '[periods]\nmonth = "made"\n')
+    cs = ChangeSet(added=[ChunkRef("tally/rules.toml", "tally/rules.toml::periods",
+                                   "h1", section)])
+    seen: list[dict] = []
+
+    def propose(changes, *_a, **_kw):
+        seen.append(changes)
+        return [NodeOp(kind=NodeOpKind.ATTACH, feature_id=summaries.id,
+                       bindings=[("tally/rules.toml", "tally/rules.toml::periods")])]
+
+    apply_changeset(cs, store, propose=propose)
+
+    added = seen[0]["added"]
+    assert [a["symbol_path"] for a in added] == ["tally/rules.toml::periods"]
+    assert added[0]["source"] == section
+    bound = store.binding_at("tally/rules.toml", "tally/rules.toml::periods")
+    assert bound is not None and bound.feature_id == summaries.id

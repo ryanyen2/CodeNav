@@ -469,6 +469,11 @@ pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEP
 prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.txt,
              #   voice_infer.txt (each carries a {{doclang}} marker, expanded into
              #   the cached prefix)
+             #   bootstrap_settings.txt — the settings pass: a config file's sections
+             #   ATTACHED to the features whose code reads them, and those
+             #   descriptions AMENDED to name the value in force. Not a
+             #   Configuration node, which is what asking a settings file what it
+             #   is FOR produces
              #   style.txt — the shared writing guide, pulled into the five prose
              #   prompts by {{include:style}} so every pass that writes a title or
              #   a description is held to one register (abstract first, then the

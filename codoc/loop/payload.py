@@ -13,7 +13,11 @@ something:
 
 - **A member is governed by its class.** The prompt's own rule binds a method to
   the feature its class owns, and no amount of the method's body changes that. So
-  when the budget binds, members are compressed first.
+  when the budget binds, members are compressed first. A settings section is the
+  exception and gets the top-level share however deeply its name nests, because
+  `[tool.pytest.ini_options]` is a member of a document rather than of a
+  definition: nothing above it states its values, and its values are the whole
+  reason it is in the prompt.
 - **A truncated body reads as a complete short one.** Slicing at a byte boundary
   hands the model a function that appears to end where the slice did, so `head`
   keeps whole lines, guarantees the signature, and says that it elided.
@@ -41,6 +45,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+
+from codoc import settings_files
 
 #: chars of one chunk's source a pass shows when the whole set fits
 PER_CHUNK = 600
@@ -81,10 +87,20 @@ def _is_member(symbol_path: str) -> bool:
     `file.py::__module__` are not. Split on the LAST `::` so a path is read the
     way the index writes it, then look for the dotted owner.
 
+    **A settings section is never a member**, however dotted it is. The concession
+    it would buy is justified for a method — the class states what the method is
+    for, so a shortened body still lands the reader in the right place — and a
+    settings section has no such parent: `[tool.pytest.ini_options]` names a path
+    through a document, and the keys under it are the decision itself. Compressing
+    those first would spend the budget on exactly the lines the tree cannot
+    otherwise say.
+
     The TypeScript adapter addresses only top-level declarations today, so a `.ts`
     file has no members and the ladder's first concession simply never fires there
     — it falls straight to shrinking the top-level share, which is correct.
     """
+    if settings_files.detect_format(symbol_path.rsplit("::", 1)[0]):
+        return False
     return "." in symbol_path.rsplit("::", 1)[-1]
 
 

@@ -267,3 +267,47 @@ def test_top_level_definitions_are_each_their_own_owner():
 
 def test_nothing_to_show_is_no_passes_at_all():
     assert passes({}) == []
+
+# --- settings sections ------------------------------------------------------
+
+def _sections(file: str, names: dict[str, int]) -> dict[str, str]:
+    """Settings sections of the given sizes, each a real header plus keys."""
+    out = {}
+    for name, size in names.items():
+        keys = "\n".join(f'key_{i} = "value"' for i in range((size // 20) + 1))
+        out[f"{file}::{name}"] = f"[{name}]\n{keys}\n"
+    return out
+
+
+def test_a_nested_settings_section_is_not_compressed_as_a_member():
+    """`[tool.pytest.ini_options]` is a member of a document, not of a definition.
+
+    Nothing above it states its values, so conceding them first would spend the
+    budget on the one thing the tree cannot say without the file — while a method's
+    class does state what the method is for, which is what the concession rests on.
+    """
+    crowd = _methods("Huge", 400, PER_CHUNK * 2)   # forces the ladder down a rung
+    crowd.update(_sized({"m.py::Huge": PER_CHUNK * 2}))
+    sections = _sections("pyproject.toml", {"tool.pytest.ini_options": 400})
+    allowed = allowances({**crowd, **sections})
+
+    top_share = allowed["m.py::Huge"]
+    assert allowed["pyproject.toml::tool.pytest.ini_options"] == top_share
+    assert allowed["m.py::Huge.method_000"] < top_share
+
+
+def test_a_settings_file_that_fits_is_shown_whole():
+    """The ordinary case, and the one that matters: a config file is small, so the
+    reader's `month = "made"` reaches the prompt verbatim."""
+    src = '# How a tally lines up its summaries.\n[periods]\nmonth = "made"\n'
+    shown = shown_sources({"tally/rules.toml::periods": src})
+    assert shown["tally/rules.toml::periods"] == src
+
+
+def test_a_settings_section_cut_by_the_budget_keeps_its_header():
+    """A section shown without its header names nothing — the same reason `head`
+    guarantees a signature. `[periods]` is that section's signature."""
+    long_section = _sections("rules.toml", {"periods": 4_000})["rules.toml::periods"]
+    cut = head(long_section, 200)
+    assert cut.startswith("[periods]\n")
+    assert cut.endswith(ELISION)

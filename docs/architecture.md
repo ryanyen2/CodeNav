@@ -171,6 +171,12 @@ ladder of named concessions:
   that, so the partition is decided at the top level. (The TypeScript adapter
   addresses only top-level declarations, so a `.ts` file has no members and the
   first concession never fires there.)
+- **A settings section is never a member**, however dotted its name. The concession
+  above is earned by the class stating what its method is for, so a shortened body
+  still lands the reader in the right place; `[tool.pytest.ini_options]` has no such
+  parent — it names a path through a DOCUMENT, and the keys under it are the decision
+  itself. Compressing those first would spend the budget on exactly the lines the tree
+  cannot otherwise say, which is the whole reason the file is in the prompt.
 - **The rung is chosen against what the set would actually cost once cut**, not
   against allowance times count — most definitions are shorter than their
   allowance, and charging for source nobody will send concedes two rungs the set
@@ -536,12 +542,40 @@ to go read.
 
 ## Bootstrap in detail
 
-`run_bootstrap` → `bootstrap_hier_from_chunks`, two phases: (1) a per-file
+`run_bootstrap` → `bootstrap_hier_from_chunks`, three phases: (1) a per-file
 `propose_file_features` LLM call (sees only that file's chunks → structurally can't
 make a cross-file junk drawer; `_ensure_file_coverage` folds stragglers into the
-file's largest node); (2) an org pass (`organize=True`) grouping file-features under
+file's largest node); (1b) a settings pass over the config files the code reads, after
+every code file (below); (2) an org pass (`organize=True`) grouping file-features under
 3–6 broad theme parents. Temp ids ("n1"/"t1") resolve to real ids before apply,
 enabling within-call nesting.
+
+### Phase 1b — the decisions a settings file holds
+
+A settings file is held back from the per-file pass and gets one of its own
+(`prompts/bootstrap_settings.txt` → `propose_settings_features`). Not for tidiness: the
+per-file pass is asked what a file is FOR, and a settings file answers that with a
+Configuration node — a junk drawer holding every unrelated decision in the repo, which
+is the shape a feature tree exists to avoid. The right answer is usually **no new
+node**. `[periods]` belongs on the feature whose code reads it, and that feature's
+description should say `month = "made"` where it used to say "read from rules.toml". So
+this pass returns `attach` plus `amend`, and mints a node only for a section nothing
+accounts for.
+
+Two properties carry it:
+
+- **It runs after every code file**, serially, at the end. The ordering IS the
+  mechanism: a pass that cites `f-…` needs those features to exist and needs their
+  prose, since an amend that cannot see what it is amending either repeats it or throws
+  it away.
+- **Candidates are chosen by evidence, not proximity** (`_settings_readers`). The same
+  rule that admitted the file to the index — a source file whose text names the
+  basename — applied per SYMBOL, so the pass is offered the function that opens
+  `rules.toml` rather than every feature in the module containing it. An `attach` or
+  `amend` citing a feature it was never shown is dropped (`_only_offered_features`);
+  `_ensure_file_coverage` then gives that section a node of its own, which is a visible
+  gap instead of prose on the wrong node. The same fallback covers a pass that fails —
+  one raised call costs the values and not the code files' tree.
 
 The per-file calls run in concurrent **waves** of `CODOC_BOOTSTRAP_CONCURRENCY`
 (default 8): all store reads happen before dispatch and all writes after the wave,
@@ -670,6 +704,34 @@ had to remember that False meant "cannot tell".
 exactly the plan's answer that a settings file cites no symbols and the dependency graph
 should not grow edges it cannot justify. `codoc status` coverage needed none either — a
 settings section is an indexed chunk, so an unbound one is a real gap and counts as one.
+
+`FORMAT_NAMES` (the format names, as against `FORMATS`, which is keyed by EXTENSION) is
+what a caller holding an indexed ROW asks: the `language` column carries `"toml"`, not
+`".toml"`, so testing a row against `FORMATS` matches nothing and does it silently. It is
+static rather than `available_formats` because a YAML row indexed on a machine that had
+PyYAML is still a settings row on one that does not.
+
+### Clicking a cited setting (`vscode-codoc/src/state/settings-sections.ts`)
+
+Once a description says `month = "made"` and cites `codoc:tally/rules.toml#periods`, the
+citation has to land on the section. Nothing that finds CODE can: VS Code ships no TOML
+or INI document-symbol provider, and `openRef`'s fallback regex looks for `def` /
+`class` / `name =` where the file's declarations are `[periods]` — so the click opened
+the file, revealed nothing, and read as a broken citation rather than a missing parser.
+The leaf rule is wrong here too, which is why this is a module and not another branch:
+`symbolLeaf` takes the last `.`-segment because `file.py::Class.method` declares
+`method`, while a settings path nests in a document and
+`pyproject.toml::tool.pytest.ini_options` is declared by its whole dotted name.
+
+It mirrors the chunker's header grammars — `_section_starts`, `_uniquify`'s
+`servers`/`servers[1]` repeat rule, and JSON's depth scan (a per-line regex cannot tell
+a nested `"month":` from a top-level `"periods":` and would send the reader to whichever
+came first). Headers only, never values, so the two can disagree about nothing but where
+a section starts. It is consulted AHEAD of both code paths and they are then skipped: a
+hit from them inside a settings file would be coincidence, and landing a reader on an
+arbitrary line is worse than the honest no-op. A ref naming no section moves nothing, for
+the same reason — showing `[periods]` to somebody whose sentence claimed `[retries]`
+states something the file does not say.
 
 ## Doc language — the language the tree is AUTHORED in (`doclang.py`)
 

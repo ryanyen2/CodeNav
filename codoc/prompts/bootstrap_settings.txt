@@ -1,0 +1,94 @@
+You are extending the **feature tree** for the codebase "{repo_name}" with the
+decisions this repo keeps in a settings file.
+
+You are looking at ONE settings file — `{file}` — that this repo's own code reads.
+Its sections are already addressable chunks (`{file}::periods`), and each one holds a
+DECISION: not what the program can do, but which way it does it here. `month = "made"`
+is the answer to a question a reader of the tree came to ask.
+
+The features that read this file already exist and already have descriptions, written
+before anyone could see this file. Those descriptions are the ones that say things like
+*the month threshold is read from rules.toml* — true, and useless to the reader who
+opened them. Your job is to put the value where the reader is.
+
+## What to return
+
+Three kinds of op, in this order of preference:
+
+1. **`attach`** — bind a section to the existing feature whose code reads it. Use that
+   feature's real `feature_id` from the list below, verbatim. This is the normal answer:
+   the feature really is partly implemented by this file, and the section belongs with
+   the code it governs, not in a node about configuration.
+2. **`amend`** — rewrite that feature's `description` so it NAMES the setting now in
+   force. Emit one only where the current description is missing the value, or reports
+   that a value is configurable without saying which way it goes. Keep everything the
+   existing description already says; you are adding the answer, not rewriting the
+   paragraph. Same `feature_id` as the attach.
+3. **`add_node`** — a new feature, ONLY for a section that no listed feature accounts
+   for. Give it a temporary id (`"id": "n1"`) and bind the sections it owns. Do not
+   mint a node named after the file, and do not mint one node holding every section:
+   a settings file that nobody reads a section of is a real thing, and one node for
+   two unrelated decisions is the junk drawer this pass exists to avoid.
+
+Every section listed must be bound by exactly one op. Bind `{file}::__module__` — the
+keys above the first section — to the same feature as the section it most affects, or
+to the file's primary reader if it stands alone.
+
+## How to write the amended description
+
+- **Say the value, in the project's own words.** Not *the alignment date is
+  configurable* but *the month is lined up on the date the payment was made and the
+  week on the date the bank posted it.* A reader can check the second sentence and act
+  on it; the first sends them to the file you were shown.
+- **The comments in this file are the reasoning, and they are the best evidence you
+  will get.** Somebody wrote them at the moment the decision was made. A comment
+  saying an unmatched merchant stops the run so a bad import is never half-recorded IS
+  the why; report it flatly.
+- **Two settings that can disagree belong in one sentence.** If a section sets both a
+  strict and a lenient path, or two values that only make sense together, say how they
+  relate — the reader is only ever shown one of them at a time.
+- **Do not say where the value lives.** The binding records that, and the reader can
+  click it. A description that spends its words on `rules.toml` has spent them on the
+  mechanism again.
+- Keep it ONE paragraph of 1 to 3 sentences, plain prose, NO double-quote characters
+  (every field here is a JSON string, and a bare `"` makes the response unparseable).
+  You MAY carry AT MOST one inline citation `[label](codoc:file#symbol)`, file and
+  symbol verbatim from a binding.
+- NEVER invent history, people, or rejected alternatives. If the file does not say why
+  a value is what it is, state the value and stop — the value alone is worth more than
+  a warrant you made up.
+
+## Output — return ONLY this, inside solution tags (example for `tally/rules.toml`):
+
+<solution>
+{"ops": [
+  {"kind": "attach", "feature_id": "f-8a2c", "bindings": [["tally/rules.toml", "tally/rules.toml::periods"]], "rationale": "the summary code reads this section"},
+  {"kind": "amend", "feature_id": "f-8a2c", "description": "Lines every summary up on one date so two runs of the same month agree: the month is lined up on the date the payment was made and the week on the date the bank posted it, which differ whenever a payment crosses a weekend.", "rationale": "the description reported the setting as configurable without naming it"},
+  {"kind": "attach", "feature_id": "f-31de", "bindings": [["tally/rules.toml", "tally/rules.toml::merchants"]], "rationale": "the matcher reads this section"}
+]}
+</solution>
+
+{{include:style}}
+
+{{doclang}}
+<<<CACHE_BREAK>>>
+## The brief — what this project is, read from its own prose
+
+{brief}
+<<<CACHE_BREAK>>>
+## The settings file: `{file}`
+
+### Sections in {file}
+
+{chunks}
+
+### The features whose code reads this file
+
+Each entry is a feature already in the tree, the symbols of its code that name this
+file, and the description it carries now. `feature_id` is what an `attach` or an
+`amend` must cite — copy it exactly. If this list is empty, every section needs an
+`add_node`.
+
+{readers}
+
+Now return the ops, inside solution tags.

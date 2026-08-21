@@ -1,6 +1,6 @@
 """Bootstrap LLM passes — orientation, per-file feature proposal, organization.
 
-Three scoped calls replace the old flat, attach-biased, global batching that
+Four scoped calls replace the old flat, attach-biased, global batching that
 produced cross-file junk-drawer nodes:
 
 * :func:`propose_brief` — one call before anything else, over the project's own
@@ -15,6 +15,11 @@ produced cross-file junk-drawer nodes:
   sees one file's chunks, so it cannot dump unrelated symbols from other files
   into the same node. It returns a small, coherent set of ``add_node`` ops,
   optionally nested via temporary local ids.
+* :func:`propose_settings_features` — one call per settings file the repo's own
+  code reads, after every source file. It is the only pass that returns
+  ``attach`` and ``amend`` rather than new nodes, because a configured decision
+  belongs to the feature whose code reads it and what the tree is missing is the
+  VALUE in a description that already exists.
 * :func:`propose_organization` — one call after every file is processed. Given
   the file-level features + their call/import coupling, it groups them under a
   few broad theme parents (``add_node`` themes + ``move_node`` of existing
@@ -222,6 +227,52 @@ def propose_file_features(
     # A repair is this same call with the critique appended to the VOLATILE tail,
     # so the wave's shared cache prefix stays byte-identical and the retry pays for
     # the critique alone.
+    def ask(extra: str = "") -> list[NodeOp]:
+        return _ops_from(run_agent(volatile + extra, config or fast_llm_config(),
+                                   prefix_parts=prefix_parts))
+
+    return _gated(ask(), ask, doc_language=doc_language)
+
+
+def propose_settings_features(
+    file: str,
+    chunks: list[dict],
+    readers: list[dict],
+    *,
+    repo_name: str = "codebase",
+    config: LLMConfig | None = None,
+    brief: dict | None = None,
+    doc_language: DocLanguage | None = None,
+) -> list[NodeOp]:
+    """One LLM call: place a settings file's sections on the features that read it.
+
+    A separate call from :func:`propose_file_features`, and separate because the
+    answer has a different shape. That pass is asked what a file is FOR and returns
+    new nodes; the right answer here is usually no new node at all — the decision in
+    `[periods]` belongs to the feature whose code reads it, and what the tree is
+    missing is not a place to put the section but the VALUE in a description that
+    already exists. So this pass returns `attach` plus `amend`, and mints a node only
+    for a section nothing accounts for.
+
+    ``readers`` carries each candidate feature's id, the symbols of its code that name
+    this file, and its current description — the description because an amend that
+    cannot see what it is amending either repeats it or throws it away.
+
+    Runs after every code file, so those features and their prose exist to be cited.
+    """
+    prefix_tpls, volatile_tpl = split_prompt(
+        load_prompt("bootstrap_settings", doc_language=doc_language))
+    kwargs = dict(
+        repo_name=repo_name,
+        file=file,
+        chunks=json.dumps(chunks, indent=2, sort_keys=True, ensure_ascii=False),
+        readers=(json.dumps(readers, indent=2, sort_keys=True, ensure_ascii=False)
+                 if readers else "(no feature in the tree reads this file)"),
+        brief=format_brief(brief),
+    )
+    prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
+    volatile = format_prompt(volatile_tpl, **kwargs)
+
     def ask(extra: str = "") -> list[NodeOp]:
         return _ops_from(run_agent(volatile + extra, config or fast_llm_config(),
                                    prefix_parts=prefix_parts))
