@@ -13,8 +13,10 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import Callable
 
 from codoc.agent.tree_update import propose_tree_update
+from codoc.codoc_file.parse import repoint_refs
 from codoc.doclang import (
     DocLanguage, has_cjk, norm_key, terms, workspace_doc_language,
 )
@@ -53,6 +55,76 @@ _MAX_ADDED_PER_CALL = 25
 # is a safety net for what the LLM missed, not a placement strategy — past a few
 # chunks it is filling a gap it cannot see the shape of.
 _COVERAGE_ATTACH_BUDGET = 5
+
+
+def _repoint_citations(
+    relocations: list[tuple[ChunkRef, ChunkRef, str]],
+    store: Store,
+    *,
+    source: str,
+    cause_of: Callable[[NodeOp], str],
+) -> int:
+    """Point every inline ``codoc:`` citation of a moved chunk at where it moved to.
+
+    A relocation carries the BINDING across — that part was already deterministic. The
+    prose was not: a description saying ``[`loads`](codoc:m.py#loads)`` still said it
+    after the function became ``load_json``, so the tree kept a link resolving to
+    nothing and a sentence naming a symbol the codebase no longer has. The dead-ref
+    registry reported that and nobody repaired it, which means a reader met it first.
+
+    It needs no model and no verdict, and both are the point:
+
+    * **No model**, because the answer is known. A relocation is established by content
+      identity (``tokens_hash``) or by a globally unique AST shape, so the new address
+      names the same code the author was pointing at. There is nothing to infer.
+    * **No verdict**, because "should this link keep pointing at something that is
+      gone?" has one answer. A proposal would leave the tree holding a dead link until
+      somebody clicked, which is the worse of the two states.
+
+    Every feature's prose is scanned, not only the relocated chunk's owner: a
+    cross-reference is the whole reason citations are addresses rather than names, and a
+    description citing a symbol it does not itself bind is the case most likely to rot
+    unnoticed.
+
+    What it does not do is invent an address. A citation of code that was DELETED rather
+    than moved is left exactly as the author wrote it — nothing here knows where it
+    went, and the registry already reports it. Nor does it claim the paragraph: the op is
+    applied with ``claims_prose=False``, so the words stay attributed to whoever wrote
+    them and the amend gate over their next rewrite stays where it was.
+    """
+    moves = {
+        (removed.file, removed.symbol_path): (added.file, added.symbol_path)
+        for added, removed, _kind in relocations
+    }
+    if not moves:
+        return 0
+    # The binding index as it now stands — the ATTACHes above have already run, so this
+    # is what a citation resolves against after the move. It is what keeps the pass to
+    # links that are actually dead; see :func:`~codoc.codoc_file.parse.repoint_refs`.
+    live: dict[str, list[str]] = {}
+    for binding in store.all_bindings():
+        live.setdefault(binding.file, []).append(binding.symbol_path)
+
+    repointed = 0
+    for feature in store.list_features():
+        if feature.retired or not feature.description:
+            continue
+        text, changed = repoint_refs(feature.description, moves, live)
+        if not changed:
+            continue
+        shown = "; ".join(f"{before} → {after}" for before, after in changed[:3])
+        if len(changed) > 3:
+            shown += f"; +{len(changed) - 3} more"
+        op = NodeOp(
+            kind=NodeOpKind.AMEND,
+            feature_id=feature.id,
+            description=text,
+            rationale=f"repointed {len(changed)} citation(s) after a rename: {shown}",
+        )
+        apply_op(op, store, source=source, applied=True, caused_by=cause_of(op),
+                 claims_prose=False)
+        repointed += len(changed)
+    return repointed
 
 
 def _detect_relocations(
@@ -665,6 +737,14 @@ def apply_changeset(
         relocated_added.add((added_ref.file, added_ref.symbol_path))
     if relocations:
         result.auto["relocate"] = result.auto.get("relocate", 0) + len(relocations)
+        # The prose that CITES the moved code, in the same pass that moved its
+        # binding: a description still naming the old symbol is the same staleness,
+        # in the half a reader actually reads.
+        repointed = _repoint_citations(
+            relocations, store, source=source, cause_of=_cause,
+        )
+        if repointed:
+            result.auto["repoint"] = result.auto.get("repoint", 0) + repointed
 
     # 2. Features that just lost their last binding (after relocations rebind).
     #    Exclude unrealized plan placeholders: a placeholder that loses a transient

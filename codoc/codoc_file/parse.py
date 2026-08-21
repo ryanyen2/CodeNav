@@ -106,6 +106,153 @@ def extract_refs(text: str) -> list[Ref]:
     ]
 
 
+# Wrappers a citation's label is routinely written inside: an identifier gets
+# backticks in prose, and `[**x**](codoc:…)` is how a focus span lands on one. Stripped
+# before a label is compared with a symbol name, and put back around the replacement.
+_LABEL_WRAPPERS = ("`", "**", "*", "_")
+
+
+def _unwrap(label: str) -> tuple[str, str]:
+    """``(inner, wrapper)`` — the label with one matched wrapper peeled off."""
+    for wrap in _LABEL_WRAPPERS:
+        if len(label) > 2 * len(wrap) and label.startswith(wrap) and label.endswith(wrap):
+            return label[len(wrap):-len(wrap)], wrap
+    return label, ""
+
+
+def _relabel(label: str, pairs: list[tuple[str, str]]) -> str:
+    """*label* rewritten if it is an ADDRESS rendered as text, else left alone.
+
+    A citation's label is usually the author's sentence — "the JSON reader" stays true
+    whatever the function is called, and rewriting it would be editing their words. But
+    a label that is exactly the symbol's own name is not a sentence, it is the address
+    written out, and leaving it says ``loads`` about something now called ``load_json``:
+    the prose would then be wrong in the one way this whole pass exists to prevent. So
+    the rewrite is limited to the forms that carry no wording of their own, which
+    *pairs* enumerates old-to-new, most specific first.
+    """
+    inner, wrap = _unwrap(label)
+    for old, new in pairs:
+        if inner == old:
+            return f"{wrap}{new}{wrap}"
+    return label
+
+
+def _recast(ref_symbol: str, old_path: str, new_path: str) -> str:
+    """*ref_symbol* re-aimed at *new_path*, at the depth the author wrote it.
+
+    A citation names code at whatever depth reads well in the sentence — ``send``,
+    ``Session.send``, or the whole file-qualified path — and a repoint that answered in
+    one fixed form would rewrite the author's choice as well as their address. So the
+    reply is cut to the same number of dotted segments as the request.
+    """
+    if ref_symbol == old_path:                       # the full file-qualified path
+        return new_path
+    q_old, q_new = _qualified(old_path), _qualified(new_path)
+    if ref_symbol == q_old:
+        return q_new
+    depth = ref_symbol.count(".") + 1                # a suffix, or the bare leaf
+    return ".".join(q_new.split(".")[-depth:])
+
+
+def _qualified(symbol_path: str) -> str:
+    """A ``symbol_path`` without its file qualifier — ``Class.method``."""
+    return symbol_path.split("::", 1)[-1]
+
+
+def repoint_refs(
+    text: str,
+    moves: dict[tuple[str, str], tuple[str, str]],
+    live: dict[str, list[str]],
+) -> tuple[str, list[tuple[str, str]]]:
+    """*text* with every DEAD citation of moved code pointing at where it moved to.
+
+    ``moves`` maps a relocated chunk's ``(file, symbol_path)`` to its new one; ``live``
+    is the binding index as it stands AFTER the move (file → ``symbol_path`` list), the
+    same shape :func:`~codoc.codoc_file.render.resolve_ref` reads. Returns the rewritten
+    text and one ``(before, after)`` pair per citation changed, so a caller can say in a
+    rationale what it repointed rather than only that it did.
+
+    Three properties, each answering a way this corrupts prose rather than repairing it:
+
+    * **Only a citation that no longer resolves is touched.** A ref carries a leaf or a
+      partial dotted path, so ``#loads`` matches both ``m.py::loads`` and
+      ``m.py::Codec.loads`` — renaming the method would otherwise re-aim a sentence that
+      was pointing at the function and was never stale. Deadness is the same predicate
+      the cross-reference registry reports with, so this pass repairs exactly what that
+      pass flags.
+    * **An ambiguous match is left alone.** If a dead ref matches two relocations, the
+      author's shorthand no longer distinguishes them and picking one would invent an
+      address. A dead link the registry reports beats a live link to the wrong code.
+    * **The replacement keeps the author's depth and their wording.** See
+      :func:`_recast` and :func:`_relabel`.
+
+    Text surgery rather than a parse-and-render round trip, because the description is
+    somebody's prose: a re-render would normalize whitespace and reflow markdown they
+    chose, and this is entitled to change addresses and nothing else. Every citation is
+    replaced in place, at the offsets the regex found it.
+    """
+    if not text or not moves:
+        return text, []
+    from codoc.codoc_file.render import ref_matches_binding, resolve_ref, symbol_leaf
+
+    # A file rename arrives as every chunk in the file relocating with its qualified
+    # name unchanged. That is the only signal the symbol-less `[label](codoc:file.py)`
+    # form can be repointed from, since it names no symbol to match.
+    renamed_files: dict[str, set[str]] = {}
+    for (old_file, old_path), (new_file, new_path) in moves.items():
+        if new_file != old_file and _qualified(old_path) == _qualified(new_path):
+            renamed_files.setdefault(old_file, set()).add(new_file)
+
+    changed: list[tuple[str, str]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        keep = match.group(0)
+        ref_file, ref_symbol, label = (
+            match.group("file"), match.group("symbol"), match.group("label"))
+        if resolve_ref(ref_file, ref_symbol, live):
+            return keep                              # still points at code that exists
+
+        if ref_symbol is None:
+            targets = renamed_files.get(ref_file, set())
+            if len(targets) != 1:
+                return keep
+            new_file = next(iter(targets))
+            new_label = _relabel(label, [
+                (ref_file, new_file),
+                (ref_file.rsplit("/", 1)[-1], new_file.rsplit("/", 1)[-1]),
+            ])
+            out = f"[{new_label}](codoc:{new_file})"
+        else:
+            # Keyed by the address the ref would become, so two moves landing at the
+            # same place are one answer and not an ambiguity; the paths behind each are
+            # kept because a label may be the whole qualified path written out.
+            hits: dict[tuple[str, str], set[tuple[str, str]]] = {}
+            for (old_file, old_path), (new_file, new_path) in moves.items():
+                if old_file != ref_file or not ref_matches_binding(ref_symbol, old_path):
+                    continue
+                key = (new_file, _recast(ref_symbol, old_path, new_path))
+                hits.setdefault(key, set()).add((old_path, new_path))
+            if len(hits) != 1:
+                return keep
+            (new_file, new_symbol), paths = next(iter(hits.items()))
+            pairs = [(ref_symbol, new_symbol),
+                     (symbol_leaf(ref_symbol), symbol_leaf(new_symbol))]
+            if len(paths) == 1:
+                old_path, new_path = next(iter(paths))
+                pairs += [(old_path, new_path),
+                          (_qualified(old_path), _qualified(new_path))]
+            new_label = _relabel(label, pairs)
+            out = f"[{new_label}](codoc:{new_file}#{new_symbol})"
+
+        if out == keep:
+            return keep
+        changed.append((keep, out))
+        return out
+
+    return _REF_RE.sub(replace, text), changed
+
+
 def extract_links(text: str) -> list[Link]:
     """Pull external ``[label](https://…)`` links out of prose — pages the
     realizing agent should consult before implementing."""

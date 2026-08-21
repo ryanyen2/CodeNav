@@ -202,6 +202,7 @@ def apply_op(
     mode: str = "",
     caused_by: str = "",
     writer: str = "",
+    claims_prose: bool = True,
 ) -> Event:
     """Log an Event for ``op``; if ``applied``, mutate the store accordingly.
 
@@ -213,6 +214,15 @@ def apply_op(
     ``actor`` / ``mode`` / ``caused_by`` stamp the change ledger. When the
     caller carries no explicit provenance (legacy paths), actor/mode are
     inferred from ``source`` via :func:`default_provenance`.
+
+    ``claims_prose=False`` says this op rewrites an ADDRESS and not a word of the
+    text — the citation-repointing pass after a rename (``loop_a._repoint_citations``)
+    is the only caller. Such a write must not take the paragraph over: stamping
+    ``feature_writers`` would make the loop the author of somebody's prose and so relax
+    the amend gate over their next rewrite, and counting it again in the prose
+    scorecard would score text that was already scored when it was written, against
+    whoever is repointing rather than whoever wrote it. Both are the same laundering
+    error :func:`restates_current` exists to refuse.
 
     ``writer`` names the editing session behind an authored command; every other
     caller falls back to ``source``. It is recorded per feature so a later command
@@ -253,7 +263,7 @@ def apply_op(
         # break a rule, they are the author writing, and averaging them into the
         # score would make our own prose look better every time somebody typed a
         # dash.
-        if (actor or d_actor) != ACTOR_HUMAN:
+        if (actor or d_actor) != ACTOR_HUMAN and claims_prose:
             _record_prose(op, store)
     # Pre-mint the id for a directly-applied ADD so the creation event records
     # the real feature id (blame needs "who created this" findable by feature).
@@ -275,7 +285,8 @@ def apply_op(
     store.append_event(event)
     if applied:
         _mutate(op, store, fp_lookup or {}, th_lookup or {}, index_keys, event=event)
-        if op.feature_id and (op.title is not None or op.description is not None):
+        if op.feature_id and claims_prose \
+                and (op.title is not None or op.description is not None):
             # The event's actor doubles as the writer's ROLE. It is already
             # resolved here (explicit provenance, else derived from source), so
             # rank arbitration reads the same authorship the ledger records

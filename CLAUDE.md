@@ -415,7 +415,13 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   next rewrite, and proposing it would ask for a verdict on nothing;
              #   a PLAN amend is exempt, since unchanged words marked not-yet-built
              #   are a request to build them),
-             #   loop_a.py / loop_b.py, edits.py
+             #   loop_a.py (whose _repoint_citations also moves the PROSE a
+             #   rename stales: a description citing the old symbol is a dead
+             #   link in the half a reader reads, so every feature's citations
+             #   of the moved chunk are re-aimed — deterministically, only when
+             #   the ref no longer resolves, never when two moves both answer
+             #   it, keeping the author's depth and their wording, and with
+             #   claims_prose=False so the words stay theirs) / loop_b.py, edits.py
              #   (edits.json + realize.json), payload.py (the per-PASS prompt
              #   budget: how much of each chunk's source a call gets to see,
              #   conceded members-first so one generated module cannot make a

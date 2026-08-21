@@ -408,7 +408,7 @@ def _compute_feature_edges(store: Store, edges: list | None = None) -> dict[str,
     return out
 
 
-def _symbol_leaf(symbol_path: str) -> str:
+def symbol_leaf(symbol_path: str) -> str:
     """The trailing bare-name segment of a qualified ``symbol_path``.
 
     Mirrors ``completion.ts:leaf`` / ``extension.ts:openRef``: drop everything
@@ -418,7 +418,7 @@ def _symbol_leaf(symbol_path: str) -> str:
     return qualified.rsplit(".", 1)[-1]
 
 
-def _ref_matches_binding(ref_symbol: str, binding_symbol_path: str) -> bool:
+def ref_matches_binding(ref_symbol: str, binding_symbol_path: str) -> bool:
     """True when an authored ref's *leaf* symbol resolves to a qualified binding.
 
     Authored ``codoc:`` refs carry the leaf symbol (``method``) or a partial
@@ -436,10 +436,10 @@ def _ref_matches_binding(ref_symbol: str, binding_symbol_path: str) -> bool:
     if qualified.endswith("." + ref_symbol):
         return True
     # Bare-leaf equality (the leaf the IDE navigates to).
-    return _symbol_leaf(binding_symbol_path) == ref_symbol
+    return symbol_leaf(binding_symbol_path) == ref_symbol
 
 
-def _resolve_ref(
+def resolve_ref(
     ref_file: str,
     ref_symbol: str | None,
     bindings_by_file: dict[str, list[str]],
@@ -448,14 +448,14 @@ def _resolve_ref(
 
     A ref ``(file, symbol)`` resolves when some binding in the SAME ``file`` has a
     ``symbol_path`` whose leaf/suffix matches ``symbol`` (leaf-matching, per
-    :func:`_ref_matches_binding`). A file-only ref (``symbol is None``) resolves
+    :func:`ref_matches_binding`). A file-only ref (``symbol is None``) resolves
     when the file carries any binding."""
     paths = bindings_by_file.get(ref_file)
     if not paths:
         return False
     if ref_symbol is None:
         return True
-    return any(_ref_matches_binding(ref_symbol, p) for p in paths)
+    return any(ref_matches_binding(ref_symbol, p) for p in paths)
 
 
 def _compute_registry(store: Store) -> dict:
@@ -464,7 +464,7 @@ def _compute_registry(store: Store) -> dict:
     Pure derived state, written to ``tree.index.json`` each loop pass. ``refs``
     is built by running :func:`~codoc.codoc_file.parse.extract_refs` over each
     live feature's ``description`` and tagging it ``resolved`` per the
-    leaf-matching rule in :func:`_resolve_ref` — so the IDE can decorate dead
+    leaf-matching rule in :func:`resolve_ref` — so the IDE can decorate dead
     ``codoc:`` links without re-deriving anything host-side."""
     from codoc.codoc_file.parse import extract_refs
 
@@ -490,7 +490,7 @@ def _compute_registry(store: Store) -> dict:
                 "label": ref.label,
                 "file": ref.file,
                 "symbol": ref.symbol,
-                "resolved": _resolve_ref(ref.file, ref.symbol, bindings_by_file),
+                "resolved": resolve_ref(ref.file, ref.symbol, bindings_by_file),
             })
 
     return {

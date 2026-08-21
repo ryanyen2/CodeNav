@@ -376,6 +376,59 @@ a stale-prose modification, safe ops apply and structural ops become proposals;
 net** — `_cover_uncovered_adds` attaches to the best `neighbor_feature` or surfaces
 a pending ADD, so nothing is silently dropped.
 
+**A rename moves the binding AND the prose that cites it.** Phase 2 above carried
+attribution across a relocation and stopped there, so a description saying
+``[`loads`](codoc:m.py#loads)`` went on saying it after the function became
+`load_json`: the tree held a link resolving to nothing, in a sentence naming a symbol
+the codebase no longer had. The cross-reference registry reported that and nobody
+repaired it, which means a reader met it first. `loop_a._repoint_citations` closes it
+in the same pass that moved the binding, over **every** feature's prose and not only
+the moved chunk's owner — a cross-reference is the whole reason a citation is an
+address rather than a name, and a description citing code it does not itself bind is
+the case most likely to rot unseen.
+
+It takes no model and asks for no verdict, and both are the design. No model, because
+the answer is already known: a relocation is established by content identity or by a
+globally unique AST shape, so the new address names the same code the author was
+pointing at, and there is nothing left to infer. No verdict, because "should this link
+keep pointing at something that is gone?" has one answer — a proposal would leave the
+tree holding a dead link until somebody clicked it.
+
+Four properties keep it a repair rather than a rewrite (`codoc_file/parse.repoint_refs`):
+
+- **Only a citation that no longer resolves is touched.** A ref carries a leaf or a
+  partial dotted path (`send`, `Class.send`), so `#loads` matches `m.py::Codec.loads`
+  as well as `m.py::loads` — renaming the *method* would otherwise re-aim a sentence
+  that pointed at the function and was never stale. Deadness is decided by
+  `render.resolve_ref`, the same predicate the registry reports with, so this pass
+  repairs exactly what that pass flags (pinned by
+  `tests/loop/test_repoint.py::test_the_registry_stops_reporting_the_link_it_repaired`).
+  That rule stopped being private for this reason: two copies of a resolution rule is
+  the drift its own docstring warns about.
+- **An ambiguous match is left as a dead link.** If a dead ref matches two relocations
+  the author's shorthand no longer distinguishes them, and a live link to the wrong
+  code is worse than a dead one the registry already names.
+- **The replacement keeps the author's depth and their wording.** A citation names code
+  at whatever depth reads well in the sentence, so the reply is cut to the same number
+  of dotted segments (`#send` → `#dispatch`, `#Session.send` → `#Session.dispatch`). A
+  label is rewritten only when it is the *address rendered as text* — the symbol name,
+  its leaf, or the qualified path, with one markdown wrapper allowed around it. "the
+  JSON reader" is still true whatever the function is called, and rewriting it would be
+  editing somebody's sentence rather than repairing an address.
+- **It does not claim the paragraph.** The AMEND is applied with
+  `apply_op(..., claims_prose=False)` — the one caller of that flag. Stamping
+  `feature_writers` would make the loop the author of somebody's prose and so relax the
+  amend gate over their next rewrite, and re-scoring the text in the prose scorecard
+  would count words that were already counted, against whoever repointed rather than
+  whoever wrote them. Both are the laundering `restates_current` refuses on the other
+  side.
+
+A citation of code that was **deleted** rather than moved is left exactly as written:
+nothing here knows where it went, and inventing an address is worse than the dead link
+the registry already reports. The surgery is done at the regex's own offsets rather than
+by a parse-and-render round trip, because a re-render would normalize whitespace and
+reflow markdown the author chose.
+
 **A file that does not parse is not evidence of deletion.** tree-sitter recovers
 what it can from a damaged file and drops the rest, so its chunks are a lower bound
 on what the file contains — and the index has no column for "I could not read
