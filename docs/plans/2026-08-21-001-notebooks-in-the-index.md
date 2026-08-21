@@ -2,9 +2,10 @@
 
 Written 2026-08-21. **Built** — `codoc/lang/notebook.py`, registered in `codoc.lang`,
 walked by the indexer, clickable from a citation
-(`vscode-codoc/src/state/notebook-cells.ts`), pinned by `tests/test_notebook_lang.py` and
-`notebook-cells.test.ts`. What a bootstrap pass should DO with an author's own paragraph
-is the part still open; see "Where this stands".
+(`vscode-codoc/src/state/notebook-cells.ts`), and read as the author's own words by the
+bootstrap pass (`prompts/notebook_note.txt`); pinned by `tests/test_notebook_lang.py`,
+`tests/agent/test_notebook_prompt.py` and `notebook-cells.test.ts`. What is left is a
+reader's nicety, not a gap in what codoc can see; see "Where this stands".
 
 ## What happened
 
@@ -130,6 +131,10 @@ still decoded whole before anything can tell where its bytes went.
   the editor, so this only bites a reader who opened the export: the notebook branch is in
   `openRef` and therefore covers both, but nothing renders a notebook's cell inline the way
   a code citation gets a hover preview.
-- **Open — bootstrap register.** A notebook section's description should be allowed to
-  quote the author's own paragraph rather than paraphrase it; nothing yet tells the
-  bootstrap prompt that this file's prose is the author's and not the model's.
+- **Built — bootstrap register.** `prompts/notebook_note.txt`, added to the file pass's
+  VOLATILE tail by `_notebook_note(file)`, so a notebook's paragraphs are read as the
+  author's own claim (assert its reasons, carry its meaning rather than paraphrase it),
+  its headings as the author's own decomposition (one feature per section that names a
+  step, overriding the coarse-grouping rule that is right for a module), and a `#` in a
+  code cell as possibly codoc's own doing rather than code somebody disabled. In the tail
+  and not the prefix, so a notebook does not split the wave's shared cache. 7 tests.

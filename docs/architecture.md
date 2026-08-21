@@ -833,6 +833,25 @@ look in, and two `## Train` sections can each declare a `fit`. A section whose m
 gone lands on the heading — the step exists, and the reader can see for themselves that
 the name is not in it; a name that matches no section at all moves nothing.
 
+### Telling the bootstrap pass whose words those are (`prompts/notebook_note.txt`)
+
+Getting the paragraphs into the chunks is necessary and not sufficient: the pass on
+the other end still reads them as a script that happens to contain long strings, and
+then makes three mistakes it cannot make on a `.py` file. It paraphrases sentences a
+PERSON wrote about their own work; it collapses the sections that person named into one
+node, because the coarse-grouping rule is right for a module and wrong for an author's
+own decomposition; and it reports the shell lines codoc commented out as code somebody
+disabled — a claim about the author's file that the file does not make.
+
+So `_notebook_note(file)` adds one instruction block for a `.ipynb` and returns `""`
+for everything else. It is a per-file block rather than a standing "if this file is a
+notebook" paragraph in the frozen instructions, because the path already settles the
+question and a paragraph in the prefix would spend tokens on a case that is usually
+absent. It rides in the **volatile tail**, for the same reason `why` does: a bootstrap
+wave shares one cached prefix across every file it reads, and a per-file block in the
+prefix would split that cache for every notebook in the repo — and for the `.py` files
+sharing the wave with it.
+
 ## Doc language — the language the tree is AUTHORED in (`doclang.py`)
 
 Two different things are called "language" here, and confusing them costs an

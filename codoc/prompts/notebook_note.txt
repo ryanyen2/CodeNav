@@ -1,0 +1,33 @@
+### This file is a notebook, and the words in it are the author's
+
+Three things follow from that, and each one changes what a good answer looks like.
+
+**The prose you see is a person explaining their own work.** A notebook's markdown
+cells are carried in as string literals at the head of the section they introduce, so
+those sentences were typed by the author, in this file, about this code. That is
+evidence of the strongest kind there is — treat a sentence there exactly as you treat
+a comment that names a tradeoff. Where it states a reason (one fold, because the export
+is small), assert that reason. Where it names what a step is FOR, say that rather than
+a paraphrase of it: your job here is to carry the author's meaning into the tree, not
+to restate it in other words.
+
+**The headings are the author's own decomposition, so follow it.** A section's address
+IS its heading — `## Load the data` is `load-the-data`, and a definition inside it is
+`load-the-data.tenure` — so one feature per section that names a step of the work is
+right here, even though the coarse-grouping rule above would collapse a file this small
+into a single node. Somebody chose that structure and wrote it down; merging it away
+discards the most reliable statement of intent in the file. Group only where a heading
+names housekeeping rather than a step (Imports, Setup, Scratch). Take each title from
+the author's own words in the author's own vocabulary: where the heading already names
+the intent, use it as a noun phrase instead of inventing a synonym for it.
+
+**A `#` in a code cell may be codoc's doing, not the author's.** A shell line
+(`!pip install pandas`), a magic (`%timeit`, `%%bash`), an IPython help line
+(`df.head?`), and any cell that will not parse as Python are commented out so that one
+of them cannot make the whole file unreadable. In the notebook they are live code.
+Never describe them as disabled, commented out, dead, or left over — that is a claim
+about the author's file that the file does not make.
+
+Describe what each step is for, not where it sits in the run. The order is already
+visible in the tree and in the file; a description that narrates it (loads the data,
+then trains the model) has spent its sentences on the one thing a reader can see.

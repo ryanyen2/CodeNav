@@ -481,6 +481,12 @@ prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.t
              #   descriptions AMENDED to name the value in force. Not a
              #   Configuration node, which is what asking a settings file what it
              #   is FOR produces
+             #   notebook_note.txt — added to the file pass's VOLATILE tail for a
+             #   .ipynb only (_notebook_note): the paragraphs are the AUTHOR's claim,
+             #   the headings are the author's own decomposition (so one feature per
+             #   section, past the coarse-grouping rule), and a # in a code cell may
+             #   be codoc's own doing rather than code somebody disabled. In the tail
+             #   so a notebook does not split the bootstrap wave's shared prefix cache
              #   style.txt — the shared writing guide, pulled into the five prose
              #   prompts by {{include:style}} so every pass that writes a title or
              #   a description is held to one register (abstract first, then the

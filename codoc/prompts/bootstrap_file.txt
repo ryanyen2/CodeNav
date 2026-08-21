@@ -127,6 +127,7 @@ front of you disagree, the code is what is true now; say what the code does.
 <<<CACHE_BREAK>>>
 ## The file to analyze: `{file}`
 
+{notebook_note}
 ### Chunks in {file}
 
 {chunks}

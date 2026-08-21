@@ -38,6 +38,7 @@ import json
 from codoc.agent.base import format_prompt, load_prompt, run_agent, split_prompt
 from codoc.config import LLMConfig, fast_llm_config
 from codoc.doclang import DocLanguage
+from codoc.lang import detect_language
 from codoc.loop import prose
 from codoc.model.event import NodeOp, NodeOpKind
 
@@ -175,6 +176,19 @@ def format_brief(brief: dict | None) -> str:
     return "\n\n".join(out) or "(no brief — describe this file on its own terms)"
 
 
+def _notebook_note(file: str) -> str:
+    """The added instruction block for a notebook, or nothing at all.
+
+    Empty for every other file, so a repository with no notebooks sends the prompt it
+    always sent — this cannot be a standing paragraph about "if this file is a notebook",
+    which spends prefix tokens on a case that is usually absent and asks the model to
+    decide something the path already settles.
+    """
+    if detect_language(file) != "notebook":
+        return ""
+    return load_prompt("notebook_note") + "\n"
+
+
 def propose_file_features(
     file: str,
     chunks: list[dict],
@@ -206,6 +220,13 @@ def propose_file_features(
     cache for no benefit. At bootstrap this is the *only* why-evidence there is:
     nobody has edited the tree yet, so there are no directives and no recorded
     rationale to fall back on.
+
+    A notebook gets one added block (:func:`_notebook_note`), in the volatile tail for
+    the same reason ``why`` is: it is decided by the file. Without it this pass reads a
+    notebook as a script that happens to have long strings in it, and makes three
+    mistakes it cannot make on a `.py` file — it paraphrases sentences the AUTHOR wrote,
+    it collapses the sections the author named into one node under the coarse-grouping
+    rule, and it reports the shell lines codoc commented out as code somebody disabled.
     """
     # Split the raw template FIRST, then substitute per segment — substituted
     # values are repo-derived and may contain a literal marker.
@@ -214,6 +235,7 @@ def propose_file_features(
     kwargs = dict(
         repo_name=repo_name,
         file=file,
+        notebook_note=_notebook_note(file),
         chunks=json.dumps(chunks, indent=2, sort_keys=True, ensure_ascii=False),
         edges=json.dumps(edges, indent=2, sort_keys=True, ensure_ascii=False),
         existing_titles="\n".join(f"- {t}" for t in existing_titles) or "(none yet)",
