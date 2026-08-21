@@ -439,6 +439,11 @@ doclang.py   # the AUTHORING language of the tree: profiles + the prompt directi
              #   loop's lexical heuristics use instead of Latin-only regexes
 core/        # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT substrate]
 pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEPT]
+             #   survey.py — what the walk never saw (unreadable languages,
+             #   over-cap files, unfollowed symlinks), so the index-coverage
+             #   figure in `codoc status` cannot read 100% over code codoc
+             #   never saw; reports codoc's OWN limits only, never intentional
+             #   excludes. See docs/architecture.md "What the walk never saw"
 prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.txt,
              #   voice_infer.txt (each carries a {{doclang}} marker, expanded into
              #   the cached prefix)

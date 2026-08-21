@@ -460,6 +460,18 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
         except Exception:
             pass  # index not built yet / unreadable — coverage check is best-effort
 
+        # …and what the walk never saw at all, which the check above cannot know:
+        # it compares bindings against the INDEX, so a repo whose Go half codoc
+        # cannot parse reads as fully covered. The bound on the tree belongs next to
+        # the coverage figure, or the figure overstates itself.
+        try:
+            from codoc.pipelines.indexing.survey import render_survey, survey_repo
+
+            for line in render_survey(survey_repo(root)):
+                typer.echo(line)
+        except Exception:
+            pass  # advisory: a survey must never be what breaks `codoc status`
+
         # What the prose gate has been finding, on prose CODOC wrote (a person's own
         # words are never counted — see `apply._record_prose`). Reported here rather
         # than only in a test because the number is the only thing that says whether

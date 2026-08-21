@@ -140,6 +140,43 @@ written from an incomplete view of the code — which is the point. A file that 
 source equals the new named chunk's, so `_detect_relocations` pairs them on
 `tokens_hash` and re-attaches.
 
+### What the walk never saw (`pipelines/indexing/survey.py`)
+
+`codoc status` checks that every indexed chunk is attributed to a feature. That is
+a coverage report over **the index**, and it reads 100% on a repo whose Go half
+codoc cannot parse, whose generated schema module is over `_MAX_FILE_BYTES`, or
+whose monorepo packages are directory symlinks the walk refuses to follow. A tree
+that describes a third of a codebase and calls itself in sync is the one failure a
+faithful view of the code must not have, so the coverage figure now carries the
+bound on itself.
+
+`survey_repo` walks the repo **the way the indexer walks it** — the same matcher,
+patterns and size cap, *imported* from `cocoindex_app` rather than restated,
+because a survey that disagrees with the walk is worse than no survey. It reports
+three kinds of blindness, each on its own `render_survey` line because each is
+answered differently:
+
+- **another language** — source with no adapter (`.go`, `.js`, `.sh`, …), counted
+  per extension. A standing bound on what the tree can ever say.
+- **over the cap** — parseable files above `_MAX_FILE_BYTES`, **named**: the
+  threshold is somebody's to revisit and they cannot weigh it without knowing
+  which file it cost them (`test/altair`'s `vegalite/v6/schema/core.py`, 1.6 MB).
+- **an unfollowed symlink** — a directory the patterns *allow* and the walk's loop
+  guard refuses. Usually a monorepo layout codoc should be pointed at directly.
+
+It reports only codoc's **own** limits. A file under `node_modules/`, `dist/`, or a
+path the repo's `.gitignore` names was excluded by somebody's decision; saying so
+on every `codoc status` would bury the facts that are about codoc. That is why the
+survey uses a plain `PatternFilePathMatcher` instead of the walk's
+`_SymlinkAwareMatcher` and tests exclusion *before* the symlink guard — it has to
+tell "excluded on purpose" from "codoc declined to follow a link", and only the
+second is news. The extension set is source-only for the same reason: `.md`,
+`.json` and lock files are not a gap in codoc's view of the *code*.
+
+The whole thing is advisory. It is wrapped in a bare `except` at the call site in
+`cli/main.py`, has a `max_entries` runaway guard, and a partial result is still a
+lower bound — a survey must never be what breaks `codoc status`.
+
 ## Loop A in detail (code → codoc)
 
 `compute_changeset` (`loop/diff.py`) diffs two index snapshots keyed by
