@@ -19,6 +19,7 @@ import { BridgeCodeLensProvider } from './providers/bridge-lens';
 import { subtreeTitleLines, siblingTitleLine, parentTitleLine, firstChildTitleLine } from './providers/feature-lines';
 import { bindingsForFeature } from './state/bindings-model';
 import { symbolLeaf } from './state/registry-model';
+import { isNotebook, notebookCellForRef } from './state/notebook-cells';
 import { settingsFormat, settingsSectionLine } from './state/settings-sections';
 import { DependencyFocus } from './providers/focus';
 import { AgentGutter } from './providers/agent';
@@ -519,6 +520,39 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('codoc.rejectAll', async (ids: string[]) => bulkVerdict(ids, false)),
     );
 
+    /**
+     * Open a notebook Beside and select the cell a `codoc:` ref names.
+     *
+     * The cells come from the OPEN document rather than the file's bytes, so a citation
+     * resolves against a cell edited and not yet saved — which is exactly when a reader
+     * clicks one. A ref that names no cell selects nothing: revealing an arbitrary cell
+     * would state something the notebook does not, and the reader cannot tell that from a
+     * citation that worked.
+     */
+    const revealNotebookRef = async (uri: vscode.Uri, file: string, symbol: string) => {
+        let notebook: vscode.NotebookDocument;
+        try {
+            notebook = await vscode.workspace.openNotebookDocument(uri);
+        } catch {
+            void vscode.window.showWarningMessage(`codoc: couldn't open ${file} — the reference may be stale.`);
+            return;
+        }
+        const cells = notebook.getCells().map(cell => ({
+            kind: cell.kind === vscode.NotebookCellKind.Code ? 'code' as const : 'markup' as const,
+            text: cell.document.getText(),
+        }));
+        const hit = symbol ? notebookCellForRef(cells, symbol) : null;
+        const range = hit && hit.cell < notebook.cellCount
+            ? new vscode.NotebookRange(hit.cell, hit.cell + 1)
+            : undefined;
+        const editor = await vscode.window.showNotebookDocument(notebook, {
+            viewColumn: vscode.ViewColumn.Beside,
+            preserveFocus: true,
+            selections: range ? [range] : undefined,
+        });
+        if (range) editor.revealRange(range, vscode.NotebookEditorRevealType.InCenter);
+    };
+
     // ── codoc.openRef — jump from an inline [..](codoc:file#symbol) to code ───
     context.subscriptions.push(
         vscode.commands.registerCommand('codoc.openRef', async (file: string, symbol: string) => {
@@ -535,6 +569,17 @@ export function activate(context: vscode.ExtensionContext): void {
                 return;
             }
             const uri = vscode.Uri.file(target);
+
+            // A notebook is opened AS a notebook, before anything below can try. Every
+            // other path here would make the click worse than a no-op: `.ipynb` read as
+            // text is a wall of JSON, and the regex fallback matches `"name":` inside a
+            // base64 output and reveals a line of PNG — machine noise where a sentence
+            // promised the reader code.
+            if (isNotebook(file)) {
+                await revealNotebookRef(uri, file, symbol);
+                return;
+            }
+
             let doc: vscode.TextDocument;
             let targetEditor: vscode.TextEditor;
             try {

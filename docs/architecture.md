@@ -812,6 +812,27 @@ monotone forward search per line locates each synthetic line's text in the raw f
 position: bootstrap's file ordering by `(start_byte, symbol_path)`, and the hook's
 approximate line number.
 
+### Clicking a cited cell (`vscode-codoc/src/state/notebook-cells.ts`)
+
+A citation into a notebook is the case where the existing paths are worse than a no-op.
+A `.ipynb` opened as a TextDocument is a wall of JSON; the document-symbol provider has
+nothing to say about it; and `openRef`'s fallback regex matches `"name":` inside a base64
+output and reveals a line of PNG — so the reader ends up looking at machine noise where a
+sentence promised them the code, which costs more trust than a click that did nothing. So
+the notebook branch comes FIRST and owns the whole open (`openNotebookDocument`, then
+`showNotebookDocument` with the cell as the selection), rather than being consulted after
+the file is already open as text the way the settings branch is.
+
+It reads the cells of the OPEN document rather than the file's bytes, so a citation still
+resolves against a cell the author has edited and not saved — which is exactly when
+somebody clicks one. Resolution mirrors the chunker's grammar (`_slug`, `_uniquify`'s
+`train[1]`, flat sections) and lands a section on its HEADING and a member on the line
+that DECLARES it. It resolves by longest section prefix rather than by `symbolLeaf`
+alone: the leaf names the declaration to find, but only the prefix says which section to
+look in, and two `## Train` sections can each declare a `fit`. A section whose member is
+gone lands on the heading — the step exists, and the reader can see for themselves that
+the name is not in it; a name that matches no section at all moves nothing.
+
 ## Doc language — the language the tree is AUTHORED in (`doclang.py`)
 
 Two different things are called "language" here, and confusing them costs an

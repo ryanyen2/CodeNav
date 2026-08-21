@@ -1,8 +1,10 @@
 # The reasoning was already written down, in the one file codoc did not read
 
-Written 2026-08-21. **Built** — `codoc/lang/notebook.py`, registered in
-`codoc.lang`, walked by the indexer, pinned by `tests/test_notebook_lang.py`. What the
-extension does with a notebook citation is the part still open; see "Where this stands".
+Written 2026-08-21. **Built** — `codoc/lang/notebook.py`, registered in `codoc.lang`,
+walked by the indexer, clickable from a citation
+(`vscode-codoc/src/state/notebook-cells.ts`), pinned by `tests/test_notebook_lang.py` and
+`notebook-cells.test.ts`. What a bootstrap pass should DO with an author's own paragraph
+is the part still open; see "Where this stands".
 
 ## What happened
 
@@ -115,11 +117,19 @@ still decoded whole before anything can tell where its bytes went.
   `get_adapter` / `detect_language`; `**/*.ipynb` in `_INCLUDED_PATTERNS` and
   `**/.ipynb_checkpoints/**` excluded (the same notebook, stale); `read_ceiling` threaded
   through `cocoindex_app._process_file` and `survey.py`. 24 unit tests.
-- **Open — clicking a notebook citation.** `codoc.openRef` cannot land on
-  `codoc:work/churn.ipynb#load-the-data`: VS Code exposes no document symbols for a
-  notebook, and `openRef`'s regex fallback would match inside the JSON text and reveal a
-  line of base64. The analogue of `state/settings-sections.ts` is a `notebook-cells.ts`
-  that finds the cell by heading and reveals it through the notebook API.
+- **Built — clicking a notebook citation.** `state/notebook-cells.ts` +
+  a notebook branch at the top of `codoc.openRef`: the file is opened as a NOTEBOOK and
+  the cited cell becomes the selection. It had to come first and own the open, because
+  every path already there is worse than a no-op on a `.ipynb` — the regex fallback
+  matches `"name":` inside an output and reveals a line of base64 PNG. Cells are read from
+  the open document, so an unsaved edit still resolves. 13 vitest cases, and the addresses
+  they assert were taken from the chunker rather than invented: two of them named
+  `churn-model.pd` and `sys`, which look like members and are section GLUE, so the test
+  was wrong and not the module.
+- **Open — the raw-text editor.** `tree.codoc` is a read-only export and the webview is
+  the editor, so this only bites a reader who opened the export: the notebook branch is in
+  `openRef` and therefore covers both, but nothing renders a notebook's cell inline the way
+  a code citation gets a hover preview.
 - **Open — bootstrap register.** A notebook section's description should be allowed to
   quote the author's own paragraph rather than paraphrase it; nothing yet tells the
   bootstrap prompt that this file's prose is the author's and not the model's.
