@@ -85,7 +85,7 @@ test('a batch reaches the far end and the log is left exactly as it was', async 
 test('the mirror takes the mirror slot, not the browser one', async () => {
     const dir = tmpdir();
     const client = fakeClient();
-    const m = new Mirror({ logPath: writeLog(dir, [edit(0)]), code: 'p-x', client });
+    const m = new Mirror({ logPath: writeLog(dir, [edit(0)]), code: 'p-x', condition: 'codoc', client });
     await m.start();
     assert.ok([...client.written.keys()].some((k) => k.endsWith('/devices/mirror')));
     assert.ok(![...client.written.keys()].some((k) => k.endsWith('/devices/browser')));
@@ -97,7 +97,7 @@ test('with no network nothing is lost and nothing is marked as sent', async () =
     const dir = tmpdir();
     const logPath = writeLog(dir, Array.from({ length: 50 }, (_, i) => edit(i * 20_000)));
     const client = fakeClient({ failWrites: true });
-    const m = new Mirror({ logPath, code: 'p-x', client });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     await m.start();
     const res = await m.flush(true);
 
@@ -111,14 +111,14 @@ test('when the network returns the backlog goes up', async () => {
     const logPath = writeLog(dir, Array.from({ length: 50 }, (_, i) => edit(i * 20_000)));
 
     const offline = fakeClient({ failWrites: true });
-    const m1 = new Mirror({ logPath, code: 'p-x', client: offline });
+    const m1 = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client: offline });
     await m1.start();
     await m1.flush(true);
     assert.equal(offline.written.size, 0, 'nothing gets through, not even the registration');
 
     // Same state file, a working connection.
     const online = fakeClient();
-    const m2 = new Mirror({ logPath, code: 'p-x', client: online });
+    const m2 = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client: online });
     await m2.start();
     const res = await m2.flush(true);
     assert.ok(res.sent > 0, 'the backlog uploads once it can');
@@ -130,7 +130,7 @@ test('a crash between sending and recording the send does not double anything', 
 
     // First run sends, then dies before its state file is written.
     const client = fakeClient();
-    const m1 = new Mirror({ logPath, code: 'p-x', client });
+    const m1 = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     await m1.start();
     const sentKeys = new Set();
     const realCreate = client.createDocument;
@@ -141,7 +141,7 @@ test('a crash between sending and recording the send does not double anything', 
 
     // Second run starts from the old state, so it re-sends the same bytes.
     const m2 = new Mirror({
-        logPath, code: 'p-x', client,
+        logPath, code: 'p-x', condition: 'codoc', client,
         statePath: path.join(dir, 'never-written.json'),
     });
     await m2.start();
@@ -157,12 +157,12 @@ test('a restart reuses the saved sign-in rather than taking another slot', async
     const logPath = writeLog(dir, [edit(0)]);
     const client = fakeClient();
 
-    const m1 = new Mirror({ logPath, code: 'p-x', client });
+    const m1 = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     await m1.start();
     const uid = m1.state.uid;
-    assert.ok(m1.state.refreshToken, 'the sign-in is remtallyed');
+    assert.ok(m1.state.refreshToken, 'the sign-in is remembered');
 
-    const m2 = new Mirror({ logPath, code: 'p-x', client });
+    const m2 = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     assert.equal(m2.state.uid, uid, 'the same account comes back');
     assert.equal(m2.state.refreshToken, m1.state.refreshToken);
 });
@@ -173,7 +173,7 @@ test('a half-written line is left for the next pass', async () => {
     fs.appendFileSync(logPath, '{"ev":"edit","surf');   // the logger, mid-write
 
     const client = fakeClient();
-    const m = new Mirror({ logPath, code: 'p-x', client });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     await m.start();
     await m.flush(true);
 
@@ -186,7 +186,7 @@ test('nothing is sent twice across successive flushes', async () => {
     const dir = tmpdir();
     const logPath = writeLog(dir, [edit(0), edit(20_000)]);
     const client = fakeClient();
-    const m = new Mirror({ logPath, code: 'p-x', client });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     await m.start();
     await m.flush(true);
     const afterFirst = [...client.written.keys()].filter((k) => k.includes('/batches/')).length;
@@ -199,6 +199,27 @@ test('nothing is sent twice across successive flushes', async () => {
     assert.equal(afterSecond, 2);
     const ranges = [...client.written.keys()].filter((k) => k.includes('/batches/'));
     assert.equal(new Set(ranges).size, ranges.length, 'no id repeats');
+});
+
+test('with no condition set nothing is sent, rather than sent to the wrong arm', async () => {
+    // The old default was 'codoc', so a baseline workspace whose setup had not
+    // written the condition mirrored itself into the codoc arm. Both arms number
+    // their batches from byte zero, so the ids collided, and a collision is read
+    // as an already-sent batch and therefore as success. Two arms mixed together
+    // with nothing anywhere saying so is worse than a session that only exists in
+    // the local log, which is why this refuses.
+    const dir = tmpdir();
+    const logPath = writeLog(dir, Array.from({ length: 60 }, (_, i) => edit(i * 20_000)));
+    const client = fakeClient();
+    const errors = [];
+    const m = new Mirror({ logPath, code: 'p-x', client, onError: (e) => errors.push(e) });
+
+    assert.equal(await m.start(), false, 'it does not start');
+    assert.equal(await m.flush(true).then((r) => r.sent), 0, 'and it sends nothing');
+    assert.equal(client.written.size, 0, 'not even the slot registration');
+    assert.equal(m.state.offset, 0, 'and the log is left unread, so nothing is lost');
+    assert.ok(errors.some((e) => e.includes('which condition')),
+        'the participant is told why, in a sentence they can repeat to the researcher');
 });
 
 test('with no code configured the mirror stays off and the log still works', async () => {
@@ -231,7 +252,7 @@ test('a mirror that could not start recovers when the network appears', async ()
         },
     };
 
-    const m = new Mirror({ logPath, code: 'p-x', client });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     assert.equal(await m.start(), false, 'it reports that it did not get going');
     assert.equal((await m.flush(true)).sent, 0);
 
@@ -259,7 +280,7 @@ test('a slot held by another machine is reported, not mistaken for success', asy
         },
         async getDocument() { return { uid: 'somebody-else', kind: 'mirror' }; },
     };
-    const m = new Mirror({ logPath, code: 'p-x', client, onError: (e) => errors.push(e) });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client, onError: (e) => errors.push(e) });
 
     assert.equal(await m.start(), false);
     assert.equal((await m.flush(true)).sent, 0);
@@ -288,7 +309,7 @@ test('a slot left behind by an older run is taken over rather than given up on',
         async getDocument() { return null; },   // a slot we are not allowed to read
         async updateDocument(path, data) { asked.push({ path, data }); return { updated: true }; },
     };
-    const m = new Mirror({ logPath, code: 'p-x', client, onError: (e) => errors.push(e) });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client, onError: (e) => errors.push(e) });
 
     assert.equal(await m.start(), true, 'it holds the slot after taking it over');
     assert.equal(asked.length, 1, 'it asked for the slot once');
@@ -316,7 +337,7 @@ test('a slot another machine is still using is left alone', async () => {
         async getDocument() { return null; },
         async updateDocument() { return { updated: false, status: 403, body: 'PERMISSION_DENIED' }; },
     };
-    const m = new Mirror({ logPath, code: 'p-x', client, onError: (e) => errors.push(e) });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client, onError: (e) => errors.push(e) });
 
     assert.equal(await m.start(), false);
     assert.equal((await m.flush(true)).sent, 0, 'and nothing is sent under a code it does not hold');
@@ -340,7 +361,7 @@ test('the slot records when this machine was last heard from', async () => {
         async getDocument() { return null; },
         async updateDocument(path, data) { beats.push({ path, data }); return { updated: true }; },
     };
-    const m = new Mirror({ logPath, code: 'p-x', client });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     await m.start();
     assert.ok((await m.flush(true)).sent > 0);
     assert.equal(beats.length, 0,
@@ -372,7 +393,7 @@ test('a restart reclaiming its own slot is not mistaken for a conflict', async (
         },
         async getDocument() { return { uid: 'mine', kind: 'mirror' }; },
     };
-    const m = new Mirror({ logPath, code: 'p-x', client });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     assert.equal(await m.start(), true);
     assert.ok((await m.flush(true)).sent > 0);
 });
@@ -386,7 +407,7 @@ test('no file contents, prompts, or paths outside the project leave', async () =
         { ev: 'view', surface: 'document', file: 'CLAUDE.md', t: 30_000, ms: 5000 },
     ]);
     const client = fakeClient();
-    const m = new Mirror({ logPath, code: 'p-x', client });
+    const m = new Mirror({ logPath, code: 'p-x', condition: 'codoc', client });
     await m.start();
     await m.flush(true);
 

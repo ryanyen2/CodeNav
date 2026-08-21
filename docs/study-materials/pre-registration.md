@@ -182,4 +182,18 @@ survives playback in proportion rather than being removed.
 Any departure from this document is listed here with its date and its reason,
 before the affected analysis is run.
 
-- (none yet)
+- **2026-08-20. Two participants have no session data in the database, and the
+  logger was changed mid-study to stop it happening again.** The codes are
+  p-6p64rwcecyx9 and p-5uvfr5j6zyuf. The logger read the participant code once when
+  the window started and gave up for good if it was not there yet, so a window that
+  was already open when setup wrote the code recorded nothing for the whole session,
+  and the only sign of it was a line on an output channel nobody has open. The logger
+  now starts when the code arrives, and it shows in the status bar whether the window
+  is being recorded, so the same failure is visible to the participant and to whoever
+  is watching. It also refuses to send anything when the workspace does not say which
+  condition it is, because the previous default filed such a session under the codoc
+  arm. Both arms get the identical logger, as before, so nothing about the comparison
+  changes. Whether these two sessions can still be analysed depends on their returned
+  zip, which carries the local log that the mirror only ever copied; if the zip has
+  the log, the sessions are intact and only the live view was missing, and if it does
+  not, the two are lost and are reported as lost rather than replaced.

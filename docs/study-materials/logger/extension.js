@@ -49,6 +49,7 @@ let participant = '';
 let workspaceName = '';
 let rootDir = '';
 let channel = null;
+let status = null;       // the one visible sign that recording is on
 
 // The file currently on screen, and since when.
 let current = null;      // { file, surface, since, lo, hi }
@@ -100,6 +101,31 @@ function openCurrent(file, surface, ranges) {
     write('focus', { surface, file });
 }
 
+/**
+ * Say on screen whether this window is being recorded.
+ *
+ * The logger used to report itself only on an output channel and only to the
+ * dashboard, so a window that was recording nothing looked exactly like one that
+ * was, both to the participant and to the researcher watching over their
+ * shoulder. Two participants finished a condition that way. A status bar item is
+ * the cheapest place a person actually looks, it reads the same in both arms so
+ * it changes nothing about the comparison, and clicking it opens the channel that
+ * says what is being recorded.
+ */
+function showState(context, recording) {
+    if (!status) {
+        status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+        status.command = 'codocStudyLogger.showLog';
+        context.subscriptions.push(status);
+    }
+    status.text = recording ? '$(record) codoc study' : '$(circle-slash) codoc study: off';
+    status.tooltip = recording
+        ? 'This window is being recorded for the study. Click to see what is recorded.'
+        : 'No participant code is set in this window, so nothing here is recorded. '
+          + 'If setup has just run, this changes on its own.';
+    status.show();
+}
+
 function activate(context) {
     channel = vscode.window.createOutputChannel('codoc study logger');
 
@@ -128,16 +154,44 @@ function activate(context) {
         const why = `No participant code is set in ${workspaceName || 'this window'}, `
             + 'so nothing here is recorded. Only the study projects are logged.';
         channel.appendLine(why);
-        context.subscriptions.push(
+        showState(context, false);
+        // Start the moment a code appears, rather than at the next window reload.
+        //
+        // Setup writes the code into the study project's own settings.json, and it
+        // is ordinarily run from a terminal inside VS Code, so the window that ends
+        // up holding the session is often already open when the code arrives. The
+        // setting was read once at startup and this branch then returned for good,
+        // which left a participant working in a window that recorded nothing, with
+        // the reason on an output channel nobody has open. Two codes came back with
+        // no sessions on them before anybody noticed, and by then the only place it
+        // showed was the dashboard.
+        const placeholders = [
             vscode.commands.registerCommand('codocStudyLogger.showLog', () => {
                 channel.appendLine(why);
                 channel.show();
             }),
             vscode.commands.registerCommand('codocStudyLogger.openStudyPage', () => {
                 void openStudyPage(cfg, true);
-            }));
+            }),
+            vscode.workspace.onDidChangeConfiguration((e) => {
+                if (!e.affectsConfiguration('codocStudyLogger.participant')) return;
+                const set = vscode.workspace.getConfiguration('codocStudyLogger')
+                    .get('participant');
+                if (!set) return;
+                // Hand the channel and both commands back before activating again,
+                // because registering a command twice under one name throws and the
+                // second activation would die halfway through.
+                for (const d of placeholders) d.dispose();
+                if (status) { status.dispose(); status = null; }
+                channel.dispose();
+                channel = null;
+                activate(context);
+            }),
+        ];
+        context.subscriptions.push(...placeholders);
         return;
     }
+    showState(context, true);
 
     out = cfg.get('file') || process.env.CODOC_STUDY_LOG || '';
     if (!out) {
@@ -146,7 +200,7 @@ function activate(context) {
         out = path.join(dir, `interaction-${workspaceName}.jsonl`);
     }
     channel.appendLine(`logging to ${out}`);
-    write('session', { start: true, version: '1.1.0' });
+    write('session', { start: true, version: '1.1.1' });
 
     const sub = context.subscriptions;
 

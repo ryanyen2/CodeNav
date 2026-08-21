@@ -65,6 +65,9 @@ run node "$MAT/logger/test-scope.js"
 run node "$MAT/logger/test-transcript.js"
 run node "$MAT/logger/test-snapshot.js"
 run node --test "$MAT/logger/test-composition.js"
+# The mirror was left out of this list until 2026-08-20, which is how a bundle
+# shipped with the sending half untested while the recording half was covered.
+run node --test "$MAT/logger/test-mirror.js"
 run python3 "$MAT/replay/test_replay.py"
 run python3 -m pytest -q "$MAT/replay/test_agent.py"
 # The extension reads every recorded frame the way the webview does. It skips

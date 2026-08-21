@@ -302,12 +302,20 @@ the first pilot nobody started it in either condition, so there is no replay of
 it. `scripts/session-log.sh` still exists as a fallback and is not part of the
 normal run.
 
+**The status bar says whether the window is recording.** Bottom right of the
+window, in both conditions, it reads "codoc study" with a record dot when the
+logger is running, and "codoc study: off" when the window has no participant code
+in it and is therefore recording nothing. Look at it once when they open each
+folder. It exists because the off state used to be invisible, and two sessions
+were lost to it before anybody noticed.
+
 **One check, once per condition, before the task starts.** Ask them to run
 "Study logger: show what is being recorded" from Cmd+Shift+P. It prints the log
 file and how many snapshots it has taken. You want a log file that exists and a
 snapshot count above zero. If it says snapshots are off or failing, or the log is
-empty after they have clicked around for a few seconds, stop and fix it — five of
-the measures come from nowhere else, and `analysis-plan.md` says which five.
+empty after they have clicked around for a few seconds, stop and fix it, because
+five of the measures come from nowhere else and `analysis-plan.md` says which
+five.
 
 ## Part 4. The shape of the session
 
@@ -723,6 +731,18 @@ already been played there. Somebody has run `./start-session` in that folder, an
 the change is sitting in it before the participant has asked for anything. Do not
 run the session there. Delete `~/codoc-study` and run `./setup.sh` with their code
 and order again.
+
+**Nothing shows up for them on the dashboard.** Open the participant in the
+dashboard and read their device panel, which says something different for each of
+the two ways it fails. "Their editor has not reported" means the logger never sent
+anything at all, and the usual reason is that the window was already open when
+setup wrote the participant code into it, so ask them to look at the status bar
+and, if it says off, to reload the window. "Claimed this code but has sent nothing
+for N minutes" means something did register under the code and then went quiet,
+which is normally a second window or a second machine holding the same code, so
+close the one that should not have it. Either way the session itself is probably
+fine, because the local log is what the copy to the database is made from, and
+`collect.sh` puts that log in the zip they send back.
 
 **Nothing is updating.** The status bar is stuck and no proposals appear. The
 daemon runs behind the session with no terminal of its own, so read

@@ -47,13 +47,21 @@ export class Mirror {
         // that log; the sign-in is about the machine.
         this.identityPath = opts.identityPath || defaultIdentityPath(opts.logPath);
         this.code = opts.code;
-        this.condition = opts.condition || 'codoc';
+        // Kept exactly as given, with no default.
+        //
+        // It used to fall back to 'codoc' when nothing was set, which meant a
+        // baseline session whose setup had not written the condition mirrored
+        // itself into the codoc arm, under batch ids derived from byte offsets
+        // that both arms start at zero. The arms were mixed and the collisions
+        // read as success, so nothing anywhere said so. start() refuses instead.
+        this.condition = opts.condition || '';
         this.flushMs = opts.flushMs ?? DEFAULTS.flushMs;
         this.flushActions = opts.flushActions ?? DEFAULTS.flushActions;
         this.onError = opts.onError || (() => {});
         this.client = opts.client || new FirestoreRest(opts.config, opts.fetchImpl);
         this.state = this._loadState();
         this.registered = false;
+        this.saidNoCondition = false;
         this.lastSeenSentAt = 0;
         this.timer = null;
     }
@@ -113,6 +121,19 @@ export class Mirror {
      */
     async _ensureReady() {
         if (this.registered) return true;
+        // Which arm this is, checked here rather than in start(), because flush()
+        // calls this directly and a timer-driven flush therefore never went through
+        // start() at all. Guarding start() alone left the whole failure in place.
+        if (this.condition !== 'codoc' && this.condition !== 'baseline') {
+            if (!this.saidNoCondition) {
+                this.saidNoCondition = true;
+                this.onError('this workspace does not say which condition it is, so '
+                    + 'nothing is being sent. Sending it anyway would file the session '
+                    + 'under the wrong arm. The local log still has everything, so '
+                    + 'nothing is lost. Tell the experimenter.');
+            }
+            return false;
+        }
         try {
             if (!this.client.idToken) {
                 this.client.restore(this.state);

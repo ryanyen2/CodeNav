@@ -2,7 +2,7 @@
   "name": "codoc-study-logger",
   "displayName": "codoc study logger",
   "description": "Records which files a study participant opens, looks at, and edits. Runs in both conditions.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "codoc",
   "license": "MIT",
   "engines": {
@@ -37,7 +37,7 @@
             ""
           ],
           "default": "",
-          "description": "Which condition this project is. Left empty, it is guessed from the folder name."
+          "description": "Which condition this project is, written by setup. Left empty, nothing is sent to the study database, because the alternative is filing a session under the wrong arm."
         },
         "codocStudyLogger.studyPage": {
           "type": "string",

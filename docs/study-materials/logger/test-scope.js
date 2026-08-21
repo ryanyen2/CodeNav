@@ -27,12 +27,18 @@ const fire = (name, arg) => (handlers[name] || []).forEach((fn) => fn(arg));
 let activeEditor = null;
 const said = [];
 const commands = new Map();
+const settings = { file: LOG, snapshots: false };
 
 const vscode = {
+    StatusBarAlignment: { Left: 1, Right: 2 },
     Uri: { parse: (u) => ({ href: u }) },
     env: { openExternal: () => Promise.resolve(true) },
     window: {
-        createOutputChannel: () => ({ appendLine: (m) => said.push(m), show() {} }),
+        createOutputChannel: () => ({ appendLine: (m) => said.push(m), show() {}, dispose() {} }),
+        // The visible sign that recording is on. Stubbed because the real thing is
+        // the only place a participant, or a researcher watching their screen, can
+        // see whether this window is being recorded at all.
+        createStatusBarItem: () => ({ text: '', tooltip: '', command: '', show() {}, dispose() {} }),
         showInformationMessage: () => Promise.resolve(undefined),
         showWarningMessage: (m) => { said.push(m); return Promise.resolve(undefined); },
         onDidChangeActiveTextEditor: on('editor'),
@@ -46,9 +52,18 @@ const vscode = {
         // No participant code, which is what every workspace outside the study
         // looks like: setup writes the code into each study project's own
         // .vscode/settings.json and nowhere else.
-        getConfiguration: () => ({ get: (k) => (k === 'file' ? LOG : '') }),
+        // Mutable, because setup writes the code into settings.json while this
+        // window is already open and the test below flips it the same way.
+        getConfiguration: () => ({ get: (k) => settings[k] || '' }),
         onDidChangeTextDocument: on('change'),
         onDidSaveTextDocument: on('save'),
+        onDidChangeConfiguration: on('config'),
+        createFileSystemWatcher: () => ({
+            onDidCreate: on('askCreate'),
+            onDidChange: on('askChange'),
+            onDidDelete: on('askDelete'),
+            dispose() {},
+        }),
     },
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
@@ -99,5 +114,20 @@ commands.get('codocStudyLogger.showLog')();
 assert.match(said.join('\n'), /nothing here is recorded/i,
     'and it says why, rather than naming a file it is not writing');
 
+// ── the code arriving while the window is already open ───────────────────────
+//
+// Setup writes the code into the study project's own settings.json, and it is
+// ordinarily run from a terminal inside VS Code, so the window that ends up
+// holding the session is often already open when the code arrives. The setting
+// was read once at startup and the branch above returned for good, which left a
+// participant working in a window that recorded nothing. Two codes came back with
+// no sessions on them, and the only place it showed was the dashboard.
+settings.participant = 'p-abcdefghjkmn';
+fire('config', { affectsConfiguration: (k) => k === 'codocStudyLogger.participant' });
+
+assert.equal(ext.activation.logging, true,
+    'the code arriving is enough; nobody has to reload the window');
+assert.ok(fs.existsSync(LOG), 'and the log it should have been writing all along exists');
+
 fs.rmSync(DIR, { recursive: true, force: true });
-console.log('ok  logger records only the study projects');
+console.log('ok  logger records only the study projects, and starts when a code arrives');

@@ -28,10 +28,15 @@ let activeEditor = null;
 let activeTab = null;
 
 const vscode = {
+    StatusBarAlignment: { Left: 1, Right: 2 },
     Uri: { parse: (u) => ({ href: u }) },
     env: { openExternal(uri) { opened.push(uri.href); return Promise.resolve(true); } },
     window: {
-        createOutputChannel: () => ({ appendLine() {}, show() {} }),
+        createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
+        // The visible sign that recording is on. Stubbed because the real thing is
+        // the only place a participant, or a researcher watching their screen, can
+        // see whether this window is being recorded at all.
+        createStatusBarItem: () => ({ text: '', tooltip: '', command: '', show() {}, dispose() {} }),
         showInformationMessage: (...args) => { offers.push(args[0]); return Promise.resolve(undefined); },
         showWarningMessage: () => Promise.resolve(undefined),
         onDidChangeActiveTextEditor: on('editor'),
@@ -47,7 +52,13 @@ const vscode = {
     },
     workspace: {
         workspaceFolders: [{ uri: { fsPath: ROOT } }],
-        getConfiguration: () => ({ get: (k) => (k === 'file' ? LOG : k === 'participant' ? 'p04' : '') }),
+        // Both the code and the condition, because setup writes both into the study
+        // project's own settings.json and the mirror now needs both to send.
+        getConfiguration: () => ({
+            get: (k) => (k === 'file' ? LOG
+                : k === 'participant' ? 'p04'
+                : k === 'condition' ? 'codoc' : ''),
+        }),
         onDidChangeTextDocument: on('change'),
         onDidSaveTextDocument: on('save'),
         createFileSystemWatcher: () => ({
@@ -203,7 +214,12 @@ assert.match(opened[0], /[?&]code=p04\b/, 'carrying the participant code');
     const m = await ext.activation.mirrorReady;
     assert.ok(m, 'the mirror module loaded and a mirror was constructed');
     assert.equal(m.code, 'p04');
-    assert.equal(m.condition, 'codoc', 'the condition is read from the workspace name');
+    // Read from the setting, which is the only place it lives. The folders are
+    // named for the project alone, so there is no workspace name to guess it from,
+    // and an unset condition now stops the mirror rather than defaulting to this
+    // one. The old assertion passed on that default and read as if it had checked
+    // something.
+    assert.equal(m.condition, 'codoc', 'the condition comes through from the setting');
     await m.stop();
     console.log(`study logger: ${rows.length} events, all assertions pass`);
 })().catch((err) => { console.error(err); process.exit(1); });
