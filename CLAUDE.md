@@ -336,6 +336,15 @@ Four properties are load-bearing:
 - **A person's prose is never checked and never scored.** An author who writes a dash
   is not committing a defect, and averaging their words into the rate would improve
   codoc's own score every time somebody typed one.
+- **A rule that needs evidence asks for evidence.** The register `style.txt` bans
+  hardest is a description opening on a CLASS name, and shape cannot see it:
+  `snake_case` and `camelCase` announce themselves, a capitalized word does not.
+  Two-hump PascalCase alone fires on 0.9% of this repo's prose and half of those are
+  somebody else's proper noun (`TypeScript`, `GitHub`, `LanceDB`) — naming a technology
+  the reader knows is orienting them. So the check asks the node's own bindings whether
+  it holds something by that name (0.1%, all real), one hump is not checked at all
+  (`Merge`, `Phase`, `Usage` are classes here and also ordinary words), and a caller
+  with no bindings to offer gets silence rather than a guess.
 - **Every rule was calibrated against this repo's own prose**, swept over 412
   docstring paragraphs, with the surviving false-positive share recorded per rule in
   the module docstring. A rule that fires on a fifth of good writing has stopped

@@ -83,6 +83,54 @@ def test_a_filename_is_a_place_and_not_a_mechanism():
     assert "opens-on-a-mechanism" in codes(check("Sync", path))
 
 
+def test_opening_on_a_bound_class_name_is_caught_by_the_symbol_table():
+    # A PascalCase word does not announce itself the way `snake_case` does, so the
+    # rule asks the node's own bindings whether it names something here. That is the
+    # gap this closes: a bootstrap description opening "NodeOp carries…" is the exact
+    # register style.txt bans, and no regex could tell it from a capitalized word.
+    names = ("model/event.py model/event.py::NodeOp",)
+    opens = "NodeOp carries the one change a pass makes, so a reader can replay it."
+    assert "opens-on-a-mechanism" in codes(check("Change record", opens, names=names))
+
+
+def test_a_technology_the_reader_knows_is_not_this_codebase_s_mechanism():
+    # Half the PascalCase words in real prose are somebody else's proper noun --
+    # TypeScript, GitHub, LanceDB, FastAPI -- and naming one orients the reader
+    # instead of showing them machinery. The symbol table is what tells them apart,
+    # and it is why the rule is gated on it rather than on shape.
+    names = ("lang/typescript.py lang/typescript.py::extract_chunks",)
+    fine = "TypeScript files are read by the same walk, so a mixed repo needs no "\
+           "second path through the index."
+    assert "opens-on-a-mechanism" not in codes(check("Reading code", fine, names=names))
+
+
+def test_a_class_named_after_an_ordinary_word_is_left_alone():
+    # `Merge` IS a class here, and "Merge the hook entries…" is good imperative
+    # prose. One hump is not decidable even with the symbol table, so it is not
+    # decided -- measured at 2.7% of this repo's docstring paragraphs, most of them
+    # this shape.
+    names = ("loop/merge3.py loop/merge3.py::Merge",)
+    fine = "Merge the entries so a later writer cannot drop what an older one added."
+    assert "opens-on-a-mechanism" not in codes(check("Hook install", fine, names=names))
+
+
+def test_a_constant_is_an_identifier_without_asking_the_symbol_table():
+    # No English word carries an underscore, so SCREAMING_SNAKE needs no evidence
+    # beyond its shape -- and an env var, which the symbol table would never hold,
+    # is a mechanism opening just as surely as a constant is.
+    opens = "ACTOR_HUMAN marks a write as the author's, and the gate reads it."
+    assert "opens-on-a-mechanism" in codes(check("Authorship", opens))
+    env = "CODOC_DOC_LANGUAGE overrides the workspace setting for one process."
+    assert "opens-on-a-mechanism" in codes(check("Authoring language", env))
+
+
+def test_without_a_symbol_table_the_class_rule_says_nothing():
+    # A caller with no bindings to offer gets silence rather than a guess, the same
+    # way the altitude rules do not fire without enough signal to place the node.
+    opens = "NodeOp carries the one change a pass makes."
+    assert "opens-on-a-mechanism" not in codes(check("Change record", opens))
+
+
 def test_restating_the_title_is_caught_through_a_change_of_word_class():
     # "Renders" against "rendering" is the commonest way a title is restated, so
     # exact term matching would miss precisely the case worth catching.

@@ -54,7 +54,11 @@ rule                         share  reading
 ``demonstrative-opening``       8%  real; a docstring opens on "This is" constantly and
                                     a description may not.
 ``machine-register``            2%  all of them the word "simply".
-``opens-on-a-mechanism``        1%
+``opens-on-a-mechanism``        2%  the second point is ``SCREAMING_SNAKE``, added
+                                    later: every hit is a constant or an env var
+                                    genuinely opening a paragraph, in a docstring
+                                    register where that is fine and a description
+                                    where it is not.
 ``clipped-sentences``           1%  a run of short attribute sentences, which is a
                                     docstring shape rather than a description's.
 ``rhetorical-question``         0%  two, both genuinely asking one.
@@ -64,6 +68,21 @@ The number to watch is not any single share but whether they move: a rule that
 starts firing on a fifth of everything has stopped describing a defect. That is
 why :func:`record` keeps the running counts per code in the store, and why
 ``altitude-too-high`` was removed when it reached 19% here.
+
+**Where a rule needs evidence, it asks for evidence.** The clearest case is a CLASS
+name opening a description, which is the register ``style.txt`` bans and which the
+shape rules cannot see: ``snake_case`` and ``camelCase`` announce themselves, a
+capitalized word does not. Sweeping for two-hump PascalCase alone fires on 0.9% of the
+corpus and about half of those are somebody else's proper noun -- ``TypeScript``,
+``GitHub``, ``OpenAI``, ``LanceDB``, ``FastAPI``, ``ProseMirror`` -- where naming a
+technology the reader knows is orienting them rather than showing them machinery.
+Asking the node's own bindings whether it holds something by that name leaves 0.1%, all
+of it real. One hump stays undecidable even with that evidence, because this repo names
+classes ``Merge``, ``Phase``, ``Usage``, ``Resolution``, ``Skipped``: gated on the
+symbol table it still fires on 2.7%, most of them ordinary sentences whose first word
+happens to be a class, so it is not checked at all. And where a caller offers no
+bindings the rule stays silent rather than guessing from shape -- the same discipline
+the altitude rules follow.
 """
 from __future__ import annotations
 
@@ -295,8 +314,19 @@ _IDENTIFIER = re.compile(
     r"\b(?:[A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*\b"     # a.b.c
     r"|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b"                          # snake_case
     r"|\b[a-z]+[A-Z][A-Za-z0-9]*\b"                                # camelCase
+    r"|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b"                          # SCREAMING_SNAKE
     r"|\b[A-Za-z_][A-Za-z0-9_]*\(\)"                               # a call
 )
+# A class or a type as prose would write it: two humps or more. One hump is not
+# decidable even WITH the symbol table -- this repo names classes `Merge`, `Phase`,
+# `Usage`, `Resolution`, `Skipped`, so "Merge codoc hook entries into each event's
+# array" is good imperative prose whose first word is also a class (measured: 2.7% of
+# this repo's docstring paragraphs, most of them that shape). Two humps is decidable
+# and still not sufficient, because half of them are somebody else's proper noun --
+# `TypeScript`, `GitHub`, `OpenAI`, `LanceDB`, `FastAPI`, `ProseMirror` -- and naming a
+# technology a reader knows is orienting them, not showing them a mechanism. So the
+# symbol table decides, which is what the note above says a regex cannot do.
+_PASCAL = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b")
 _CITATION = re.compile(r"`[^`]+`|\[[^\]]*\]\(codoc:[^)]*\)")
 # One dot and a known extension is a FILE, and naming a file a reader can open is
 # orienting them rather than showing them a mechanism. "Apply tree.codoc edits,
@@ -314,12 +344,35 @@ _FILENAME = re.compile(
 _OPENING_WORDS = 3
 
 
-def _opens_on_mechanism(description: str) -> Defect | None:
+def _bound_leaves(names: tuple[str, ...]) -> set[str]:
+    """The bare entity names behind ``names`` -- ``NodeOp`` of ``model/event.py NodeOp``.
+
+    Case is KEPT, unlike :func:`terms`: whether a capitalized word is this codebase's
+    class or an ordinary word opening a sentence is exactly the distinction being made,
+    and folding case throws it away.
+    """
+    leaves: set[str] = set()
+    for name in names:
+        for part in str(name).replace("/", " ").replace("#", " ").split():
+            leaves.add(part.split("::")[-1].split(".")[-1])
+    return leaves - {""}
+
+
+def _opens_on_mechanism(
+    description: str, names: tuple[str, ...] = (),
+) -> Defect | None:
     """"Never open on a mechanism or an identifier."
 
     Checked on the first sentence only, and only in its first few words, because
     the rule is about what the reader meets first. A description whose second
     clause names the function is doing exactly what the guide wants.
+
+    ``names`` is the node's own symbol table, and it is what lets a CLASS name count.
+    An identifier in snake_case or camelCase announces itself; a PascalCase word does
+    not, so the check asks whether this node actually binds something by that name
+    rather than guessing from shape. Without ``names`` the class rule simply does not
+    fire -- the same principle the altitude rules follow, since correcting somebody's
+    register on a guess is the one way this gate makes prose worse.
     """
     masked, raw, _ = next(iter(_units(description)), ("", "", False))
     if not masked:
@@ -336,6 +389,14 @@ def _opens_on_mechanism(description: str) -> Defect | None:
     # characters must never be read back as a symbol.
     cut = len(" ".join(masked.split()[:_OPENING_WORDS]))
     hit = _IDENTIFIER.search(masked[:cut])
+    if hit is None:
+        # A class name the node BINDS, which the shape rules above cannot see. Only
+        # the first such word is considered: past the opening the rule does not apply.
+        leaves = _bound_leaves(names)
+        for m in _PASCAL.finditer(masked[:cut]):
+            if (raw[m.start():m.end()] or m.group(0)) in leaves:
+                hit = m
+                break
     if hit and not _FILENAME.match(raw[hit.start():hit.end()] or hit.group(0)):
         return Defect(
             "opens-on-a-mechanism", "description",
@@ -772,7 +833,7 @@ def check(
         out.extend(_title_defects(title))
     if description is None or not description.strip():
         return out
-    hit = _opens_on_mechanism(description)
+    hit = _opens_on_mechanism(description, tuple(names))
     if hit:
         out.append(hit)
     if title:
