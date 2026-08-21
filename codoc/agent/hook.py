@@ -150,12 +150,19 @@ def _symbol_scoped_features(
         touched = set(sorted(touched)[:500])
 
     try:
+        from codoc import settings_files
         from codoc.lang import detect_language, get_adapter
 
         lang = detect_language(rel_path)
-        if lang is None:
+        if lang is not None:
+            chunks = get_adapter(lang).extract_chunks(rel_path, source)
+        elif settings_files.detect_format(rel_path) is not None:
+            # A settings file has sections rather than symbols, and an agent that
+            # changed one changed one decision — the same narrowing a function edit
+            # gets, and the reason the sections are addressable at all.
+            chunks = settings_files.extract_chunks(rel_path, source)
+        else:
             return []
-        chunks = get_adapter(lang).extract_chunks(rel_path, source)
     except Exception:  # noqa: BLE001 — parse is best-effort; never break the hook
         return []
 

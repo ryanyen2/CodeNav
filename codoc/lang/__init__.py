@@ -18,8 +18,8 @@ def get_adapter(language: str) -> LanguageAdapter:
     return cls()
 
 
-def parses_cleanly(file_path: str, source: str) -> bool:
-    """True if *source* parses with no error and nothing missing.
+def parses_cleanly(file_path: str, source: str) -> bool | None:
+    """True if *source* parses with no error and nothing missing; None if unjudged.
 
     A file that does not parse is not evidence about what it contains. tree-sitter
     recovers what it can and drops the rest, so the chunks it yields are a LOWER
@@ -28,12 +28,16 @@ def parses_cleanly(file_path: str, source: str) -> bool:
     a DELETED entity have to know the difference; see
     ``loop/diff._hold_unparseable_removals``.
 
-    Unsupported for a file no adapter claims: nothing parsed it, so there is no
-    parse to call clean. Says False, and the caller treats that as "cannot tell".
+    **None for a file no adapter claims**, because "nothing read it" and "it is
+    damaged" are opposite answers and a bool cannot hold both. It said False, which
+    every caller had to remember meant "cannot tell" — and the moment a second kind
+    of readable file entered the index (settings files, which have no adapter and
+    parse perfectly well) that False started reading as "damaged" and held removals
+    from files that were fine.
     """
     language = detect_language(file_path)
     if language is None:
-        return False
+        return None
     tree = get_adapter(language).parse(source)
     cursor = tree.walk()
     while True:

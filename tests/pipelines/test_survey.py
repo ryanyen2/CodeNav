@@ -226,3 +226,41 @@ def test_the_walk_stops_at_the_runaway_guard(tmp_path):
     # A guard, not a policy: it bounds the cost of an advisory, and the partial
     # figure it returns is still a lower bound on what codoc saw.
     assert survey.indexed <= 5
+
+
+# --- settings files ---------------------------------------------------------
+
+def test_a_settings_file_the_code_reads_but_codoc_cannot_parse_is_reported(
+        tmp_path, monkeypatch):
+    """PyYAML is not a codoc dependency, so on a machine without it a YAML file the
+    code reads holds a decision nothing in the tree can describe. That is a bound on
+    the view, and it is fixable by installing one package — so it gets said."""
+    from codoc import settings_files
+
+    monkeypatch.setattr(settings_files, "_yaml", None)
+    _repo(tmp_path, {"main.py": 'CONFIG = "deploy.yaml"\n'})
+    (tmp_path / "deploy.yaml").write_text("region: eu\n", encoding="utf-8")
+
+    survey = survey_repo(tmp_path)
+    assert survey.settings_unreadable == ["deploy.yaml"]
+    assert any("deploy.yaml" in line for line in render_survey(survey))
+
+
+def test_a_settings_file_nobody_reads_is_not_reported(tmp_path):
+    """A repo has many of those and none of them is news — the walk excludes them by
+    design, so listing them would bury the file that is actually missing a parser."""
+    _repo(tmp_path, {"main.py": "x = 1\n"})
+    (tmp_path / "fixture.toml").write_text("[x]\ny = 1\n", encoding="utf-8")
+
+    survey = survey_repo(tmp_path)
+    assert survey.settings_unreadable == []
+    assert render_survey(survey) == []
+
+
+def test_a_settings_file_that_parses_is_not_a_gap(tmp_path):
+    """It is indexed, so it is covered by the coverage figure rather than by a
+    warning about what codoc could not read."""
+    _repo(tmp_path, {"main.py": 'RULES = "rules.toml"\n'})
+    (tmp_path / "rules.toml").write_text('[periods]\nmonth = "made"\n', encoding="utf-8")
+
+    assert survey_repo(tmp_path).settings_unreadable == []

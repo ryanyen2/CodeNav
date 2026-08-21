@@ -29,9 +29,9 @@ def test_a_half_typed_definition_does_not() -> None:
 
 
 def test_a_file_no_adapter_reads_is_not_judged() -> None:
-    # Nothing parsed it, so there is no parse to call clean — and the caller must
-    # not read that as "damaged".
-    assert parses_cleanly("README.md", "# hello\n") is False
+    # Nothing parsed it, so there is no parse to call clean — and that is a third
+    # answer, not False: False is what a damaged file says.
+    assert parses_cleanly("README.md", "# hello\n") is None
 
 
 def test_removal_from_a_broken_file_is_held(tmp_path: pathlib.Path) -> None:
@@ -93,3 +93,28 @@ def test_the_hold_is_reported(tmp_path: pathlib.Path, caplog) -> None:
     with caplog.at_level("WARNING"):
         _hold_unparseable_removals(cs, str(tmp_path))
     assert "m.py" in caplog.text and "does not parse" in caplog.text
+
+
+# --- files with no adapter that are readable anyway -------------------------
+
+RULES = '[periods]\nmonth = "made"\n\n[merchants]\nunmatched = "stop"\n'
+
+
+def test_removal_from_a_settings_file_that_parses_stands(tmp_path: pathlib.Path) -> None:
+    """A deleted section is a deleted decision. The file has no tree-sitter adapter,
+    which for a while was answered as "damaged" — so the binding was held forever and
+    the tree kept citing a section that was gone."""
+    (tmp_path / "rules.toml").write_text('[periods]\nmonth = "made"\n')
+    cs = ChangeSet(removed=[ChunkRef("rules.toml", "rules.toml::merchants", "h1")])
+    assert _hold_unparseable_removals(cs, str(tmp_path)) == []
+    assert [c.symbol_path for c in cs.removed] == ["rules.toml::merchants"]
+
+
+def test_removal_from_a_half_saved_settings_file_is_held(tmp_path: pathlib.Path) -> None:
+    """Mid-edit is mid-edit in any language: an unterminated string means the reader
+    saw a keystroke, not a decision to remove a section."""
+    (tmp_path / "rules.toml").write_text('[periods]\nmonth = "made\n')
+    cs = ChangeSet(removed=[ChunkRef("rules.toml", "rules.toml::merchants", "h1")])
+    held = _hold_unparseable_removals(cs, str(tmp_path))
+    assert [c.symbol_path for c in held] == ["rules.toml::merchants"]
+    assert cs.removed == []

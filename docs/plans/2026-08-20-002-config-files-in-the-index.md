@@ -128,17 +128,20 @@ Built:
 - `runner.py` — the App/environment cache the integration tests forced into the open
   (one cocoindex environment per process; see docs/architecture.md).
 
-Still open, in the order it matters:
+- The three seams that asked `codoc.lang` whether a file parses: `lang.parses_cleanly`
+  now answers None for a file no adapter claims, `loop/diff` asks whichever reader
+  claims the file (so a deleted section DETACHES instead of being held forever),
+  `agent/hook` narrows an agent's edit to the section it touched, and
+  `pipelines/indexing/survey` reports a settings file the code reads that no parser
+  here can open. `graph/extract` and `codoc status` needed nothing — see
+  docs/architecture.md, "What had to stop asking `codoc.lang`".
 
-1. **The seams that still assume a tree-sitter adapter.** `loop/diff.py:_hold_unparseable_removals`
-   asks `codoc.lang.parses_cleanly`, which answers "no adapter" and "does not parse" the
-   same way — so a removed section of a perfectly parseable settings file is HELD instead of
-   detached. `agent/hook.py` and `pipelines/indexing/survey.py` ask the same question in
-   their own words; `survey` also needs to report a YAML file skipped for a missing PyYAML
-   differently from one nobody reads (`SettingsScan.unreadable` exists for that).
-2. **Decision 1 above, in practice.** The chunks exist, so the loop CAN bind them; what
-   `codoc status` coverage should say about a repo whose settings files are half-bound is
-   not yet decided.
-3. **The prompt.** A chunk's comments and values reach the pass only once the payload
+Still open:
+
+1. **The prompt.** A chunk's comments and values reach the pass only once the payload
    builder includes them, which is the whole point: a description should be able to say
    `month = "made"` rather than "read from rules.toml".
+2. **Decision 1 above, in practice.** Coverage arithmetic settled by uniformity — a
+   settings section is an indexed chunk, so an unbound one is a real gap — but nothing
+   yet CHECKS that Loop A binds a section to the feature whose code reads it, which is
+   the claim the whole plan rests on.

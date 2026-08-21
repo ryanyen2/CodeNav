@@ -14,6 +14,7 @@ import logging
 import pathlib
 from dataclasses import dataclass, field
 
+from codoc import settings_files
 from codoc.lang import parses_cleanly
 from codoc.pipelines.indexing.reader import ChunkRow, read_all_chunks
 from codoc.pipelines.indexing.runner import update_index
@@ -116,6 +117,21 @@ def compute_changeset(
     return cs
 
 
+def _reads_cleanly(file: str, source: str) -> bool | None:
+    """Whether this file is whole, from whichever reader claims it. None: neither does.
+
+    Two readers produce chunks, and the question means the same thing to both — is
+    what I am looking at the finished document, or a keystroke inside an edit. A
+    settings file has no tree-sitter adapter and parses perfectly well, so asking
+    only the adapters would answer "damaged" about a file that is fine, and a deleted
+    ``[merchants]`` section would keep its binding forever.
+    """
+    fmt = settings_files.detect_format(file)
+    if fmt is not None:
+        return settings_files.parses_cleanly(source, fmt)
+    return parses_cleanly(file, source)
+
+
 def _hold_unparseable_removals(cs: ChangeSet, root_dir: str) -> list[ChunkRef]:
     """Drop removals whose file is still on disk but no longer parses; return them.
 
@@ -132,12 +148,11 @@ def _hold_unparseable_removals(cs: ChangeSet, root_dir: str) -> list[ChunkRef]:
     at worst a spurious refresh — idempotent, and the next clean pass corrects it
     — while a removal destroys attribution that nothing recreates.
 
-    A file that is GONE from disk removes its chunks for real, and one that no
-    adapter can read (so ``parses_cleanly`` cannot judge it) is not second-guessed
-    either: this holds a removal only where the file is present and demonstrably
-    unparseable. A file that never parses — a templated ``.py``, Python 2 — keeps
-    its stale bindings until it does, which is why the hold is logged rather than
-    silent.
+    A file that is GONE from disk removes its chunks for real, and one that nothing
+    in this process can read is not second-guessed either: this holds a removal only
+    where the file is present and DEMONSTRABLY unparseable. A file that never parses
+    — a templated ``.py``, Python 2 — keeps its stale bindings until it does, which
+    is why the hold is logged rather than silent.
     """
     if not cs.removed:
         return []
@@ -149,7 +164,7 @@ def _hold_unparseable_removals(cs: ChangeSet, root_dir: str) -> list[ChunkRef]:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue  # gone, unreadable → the removal stands
-        if not parses_cleanly(file, source):
+        if _reads_cleanly(file, source) is False:
             broken.add(file)
     if not broken:
         return []

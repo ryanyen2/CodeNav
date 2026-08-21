@@ -645,6 +645,32 @@ file's memo stays untouched. Rows carry the format in the `language` column and 
 comes from `settings_files.hashes`, so nothing downstream needs to know a chunk came
 from a settings file.
 
+### What had to stop asking `codoc.lang`
+
+Three places asked "does this file parse" by asking the tree-sitter adapters, which was
+the same question until a second kind of readable file existed. `lang.parses_cleanly` now
+answers **None** for a file no adapter claims, because "nothing read it" and "it is
+damaged" are opposite answers a bool cannot hold — it used to say False, and every caller
+had to remember that False meant "cannot tell".
+
+- **`loop/diff._hold_unparseable_removals`** holds a removal only where a reader that
+  claims the file says it is broken, and asks whichever reader claims it
+  (`diff._reads_cleanly`). Otherwise a deleted `[merchants]` section — from a file that
+  parses perfectly — was held forever and the tree kept citing a section that was gone.
+  Mid-edit is still mid-edit in any format: an unterminated string holds the removal.
+- **`agent/hook._symbol_scoped_features`** narrows an agent's edit to the SECTION it
+  touched, so one changed decision scopes Loop A to the feature that owns it rather than
+  to every feature bound to the file. An edit to the comment run above a header is an
+  edit to that section, which is the same rule the chunker uses.
+- **`pipelines/indexing/survey`** reports one settings answer, the only one that is news:
+  a file the code READS that no parser here can open (a YAML file with no PyYAML). The
+  ones nobody reads are excluded by design, so listing them would bury it.
+
+`graph/extract` needed no change: it skips a row whose file has no adapter, which is
+exactly the plan's answer that a settings file cites no symbols and the dependency graph
+should not grow edges it cannot justify. `codoc status` coverage needed none either — a
+settings section is an indexed chunk, so an unbound one is a real gap and counts as one.
+
 ## Doc language — the language the tree is AUTHORED in (`doclang.py`)
 
 Two different things are called "language" here, and confusing them costs an

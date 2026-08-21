@@ -251,6 +251,66 @@ def test_symbol_scope_write_falls_back_to_file_level(multi_symbol_repo):
 
 # ── session-start ─────────────────────────────────────────────────────────────
 
+# ── section-level narrowing in a settings file ─────────────────────────────────
+
+_RULES_SRC = """\
+# How a tally lines up its summaries.
+[periods]
+month = "made"
+
+# An unmatched merchant stops the run.
+[merchants]
+unmatched = "stop"
+"""
+
+
+@pytest.fixture
+def settings_repo(tmp_path):
+    """A settings file whose two sections belong to two different features. An agent
+    that changes one changed one decision, and the hook has to say which — a settings
+    file has no tree-sitter adapter, so this used to fall back to the whole file."""
+    root = tmp_path / "repo"
+    (root / "tally").mkdir(parents=True)
+    codoc_dir = root / ".codoc"
+    codoc_dir.mkdir()
+    (root / "tally" / "rules.toml").write_text(_RULES_SRC)
+    sidecar = {
+        "version": 1,
+        "by_feature": {},
+        "by_file": {"tally/rules.toml": [
+            {"symbol": "tally/rules.toml::periods", "feature_id": "f-periods",
+             "feature_title": "Periods"},
+            {"symbol": "tally/rules.toml::merchants", "feature_id": "f-merchants",
+             "feature_title": "Merchants"},
+        ]},
+        "features": {"f-periods": {"title": "Periods"},
+                     "f-merchants": {"title": "Merchants"}},
+    }
+    (codoc_dir / "tree.bindings.json").write_text(json.dumps(sidecar))
+    return root, codoc_dir
+
+
+def _settings_edit(root, old, new="x"):
+    fp = str(root / "tally" / "rules.toml")
+    return {"tool_name": "Edit",
+            "tool_input": {"file_path": fp, "old_string": old, "new_string": new},
+            "abs_path": fp}
+
+
+def test_an_edit_to_one_section_attributes_to_that_sections_feature(settings_repo):
+    root, codoc_dir = settings_repo
+    kw = _settings_edit(root, 'unmatched = "stop"', 'unmatched = "bucket"')
+    assert _resolve_features("tally/rules.toml", str(codoc_dir), **kw) == ["f-merchants"]
+
+
+def test_an_edit_to_the_comment_above_a_section_is_that_section(settings_repo):
+    """The reason a value is what it is belongs to the decision, so editing the
+    sentence above `[periods]` is an edit to periods."""
+    root, codoc_dir = settings_repo
+    kw = _settings_edit(root, "# How a tally lines up its summaries.")
+    assert _resolve_features("tally/rules.toml", str(codoc_dir), **kw) == ["f-periods"]
+
+
 def test_session_start_writes_open_epoch(repo):
     root, codoc_dir = repo
     payload = _payload(str(root))

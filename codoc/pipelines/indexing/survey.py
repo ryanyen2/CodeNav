@@ -15,6 +15,12 @@ survey does what the indexer does for a file past the hearing threshold: reads i
 parses it. That is a handful of files in a large repo and none in most, which is the
 price of the report being about the walk that actually happened.
 
+It reports settings files on the same terms as code. A settings file is indexed when
+some source file names it, so the ones nobody reads are excluded by design and saying
+so would bury the one answer that is news: a file the code READS that no parser in
+this process can open, which is a decision the tree cannot describe and a missing
+dependency somebody can fix.
+
 It reports only codoc's OWN limits. A file under `node_modules/`, `dist/`, or a path
 the repo's `.gitignore` names is excluded on purpose and by somebody's decision;
 saying so on every `codoc status` would bury the facts that are about codoc.
@@ -32,6 +38,7 @@ from codoc.pipelines.indexing.cocoindex_app import (
     _INCLUDED_PATTERNS,
     _gitignore_excludes,
 )
+from codoc.pipelines.indexing import settings_scan
 from codoc.pipelines.indexing.gate import (
     READ_CEILING_BYTES,
     holds_definitions,
@@ -64,12 +71,14 @@ class RepoSurvey:
     unaddressable: list[tuple[str, int]] = field(default_factory=list)
     #: repo-relative directories the walk refused to follow (symlinks)
     symlinked_dirs: list[str] = field(default_factory=list)
+    #: settings files the code reads that this process has no parser for
+    settings_unreadable: list[str] = field(default_factory=list)
 
     @property
     def unseen(self) -> int:
-        """Files that hold code no feature can possibly cover."""
-        return (sum(self.unreadable.values())
-                + len(self.too_large) + len(self.unaddressable))
+        """Files a feature cannot cover, whether they hold code or a decision."""
+        return (sum(self.unreadable.values()) + len(self.too_large)
+                + len(self.unaddressable) + len(self.settings_unreadable))
 
 
 def survey_repo(root: str | pathlib.Path, *, max_entries: int = 200_000) -> RepoSurvey:
@@ -129,6 +138,18 @@ def survey_repo(root: str | pathlib.Path, *, max_entries: int = 200_000) -> Repo
                 survey.unaddressable.append((rel, size))
             else:
                 survey.indexed += 1
+    # Settings files are selected by the code that reads them, not by the walk, so
+    # the survey has to ask the same question the indexer asks. Only one answer is
+    # news: a file the code reads that no parser in this process can open. The ones
+    # nobody reads are excluded by design and reporting them would bury this.
+    try:
+        scan = settings_scan.scan(root, PatternFilePathMatcher(
+            included_patterns=_INCLUDED_PATTERNS + settings_scan.CANDIDATE_PATTERNS,
+            excluded_patterns=_EXCLUDED_PATTERNS + _gitignore_excludes(root),
+        ), max_entries=max_entries)
+        survey.settings_unreadable = sorted(scan.unreadable)
+    except OSError:
+        pass
     survey.too_large.sort(key=lambda pair: -pair[1])
     survey.unaddressable.sort(key=lambda pair: -pair[1])
     survey.symlinked_dirs.sort()
@@ -206,6 +227,12 @@ def render_survey(survey: RepoSurvey, *, max_names: int = 3) -> list[str]:
             f"  ⚠ {len(survey.unaddressable)} large file(s) that parse to no "
             f"definitions a feature could bind (generated or data), "
             f"unindexed: {names}"
+        )
+    if survey.settings_unreadable:
+        names = _with_overflow(survey.settings_unreadable, max_names)
+        lines.append(
+            f"  ⚠ {len(survey.settings_unreadable)} settings file(s) the code reads "
+            f"but codoc cannot parse here: {names} — YAML needs PyYAML installed"
         )
     if survey.symlinked_dirs:
         names = _with_overflow(survey.symlinked_dirs, max_names)
