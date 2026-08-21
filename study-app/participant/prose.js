@@ -75,12 +75,13 @@ survey.txt: 5 pages, 3 headings, 12 paragraphs, 0 bullets, 0 notes, 8 lines of f
         caption: '"Furniture" is just the project\'s name for repeated page headers and page numbers. If the changes cause more or fewer headers or page numbers to be removed, these numbers will change.',
 
         after: Object.freeze({
-            lead: 'When the agent says it has finished, run these commands yourself.',
+            lead: 'When the agent says it has finished, run these three commands yourself and read what they print.',
             commands: Object.freeze([
-                ['.venv/bin/scribe check fixtures/', 'Compare the results with the original numbers above. If any number changed, it changed because of what the agent did.'],
-                ['cat scribe.toml', 'This shows the settings the agent added. Check that they match what you asked for, then compare them with the check results.'],
+                ['.venv/bin/scribe check fixtures/', 'The same four documents as above, counted the same way, so you can hold the two sets of numbers side by side.'],
+                ['.venv/bin/scribe convert fixtures/report.txt -', 'Prints one whole converted document to the screen instead of writing a file, so you can read the Markdown the way somebody receiving it would read it.'],
+                ['cat scribe.toml', 'The settings file the change added, which is the thing you asked for, so check that the values written in it are the values you wanted.'],
             ]),
-            caption: 'If any number changed, work out why it changed and whether that change is correct. Fix anything that should not have changed.',
+            caption: 'Where a number has moved, work out whether it moved because of something you asked for or for some other reason. Read the converted document as well as the counts, because a count can stay the same while what comes out of the conversion changes, and the converted document is the thing somebody would actually read.',
         }),
     }),
 
@@ -161,14 +162,14 @@ other-bank.csv: 13 rows, 3 months, 0 duplicates, 0 transfers, 3 uncategorised, 1
         caption: 'There are three sample files. boundary.csv is the tricky one. Every payment in it was made at the end of one month but processed by the bank at the beginning of the next month. This means the result can change depending on which date Tally uses.',
 
         after: Object.freeze({
-            lead: 'When the agent says it has finished, run these commands yourself.',
+            lead: 'When the agent says it has finished, run these four commands yourself and read what they print.',
             commands: Object.freeze([
-                ['.venv/bin/tally check fixtures/', 'Make sure the results still look correct.'],
-                ['cat tally/rules.toml', 'This shows the settings added by the change.'],
-                ['.venv/bin/tally summarise fixtures/boundary.csv -', 'Print the full monthly summary for boundary.csv. Compare this with the original results above, line by line.'],
-                ['.venv/bin/tally summarise fixtures/boundary.csv - --by-week', 'This shows the same seven payments broken down by week. Compare the monthly and weekly results.'],
+                ['.venv/bin/tally check fixtures/', 'The same three exports as above, counted the same way, so you can hold the two sets of numbers side by side.'],
+                ['.venv/bin/tally summarise fixtures/current.csv -', 'Prints the whole summary for the largest sample to the screen instead of writing a file, one heading per month with the category rows under it and a total underneath them.'],
+                ['.venv/bin/tally summarise fixtures/current.csv - --by-week', 'The same payments grouped into weeks rather than months, which is the second thing you asked for.'],
+                ['cat tally/rules.toml', 'The settings file the change added, so check that the categories and the other values written in it are the values you wanted.'],
             ]),
-            caption: 'The new version should still produce the normal monthly summary, but it should also support the more detailed summary. The settings file will tell you which date each summary uses. If a number has moved from one month or week to another, check that the change is actually caused by the new behaviour and that it makes sense. Fix anything that looks wrong.',
+            caption: 'Where a number has moved, work out whether it moved because of something you asked for or for some other reason. Read the summaries themselves as well as the counts, because the counts only say how many rows were read and a summary can be wrong in a way that no count reports.',
         }),
     }),
 
@@ -176,10 +177,10 @@ other-bank.csv: 13 rows, 3 months, 0 duplicates, 0 transfers, 3 uncategorised, 1
 });
 
 const TASK = Object.freeze({
-    lead: 'You asked your coding agent for the following, and it is about to work on it.',
-    stage1: 'The agent will read the code and suggest what it wants to change. Review its suggestions and accept or reject them.',
-    stage2: 'The agent will then make the changes. Read through what it changed and make sure the changes make sense.',
-    stage3: 'Run the project yourself and check that everything still works. Fix anything that is wrong.',
+    lead: 'You asked your coding agent for the request below, and it is about to start work on it.',
+    stage1: 'First the agent reads the project and comes back with what it plans to change, before it changes anything. Read what it plans and answer it.',
+    stage2: 'Then it makes the changes. Read what it changed, and decide for each part whether it is a change you would keep.',
+    stage3: 'Then run the project yourself, using the commands further down this page, and check that what comes out of it is right. Fix anything that is not.',
 });
 
 export const COPY = Object.freeze({

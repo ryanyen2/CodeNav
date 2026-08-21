@@ -1,7 +1,10 @@
 // The quiz, as the participant sees it.
 //
-// Simplified for clarity. THE RIGHT ANSWER IS NOT HERE: this file ships to a
-// browser. Marking happens in the dashboard, against its own copy.
+// Generated from the projects' STUDY.md, so there is one source of truth for the
+// wording. THE RIGHT ANSWER IS NOT HERE: this file ships to a browser. Marking
+// happens in the dashboard, against its own copy.
+//
+// Do not edit by hand. Run: npm run questions
 export const QUIZZES = Object.freeze({
     "scribe": [
         {
@@ -245,11 +248,11 @@ export const AFTER_QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "Your change added a report beside the Markdown output. What does the report show?",
+            "question": "Your change writes a second file beside the Markdown. What is in it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "What scribe changed: lines removed, words rejoined, and notes moved"
+                    "text": "What the conversion did to the document, rule by rule, and the settings the run used"
                 },
                 {
                     "letter": "b",
@@ -261,99 +264,99 @@ export const AFTER_QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "d",
-                    "text": "A comparison of the original and converted text side by side"
+                    "text": "The original text and the converted text side by side"
                 }
             ]
         },
         {
             "n": 2,
             "band": "Extension",
-            "question": "Where are the conversion settings stored now?",
+            "question": "A colleague wants one awkward document converted with different rules from the rest. Where do they put that now?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "In a settings file that scribe looks for near the document"
+                    "text": "In a section for that document in the settings file, scribe.toml"
                 },
                 {
                     "letter": "b",
-                    "text": "In the code, where they were before"
+                    "text": "In the code, next to the rule they want to change"
                 },
                 {
                     "letter": "c",
-                    "text": "On the command line, given on every run"
+                    "text": "On the command line, every time they convert it"
                 },
                 {
                     "letter": "d",
-                    "text": "In an environment variable"
+                    "text": "Nowhere, because every document is converted with the same rules"
                 }
             ]
         },
         {
             "n": 3,
             "band": "Rationale",
-            "question": "A document has no settings file. What happens when you convert it?",
+            "question": "There is no settings file anywhere near the document. What happens when you convert it?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It works the same as before, using the default rules"
+                    "text": "It converts using the values scribe has always used"
                 },
                 {
                     "letter": "b",
-                    "text": "Scribe refuses to convert it"
+                    "text": "Scribe refuses to convert until a settings file exists"
                 },
                 {
                     "letter": "c",
-                    "text": "It skips all the rules and just joins lines"
+                    "text": "Scribe writes a settings file full of empty values and carries on"
                 },
                 {
                     "letter": "d",
-                    "text": "It creates a settings file with empty values"
+                    "text": "Scribe converts the document and skips every rule"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Change",
-            "question": "What did the change do to the furniture threshold — the share of pages a header has to appear on before it is removed?",
+            "question": "Before the change, a footnote came out as a marker in the sentence and a matching `[^1]: ...` line at the end of the Markdown. What comes out now?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "Moved it into the settings file so you can change it per document"
+                    "text": "The marker in the sentence, and the note text as an ordinary paragraph where it sat on the page"
                 },
                 {
                     "letter": "b",
-                    "text": "Kept it the same but made it stricter"
+                    "text": "The marker and the matching line at the end, exactly as before"
                 },
                 {
                     "letter": "c",
-                    "text": "Removed it, so all repeated lines are removed"
+                    "text": "Neither the marker nor the note text, because notes are dropped"
                 },
                 {
                     "letter": "d",
-                    "text": "Did not change it at all"
+                    "text": "The line at the end, with the marker taken out of the sentence"
                 }
             ]
         },
         {
             "n": 5,
-            "band": "Rationale",
-            "question": "If you lower the furniture threshold so that fewer repeats are needed, what else could that affect?",
+            "band": "Change",
+            "question": "Somebody opens the converted report in a Markdown reader and clicks the `[^1]` in the second paragraph. What happens?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "A real heading that repeats across pages could be removed as furniture"
+                    "text": "Nothing, because the document no longer contains a `[^1]:` line for it to jump to"
                 },
                 {
                     "letter": "b",
-                    "text": "Nothing, because furniture and headings are completely separate"
+                    "text": "It jumps to the note text further down the document"
                 },
                 {
                     "letter": "c",
-                    "text": "Page numbers would stop being removed"
+                    "text": "It jumps to the end of the document, where the notes are gathered"
                 },
                 {
                     "letter": "d",
-                    "text": "The document would get longer"
+                    "text": "The reader shows the note in a tooltip, because the marker carries the text with it"
                 }
             ]
         }
@@ -362,7 +365,7 @@ export const AFTER_QUIZZES = Object.freeze({
         {
             "n": 1,
             "band": "Purpose",
-            "question": "Your change added a weekly view. What does each week show?",
+            "question": "Your change added a weekly view. What does one week show?",
             "options": [
                 {
                     "letter": "a",
@@ -378,7 +381,7 @@ export const AFTER_QUIZZES = Object.freeze({
                 },
                 {
                     "letter": "d",
-                    "text": "The difference from the previous week"
+                    "text": "The difference from the week before"
                 }
             ]
         },
@@ -389,7 +392,7 @@ export const AFTER_QUIZZES = Object.freeze({
             "options": [
                 {
                     "letter": "a",
-                    "text": "In the settings file, which is where the rules now live"
+                    "text": "In the settings file, which is where the merchant rules now live"
                 },
                 {
                     "letter": "b",
@@ -408,69 +411,69 @@ export const AFTER_QUIZZES = Object.freeze({
         {
             "n": 3,
             "band": "Rationale",
-            "question": "A shop on the statement matches no rule in the settings file. What happens?",
+            "question": "A shop on the statement matches no rule in the settings file. What does the summary do with that payment, as the project is set up now?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "It goes under uncategorised"
+                    "text": "Counts it in the month's total and in the count line at the end, without printing it in any category row"
                 },
                 {
                     "letter": "b",
-                    "text": "The run stops with an error"
+                    "text": "Prints it as an uncategorised row alongside the other categories"
                 },
                 {
                     "letter": "c",
-                    "text": "It is left out of the summary entirely"
+                    "text": "Leaves it out of the summary and out of the total"
                 },
                 {
                     "letter": "d",
-                    "text": "It is matched to the closest rule"
+                    "text": "Stops the run and lists the shop it could not match"
                 }
             ]
         },
         {
             "n": 4,
             "band": "Change",
-            "question": "The monthly view uses the date you made the payment. What date does the weekly view use?",
+            "question": "You already have a monthly summary written out for a statement, and you run the same command again with `--by-week`. What happens to the monthly file?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "The same date — when you made the payment"
+                    "text": "It stays where it is, and the weekly summary is written beside it under a different name"
                 },
                 {
                     "letter": "b",
-                    "text": "The date the bank processed the payment"
+                    "text": "It is overwritten, because both summaries are written to the same file"
                 },
                 {
                     "letter": "c",
-                    "text": "Whichever date comes first"
+                    "text": "It is deleted, because a weekly summary replaces a monthly one"
                 },
                 {
                     "letter": "d",
-                    "text": "The date is not used — it just counts seven days"
+                    "text": "Nothing is written at all, because `--by-week` only prints to the screen"
                 }
             ]
         },
         {
             "n": 5,
-            "band": "Rationale",
-            "question": "If the monthly and weekly views use different dates, what can happen?",
+            "band": "Change",
+            "question": "You add up the category rows printed under a month heading, and you compare your figure with the total printed underneath them. What do you find?",
             "options": [
                 {
                     "letter": "a",
-                    "text": "A payment could appear in January in the monthly view but February in the weekly view"
+                    "text": "The two disagree, by exactly the amount that went to shops matching no rule"
                 },
                 {
                     "letter": "b",
-                    "text": "Nothing, because they always add up to the same total"
+                    "text": "They agree, because every row under the heading is counted in the total"
                 },
                 {
                     "letter": "c",
-                    "text": "Some payments would be counted twice"
+                    "text": "They disagree, because transfers are in the total but have no row of their own"
                 },
                 {
                     "letter": "d",
-                    "text": "Weekend payments would be left out"
+                    "text": "They disagree by a penny or two, because each row is rounded before the total is added up"
                 }
             ]
         }

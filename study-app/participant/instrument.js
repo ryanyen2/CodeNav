@@ -10,6 +10,15 @@
 // NASA-TLX). They are not improved, shortened, or reworded. Their value is that
 // a reviewer already knows what the numbers mean and can compare them to other
 // papers, and an edited instrument forfeits that.
+//
+// On 2026-08-20 the items that are ours rather than published were reworded so
+// that each one reads as a sentence somebody would say out loud, and so that the
+// four blocks describe reviewing a change the agent made rather than typing the
+// change yourself, which is what the task became on 2026-08-19. Every item id and
+// every reverse key is unchanged, and the two published blocks were not touched,
+// so answers collected before that date still line up item for item. The pilot
+// answers collected under the older wording are comparable at the construct level
+// and should be reported as having been asked in the older wording.
 
 // ── the forms that live in Google ────────────────────────────────────────────
 
@@ -33,26 +42,26 @@ export const CONSENT_FORM =
 export const PRESTUDY = Object.freeze([
     { id: 'gender', type: 'choice', label: 'Gender',
       options: ['Woman', 'Man', 'Non-binary', 'Prefer to self-describe', 'Prefer not to say'] },
-    { id: 'genderSelf', type: 'text', label: 'If you would rather describe it yourself',
+    { id: 'genderSelf', type: 'text', label: 'If you would rather describe your gender yourself, please write it here',
       placeholder: 'Optional', showWhen: { gender: 'Prefer to self-describe' } },
     { id: 'age', type: 'number', label: 'Age', min: 18, max: 99, optional: true },
-    { id: 'education', type: 'choice', label: 'Highest level of education finished',
+    { id: 'education', type: 'choice', label: 'What is the highest level of education you have finished?',
       options: ["Bachelor's", "Master's", 'Doctorate', 'Professional degree',
                 'Trade or vocational', 'Other'] },
-    { id: 'years', type: 'number', label: 'Years you have been programming', min: 0, max: 60 },
-    { id: 'aiUse', type: 'choice', label: 'How often do you use AI tools to write code',
+    { id: 'years', type: 'number', label: 'How many years have you been programming?', min: 0, max: 60 },
+    { id: 'aiUse', type: 'choice', label: 'How often do you use AI tools to write code?',
       options: ['Almost every day', 'Several times a week', 'About once a week',
                 'A few times a month', 'Less than once a month', 'Never'] },
-    { id: 'aiFamiliar', type: 'scale5', label: 'How familiar are you with AI coding tools',
+    { id: 'aiFamiliar', type: 'scale5', label: 'How familiar are you with AI coding tools?',
       low: 'Not at all', high: 'Very' },
-    { id: 'python', type: 'scale5', label: 'How confident are you reading Python',
+    { id: 'python', type: 'scale5', label: 'How confident are you reading Python?',
       low: 'Not at all', high: 'Very' },
     // The screening question. It sits with the rest now, in the order somebody
     // would naturally answer them, rather than alone on a page that had to
     // explain itself. The page still does not say which answer excludes, or the
     // answer stops being honest.
     { id: 'readsDiff', type: 'choice',
-      label: 'When an AI suggests a code change, how often do you read it before accepting',
+      label: 'When an AI suggests a code change, how often do you read the change before you accept it?',
       options: ['Always', 'Usually', 'About half the time', 'Rarely', 'Never'] },
 ]);
 
@@ -201,29 +210,29 @@ export const AFTER_CONDITION = Object.freeze([
       description: 'How insecure, discouraged, irritated, stressed and annoyed — versus secure, gratified, content and relaxed — did you feel during the task?' },
 
     // Understanding and control.
-    { id: 'ctl1', c: 'control', text: 'I knew what the agent changed.' },
-    { id: 'ctl2', c: 'control', text: 'I could guide the agent toward what I wanted.' },
+    { id: 'ctl1', c: 'control', text: 'I knew what the agent had changed.' },
+    { id: 'ctl2', c: 'control', text: 'I could steer the agent towards what I wanted.' },
     { id: 'ctl3', c: 'control', text: 'I felt in control of the process.' },
     { id: 'ctl4', c: 'control', text: 'I lost track of what the code looked like while the agent worked.', reverse: true },
     { id: 'ctl5', c: 'control', text: 'The agent made choices I should have made myself.', reverse: true },
 
     // Alignment.
-    { id: 'ali1', c: 'align', text: 'The result matched what I asked for.' },
-    { id: 'ali2', c: 'align', text: 'This way of working helped me understand the codebase.' },
-    { id: 'ali3', c: 'align', text: 'I could switch between editing and checking without getting lost.' },
+    { id: 'ali1', c: 'align', text: 'What the agent did was what I had asked for.' },
+    { id: 'ali2', c: 'align', text: 'Working this way helped me understand the code.' },
+    { id: 'ali3', c: 'align', text: 'I could move between reading the change and checking it without losing my place.' },
 
     // The written description.
-    { id: 'doc1', c: 'doc', text: 'The written description matched the code.' },
+    { id: 'doc1', c: 'doc', text: 'The written description said what the code actually did.' },
     { id: 'doc2', c: 'doc', text: 'Keeping the description up to date felt like extra work for nothing.', reverse: true },
-    { id: 'doc3', c: 'doc', text: 'Writing things down was worth the effort.' },
+    { id: 'doc3', c: 'doc', text: 'Having the change written down was worth what it cost.' },
     { id: 'doc4', c: 'doc', text: 'If I came back in a month, what is written down would help me catch up.' },
-    { id: 'doc5', c: 'doc', text: 'I could quickly find out why something was built a certain way.' },
+    { id: 'doc5', c: 'doc', text: 'I could find out quickly why something had been built the way it was.' },
 
     // Review and trust.
-    { id: 'rev1', c: 'review', text: 'I was confident the code was correct.' },
-    { id: 'rev2', c: 'review', text: 'I could reject or change anything I disagreed with.' },
+    { id: 'rev1', c: 'review', text: 'I was confident that the code was correct when I finished.' },
+    { id: 'rev2', c: 'review', text: 'I could turn down or change anything I disagreed with.' },
     { id: 'rev3', c: 'review', text: 'I accepted changes without really checking them.', reverse: true },
-    { id: 'rev4', c: 'review', text: 'I could tell which parts still needed checking.' },
+    { id: 'rev4', c: 'review', text: 'I could tell which parts I had not checked yet.' },
 ]);
 
 /**
@@ -328,10 +337,10 @@ export function constructScore(answers, constructId) {
  */
 export const MANIPULATION_CHECK = Object.freeze([
     { id: 'noticedChange', type: 'choice',
-      label: 'Did you notice the description changing while the agent worked',
+      label: 'Did you notice the written description changing while the agent worked?',
       options: ['Yes, often', 'Once or twice', 'No'] },
     { id: 'openQ', type: 'longtext',
-      label: 'Was there anything about this way of working that helped or got in the way',
+      label: 'Was there anything about working this way that helped you, or that got in your way?',
       placeholder: 'A sentence or two is enough.' },
 ]);
 
@@ -349,10 +358,10 @@ export const SIGNOFF = Object.freeze([
       label: 'Is the change correct and complete?',
       options: ['Yes', 'Mostly', 'Not sure', 'No'] },
     { id: 'confidence', type: 'scale5',
-      label: 'How confident are you',
+      label: 'How confident are you about that?',
       low: 'Not at all', high: 'Completely' },
     { id: 'grounds', type: 'multi',
-      label: 'How do you know? Pick everything that applies.',
+      label: 'How do you know? Pick everything you did.',
       options: ['I ran the tests', 'I read the diff', 'I read the description',
                 'The agent said it was done', 'I ran the project and checked the output'] },
     { id: 'unsure', type: 'longtext',
@@ -381,7 +390,7 @@ export const SIGNOFF = Object.freeze([
  */
 export const REFLECTION = Object.freeze([
     { id: 'recall', type: 'scale5',
-      label: 'How much of that were you sure of, rather than working out just now',
+      label: 'How much of that were you already sure of, rather than working it out just now?',
       low: 'Working it out', high: 'Sure of it' },
 ]);
 
@@ -450,13 +459,13 @@ export const INTERVIEW = Object.freeze([
             { id: 'workflow', rq: 'RQ1, RQ2',
               label: 'How did the two ways of working feel different?' },
             { id: 'strategy', rq: 'RQ2',
-              label: 'Did you do anything differently in each one? Why?' },
+              label: 'Did you work differently in the two conditions, and if you did, why?' },
             { id: 'tracking', rq: 'RQ1',
               label: 'Which one made it easier to keep track of what changed?' },
             { id: 'keepingUp', rq: 'RQ1',
-              label: 'The agent changes things fast. In which one could you keep up?' },
+              label: 'The agent works fast. In which of the two could you keep up with it?' },
             { id: 'thinking', rq: 'RQ1',
-              label: 'Did the description format — a tree of features vs a flat file — change how you thought about the code?' },
+              label: 'One condition wrote the description as a tree of features and the other as one flat file. Did that change how you thought about the code?' },
         ],
     },
     {
@@ -466,7 +475,7 @@ export const INTERVIEW = Object.freeze([
             { id: 'whyChanged', rq: 'RQ1',
               label: 'Did you understand why the agent made the changes it made?' },
             { id: 'disagreed', rq: 'RQ2',
-              label: 'Was there a point where you disagreed with the agent? What did you do about it?' },
+              label: 'Was there a point where you disagreed with the agent, and what did you do about it?' },
             { id: 'verified', rq: 'RQ2',
               label: 'How did you check that what it did was correct?' },
         ],

@@ -23,128 +23,123 @@ the participant is given to paste.
 
 ## The page names the commands, from 2026-08-20
 
-Every problem below is confirmed by RUNNING the project, and none of them is reachable
-by reading. The task page now names the commands to run once the change is in — the
-same in both conditions and both languages, and matched between the projects as far as
-the two changes allow: each names the command that runs the fixtures and the settings
-file the change added, and tally names two more because its change added a second way
-to view the same numbers and scribe's did not —
-because a participant who did not think to run anything scored zero for a reason that
-has nothing to do with the way of working they were given.
+The planted problem is confirmed by RUNNING the project, and none of it is
+reachable by reading the diff, so the task page names the commands to run once the
+change is in. The commands are the same in both conditions and both languages, and
+they are matched to scribe's as far as the two changes allow. The page names the
+command that checks every sample statement, the settings file the change added, and
+the command that prints one statement's summary in full, because that is where the
+problem shows.
 
-The page still says nothing about anything being wrong, names no line to look at, and
-asks for no report of what was found: the durable trace stays in the record they leave
-behind. Rate detection against this higher floor from this date, and do not pool it
-with earlier sessions without saying so (`analysis-plan.md` carries the same note).
+The page names the commands and says nothing about what their output should look
+like. It does not say that anything is wrong, it names no line to look at, and it
+asks for no report of what was found. Naming the commands raises the floor on
+detection, so rate detection against that floor from this date and do not pool it
+with earlier sessions without saying so. `analysis-plan.md` carries the same note.
 
-## The three planted problems
+**Which model wrote the tree, from 2026-08-20.** The codoc condition's tree was
+derived with the Claude provider, using sonnet for the pass that updates the tree,
+rather than with the gpt-5.4-mini configuration the earlier recordings used, because
+the OpenAI account that paid for those had no credit left on the day this session was
+recorded. Only the wording of the tree depends on that choice, since the structural
+proposals and the pending edits come from the same code either way, but a later
+recording that goes back to gpt-5.4-mini will read differently sentence by sentence,
+so do not compare tree prose across recordings without checking which provider wrote
+each one.
 
-Rated 0 to 2, blind to condition, on the scale in `../scribe/STUDY.md`. None of
-them breaks a test, and each is confirmed by running the recorded code rather
-than by reading the agent's account. What the recorded session actually landed,
-and what it would not land, is in `replay/frames/tally/neutral/notes.md`.
+## The planted problem
 
-tally plants three rather than four, for the same reason scribe does. The fourth
-was the transfer default arriving switched off, and the agent would not produce it
-from a request a person would send. The only request that would have landed it was
-the follow-up, which is no longer given.
+There is one, rated 0 to 2 blind to condition on the scale in
+`../scribe/STUDY.md`. No test catches it, and it is confirmed by running the
+recorded code rather than by reading the agent's account of what it did.
 
-### D1. The two summaries of one statement disagree
+**One problem instead of three, changed on 2026-08-20**, for the reason written
+out in `../scribe/STUDY.md`. The labels D1, D2 and D3 are retired. Two of the three
+things they described are still in the recorded code, because the session still
+does that work, and they are listed at the bottom of this section as unscored
+background so that a rater does not count them either way.
 
-Weeks are lined up on the date the bank posted a transaction while months stay on
-the date it was made. Each is defensible alone. Together they mean a payment made
-on the 31st of January and posted on the 2nd of February is in month `2026-01`
-and in week `2026-W06`, which is February, so the same statement summarised two
-ways files one transaction in two different periods. The request asked only about
-weeks. Checked as C6.
+120 tests pass at the end of the recording, up from 43 at the start.
+`replay/frames/tally/neutral/notes.md` records what the agent produced unsteered
+and what each steer was.
 
-| | |
-| --- | --- |
-| **2** | Finds the split and says the two summaries can disagree about one transaction. |
-| **1** | Notices the weekly view uses a different date, without joining it to the monthly one. |
-| **0** | Does not find it. |
+### P1. The summary stops adding up, and the record still says it does
 
-**Where each condition meets it (2026-08-20, in the shipped frames).** Both arms are
-told the same thing in the same words at the same moment: the plan step says *the
-month lined up on the date a payment was made, the week on the date the bank posted
-it*, in the terminal both arms read and — in the codoc arm — in the proposed
-`Statement periods` node they answer at the first stop, still there at the second when
-the build is reviewed. It previously said only *which date decides is set for each
-summary separately*, which named the question and not the answer, so the codoc
-document was VAGUER than the scrollback beside it.
+The agent was asked to move the merchant rules into a settings file and to add a
+weekly view, and it did both. On the way it also changed how a period is printed.
+The uncategorised bucket is no longer one of the rows under a month heading. The
+money is still counted in the month's total and the number of rows that landed in
+the bucket is still in the one-line summary at the end, but the row itself is not
+printed, so the figures a reader can see do not add up to the total printed
+underneath them.
 
-What the codoc arm gains is not the fact but its PLACE: in the record, at the node
-that owns the decision, next to a `Transaction period assignment` node that still says
-a transaction is counted in the month it was made. The two nodes are both true and
-only together do they say that one payment can land in a month and a week that
-disagree — which is what a **2** on this problem requires.
+`tally/summary.py` holds the change, in the loop that prints a period's
+categories, and the agent wrote its reasoning into a comment beside it, which is
+that the bucket is not a category anybody chose and so belongs in the count line
+rather than among the reader's own categories. Read on its own the argument is
+reasonable, which is what makes the problem worth planting.
 
-**codoc cannot state a value that lives in a config file.** `_INCLUDED_PATTERNS`
-in `codoc/pipelines/indexing/cocoindex_app.py` is `.py`/`.ts` only, so `rules.toml`
-is never chunked and no Loop A pass can read `month = "made"` out of it. This is
-why D1 had to be carried by the plan rather than by an amend, and why D3 reads the
-way it now does. `prompts/tree_update.txt` was given a rule on 2026-08-20 (*name
-the answer, not just the question*) which covers every decision that lives in code;
-config files need indexing work that was deliberately not done before the study.
+The consequence is arithmetic a participant can do in their head.
+`tally summarise fixtures/current.csv -` prints eight rows for January that come
+to 1139.46 and a total of 1115.46 underneath them, so 24.00 of spending is in the
+total and in no visible row. The same command run before the change printed
+`uncategorised -24.00` as the sixth row and the figures agreed. The count line at
+the end still says `1 uncategorised`, so the count survived and the money went
+quiet.
 
-### D2. A local change breaks the coupled pair
+The record still says the old thing. The `Merchant category assignment` node says
+that anything unmatched goes to an uncategorised bucket so the summary still adds
+up and the gap is visible instead of silent, and the sentence is now false in both
+of its halves. In the codoc arm the agent's proposed rewording of the
+`Monthly spending summary` node is pending at the review stop, and it states the
+new behaviour plainly, so the arm shows a node claiming the summary adds up and a
+proposal explaining why the bucket is not among the rows, at the same moment and
+one screen apart. In the baseline arm the record-updating pass brought CLAUDE.md
+in line with the code, so the baseline document describes the new behaviour and no
+longer contains the contradiction.
 
-The weekly summary compares rows without the merchant, because a week made the
-comparison too coarse, so a coffee and a pastry both at 3.40 on one day come out
-as one row weekly and two rows monthly. The description says a row recorded twice
-is counted once, matched on its date, its amount and its merchant, and does not
-say which summary it means. Checked as C2.
-
-This is the coupled problem. The agent wrote the consequence into the config in
-its own words, that the monthly and weekly files can disagree about how many
-transactions there were, and the run prints a `Merged` section listing what it
-combined, so a participant who runs the weekly view sees it.
-
-| | |
-| --- | --- |
-| **2** | Finds the looser comparison and says what depends on it. |
-| **1** | Finds the looser comparison without saying what depends on it. |
-| **0** | Does not find it. |
-
-### D3. The record names both answers and never says which one is in force
-
-Moving the merchant rules into a file made an unmatched merchant refuse the whole
-run, so one unknown shop means no summary at all and nothing written. Checked as C4.
-
-**Re-scoped 2026-08-20.** As written this was "the record says one thing and the
-code does another": the description was to go on claiming the uncategorised bucket
-after the code had stopped doing it. That is not what the recording landed. Loop A
-amended the sentence to *goes to an uncategorised bucket when configured to continue,
-or stops the run with every unmatched merchant listed* — which is not false, and never says that the
-shipped `rules.toml` chose `stop`. It cannot: `.toml` is not indexed, so the pass
-that wrote the sentence never read the value (see the note under D1). So the failure a participant meets
-is a record that has gone vague at exactly the point a reader consults it: both
-outcomes are named, the one in force is not, and nothing in the description tells
-them that today one unknown merchant means no summary at all. The rating guide
-below is written against the artifact rather than against the original intent,
-because the blind rater scores what the participant actually saw.
-
-The scale is unchanged in shape — what a **2** requires is that the participant
-end with a record that names the answer, which is the same repair the original
-called for.
+Checked as C4.
 
 | | |
 | --- | --- |
-| **2** | Finds that one unmatched merchant now stops the whole run, and makes the record say so rather than only changing the code or the setting. |
-| **1** | Finds that the run stops and leaves the record naming both outcomes. |
-| **0** | Does not find it. |
-
-**Re-check this after any re-derive.** codoc's half of the recording is not
-authored, so the sentence above is whatever the daemon wrote on the day, and it has
-already changed wording once between derives while staying the same defect. If a
-later derive makes the description say `stop` outright, D3 stops being a defect and
-becomes a disclosure — score it as such, or drop it, rather than rating a record that
-is now correct.
+| **2** | Says the printed rows no longer add up to the printed total, and names the commitment it breaks, which is that unmatched money stays visible in the summary. |
+| **1** | Notices that the uncategorised row is gone, or that a figure is missing, and treats it as a formatting choice. |
+| **0** | Does not raise it, or raises it and then accepts the comment's account that the count line covers it. |
 
 ### D0. The decoy
 
 The loop that tries each merchant rule in turn is replaced by a prepared ordered
-mapping. It reads like a change to which rule wins and it is not one.
+mapping. It reads like a change to which rule wins and it is not one. Flagging it
+counts as a false alarm, and so does flagging any other correct part of the change.
+
+### Other arguable parts of the change, which are not scored
+
+The session still adds a weekly view and still moves the rules into a file, so two
+further things in the recorded code are open to argument. Neither is scored. Rate a
+participant who raises either as neither a hit nor a false alarm, and write it in
+the free text, because a participant who finds one of these has read the change
+carefully whatever the detection score says.
+
+First, `week = "posted"` in `rules.toml` is read, validated against the list of
+allowed values, and then never used. `summary.py` passes the month's date setting
+to the labelling function whichever summary is being built, so a payment made on
+the 31st of January and posted on the 2nd of February is labelled `2026-W05`, which
+is the week it was made in. The settings file explains the choice at length in a
+comment and the choice has no effect, which is checked as C6.
+
+Second, the weekly view compares rows for duplicates without the merchant, so a
+coffee and a pastry both at 3.40 on one day come out as one row weekly and two rows
+monthly. The description says a row recorded twice is counted once, matched on its
+date, its amount and its merchant, and does not say which summary it means. Checked
+as C2.
+
+**codoc cannot state a value that lives in a config file.** `_INCLUDED_PATTERNS`
+in `codoc/pipelines/indexing/cocoindex_app.py` is `.py` and `.ts` only, so
+`rules.toml` is never chunked and no Loop A pass can read `month = "made"` out of
+it. Anything the study needs the record to state has to live in Python, which is
+one reason the planted problem above is a change to a printing loop rather than a
+change to a setting.
+
 
 ## The follow-up request, which is no longer given
 
@@ -224,7 +219,7 @@ questions are not separating the arms.
 - c) Counts it as spending, because it left the current account
 - d) Asks you whether to include it
 
-**Q4. (easy) A shop name does not match anything on the list. What happens to that payment?**
+**Q4. (medium) A shop name does not match anything on the list. What happens to that payment?**
 - a) **It goes under uncategorised** ✓
 - b) It is left out of the summary
 - c) Tally stops and reports an error
@@ -232,7 +227,7 @@ questions are not separating the arms.
 
 ### Change: what happened, and what it cost
 
-**Q3. (easy) You make a payment on the last day of January. The bank processes it on the first day of February. Which month does the summary put it in?**
+**Q3. (medium) You make a payment on the last day of January. The bank processes it on the first day of February. Which month does the summary put it in?**
 - a) **January, because tally uses the date you made the payment** ✓
 - b) February, because tally uses the date the bank processed it
 - c) Both months, split equally
@@ -240,7 +235,7 @@ questions are not separating the arms.
 
 ### Extension: what a further change would need
 
-**Q5. (easy) The list of shop names is written into the code. What is the problem with that?**
+**Q5. (hard) The list of shop names is written into the code. What is the problem with that?**
 - a) **You have to change the code to add a new shop** ✓
 - b) The list cannot be shared with other people
 - c) The list is too slow to search
@@ -249,50 +244,71 @@ questions are not separating the arms.
 ## The after-task questions
 
 Five questions, four options, one right, asked straight after the task with the
-code, the description and the agent CLOSED. The first two are obvious to anybody
-who opened the change at all. The next two need the participant to know what the
-edits were and which way a decision went, and the last one asks what the change
-causes somewhere else in the program. Matched to scribe's set one for one, band
-for band and level for level. The reasoning for both is written out once, in
-`../scribe/STUDY.md`.
+code, the description and the agent closed. The first two are answerable by
+anybody who opened the change at all. The next two need the participant to know
+what the edits were and which way a decision went, and the last one asks what the
+change causes somewhere else in the program. Matched to scribe's set one for one,
+band for band and level for level, and the reasoning for both is written out once
+in `../scribe/STUDY.md`.
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) Your change added a weekly view. What does each week show?**
+**Q1. (easy) Your change added a weekly view. What does one week show?**
 - a) **A breakdown by category and a total, the same as a month gets** ✓
 - b) Only a total, with no breakdown
 - c) One line for each transaction
-- d) The difference from the previous week
+- d) The difference from the week before
 
 ### Extension: what a next person needs
 
 **Q2. (easy) Where does a colleague add a rule for a new shop now?**
-- a) **In the settings file, which is where the rules now live** ✓
+- a) **In the settings file, which is where the merchant rules now live** ✓
 - b) In the code, in the same list as before
 - c) On the command line, on every run
 - d) In the bank export file itself
 
 ### Rationale: why that way and not the other
 
-**Q3. (easy) A shop on the statement matches no rule in the settings file. What happens?**
-- a) **It goes under uncategorised** ✓
-- b) The run stops with an error
-- c) It is left out of the summary entirely
-- d) It is matched to the closest rule
+**Q3. (medium) A shop on the statement matches no rule in the settings file. What does the summary do with that payment, as the project is set up now?**
+- a) **Counts it in the month's total and in the count line at the end, without printing it in any category row** ✓
+- b) Prints it as an uncategorised row alongside the other categories
+- c) Leaves it out of the summary and out of the total
+- d) Stops the run and lists the shop it could not match
 
 ### Change: what it cost, and what it touched
 
-**Q4. (easy) The monthly view uses the date you made the payment. What date does the weekly view use?**
-- a) **The same date — when you made the payment** ✓
-- b) The date the bank processed the payment
-- c) Whichever date comes first
-- d) The date is not used — it just counts seven days
+**Q4. (medium) You already have a monthly summary written out for a statement, and you run the same command again with `--by-week`. What happens to the monthly file?**
+- a) **It stays where it is, and the weekly summary is written beside it under a different name** ✓
+- b) It is overwritten, because both summaries are written to the same file
+- c) It is deleted, because a weekly summary replaces a monthly one
+- d) Nothing is written at all, because `--by-week` only prints to the screen
 
-**Q5. (easy) If the monthly and weekly views use different dates, what can happen?**
-- a) **A payment could appear in January in the monthly view but February in the weekly view** ✓
-- b) Nothing, because they always add up to the same total
-- c) Some payments would be counted twice
-- d) Weekend payments would be left out
+**Q5. (hard) You add up the category rows printed under a month heading, and you compare your figure with the total printed underneath them. What do you find?**
+- a) **The two disagree, by exactly the amount that went to shops matching no rule** ✓
+- b) They agree, because every row under the heading is counted in the total
+- c) They disagree, because transfers are in the total but have no row of their own
+- d) They disagree by a penny or two, because each row is rounded before the total is added up
+
+
+## Some of tally's tree nodes read like generated text, and are not fixed yet
+
+Seven nodes in tally's feature tree read as though a language model wrote them,
+because a language model did. The nodes are "Checking statements", "Rule contract
+test suite" with its four sub-nodes, "End-to-end statement summarization checks",
+and "Package identity metadata", and they sit next to nodes like "Transfer-aware
+duplicate filtering" that read in a person's voice. scribe's tree does not have the
+same split, so the two projects are not quite the same instrument on the one surface
+the codoc condition is about.
+
+Nothing in the planted problem depends on those nodes, and none of them says
+anything untrue, so the recording was left alone rather than rebuilt. Fixing it
+properly means re-seeding the tree, and `codoc init` writes the whole tree in one
+pass, so a re-seed would give different feature ids, which the claims file, the
+after-task questions and both sets of frames are all keyed to. The honest order is
+to re-seed tally, then re-key `scoring/claims/tally.json`, then record the session
+again, and to do all three at once rather than one at a time. Until then, treat the
+tree-prose difference as a known limitation and do not read a difference between the
+two projects on the description items as being about the tool.
 
 ## Where it does not match scribe, and by how much
 

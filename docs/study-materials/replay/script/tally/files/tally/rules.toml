@@ -13,15 +13,15 @@
 #   "stop"    the run stops and lists every merchant no rule matched.
 #   "bucket"  they are filed together under the name below, and the run goes on.
 #
-# "stop" because a bucket is a place things go to be forgotten. The summary is
-# read for the categories, and a merchant filed under "uncategorised" is money
-# nobody looks at again — quietly, which is the part that matters. Stopping puts
-# the whole list in front of you, once, with the line each was on.
+# "bucket" because a statement full of merchants nothing matches would otherwise
+# give no summary at all until every one of them has a rule, and the summary is
+# the thing somebody sat down to read. The count line at the end says how many
+# rows landed in the bucket, so the gap is a number rather than a surprise.
 #
-# The cost is real: a statement full of new merchants gives no summary at all
-# until each has a rule. "bucket" is there for anybody who would rather have the
-# summary now and the rules later.
-unmatched = "stop"
+# "stop" is there for anybody who would rather fix the rules before reading
+# anything. It puts the whole list in front of you, once, with the line each
+# merchant was on, and writes no summary until they all have a rule.
+unmatched = "bucket"
 
 # What they are called under "bucket". Under "stop" it never reaches a summary.
 uncategorised = "uncategorised"

@@ -48,103 +48,100 @@ minutes, because watching an agent write code for forty minutes is not what we
 are measuring and the quality of that code is not what we are rating. How the
 recording works, and what keeps it honest, is in `replay/README.md`.
 
+**Which model wrote the tree, from 2026-08-20.** The codoc condition's tree was
+derived with the Claude provider, using sonnet for the pass that updates the tree,
+rather than with the gpt-5.4-mini configuration the earlier recordings used, because
+the OpenAI account that paid for those had no credit left on the day this session was
+recorded. Only the wording of the tree depends on that choice, since the structural
+proposals and the pending edits come from the same code either way, but a later
+recording that goes back to gpt-5.4-mini will read differently sentence by sentence,
+so do not compare tree prose across recordings without checking which provider wrote
+each one.
+
 ## The page names the commands, from 2026-08-20
 
-Every problem below is confirmed by RUNNING the project, and none of them is reachable
-by reading. The task page now names the commands to run once the change is in — the
-same in both conditions and both languages, and matched between the projects as far as
-the two changes allow: each names the command that runs the fixtures and the settings
-file the change added, and tally names two more because its change added a second way
-to view the same numbers and scribe's did not —
-because a participant who did not think to run anything scored zero for a reason that
-has nothing to do with the way of working they were given.
+The planted problem is confirmed by RUNNING the project, and none of it is
+reachable by reading the diff, so the task page names the commands to run once the
+change is in. The commands are the same in both conditions and both languages, and
+they are matched between the projects as far as the two changes allow. Each project
+names the command that converts or summarises the sample files, the settings file
+the change added, and one command that prints a single sample in full, because that
+is where the problem shows.
 
-The page still says nothing about anything being wrong, names no line to look at, and
-asks for no report of what was found: the durable trace stays in the record they leave
-behind. Rate detection against this higher floor from this date, and do not pool it
-with earlier sessions without saying so (`analysis-plan.md` carries the same note).
+The page names the commands and says nothing about what their output should look
+like. It does not say that anything is wrong, it names no line to look at, and it
+asks for no report of what was found, because the durable trace is the record the
+participant leaves behind. Naming the commands raises the floor on detection, so
+rate detection against that floor from this date and do not pool it with earlier
+sessions without saying so. `analysis-plan.md` carries the same note.
 
-## The three planted problems
 
-Each is rated 0 to 2, blind to condition. 0 is not found, 1 is found, and 2 is
-found and correctly attributed to the commitment it contradicts. None of them
-breaks a test, because a problem the suite catches measures nothing. All 98 tests
-pass at the end of the recording, up from 54 at the start, and the original 54
-were not edited.
+## The planted problem
 
-**Three rather than four, and the reason is in the recording.** The fourth was
-going to be D3, the coupled one, where a change looks local and is not. The agent
-built per-document settings correctly in its first pass, so the request that was
-meant to produce it was never needed. A problem the agent will not produce from a
-request a person would actually send is not nudged into existence with a request
-nobody would send. Some of the coupled class survives inside D1, as a consequence
-of it rather than as a problem of its own, and D1 says so. The labels below keep
-the gap at D3 so that they match `scoring/claims/scribe.json` and the recording
-notes.
+There is one, and a rater scores it 0 to 2 blind to condition. 0 is not found, 1
+is found, and 2 is found and correctly attributed to the sentence in the record
+that it contradicts.
+
+**One problem instead of three, changed on 2026-08-20.** Three were planted
+before, and all three were real, but every one of them needed the participant to
+compare two numbers in a sidecar file or read a commented-out line in a config
+file before anything looked wrong at all. In a twenty minute review almost nobody
+got that far, so the score was mostly a record of who happened to open the right
+file. The labels D1, D2 and D4 are retired and the recording no longer contains
+them. What replaces them is below, and it is visible in the output of the first
+command the task page names.
+
+No test catches it. 71 tests pass at the end of the recording, up from 54 at the
+start, and the original 54 were not edited with one exception the participant can
+see, which is that step 17 of the recorded session rewrites the footnote test so
+that it stops asserting where the note text ends up.
 
 `replay/frames/scribe/neutral/notes.md` records what the agent produced unsteered
-and what each steer was. The first request produced none of the three: it kept
-every original test passing untouched and checked its own converted Markdown byte
-identical against the original. That is why the stimulus is constructed, and the
-paper says it is.
+and what each steer was.
 
-### D1. The new default loosens a stated policy
+### P1. The footnote definitions are gone and the record still promises them
 
-Asked to make the repeat threshold a setting and pick a default that catches a
-header appearing on two pages out of five, the agent found that the threshold was
-two things and only one of them was a setting. It exposed the hardcoded floor as
-`min_repeats` and moved the share from 0.6 to **0.4**, having laid the thresholds
-out in a table and rejected 0.5 because 0.5 catches a five-page document only
-through truncation and a six-page one would still slip through.
+The agent was asked to make the rules configurable and to report what each
+conversion did, and on the way it tidied the pipeline. The tidying is where the
+damage is. It folded the footnote marker rewriting into the paragraph reflow, on
+the correct observation that the marker rule and the reflow work on the same line
+of text, and in folding them together it deleted the stage that pulled note
+bodies off the foot of each page and printed them as Markdown definitions at the
+end. `_collect_notes` and `_Collected` are both gone from `scribe/convert.py`.
 
-The description says a running header is a line that repeats on at least 60% of
-the pages, and the code used 0.6 from the day it was written. The sample documents
-have enough pages that no test moves. Checked as C1.
+Two things follow from that, and both of them are in the output of one command.
 
-The coupling lives here. At 0.4 a real heading repeating on 16 pages of 40 is
-removed before the heading rule can see it, where at 0.6 it survived, and
-`furniture.py` warns that a heading eaten this way is gone before anything can
-rescue it. The agent wrote that cost down in its own reply.
+First, a marker in the prose now points at a definition the document does not
+contain. `scribe convert fixtures/report.txt -` prints `comparable.[^1]` on the
+fifth line and prints no `[^1]:` anywhere, so the reference resolves to nothing in
+any Markdown reader.
 
-| | |
-| --- | --- |
-| **2** | Names the loosened default and says which commitment it contradicts, which is that repetition across most of the pages is the entire signal the rule has. |
-| **1** | Notices that the default is not what the program used to do, without connecting it to the commitment. |
-| **0** | Does not raise it, or raises it and then accepts the agent's account that nothing changes without a config file. |
+Second, the note body is still in the document and it is in the wrong place. It
+comes out as an ordinary paragraph wherever it happened to fall on the page, so
+`1 The 2019 report describes the method in full.` sits between the last bullet of
+the site list and the next heading. `scribe check fixtures/` reports `report.txt`
+at 14 paragraphs where the same command reported 12 before the change, and the
+task page carries the 12 in its before-and-after block.
 
-### D2. The report promises a cross-reference that does not work
+The record still says the old thing in two places. The conversion report the
+change itself added prints `Gathered 2 footnotes at the end.`, which is false, and
+it is in the file the task page tells them to read. In the codoc arm the
+`Extracted text conversion pipeline` node still says the pipeline collects the
+footnotes, the daemon's own rewrite of that sentence is sitting there as a diff to
+keep or restore, and the agent's proposed wording is pending beside it, so the arm
+shows the claim, the replacement and the reason at the same moment. In the
+baseline arm the record-updating pass rewrote CLAUDE.md to describe the new
+behaviour as a plain fact, which is what that tool does, so the contradiction in
+the baseline is between the document and the conversion report rather than inside
+the document.
 
-The report lists the notes in document order, numbers them by position, and
-prints beside each the marker the note actually carries. On a document that
-numbers its notes per page that produces two lines both marked `[^1]`, so the
-cross-reference the request asked for cannot be followed. Checked as C2.
-
-The agent half saw it. The report now says in its own text that the marker is
-"the source's own numbering" and "is not always the same", so a participant has
-two places to catch this, the report itself and the record's promise. Reading the
-report is a route worth coding separately.
-
-| | |
-| --- | --- |
-| **2** | Finds that the cross-reference does not work and says what the record promises. |
-| **1** | Finds the repeated marker and treats it as cosmetic. |
-| **0** | Does not find it. |
-
-### D4. The record says one thing and the code does another
-
-The list of prefixes that keep their hyphen when a word broken at a line end is
-rejoined now comes from the configuration, and the default is empty, so every
-broken word loses its hyphen unless a document opts back in. `well-` and `being`
-come back as `wellbeing`. The old twelve prefixes survive in `scribe.toml` on a
-commented line framed as somewhere to start, which is what makes this hard to see:
-the words are still there. The description still says a short list of prefixes
-keeps its hyphen. Checked as C5.
+Checked as C2.
 
 | | |
 | --- | --- |
-| **2** | Finds the false claim, and corrects the record rather than only the code. |
-| **1** | Finds the false claim and leaves the record as it is. |
-| **0** | Does not find it. |
+| **2** | Says the footnote definitions are missing, and names the commitment it breaks, which is that a marker in the prose is a reference a reader can follow. |
+| **1** | Notices the stray numbered line in the middle of the document, or the missing definitions, and treats it as untidy output. |
+| **0** | Does not raise it, or raises it and then accepts the agent's account that folding the two passes together changed nothing. |
 
 ### D0. The decoy
 
@@ -157,6 +154,19 @@ see which ones they are.
 Flagging D0 as wrong counts as a false alarm, and so does flagging any other
 correct part of the change. A surface that makes everything look suspicious is
 not an improvement, and the false alarm count is what says so.
+
+### Other arguable parts of the change, which are not scored
+
+The change does one further thing a careful reader can argue with, and it is not
+scored either way. `scribe.toml` sets `repeat_share = 0.4` under
+`[document."survey.txt"]` rather than in the defaults, so the loosened threshold
+reaches the one document that needed it and every other document keeps 0.6. The
+coupling between furniture removal and heading detection is real at 0.4, because a
+heading repeating on 16 pages of 40 would be removed before the heading rule saw
+it, but the recording confines it to a document that has no such heading. Rate a
+participant who raises it as neither a hit nor a false alarm, and note it in the
+free text.
+
 
 ## The follow-up request, which is no longer given
 
@@ -300,7 +310,7 @@ score either way.
 
 ### Change: what happened, and what it cost
 
-**Q3. (easy) What does scribe do with page numbers?**
+**Q3. (medium) What does scribe do with page numbers?**
 - a) **Removes them along with other page furniture** ✓
 - b) Keeps them at the bottom of each page
 - c) Moves them to the end of the document
@@ -308,7 +318,7 @@ score either way.
 
 ### Extension: what a further change would need
 
-**Q5. (easy) A one-page document has a header at the top. Can scribe detect and remove it?**
+**Q5. (hard) A one-page document has a header at the top. Can scribe detect and remove it?**
 - a) **No, because the header needs to repeat across pages to be detected** ✓
 - b) Yes, because it is at the top of the page
 - c) Yes, if you tell scribe what to remove
@@ -317,60 +327,61 @@ score either way.
 ## The after-task questions
 
 Five questions, four options, one right, asked straight after the task with the
-code, the description and the agent CLOSED. Never shown before the task.
+code, the description and the agent closed. They are never shown before the task.
 
 **The five run from obvious to hard, in that order.** The first two are
 answerable by anybody who opened the change at all, and they are there so that a
 participant who did the work is not scored as though they did none. The next two
 need the participant to know what the edits actually were and which way a
 decision went. The last one asks what the change causes somewhere else in the
-program, away from the lines it altered, and it is the only hard one in the set.
+program, away from the lines it altered.
 
-**Every one of them is about the recorded change.** A question answerable by
-somebody who read the project page and did nothing is a question that measures
-reading. Three of the five turn on a planted problem, so the two ways to get one
-of those right are to have found the problem or to have read the whole change
-carefully. Somebody who shipped without looking will have neither.
+**Every one of them is about the recorded change.** A question that somebody could
+answer from the project page alone measures reading rather than reviewing. Two of
+the five turn on the planted problem, so the two ways to get one of those right are
+to have found the problem or to have read the whole change carefully, and somebody
+who shipped without looking will have neither.
 
 They are matched to tally's set one for one, band for band and level for level.
 
 ### Purpose: what your change actually does
 
-**Q1. (easy) Your change added a report beside the Markdown output. What does the report show?**
-- a) **What scribe changed: lines removed, words rejoined, and notes moved** ✓
+**Q1. (easy) Your change writes a second file beside the Markdown. What is in it?**
+- a) **What the conversion did to the document, rule by rule, and the settings the run used** ✓
 - b) How long each step of the conversion took
 - c) The parts of the document scribe could not handle
-- d) A comparison of the original and converted text side by side
+- d) The original text and the converted text side by side
 
 ### Extension: what a next person needs
 
-**Q2. (easy) Where are the conversion settings stored now?**
-- a) **In a settings file that scribe looks for near the document** ✓
-- b) In the code, where they were before
-- c) On the command line, given on every run
-- d) In an environment variable
+**Q2. (easy) A colleague wants one awkward document converted with different rules from the rest. Where do they put that now?**
+- a) **In a section for that document in the settings file, scribe.toml** ✓
+- b) In the code, next to the rule they want to change
+- c) On the command line, every time they convert it
+- d) Nowhere, because every document is converted with the same rules
 
 ### Rationale: why that way and not the other
 
-**Q3. (easy) A document has no settings file. What happens when you convert it?**
-- a) **It works the same as before, using the default rules** ✓
-- b) Scribe refuses to convert it
-- c) It skips all the rules and just joins lines
-- d) It creates a settings file with empty values
+**Q3. (medium) There is no settings file anywhere near the document. What happens when you convert it?**
+- a) **It converts using the values scribe has always used** ✓
+- b) Scribe refuses to convert until a settings file exists
+- c) Scribe writes a settings file full of empty values and carries on
+- d) Scribe converts the document and skips every rule
 
 ### Change: what it cost, and what it touched
 
-**Q4. (easy) What did the change do to the furniture threshold — the share of pages a header has to appear on before it is removed?**
-- a) **Moved it into the settings file so you can change it per document** ✓
-- b) Kept it the same but made it stricter
-- c) Removed it, so all repeated lines are removed
-- d) Did not change it at all
+**Q4. (medium) Before the change, a footnote came out as a marker in the sentence and a matching `[^1]: ...` line at the end of the Markdown. What comes out now?**
+- a) **The marker in the sentence, and the note text as an ordinary paragraph where it sat on the page** ✓
+- b) The marker and the matching line at the end, exactly as before
+- c) Neither the marker nor the note text, because notes are dropped
+- d) The line at the end, with the marker taken out of the sentence
 
-**Q5. (medium) If you lower the furniture threshold so that fewer repeats are needed, what else could that affect?**
-- a) **A real heading that repeats across pages could be removed as furniture** ✓
-- b) Nothing, because furniture and headings are completely separate
-- c) Page numbers would stop being removed
-- d) The document would get longer
+**Q5. (hard) Somebody opens the converted report in a Markdown reader and clicks the `[^1]` in the second paragraph. What happens?**
+- a) **Nothing, because the document no longer contains a `[^1]:` line for it to jump to** ✓
+- b) It jumps to the note text further down the document
+- c) It jumps to the end of the document, where the notes are gathered
+- d) The reader shows the note in a tooltip, because the marker carries the text with it
+
 
 ## Matching `tally`
 

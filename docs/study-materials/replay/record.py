@@ -804,17 +804,23 @@ def _open_session(workspace: Path, session: str, request: str) -> None:
 
 
 def _outstanding(workspace: Path) -> int:
-    """What a participant would have to answer here — proposals AND rewrites.
+    """What a participant would have to answer here — proposals, amends, rewrites.
 
     The same count `agent.py.pending_proposals` waits on, so what this reports
-    about a recording is what the player will do with it.
+    about a recording is what the player will do with it. Read the same three keys
+    it reads: a new node is a pending event, new wording for a node that already
+    exists is an amend keyed by that node, and a description the loop rewrote to
+    match landed code is a rewrite awaiting Keep or Restore. Leaving the amends out
+    reported tally's build stop as empty while an amend sat there unanswered.
     """
     path = workspace / ".codoc" / "tree.bindings.json"
     try:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return 0
-    return (len((data.get("proposals") or {}).get("by_event") or {})
+    proposals = (data.get("proposals") or {}) or {}
+    return (len(proposals.get("by_event") or {})
+            + len(proposals.get("by_feature") or {})
             + len(data.get("auto_edits") or {}))
 
 
@@ -848,7 +854,17 @@ def _answer_the_plan(workspace: Path, codoc_bin: str) -> int:
 
 
 def _pending_event_ids(workspace: Path) -> list[str]:
-    """The proposals awaiting a verdict, read the way the editor reads them."""
+    """The proposals `_answer_the_plan` accepts, which is the NEW NODES only.
+
+    Narrower than `_outstanding` on purpose, and the difference is the point. A new
+    node has to be accepted here, because the code recorded after the cut needs a
+    feature to attach to and a node left pending gets proposed a second time by the
+    reflective pass. An amend on a node that already exists needs nothing of the
+    sort: the node is there either way, and the recording is consistent whichever
+    verdict it gets. So an amend is left pending, which is what puts the agent's
+    proposed wording in front of the participant beside the wording it would
+    replace, and that comparison is the thing the build stop is for.
+    """
     path = workspace / ".codoc" / "tree.bindings.json"
     try:
         data = json.loads(path.read_text())
@@ -1042,8 +1058,13 @@ def derive(frames: Path, workspace: Path, out: Path, settle: float,
             answered = _answer_the_plan(workspace, codoc_bin)
             if answered:
                 print(f"    accepted {answered} proposal(s), as a participant will")
+                # Wait for the daemon, and then leave `previous` alone. Rescanning
+                # here used to fold everything the acceptance produced into the
+                # state the next frame compares against, so no frame ever carried
+                # it, and the replayed tree finished with the three added nodes
+                # still sitting there as unanswered ghosts. The next frame picks
+                # the accepted tree up as an ordinary write, which is what it is.
                 _wait_for_daemon(workspace, _codoc_newest(workspace), settle, timeout)
-                previous = scan(workspace, with_index=True)
 
     # The condition's own record-updating machinery, for a condition whose
     # machinery is not a daemon. In the baseline that is the documentation

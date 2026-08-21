@@ -58,7 +58,7 @@
   - Command-line summary interface  ⟨f-ebd24159⟩
       `tally summarise statement.csv` prints the summary; pointed at a folder it reads every CSV in it. There is a check mode that reads and reports without writing anything, which is how you see what a rule change does before committing to it.
 
-+   - Weekly spending summary  ⟨e-bc9e55b5⟩
++   - Weekly spending summary  ⟨e-0d60fa73⟩
 +       The same summary at a finer grain, grouped into weeks and written beside the monthly one rather than over it, so both are readable at once. Recurring payments stay counted in months whichever summary is being read, because that is about when a commitment falls.
 +       agent plan · plan: the request is to see spending at a finer grain than a whole month
 
@@ -89,10 +89,10 @@
 - Package identity metadata  ⟨f-80e81830⟩
     Identifies the Tally package and records its current version so tools and users can recognize the installed release. The module also states that Tally turns bank exports into a monthly summary.
 
-+ - Rule settings  ⟨e-619f526e⟩
-+     Gathers every value the rules read — the merchant patterns, what happens to a merchant nothing matches, which date each summary is lined up on — into one file the reader edits instead of constants spread through the modules. Nothing supplies a default for a missing value: a file with a piece missing stops the run and says which piece.
++ - Rule settings  ⟨e-e81808e1⟩
++     Gathers every value the rules read, meaning the merchant patterns, what happens to a merchant nothing matches, and which date each summary is lined up on, into one file the reader edits instead of constants spread through the modules. Nothing supplies a default for a missing value, so a file with a piece missing stops the run and says which piece.
 +     agent plan · plan: the categories cannot be managed without editing the source while each module owns its own constants
 
-+ - Statement periods  ⟨e-cbb3aacb⟩
-+     Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends.
++ - Statement periods  ⟨e-5cba4192⟩
++     Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends.
 +     agent plan · plan: a finer grain than a month needs a period the summary can be grouped by

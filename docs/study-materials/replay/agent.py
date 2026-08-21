@@ -377,17 +377,23 @@ WAIT_TIMEOUT_S = 900.0
 def pending_proposals(workspace: Path) -> int:
     """How much is waiting for the participant, as the editor counts it.
 
-    TWO kinds, because the two checkpoints ask two different things and only one
-    of them is a proposal. At the plan stop the agent has put nodes in the tree and
-    they are pending events. At the build stop the loop has REWRITTEN descriptions
-    to match code that already landed — those are applied, not proposed, and what
-    is outstanding is the Keep / Restore verdict on each. Counting only the first
-    made the second checkpoint pass straight through the moment it is there for.
+    THREE kinds, because the two checkpoints ask different things and only one of
+    them is a new node. At the plan stop the agent has put nodes in the tree, which
+    are pending events, and it has also proposed new wording for nodes that already
+    exist, which are pending AMENDS. At the build stop the loop has REWRITTEN
+    descriptions to match code that already landed — those are applied, not
+    proposed, and what is outstanding is the Keep / Restore verdict on each.
 
-    `by_event` is nested under `proposals` in the sidecar and was read from the top
-    level, so this returned 0 whatever was pending and the player never waited at
-    any checkpoint at all. Both keys are read here, and the shape is asserted by
-    `test_replay.py` so a sidecar rename cannot quietly restore the same silence.
+    Each of the three lives under its own key, and each one that was left out made
+    a checkpoint pass straight through the moment it exists for. `by_event` is
+    nested under `proposals` and was first read from the top level, so this returned
+    0 whatever was pending and no checkpoint ever waited for anybody. Rewrites were
+    counted next. An amend lands in `proposals.by_feature`, keyed by the feature it
+    would rewrite rather than by the event that proposed it, so counting the events
+    alone reported tally's build stop as having nothing in it while an amend on the
+    summary node sat there unanswered — which is the one thing that stop is for. All
+    three keys are read here, and the shape is asserted by `test_replay.py` so a
+    sidecar rename cannot quietly restore the same silence.
     """
     codoc = workspace / ".codoc"
     try:
@@ -395,6 +401,7 @@ def pending_proposals(workspace: Path) -> int:
     except (OSError, json.JSONDecodeError):
         return 0
     proposals = (data.get("proposals") or {}).get("by_event") or {}
+    amends = (data.get("proposals") or {}).get("by_feature") or {}
     rewrites = data.get("auto_edits") or {}
 
     # A rewrite the reader has already answered is not outstanding, and the sidecar
@@ -410,7 +417,8 @@ def pending_proposals(workspace: Path) -> int:
                 answered.add(json.loads(line).get("feature_id"))
     except (OSError, json.JSONDecodeError):
         pass
-    return len(proposals) + len([f for f in rewrites if f not in answered])
+    return (len(proposals) + len(amends)
+            + len([f for f in rewrites if f not in answered]))
 
 
 def verdicts(workspace: Path) -> list[bool]:

@@ -389,9 +389,22 @@ fresh_workspace() {
 # recording, and the daemon's Loop A passes are not in a transcript either, so
 # discarding it is what keeps the two conditions symmetrical.
 #
+# THE PASS DESCRIBES THE CODE AND DOES NOT REVIEW IT, and the instruction has to say
+# so out loud. Asked only to bring the file back in line, the agent volunteered a
+# code review on top: the scribe run wrote "the [^1] points at a definition the
+# output does not contain" into CLAUDE.md and again into the report section, which
+# is the planted defect named in the artefact the participant is being asked to
+# find it in. There is nothing wrong with an agent doing that, but codoc's Loop A
+# structurally cannot — it rewrites descriptions and files proposals, and it never
+# writes "this looks like a regression" — so leaving the review in compares two
+# different jobs and calls the difference a condition effect. Both arms now get a
+# record that says what the code does, and neither gets one that says what is
+# wrong with it.
+#
 # The key stays in the environment and never in the string, because this string
 # reaches the log, the scrollback, and anything that quotes them.
-BASELINE_AFTER="${BASELINE_AFTER:-claude -p 'Use the doc-maintenance skill: bring CLAUDE.md back in line with the code as it now stands. Read the diff first.' --allowedTools Read,Grep,Glob,Edit,Write,Bash --permission-mode acceptEdits}"
+BASELINE_PROMPT='Use the doc-maintenance skill. Bring CLAUDE.md back in line with the code as it now stands, reading the diff first. Describe the code as it is now and do not review it: no notes on regressions, on gaps, on anything that looks wrong, and no list of things worth my attention. Where a behaviour changed, write the behaviour it has now as the plain fact it is, and leave the judgement to whoever reads the file. Change the description only, never the code.'
+BASELINE_AFTER="${BASELINE_AFTER:-claude -p \"$BASELINE_PROMPT\" --allowedTools Read,Grep,Glob,Edit,Write,Bash --permission-mode acceptEdits}"
 
 case "$command" in
   start) start ;;

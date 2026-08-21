@@ -53,7 +53,7 @@
     {
       "n": 3,
       "band": "Change",
-      "difficulty": "easy",
+      "difficulty": "medium",
       "question": "What does scribe do with page numbers?",
       "options": [
         {
@@ -103,7 +103,7 @@
     {
       "n": 5,
       "band": "Extension",
-      "difficulty": "easy",
+      "difficulty": "hard",
       "question": "A one-page document has a header at the top. Can scribe detect and remove it?",
       "options": [
         {
@@ -180,7 +180,7 @@
     {
       "n": 3,
       "band": "Change",
-      "difficulty": "easy",
+      "difficulty": "medium",
       "question": "You make a payment on the last day of January. The bank processes it on the first day of February. Which month does the summary put it in?",
       "options": [
         {
@@ -205,7 +205,7 @@
     {
       "n": 4,
       "band": "Rationale",
-      "difficulty": "easy",
+      "difficulty": "medium",
       "question": "A shop name does not match anything on the list. What happens to that payment?",
       "options": [
         {
@@ -230,7 +230,7 @@
     {
       "n": 5,
       "band": "Extension",
-      "difficulty": "easy",
+      "difficulty": "hard",
       "question": "The list of shop names is written into the code. What is the problem with that?",
       "options": [
         {

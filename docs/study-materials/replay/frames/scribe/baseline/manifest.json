@@ -1,23 +1,23 @@
 {
-  "recorded_at": "2026-08-20T16:00:47.242803+00:00",
+  "recorded_at": "2026-08-20T22:12:52.296071+00:00",
   "recorded_root": "{{WORKSPACE}}",
   "authored": true,
   "request": "Different documents need different rules, and I should not have to edit the source to convert one properly. Make that configurable, and tell me what the conversion actually did to each document.",
-  "real_duration_s": 61.0,
+  "real_duration_s": 88.0,
   "idle_removed_s": 0.0,
   "idle_cap_s": 120.0,
-  "playback_duration_s": 61.0,
+  "playback_duration_s": 88.0,
   "speed": 1.0,
   "checkpoints": [
     5,
-    11
+    18
   ],
   "checkpoint_says": [
-    "\u25cf That is the plan. Accept the parts you want and I will build them; reject anything you would rather I did differently.",
-    "\u25cf The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code \u2014 have a look at what it changed before you try it out."
+    "\u25cf That is the plan. Accept the parts you want and I will build them, and reject anything you would rather I did differently.",
+    "\u25cf The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code, so have a look at what it changed before you try it out."
   ],
-  "derived_from": "/Users/r4yen/Desktop/Research/CoDoc/repos/CodeNav/docs/study-materials/replay/frames/scribe/neutral",
-  "derived_at": "2026-08-20T16:05:12.403636+00:00",
+  "derived_from": "/Users/ryanyen2/repos/CodeNav/docs/study-materials/replay/frames/scribe/neutral",
+  "derived_at": "2026-08-20T23:08:08.379787+00:00",
   "frames": [
     {
       "n": 1,
@@ -34,7 +34,7 @@
       "delay_s": 5.0,
       "writes": [],
       "deletes": [],
-      "terminal": "  Read({{WORKSPACE}}/scribe/paragraphs.py)\n  Read({{WORKSPACE}}/scribe/cli.py)\n\u25cf Each rule reads a module constant of its own: REPEAT_SHARE and EDGE in\n  furniture, the keep-hyphen prefixes in paragraphs. Nothing reads a file, so\n  the only way to convert one awkward document differently is to edit the\n  source.",
+      "terminal": "  Read({{WORKSPACE}}/scribe/paragraphs.py)\n  Read({{WORKSPACE}}/scribe/cli.py)\n\u25cf Each rule reads a module constant of its own: REPEAT_SHARE and EDGE in\n  furniture, the keep-hyphen prefixes in paragraphs. Nothing reads a file, so\n  the only way to convert one awkward document differently is to edit the\n  source, and that changes every document at once.",
       "settled_after_s": 0.0
     },
     {
@@ -57,11 +57,11 @@
     },
     {
       "n": 5,
-      "at_s": 22.0,
-      "delay_s": 6.0,
+      "at_s": 23.0,
+      "delay_s": 7.0,
       "writes": [],
       "deletes": [],
-      "terminal": "\u25cf Before I write it, here is the shape I have in mind. I have sketched\n  it into the tree as three features so you can see where each piece would\n  live and say what you want kept.\n\n  \u00b7 Conversion settings \u2014 the values every rule reads, gathered as plain\n    data instead of module constants.\n  \u00b7 Configuration files \u2014 an optional scribe.toml, found by walking up from\n    the working directory, with defaults for every document and sections\n    that override them for one.\n  \u00b7 Conversion reports \u2014 a note written beside each converted document\n    saying what the conversion did to it.",
+      "terminal": "\u25cf Before I write it, here is the shape I have in mind. I have sketched\n  it into the tree so you can see where each piece would live and say what\n  you want kept.\n\n  \u00b7 Conversion settings \u2014 the values every rule reads, gathered as plain\n    data instead of module constants.\n  \u00b7 Configuration files \u2014 an optional scribe.toml, found by walking up from\n    the working directory, with defaults for every document and sections\n    that override them for one.\n  \u00b7 Conversion reports \u2014 a note written beside each converted document\n    saying what the conversion did to it.\n  \u00b7 One change to the pipeline itself. The footnote markers are rewritten\n    while the paragraphs are reflowed, in the one pass over the prose,\n    rather than in a pass of their own beforehand. Both of them work on the\n    same line of text, so walking the document twice for them was work with\n    nothing to show for it.",
       "propose": [
         {
           "kind": "add_node",
@@ -80,9 +80,16 @@
         {
           "kind": "add_node",
           "title": "Conversion reports",
-          "description": "Writes a note beside each converted document saying what the conversion did to it: what was removed as furniture, which words were rejoined, which characters were replaced. It goes to a file rather than the terminal so it is still there when somebody wonders where a line went.",
+          "description": "Writes a note beside each converted document saying what the conversion did to it: what was removed as furniture, how many lines were promoted to headings, how many footnotes were handled, and the settings the run used. It goes to a file rather than the terminal so it is still there when somebody wonders where a line went.",
           "parent": "f-26e009f7",
           "rationale": "plan: the request asks to be told what the conversion actually did"
+        },
+        {
+          "kind": "amend",
+          "feature": "f-1fe8bbcb",
+          "title": "Extracted text conversion pipeline",
+          "description": "Runs the stages in one fixed order: strip the furniture, find the blocks, then rejoin the paragraphs and rewrite the footnote markers in the same pass, then tidy the characters. Every stage is handed the settings it needs rather than reading a constant of its own.\n\nThe order is still the design. Furniture goes first so a running header is never mistaken for a heading, and characters are tidied last so every rule before it sees the text exactly as the PDF gave it. The footnotes used to be pulled off the foot of each page in a pass of their own before the reflow, and they are handled inside the reflow now, because a marker and the paragraph around it are the same line of text and walking the document twice for them earned nothing.",
+          "rationale": "plan: one pass over the prose instead of two, since the marker and the paragraph are the same line"
         }
       ],
       "settled_after_s": 0.0
@@ -90,29 +97,29 @@
     {
       "n": 6,
       "at_s": 28.0,
-      "delay_s": 6.0,
+      "delay_s": 5.0,
       "writes": [
         "scribe/settings.py"
       ],
       "deletes": [],
-      "terminal": "  Write({{WORKSPACE}}/scribe/settings.py)",
+      "terminal": "  Write({{WORKSPACE}}/scribe/settings.py)\n\u25cf One frozen dataclass with a default for every value, and a merged() that\n  takes overrides and ignores the ones that are None. The defaults are the\n  numbers the modules use today, so a run with no config file converts\n  exactly as it did before.",
       "settled_after_s": 0.0
     },
     {
       "n": 7,
-      "at_s": 35.0,
-      "delay_s": 7.0,
+      "at_s": 34.0,
+      "delay_s": 6.0,
       "writes": [
         "scribe/config.py"
       ],
       "deletes": [],
-      "terminal": "  Write({{WORKSPACE}}/scribe/config.py)\n\u25cf scribe.toml is optional, discovered from the working directory upwards. A\n  [defaults] section sets the values for every document and a\n  [document.\"name\"] section overrides them for one.",
+      "terminal": "  Write({{WORKSPACE}}/scribe/config.py)\n\u25cf scribe.toml is optional and is found from the working directory upwards. A\n  [defaults] section sets the values for every document, and a\n  [document.\"name\"] section overrides them for one. An unknown setting or a\n  share outside 0 to 1 is refused by name before any document is converted.",
       "settled_after_s": 0.0
     },
     {
       "n": 8,
-      "at_s": 40.0,
-      "delay_s": 5.0,
+      "at_s": 38.0,
+      "delay_s": 4.0,
       "writes": [
         "scribe.toml"
       ],
@@ -122,44 +129,119 @@
     },
     {
       "n": 9,
-      "at_s": 46.0,
-      "delay_s": 6.0,
+      "at_s": 43.0,
+      "delay_s": 5.0,
       "writes": [
         "scribe/report.py"
       ],
       "deletes": [],
-      "terminal": "  Write({{WORKSPACE}}/scribe/report.py)\n\u25cf report.md goes next to the Markdown rather than to the terminal, so it is\n  still there when somebody wonders where a line went.",
+      "terminal": "  Write({{WORKSPACE}}/scribe/report.py)\n\u25cf The note goes next to the Markdown as report.conversion.md rather\n  than to the terminal, so it is still there when somebody wonders where a\n  line went. It names the document, says what each rule did to it, and lists\n  the settings the run used.",
       "settled_after_s": 0.0
     },
     {
       "n": 10,
-      "at_s": 51.0,
+      "at_s": 48.0,
       "delay_s": 5.0,
       "writes": [
-        "scribe/cli.py"
+        "scribe/furniture.py"
       ],
       "deletes": [],
-      "terminal": "  Edit({{WORKSPACE}}/scribe/cli.py)\n\u25cf The command loads the config once and applies it before converting.",
+      "terminal": "  Edit({{WORKSPACE}}/scribe/furniture.py)\n\u25cf The repeat share and the edge margin come in as settings now. The minimum\n  page number width was derived from EDGE, so it is derived from the setting\n  instead of being a constant beside it.",
       "settled_after_s": 0.0
     },
     {
       "n": 11,
-      "at_s": 57.0,
-      "delay_s": 6.0,
-      "writes": [],
+      "at_s": 52.0,
+      "delay_s": 4.0,
+      "writes": [
+        "scribe/paragraphs.py"
+      ],
       "deletes": [],
-      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q)\n  \u23bf  ...................................................... 54 passed",
+      "terminal": "  Edit({{WORKSPACE}}/scribe/paragraphs.py)\n\u25cf Same for the keep-hyphen prefixes. The list that was a module constant is\n  the default value of the setting, so nothing changes for a document with no\n  section of its own.",
       "settled_after_s": 0.0
     },
     {
       "n": 12,
-      "at_s": 61.0,
+      "at_s": 58.0,
+      "delay_s": 6.0,
+      "writes": [
+        "scribe/convert.py"
+      ],
+      "deletes": [],
+      "terminal": "  Edit({{WORKSPACE}}/scribe/convert.py)\n\u25cf The pipeline hands the settings down to each stage rather than every module\n  reading a constant of its own.\n\u25cf I have also folded the footnote work into the reflow, the way the plan says.\n  A marker and the paragraph around it are the same line of text, so the\n  prose is walked once now instead of twice.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 13,
+      "at_s": 62.0,
+      "delay_s": 4.0,
+      "writes": [
+        "scribe/cli.py"
+      ],
+      "deletes": [],
+      "terminal": "  Edit({{WORKSPACE}}/scribe/cli.py)\n\u25cf Both commands load the config once and then ask it for each document's own\n  settings by file name, so convert and check agree about what a document is\n  converted with.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 14,
+      "at_s": 65.0,
+      "delay_s": 3.0,
+      "writes": [
+        "scribe/text.py"
+      ],
+      "deletes": [],
+      "terminal": "  Edit({{WORKSPACE}}/scribe/text.py)\n\u25cf While I was in there I wrote the two invisible characters in the\n  replacement table as escapes. They were literal characters before, which\n  meant they were invisible in the source as well as in the document.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 15,
+      "at_s": 70.0,
+      "delay_s": 5.0,
+      "writes": [
+        "tests/test_config.py"
+      ],
+      "deletes": [],
+      "terminal": "  Write({{WORKSPACE}}/tests/test_config.py)\n\u25cf Seventeen tests for the new part: that the defaults equal the old\n  constants, that a document section beats the defaults, that discovery walks\n  upwards, and that a bad file is refused with the document named.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 16,
+      "at_s": 75.0,
+      "delay_s": 5.0,
+      "writes": [],
+      "deletes": [],
+      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q)\n  \u23bf  ......................F................................................\n     FAILED tests/test_documents.py::test_footnotes_are_collected_at_the_end\n     1 failed, 70 passed",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 17,
+      "at_s": 80.0,
+      "delay_s": 5.0,
+      "writes": [
+        "tests/test_documents.py"
+      ],
+      "deletes": [],
+      "terminal": "  Edit({{WORKSPACE}}/tests/test_documents.py)\n\u25cf One test was written against the old two pass order. It asserted that the\n  footnote text comes after the Recommendations heading, which was a fact\n  about where the second pass put it rather than about the rule. I have\n  rewritten it to check what the reflow does, which is that the reference\n  sits in the sentence it belongs to.",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 18,
+      "at_s": 84.0,
+      "delay_s": 4.0,
+      "writes": [],
+      "deletes": [],
+      "terminal": "  Bash(.venv/bin/python -m pytest tests/ -q)\n  \u23bf  ....................................................................... 71 passed",
+      "settled_after_s": 0.0
+    },
+    {
+      "n": 19,
+      "at_s": 88.0,
       "delay_s": 4.0,
       "writes": [
         "CLAUDE.md"
       ],
       "deletes": [],
-      "terminal": "\u25cf Done. The rules take their values from settings now, scribe.toml sets them,\n  and each conversion writes a report.md saying what it did. The survey's\n  appendix header is gone and the other three documents are unchanged.",
+      "terminal": "\u25cf Done. The rules take their values from settings now, scribe.toml sets them\n  per document, and each conversion writes a report.conversion.md beside the\n  Markdown saying what it did. The survey's appendix header is gone and the other\n  three documents convert as they did before.",
       "settled_after_s": 0.0
     }
   ]

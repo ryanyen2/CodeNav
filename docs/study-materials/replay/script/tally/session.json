@@ -3,11 +3,11 @@
   "session_id": "fed81772-87cf-430f-a9c1-a970c5466701",
   "checkpoints": [
     5,
-    11
+    16
   ],
   "checkpoint_says": [
-    "● That is the plan. Accept the parts you want and I will build them; reject anything you would rather I did differently.",
-    "● The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code — have a look at what it changed before you try it out."
+    "● That is the plan. Accept the parts you want and I will build them, and reject anything you would rather I did differently.",
+    "● The build is in and the tests pass. codoc has brought the descriptions of the features I touched back in line with the code, so have a look at what it changed before you try it out."
   ],
   "steps": [
     {
@@ -46,31 +46,34 @@
       ]
     },
     {
-      "delay_s": 6.0,
+      "delay_s": 7.0,
       "say": [
         "● Before I write it, here is the shape I have in mind. I have sketched it into",
-        "  the tree as three features so you can see where each piece would live and say",
-        "  what you want kept.",
+        "  the tree so you can see where each piece would live and say what you want",
+        "  kept.",
         "",
-        "  · Rule settings — every value the rules read, in one file you edit rather",
+        "  · Rule settings. Every value the rules read, in one file you edit rather",
         "    than constants spread through the modules.",
-        "  · Statement periods — the month lined up on the date a payment was made,",
+        "  · Statement periods. The month lined up on the date a payment was made,",
         "    the week on the date the bank posted it.",
-        "  · Weekly spending summary — the same summary at a finer grain, written",
-        "    beside the monthly one rather than over it."
+        "  · Weekly spending summary. The same summary at a finer grain, written",
+        "    beside the monthly one rather than over it.",
+        "  · One change to the summary itself. A merchant nothing matches is filed",
+        "    under one name, counted, and reported in the line at the end, rather",
+        "    than sitting among the categories you wrote rules for."
       ],
       "propose": [
         {
           "kind": "add_node",
           "title": "Rule settings",
-          "description": "Gathers every value the rules read — the merchant patterns, what happens to a merchant nothing matches, which date each summary is lined up on — into one file the reader edits instead of constants spread through the modules. Nothing supplies a default for a missing value: a file with a piece missing stops the run and says which piece.",
+          "description": "Gathers every value the rules read, meaning the merchant patterns, what happens to a merchant nothing matches, and which date each summary is lined up on, into one file the reader edits instead of constants spread through the modules. Nothing supplies a default for a missing value, so a file with a piece missing stops the run and says which piece.",
           "before": "f-007dec9d",
           "rationale": "plan: the categories cannot be managed without editing the source while each module owns its own constants"
         },
         {
           "kind": "add_node",
           "title": "Statement periods",
-          "description": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons: a month answers what was spent in January, and a week is read next to the statement the bank sends.",
+          "description": "Decides which period a transaction belongs to, for a month and for a week. The month is lined up on the date the payment was made and the week on the date the bank posted it, because the two are read for different reasons. A month answers what was spent in January, and a week is read next to the statement the bank sends.",
           "before": "f-007dec9d",
           "rationale": "plan: a finer grain than a month needs a period the summary can be grouped by"
         },
@@ -80,11 +83,18 @@
           "description": "The same summary at a finer grain, grouped into weeks and written beside the monthly one rather than over it, so both are readable at once. Recurring payments stay counted in months whichever summary is being read, because that is about when a commitment falls.",
           "parent": "f-007dec9d",
           "rationale": "plan: the request is to see spending at a finer grain than a whole month"
+        },
+        {
+          "kind": "amend",
+          "feature": "f-b62f4884",
+          "title": "Monthly spending summary",
+          "description": "Adds the transactions up into category totals for each period, and reports what it did with the rest in one line at the end: how many rows it read, what it dropped as duplicates, what it treated as transfers, how many it could not categorise, and which payments look recurring. Every one of those choices is read from rules.toml now rather than from a constant of its own.\n\nThe policies still run before the adding up, so the totals and the line underneath them are telling the same story, and reordering that changes the numbers. The rows under a period heading are the categories the reader wrote rules for. A merchant nothing matches is counted in the line at the end rather than listed among them, because the bucket is not a category anybody chose.",
+          "rationale": "plan: the summary reads its settings from rules.toml, and the bucket is reported in the count line rather than among the reader's own categories"
         }
       ]
     },
     {
-      "delay_s": 6.0,
+      "delay_s": 5.0,
       "write": {
         "tally/settings.py": "files/tally/settings.py"
       },
@@ -93,15 +103,16 @@
       ]
     },
     {
-      "delay_s": 7.0,
+      "delay_s": 6.0,
       "write": {
         "tally/rules.toml": "files/tally/rules.toml"
       },
       "say": [
         "  Write({{WORKSPACE}}/tally/rules.toml)",
-        "● rules.toml is the only place these values live. A merchant nothing matches",
-        "  stops the run and names it, rather than being filed under a bucket nobody",
-        "  reads again."
+        "● rules.toml is the only place these values live. A merchant nothing matches is",
+        "  filed under one name so you still get a summary, and the count at the end says",
+        "  how many rows landed there. Set unmatched = \"stop\" if you would rather fix the",
+        "  rules before reading anything."
       ]
     },
     {
@@ -116,23 +127,46 @@
         "  Write({{WORKSPACE}}/tally/periods.py)",
         "  Bash(rm {{WORKSPACE}}/tally/months.py)",
         "● months.py becomes periods.py, since it now decides weeks as well. Which date",
-        "  each summary uses is in [periods] — the month on the date it was made, the",
+        "  each summary uses is in [periods], the month on the date it was made and the",
         "  week on the date the bank posted it."
+      ]
+    },
+    {
+      "delay_s": 4.0,
+      "write": {
+        "tally/categories.py": "files/tally/categories.py"
+      },
+      "say": [
+        "  Edit({{WORKSPACE}}/tally/categories.py)",
+        "● The patterns come in as an argument now. The order still decides which rule",
+        "  wins, and rules.toml is where that order is."
       ]
     },
     {
       "delay_s": 6.0,
       "write": {
-        "tally/summary.py": "files/tally/summary.py",
-        "tally/categories.py": "files/tally/categories.py",
+        "tally/summary.py": "files/tally/summary.py"
+      },
+      "say": [
+        "  Edit({{WORKSPACE}}/tally/summary.py)",
+        "● The summary takes its settings as an argument and holds no policy of its own.",
+        "  I have also kept the uncategorised bucket out of the category rows the way the",
+        "  plan says, since it is not a category you chose, and the count line at the end",
+        "  is where it is reported."
+      ]
+    },
+    {
+      "delay_s": 5.0,
+      "write": {
         "tally/dedupe.py": "files/tally/dedupe.py",
         "tally/money.py": "files/tally/money.py",
         "tally/recurring.py": "files/tally/recurring.py"
       },
       "say": [
-        "  Edit({{WORKSPACE}}/tally/summary.py)",
-        "  Edit({{WORKSPACE}}/tally/categories.py)",
-        "● Every rule takes its settings as an argument now. None of them reads a global."
+        "  Edit({{WORKSPACE}}/tally/dedupe.py)",
+        "  Edit({{WORKSPACE}}/tally/money.py)",
+        "  Edit({{WORKSPACE}}/tally/recurring.py)",
+        "● Every rule is handed the settings it needs. None of them reads a global."
       ]
     },
     {
@@ -149,17 +183,49 @@
       ]
     },
     {
-      "delay_s": 6.0,
+      "delay_s": 4.0,
       "write": {
         "tests/test_settings.py": "files/tests/test_settings.py",
-        "tests/test_rules.py": "files/tests/test_rules.py",
-        "tests/test_statements.py": "files/tests/test_statements.py",
-        "tests/test_cli.py": "files/tests/test_cli.py"
+        "tests/test_rules.py": "files/tests/test_rules.py"
       },
       "say": [
         "  Write({{WORKSPACE}}/tests/test_settings.py)",
+        "  Edit({{WORKSPACE}}/tests/test_rules.py)"
+      ]
+    },
+    {
+      "delay_s": 6.0,
+      "write": {
+        "tests/test_cli.py": "files/tests/test_cli.py",
+        "tests/test_statements.py": "files/tests/test_statements.before.py"
+      },
+      "say": [
+        "  Edit({{WORKSPACE}}/tests/test_cli.py)",
+        "  Edit({{WORKSPACE}}/tests/test_statements.py)",
         "  Bash(.venv/bin/python -m pytest tests/ -q)",
-        "  ⎿  ....................................... 119 passed"
+        "  ⎿  .................................F..............................",
+        "     FAILED tests/test_statements.py::test_an_unmatched_merchant_is_filed_under_one_name",
+        "     1 failed, 119 passed"
+      ]
+    },
+    {
+      "delay_s": 5.0,
+      "write": {
+        "tests/test_statements.py": "files/tests/test_statements.py"
+      },
+      "say": [
+        "  Edit({{WORKSPACE}}/tests/test_statements.py)",
+        "● That test looked for the word uncategorised in the body of the summary. The",
+        "  count line at the end is where the bucket is reported now, so the test asks",
+        "  for it there instead."
+      ]
+    },
+    {
+      "delay_s": 4.0,
+      "say": [
+        "  Bash(.venv/bin/python -m pytest tests/ -q)",
+        "  ⎿  ................................................................",
+        "     120 passed"
       ]
     },
     {

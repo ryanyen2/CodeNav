@@ -200,7 +200,7 @@ def test_a_checkpoint_outside_the_recording_is_ignored():
         == [(0, 4), (4, 10)]
 
 
-def sidecar(tmp_path, *, proposals=(), auto_edits=()):
+def sidecar(tmp_path, *, proposals=(), amends=(), auto_edits=()):
     """A sidecar in the shape `codoc_file/render.py` actually writes.
 
     Written out rather than abbreviated, because the abbreviation is what hid the
@@ -214,7 +214,8 @@ def sidecar(tmp_path, *, proposals=(), auto_edits=()):
     path = codoc / "tree.bindings.json"
     path.write_text(json.dumps({
         "version": 6,
-        "proposals": {"by_feature": {}, "by_event": {e: {} for e in proposals},
+        "proposals": {"by_feature": {f: {"op": "amend"} for f in amends},
+                      "by_event": {e: {} for e in proposals},
                       "by_parent": {}},
         "auto_edits": {f: {"at": "x", "prev": "y"} for f in auto_edits},
     }))
@@ -311,6 +312,33 @@ def test_an_answered_rewrite_releases_the_stop(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agent.time, "sleep", answer_after_one_poll)
     assert agent.wait_for_an_answer(tmp_path, "look at it?", timeout=5.0) == agent.ANSWERED
+
+
+def test_an_unanswered_amend_is_something_to_wait_for(tmp_path):
+    # An amend proposes new wording for a node that already exists, so it is keyed
+    # by that node in `proposals.by_feature` rather than by the event that proposed
+    # it. Counting only `by_event` reported tally's build stop as having nothing in
+    # it while an amend on the summary node sat there unanswered, and the player
+    # walked past the stop that exists to show the participant the agent's proposed
+    # wording beside the wording it would replace.
+    sidecar(tmp_path, amends=["f-b62f4884"])
+    assert agent.pending_proposals(tmp_path) == 1
+
+
+def test_the_three_kinds_of_pending_thing_add_up(tmp_path):
+    sidecar(tmp_path, proposals=["e-1", "e-2"], amends=["f-1"], auto_edits=["f-2"])
+    assert agent.pending_proposals(tmp_path) == 4
+
+
+def test_an_answered_amend_releases_the_stop(tmp_path, monkeypatch):
+    bindings = sidecar(tmp_path, amends=["f-1"])
+
+    def answer_after_one_poll(_s: float) -> None:
+        bindings.write_text(json.dumps({
+            "proposals": {"by_feature": {}, "by_event": {}}, "auto_edits": {}}))
+
+    monkeypatch.setattr(agent.time, "sleep", answer_after_one_poll)
+    assert agent.wait_for_an_answer(tmp_path, "keep it?", timeout=5.0) == agent.ANSWERED
 
 
 def test_an_unanswered_rewrite_is_something_to_wait_for(tmp_path):
