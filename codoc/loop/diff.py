@@ -10,10 +10,15 @@ minus the binding-anchor synthesis and the move-detection scaffolding.
 """
 from __future__ import annotations
 
+import logging
+import pathlib
 from dataclasses import dataclass, field
 
+from codoc.lang import parses_cleanly
 from codoc.pipelines.indexing.reader import ChunkRow, read_all_chunks
 from codoc.pipelines.indexing.runner import update_index
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,4 +112,53 @@ def compute_changeset(
             cs.removed.append(ChunkRef(file, symbol_path, old.tokens_hash, old.source, old.types_hash))
         elif old is not None and new is not None and old.tokens_hash != new.tokens_hash:
             cs.modified.append(ChunkRef(file, symbol_path, new.tokens_hash, new.source, new.types_hash))
+    _hold_unparseable_removals(cs, root_dir)
     return cs
+
+
+def _hold_unparseable_removals(cs: ChangeSet, root_dir: str) -> list[ChunkRef]:
+    """Drop removals whose file is still on disk but no longer parses; return them.
+
+    A chunk's absence from the index means one of two very different things, and
+    the diff cannot tell them apart on its own: the entity was deleted, or the
+    file was saved mid-edit and the parser could not reach it. Loop A reads a
+    removal as deletion — a bound removal DETACHES the binding — so a broken save
+    would strip a feature's attribution, and the repaired file would come back as
+    an unbound ADDITION whose feature the LLM pass has to guess at again. The
+    changeset for that save reports one thing honestly: nothing is known about
+    that file.
+
+    Only removals are held. An addition or a modification from a damaged file is
+    at worst a spurious refresh — idempotent, and the next clean pass corrects it
+    — while a removal destroys attribution that nothing recreates.
+
+    A file that is GONE from disk removes its chunks for real, and one that no
+    adapter can read (so ``parses_cleanly`` cannot judge it) is not second-guessed
+    either: this holds a removal only where the file is present and demonstrably
+    unparseable. A file that never parses — a templated ``.py``, Python 2 — keeps
+    its stale bindings until it does, which is why the hold is logged rather than
+    silent.
+    """
+    if not cs.removed:
+        return []
+    root = pathlib.Path(root_dir)
+    broken: set[str] = set()
+    for file in {c.file for c in cs.removed}:
+        path = root / file
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue  # gone, unreadable → the removal stands
+        if not parses_cleanly(file, source):
+            broken.add(file)
+    if not broken:
+        return []
+    held = [c for c in cs.removed if c.file in broken]
+    cs.removed = [c for c in cs.removed if c.file not in broken]
+    for file in sorted(broken):
+        _log.warning(
+            "%s does not parse; holding %d removed chunk(s) rather than reading "
+            "them as deleted code",
+            file, sum(1 for c in held if c.file == file),
+        )
+    return held

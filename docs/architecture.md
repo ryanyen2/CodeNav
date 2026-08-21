@@ -96,6 +96,9 @@ to give neither.
   protocol and version branch with no address of its own — swallowed whole into
   `__module__`, where nothing could cite them. `_TRANSPARENT` names those
   statements and `_same_scope_defs` descends them, stopping at each definition.
+- **A declaration is an entity too.** A public module-level name — `X = …`,
+  `X: T = …`, and PEP 695's `type X = …` — gets its own address, because a
+  description cites it by name. The 695 spelling was the one falling into glue.
 - **One name, one address.** Keying by qualified name alone is not enough when a
   name is defined more than once: `@overload` stubs, a property and its setter, a
   version-branched pair. Whichever piece the walk emitted last won, so an
@@ -151,6 +154,20 @@ a stale-prose modification, safe ops apply and structural ops become proposals;
 (4) **may-impact** — surface upstream dependents for the prompt; (5) **coverage
 net** — `_cover_uncovered_adds` attaches to the best `neighbor_feature` or surfaces
 a pending ADD, so nothing is silently dropped.
+
+**A file that does not parse is not evidence of deletion.** tree-sitter recovers
+what it can from a damaged file and drops the rest, so its chunks are a lower bound
+on what the file contains — and the index has no column for "I could not read
+this". A removal reads as deletion and DETACHES the binding, so a save in the
+middle of an edit would strip a feature's attribution and the repaired file would
+come back as an unbound addition for the LLM pass to guess at again.
+`diff._hold_unparseable_removals` drops removals whose file is **still on disk and
+demonstrably unparseable** (`lang.parses_cleanly`, which walks only the damaged path
+via `has_error`); a file that is GONE removes its chunks for real, and a file no
+adapter reads is not second-guessed. Only removals are held: an addition or a
+modification out of a damaged file is at worst a spurious refresh that the next
+clean pass corrects. A file that never parses (a templated `.py`, Python 2) keeps
+stale bindings until it does, which is why the hold is logged rather than silent.
 
 **Merge-edge robustness (D1–D4).** The LLM-pass apply folds a re-proposed node by
 exact title (`_unbound_features_by_title`), by `(normalized_title, parent_id)` for

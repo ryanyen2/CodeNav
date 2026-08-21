@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from codoc.core.tree_walk import walk
-from codoc.lang import detect_language, get_adapter
+from codoc.lang import detect_language, get_adapter, parses_cleanly
 
 
 def fingerprint_chunk(source: str, adapter) -> str:
@@ -205,6 +205,36 @@ def test_python_adapter_resolves_a_symbol_to_what_the_index_holds() -> None:
             chunks[name].start_byte, chunks[name].end_byte,
         )
     assert adapter.resolve_symbol_path(CONDITIONAL, "m.py::nope") is None
+
+
+def test_python_adapter_addresses_a_type_alias_in_either_spelling() -> None:
+    # `Alias: TypeAlias = int` was already an addressable declaration; PEP 695
+    # spells the same thing `type Alias = int`, and the newer syntax should not be
+    # the one that vanishes into module glue.
+    chunks = python_chunks(
+        "type Alias = int | str\n"
+        "Other: TypeAlias = int\n"
+        "_Hidden: TypeAlias = int\n"
+        "type _AlsoHidden = int\n"
+    )
+    assert "Alias" in chunks and "Other" in chunks
+    assert "_Hidden" not in chunks and "_AlsoHidden" not in chunks
+
+
+def test_python_adapter_reads_the_syntax_a_current_repo_contains() -> None:
+    # The bundled grammar is old enough that this is worth stating rather than
+    # assuming: a construct it cannot parse loses every definition in the damaged
+    # region, silently.
+    cases = {
+        "generic_fn": "def first[T](xs: list[T]) -> T:\n    return xs[0]\n",
+        "generic_cls": "class Box[T]:\n    def get(self) -> T: ...\n",
+        "except_star": "def f():\n    try:\n        pass\n    except* ValueError:\n        pass\n",
+        "unpack": "def g(*args: *tuple[int, str]) -> None:\n    return None\n",
+        "async_gen": "async def h(s):\n    async with s as c:\n        async for r in c:\n            yield r\n",
+    }
+    for label, source in cases.items():
+        assert parses_cleanly("m.py", source), label
+        assert python_chunks(source), label
 
 
 def test_typescript_module_chunk_excludes_the_declarations_between_the_glue() -> None:

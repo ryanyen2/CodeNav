@@ -64,11 +64,26 @@ def _node_name(node: ts.Node) -> str | None:
 
 
 def _module_assignment_name(node: ts.Node) -> str | None:
-    """If *node* is a simple ``NAME = value`` expression_statement, return NAME.
+    """If *node* declares a single public module-level NAME, return it.
 
-    Returns None for private names (leading underscore), augmented assignments,
-    destructuring patterns, and anything that isn't a single-identifier LHS.
+    Covers ``NAME = value`` and the annotated ``NAME: T = value``, plus PEP 695's
+    ``type NAME = …``. Returns None for private names (leading underscore),
+    augmented assignments, destructuring patterns, and anything that isn't a
+    single-identifier LHS.
     """
+    if node.type == "type_alias_statement":
+        # PEP 695 `type Alias = int | str`. A public alias is a named entity a
+        # description cites by name, and the pre-695 spelling (`Alias: TypeAlias =
+        # …`) already got an address as an ordinary assignment — the newer syntax
+        # for the same declaration should not be the one that disappears into glue.
+        for child in node.children:
+            if child.type == "type":
+                ident = next((c for c in child.children if c.type == "identifier"), None)
+                if ident is None:
+                    continue  # the `type` keyword itself, not the alias name
+                name = ident.text.decode("utf-8", errors="replace")
+                return name if name and not name.startswith("_") else None
+        return None
     if node.type != "expression_statement":
         return None
     for child in node.children:

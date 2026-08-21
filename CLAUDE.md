@@ -389,7 +389,10 @@ graph/       # code dependency graph (derived, rebuildable): extract.py, query.p
              #   loop_a._compute_impacted, which is changeset-scoped)
 loop/        # the two loops + pieces: classify.py (decision table), phase.py (the
              #   single feature-phase projection — holds/drift/resolution are views),
-             #   diff.py (compute_changeset), apply.py, loop_a.py / loop_b.py, edits.py
+             #   diff.py (compute_changeset — and a removal from a file that no
+             #   longer PARSES is held rather than read as deleted code, so a
+             #   mid-edit save cannot detach a binding), apply.py,
+             #   loop_a.py / loop_b.py, edits.py
              #   (edits.json + realize.json), why.py (grounded rationale for
              #   descriptions: commit messages / realized directives / recorded
              #   rationale — each entry id-stamped so a claim can cite it),

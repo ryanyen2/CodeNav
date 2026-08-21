@@ -12,6 +12,7 @@ Programmatic entry: :func:`make_app` (used by
 """
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
 from typing import AsyncIterator
@@ -178,15 +179,23 @@ async def _process_file(
     chunks = adapter.extract_chunks(file_str, source)
     # The chunk id is generate_id((file, symbol_path)) and the LanceDB PK, so the
     # system treats (file, symbol_path) as unique (bindings are UNIQUE on it, the
-    # changeset keys on it). Real code legitimately repeats a qualified name
-    # (@overload stubs, conditional/try-except redefinitions), which would yield
-    # the same memoized id and a "target state already declared" PK collision —
-    # dropping the whole file. Keep the first chunk per symbol_path so the file
-    # still indexes and the uniqueness invariant holds.
+    # changeset keys on it) and a repeat would collide the PK, dropping the whole
+    # file. Uniqueness is now the ADAPTER's guarantee — real code repeats a
+    # qualified name (@overload stubs, a property and its setter, an if/else pair)
+    # and the walk joins those definitions into one chunk rather than handing out
+    # two. So this is a backstop, and reaching it means an adapter broke its
+    # contract. It stays because losing a whole file to a PK collision is the worse
+    # failure, but keeping the first silently is what made an overloaded function
+    # index as its empty stub, so it says so instead.
     seen: set[str] = set()
     items = []
     for c in chunks:
         if c.symbol_path in seen:
+            logging.getLogger(__name__).warning(
+                "%s: adapter returned %s twice; indexing the first only "
+                "(the later definitions of that name are not in the index)",
+                file_str, c.symbol_path,
+            )
             continue
         seen.add(c.symbol_path)
         walk_result = tree_walk(c.source, adapter)
