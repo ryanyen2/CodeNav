@@ -43,6 +43,7 @@ from codoc.pipelines.indexing.gate import (
     READ_CEILING_BYTES,
     holds_definitions,
     needs_hearing,
+    read_ceiling,
     too_large_to_read,
 )
 
@@ -132,7 +133,7 @@ def survey_repo(root: str | pathlib.Path, *, max_entries: int = 200_000) -> Repo
                 size = entry.stat().st_size
             except OSError:
                 continue
-            if too_large_to_read(size):
+            if too_large_to_read(size, ceiling=read_ceiling(rel)):
                 survey.too_large.append((rel, size))
             elif needs_hearing(size) and not _passes_hearing(entry, rel):
                 survey.unaddressable.append((rel, size))

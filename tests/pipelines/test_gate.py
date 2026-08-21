@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from codoc.pipelines.indexing.gate import (
     HEARING_BYTES,
+    NOTEBOOK_READ_CEILING_BYTES,
     ORDINARY_DEFINITION_BYTES,
     READ_CEILING_BYTES,
     holds_definitions,
     needs_hearing,
+    read_ceiling,
     too_large_to_read,
 )
 
@@ -52,6 +54,24 @@ def test_past_the_read_ceiling_nothing_is_read_at_all():
 def test_the_ceiling_leaves_room_above_the_hearing():
     # A file can only be turned away on its shape if it is first allowed to be read.
     assert HEARING_BYTES < READ_CEILING_BYTES
+
+
+def test_the_ceiling_is_per_kind_because_a_notebook_s_bytes_are_its_outputs():
+    # Cost, again, and not intent: a notebook's size is a base64 PNG per plot, none of
+    # which is parsed, hashed, or shown to a prompt. Held to the code ceiling, whether
+    # codoc can see a notebook's code would be decided by whether somebody ran it.
+    assert read_ceiling("analysis/churn.ipynb") == NOTEBOOK_READ_CEILING_BYTES
+    assert read_ceiling("nb/CHURN.IPYNB") == NOTEBOOK_READ_CEILING_BYTES
+    assert read_ceiling("codoc/store/db.py") == READ_CEILING_BYTES
+    figures = 12_000_000
+    assert not too_large_to_read(figures, ceiling=read_ceiling("nb/figures.ipynb"))
+    assert too_large_to_read(figures, ceiling=read_ceiling("codoc/generated.py"))
+
+
+def test_a_caller_holding_only_a_size_is_held_to_the_stricter_ceiling():
+    # The default cannot be the loose one: a caller that never learned the path would
+    # then read a 20 MB source file on the strength of a notebook's allowance.
+    assert too_large_to_read(READ_CEILING_BYTES + 1)
 
 
 # ------------------------------------------------------------ what shape decides

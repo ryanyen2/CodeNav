@@ -2,6 +2,31 @@ from typing import Protocol, runtime_checkable
 from dataclasses import dataclass
 
 
+def tree_is_clean(tree) -> bool:
+    """True if *tree* has no error and nothing missing.
+
+    Here rather than beside its first caller because two of them ask the question about
+    trees they built differently: ``lang.parses_cleanly`` asks it of a file, and the
+    notebook adapter asks it of one cell, to decide whether that cell is Python at all.
+    A cell is not a file and cannot go through the file path — it has no name and it is
+    read many times per notebook — but the judgment has to be the same one, or a cell
+    could be commented out for damage a file would have been forgiven.
+
+    ``has_error`` is true for every ancestor of an error, so a subtree without it cannot
+    contain one and is skipped whole: the walk costs the damaged path, not the file.
+    """
+    cursor = tree.walk()
+    while True:
+        node = cursor.node
+        if node.type == "ERROR" or node.is_missing:
+            return False
+        if node.has_error and cursor.goto_first_child():
+            continue
+        while not cursor.goto_next_sibling():
+            if not cursor.goto_parent():
+                return True
+
+
 @dataclass
 class Chunk:
     """A named, addressable unit of code extracted from a file."""

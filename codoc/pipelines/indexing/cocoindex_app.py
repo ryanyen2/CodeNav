@@ -29,6 +29,7 @@ from codoc.pipelines.indexing import settings_scan
 from codoc.pipelines.indexing.gate import (
     holds_definitions,
     needs_hearing,
+    read_ceiling,
     too_large_to_read,
 )
 from codoc.pipelines.indexing.schema import (
@@ -46,7 +47,9 @@ _DEFAULT_SOURCE = "./test/small_python_repo"
 
 # Match every extension the tree-sitter adapters (codoc.lang.detect_language)
 # understand, so a file codoc *could* parse is never silently skipped at the walk.
-_INCLUDED_PATTERNS = ["**/*.py", "**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
+_INCLUDED_PATTERNS = [
+    "**/*.py", "**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts", "**/*.ipynb",
+]
 _EXCLUDED_PATTERNS = [
     ".*/**",                 # dot-dirs (.git, .tox, .mypy_cache, …)
     "**/__pycache__/**",
@@ -57,6 +60,7 @@ _EXCLUDED_PATTERNS = [
     "**/node_modules/**",
     "**/bower_components/**",
     "**/.codoc/**",
+    "**/.ipynb_checkpoints/**",   # Jupyter's autosaves — the same notebook, stale
     "**/vendor/**",
     "**/third_party/**",
     "**/dist/**",
@@ -177,7 +181,7 @@ async def _process_file(
         size = file_abs.stat().st_size
     except OSError:
         return
-    if too_large_to_read(size):
+    if too_large_to_read(size, ceiling=read_ceiling(file_str)):
         return
     source = await file.read_text()
     adapter = get_adapter(lang)

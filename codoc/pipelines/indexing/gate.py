@@ -19,7 +19,9 @@ median of 105,792. Two and a half orders of magnitude of daylight, so
 
 So size decides one thing only — whether to READ the file at all, which is a memory
 and latency bound and nothing to do with intent (`READ_CEILING_BYTES`; parse and
-hash measured at 0.36 s/MB, so 4 MB is ~1.3 s once). Past 1.5 MB a file gets a
+hash measured at 0.36 s/MB, so 4 MB is ~1.3 s once). Being a cost bound, it is per
+KIND of file rather than one number: a notebook's bytes are mostly its outputs, which
+nothing parses, so it is held to `NOTEBOOK_READ_CEILING_BYTES` — see `read_ceiling`. Past 1.5 MB a file gets a
 *hearing* instead of a silent drop: read it, parse it, and index it if the parse
 found definitions of the size a person writes. The hearing is free, because the
 indexer parses the file in the next breath anyway.
@@ -34,11 +36,15 @@ turns away rather than letting the tree quietly not mention them.
 """
 from __future__ import annotations
 
+import pathlib
 import statistics
 from collections.abc import Iterable
 
 #: past this many bytes a file is not read at all — memory and latency, not intent
 READ_CEILING_BYTES = 4_000_000
+
+#: the same bound for a notebook, where the bytes are somewhere else entirely
+NOTEBOOK_READ_CEILING_BYTES = 20_000_000
 
 #: at or under this many bytes a file is indexed with no questions asked
 HEARING_BYTES = 1_500_000
@@ -47,8 +53,35 @@ HEARING_BYTES = 1_500_000
 ORDINARY_DEFINITION_BYTES = 40_000
 
 
+def read_ceiling(file_path: str) -> int:
+    """The ceiling that applies to *file_path*.
+
+    One number was right while every readable file was read the same way. A notebook
+    is not: its size is dominated by OUTPUT — a base64 PNG per plot, a megabyte of
+    captured stdout — and none of that is ever parsed, hashed, or shown to a prompt.
+    The adapter builds a document out of the cells' source alone, which for a 12 MB
+    notebook of figures is a few tens of KB. Holding it to the code ceiling would turn
+    away a file whose actual cost is a JSON parse, and turn it away for bytes that
+    exist because somebody RAN the notebook — so re-running it would decide whether
+    codoc can see it.
+
+    Five times, not unbounded: the file is still read into memory whole and decoded
+    before anything can tell where its bytes went, so there has to be a number, and
+    this one keeps the transient cost of the worst case in the same range as a 4 MB
+    source file's parse.
+    """
+    if pathlib.Path(file_path).suffix.lower() == ".ipynb":
+        return NOTEBOOK_READ_CEILING_BYTES
+    return READ_CEILING_BYTES
+
+
 def too_large_to_read(size: int, *, ceiling: int = READ_CEILING_BYTES) -> bool:
-    """True when *size* is past what the loop will pull into memory and describe."""
+    """True when *size* is past what the loop will pull into memory and describe.
+
+    Callers that hold a path should pass ``ceiling=read_ceiling(path)``. The default
+    stays the code ceiling so a caller that has only a size is held to the stricter of
+    the two.
+    """
     return size > ceiling
 
 

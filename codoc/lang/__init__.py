@@ -1,4 +1,5 @@
-from codoc.lang.base import LanguageAdapter
+from codoc.lang.base import LanguageAdapter, tree_is_clean
+from codoc.lang.notebook import NotebookAdapter
 from codoc.lang.python import PythonAdapter
 from codoc.lang.typescript import TypeScriptAdapter
 
@@ -7,6 +8,7 @@ def get_adapter(language: str) -> LanguageAdapter:
     """Return the appropriate adapter for the given language name."""
     adapters = {
         "python": PythonAdapter,
+        "notebook": NotebookAdapter,
         "typescript": TypeScriptAdapter,
         "tsx": TypeScriptAdapter,
     }
@@ -38,26 +40,14 @@ def parses_cleanly(file_path: str, source: str) -> bool | None:
     language = detect_language(file_path)
     if language is None:
         return None
-    tree = get_adapter(language).parse(source)
-    cursor = tree.walk()
-    while True:
-        node = cursor.node
-        if node.type == "ERROR" or node.is_missing:
-            return False
-        # `has_error` is true for any ancestor of an error, so a subtree without it
-        # cannot contain one and is skipped whole — the walk costs the damaged path
-        # only, not the file.
-        if node.has_error and cursor.goto_first_child():
-            continue
-        while not cursor.goto_next_sibling():
-            if not cursor.goto_parent():
-                return True
+    return tree_is_clean(get_adapter(language).parse(source))
 
 
 def detect_language(file_path: str) -> str | None:
     """Detect language from file extension. Returns None if unsupported."""
     ext_map = {
         ".py": "python",
+        ".ipynb": "notebook",
         ".ts": "typescript",
         ".tsx": "typescript",
         ".mts": "typescript",

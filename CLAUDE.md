@@ -432,6 +432,13 @@ mcp/         # codoc MCP server (FastMCP, stdio): tools.py + server.py (codoc-mc
 serve/       # the deployed hub (codoc serve) — see docs/architecture.md + serve-deployment.md
 codoc_file/  # render.py (store → tree.codoc + sidecar), parse.py, diff.py (→ user ops)
 lang/        # tree-sitter adapters: python.py + typescript.py  [KEPT]
+             #   + notebook.py — a .ipynb IS Python with the cells still visible, so
+             #   it is an ADAPTER (not a second reader like settings_files.py): the
+             #   cells become one synthetic Python document, a markdown heading names
+             #   the statement run under it (nb.ipynb::load-the-data, its defs as
+             #   members), sections are FLAT, the prose rides in as raw string
+             #   literals so it reaches both the chunk and its identity, and outputs
+             #   never do — so a re-run is not a change and a reworded step is
              #   they decide what gets an ADDRESS — see docs/architecture.md,
              #   "What gets an address": every definition in the namespace gets
              #   one (a `def` in an `except` branch binds the module, so it is

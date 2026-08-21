@@ -256,6 +256,11 @@ inside the gap and does not have to be delicate.
 
 So size decides one thing — whether to **read** the file at all
 (`READ_CEILING_BYTES`, 4 MB; parse and hash measured at 0.36 s/MB, so ~1.3 s once).
+Being a cost bound and not a claim about intent, it is per **kind** of file
+(`read_ceiling`): a notebook's bytes are mostly the outputs of having run it — a base64
+PNG per plot — and none of them is ever parsed, hashed, or shown to a prompt, so a
+`.ipynb` is held to `NOTEBOOK_READ_CEILING_BYTES` (20 MB) instead. Under one number,
+whether codoc could see a notebook's code would be decided by whether somebody ran it.
 Past `HEARING_BYTES` (1.5 MB) a file gets a *hearing* instead of a silent drop: read
 it, parse it, index it if the parse found definitions of the size a person writes.
 The hearing is **free** — the parse it judges is the one `_process_file` was going to
@@ -732,6 +737,80 @@ hit from them inside a settings file would be coincidence, and landing a reader 
 arbitrary line is worse than the honest no-op. A ref naming no section moves nothing, for
 the same reason — showing `[periods]` to somebody whose sentence claimed `[retries]`
 states something the file does not say.
+
+## Notebooks (`codoc/lang/notebook.py`)
+
+A notebook is where a lot of a Python codebase's *reasoning* is written down, and it is
+the one place the author already wrote the description: `## Load the data`, then a
+paragraph on why the export arrives monthly, then the code. Unindexed, that is the
+richest intent in the repo sitting outside the tree — and worse, a notebook that calls
+into the package is a caller the dependency graph does not know about.
+
+The call this stage makes, and the reason it looks nothing like the settings-file one:
+**a notebook goes behind the `LanguageAdapter` Protocol.** A settings file needed a
+second reader because it has no symbols; a notebook HAS symbols, because a notebook is
+Python with the cells still visible. So `detect_language(".ipynb") → "notebook"` plus
+`get_adapter("notebook")` makes diff, the hook's symbol scoping, the graph, `status`
+coverage, `payload`'s budget split and bootstrap work with **zero** changes each.
+
+The adapter's whole job is to answer the Protocol in terms of a **synthetic Python
+document**: the cells in order, one blank line between them, with a per-line index back
+into the file. Everything else is delegated — each section's text goes to
+`PythonAdapter().extract_chunks`, so name-merging, decorator peeling and the transparent
+wrappers come for free and only the ADDRESSES differ.
+
+**The prose rides in as raw string literals, not comments** — the load-bearing decision.
+The pipeline-wide rule is that a comment is not part of a chunk (module-level glue is
+collected in runs that exclude comment nodes) and not part of its identity
+(`core/tree_walk`'s `_COMMENT_TYPES` is hard-coded, so an adapter cannot opt out). For
+code that rule earns its keep: a reflowed comment is not a change. A notebook inverts the
+case, and prose-as-comments would have failed twice over — the markdown would reach no
+chunk and therefore no prompt, a prose-only section would produce nothing to bind, and a
+rewritten paragraph would go unnoticed by Loop A. As `r"""…"""` statements the prose is
+in the chunk source AND in the identity, which is right: in a notebook the markdown *is*
+the authored intent, and a reworded step is exactly the change a fresh description should
+follow. The literal is raw and quoted with whichever triple-quote the prose does not
+itself use, so the paragraph is carried through byte-for-byte; a block using both styles
+falls back to comments, which loses that block's prose and nothing else.
+
+**A heading names the statement run under it, and sections are FLAT.** `## Load the data`
+makes `nb.ipynb::load-the-data`, and a `def` under it is a member — `load-the-data.tenure`
+— the same owner/member relation a class and its methods have, which is what lets the
+dotted-path readers downstream work unchanged. `### Load` under `## Data` is `load`, not
+`data.load`: headings are a **reading order**, not a namespace, and nesting them would
+mint addresses that move when an author demotes a heading. A repeated `## Train` is a
+second section (`train`, `train[1]`), and its members go under the name that section
+actually got — the section's name is settled before its chunks for exactly that reason.
+Before the first heading, and in a heading-less notebook, the addresses are a script's own
+(`::__module__`, bare names), identical to the equivalent `.py` file, so nothing has two
+names.
+
+**Identity is the cells' source and nothing else.** Outputs and `execution_count` never
+enter the synthetic document, so re-running a notebook is not a change — the alternative
+is a tree that churns every time somebody presses Run All.
+
+**IPython that is not Python is tolerated rather than fatal.** `!shell` and `%magic`
+lines and `?`-help lines are commented out; a `%%cell-magic` cell and any cell that still
+fails to parse is commented out whole. One `!pip install` must not make the file read as
+*damaged*, because damage is what holds Loop A's removals — a tree citing symbols that
+are gone. Two costs come with it and are accepted: a half-typed cell reads as clean, and
+a section whose only cell is shell contributes no code chunk (its prose still binds).
+Broken JSON is the opposite case and must report damage, which is why the fallback
+document is `"(\n"` — raw JSON is itself a valid Python expression, so parsing the file
+as Python would report a corrupt notebook as clean.
+
+`synthetic_source` takes a notebook **or a chunk of one**: the identity and reference
+walks are handed a chunk's own source, which is already synthetic Python. Routing that
+back through the cell reader would give every notebook chunk the same never-moving hash
+and no graph edges, so a text that is not a notebook is parsed as Python unless it opens
+like a JSON document.
+
+Byte offsets are **anchors, not slices** — nothing re-reads a notebook chunk from the
+file, since the bytes between two chunk lines are JSON punctuation and base64. One
+monotone forward search per line locates each synthetic line's text in the raw file
+(trying both `ensure_ascii` escape forms). They serve the two callers that need a
+position: bootstrap's file ordering by `(start_byte, symbol_path)`, and the hook's
+approximate line number.
 
 ## Doc language — the language the tree is AUTHORED in (`doclang.py`)
 
