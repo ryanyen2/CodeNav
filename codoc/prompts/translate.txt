@@ -61,6 +61,8 @@ a translator's note. Do not append anything explaining that this was translated.
   feature is already written in {language}, return it unchanged rather than
   paraphrasing it.
 
+{{include:style}}
+
 ## Output
 
 Return ONLY this, inside solution tags:

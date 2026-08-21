@@ -61,6 +61,8 @@ codebase could hold in their head while reading any one file of it.
 {"purpose": "…", "audience": "…", "out_of_scope": ["…"], "vocabulary": [{"term": "…", "means": "…"}], "decisions": [{"choice": "…", "because": "…", "gave_up": "…"}], "ordering": [{"before": "…", "then": "…", "otherwise": "…"}]}
 </solution>
 
+{{include:style}}
+
 {{doclang}}
 <<<CACHE_BREAK>>>
 ## What the project says about itself

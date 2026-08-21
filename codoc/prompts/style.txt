@@ -1,0 +1,58 @@
+## How to write the prose a person will read
+
+A description teaches, so write it the way a patient colleague explains something
+out loud rather than the way a summary states it. Somebody who has never opened
+this file has to finish the first sentence knowing what the feature is for, and
+finish the last one knowing the one thing that would surprise them.
+
+**Go from the general to the particular, every time.** The first sentence says
+what the feature is for, in words a reader who has not seen the code would use.
+The next says the rule or the choice that shapes it. The last, when there is one
+worth the room, gives the case that shows the rule, with the actual threshold,
+name, or symbol in it. Never open on a mechanism or an identifier, and never drop
+the general sentence on the grounds that the detail implies it, because a reader
+who does not yet know what something is for cannot use a detail about it.
+
+**Prefer one explanatory sentence to two clipped ones.** Short statements stacked
+together read as precise and leave the connection for the reader to guess, so join
+the clauses with the plain words that say the relation, meaning because, so, which
+means, unless, or rather than. Two or three clauses is the right size for a
+sentence, and four is too many.
+
+**Be specific enough that the sentence could not be about another codebase.**
+Validates its input and handles errors say nothing at all. Name what is checked,
+what happens when the check fails, and what the caller sees afterwards.
+
+**Use the words two colleagues would use out loud.** Avoid the ones that make
+writing sound machine-made, meaning leverage, robust, seamless, ensure, utilize,
+comprehensive, crucial, key, powerful, elegant, and simply. Do not call the code
+clean or careful. Say what it does and let the reader judge it.
+
+**Do not decorate.** No em dash or en dash, because a full stop or the word and
+does the same work. No colon holding two clauses together. No analogy and no
+metaphor, so describe the thing itself. Not just X but Y is banned, and so are
+rhetorical questions. Do not start a sentence with This, That, These, or Those;
+name the thing you mean.
+
+**Cut anything that carries no fact**, meaning it is worth noting that, at its
+core, under the hood, in order to, and any sentence whose only job is to announce
+the sentence after it.
+
+Weak, and typical of a first draft:
+
+    Robustly handles the header edge case. Uses REPEAT_SHARE. This is important
+    for correctness, see `_near_edge()`.
+
+Rewritten the way it should read:
+
+    Drops the running header and the page number, so the rules that follow are
+    reading the document rather than the paper it was printed on. Repetition is
+    the only signal available, so a line counts as furniture when it sits near
+    the top or bottom of a page and the same text repeats on at least 60% of
+    them. A one-page letter can therefore never show the pattern, and its header
+    survives.
+
+The instructions around this section use dashes, colons, and clipped phrasing
+freely, because they are notes to you rather than prose for a reader. Do not copy
+that register. Every rule above describes the writing you produce, not the writing
+you are reading.

@@ -270,6 +270,10 @@ core/        # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT s
 pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEPT]
 prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.txt
              #   (each carries a {{doclang}} marker, expanded into the cached prefix)
+             #   style.txt — the shared writing guide, pulled into the five prose
+             #   prompts by {{include:style}} so every pass that writes a title or
+             #   a description is held to one register (abstract first, then the
+             #   rule, then the case; no dashes, no decoration)
 cli/main.py  # Typer app; config.py — LLM config
 ```
 

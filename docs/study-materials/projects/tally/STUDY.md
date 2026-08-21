@@ -37,15 +37,23 @@ asks for no report of what was found. Naming the commands raises the floor on
 detection, so rate detection against that floor from this date and do not pool it
 with earlier sessions without saying so. `analysis-plan.md` carries the same note.
 
-**Which model wrote the tree, from 2026-08-20.** The codoc condition's tree was
-derived with the Claude provider, using sonnet for the pass that updates the tree,
-rather than with the gpt-5.4-mini configuration the earlier recordings used, because
-the OpenAI account that paid for those had no credit left on the day this session was
-recorded. Only the wording of the tree depends on that choice, since the structural
-proposals and the pending edits come from the same code either way, but a later
-recording that goes back to gpt-5.4-mini will read differently sentence by sentence,
-so do not compare tree prose across recordings without checking which provider wrote
-each one.
+**Which model wrote which part of the tree, from 2026-08-20.** Two models wrote the
+prose a participant in the codoc arm reads, and they wrote different parts of it. The
+tree that is in the workspace when the session starts was written by `codoc init` on
+2026-08-17 with the gpt-5.4-mini configuration. The proposals and amendments the
+recorded session produced on top of it were written by the Claude provider using
+sonnet, because the OpenAI account that had paid for the seeding had no credit left on
+the day the session was recorded. Only wording depends on that, since the structural
+proposals and the pending edits come from the same code whichever model describes them,
+but do not compare tree prose across recordings without first checking which model
+wrote each part of each one.
+
+**An internal OpenAI proxy is available again, and re-seeding with it was tried and not
+adopted, on 2026-08-20.** The reasoning is written out once, under the heading about
+tally's flatter nodes in `../tally/STUDY.md`, and the short version is that the newer
+model wrote the thinly-commented test nodes better and the richly-commented policy
+nodes worse, and regrouped the policy nodes, which are the ones the claims file and the
+question sets are written against.
 
 ## The planted problem
 
@@ -290,25 +298,61 @@ in `../scribe/STUDY.md`.
 - d) They disagree by a penny or two, because each row is rounded before the total is added up
 
 
-## Some of tally's tree nodes read like generated text, and are not fixed yet
+## Some of tally's tree nodes read flatter than the rest, and are being left alone
 
-Seven nodes in tally's feature tree read as though a language model wrote them,
-because a language model did. The nodes are "Checking statements", "Rule contract
-test suite" with its four sub-nodes, "End-to-end statement summarization checks",
-and "Package identity metadata", and they sit next to nodes like "Transfer-aware
-duplicate filtering" that read in a person's voice. scribe's tree does not have the
-same split, so the two projects are not quite the same instrument on the one surface
-the codoc condition is about.
+Nine nodes in tally's feature tree read as though a language model wrote them, which
+one did, and so did every other node in the tree. The nine are "Checking statements",
+"Rule contract test suite" with its five sub-nodes, "End-to-end statement summarization
+checks" and "Package identity metadata". They sit next to nodes like "Transfer-aware
+duplicate filtering" that read in a person's voice, and the difference between the two
+groups is not which model wrote them, because one pass wrote all of them. The policy
+modules carry docstrings and comments that say why a rule went the way it did, so the
+seeding pass had something to report and reported it. The test files carry almost no
+prose, so the same pass had the code alone and wrote from the code, which is what flat
+prose about tests looks like. scribe's tree does not have as sharp a split, so the two
+projects are not quite the same instrument on the one surface the codoc condition is
+about.
 
-Nothing in the planted problem depends on those nodes, and none of them says
-anything untrue, so the recording was left alone rather than rebuilt. Fixing it
-properly means re-seeding the tree, and `codoc init` writes the whole tree in one
-pass, so a re-seed would give different feature ids, which the claims file, the
-after-task questions and both sets of frames are all keyed to. The honest order is
-to re-seed tally, then re-key `scoring/claims/tally.json`, then record the session
-again, and to do all three at once rather than one at a time. Until then, treat the
-tree-prose difference as a known limitation and do not read a difference between the
-two projects on the description items as being about the tool.
+**What an earlier version of this section claimed, and why it was wrong.** It said the
+tree could not be re-seeded because the claims file, the after-task questions and both
+sets of frames are keyed to feature ids. They are not. `scoring/claims/tally.json`
+matches a claim to the record by its wording and by the keywords in its
+`find_in_record` list, and neither STUDY.md nor either question set names an id
+anywhere. The ids that really are written down are three, which are two in
+`replay/script/tally/session.json` and one in `replay/test_agent.py`. So a re-seed costs
+those three lines, a re-derive of the codoc arm, and a `check`, and it does not cost the
+scoring material at all.
+
+**Re-seeding was tried on 2026-08-20 with a newer model, and not adopted.** tally was
+seeded again in a scratch copy with gpt-5.6-luna through the internal OpenAI proxy, with
+the shared writing guide now included in codoc's prompts. The test nodes came out
+better, and they name their thresholds, for example that three months is the threshold
+for calling a payment recurring and that the amount has to stay the same. The policy
+nodes came out worse. Where the current tree says that an unreadable row is skipped
+rather than guessed at, the new one says the resulting amounts and dates must be valid
+before a row enters the policy pipeline, which is longer, more abstract and no more
+informative.
+
+The re-seeded tree also grouped the policies differently. Refund netting was folded into
+the month node, and the two money decisions that currently sit together under "Money
+handling policies" were split and sent to different parents. Both groupings are
+defensible, and neither is the grouping the claims file and the two question sets were
+written against, so adopting the new tree means re-checking every claim and every
+question against a tree that changed shape for no gain on the nodes those items are
+about. That is a bad trade for a fix to nine nodes that say nothing untrue and that the
+planted problem does not touch, so the current tree stays.
+
+**The option that is still open, and what it would cost.** An experimenter could rewrite
+those nine descriptions by hand. Editing a description keeps every feature id, so the
+cost is a re-derive of the codoc arm and a `check`, and nothing in the scoring material
+moves. What it costs instead is the claim that the codoc arm shows what codoc produced,
+because part of what a participant read would be the experimenter's own writing. Doing
+it would have to be declared here, in `pre-registration.md`, and in scribe's tree as
+well, or the two projects stop matching in the other direction. It has not been done.
+
+Until one of those is chosen, treat the difference in tree prose as a known limitation,
+and do not read a difference between the two projects on the description items as being
+about the tool.
 
 ## Where it does not match scribe, and by how much
 

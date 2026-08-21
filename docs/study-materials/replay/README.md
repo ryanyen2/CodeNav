@@ -114,6 +114,24 @@ Recording happens once per project, on the experimenter's machine, and it needs
 an API key. It has three steps, because the code is recorded once and each
 condition's record is derived from it.
 
+**Which model writes the tree, and how to point codoc at it.** The prose in the
+codoc arm is the thing that arm is being judged on, so it is written by an OpenAI
+reasoning model rather than by the keyless Claude fallback, whose descriptions read
+noticeably more like generated text. The keys live in the repo's `.env`, and the
+proxy that serves the model wants its own token rather than the OpenAI one, so the
+recipe is:
+
+    set -a && . .env && set +a
+    export CODOC_PROVIDER=openai CODOC_MODEL=azure/gpt-5.6-luna
+    export CODOC_BASE_URL="$OPENAI_BASE_URL" OPENAI_API_KEY="$OPENAI_AUTH_TOKEN"
+
+`CODOC_BASE_URL` is the variable codoc reads, and `OPENAI_BASE_URL` is only where
+the address is kept, which is why the two are assigned across. Check it before
+spending a recording on it, because a wrong key fails one file at a time rather
+than up front:
+
+    .venv/bin/python -c "from codoc.config import *; print(complete('say ready', get_llm_config()))"
+
 **First, record the code.** `record-session.sh start scribe neutral` unpacks a
 workspace with no codoc, no description and no agent configuration, folds the
 removal into the last commit so the agent does not begin in a tree that is

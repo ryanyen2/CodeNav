@@ -48,15 +48,23 @@ minutes, because watching an agent write code for forty minutes is not what we
 are measuring and the quality of that code is not what we are rating. How the
 recording works, and what keeps it honest, is in `replay/README.md`.
 
-**Which model wrote the tree, from 2026-08-20.** The codoc condition's tree was
-derived with the Claude provider, using sonnet for the pass that updates the tree,
-rather than with the gpt-5.4-mini configuration the earlier recordings used, because
-the OpenAI account that paid for those had no credit left on the day this session was
-recorded. Only the wording of the tree depends on that choice, since the structural
-proposals and the pending edits come from the same code either way, but a later
-recording that goes back to gpt-5.4-mini will read differently sentence by sentence,
-so do not compare tree prose across recordings without checking which provider wrote
-each one.
+**Which model wrote which part of the tree, from 2026-08-20.** Two models wrote the
+prose a participant in the codoc arm reads, and they wrote different parts of it. The
+tree that is in the workspace when the session starts was written by `codoc init` on
+2026-08-17 with the gpt-5.4-mini configuration. The proposals and amendments the
+recorded session produced on top of it were written by the Claude provider using
+sonnet, because the OpenAI account that had paid for the seeding had no credit left on
+the day the session was recorded. Only wording depends on that, since the structural
+proposals and the pending edits come from the same code whichever model describes them,
+but do not compare tree prose across recordings without first checking which model
+wrote each part of each one.
+
+**An internal OpenAI proxy is available again, and re-seeding with it was tried and not
+adopted, on 2026-08-20.** The reasoning is written out once, under the heading about
+tally's flatter nodes in `../tally/STUDY.md`, and the short version is that the newer
+model wrote the thinly-commented test nodes better and the richly-commented policy
+nodes worse, and regrouped the policy nodes, which are the ones the claims file and the
+question sets are written against.
 
 ## The page names the commands, from 2026-08-20
 
