@@ -506,6 +506,22 @@ def _elide(text: str, limit: int = 100) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
+def _note_body(store, source_id: str) -> str:
+    """The comment a lesson was learned from, or "" if this source is not one.
+
+    A lesson's sources are ledger event ids and comment thread ids in one list —
+    they are both "the thing the author did" and the memory has no reason to keep
+    them apart. The id prefix is what tells them apart here, and a thread that has
+    since been deleted reads as no note rather than as an error.
+    """
+    if not source_id.startswith("cm-"):
+        return ""
+    for thread in store.all_comments():
+        if thread.id == source_id:
+            return thread.body.strip()
+    return ""
+
+
 @app.command()
 def history(
     feature: str = typer.Argument(..., help="Feature id (f-…) or a title fragment."),
@@ -855,7 +871,14 @@ def voice(
             if lesson.scope_path:
                 typer.echo(f"  learned under: {' / '.join(lesson.scope_path)}")
             for event_id in lesson.source_events:
-                typer.echo(f"  ← ⟨{event_id}⟩")
+                # A source is either a ledger event (a rewrite) or a comment thread
+                # (a note the author typed). Print the note: an id is a handle, and
+                # what makes a learned preference correctable is reading the sentence
+                # that produced it. The thread is durable, so this works long after
+                # the card has left the margin.
+                note = _note_body(store, event_id)
+                typer.echo(f"  ← ⟨{event_id}⟩" + (f" you wrote: {_elide(note)}"
+                                                  if note else ""))
             return
 
         if verb:
@@ -865,8 +888,9 @@ def voice(
         lessons = store.all_lessons(include_retired=all_)
         if not lessons:
             typer.echo("codoc has not learned anything about your writing yet.")
-            typer.echo("  It learns from rewrites you make to descriptions IT wrote — "
-                       "edit a few and it will start.")
+            typer.echo("  It learns from rewrites you make to descriptions IT wrote, "
+                       "and from comments you leave on them — do either and it will "
+                       "start.")
             return
 
         active = [x for x in lessons if x.status is LessonStatus.ACTIVE]

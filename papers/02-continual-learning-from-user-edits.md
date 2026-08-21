@@ -101,6 +101,14 @@ has made hundreds of edits.
 
 **Training Language Models with Language Feedback** — 2022. **[verified]**
 Natural-language feedback as the learning channel, upstream of this whole line.
+**Built** (`loop/voice.py::_note_rows`): codoc already has this channel and was not
+reading it. An author who comments "don't call it a handler" has *said* the preference,
+where a rewrite only demonstrates it — and the comment was invisible to the harvest
+because an agent answers it, so the resulting amend is not a human edit. Both streams
+now enter one inference call, which lets a note and a rewrite that agree corroborate
+each other rather than arrive as two lessons to merge. The paper's caution carries over
+intact: feedback says how to write and never what is true, so a note classified
+`content` teaches nothing about voice.
 
 **Dr Genre: Reinforcement Learning from Decoupled LLM Feedback for Generic Text
 Rewriting** — 2025. **[verified]** 4 citations. Decouples the reward across

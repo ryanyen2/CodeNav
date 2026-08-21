@@ -457,6 +457,65 @@ It travels on both surfaces a reader asks from — `revisions.py::_entry` for th
 and `render.py::_history_feed` for the sidecar, each omitting the key entirely when there
 is nothing to say — and `codoc history` echoes it as a `rests on …` line under the reason.
 
+### What the style memory reads (`loop/voice.py`)
+
+The memory described in CLAUDE.md ("Learning how the author writes") learns from two
+streams of feedback, and they are not equally strong:
+
+- **A rewrite** — the author displacing prose codoc wrote (`Store.human_amend_events`).
+  The preference is INFERRED from the gap between draft and revision. This is PRELUDE's
+  method and the weaker signal: a gap between two paragraphs has several readings, which
+  is why one rewrite only ever yields a *provisional* lesson.
+- **A note** — a comment thread the author left on a description
+  (`Store.human_comment_threads`). The preference is STATED, in words, on the sentence it
+  is about. It is the stronger signal and it was the invisible one, by construction: a
+  prose-scope note is answered by an AGENT rewriting the description, so the AMEND that
+  lands is not a human edit and the ledger walk never saw the author's own words. The
+  literature anchor is *Training Language Models with Language Feedback* (2022) — natural
+  language as the learning channel — noted in
+  `papers/02-continual-learning-from-user-edits.md`.
+
+Both are folded into **one** inference call. The batch is what makes a weak signal
+readable (see `agent/voice.py`), and a note and a rewrite that say the same thing
+corroborate each other into an ACTIVE lesson — which they cannot do if they are inferred
+in separate calls and only meet afterwards as two lessons for the merge step to notice.
+
+Four properties keep the second stream from teaching the wrong thing:
+
+- **Notes get half the batch, floor one** (`_note_slots`). Filling the batch with
+  rewrites and giving notes the leftovers means a tree whose author edits often never has
+  a note read at all; the reverse reservation would let a burst of notes stall the
+  rewrites.
+- **Two watermarks, not one** (`WATERMARK_KEY`, `NOTE_WATERMARK_KEY`). The streams are
+  read from different tables at different rates, so a shared cursor would have to be the
+  minimum of the two and would re-read one side forever. Both are written at the END of a
+  harvest and neither is written when the inference call failed, so a failed batch is
+  retried whole rather than half-lost. Each is the table's **insertion order**, zero
+  padded — the HLC stamp cannot serve, since `HLC.now()` pins `logical_time` at zero and a
+  drained batch shares one `at`.
+- **A note carries no example pair, and none is invented.** A lesson keeps one
+  before/after as its cue — a rule plus its instance — and a note has no instance: the
+  author asked for the change instead of making it. Storing the quoted sentence as a
+  `before` with an empty `after` would put a half comparison into a later prompt, where it
+  reads as prose codoc should have written. The audit trail is the note itself, which
+  `codoc voice why` reads back out of the (durable) thread and prints under the lesson.
+- **The two filters mirror the rewrite side.** A note on prose the AUTHOR wrote is never
+  read — that is a request about the code, or a note to themselves, not a correction of
+  how codoc writes, and it is the same category error `prev_written_by == human` catches
+  for rewrites. And a note under `MIN_NOTE_CHARS` (12) says nothing a writer could act on.
+  That floor is *lower* than the rewrite floor on purpose: a rewrite has to demonstrate
+  the preference and needs room to do it, while "too jargony" is already a complete
+  instruction.
+
+Nothing filters on a thread's `scope` or `status`. A `code`-scope note can still carry a
+titling preference, separating content from style is the classifier's job rather than a
+field's, and threads are taken as they ARRIVE rather than once they resolve — waiting for
+a directive to land would delay every lesson by a build, and a `code`-scope note never
+rewrites prose at all, so waiting would learn nothing from it ever. The cursor survives
+those later writes because `upsert_comment` is an `ON CONFLICT(id) DO UPDATE`, not a
+delete-and-reinsert: a requeued note would corroborate its own lesson into ACTIVE by
+itself.
+
 ## Loop B in detail (codoc → code)
 
 `run_loop_b` (1) drains the `edits.json` **`commands`** channel — the

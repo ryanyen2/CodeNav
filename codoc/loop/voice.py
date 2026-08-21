@@ -3,8 +3,13 @@
 The policy half of the style memory; :mod:`codoc.agent.voice` is the one LLM call
 and :mod:`codoc.model.voice` is the shape. Four jobs, in the order the data moves:
 
-1. :func:`harvest` — walk the change ledger for prose a PERSON rewrote, ask the
-   model what each rewrite teaches, and fold the answers into the lesson set.
+1. :func:`harvest` — read the two ways an author corrects our writing, ask the
+   model what each one teaches, and fold the answers into the lesson set. The
+   ledger's human rewrites are PRELUDE's own signal, inferred from the draft →
+   revision gap; a comment thread on our prose is the author STATING the preference
+   instead of demonstrating it, which is the language-feedback channel the same
+   notes place upstream of that whole line. Both are read in one call, so a note and
+   a rewrite that agree corroborate each other.
 2. :func:`retrieve` — for the node about to be written, rank the lessons by how
    close their context is to it. CIPHER's k-nearest-context step; the adaptation is
    that "context" here is structural (where in the tree, which files) rather than
@@ -31,6 +36,7 @@ import logging
 from pathlib import Path
 
 from codoc.doclang import DocLanguage, tokens
+from codoc.model.annotation import CommentThread
 from codoc.model.event import ACTOR_HUMAN, Event, NodeOpKind
 from codoc.model.hlc import HLC
 from codoc.model.voice import (
@@ -57,6 +63,18 @@ WATERMARK_KEY = "voice.harvest_watermark"
 #: what this batch does not read, the next one does, because the watermark only
 #: advances over what was actually sent.
 BATCH = 8
+
+#: Where the note harvest keeps its position. A SECOND watermark rather than one
+#: shared with the rewrites, because the two streams are read from different tables
+#: at different rates: a single cursor would have to be the minimum of the two and
+#: would re-read one side forever.
+NOTE_WATERMARK_KEY = "voice.note_watermark"
+
+#: A note below this many characters says nothing a writer could act on ("no", "?",
+#: "fix"). Lower than the rewrite floor on purpose: a rewrite has to DEMONSTRATE the
+#: preference and needs room to do it, while a note STATES it, and "too jargony" is
+#: already a complete instruction.
+MIN_NOTE_CHARS = 12
 
 #: A rewrite below this many characters of change is noise (a typo, a link fix) and
 #: is dropped before the model sees it, so the batch spends its slots on rewrites
@@ -169,6 +187,78 @@ def _changed_chars(before: str, after: str) -> int:
     )
 
 
+def _note_rows(store: Store, threads: list[tuple[str, CommentThread]]) -> list[dict]:
+    """The comment threads that are a person objecting to OUR prose, as prompt rows.
+
+    A note is the more direct of the two signals and the one this module was missing.
+    A rewrite makes codoc infer the preference from a gap; a note is the author
+    saying it — "don't call these handlers", "this opens on the class name again" —
+    which is the channel the language-feedback line treats as primary (see
+    ``papers/02-continual-learning-from-user-edits.md``, section 2). It was also
+    invisible here by construction: a note with prose scope is answered by an AGENT
+    rewriting the description, so the resulting AMEND is not a human edit and
+    :meth:`Store.human_amend_events` never sees it. The author's stated preference
+    was acted on once and forgotten, and the next description repeated what they
+    objected to.
+
+    Two filters, mirroring the two that matter for a rewrite:
+
+    * The prose must be OURS. A note on a description a PERSON wrote is a request
+      about the code or a note to themselves, not a correction of how codoc writes —
+      the same category error ``prev_written_by == ACTOR_HUMAN`` drops on the rewrite
+      side, asked here of ``feature_writers``.
+    * The note must be long enough to carry an instruction
+      (:data:`MIN_NOTE_CHARS`).
+
+    Nothing filters on ``scope`` or ``status``. A ``code``-scope note can still name
+    what the author calls a thing, which is a titling preference; a note that turns
+    out to be about the implementation is what the model's ``content`` class is for,
+    and deciding it here would be this module guessing at prose it has not read.
+    """
+    rows: list[dict] = []
+    for _cursor, thread in threads:
+        if not thread.feature_id:
+            continue
+        body = thread.body.strip()
+        if len(body) < MIN_NOTE_CHARS:
+            continue
+        _writer, role = store.feature_writer_info(thread.feature_id)
+        if role == ACTOR_HUMAN:
+            continue
+        feature = store.get_feature(thread.feature_id)
+        if feature is None:
+            continue
+        rows.append({
+            "event_id": thread.id,
+            "feature_id": thread.feature_id,
+            "feature_title": feature.title,
+            "field": "description",
+            "note": body,
+            # What they were pointing AT. A note reads as a correction and the claim
+            # it corrects is half of it, which is why the thread stores the words and
+            # not only the offsets.
+            "quoted": (thread.anchor_text or "").strip(),
+            # No `before`/`after` pair, and none invented. A lesson keeps one as its
+            # cue — a rule plus its instance — and a note has no instance: the author
+            # asked for the change instead of making it, so there is no prose of
+            # theirs to show. The audit trail is the note itself, which `codoc voice
+            # why` reads back out of the thread.
+            "tree_path": " / ".join(_tree_path(store, thread.feature_id)),
+        })
+    return rows
+
+
+def _note_slots(batch: int) -> int:
+    """How much of one batch the notes may take.
+
+    Half. Not all of it, because a burst of notes must not stall the rewrite stream
+    that PRELUDE's method reads; not the leftovers either, because a stated
+    preference queueing behind inferred ones is the wrong priority — on a busy tree
+    the rewrites would fill every batch and the notes would never be read at all.
+    """
+    return max(1, max(1, batch) // 2)
+
+
 def harvest(
     store: Store,
     *,
@@ -176,50 +266,45 @@ def harvest(
     batch: int = BATCH,
     infer=None,
 ) -> list[StyleLesson]:
-    """Read the ledger since the watermark and fold what it teaches into the memory.
+    """Read what the author has told us since the watermarks, and fold it in.
+
+    Two streams, because an author corrects our writing two ways and only one of
+    them was ever read here. A **rewrite** shows the preference and codoc infers it
+    from the gap (:func:`_rewrite_rows`, PRELUDE's method). A **note** states it in
+    words, on the sentence it is about (:func:`_note_rows`) — the stronger signal,
+    and until now the invisible one: a note asking for the prose to change is
+    answered by an agent, so the AMEND it produces is not a human edit and the
+    ledger walk never saw the author's own words.
 
     Returns the lessons that were created or corroborated by this pass (empty is the
-    common and healthy outcome — most passes have no new human rewrite to read).
+    common and healthy outcome — most passes have neither a new rewrite nor a new
+    note to read).
 
-    Idempotent by watermark: the position advances to the newest event CONSIDERED,
-    including ones that yielded nothing, so a second call with no new edits does no
-    work and issues no LLM call. A crash mid-pass loses at most one batch's signal
-    and never double-counts, because evidence is keyed on event ids the lesson
-    already carries.
+    Idempotent by watermark, one per stream: each position advances to the newest row
+    CONSIDERED, including ones that yielded nothing, so a second call with no new
+    feedback does no work and issues no LLM call. A crash mid-pass loses at most one
+    batch's signal and never double-counts, because evidence is keyed on the row ids
+    the lesson already carries.
 
     ``infer`` is the injection point for tests — it defaults to
     :func:`codoc.agent.voice.infer_lessons` and is imported lazily so that importing
     this module never pulls in the LLM config.
     """
+    note_since = store.get_meta(NOTE_WATERMARK_KEY, "")
+    notes, note_mark = _take_notes(store, note_since, slots=_note_slots(batch))
     since = store.get_meta(WATERMARK_KEY, "")
-    events = store.human_amend_events(since=since, limit=max(1, batch) * 4)
-    if not events:
-        return []
+    rewrites, watermark = _take_rewrites(
+        store, since, slots=max(1, batch) - len(notes))
 
-    per_event: dict[str, list[dict]] = {}
-    for row in _rewrite_rows(store, events):
-        per_event.setdefault(row["event_id"], []).append(row)
-
-    # Walk the ledger forward taking WHOLE events until the batch is full, and move
-    # the watermark only over what was consumed. Whole events, because one AMEND can
-    # carry both a retitling and a rewritten description, and splitting it would send
-    # half a rewrite now and read the other half next pass as though it were
-    # unrelated to it.
-    rows: list[dict] = []
-    watermark = since
-    for cursor, event in events:
-        take = per_event.get(event.id, [])
-        if rows and len(rows) + len(take) > max(1, batch):
-            break
-        rows.extend(take)
-        # This event is accounted for either way — sent, or examined and found to
-        # teach nothing (an ADD_NODE, a self-correction, a typo). Holding the
-        # watermark for the boring ones is what would make a history of pure content
-        # edits re-read on every pass forever.
-        watermark = cursor
+    # ONE call for both streams, not one each. The batch is what makes a weak signal
+    # readable (see :mod:`codoc.agent.voice`), and a note and a rewrite that say the
+    # same thing corroborate each other — which they cannot do if they are inferred
+    # in separate calls and only meet as two lessons to be merged afterwards.
+    rows: list[dict] = notes + rewrites
 
     if not rows:
-        store.set_meta(WATERMARK_KEY, watermark)
+        _advance(store, (NOTE_WATERMARK_KEY, note_since, note_mark),
+                 (WATERMARK_KEY, since, watermark))
         return []
 
     if infer is None:
@@ -243,8 +328,85 @@ def harvest(
         if lesson is not None:
             touched.append(lesson)
 
-    store.set_meta(WATERMARK_KEY, watermark)
+    _advance(store, (NOTE_WATERMARK_KEY, note_since, note_mark),
+             (WATERMARK_KEY, since, watermark))
     return touched
+
+
+def _take_notes(
+    store: Store, since: str, *, slots: int,
+) -> tuple[list[dict], str]:
+    """The next notes worth sending, and the cursor they consumed.
+
+    One thread is one row, so the batch arithmetic is the trivial case of the
+    rewrite one below — a note cannot be half-read the way an AMEND carrying both a
+    title and a description can.
+    """
+    threads = store.human_comment_threads(since=since, limit=max(1, slots) * 4)
+    if not threads:
+        return [], since
+    keep = {row["event_id"]: row for row in _note_rows(store, threads)}
+    rows: list[dict] = []
+    watermark = since
+    for cursor, thread in threads:
+        row = keep.get(thread.id)
+        if row is not None and len(rows) >= max(1, slots):
+            break
+        if row is not None:
+            rows.append(row)
+        # Advanced over the dropped ones too, for the reason the rewrite side gives:
+        # a tree whose notes are all short or all on the author's own prose would
+        # otherwise be re-examined on every pass forever.
+        watermark = cursor
+    return rows, watermark
+
+
+def _take_rewrites(
+    store: Store, since: str, *, slots: int,
+) -> tuple[list[dict], str]:
+    """The next rewrites worth sending, and the cursor they consumed.
+
+    Walks the ledger forward taking WHOLE events until the slots are full. Whole
+    events, because one AMEND can carry both a retitling and a rewritten
+    description, and splitting it would send half a rewrite now and read the other
+    half next pass as though it were unrelated to it.
+    """
+    if slots <= 0:
+        return [], since
+    events = store.human_amend_events(since=since, limit=max(1, slots) * 4)
+    if not events:
+        return [], since
+
+    per_event: dict[str, list[dict]] = {}
+    for row in _rewrite_rows(store, events):
+        per_event.setdefault(row["event_id"], []).append(row)
+
+    rows: list[dict] = []
+    watermark = since
+    for cursor, event in events:
+        take = per_event.get(event.id, [])
+        if rows and len(rows) + len(take) > slots:
+            break
+        rows.extend(take)
+        # This event is accounted for either way — sent, or examined and found to
+        # teach nothing (an ADD_NODE, a self-correction, a typo). Holding the
+        # watermark for the boring ones is what would make a history of pure content
+        # edits re-read on every pass forever.
+        watermark = cursor
+    return rows, watermark
+
+
+def _advance(store: Store, *cursors: tuple[str, str, str]) -> None:
+    """Move each watermark that actually moved.
+
+    Both are written together at the END of a harvest, and neither is written when
+    the inference call failed — so a failed batch is retried whole rather than half
+    of it being lost. Skipping the unchanged ones keeps a harvest with nothing to
+    read from touching the store at all, which is the common case on a quiet pass.
+    """
+    for key, before, after in cursors:
+        if after != before:
+            store.set_meta(key, after)
 
 
 def _absorb(store: Store, item, row: dict) -> StyleLesson | None:
@@ -271,8 +433,11 @@ def _absorb(store: Store, item, row: dict) -> StyleLesson | None:
             axis=item.axis,
             instruction=item.instruction,
             axis_detail=item.axis_detail,
-            example_before=row["before"][:EXAMPLE_CHARS],
-            example_after=row["after"][:EXAMPLE_CHARS],
+            # Absent for a note (see `_note_rows`), and `voice_context` sends the
+            # pair only when both halves are there — a cue with nothing to compare
+            # against is worse than the instruction alone.
+            example_before=row.get("before", "")[:EXAMPLE_CHARS],
+            example_after=row.get("after", "")[:EXAMPLE_CHARS],
             scope_path=scope_path,
             scope_files=files,
             status=LessonStatus.PROVISIONAL if ACTIVE_AT > 1 else LessonStatus.ACTIVE,

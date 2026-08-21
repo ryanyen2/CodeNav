@@ -862,6 +862,33 @@ class Store:
         ).fetchall()
         return [(f"{r['_seq']:020d}", _row_to_event(r)) for r in rows]
 
+    def human_comment_threads(
+        self, *, since: str = "", limit: int = 20,
+    ) -> list[tuple[str, "CommentThread"]]:
+        """Comment threads a PERSON wrote, oldest first, after cursor ``since``.
+
+        The second input to the style harvest, and the more direct of the two: a
+        rewrite makes codoc infer the preference from a gap, while a note states it.
+
+        Cursor semantics are :meth:`human_amend_events`'s, for the same reason — the
+        insertion order, zero-padded so it compares as the string ``store_meta``
+        holds. A thread's rowid survives its later edits (``upsert_comment`` is an
+        ``ON CONFLICT DO UPDATE``, not a delete-and-reinsert), so the cursor stays
+        valid across a reworded note and a resolution.
+
+        Threads are taken as they ARRIVE rather than once they resolve. A note is a
+        stated preference the moment it is typed; waiting for its directive to land
+        would delay every lesson by a build, and a ``code``-scope note never rewrites
+        prose at all, so waiting for a resolution would learn nothing from it ever.
+        """
+        after = int(since) if since.strip().isdigit() else 0
+        rows = self.conn.execute(
+            "SELECT rowid AS _seq, * FROM comments WHERE author=? AND rowid > ?"
+            " ORDER BY rowid ASC LIMIT ?",
+            (Provenance.HUMAN.value, after, max(0, limit)),
+        ).fetchall()
+        return [(f"{r['_seq']:020d}", _row_to_comment(r)) for r in rows]
+
     def _next_version(self, feature_id: str) -> str:
         """The next version stamp for a feature — strictly after its current one.
 

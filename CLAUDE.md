@@ -235,6 +235,16 @@ CIPHER (Gao et al., NeurIPS 2024 — `papers/02-continual-learning-from-user-edi
 infer a NAMED preference from the draft→revision gap, keep it, retrieve the ones
 whose context resembles the node being written, put them in the prompt.
 
+It reads **two** kinds of feedback, in one call. A **rewrite** demonstrates the
+preference and codoc infers it from the gap; a **comment** states it in words, on the
+sentence it is about — the stronger signal, and the one that was invisible here, since
+a note asking for prose to change is answered by an AGENT and the amend that lands is
+not a human edit. One call for both, so a note and a rewrite that agree corroborate
+each other; notes are reserved half the batch so a busy editor cannot starve them; and
+a note stores no example pair, because the author asked for the change rather than
+making one and there is no prose of theirs to show. See `docs/architecture.md`, "What
+the style memory reads".
+
 Deliberately **no fine-tuning**, for that paper's reasons plus one of codoc's own: an
 author can read a sentence of English and tell us it is wrong, and that correction
 channel (`codoc voice forget`) is the only thing that makes a learned preference safe.
@@ -419,8 +429,9 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   displaced + the directives they cite + the warrant they rest on),
              #   gitref.py (the commit a
              #   directive's code work started from — fails soft to ""),
-             #   voice.py (the style memory: harvest human rewrites → lessons →
-             #   retrieve by context → inject; see "Learning how the author writes"),
+             #   voice.py (the style memory: harvest human rewrites AND the
+             #   comments people leave on codoc's prose → lessons → retrieve by
+             #   context → inject; see "Learning how the author writes"),
              #   prose.py (the prose GATE: a deterministic critic over a title or
              #   description + one repair pass; see "Checking what codoc wrote" —
              #   NOT blocks/prose.py, which is the prose BLOCK plugin)

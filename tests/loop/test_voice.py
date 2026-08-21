@@ -17,6 +17,7 @@ import pytest
 
 from codoc.agent.voice import InferredLesson
 from codoc.loop import voice
+from codoc.model.annotation import CommentScope, CommentStatus, CommentThread
 from codoc.model.event import ACTOR_HUMAN, Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
 from codoc.model.hlc import HLC
@@ -71,6 +72,34 @@ def _amend(
     )
     store.append_event(event)
     return event
+
+
+def _note(
+    store: Store,
+    fid: str,
+    body: str,
+    *,
+    quoted: str = "The EditQueueHandler processes each item.",
+    scope: CommentScope = CommentScope.BOTH,
+) -> CommentThread:
+    """One comment thread a person left on a feature's description.
+
+    Built by hand for the reason `_amend` gives: what these tests are about is what
+    `harvest` reads out of the store, and running the webview's command path in the
+    middle would make a voice failure and an edits failure indistinguishable.
+    """
+    thread = CommentThread(feature_id=fid, body=body, anchor_text=quoted, scope=scope)
+    store.upsert_comment(thread)
+    return thread
+
+
+def _ours(store: Store, fid: str) -> None:
+    """Mark this feature's prose as codoc-written, the way `apply_op` marks it."""
+    store.set_feature_writer(fid, "loop_a", "loop")
+
+
+def _theirs(store: Store, fid: str) -> None:
+    store.set_feature_writer(fid, "human", ACTOR_HUMAN)
 
 
 def _infer(answers: dict[str, InferredLesson | None]):
@@ -187,6 +216,200 @@ def test_tree_path_is_the_ancestor_titles(store):
     voice.harvest(store, infer=infer)
     assert infer.seen[0][0]["tree_path"] == "Codoc / The two loops / Retry policy"
     assert store.all_lessons()[0].scope_path == ["Codoc", "The two loops", "Retry policy"]
+
+
+# --------------------------------------------------------------------------
+# what a note teaches
+# --------------------------------------------------------------------------
+#
+# A comment is the author STATING the preference instead of demonstrating it, and it
+# was invisible to this module: a note asking for the prose to change is answered by
+# an agent, so the AMEND it produces is not a human edit and the ledger walk never
+# saw the author's own words. These tests pin the second stream and the two filters
+# that keep it from teaching the wrong thing.
+
+def test_a_note_on_our_prose_teaches_a_lesson(store):
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    thread = _note(store, "f-1", "don't call it a handler — it drains the queue")
+    infer = _infer({thread.id: _lesson(thread.id, "Never write 'handler'.",
+                                       axis=LessonAxis.VOCABULARY)})
+
+    touched = voice.harvest(store, infer=infer)
+
+    (row,) = infer.seen[0]
+    assert row["event_id"] == thread.id
+    assert row["note"] == "don't call it a handler — it drains the queue"
+    assert row["quoted"] == "The EditQueueHandler processes each item."
+    assert row["field"] == "description"
+    assert row["tree_path"] == "Edit queue"
+
+    assert len(touched) == 1
+    (stored,) = store.all_lessons()
+    assert stored.instruction == "Never write 'handler'."
+    assert stored.source_events == [thread.id]
+
+
+def test_a_note_carries_no_before_after_pair(store):
+    """Neither in the prompt nor in the lesson, and neither is invented.
+
+    A lesson keeps one pair as its cue — a rule plus its instance — and a note has no
+    instance: the author asked for the change rather than making it. Showing the
+    quoted sentence as a `before` with an empty `after` would put a half comparison
+    in a later prompt, which reads as prose codoc should have written.
+    """
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    thread = _note(store, "f-1", "say what it is for, not what class it is")
+    infer = _infer({thread.id: _lesson(thread.id, "Open on the purpose.")})
+
+    voice.harvest(store, infer=infer)
+
+    (row,) = infer.seen[0]
+    assert "before" not in row and "after" not in row
+    (stored,) = store.all_lessons()
+    assert stored.example_before == "" and stored.example_after == ""
+    block = voice.voice_context(store) or {}
+    assert all("example_before" not in x for x in block.get("lessons", []))
+
+
+def test_a_note_on_the_authors_own_prose_never_reaches_the_model(store):
+    """The same category error `prev_written_by == human` drops on the rewrite side.
+
+    A note on a paragraph the author wrote themselves is a request about the code, or
+    a note to themselves — not a correction of how codoc writes.
+    """
+    _feature(store, "f-1", "Edit queue")
+    _theirs(store, "f-1")
+    _note(store, "f-1", "make this shorter and drop the second sentence")
+    infer = _infer({})
+
+    assert voice.harvest(store, infer=infer) == []
+    assert infer.seen == []
+    # And it is not re-examined on every pass forever.
+    assert store.get_meta(voice.NOTE_WATERMARK_KEY, "") != ""
+
+
+def test_a_note_too_short_to_be_an_instruction_is_dropped(store):
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    _note(store, "f-1", "no")
+    infer = _infer({})
+
+    assert voice.harvest(store, infer=infer) == []
+    assert infer.seen == []
+
+
+def test_a_note_and_a_rewrite_arrive_in_one_call(store):
+    """One call for both streams, so a note and a rewrite that agree can corroborate.
+
+    Inferred in separate calls they would only meet afterwards as two lessons to be
+    merged, and the batch is what makes a weak signal readable in the first place.
+    """
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    thread = _note(store, "f-1", "don't call it a handler — it drains the queue")
+    event = _amend(store, "f-1", before=LONG_A, after=LONG_B)
+    infer = _infer({})
+
+    voice.harvest(store, infer=infer)
+
+    assert len(infer.seen) == 1, "one call, not one per stream"
+    sent = [row["event_id"] for row in infer.seen[0]]
+    assert sorted(sent) == sorted([thread.id, event.id])
+
+
+def test_a_note_and_a_rewrite_that_agree_promote_the_lesson(store):
+    """The payoff. Two channels, one preference, and it starts shaping prose.
+
+    Corroboration counts distinct things the author DID, and asking for a change is
+    not the same act as making one.
+    """
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    thread = _note(store, "f-1", "don't call it a handler — it drains the queue")
+    event = _amend(store, "f-1", before=LONG_A, after=LONG_B)
+    said = "Call this what the codebase calls it; never 'handler'."
+    infer = _infer({
+        thread.id: _lesson(thread.id, said, axis=LessonAxis.VOCABULARY),
+        event.id: _lesson(event.id, said, axis=LessonAxis.VOCABULARY),
+    })
+
+    voice.harvest(store, infer=infer)
+
+    (stored,) = store.all_lessons()
+    assert stored.evidence == ACTIVE_AT
+    assert stored.status is LessonStatus.ACTIVE
+    assert sorted(stored.source_events) == sorted([thread.id, event.id])
+
+
+def test_notes_are_not_starved_by_a_busy_rewrite_stream(store):
+    """A stated preference must not queue behind inferred ones.
+
+    Filling the batch with rewrites and giving notes the leftovers means a tree whose
+    author edits often never has a note read at all.
+    """
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    for i in range(6):
+        _amend(store, "f-1", before=LONG_A, after=LONG_B + f" {i}")
+    thread = _note(store, "f-1", "stop opening on the class name")
+    infer = _infer({})
+
+    voice.harvest(store, infer=infer, batch=4)
+
+    sent = [row["event_id"] for row in infer.seen[0]]
+    assert thread.id in sent
+    assert len(sent) == 4
+
+
+def test_a_second_harvest_does_not_reread_a_note(store):
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    thread = _note(store, "f-1", "stop opening on the class name")
+    infer = _infer({thread.id: _lesson(thread.id, "Open on the purpose.")})
+
+    voice.harvest(store, infer=infer)
+    assert voice.harvest(store, infer=infer) == []
+    assert len(infer.seen) == 1
+
+
+def test_resolving_a_note_does_not_make_it_new_again(store):
+    """The cursor is the thread's insertion order, and Loop B writes to the row.
+
+    Stamping the directive it produced and marking it resolved both update the
+    thread. If either moved its place in the queue, one note would be read again on
+    every pass — and would corroborate its own lesson into ACTIVE by itself.
+    """
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    thread = _note(store, "f-1", "stop opening on the class name")
+    infer = _infer({thread.id: _lesson(thread.id, "Open on the purpose.")})
+    voice.harvest(store, infer=infer)
+
+    thread.directive_id = "d-1"
+    thread.status = CommentStatus.RESOLVED
+    store.upsert_comment(thread)
+
+    assert voice.harvest(store, infer=infer) == []
+    assert len(infer.seen) == 1
+    (stored,) = store.all_lessons()
+    assert stored.evidence == 1
+
+
+def test_a_failing_inference_holds_the_note_watermark_too(store):
+    _feature(store, "f-1", "Edit queue")
+    _ours(store, "f-1")
+    thread = _note(store, "f-1", "stop opening on the class name")
+
+    def boom(rewrites, *, config=None, doc_language=None):
+        raise RuntimeError("no model")
+
+    assert voice.harvest(store, infer=boom) == []
+    assert store.get_meta(voice.NOTE_WATERMARK_KEY, "") == ""
+
+    infer = _infer({thread.id: _lesson(thread.id, "Open on the purpose.")})
+    assert len(voice.harvest(store, infer=infer)) == 1
 
 
 # --------------------------------------------------------------------------
