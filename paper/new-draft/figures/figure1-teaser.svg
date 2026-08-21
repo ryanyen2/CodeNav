@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 326" width="700" height="326">
+  <defs>
+    <style>
+      .label { font-family: -apple-system, 'Inter', 'Helvetica Neue', sans-serif; fill: #2D3436; }
+      .mono { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; fill: #2D3436; }
+      .caption { font-family: -apple-system, 'Inter', 'Helvetica Neue', sans-serif; fill: #555; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="700" height="326" fill="#FFFFFF"/>
+
+  <!-- ===== LEFT PANEL: Without codoc ===== -->
+
+  <!-- Panel header -->
+  <text x="168" y="24" text-anchor="middle" class="label" font-size="11" font-weight="600" fill="#FF6B9D">Without codoc</text>
+
+  <!-- Chat interface box -->
+  <rect x="16" y="36" width="155" height="108" rx="4" fill="none" stroke="#DFE6E9" stroke-width="1"/>
+  <text x="24" y="50" class="mono" font-size="7" fill="#999">chat session</text>
+
+  <!-- User message bubble -->
+  <rect x="50" y="56" width="112" height="20" rx="8" fill="#E8F4FD"/>
+  <text x="58" y="69" class="mono" font-size="6.5" fill="#2D3436">Add playlist management</text>
+
+  <!-- Agent response bubble -->
+  <rect x="22" y="82" width="140" height="28" rx="8" fill="#F0F0F0"/>
+  <text x="30" y="94" class="mono" font-size="6.5" fill="#2D3436">Done! Created 4 files,</text>
+  <text x="30" y="104" class="mono" font-size="6.5" fill="#2D3436">modified 3 modules...</text>
+
+  <!-- Agent follow-up -->
+  <rect x="22" y="115" width="112" height="16" rx="8" fill="#F0F0F0"/>
+  <text x="30" y="126" class="mono" font-size="6.5" fill="#999">session ended</text>
+
+  <!-- File tree box -->
+  <rect x="180" y="36" width="148" height="108" rx="4" fill="none" stroke="#DFE6E9" stroke-width="1"/>
+  <text x="188" y="50" class="mono" font-size="7" fill="#999">14 files changed</text>
+
+  <text x="188" y="64" class="mono" font-size="6.5">src/</text>
+  <text x="198" y="74" class="mono" font-size="6.5">playlist/</text>
+  <text x="208" y="84" class="mono" font-size="6.5" fill="#4ECDC4">+ index.ts</text>
+  <text x="208" y="93" class="mono" font-size="6.5" fill="#4ECDC4">+ fetch.ts</text>
+  <text x="208" y="102" class="mono" font-size="6.5" fill="#4ECDC4">+ types.ts</text>
+  <text x="198" y="112" class="mono" font-size="6.5">player/</text>
+  <text x="208" y="122" class="mono" font-size="6.5" fill="#E17055">~ controls.ts</text>
+  <text x="208" y="131" class="mono" font-size="6.5" fill="#E17055">~ shortcuts.ts</text>
+  <text x="188" y="140" class="mono" font-size="6" fill="#999">... +9 more</text>
+
+  <!-- CLAUDE.md box -->
+  <rect x="50" y="152" width="240" height="56" rx="4" fill="none" stroke="#DFE6E9" stroke-width="1"/>
+  <text x="58" y="166" class="mono" font-size="7" fill="#999">CLAUDE.md</text>
+  <text x="58" y="179" class="mono" font-size="6.5"># Playlist Module</text>
+  <text x="58" y="189" class="mono" font-size="6.5" fill="#666">The playlist module handles fetching,</text>
+  <text x="58" y="199" class="mono" font-size="6.5" fill="#666">caching, and displaying user playlists.</text>
+
+  <!-- Disconnection indicators: dashed lines with X marks -->
+  <line x1="93" y1="144" x2="93" y2="152" stroke="#FF6B9D" stroke-width="1" stroke-dasharray="2,2"/>
+  <line x1="254" y1="144" x2="200" y2="152" stroke="#FF6B9D" stroke-width="1" stroke-dasharray="2,2"/>
+
+  <!-- Small X marks indicating disconnection -->
+  <g transform="translate(91,147)">
+    <line x1="-2" y1="-2" x2="2" y2="2" stroke="#FF6B9D" stroke-width="1.2"/>
+    <line x1="2" y1="-2" x2="-2" y2="2" stroke="#FF6B9D" stroke-width="1.2"/>
+  </g>
+  <g transform="translate(226,147)">
+    <line x1="-2" y1="-2" x2="2" y2="2" stroke="#FF6B9D" stroke-width="1.2"/>
+    <line x1="2" y1="-2" x2="-2" y2="2" stroke="#FF6B9D" stroke-width="1.2"/>
+  </g>
+
+  <!-- Question annotation -->
+  <rect x="62" y="216" width="210" height="22" rx="10" fill="#FFF0F5" stroke="#FF6B9D" stroke-width="0.8"/>
+  <text x="86" y="230" class="label" font-size="8" fill="#FF6B9D" font-style="italic">What was decided? What was traded off?</text>
+  <text x="72" y="230" class="label" font-size="9" fill="#FF6B9D">?</text>
+
+  <!-- ===== DIVIDER ===== -->
+  <line x1="350" y1="32" x2="350" y2="248" stroke="#DFE6E9" stroke-width="1.2"/>
+  <polygon points="350,252 346,244 354,244" fill="#DFE6E9"/>
+
+  <!-- ===== RIGHT PANEL: With codoc ===== -->
+
+  <!-- Panel header -->
+  <text x="525" y="24" text-anchor="middle" class="label" font-size="11" font-weight="600" fill="#5B8DEF">With codoc</text>
+
+  <!-- Feature tree container -->
+  <rect x="370" y="36" width="200" height="162" rx="4" fill="none" stroke="#5B8DEF" stroke-width="1"/>
+  <text x="378" y="50" class="label" font-size="7.5" font-weight="500" fill="#5B8DEF">feature tree</text>
+
+  <!-- Root node -->
+  <rect x="380" y="56" width="8" height="8" rx="1.5" fill="#5B8DEF"/>
+  <text x="392" y="64" class="mono" font-size="7.5" font-weight="600">Playlist management</text>
+
+  <!-- Tree hierarchy lines -->
+  <line x1="384" y1="66" x2="384" y2="134" stroke="#DFE6E9" stroke-width="0.8"/>
+  <line x1="384" y1="80" x2="391" y2="80" stroke="#DFE6E9" stroke-width="0.8"/>
+  <line x1="384" y1="98" x2="391" y2="98" stroke="#DFE6E9" stroke-width="0.8"/>
+  <line x1="384" y1="116" x2="391" y2="116" stroke="#DFE6E9" stroke-width="0.8"/>
+  <!-- Sub-hierarchy for Keyboard shortcuts -->
+  <line x1="396" y1="118" x2="396" y2="134" stroke="#DFE6E9" stroke-width="0.8"/>
+  <line x1="396" y1="134" x2="403" y2="134" stroke="#DFE6E9" stroke-width="0.8"/>
+
+  <!-- Child: Fetch user playlists (stable) -->
+  <circle cx="394" cy="80" r="3" fill="#5B8DEF"/>
+  <text x="402" y="83" class="mono" font-size="7">Fetch user playlists</text>
+  <!-- Code link indicator -->
+  <text x="520" y="83" class="mono" font-size="5.5" fill="#999">fetch.ts</text>
+
+  <!-- Child: Track duration format (PROPOSAL: new) -->
+  <circle cx="394" cy="98" r="3" fill="none" stroke="#4ECDC4" stroke-width="1.5"/>
+  <rect x="400" y="91" width="130" height="13" rx="2" fill="#E8FFF8"/>
+  <text x="402" y="100" class="mono" font-size="7" fill="#2D3436">Track duration format</text>
+  <!-- Green "new" badge -->
+  <rect x="532" y="92" width="24" height="10" rx="3" fill="#4ECDC4"/>
+  <text x="537" y="100" class="mono" font-size="5.5" fill="#FFF" font-weight="600">NEW</text>
+
+  <!-- Child: Player controls (stable) -->
+  <circle cx="394" cy="116" r="3" fill="#5B8DEF"/>
+  <text x="402" y="119" class="mono" font-size="7">Player controls</text>
+  <text x="520" y="119" class="mono" font-size="5.5" fill="#999">controls.ts</text>
+
+  <!-- Grandchild: Keyboard shortcuts (PROPOSAL: amended) -->
+  <circle cx="406" cy="134" r="3" fill="none" stroke="#F0932B" stroke-width="1.5"/>
+  <rect x="414" y="127" width="115" height="13" rx="2" fill="#FFF8E8"/>
+  <text x="416" y="136" class="mono" font-size="7" fill="#2D3436">Keyboard shortcuts</text>
+  <!-- Amber "amend" badge -->
+  <rect x="531" y="128" width="30" height="10" rx="3" fill="#F0932B"/>
+  <text x="534" y="136" class="mono" font-size="5.5" fill="#FFF" font-weight="600">AMEND</text>
+
+  <!-- Accept/Reject annotation -->
+  <g transform="translate(400, 154)">
+    <rect x="0" y="0" width="50" height="14" rx="3" fill="#E8FFF8" stroke="#4ECDC4" stroke-width="0.6"/>
+    <text x="6" y="10" class="mono" font-size="6.5" fill="#4ECDC4">Accept</text>
+    <text x="40" y="10" class="label" font-size="7" fill="#4ECDC4">&#x2713;</text>
+  </g>
+  <g transform="translate(456, 154)">
+    <rect x="0" y="0" width="46" height="14" rx="3" fill="#FFF0F5" stroke="#FF6B9D" stroke-width="0.6"/>
+    <text x="6" y="10" class="mono" font-size="6.5" fill="#FF6B9D">Reject</text>
+    <text x="36" y="10" class="label" font-size="7" fill="#FF6B9D">&#x2717;</text>
+  </g>
+
+  <!-- Drift indicator on Player controls -->
+  <rect x="384" y="176" width="80" height="14" rx="3" fill="#FFF0F5" stroke="#FF6B9D" stroke-width="0.6"/>
+  <circle cx="392" cy="183" r="2.5" fill="#FF6B9D"/>
+  <text x="398" y="186" class="mono" font-size="6" fill="#FF6B9D">code drifted</text>
+
+  <!-- Code binding box (linked from feature) -->
+  <rect x="580" y="56" width="104" height="60" rx="4" fill="#F8F9FA" stroke="#DFE6E9" stroke-width="1"/>
+  <text x="588" y="70" class="mono" font-size="6" fill="#999">fetch.ts:12</text>
+  <text x="588" y="82" class="mono" font-size="6">async fetchPlaylists(</text>
+  <text x="588" y="91" class="mono" font-size="6">  userId: string</text>
+  <text x="588" y="100" class="mono" font-size="6">): Promise&lt;Playlist[]&gt;</text>
+  <text x="588" y="109" class="mono" font-size="6">{...}</text>
+
+  <!-- Connection arrow from feature to code -->
+  <line x1="556" y1="80" x2="578" y2="80" stroke="#5B8DEF" stroke-width="1" stroke-dasharray="3,2"/>
+  <polygon points="578,80 574,77 574,83" fill="#5B8DEF"/>
+
+  <!-- Connection arrow from tree to drift -->
+  <line x1="430" y1="119" x2="430" y2="176" stroke="#FF6B9D" stroke-width="0.8" stroke-dasharray="2,2"/>
+
+  <!-- Right panel annotation -->
+  <rect x="390" y="200" width="200" height="34" rx="4" fill="#F0F7FF" stroke="#5B8DEF" stroke-width="0.6"/>
+  <text x="400" y="213" class="label" font-size="7" fill="#5B8DEF">Proposals demand a verdict.</text>
+  <text x="400" y="225" class="label" font-size="7" fill="#5B8DEF">Features bind to the code that implements them.</text>
+
+  <!-- ===== CAPTION ===== -->
+  <line x1="16" y1="265" x2="684" y2="265" stroke="#DFE6E9" stroke-width="0.5"/>
+
+  <text x="16" y="282" class="caption" font-size="7.5">
+    <tspan font-weight="600" fill="#2D3436">Figure 1.</tspan>
+    <tspan fill="#555"> (Left) In chat-based workflows, the developer's account of the codebase is scattered across ephemeral prompts, agent-authored</tspan>
+  </text>
+  <text x="16" y="294" class="caption" font-size="7.5" fill="#555">documentation, and raw code &#x2014; none linked to each other. (Right) codoc maintains a feature tree synchronized with the code: agent changes</text>
+  <text x="16" y="306" class="caption" font-size="7.5" fill="#555">appear as proposals requiring a verdict, and each feature binds to the code that implements it.</text>
+
+</svg>
