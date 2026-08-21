@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pathlib
 
-from codoc.pipelines.indexing.cocoindex_app import _MAX_FILE_BYTES
+from codoc.pipelines.indexing.gate import HEARING_BYTES, READ_CEILING_BYTES
 from codoc.pipelines.indexing.survey import RepoSurvey, render_survey, survey_repo
 
 
@@ -23,11 +23,38 @@ def _repo(root: pathlib.Path, files: dict[str, str]) -> pathlib.Path:
     return root
 
 
-def _oversize(path: pathlib.Path) -> pathlib.Path:
+def _write(path: pathlib.Path, text: str, floor: int) -> pathlib.Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("# pad\n" * (_MAX_FILE_BYTES // 6 + 2), encoding="utf-8")
-    assert path.stat().st_size > _MAX_FILE_BYTES
+    path.write_text(text, encoding="utf-8")
+    assert path.stat().st_size > floor
     return path
+
+
+def _beyond_ceiling(path: pathlib.Path) -> pathlib.Path:
+    """A file past what codoc will read into memory at all."""
+    return _write(path, "# pad\n" * (READ_CEILING_BYTES // 6 + 2), READ_CEILING_BYTES)
+
+
+def _blob(path: pathlib.Path) -> pathlib.Path:
+    """Large, parseable, and one enormous data literal — nothing to bind to."""
+    body = "1, " * (HEARING_BYTES // 3 + 100)
+    return _write(path, f"DATA = [{body}]\n", HEARING_BYTES)
+
+
+def _generated_surface(path: pathlib.Path) -> pathlib.Path:
+    """Large and made of ordinary definitions — altair's schema modules.
+
+    The size a real one is (`test/altair`'s `core.py` is 1.6 MB of 923 classes),
+    built here from the same shape so the hearing is asked the real question.
+    """
+    unit = (
+        "class Gen{i}(SchemaBase):\n"
+        '    """A generated schema class."""\n'
+        "    def __init__(self, field=None, **kwds):\n"
+        "        super().__init__(field=field, **kwds)\n\n"
+    )
+    text = "".join(unit.format(i=i) for i in range(HEARING_BYTES // 150 + 2_000))
+    return _write(path, text, HEARING_BYTES)
 
 
 def test_a_repo_codoc_reads_whole_reports_nothing(tmp_path):
@@ -72,16 +99,41 @@ def test_data_and_docs_are_not_a_gap_in_the_view_of_the_code(tmp_path):
     assert render_survey(survey) == []
 
 
-def test_a_file_over_the_index_cap_is_named(tmp_path):
+def test_a_file_too_large_to_read_is_named(tmp_path):
     _repo(tmp_path, {"pkg/small.py": "x = 1\n"})
-    _oversize(tmp_path / "pkg" / "generated.py")
+    _beyond_ceiling(tmp_path / "pkg" / "huge.py")
 
     survey = survey_repo(tmp_path)
     assert survey.indexed == 1
-    assert [rel for rel, _ in survey.oversize] == ["pkg/generated.py"]
+    assert [rel for rel, _ in survey.too_large] == ["pkg/huge.py"]
     # Named, not just counted: the threshold is somebody's to revisit, and they
     # cannot weigh it without knowing which file it cost them.
-    assert "pkg/generated.py" in render_survey(survey)[0]
+    assert "pkg/huge.py" in render_survey(survey)[0]
+
+
+def test_a_large_file_made_of_ordinary_definitions_is_indexed(tmp_path):
+    # The case a byte cap got wrong. `test/altair` ships two modules from one
+    # generator, 1.20 MB and 1.60 MB; the cap indexed the first and made the second
+    # invisible, and the second is the schema surface a reader most needs described.
+    _repo(tmp_path, {"pkg/small.py": "x = 1\n"})
+    _generated_surface(tmp_path / "pkg" / "schema.py")
+
+    survey = survey_repo(tmp_path)
+    assert survey.indexed == 2
+    assert survey.unseen == 0
+    assert render_survey(survey) == []
+
+
+def test_a_large_file_that_is_one_data_literal_is_reported(tmp_path):
+    # …and the shape the cap was written for is still turned away, on the ground
+    # the cap was reaching for: the parse found nothing a feature could bind to.
+    _repo(tmp_path, {"pkg/small.py": "x = 1\n"})
+    _blob(tmp_path / "pkg" / "table.py")
+
+    survey = survey_repo(tmp_path)
+    assert survey.indexed == 1
+    assert [rel for rel, _ in survey.unaddressable] == ["pkg/table.py"]
+    assert "pkg/table.py" in render_survey(survey)[0]
 
 
 def test_a_directory_excluded_on_purpose_stays_quiet(tmp_path):
@@ -150,14 +202,15 @@ def test_a_symlink_under_an_excluded_path_stays_quiet(tmp_path):
 
 def test_each_kind_of_blindness_gets_its_own_line(tmp_path):
     _repo(tmp_path, {"main.py": "x = 1\n", "cmd/serve.go": "package main\n"})
-    _oversize(tmp_path / "generated.py")
+    _beyond_ceiling(tmp_path / "huge.py")
+    _blob(tmp_path / "table.py")
     real = tmp_path / "packages" / "shared"
     real.mkdir(parents=True)
     (real / "lib.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "shared").symlink_to(real, target_is_directory=True)
 
     lines = render_survey(survey_repo(tmp_path))
-    assert len(lines) == 3  # answered differently, so never merged into one
+    assert len(lines) == 4  # answered differently, so never merged into one
 
 
 def test_long_lists_are_summarised_rather_than_dumped():

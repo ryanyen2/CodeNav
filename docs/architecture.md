@@ -181,27 +181,78 @@ at 95 chunks, `doc-view.ts` at 141. On the crowded ones `channels.py` goes 258k 
 and Loop A across `added` + `modified`, so a commit that lands a generated module
 cannot turn the incremental pass into a half-megabyte call either.
 
+### Whether a large file holds intent (`pipelines/indexing/gate.py`)
+
+The indexer skipped any file over 1.5 MB, reasoning that a minified bundle, a
+generated blob, or a vendored single-file lib is not authored intent and that
+parsing and embedding one stalls the loop. The reasoning is right and the measure is
+a proxy, and it came apart on the file that matters most: `test/altair` ships two
+modules from one generator — `channels.py` at 1.20 MB, 786 definitions, indexed, and
+`core.py` at 1.60 MB, 923 definitions, **invisible**. Same directory, same generator,
+same shape, and what decided between them was 400 KB. `core.py` is the Vega-Lite
+schema surface: the single file a reader of altair most needs described.
+
+What distinguishes a blob is its **shape once parsed**, and the parse says so
+plainly. Over the 826 Python and TypeScript files in this repo and its corpora the
+largest median chunk any of them has is 16,097 bytes (a re-export `__init__.py` that
+is one chunk). A one-line data module parses to one chunk with a median of 1,248,897;
+a vendored file of four enormous generated functions has a median of 105,792. Two and
+a half orders of magnitude of daylight, so `ORDINARY_DEFINITION_BYTES` (40 KB) sits
+inside the gap and does not have to be delicate.
+
+So size decides one thing — whether to **read** the file at all
+(`READ_CEILING_BYTES`, 4 MB; parse and hash measured at 0.36 s/MB, so ~1.3 s once).
+Past `HEARING_BYTES` (1.5 MB) a file gets a *hearing* instead of a silent drop: read
+it, parse it, index it if the parse found definitions of the size a person writes.
+The hearing is **free** — the parse it judges is the one `_process_file` was going to
+do in the next breath.
+
+- The test is the **median** definition, not the count and not the largest. Count
+  says nothing (a blob can parse to many pieces, a hand-written module to a few) and
+  the largest says nothing either — `store/db.py` carries a 55 KB chunk among 95
+  without ceasing to be readable code. The median asks the question that matters: *is
+  this file made of units a person could read one at a time?*
+- A parse that found **nothing** is not addressable, which is also honest: indexing
+  it would be a no-op that reads as coverage.
+- Below the hearing threshold nothing is consulted, so a small module that happens to
+  be one enormous dict is indexed exactly as before. The hearing only ever gives a
+  big file a chance; it never takes one away.
+
+The ceiling is now a bound on what the **describing** pass can carry rather than a
+guess about the author. `loop/payload.py` is what made that bound honest — it keeps
+one crowded file's prompt finite by conceding down to its signatures, and the
+newly-admitted `core.py` makes a 94,165-character bootstrap call instead of a
+308,434-character one. Raising the ceiling further waits on splitting a crowded
+file's bootstrap pass, so the number stays where the downstream can honor it, and the
+survey **reports every file the gate turns away** rather than letting the tree quietly
+not mention them.
+
 ### What the walk never saw (`pipelines/indexing/survey.py`)
 
 `codoc status` checks that every indexed chunk is attributed to a feature. That is
 a coverage report over **the index**, and it reads 100% on a repo whose Go half
-codoc cannot parse, whose generated schema module is over `_MAX_FILE_BYTES`, or
-whose monorepo packages are directory symlinks the walk refuses to follow. A tree
-that describes a third of a codebase and calls itself in sync is the one failure a
-faithful view of the code must not have, so the coverage figure now carries the
-bound on itself.
+codoc cannot parse, whose generated module the gate turned away, or whose monorepo
+packages are directory symlinks the walk refuses to follow. A tree that describes a
+third of a codebase and calls itself in sync is the one failure a faithful view of
+the code must not have, so the coverage figure now carries the bound on itself.
 
 `survey_repo` walks the repo **the way the indexer walks it** — the same matcher,
-patterns and size cap, *imported* from `cocoindex_app` rather than restated,
-because a survey that disagrees with the walk is worse than no survey. It reports
-three kinds of blindness, each on its own `render_survey` line because each is
-answered differently:
+patterns and large-file gate, *imported* rather than restated, because a survey that
+disagrees with the walk is worse than no survey. Sharing the gate means the survey
+does for a file past the hearing threshold what the indexer does: reads and parses
+it. That is a handful of files in a large repo and none in most, and it is the price
+of the report being about the walk that actually happened. It reports four kinds of
+blindness, each on its own `render_survey` line because each is answered differently:
 
 - **another language** — source with no adapter (`.go`, `.js`, `.sh`, …), counted
   per extension. A standing bound on what the tree can ever say.
-- **over the cap** — parseable files above `_MAX_FILE_BYTES`, **named**: the
-  threshold is somebody's to revisit and they cannot weigh it without knowing
-  which file it cost them (`test/altair`'s `vegalite/v6/schema/core.py`, 1.6 MB).
+- **over the read ceiling** — parseable files past `READ_CEILING_BYTES`, **named**:
+  the threshold is somebody's to revisit and they cannot weigh it without knowing
+  which file it cost them.
+- **large and not addressable** — read, parsed, and made of no definitions a feature
+  could bind (a one-line data module, a few enormous generated functions). Named for
+  the same reason, and separate from the line above because the answer is different:
+  there was nothing here to describe, so the threshold is not the thing to revisit.
 - **an unfollowed symlink** — a directory the patterns *allow* and the walk's loop
   guard refuses. Usually a monorepo layout codoc should be pointed at directly.
 

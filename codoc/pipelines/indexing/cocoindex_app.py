@@ -24,6 +24,11 @@ from cocoindex.resources.id import generate_id
 
 from codoc.core.tree_walk import walk as tree_walk
 from codoc.lang import detect_language, get_adapter
+from codoc.pipelines.indexing.gate import (
+    holds_definitions,
+    needs_hearing,
+    too_large_to_read,
+)
 from codoc.pipelines.indexing.schema import (
     EMBEDDER,
     EMBEDDER_MODEL,
@@ -63,11 +68,6 @@ _EXCLUDED_PATTERNS = [
     "**/*.min.js",
     "**/*.min.ts",
 ]
-
-# Files above this many bytes are skipped: minified bundles, generated blobs, and
-# vendored single-file libs are not authored intent, and parsing/embedding a 10 MB
-# file stalls the loop and bloats the index. Overridable for unusual repos.
-_MAX_FILE_BYTES = 1_500_000
 
 
 def _gitignore_excludes(sourcedir: pathlib.Path) -> list[str]:
@@ -167,16 +167,23 @@ async def _process_file(
     lang = detect_language(file_str)
     if lang is None:
         return
-    # Skip oversize files (minified bundles, generated blobs) before reading them into
-    # memory — they are not authored intent and would stall the loop / bloat the index.
+    # Size decides one thing: whether to read the file at all. That is a memory and
+    # latency bound; whether a big file is authored intent is decided below, by its
+    # parse, because size is a proxy that drops exactly the generated API surface a
+    # reader most needs described (see `pipelines/indexing/gate.py`).
     try:
-        if file_abs.stat().st_size > _MAX_FILE_BYTES:
-            return
+        size = file_abs.stat().st_size
     except OSError:
+        return
+    if too_large_to_read(size):
         return
     source = await file.read_text()
     adapter = get_adapter(lang)
     chunks = adapter.extract_chunks(file_str, source)
+    # The hearing a large file gets instead of a silent drop. It costs nothing: the
+    # parse it judges is the one this function was going to do anyway.
+    if needs_hearing(size) and not holds_definitions(len(c.source) for c in chunks):
+        return
     # The chunk id is generate_id((file, symbol_path)) and the LanceDB PK, so the
     # system treats (file, symbol_path) as unique (bindings are UNIQUE on it, the
     # changeset keys on it) and a repeat would collide the PK, dropping the whole

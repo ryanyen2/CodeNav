@@ -443,6 +443,11 @@ doclang.py   # the AUTHORING language of the tree: profiles + the prompt directi
              #   loop's lexical heuristics use instead of Latin-only regexes
 core/        # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT substrate]
 pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEPT]
+             #   gate.py — whether a LARGE file holds intent, decided by its parse
+             #   and not its size: past 1.5 MB a file gets a hearing (read it, parse
+             #   it, index it if the median definition is the size a person writes)
+             #   instead of the silent drop that made altair's 1.6 MB schema module
+             #   invisible while its 1.2 MB sibling was indexed
              #   survey.py — what the walk never saw (unreadable languages,
              #   over-cap files, unfollowed symlinks), so the index-coverage
              #   figure in `codoc status` cannot read 100% over code codoc

@@ -2,15 +2,18 @@
 
 `codoc status` already checks that every indexed chunk is attributed to a feature.
 That is a coverage report over *the index*, and it reads as 100% on a repo whose Go
-half codoc cannot parse, whose generated schema module is over the size cap, or
+half codoc cannot parse, whose generated schema module the indexer turned away, or
 whose monorepo packages are directory symlinks the walk refuses to follow. A tree
 that describes a third of a codebase and calls itself in sync is the one failure a
 faithful view of the code must not have.
 
 So the survey walks the repo the way the indexer walks it — the same matcher, the
-same patterns, the same size cap, imported from the indexer rather than restated,
-because a survey that disagrees with the walk is worse than no survey — and reports
-what fell outside.
+same patterns, and the same gate on large files (`indexing/gate.py`), imported from
+the indexer rather than restated, because a survey that disagrees with the walk is
+worse than no survey — and reports what fell outside. Sharing the gate means the
+survey does what the indexer does for a file past the hearing threshold: reads it and
+parses it. That is a handful of files in a large repo and none in most, which is the
+price of the report being about the walk that actually happened.
 
 It reports only codoc's OWN limits. A file under `node_modules/`, `dist/`, or a path
 the repo's `.gitignore` names is excluded on purpose and by somebody's decision;
@@ -23,12 +26,17 @@ from dataclasses import dataclass, field
 
 from cocoindex.resources.file import PatternFilePathMatcher
 
-from codoc.lang import detect_language
+from codoc.lang import detect_language, get_adapter
 from codoc.pipelines.indexing.cocoindex_app import (
     _EXCLUDED_PATTERNS,
     _INCLUDED_PATTERNS,
-    _MAX_FILE_BYTES,
     _gitignore_excludes,
+)
+from codoc.pipelines.indexing.gate import (
+    READ_CEILING_BYTES,
+    holds_definitions,
+    needs_hearing,
+    too_large_to_read,
 )
 
 # Extensions that mean "somebody's source code lives here and codoc cannot read
@@ -50,15 +58,18 @@ class RepoSurvey:
     indexed: int = 0
     #: extension → file count, for source codoc has no adapter for
     unreadable: dict[str, int] = field(default_factory=dict)
-    #: (repo-relative path, size in bytes) for parseable files over the cap
-    oversize: list[tuple[str, int]] = field(default_factory=list)
+    #: (repo-relative path, bytes) for files too large to read at all
+    too_large: list[tuple[str, int]] = field(default_factory=list)
+    #: (repo-relative path, bytes) for large files whose parse found no definitions
+    unaddressable: list[tuple[str, int]] = field(default_factory=list)
     #: repo-relative directories the walk refused to follow (symlinks)
     symlinked_dirs: list[str] = field(default_factory=list)
 
     @property
     def unseen(self) -> int:
         """Files that hold code no feature can possibly cover."""
-        return sum(self.unreadable.values()) + len(self.oversize)
+        return (sum(self.unreadable.values())
+                + len(self.too_large) + len(self.unaddressable))
 
 
 def survey_repo(root: str | pathlib.Path, *, max_entries: int = 200_000) -> RepoSurvey:
@@ -112,13 +123,35 @@ def survey_repo(root: str | pathlib.Path, *, max_entries: int = 200_000) -> Repo
                 size = entry.stat().st_size
             except OSError:
                 continue
-            if size > _MAX_FILE_BYTES:
-                survey.oversize.append((rel, size))
+            if too_large_to_read(size):
+                survey.too_large.append((rel, size))
+            elif needs_hearing(size) and not _passes_hearing(entry, rel):
+                survey.unaddressable.append((rel, size))
             else:
                 survey.indexed += 1
-    survey.oversize.sort(key=lambda pair: -pair[1])
+    survey.too_large.sort(key=lambda pair: -pair[1])
+    survey.unaddressable.sort(key=lambda pair: -pair[1])
     survey.symlinked_dirs.sort()
     return survey
+
+
+def _passes_hearing(path: pathlib.Path, rel: str) -> bool:
+    """Read and parse *path* the way the indexer will, and report its verdict.
+
+    Only ever called for a file past the hearing threshold, so the cost is the cost
+    of the few files in a repo that are that large. A file that cannot be read or
+    parsed does not get indexed either, so failing the hearing is the truthful
+    answer rather than a reason to stay quiet.
+    """
+    language = detect_language(rel)
+    if language is None:
+        return False
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+        chunks = get_adapter(language).extract_chunks(rel, source)
+    except Exception:
+        return False
+    return holds_definitions(len(chunk.source) for chunk in chunks)
 
 
 def _holds_source(directory: pathlib.Path) -> bool:
@@ -146,9 +179,11 @@ def render_survey(survey: RepoSurvey, *, max_names: int = 3) -> list[str]:
     """Advisory lines for `codoc status` — empty when codoc saw the whole repo.
 
     One line per KIND of blindness, because each is answered differently: another
-    language is a standing bound on what the tree can ever say, a file over the cap
-    is a threshold somebody can revisit, and an unfollowed symlink is usually a
-    monorepo layout codoc should be pointed at directly.
+    language is a standing bound on what the tree can ever say, a file over the read
+    ceiling is a threshold somebody can revisit, a large file whose parse found no
+    definitions is a generated blob and the honest answer is that there was nothing
+    to describe, and an unfollowed symlink is usually a monorepo layout codoc should
+    be pointed at directly.
     """
     lines: list[str] = []
     if survey.unreadable:
@@ -158,11 +193,19 @@ def render_survey(survey: RepoSurvey, *, max_names: int = 3) -> list[str]:
             f"  ⚠ outside codoc's view: {counted} — it reads Python and TypeScript, "
             f"so no feature covers those files"
         )
-    if survey.oversize:
-        names = _with_overflow([path for path, _ in survey.oversize], max_names)
+    if survey.too_large:
+        names = _with_overflow([path for path, _ in survey.too_large], max_names)
         lines.append(
-            f"  ⚠ {len(survey.oversize)} file(s) over the "
-            f"{_MAX_FILE_BYTES / 1_000_000:.1f} MB index cap, unindexed: {names}"
+            f"  ⚠ {len(survey.too_large)} file(s) over the "
+            f"{READ_CEILING_BYTES / 1_000_000:.1f} MB read ceiling, "
+            f"unindexed: {names}"
+        )
+    if survey.unaddressable:
+        names = _with_overflow([path for path, _ in survey.unaddressable], max_names)
+        lines.append(
+            f"  ⚠ {len(survey.unaddressable)} large file(s) that parse to no "
+            f"definitions a feature could bind (generated or data), "
+            f"unindexed: {names}"
         )
     if survey.symlinked_dirs:
         names = _with_overflow(survey.symlinked_dirs, max_names)
