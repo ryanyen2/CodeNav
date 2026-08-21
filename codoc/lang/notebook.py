@@ -43,7 +43,10 @@ notebook is not a change to any chunk.
 What is deliberately not attempted: IPython that is not Python. A ``!pip install`` or
 ``%%bash`` line is commented out rather than parsed, and a cell that still does not
 parse is commented out whole — one shell line at the top of a notebook must not make
-the entire file read as damaged, which is what holds Loop A's removals. Two costs come
+the entire file read as damaged, which is what holds Loop A's removals. "Does not
+parse" is ``PythonAdapter.reads_cleanly``, both of its readers: a cell has to be
+rejected by the grammar AND by the interpreter before it is commented out, or a cell
+using syntax newer than the bundled grammar would lose every definition in it. Two costs come
 with that, both preferred to the alternative: a genuinely half-typed cell reads as
 clean rather than as damage (the rarer case, since Jupyter writes the file on save),
 and a section whose only cell is shell contributes no chunk, which is the honest report
@@ -55,7 +58,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from codoc.lang.base import Chunk, SymbolRef, tree_is_clean
+from codoc.lang.base import Chunk, SymbolRef
 from codoc.lang.python import PythonAdapter
 
 LANGUAGE_NAME = "notebook"
@@ -269,7 +272,7 @@ def _synthesize(cells: list[Cell]) -> _Doc:
             emit("", "")
         if cell.kind == "code":
             body = _code_lines(cell.source)
-            if body is not None and not tree_is_clean(adapter.parse("\n".join(body))):
+            if body is not None and not adapter.reads_cleanly("\n".join(body)):
                 body = None
             if body is None:
                 body = [_comment(line) for line in cell.source.split("\n")]
@@ -487,6 +490,15 @@ class NotebookAdapter:
     def references_in_chunk(self, chunk_source: str, file: str) -> list[SymbolRef]:
         # A chunk's source is already synthetic Python, so this needs no conversion.
         return PythonAdapter().references_in_chunk(chunk_source, file)
+
+    def reads_cleanly(self, source: str) -> bool:
+        """Whether the document this notebook describes is whole.
+
+        Asked of the synthetic Python rather than of the JSON, for the reason every
+        other method here delegates: what codoc read is the document, and a notebook we
+        could not open reaches this as ``_UNPARSEABLE``, which both readers reject.
+        """
+        return PythonAdapter().reads_cleanly(self.synthetic_source(source))
 
     def parse(self, source: str):
         return PythonAdapter().parse(self.synthetic_source(source))

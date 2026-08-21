@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import ctypes
 import pathlib
 import warnings
 
 import tree_sitter as ts
 
-from codoc.lang.base import Chunk, SymbolRef
+from codoc.lang.base import Chunk, SymbolRef, tree_is_clean
 
 LANGUAGE_NAME = "python"
 
@@ -49,6 +50,30 @@ def _get_parser() -> ts.Parser:
     if _PY_PARSER is None:
         _PY_PARSER = ts.Parser(_get_lang())
     return _PY_PARSER
+
+
+# ---------------------------------------------------------------------------
+# Is this source whole, or a keystroke inside an edit?
+# ---------------------------------------------------------------------------
+
+def _compiles(source: str) -> bool:
+    """True if the running interpreter accepts *source* as a module.
+
+    The BOM is stripped because ``ast.parse`` refuses one and a decoded str is where
+    it would still be. Every other failure is the answer. The broad ``except`` is
+    deliberate: all that is being asked is whether the parse got through, and
+    pathological source raises things that are not SyntaxError — a null byte is a
+    ValueError, deep enough nesting a RecursionError. Warnings are suppressed so that
+    a SyntaxWarning (an invalid escape, a literal compared with ``is``) cannot be
+    turned into damage by a caller running under ``-W error``.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ast.parse(source.lstrip("\ufeff"))
+    except Exception:  # noqa: BLE001 -- see above: only success is being asked about
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +352,37 @@ class PythonAdapter:
         chunks: list[Chunk] = []
         _extract_chunks_recursive(tree.root_node, source_bytes, file, "", chunks)
         return chunks
+
+    def reads_cleanly(self, source: str) -> bool:
+        """Whether *source* is a whole module — asked of both readers, clean if either
+        one gets through it.
+
+        The question is not "does my grammar like this" but "am I looking at a finished
+        document, or at a keystroke inside an edit", because the caller that acts on
+        False DESTROYS attribution: `loop/diff._hold_unparseable_removals` holds a
+        removal only where the file is demonstrably damaged, and Loop A detaches a
+        binding for every removal it honours. A False therefore has to mean that every
+        reader failed, not that one of them did.
+
+        Neither reader covers Python alone, and they fail on opposite halves of it. The
+        bundled grammar predates a trailing comma inside a subscript —
+        ``Mapping[int, str,]``, which is what a formatter writes every time it splits a
+        type across lines — and calls those files damaged: 10% of altair's addressable
+        chunks (311 of 2998) sit in the two modules where that happens, so nothing bound
+        to them could ever learn that code had been deleted. The interpreter reads those
+        perfectly, and rejects the Python 2 the grammar still parses. Either verdict
+        alone is standing false on real repositories; together they disagree only about
+        files that are genuinely broken.
+
+        The grammar answers first, because its tree is where the chunks come from and
+        because a clean file must not cost more than it did before — ``ast.parse`` is
+        reached only for the files the grammar rejects.
+
+        What is left is syntax NEITHER reader knows: PEP 696's ``def f[T = int]`` on an
+        interpreter older than 3.13 is still read as damage. That bound is worth stating
+        and is not one this can close from the inside.
+        """
+        return tree_is_clean(self.parse(source)) or _compiles(source)
 
     @property
     def comment_node_kinds(self) -> set[str]:  # type: ignore[override]

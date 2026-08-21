@@ -456,6 +456,16 @@ mcp/         # codoc MCP server (FastMCP, stdio): tools.py + server.py (codoc-mc
 serve/       # the deployed hub (codoc serve) — see docs/architecture.md + serve-deployment.md
 codoc_file/  # render.py (store → tree.codoc + sidecar), parse.py, diff.py (→ user ops)
 lang/        # tree-sitter adapters: python.py + typescript.py  [KEPT]
+             #   Each adapter also answers `reads_cleanly` — is this a whole
+             #   document or a keystroke inside an edit — and Python's asks TWO
+             #   readers, because a false "damaged" holds a removal forever and
+             #   the bundled grammar cannot read a trailing comma inside a
+             #   subscript (`Mapping[int, str,]`, which is what a formatter
+             #   writes): the grammar first, then `ast.parse` for what it
+             #   rejects. They fail on opposite halves of Python — the
+             #   interpreter reads formatted types and rejects Python 2, which
+             #   the grammar still parses — so only a file BOTH refuse is
+             #   damage. See docs/architecture.md, "Two readers".
              #   + notebook.py — a .ipynb IS Python with the cells still visible, so
              #   it is an ADAPTER (not a second reader like settings_files.py): the
              #   cells become one synthetic Python document, a markdown heading names

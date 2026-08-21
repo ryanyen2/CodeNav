@@ -350,12 +350,13 @@ this". A removal reads as deletion and DETACHES the binding, so a save in the
 middle of an edit would strip a feature's attribution and the repaired file would
 come back as an unbound addition for the LLM pass to guess at again.
 `diff._hold_unparseable_removals` drops removals whose file is **still on disk and
-demonstrably unparseable** (`lang.parses_cleanly`, which walks only the damaged path
-via `has_error`); a file that is GONE removes its chunks for real, and a file no
-adapter reads is not second-guessed. Only removals are held: an addition or a
-modification out of a damaged file is at worst a spurious refresh that the next
-clean pass corrects. A file that never parses (a templated `.py`, Python 2) keeps
-stale bindings until it does, which is why the hold is logged rather than silent.
+demonstrably unparseable** (`lang.parses_cleanly` — every reader that claims the file
+had to fail, see "Two readers" below); a file that is GONE removes its chunks for
+real, and a file no adapter reads is not second-guessed. Only removals are held: an
+addition or a modification out of a damaged file is at worst a spurious refresh that
+the next clean pass corrects. A file that never parses (a templated `.py`, a merge
+conflict left in) keeps stale bindings until it does, which is why the hold is logged
+rather than silent.
 
 **Merge-edge robustness (D1–D4).** The LLM-pass apply folds a re-proposed node by
 exact title (`_unbound_features_by_title`), by `(normalized_title, parent_id)` for
@@ -819,6 +820,68 @@ the repo, so a settings file the code stopped reading has to re-run while every 
 file's memo stays untouched. Rows carry the format in the `language` column and identity
 comes from `settings_files.hashes`, so nothing downstream needs to know a chunk came
 from a settings file.
+
+### Two readers, and why a grammar gap is not damage
+
+"This file is damaged" is a verdict with teeth: it is what holds Loop A's removals, and
+a removal that is honoured DETACHES a binding. So the cost of a false *damaged* is a
+binding held forever — the file never starts parsing, so the tree goes on citing code
+that was deleted, with no pass that can correct it. That asymmetry is why the verdict
+now requires **every reader that claims the file to fail**, not just one.
+
+The bundled tree-sitter grammar (`tree_sitter_languages` 1.10.2, built against the
+0.20 API) predates a trailing comma inside a subscript:
+
+```python
+VERSIONS: Mapping[
+    Literal["vega-lite", "vega-embed"],
+    str,
+] = {...}
+```
+
+That is legal Python and it is what a formatter writes every time it splits a type
+across lines — so a repository that runs Black or ruff over annotated code produces it
+constantly. The grammar emits a zero-width MISSING identifier, `tree_is_clean` says
+False, and the file is read as mid-edit forever. Measured on the altair corpus: **311 of
+2,998 addressable chunks (10%)** sit in the two modules where this happens
+(`utils/schemapi.py`, `vegalite/v6/api.py`) — and those are the core modules, 80 and 46
+top-level names respectively.
+
+The second reader is free and already in the process: **the interpreter codoc runs on**.
+`PythonAdapter.reads_cleanly` asks the grammar first (its tree is where the chunks come
+from, and a clean file must not cost more than before) and falls back to `ast.parse` only
+for the files the grammar rejects. The two fail on opposite halves of the language, which
+is what makes the union honest rather than lax:
+
+| | grammar | interpreter |
+|---|---|---|
+| `Mapping[int, str,]` (formatted type) | ✗ | ✓ |
+| `print "x"`, `except E, e` (Python 2) | ✓ | ✗ |
+| half-typed line, templated `.py`, merge conflict | ✗ | ✗ |
+
+Only the third row is damage, and only the third row holds a removal. Asking *only* the
+interpreter would have moved the false verdict from formatted repositories to Python 2
+ones rather than removing it.
+
+Details that are load-bearing: a leading BOM is stripped before `ast.parse` (it refuses
+one, and a decoded `str` is exactly where a BOM still is — otherwise a BOM file using
+formatted types would have no reader left); the `except` is broad because the only
+question is whether the parse got through, and pathological source raises things that are
+not `SyntaxError` (a null byte is a `ValueError`); and warnings are suppressed so a
+`SyntaxWarning` cannot become damage under `-W error`.
+
+**The judgment belongs to the adapter**, which is why `lang.parses_cleanly` dispatches to
+`reads_cleanly` instead of calling `tree_is_clean(parse(source))` itself. TypeScript's
+implementation is the grammar and nothing else, and says so: this process has no
+TypeScript, so a construct newer than the bundled grammar reads as damage there, and the
+fix for that is a newer grammar. The notebook adapter asks the Python adapter over its
+synthetic document, so the **cell** test gets both readers too — before this, one cell
+using a formatted type annotation was commented out whole and every definition in it left
+the tree silently.
+
+What remains is syntax **neither** reader knows: PEP 696's `def f[T = int]` on an
+interpreter older than 3.13. That is a real bound, stated in `reads_cleanly` rather than
+papered over, and it is not one this can close from the inside.
 
 ### What had to stop asking `codoc.lang`
 

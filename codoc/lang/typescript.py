@@ -8,7 +8,7 @@ import warnings
 
 import tree_sitter as ts
 
-from codoc.lang.base import Chunk, SymbolRef
+from codoc.lang.base import Chunk, SymbolRef, tree_is_clean
 
 LANGUAGE_NAME = "typescript"
 
@@ -299,6 +299,17 @@ class TypeScriptAdapter:
                 )
             )
         return other_chunks
+
+    def reads_cleanly(self, source: str) -> bool:
+        """Whether *source* is a whole module, as its only reader sees it.
+
+        The Python adapter asks a second reader as well, because the interpreter it runs
+        on is a Python parser and the two cover different gaps. There is no equivalent
+        here — this process has no TypeScript — so the grammar's verdict is the whole
+        answer, which is worth saying out loud: a construct newer than the bundled
+        grammar reads as damage, and the way to fix that is a newer grammar.
+        """
+        return tree_is_clean(self.parse(source))
 
     @property
     def comment_node_kinds(self) -> set[str]:  # type: ignore[override]

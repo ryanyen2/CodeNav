@@ -1,4 +1,4 @@
-from codoc.lang.base import LanguageAdapter, tree_is_clean
+from codoc.lang.base import LanguageAdapter
 from codoc.lang.notebook import NotebookAdapter
 from codoc.lang.python import PythonAdapter
 from codoc.lang.typescript import TypeScriptAdapter
@@ -21,7 +21,7 @@ def get_adapter(language: str) -> LanguageAdapter:
 
 
 def parses_cleanly(file_path: str, source: str) -> bool | None:
-    """True if *source* parses with no error and nothing missing; None if unjudged.
+    """True if *source* reads as a whole document; None if nothing here reads it.
 
     A file that does not parse is not evidence about what it contains. tree-sitter
     recovers what it can and drops the rest, so the chunks it yields are a LOWER
@@ -36,11 +36,16 @@ def parses_cleanly(file_path: str, source: str) -> bool | None:
     of readable file entered the index (settings files, which have no adapter and
     parse perfectly well) that False started reading as "damaged" and held removals
     from files that were fine.
+
+    The verdict is the ADAPTER'S, not this function's. It used to be the tree-sitter
+    parse and nothing else, which made a grammar gap indistinguishable from damage;
+    Python's adapter now asks the running interpreter as well, and it is the adapter
+    that knows which readers it has (`lang/python.PythonAdapter.reads_cleanly`).
     """
     language = detect_language(file_path)
     if language is None:
         return None
-    return tree_is_clean(get_adapter(language).parse(source))
+    return get_adapter(language).reads_cleanly(source)
 
 
 def detect_language(file_path: str) -> str | None:

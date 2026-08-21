@@ -3,14 +3,13 @@ from dataclasses import dataclass
 
 
 def tree_is_clean(tree) -> bool:
-    """True if *tree* has no error and nothing missing.
+    """True if *tree* has no error and nothing missing — ONE reader's verdict.
 
-    Here rather than beside its first caller because two of them ask the question about
-    trees they built differently: ``lang.parses_cleanly`` asks it of a file, and the
-    notebook adapter asks it of one cell, to decide whether that cell is Python at all.
-    A cell is not a file and cannot go through the file path — it has no name and it is
-    read many times per notebook — but the judgment has to be the same one, or a cell
-    could be commented out for damage a file would have been forgiven.
+    Here rather than beside a caller because every adapter builds its trees differently
+    and they all need the same walk. Not the whole answer to "is this document whole",
+    though, which is ``reads_cleanly``: a MISSING node is what a parser emits both for a
+    half-typed line and for syntax its grammar predates, and only the second of those is
+    legal code. The adapter decides; this reports what the tree says.
 
     ``has_error`` is true for every ancestor of an error, so a subtree without it cannot
     contain one and is skipped whole: the walk costs the damaged path, not the file.
@@ -83,6 +82,17 @@ class LanguageAdapter(Protocol):
 
     def parse(self, source: str):
         """Return the tree-sitter parse tree for source."""
+        ...
+
+    def reads_cleanly(self, source: str) -> bool:
+        """Whether *source* is a whole document rather than a keystroke inside an edit.
+
+        Distinct from ``tree_is_clean(parse(source))``, which is only how ONE reader
+        answers it. An adapter may have more than one — Python's asks the interpreter it
+        is running on as well, because a construct newer than the bundled grammar is
+        legal code and must not be reported as damage (a caller acting on False detaches
+        bindings; see ``lang.parses_cleanly``).
+        """
         ...
 
     def token_stream(self, source: str, exclude_comment_nodes: bool = True) -> list[str]:
