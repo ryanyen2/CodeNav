@@ -1,0 +1,39 @@
+/Users/ryanyen2/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+[open_alex] unavailable (import failed: unsupported operand type(s) for |: 'type' and 'NoneType'); skipping this source.
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+
+============================================================
+  open_alex: 0 papers found
+============================================================
+
+============================================================
+  dblp: 0 papers found
+============================================================
+
+============================================================
+  semantic_scholar: 3 papers found
+============================================================
+  [1] Code Comment Inconsistency Detection Based on Confidence Learning
+      Authors: Zhen Xu, Shikai Guo, Yumiao Wang...
+      Year: 2024  Citations: 24  Venue: IEEE Transactions on Software Engineering
+      URL: https://www.semanticscholar.org/paper/562662725148f6c34f2b6b82df8a48773006904f
+
+  [2] LLMCup: Ranking-Enhanced Comment Updating with LLMs
+      Authors: Huaizhi Ge, Juan Zhai, Minxue Pan...
+      Year: 2025  Citations: 0  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/7298259992fbcdb8f764e4783ae8bdd8a4b5e24d
+
+  [3] Shift-to-Shift Information Transfer: Phenomenological Study of Nurses’ Experiences
+      Authors: María-Josefa Montoya-Garrido, Claudio-Alberto Rodríguez-Suárez, Noa Mateos-López...
+      Year: 2025  Citations: 2  Venue: JMIR Nursing
+      URL: https://www.semanticscholar.org/paper/9796bf088585d49ba93fdfae0e2c5ac05c203375
+
+
+Total: 3 papers from 3 sources.

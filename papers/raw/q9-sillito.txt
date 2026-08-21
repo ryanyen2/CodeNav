@@ -1,0 +1,52 @@
+/Users/ryanyen2/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+
+============================================================
+  semantic_scholar: 6 papers found
+============================================================
+  [1] Questions programmers ask during software evolution tasks
+      Authors: Jonathan Sillito, G. Murphy, K. Volder
+      Year: 2006  Citations: 306  Venue: SIGSOFT '06/FSE-14
+      URL: https://www.semanticscholar.org/paper/3dda5d9a5e4eb27760e8a4a381a1057ce0ba7d65
+
+  [2] Asking and Answering Questions during a Programming Change Task
+      Authors: Jonathan Sillito, G. Murphy, K. Volder
+      Year: 2008  Citations: 347  Venue: IEEE Transactions on Software Engineering
+      URL: https://www.semanticscholar.org/paper/98cb9e2c4214f0a68bae57e5f5a8d5005fd3f908
+
+  [3] Asking and answering questions about the causes of software behavior
+      Authors: B. Myers, Amy J. Ko
+      Year: 2008  Citations: 22  Venue: 
+      URL: https://www.semanticscholar.org/paper/1b4f5328838b9219c3959653611216e5a596b45c
+
+  [4] 1 ASKING AND ANSWERING QUESTIONS ABOUT THE CAUSES OF SOFTWARE BEHAVIORS THESIS PROPOSAL
+      Authors: Amy J. Ko
+      Year: 2006  Citations: 0  Venue: 
+      URL: https://www.semanticscholar.org/paper/6f829946e0b906626ea308cfc2d436aa7a455c98
+
+  [5] Toward evolution of software system using adaptive principles
+      Authors: J. Bandakova
+      Year: 2008  Citations: 0  Venue: International Symposium on Applied Machine Intelligence and Informatics
+      URL: https://www.semanticscholar.org/paper/6e4ff3885d5f33c8e67aeac00efd5a62880eec45
+
+  [6] Analyzing the co-evolution of comments and source code
+      Authors: Beat Fluri, Michael Würsch, E. Giger...
+      Year: 2009  Citations: 93  Venue: Software quality journal
+      URL: https://www.semanticscholar.org/paper/8373c21dfe280d119347460bd6d8854071d62e9a
+
+
+Total: 6 papers from 1 sources.

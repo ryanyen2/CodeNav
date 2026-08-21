@@ -187,6 +187,24 @@ children). Prefer attaching new chunks here.
   description. If they write short and concrete, do not answer in long and
   abstract; if they stay above the mechanism, stay above it too.
 
+- `voice_lessons` (optional) — rules drawn from times this author REWROTE prose
+  codoc had generated. Each has an `instruction` and the number of separate
+  edits it was learned from. These are stronger than `author_voice`: a sample
+  shows you a register to imitate, while a lesson is a correction this author
+  already made once and should not have to make again. Follow them.
+
+  Two limits on them, and both matter more than the lessons do:
+
+  - They tell you HOW to write, never WHAT is true. A lesson can change your
+    opening, your sentence length, or whether you name a threshold; it can never
+    license a claim the code does not support. Where following one would require
+    saying something you cannot ground in the change or in `why_evidence`, do not
+    follow it — write the accurate sentence instead.
+  - They do not override the assertion register or Rule 8. A lesson asking for
+    confident phrasing does not authorize a why you have no warrant for, and a
+    lesson about openings does not authorize rewriting a description a person
+    wrote themselves.
+
 The subtree entries carry `written_by` — `human` when a person last wrote that
 description, otherwise the agent or loop that did. Rule 8 depends on it.
 

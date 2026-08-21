@@ -1,0 +1,81 @@
+/Users/ryanyen2/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+[open_alex] unavailable (import failed: unsupported operand type(s) for |: 'type' and 'NoneType'); skipping this source.
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+[dblp] Error: 500 Server Error: Internal Server Error for url: https://dblp.org/search/publ/api?q=developers+questions+asking+answering+about+code+program+exploration+navigation+strategies&format=json&h=12&f=0
+Rate limited. Waiting 3 seconds...
+
+============================================================
+  open_alex: 0 papers found
+============================================================
+
+============================================================
+  dblp: 0 papers found
+============================================================
+
+============================================================
+  semantic_scholar: 12 papers found
+============================================================
+  [1] Asking and Answering Questions during a Programming Change Task in Pharo Language
+      Authors: Juraj Kubelka, Alexandre Bergel, R. Robbes
+      Year: 2014  Citations: 36  Venue: Workshop on Evaluation and Usability of Programming Languages and Tools
+      URL: https://www.semanticscholar.org/paper/8b29476f63f39b3c259c9844f84f1bc17e5f56ca
+
+  [2] Questions developers ask while diagnosing potential security vulnerabilities with static analysis
+      Authors: Justin Smith, Brittany Johnson, E. Murphy-Hill...
+      Year: 2015  Citations: 101  Venue: ESEC/SIGSOFT FSE
+      URL: https://www.semanticscholar.org/paper/6cd10197d339d5ae2822a5b0810b16f297a32d02
+
+  [3] An Opinion on ChatGPT in Health Care—Written by Humans Only
+      Authors: J. Kleesiek, Yonghui Wu, Gregor Stiglic...
+      Year: 2023  Citations: 49  Venue: Journal of Nuclear Medicine
+      URL: https://www.semanticscholar.org/paper/4cd9389c227b771ec40cf09d9e7657391098f285
+
+  [4] An information retrieval strategy for large multimodal data collections involving source code and natural language
+      Authors: Baquero Vargas, J. Felipe
+      Year: 2020  Citations: 0  Venue: 
+      URL: https://www.semanticscholar.org/paper/50a1e288134e5a57f918c4425abdaefaaaa80f8b
+
+  [5] An Observational Investigation of Reverse Engineers' Process and Mental Models
+      Authors: Daniel Votipka, Seth M. Rabin, Kristopher K. Micinski...
+      Year: 2019  Citations: 43  Venue: CHI Extended Abstracts
+      URL: https://www.semanticscholar.org/paper/5bbcc0b91d439ace267687505839b947219f3082
+
+  [6] Discovering discussion topics about development of cross-platform mobile applications using a cross-compiler development framework
+      Authors: Matias Martinez, S. Lecomte
+      Year: 2017  Citations: 4  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/f8ac3a284c8d40ea302dab0d27cecd1849584768
+
+  [7] Improved strategies, logic and decision support for selecting test trench locations
+      Authors: Paulina Racz
+      Year: 2017  Citations: 1  Venue: 
+      URL: https://www.semanticscholar.org/paper/674ec3309e4b67075c6dd9c97dbc7834a6655f0f
+
+  [8] Symposium Program
+      Authors: A. Stott, David Glasgow, Hugo Burbano
+      Year: 2016  Citations: 0  Venue: 
+      URL: https://www.semanticscholar.org/paper/013b343ff127f18709b227e8f594554a78cc5cad
+
+  [9] Authentic Literacy Experiences in the Secondary Classroom.
+      Authors: Valerie Brunow
+      Year: 2016  Citations: 1  Venue: 
+      URL: https://www.semanticscholar.org/paper/14c4159c6bd744c824d80747b79b54a345da3f32
+
+  [10] Learning and Becoming in Practice: The International Conference of the Learning Sciences (ICLS) 2014
+      Authors: J. Polman, E. Kyza, D. O'Neill...
+      Year: 2014  Citations: 2  Venue: 
+      URL: https://www.semanticscholar.org/paper/e4da17778746613de828d1060eba23c559d0d53c
+
+  [11] Potentials of ChatGPT in Computer Programming: Insights from Programming Instructors
+      Authors: Anas Husain
+      Year: 2024  Citations: 47  Venue: J. Inf. Technol. Educ. Res.
+      URL: https://www.semanticscholar.org/paper/4072af5e7a69f8bb5e8427c3c1af6136c7548a39
+
+  [12] Editorial: Lean and Integrated Project Delivery
+      Authors: Ryan E. Smith, A. Mossman, S. Emmitt
+      Year: 2011  Citations: 37  Venue: Lean Construction Journal
+      URL: https://www.semanticscholar.org/paper/daaf5cd2978ebab109b028d21068bad4a704c5dd
+
+
+Total: 12 papers from 3 sources.

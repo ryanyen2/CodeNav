@@ -15,7 +15,11 @@ from codoc.loop.apply import apply_op
 from codoc.loop.diff import ChangeSet, ChunkRef
 from codoc.loop.loop_a import apply_changeset
 from codoc.loop.subtree import select_context
-from codoc.model.event import ACTOR_HUMAN, ACTOR_LOOP, NodeOp, NodeOpKind
+from codoc.model.event import (
+    ACTOR_HUMAN, ACTOR_LOOP, Event, NodeOp, NodeOpKind,
+)
+from codoc.model.hlc import HLC
+from codoc.model.voice import LessonAxis, LessonStatus, StyleLesson
 from codoc.store.db import open_store
 
 HUMAN_PROSE = (
@@ -112,3 +116,147 @@ class TestAuthorVoice:
             apply_changeset(cs, store, propose=capture, codoc_dir=str(codoc_dir))
 
         assert seen["author_voice"] == [HUMAN_PROSE]
+
+class TestVoiceLessons:
+    """The learned half of the channel, at the seam where it reaches the model.
+
+    `tests/loop/test_voice.py` covers what gets learned and how; these cover only
+    that a lesson which HAS been learned arrives in the prompt, that one which has
+    not been corroborated does not, and that the harvest's LLM call stays off unless
+    a caller asked for it. The last one is the failure that would be least visible:
+    a unit test quietly making a network call looks like a slow test, not a bug.
+    """
+
+    @staticmethod
+    def _capture(seen: dict):
+        def capture(changes, subtree, all_titles, *, repo_name="codebase", config=None, **_kw):
+            seen.update(changes)
+            return []
+        return capture
+
+    @staticmethod
+    def _cs():
+        return ChangeSet(added=[ChunkRef("b.py", "b.py::new", "fp", "def new(): ...")])
+
+    def test_an_active_lesson_reaches_the_tree_update_call(self, tmp_path):
+        codoc_dir = tmp_path / ".codoc"
+        codoc_dir.mkdir()
+        seen: dict = {}
+        with open_store(tmp_path) as store:
+            _add(store, "Outline freshness", HUMAN_PROSE)
+            store.upsert_lesson(StyleLesson(
+                axis=LessonAxis.STRUCTURE,
+                instruction="Open on the problem the caller has, not the module name.",
+                status=LessonStatus.ACTIVE, evidence=2,
+            ))
+            apply_changeset(self._cs(), store, propose=self._capture(seen),
+                            codoc_dir=str(codoc_dir))
+
+        assert seen["voice_lessons"][0]["instruction"].startswith("Open on the problem")
+        assert seen["voice_lessons"][0]["learned_from"] == 2
+
+    def test_a_provisional_lesson_does_not(self, tmp_path):
+        """One rewrite is a hypothesis. It is recorded so a second can confirm it, and
+        it must not shape the whole tree in the meantime."""
+        codoc_dir = tmp_path / ".codoc"
+        codoc_dir.mkdir()
+        seen: dict = {}
+        with open_store(tmp_path) as store:
+            _add(store, "Outline freshness", HUMAN_PROSE)
+            store.upsert_lesson(StyleLesson(
+                axis=LessonAxis.STRUCTURE, instruction="Do it this way.",
+                status=LessonStatus.PROVISIONAL, evidence=1,
+            ))
+            apply_changeset(self._cs(), store, propose=self._capture(seen),
+                            codoc_dir=str(codoc_dir))
+
+        assert "voice_lessons" not in seen
+
+    def test_the_samples_channel_survives_having_lessons(self, tmp_path):
+        """Two keys, not one: a sample says sound like this, a lesson says do this."""
+        codoc_dir = tmp_path / ".codoc"
+        codoc_dir.mkdir()
+        seen: dict = {}
+        with open_store(tmp_path) as store:
+            fid = _add(store, "Outline freshness", HUMAN_PROSE)
+            store.set_feature_writer(fid, "me", ACTOR_HUMAN)
+            store.upsert_lesson(StyleLesson(
+                axis=LessonAxis.LENGTH, instruction="Stop after the rule.",
+                status=LessonStatus.ACTIVE, evidence=2,
+            ))
+            apply_changeset(self._cs(), store, propose=self._capture(seen),
+                            codoc_dir=str(codoc_dir))
+
+        assert seen["author_voice"] == [HUMAN_PROSE]
+        assert seen["voice_lessons"][0]["instruction"] == "Stop after the rule."
+
+    @staticmethod
+    def _human_rewrote(store, fid: str):
+        """Put one human rewrite of machine prose in the ledger for the harvest to find."""
+        op = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid)
+        op.description = ("Readers cannot trust an outline they have to verify, so this "
+                          "keeps it honest about what the code does.")
+        op.prev_description = HUMAN_PROSE
+        op.prev_written_by = ACTOR_LOOP
+        store.append_event(
+            Event(op=op, actor=ACTOR_HUMAN, source="user", applied=True, at=HLC.now()))
+
+    def test_a_bare_caller_never_triggers_the_harvest(self, tmp_path, monkeypatch):
+        """The harvest makes its own model call, so it is off on the `embed_fn`
+        precedent: a unit test that did not ask for one must not get one.
+
+        Two things here are deliberate. It patches the name in `loop_a`, not in
+        `loop.voice` — loop_a imported the function directly, so patching the defining
+        module would leave its reference untouched and the test would pass without
+        testing anything. And it RECORDS the call rather than raising on it: loop_a
+        wraps the harvest in a tolerant `except Exception` so that learning can never
+        sink a pass, and an `AssertionError` raised in there would be swallowed,
+        leaving this green with the gate broken.
+        """
+        codoc_dir = tmp_path / ".codoc"
+        codoc_dir.mkdir()
+        calls: list = []
+        monkeypatch.setattr("codoc.loop.loop_a.harvest",
+                            lambda *a, **k: calls.append(k) or [])
+        with open_store(tmp_path) as store:
+            fid = _add(store, "Outline freshness", HUMAN_PROSE)
+            self._human_rewrote(store, fid)  # there IS something to learn; still off
+            apply_changeset(self._cs(), store, propose=self._capture({}),
+                            codoc_dir=str(codoc_dir))
+        assert calls == []
+
+    def test_injecting_infer_voice_runs_the_harvest(self, tmp_path):
+        """The seam tests use: turn learning on without turning a network call on."""
+        codoc_dir = tmp_path / ".codoc"
+        codoc_dir.mkdir()
+        asked: list = []
+
+        def infer(rewrites, *, config=None, doc_language=None):
+            asked.append(rewrites)
+            return []
+
+        with open_store(tmp_path) as store:
+            fid = _add(store, "Outline freshness", HUMAN_PROSE)
+            self._human_rewrote(store, fid)
+            apply_changeset(self._cs(), store, propose=self._capture({}),
+                            codoc_dir=str(codoc_dir), infer_voice=infer)
+
+        assert len(asked) == 1
+        assert asked[0][0]["before"] == HUMAN_PROSE
+
+    def test_a_pass_with_nothing_new_to_read_spends_no_call(self, tmp_path):
+        """What makes harvesting on every Loop A pass affordable."""
+        codoc_dir = tmp_path / ".codoc"
+        codoc_dir.mkdir()
+        asked: list = []
+
+        def infer(rewrites, *, config=None, doc_language=None):
+            asked.append(rewrites)
+            return []
+
+        with open_store(tmp_path) as store:
+            _add(store, "Outline freshness", HUMAN_PROSE)
+            apply_changeset(self._cs(), store, propose=self._capture({}),
+                            codoc_dir=str(codoc_dir), infer_voice=infer)
+        assert asked == []
+

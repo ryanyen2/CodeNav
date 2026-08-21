@@ -41,6 +41,8 @@ codoc realize               # implement the realize queue NOW, foreground (SDK o
 codoc migrate               # one-time idempotent workspace heal (migrate tree.doc.json comments into the store + converge duplicate features + track config.json + install /codoc:* commands that shipped after this workspace was wired); also runs on daemon startup
 codoc lang [<bcp47>]        # show / set the language the TREE is authored in (en, zh-Hans, ja, …) — see "Authoring language" below
 codoc translate             # rewrite an EXISTING tree's prose into that language (--dry-run, --limit N)
+codoc voice                 # read what codoc learned about how YOU write, from your own
+                            #   rewrites of its prose; `forget <v-id>` / `keep <v-id>` / `why <v-id>`
 codoc serve                 # the deployed hub: serve the tree to remote users (docs/serve-deployment.md)
 
 # watch flags: --dry (apply tree edits, don't queue realization), --no-realize
@@ -204,6 +206,65 @@ mint a duplicate node, `terms`/`tokens` segment per script instead of dropping e
 non-ASCII character, and `clause_chars` ports the amend gate's 24-character
 "preserved clause" into whatever a clause costs in the script at hand.
 
+## Learning how the author writes
+
+Codoc generated a description, a person rewrote it, and until now that rewrite
+taught nothing: the ledger recorded it and the next pass wrote in the register it
+had just had corrected. `codoc/loop/voice.py` closes that gap, following PRELUDE /
+CIPHER (Gao et al., NeurIPS 2024 — `papers/02-continual-learning-from-user-edits.md`):
+infer a NAMED preference from the draft→revision gap, keep it, retrieve the ones
+whose context resembles the node being written, put them in the prompt.
+
+Deliberately **no fine-tuning**, for that paper's reasons plus one of codoc's own: an
+author can read a sentence of English and tell us it is wrong, and that correction
+channel (`codoc voice forget`) is the only thing that makes a learned preference safe.
+
+Three properties are load-bearing, and each answers a way this goes wrong:
+
+- **A lesson is about the WRITING, never the content.** An author who fixed a false
+  claim taught us nothing about voice, and generalizing from that edit is how a
+  memory learns to assert one specific fact everywhere. The inference pass classifies
+  every rewrite (`style` / `content` / `mixed` / `noise`) and only the style half of a
+  rewrite survives into a lesson. Two guards sit in front of the model as well: a
+  rewrite of prose a PERSON wrote is never read (they are changing their mind, not
+  correcting us), and a change too small to carry a preference is dropped.
+- **A lesson is provisional until a second edit corroborates it.** One rewrite is a
+  hypothesis, so it is recorded but NOT injected; it starts shaping prose at
+  `ACTIVE_AT` (2) agreeing edits, or when a person promotes it with `codoc voice keep`.
+- **A lesson remembers where it was learned** (`scope_path`, `scope_files`), because
+  preferences vary by region of the tree. Retrieval ranks on that overlap and sends
+  **at most one lesson per axis** — two lessons on one axis are either paraphrases
+  (which merging should have caught) or a contradiction, and sending both means the
+  model follows whichever it read last. That is also how a changed mind takes effect:
+  the better-corroborated lesson displaces the older one at the point of use.
+
+Where it runs: `harvest` is at the head of Loop A's prose pass, not in Loop B. Loop B
+is the interactive path the author is waiting on, while Loop A already makes a model
+call and is where prose gets written — and the harvest only has to have run before the
+next WRITE. It costs nothing on a pass with no new rewrites (it returns before calling
+anything), and it is gated `learn_voice=False` for bare callers on the `embed_fn`
+precedent, so a unit test never makes an unasked-for call. **Retrieval is
+unconditional** — reading already-learned lessons out of the store needs no gate.
+
+Two prompt keys, not one: `author_voice` is the author's own paragraphs ("sound like
+this") and `voice_lessons` is the learned instructions ("do this"). Kept apart because
+a model handed both in one list follows neither reliably, and because the samples alone
+are the weak form of style transfer (the EMNLP 2025 imitation result in the notes).
+The prompt states the two limits that outrank every lesson: they say HOW to write and
+never WHAT is true, and they do not override the assertion register or the human-prose
+amend gate.
+
+The ledger cursor for the harvest is the events table's **insertion order, not the HLC
+stamp** — `HLC.now()` pins `logical_time` at zero, so every event Loop B applies inside
+one millisecond carries an identical `at`, and paging on `at > since` silently dropped
+whatever shared the watermark's millisecond (`tests/loop/test_voice.py` pins this).
+
+`codoc voice` also reports PRELUDE's metric, `edit_cost_trend`: the normalized edit
+distance between what codoc wrote and what the author left, in buckets oldest to
+newest. A falling series is the claim that this works; a flat one says it is doing
+nothing, which is the finding worth having. It refuses to call a trend under 8
+observations.
+
 ## Architecture
 
 ### Core idea — two loops
@@ -234,9 +295,11 @@ detailed in `docs/architecture.md`.
 
 ```
 model/       # Pydantic: Feature, Binding, Event/NodeOp/NodeOpKind, HLC; ids.py;
-             #   annotation.py (Mark, CommentThread — store-authoritative rich state)
+             #   annotation.py (Mark, CommentThread — store-authoritative rich state),
+             #   voice.py (StyleLesson + EditKind/LessonStatus/LessonAxis)
 store/       # db.py — Store over the SQLite tables (features/bindings/events +
-             #   blocks/marks/comments + applied-command ledger) + 1 derived graph cache (WAL)
+             #   blocks/marks/comments + style_lessons/store_meta + applied-command
+             #   ledger) + 1 derived graph cache (WAL)
 graph/       # code dependency graph (derived, rebuildable): extract.py, query.py
 loop/        # the two loops + pieces: classify.py (decision table), phase.py (the
              #   single feature-phase projection — holds/drift/resolution are views),
@@ -249,14 +312,17 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   heal), sdk_realize.py / autorealize.py, watch.py,
              #   revisions.py (the timeline transport: applied events + the text each
              #   displaced + the directives they cite), gitref.py (the commit a
-             #   directive's code work started from — fails soft to "")
+             #   directive's code work started from — fails soft to ""),
+             #   voice.py (the style memory: harvest human rewrites → lessons →
+             #   retrieve by context → inject; see "Learning how the author writes")
 blocks/      # typed-media blocks + plugin codecs (agent-native notebook protocol):
              #   base.py (Capability LIFT/LOWER/CONSULT + BlockPlugin), registry.py,
              #   builtins.py, prose.py (plugin-zero), diagram.py (graph→mermaid lift +
              #   edge-delta lower), screenshot.py (transient + url/image consult media),
              #   refresh.py (Loop A lift pass), conformance.py (host parity harness)
 agent/       # base.py, tree_update.py (the incremental LLM call), bootstrap_agent.py,
-             # paths.py, hook.py / install_hooks.py, propose.py
+             # paths.py, hook.py / install_hooks.py, propose.py,
+             # voice.py (classify a rewrite, name the preference — policy-free)
 mcp/         # codoc MCP server (FastMCP, stdio): tools.py + server.py (codoc-mcp script)
 serve/       # the deployed hub (codoc serve) — see docs/architecture.md + serve-deployment.md
 codoc_file/  # render.py (store → tree.codoc + sidecar), parse.py, diff.py (→ user ops)
@@ -268,8 +334,9 @@ doclang.py   # the AUTHORING language of the tree: profiles + the prompt directi
              #   loop's lexical heuristics use instead of Latin-only regexes
 core/        # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT substrate]
 pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEPT]
-prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.txt
-             #   (each carries a {{doclang}} marker, expanded into the cached prefix)
+prompts/     # tree_update.txt, realize.txt, bootstrap_file.txt, bootstrap_org.txt,
+             #   voice_infer.txt (each carries a {{doclang}} marker, expanded into
+             #   the cached prefix)
              #   style.txt — the shared writing guide, pulled into the five prose
              #   prompts by {{include:style}} so every pass that writes a title or
              #   a description is held to one register (abstract first, then the

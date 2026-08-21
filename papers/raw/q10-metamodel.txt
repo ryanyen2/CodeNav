@@ -1,0 +1,42 @@
+/Users/ryanyen2/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+
+============================================================
+  semantic_scholar: 6 papers found
+============================================================
+  [1] Program Comprehension During Software Maintenance and Evolution
+      Authors: A. Von, Mayrhauser A Marie Vans
+      Year: 1995  Citations: 678  Venue: Computer
+      URL: https://www.semanticscholar.org/paper/8a9903a2241c51ad8a8de7727d5e006c83519074
+
+  [2] Verbal source code descriptor
+      Authors: S. Tehrani
+      Year: 2003  Citations: 2  Venue: 
+      URL: https://www.semanticscholar.org/paper/0e657a5417e84795c7806bc809c29eeffc90a861
+
+  [3] Integrated Computer Modeling of Engineering Design Information )*564)+6
+      Authors: F. Salustri
+      Year: 1996  Citations: 3  Venue: 
+      URL: https://www.semanticscholar.org/paper/a350db34669c2248f9113a956d0da25b3c808875
+
+  [4] Modifying reading instruction to maximize its effectiveness for all students
+      Authors: G. García, P. David Pearson
+      Year: 1990  Citations: 32  Venue: 
+      URL: https://www.semanticscholar.org/paper/f25249db3a27bec38a6e6f65e026794f40b06ec9
+
+  [5] A study of Ilokano learners' lexical inferencing procedures through think-aloud
+      Authors: J. Soria
+      Year: 2001  Citations: 23  Venue: 
+      URL: https://www.semanticscholar.org/paper/b6446f109ec7b02791775287d5449a55bf1b65ea
+
+  [6] ESP 7: empirical studies of programmers
+      Authors: J. Scholtz
+      Year: 1998  Citations: 0  Venue: SGCH
+      URL: https://www.semanticscholar.org/paper/635c8f02edf8eb186bffa8e668a49c26e8a52f87
+
+
+Total: 6 papers from 1 sources.

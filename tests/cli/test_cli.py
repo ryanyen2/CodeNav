@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 from codoc.cli.main import app
 from codoc.model.event import Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
+from codoc.model.voice import LessonAxis, LessonStatus, StyleLesson
 from codoc.store.db import open_store
 
 runner = CliRunner()
@@ -316,3 +317,111 @@ def test_serve_refuses_non_localhost_host_without_optin(tmp_path):
     r = runner.invoke(app, ["serve", "--root", str(tmp_path), "--host", "0.0.0.0"])
     assert r.exit_code == 1
     assert "Refusing to expose" in r.output
+
+class TestVoiceCommand:
+    """`codoc voice` — the channel that makes a learned preference correctable.
+
+    Codoc keeps what it learns as English sentences rather than as tuned weights
+    specifically so a wrong one can be read and deleted, so these tests treat the
+    listing and the `forget` path as the feature, not as reporting around it.
+    """
+
+    @staticmethod
+    def _workspace(tmp_path, *lessons):
+        cd = tmp_path / ".codoc"
+        cd.mkdir()
+        s = open_store(cd)
+        for lesson in lessons:
+            s.upsert_lesson(lesson)
+        s.close()
+        return tmp_path
+
+    @staticmethod
+    def _lesson(instruction, *, status=LessonStatus.ACTIVE, evidence=2,
+                axis=LessonAxis.STRUCTURE):
+        return StyleLesson(axis=axis, instruction=instruction, status=status,
+                           evidence=evidence, example_before="It calls the writer.",
+                           example_after="Readers need one place to look.")
+
+    def test_says_so_plainly_when_nothing_is_learned(self, tmp_path):
+        root = self._workspace(tmp_path)
+        r = runner.invoke(app, ["voice", "--root", str(root)])
+        assert r.exit_code == 0
+        assert "has not learned anything" in r.output
+
+    def test_lists_an_active_lesson_with_its_id(self, tmp_path):
+        lesson = self._lesson("Open on the caller's problem.")
+        root = self._workspace(tmp_path, lesson)
+        r = runner.invoke(app, ["voice", "--root", str(root)])
+        assert r.exit_code == 0
+        assert "Open on the caller's problem." in r.output
+        assert lesson.id in r.output
+        assert "applying now" in r.output
+
+    def test_separates_what_is_applying_from_what_is_only_seen_once(self, tmp_path):
+        """Collapsing the two would misreport what codoc is actually doing."""
+        root = self._workspace(
+            tmp_path,
+            self._lesson("Applied rule."),
+            self._lesson("Unconfirmed rule.", status=LessonStatus.PROVISIONAL,
+                         evidence=1, axis=LessonAxis.LENGTH),
+        )
+        r = runner.invoke(app, ["voice", "--root", str(root)])
+        assert r.exit_code == 0
+        applying = r.output.index("applying now")
+        waiting = r.output.index("seen once")
+        assert applying < r.output.index("Applied rule.") < waiting
+        assert waiting < r.output.index("Unconfirmed rule.")
+
+    def test_forget_stops_a_lesson_applying(self, tmp_path):
+        lesson = self._lesson("Wrong rule.")
+        root = self._workspace(tmp_path, lesson)
+        r = runner.invoke(app, ["voice", "forget", lesson.id, "--root", str(root)])
+        assert r.exit_code == 0
+        assert "forgotten" in r.output
+        with open_store(tmp_path / ".codoc") as store:
+            assert store.injectable_lessons() == []
+            assert store.get_lesson(lesson.id).status is LessonStatus.RETIRED
+
+    def test_a_forgotten_lesson_is_hidden_unless_asked_for(self, tmp_path):
+        lesson = self._lesson("Wrong rule.", status=LessonStatus.RETIRED)
+        root = self._workspace(tmp_path, lesson)
+        assert "Wrong rule." not in runner.invoke(
+            app, ["voice", "--root", str(root)]).output
+        assert "Wrong rule." in runner.invoke(
+            app, ["voice", "--root", str(root), "--all"]).output
+
+    def test_keep_applies_a_lesson_seen_only_once(self, tmp_path):
+        lesson = self._lesson("Good rule.", status=LessonStatus.PROVISIONAL, evidence=1)
+        root = self._workspace(tmp_path, lesson)
+        r = runner.invoke(app, ["voice", "keep", lesson.id, "--root", str(root)])
+        assert r.exit_code == 0
+        with open_store(tmp_path / ".codoc") as store:
+            assert [x.id for x in store.injectable_lessons()] == [lesson.id]
+
+    def test_why_shows_the_edit_the_lesson_came_from(self, tmp_path):
+        """A preference nobody can trace back to its edit is deletable but not
+        correctable, which is a worse channel than it looks."""
+        lesson = self._lesson("Open on the caller's problem.")
+        lesson.scope_path = ["Codoc", "The two loops"]
+        lesson.source_events = ["e-deadbeef"]
+        root = self._workspace(tmp_path, lesson)
+        r = runner.invoke(app, ["voice", "why", lesson.id, "--root", str(root)])
+        assert r.exit_code == 0
+        assert "It calls the writer." in r.output
+        assert "Readers need one place to look." in r.output
+        assert "Codoc / The two loops" in r.output
+        assert "e-deadbeef" in r.output
+
+    def test_an_unknown_lesson_id_fails_loudly(self, tmp_path):
+        root = self._workspace(tmp_path)
+        r = runner.invoke(app, ["voice", "forget", "v-nope", "--root", str(root)])
+        assert r.exit_code == 1
+        assert "no lesson" in r.output
+
+    def test_an_unknown_action_fails_rather_than_listing(self, tmp_path):
+        root = self._workspace(tmp_path, self._lesson("A rule."))
+        r = runner.invoke(app, ["voice", "banana", "--root", str(root)])
+        assert r.exit_code == 1
+        assert "unknown action" in r.output
+

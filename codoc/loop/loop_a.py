@@ -36,6 +36,7 @@ from codoc.loop.title_dedup import (
     make_loop_embedder,
     semantic_dedup_enabled,
 )
+from codoc.loop.voice import harvest, voice_context
 from codoc.loop.why import gather_why_evidence
 from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
 from codoc.store.db import Store, open_store
@@ -504,6 +505,14 @@ def apply_changeset(
     # None ⇒ read it from the workspace config (env var still overrides), so the
     # daemon needs no plumbing and a bare unit-test caller gets English.
     doc_language: DocLanguage | None = None,
+    # Learn this author's writing from the edits they have made to ours
+    # (:mod:`codoc.loop.voice`). Off for bare callers on the ``embed_fn`` precedent:
+    # the harvest makes its own LLM call, and a unit test that did not ask for one
+    # should not get one. The run entrypoints turn it on; tests inject
+    # ``infer_voice`` instead. RETRIEVAL is unconditional and unaffected — reading
+    # already-learned lessons out of the store costs nothing and needs no gate.
+    learn_voice: bool = False,
+    infer_voice=None,
 ) -> LoopAResult:
     held = held or set()
     caused_by_map = caused_by_map or {}
@@ -789,15 +798,44 @@ def apply_changeset(
     if evidence:
         changes["why_evidence"] = evidence
 
-    # The author's own writing, shown as the register to match. A new node has
-    # no prose of its own to take a cue from, so without this every added
+    # Read anything the author has rewritten since the last pass, BEFORE retrieving
+    # lessons below — so a correction they made a minute ago can inform the prose this
+    # pass is about to write, rather than the one after it.
+    #
+    # Here rather than in Loop B, which is the pass that applies their edit, for two
+    # reasons. Loop B is the interactive path and the author is waiting on it, while
+    # this pass already makes a model call and is where prose gets written. And the
+    # harvest only has to have run before the next WRITE, which is here. It costs
+    # nothing on a pass with no new rewrites to read: `harvest` returns before calling
+    # anything when the ledger has not moved.
+    if learn_voice or infer_voice is not None:
+        try:
+            harvest(store, doc_language=doc_language, infer=infer_voice)
+        except Exception:  # noqa: BLE001 — learning is optional; never sink a pass
+            pass
+
+    # How this author writes, in the two forms that transfer differently.
+    #
+    # `author_voice` is their own paragraphs, shown as the register to match: a new
+    # node has no prose of its own to take a cue from, so without this every added
     # feature arrives in house style regardless of how the tree around it reads.
+    #
+    # `voice_lessons` is what codoc has LEARNED from their rewrites — named
+    # instructions, retrieved for this change's files. Kept a separate key rather
+    # than folded into the samples because the two ask for different things: a
+    # sample says "sound like this", a lesson says "do this", and a model handed
+    # both in one list follows neither reliably. See :mod:`codoc.loop.voice`; the
+    # imitation result in `papers/02-continual-learning-from-user-edits.md` is why
+    # the samples alone were not enough.
     try:
-        voice = store.human_written_descriptions()
-    except Exception:  # noqa: BLE001 — advisory context only
-        voice = []
-    if voice:
-        changes["author_voice"] = voice
+        block = voice_context(store, files=cs.touched_files())
+    except Exception:  # noqa: BLE001 — advisory context only; never sink a pass
+        block = None
+    if block:
+        if block.get("samples"):
+            changes["author_voice"] = block["samples"]
+        if block.get("lessons"):
+            changes["voice_lessons"] = block["lessons"]
 
     # One call per batch of added chunks, not one call for all of them. The pass
     # is asked to place every added chunk, and that instruction stops being
@@ -1186,7 +1224,8 @@ def run_loop_a(
                                      allow_retire=False, held=held,
                                      caused_by_map=cb_map, default_caused_by=default_cb,
                                      codoc_dir=codoc_dir, root_dir=root_dir,
-                                     file_scope=file_scope, embed_fn=embed_fn)
+                                     file_scope=file_scope, embed_fn=embed_fn,
+                                     learn_voice=True)
             # Block `lift` (U3): re-derive persistent, LIFT-capable blocks (e.g. diagrams)
             # from the freshly-updated graph/bindings. Read-only on code (attribution),
             # and doc-wins — a block on a held feature is skipped, so a human's pending
@@ -1471,7 +1510,8 @@ def reconcile_drift(
                                      allow_retire=True, amend_on_change=True, held=held,
                                      caused_by_map=cb_map, default_caused_by=default_cb,
                                      codoc_dir=codoc_dir, root_dir=root_dir,
-                                     file_scope=file_scope, embed_fn=embed_fn)
+                                     file_scope=file_scope, embed_fn=embed_fn,
+                                     learn_voice=True)
             # Close realize-queue entries the reconciled state proves finished (a
             # plan placeholder now bound, a directive whose ⟨d-…⟩ id the ledger
             # carries). The daemon runs THIS pass — not Loop B — at epoch close and

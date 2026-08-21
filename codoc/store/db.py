@@ -26,6 +26,7 @@ from codoc.model.block import Block, BlockLifecycle, Provenance
 from codoc.model.event import ACTOR_HUMAN, Event, NodeOp
 from codoc.model.feature import Feature, Lifecycle
 from codoc.model.hlc import HLC
+from codoc.model.voice import LessonAxis, LessonStatus, StyleLesson
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS features (
@@ -190,6 +191,44 @@ CREATE TABLE IF NOT EXISTS feature_writers (
     role        TEXT NOT NULL DEFAULT '',
     at          TEXT NOT NULL
 );
+
+-- What codoc has learned about how this codebase's author writes, inferred from
+-- their rewrites of prose codoc generated (codoc.model.voice, codoc.loop.voice).
+-- Not derived state: the ledger holds the rewrites, but the LESSON drawn from one
+-- is an LLM inference that costs a call, so re-deriving it on every pass would
+-- re-bill the whole history. Hence a table, and hence `harvest_watermark` — the
+-- newest event id already considered, so a harvest reads only what arrived since.
+--
+-- `status` gates injection (provisional until a second edit corroborates it), and
+-- a RETIRED row is kept rather than deleted: a lesson the author told us to forget
+-- would otherwise be re-inferred from the same untouched history on the next pass,
+-- so the row is the record of the refusal.
+CREATE TABLE IF NOT EXISTS style_lessons (
+    id            TEXT PRIMARY KEY,
+    axis          TEXT NOT NULL,
+    instruction   TEXT NOT NULL,
+    example_before TEXT NOT NULL DEFAULT '',
+    example_after TEXT NOT NULL DEFAULT '',
+    axis_detail   TEXT NOT NULL DEFAULT '',
+    scope_path    TEXT NOT NULL DEFAULT '[]',
+    scope_files   TEXT NOT NULL DEFAULT '[]',
+    status        TEXT NOT NULL DEFAULT 'provisional',
+    evidence      INTEGER NOT NULL DEFAULT 1,
+    sources       TEXT NOT NULL DEFAULT '[]',
+    source_events TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_status ON style_lessons(status);
+
+-- Small key/value scratch for the store's own bookkeeping. One row today (the
+-- voice harvest watermark) and deliberately not a column on style_lessons: the
+-- watermark has to advance even on a harvest that produced NO lesson, or a
+-- history of pure content edits would be re-read and re-billed forever.
+CREATE TABLE IF NOT EXISTS store_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
 """
 
 # Stamped into ``PRAGMA user_version`` after the schema + migrations have run, so
@@ -203,7 +242,7 @@ CREATE TABLE IF NOT EXISTS feature_writers (
 #: either order, so the tree would shuffle between renders for no visible reason.
 _ORDER_BY = " ORDER BY rank, created_at"
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 #: How many times :meth:`Store._ensure_schema` re-attempts a lock-contended schema pass.
 #: Each step is idempotent, so a retry is free; the contention window is one peer's
@@ -683,6 +722,145 @@ class Store:
             (ACTOR_HUMAN, max(0, limit)),
         ).fetchall()
         return [r[0] for r in rows if r and r[0]]
+
+    # -- voice: what codoc has learned about how the author writes ---------
+    #
+    # See :mod:`codoc.model.voice` for why a lesson is provisional until
+    # corroborated and why a retired one is kept. The store's only job here is
+    # durability and the two reads the loop needs: everything (for ``codoc voice``
+    # and for the harvest's dedup) and the injectable set (for the prompts).
+
+    def upsert_lesson(self, lesson: StyleLesson) -> None:
+        """Insert or update a lesson by its stable id.
+
+        ``evidence`` and the source lists come from the caller rather than being
+        incremented here, because deciding that a new inference is the SAME lesson
+        as an existing one is a judgment about the two instructions, which lives in
+        :mod:`codoc.loop.voice`. The store must not guess at it.
+        """
+        self.conn.execute(
+            """
+            INSERT INTO style_lessons (id, axis, instruction, example_before, example_after,
+                                       axis_detail, scope_path, scope_files, status,
+                                       evidence, sources, source_events,
+                                       created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                axis=excluded.axis,
+                instruction=excluded.instruction,
+                example_before=excluded.example_before,
+                example_after=excluded.example_after,
+                axis_detail=excluded.axis_detail,
+                scope_path=excluded.scope_path,
+                scope_files=excluded.scope_files,
+                status=excluded.status,
+                evidence=excluded.evidence,
+                sources=excluded.sources,
+                source_events=excluded.source_events,
+                updated_at=excluded.updated_at
+            """,
+            (
+                lesson.id, lesson.axis.value, lesson.instruction,
+                lesson.example_before, lesson.example_after, lesson.axis_detail,
+                json.dumps(lesson.scope_path), json.dumps(lesson.scope_files),
+                lesson.status.value, lesson.evidence,
+                json.dumps(lesson.sources), json.dumps(lesson.source_events),
+                lesson.created_at.to_str(), lesson.updated_at.to_str(),
+            ),
+        )
+        self._commit()
+
+    def all_lessons(self, *, include_retired: bool = True) -> list[StyleLesson]:
+        """Every lesson, strongest evidence first.
+
+        Retired ones are included by default because both callers that want the
+        whole set — ``codoc voice`` and the harvest's dedup — need to see them: the
+        first to show what was refused, the second to avoid re-learning it.
+        """
+        sql = "SELECT * FROM style_lessons"
+        if not include_retired:
+            sql += f" WHERE status <> '{LessonStatus.RETIRED.value}'"
+        sql += " ORDER BY evidence DESC, updated_at DESC"
+        return [_row_to_lesson(r) for r in self.conn.execute(sql).fetchall()]
+
+    def injectable_lessons(self) -> list[StyleLesson]:
+        """The lessons corroborated enough to shape prose (``status = active``)."""
+        rows = self.conn.execute(
+            "SELECT * FROM style_lessons WHERE status = ?"
+            " ORDER BY evidence DESC, updated_at DESC",
+            (LessonStatus.ACTIVE.value,),
+        ).fetchall()
+        return [_row_to_lesson(r) for r in rows]
+
+    def get_lesson(self, lesson_id: str) -> StyleLesson | None:
+        row = self.conn.execute(
+            "SELECT * FROM style_lessons WHERE id=?", (lesson_id,)
+        ).fetchone()
+        return _row_to_lesson(row) if row else None
+
+    def set_lesson_status(self, lesson_id: str, status: LessonStatus) -> bool:
+        """Promote or retire one lesson by hand. Returns whether it existed.
+
+        The author-facing half of PRELUDE's argument for keeping preferences in
+        text: a learned instruction is only safe when the person it models can read
+        it and say no.
+        """
+        cur = self.conn.execute(
+            "UPDATE style_lessons SET status=?, updated_at=? WHERE id=?",
+            (status.value, HLC.now().to_str(), lesson_id),
+        )
+        self._commit()
+        return cur.rowcount > 0
+
+    # -- store_meta: the store's own small bookkeeping ---------------------
+
+    def get_meta(self, key: str, default: str = "") -> str:
+        row = self.conn.execute(
+            "SELECT value FROM store_meta WHERE key=?", (key,)
+        ).fetchone()
+        return (row[0] if row and row[0] is not None else default)
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO store_meta (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        self._commit()
+
+    def human_amend_events(
+        self, *, since: str = "", limit: int = 40,
+    ) -> list[tuple[str, Event]]:
+        """Applied AMENDs a PERSON made, oldest first, after cursor ``since``.
+
+        Returns ``(cursor, event)`` pairs. The harvest's input: each event is a human
+        rewriting prose that was already on the page, and ``op.prev_description`` /
+        ``op.prev_written_by`` say what it replaced and who had written it. Oldest
+        first because the harvest advances a watermark through them and a partial run
+        must leave a resumable position, which reverse order cannot.
+
+        The cursor is the **insertion order**, not the HLC stamp, and that is
+        load-bearing. ``HLC.now()`` reports the wall clock with ``logical_time`` fixed
+        at zero, so every event Loop B applies inside one millisecond carries an
+        IDENTICAL ``at`` — and a batch of drained commands is exactly that. Paging on
+        ``at > since`` would then skip whatever shared the watermark's millisecond,
+        losing those rewrites permanently, while ``at >= since`` would re-read them
+        forever. Insertion order is total and has no ties, which is the only property
+        a resumable cursor needs. Zero-padded so the value compares correctly as the
+        string that ``store_meta`` holds.
+
+        Filtered on ``actor`` rather than ``source``: ``source`` says which channel
+        carried the edit (``loop_b`` carries both a person's typing and the loop's
+        own maintenance), while ``actor`` says who authored it, which is the
+        question here.
+        """
+        after = int(since) if since.strip().isdigit() else 0
+        rows = self.conn.execute(
+            "SELECT rowid AS _seq, * FROM events WHERE applied=1 AND actor=?"
+            " AND rowid > ? ORDER BY rowid ASC LIMIT ?",
+            (ACTOR_HUMAN, after, max(0, limit)),
+        ).fetchall()
+        return [(f"{r['_seq']:020d}", _row_to_event(r)) for r in rows]
 
     def _next_version(self, feature_id: str) -> str:
         """The next version stamp for a feature — strictly after its current one.
@@ -1250,6 +1428,44 @@ def _row_to_mark(r: sqlite3.Row) -> Mark:
         provenance=Provenance(r["provenance"]),
         anchor_start=r["anchor_start"],
         anchor_end=r["anchor_end"],
+        created_at=HLC.from_str(r["created_at"]),
+        updated_at=HLC.from_str(r["updated_at"]),
+    )
+
+
+def _json_list(raw: object) -> list:
+    """A JSON list column as a list, tolerating anything else.
+
+    A lesson's scope and source lists are advisory context for retrieval, so a row
+    written by a different version — or hand-edited — must degrade to "no scope
+    recorded" rather than take down every read of the table.
+    """
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw if isinstance(raw, str) else str(raw))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _row_to_lesson(r: sqlite3.Row) -> StyleLesson:
+    keys = r.keys()
+    return StyleLesson(
+        id=r["id"],
+        axis=LessonAxis(r["axis"]),
+        instruction=r["instruction"],
+        example_before=r["example_before"],
+        example_after=r["example_after"],
+        # Presence-checked: added after the table shipped, so a connection opened
+        # before the migration ran can still read the row.
+        axis_detail=(r["axis_detail"] if "axis_detail" in keys else "") or "",
+        scope_path=[str(p) for p in _json_list(r["scope_path"])],
+        scope_files=[str(f) for f in _json_list(r["scope_files"])],
+        status=LessonStatus(r["status"]),
+        evidence=r["evidence"],
+        sources=[str(s) for s in _json_list(r["sources"])],
+        source_events=[str(s) for s in _json_list(r["source_events"])],
         created_at=HLC.from_str(r["created_at"]),
         updated_at=HLC.from_str(r["updated_at"]),
     )

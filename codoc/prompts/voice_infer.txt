@@ -1,0 +1,91 @@
+A person rewrote prose that codoc had generated for their feature tree. Your job
+is to say what the rewrite teaches about HOW THEY WRITE, so later passes write
+that way the first time.
+
+You are shown one or more rewrites. For each, decide what it was about, and only
+then draw a lesson.
+
+## First, classify the rewrite
+
+- `content` — the facts changed. They fixed something that was WRONG, or added
+  information that was missing, or removed a claim that was not true. Teaches
+  nothing about voice.
+- `style` — the same facts, said differently. Reordered, shortened, plainer words,
+  a different opening, a threshold spelled out instead of gestured at.
+- `mixed` — both at once, which is the common case: somebody correcting a claim
+  tidies the sentence while they are in there.
+- `noise` — a typo, a whitespace change, one word swapped, a link fixed. Too
+  small to carry a preference.
+
+**Be strict about `content`.** The most damaging mistake you can make here is
+reading a factual correction as a preference — that turns one repair into an
+instruction to assert that same fact everywhere. If the before and after disagree
+about what the code DOES, it is `content` (or `mixed`), never `style`.
+
+## Then, draw at most one lesson per rewrite
+
+Only `style` and `mixed` rewrites yield a lesson, and for a `mixed` one the lesson
+must come from the part that did not change the facts. A rewrite may also yield no
+lesson: if you cannot name the preference in one sentence a writer could act on,
+return none for it. That is a normal outcome and much better than a vague one.
+
+A lesson has:
+
+- `axis` — one of `altitude` (how far above the mechanism to write), `length`
+  (sentence and paragraph size), `vocabulary` (the words this author uses and
+  refuses), `structure` (what the first sentence does, what order things come in),
+  `specificity` (how much naming of symbols, values, thresholds), `titling` (how a
+  feature gets named).
+- `instruction` — the preference as ONE sentence addressed to the writer, in the
+  imperative. It goes into a later prompt verbatim, so write it as guidance and
+  not as an observation about a person. Say `Open on the problem the caller has,
+  not on the name of the module`, never `The author prefers purpose-first
+  openings`.
+- `axis_detail` — three or four words naming the direction, for a reader
+  skimming a list (`shorter sentences`, `names thresholds`, `avoids I/O jargon`).
+
+**Generalize only as far as the evidence reaches.** One rewrite that cut a
+sentence supports `Stop after the rule; do not add a third sentence unless it
+carries a threshold or a name` and does NOT support `Write tersely`. A lesson that
+would change every description in the tree needs to be visible in the rewrite you
+were shown, not inferred from one instance of it.
+
+**Never draw a lesson about the subject matter.** `Mention that the store is
+SQLite` is a fact about this codebase, not a preference about writing. If the
+instruction only makes sense for the one feature you were shown, it is not a
+lesson.
+
+## Output
+
+Return ONLY this, inside solution tags. One entry per rewrite, in the order you
+were given them, each carrying the `event_id` you were shown so the caller can
+match it back. `lesson` is null when there is none.
+
+<solution>
+{"rewrites": [
+  {"event_id": "e-1a2b3c4d", "kind": "style",
+   "lesson": {"axis": "structure",
+              "instruction": "Open on the problem the caller has, then name the rule that solves it; never open on a module or class name.",
+              "axis_detail": "purpose-first openings"}},
+  {"event_id": "e-5e6f7a8b", "kind": "content", "lesson": null},
+  {"event_id": "e-9c0d1e2f", "kind": "mixed",
+   "lesson": {"axis": "specificity",
+              "instruction": "State the actual number or name a policy uses rather than saying it is configurable.",
+              "axis_detail": "names thresholds"}}
+]}
+</solution>
+
+Write every value as plain prose with NO double-quote characters — these are JSON
+string values and a bare quote makes the whole response unparseable.
+
+{{doclang}}
+<<<CACHE_BREAK>>>
+## The rewrites
+
+Each entry has the feature it belongs to, the prose codoc generated (`before`),
+what the person left in its place (`after`), and where the feature sits in the
+tree. `field` says whether this was the node's title or its description.
+
+{rewrites}
+
+Now classify each rewrite and draw its lesson, inside solution tags.

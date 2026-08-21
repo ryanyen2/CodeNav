@@ -1,0 +1,137 @@
+/Users/ryanyen2/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+[open_alex] unavailable (import failed: unsupported operand type(s) for |: 'type' and 'NoneType'); skipping this source.
+
+============================================================
+  open_alex: 0 papers found
+============================================================
+
+============================================================
+  arxiv: 12 papers found
+============================================================
+  [1] WizardCoder: Empowering Code Large Language Models with Evol-Instruct
+      Authors: Ziyang Luo, Can Xu, Pu Zhao...
+      Year: 2023  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2306.08568v2
+
+  [2] RepoSummary: Feature-Oriented Summarization and Documentation Generation for Code Repositories
+      Authors: Yifeng Zhu, Xianlin Zhao, Xutian Li...
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2510.11039v1
+
+  [3] JaCoText: A Pretrained Model for Java Code-Text Generation
+      Authors: Jessica López Espejel, Mahaman Sanoussi Yahaya Alassan, Walid Dahhane...
+      Year: 2023  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2303.12869v1
+
+  [4] Indian Language Summarization using Pretrained Sequence-to-Sequence Models
+      Authors: Ashok Urlana, Sahil Manoj Bhatt, Nirmal Surange...
+      Year: 2023  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2303.14461v1
+
+  [5] QA-prompting: Improving Summarization with Large Language Models using Question-Answering
+      Authors: Neelabh Sinha
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2505.14347v2
+
+  [6] Document Summarization with Conformal Importance Guarantees
+      Authors: Bruce Kuwahara, Chen-Yuan Lin, Xiao Shi Huang...
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2509.20461v1
+
+  [7] TEAL: Tokenize and Embed ALL for Multi-modal Large Language Models
+      Authors: Zhen Yang, Yingxue Zhang, Fandong Meng...
+      Year: 2023  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2311.04589v3
+
+  [8] Large Language Models Lack Understanding of Character Composition of Words
+      Authors: Andrew Shin, Kunitake Kaneko
+      Year: 2024  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2405.11357v3
+
+  [9] Enhancing Human-Like Responses in Large Language Models
+      Authors: Ethem Yağız Çalık, Talha Rüzgar Akkuş
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2501.05032v2
+
+  [10] Classifying German Language Proficiency Levels Using Large Language Models
+      Authors: Elias-Leander Ahlers, Witold Brunsmann, Malte Schilling
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2512.06483v1
+
+  [11] Investigating Retrieval-Augmented Generation in Quranic Studies: A Study of 13 Open-Source Large Language Models
+      Authors: Zahra Khalila, Arbi Haza Nasution, Winda Monika...
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2503.16581v1
+
+  [12] Testing the Effect of Code Documentation on Large Language Model Code Understanding
+      Authors: William Macke, Michael Doyle
+      Year: 2024  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2404.03114v1
+
+
+============================================================
+  semantic_scholar: 12 papers found
+============================================================
+  [1] ML-Bench: Evaluating Large Language Models and Agents for Machine Learning Tasks on Repository-Level Code
+      Authors: Yuliang Liu, Xiangru Tang, Zefan Cai...
+      Year: 2023  Citations: 57  Venue: 
+      URL: https://www.semanticscholar.org/paper/f537640c4e55d2a794a0af3ec60651f3820c702e
+
+  [2] RepoAgent: An LLM-Powered Open-Source Framework for Repository-level Code Documentation Generation
+      Authors: Qinyu Luo, Yining Ye, Shihao Liang...
+      Year: 2024  Citations: 109  Venue: Conference on Empirical Methods in Natural Language Processing
+      URL: https://www.semanticscholar.org/paper/f1b6c8bc0f5675c6398d56fdb86d574d48b3f91d
+
+  [3] Retrieval-Augmented Code Generation: A Survey with Focus on Repository-Level Approaches
+      Authors: Yicheng Tao, Yao Qin, Yepang Liu
+      Year: 2025  Citations: 28  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/dd9ccffa36cf0f628466bbe43318079a72d7111b
+
+  [4] Do Not Treat Code as Natural Language: Implications for Repository-Level Code Generation and Beyond
+      Authors: Minh Le-Anh, Huyen Nguyen, An Khanh Tran...
+      Year: 2026  Citations: 3  Venue: Proceedings of the ACM on Software Engineering
+      URL: https://www.semanticscholar.org/paper/e36832f51f5fba50baf333eb4b2d3d63ddb89dc2
+
+  [5] Repository-Aware Metamorphic Relation Generation for Augmented Reality Applications using Large Language Models
+      Authors: Dibyendu Brinto Bose, Jiawei Qin, Chris Brown
+      Year: 2026  Citations: 0  Venue: 
+      URL: https://www.semanticscholar.org/paper/5b5f5fa84d59b74dff836d26929abde205812d7c
+
+  [6] Agent4cs: A Multi-agent System for Code Summarization in Large Hierarchical Codebases
+      Authors: Yongjian Tang, Ezgi Sarikayak, Doruk Tuncel...
+      Year: 2026  Citations: 0  Venue: 
+      URL: https://www.semanticscholar.org/paper/0ea3160339bd731ab6375c418671ea9fe5ae64f6
+
+  [7] H2LooP Spark Preview: Continual Pretraining of Large Language Models for Low-Level Embedded Systems Code
+      Authors: A. Singh, Vedant Nipane, Pulkit Agrawal...
+      Year: 2026  Citations: 0  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/946ec0c89adff72fda541f8ff83965db44329518
+
+  [8] ReCUBE: Evaluating Repository-Level Context Utilization in Code Generation
+      Authors: Jiseung Hong, Benjamin Ascoli, Jinho D. Choi
+      Year: 2026  Citations: 1  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/1094babc0faca4b2840b09917c2233c3fe045514
+
+  [9] FragRel: Exploiting Fragment-level Relations in the External Memory of Large Language Models
+      Authors: Xihang Yue, Linchao Zhu, Yi Yang
+      Year: 2024  Citations: 2  Venue: Annual Meeting of the Association for Computational Linguistics
+      URL: https://www.semanticscholar.org/paper/ca0df686daf086421363760eacd94d3bc79eb27b
+
+  [10] HDLxGraph: Bridging Large Language Models and HDL Repositories via HDL Graph Databases
+      Authors: Pingqing Zheng, Jiayin Qin, Fuqi Zhang...
+      Year: 2025  Citations: 0  Venue: Asia and South Pacific Design Automation Conference
+      URL: https://www.semanticscholar.org/paper/ba10cea78bc6fc58ecc637e3fa38b861d57bcbc7
+
+  [11] Code generation with large language models: a survey from neural program synthesis to autonomous software development
+      Authors: Burak Gülmez
+      Year: 2026  Citations: 7  Venue: Applied intelligence (Boston)
+      URL: https://www.semanticscholar.org/paper/58589254939c8828da483d8411c19cd5cc989dee
+
+  [12] Context-Aware Pipeline for Automated Code Review Using Large Language Models
+      Authors: Fatma Abdalgalil, Gehan Sherif, Marwan Mohamed...
+      Year: 2025  Citations: 0  Venue: International Conference on Computing: Theory and Applications
+      URL: https://www.semanticscholar.org/paper/d900ac8a4a17caa1d89325efc96e419c4b5ea64b
+
+
+Total: 24 papers from 3 sources.

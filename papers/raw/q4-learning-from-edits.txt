@@ -1,0 +1,157 @@
+/Users/ryanyen2/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+[open_alex] unavailable (import failed: unsupported operand type(s) for |: 'type' and 'NoneType'); skipping this source.
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+Rate limited. Waiting 3 seconds...
+
+============================================================
+  open_alex: 0 papers found
+============================================================
+
+============================================================
+  arxiv: 12 papers found
+============================================================
+  [1] Adversarial Bandits with Multi-User Delayed Feedback: Theory and Application
+      Authors: Yandi Li, Jianxiong Guo, Yupeng Li...
+      Year: 2023  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2310.11188v2
+
+  [2] Aligning LLM Agents by Learning Latent Preference from User Edits
+      Authors: Ge Gao, Alexey Taymanov, Eduardo Salinas...
+      Year: 2024  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2404.15269v3
+
+  [3] Aligning Language Models from User Interactions
+      Authors: Thomas Kleine Buening, Jonas Hübotter, Barna Pásztor...
+      Year: 2026  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2603.12273v1
+
+  [4] Probabilistic Digital Twins of Users: Latent Representation Learning with Statistically Validated Semantics
+      Authors: Daniel David
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2512.18056v1
+
+  [5] Visual Story-Writing: Writing by Manipulating Visual Representations of Stories
+      Authors: Damien Masson, Zixin Zhao, Fanny Chevalier
+      Year: 2024  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2410.07486v2
+
+  [6] Tell Me the Good Stuff: User Preferences in Movie Recommendation Explanations
+      Authors: Juan Ahmad, Jonas Hellgren, Alan Said
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2505.03376v1
+
+  [7] How Personal Characteristics Shape User Exploration of Diverse Movie Recommendations with a LLM-Based Multi-Agent System
+      Authors: Yufan Zhou, Yirui Huang, Zhao Wang...
+      Year: 2026  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2604.24405v2
+
+  [8] Learning to summarize user information for personalized reinforcement learning from human feedback
+      Authors: Hyunji Nam, Yanming Wan, Mickel Liu...
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2507.13579v3
+
+  [9] Learning to Plan with Natural Language
+      Authors: Yiduo Guo, Yaobo Liang, Chenfei Wu...
+      Year: 2023  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2304.10464v4
+
+  [10] Teaching Language Models to Evolve with Users: Dynamic Profile Modeling for Personalized Alignment
+      Authors: Weixiang Zhao, Xingyu Sui, Yulin Hu...
+      Year: 2025  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2505.15456v2
+
+  [11] Training Language Models with Language Feedback
+      Authors: Jérémy Scheurer, Jon Ander Campos, Jun Shern Chan...
+      Year: 2022  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2204.14146v4
+
+  [12] Step-Back Profiling: Distilling User History for Personalized Scientific Writing
+      Authors: Xiangru Tang, Xingyao Zhang, Yanjun Shao...
+      Year: 2024  Citations: 0  Venue: arXiv
+      URL: http://arxiv.org/abs/2406.14275v2
+
+
+============================================================
+  semantic_scholar: 12 papers found
+============================================================
+  [1] Aligning LLM Agents by Learning Latent Preference from User Edits
+      Authors: Ge Gao, Alexey Taymanov, Eduardo Salinas...
+      Year: 2024  Citations: 96  Venue: Neural Information Processing Systems
+      URL: https://www.semanticscholar.org/paper/fa018aa098c28bd694b316ddf7e213641e7f86ad
+
+  [2] Meetalk: Retrieval-Augmented and Adaptively Personalized Meeting Summarization with Knowledge Learning from User Corrections
+      Authors: Zheng Chen, Futian Jiang, Yue Deng...
+      Year: 2025  Citations: 1  Venue: Proceedings of the 3rd Workshop on Towards Knowledgeable Foundation Models (KnowFM)
+      URL: https://www.semanticscholar.org/paper/a4c607a8ea3599d7fb777febd2bc5df7ebc7a0ec
+
+  [3] Dr Genre: Reinforcement Learning from Decoupled LLM Feedback for Generic Text Rewriting
+      Authors: Yufei Li, John Nham, Ganesh Jawahar...
+      Year: 2025  Citations: 4  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/aa3db5cdbe06055809484e4bde3144d4ed763eba
+
+  [4] Towards Faithful and Controllable Personalization via Critique-Post-Edit Reinforcement Learning
+      Authors: Chenghao Zhu, Meiling Tao, Tiannan Wang...
+      Year: 2025  Citations: 3  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/772411e3be3f7cb2e55cf09b407dc117edeea5f2
+
+  [5] Catch Me If You Can? Not Yet: LLMs Still Struggle to Imitate the Implicit Writing Styles of Everyday Authors
+      Authors: Zhengxiang Wang, N. Tripto, Solha Park...
+      Year: 2025  Citations: 11  Venue: Conference on Empirical Methods in Natural Language Processing
+      URL: https://www.semanticscholar.org/paper/f811f112334809410a57ba1a488d236cb83ccf57
+
+  [6] Integration of Local Large Language Models, Retrieval-Augmented Generation, and Adaptive Learning
+      Authors: A. Belcaid, Kamal Reklaoui
+      Year: 2026  Citations: 0  Venue: Journal of Computer Science
+      URL: https://www.semanticscholar.org/paper/eb637d3bdc131c3c0bf0bb35abd5157af6076ef7
+
+  [7] MINT: Meta-Learning for Intelligent Prompt Creation
+      Authors: A. Raj, Mehul Dinesh
+      Year: 2025  Citations: 0  Venue: 2025 Third International Conference on Networks, Multimedia and Information Technology (NMITCON)
+      URL: https://www.semanticscholar.org/paper/0d64f1914a968d51f7068ae75c02dc2e2dd782b3
+
+  [8] Sparse Personalized Text Generation with Multi-Trajectory Reasoning
+      Authors: Bo Ni, Hao Fu, Qinwen Ge...
+      Year: 2026  Citations: 1  Venue: arXiv.org
+      URL: https://www.semanticscholar.org/paper/0c556edc553f0cc6d815f23dcc359e53c439fac8
+
+  [9] Mitigation of User Experience Bias in LLM-Driven Educational Web Services for Women and Neurodiverse Learners
+      Authors: Reyhane Abniki, Ali Imanifard, Babak Majidi
+      Year: 2026  Citations: 0  Venue: 2026 12th International Conference on Web Research (ICWR)
+      URL: https://www.semanticscholar.org/paper/bc4d345ed107fa1aa7fb528ee32a1509e087919c
+
+  [10] One Adapts to Any: Meta Reward Modeling for Personalized LLM Alignment
+      Authors: Hongru Cai, Yongqi Li, Tiezheng Yu...
+      Year: 2026  Citations: 2  Venue: Annual International ACM SIGIR Conference on Research and Development in Information Retrieval
+      URL: https://www.semanticscholar.org/paper/2d9c75a239d05f84f13179e33d10306137aeda9b
+
+  [11] PGN-LM Model and Forcing-Seq2Seq Model: Multiple automatic models of title generation for natural text using Deep Learning
+      Authors: T. T. Nhan, Nguyen Thi Thuan, Q. T. Tho
+      Year: 2022  Citations: 0  Venue: REV Journal on Electronics and Communications
+      URL: https://www.semanticscholar.org/paper/044d8f842d4bc1a3fda6940342375ed88cff59c8
+
+  [12] HumanLLM: Towards Personalized Understanding and Simulation of Human Nature
+      Authors: Yuxuan Lei, Tian Wang, Jianxun Lian...
+      Year: 2026  Citations: 5  Venue: Knowledge Discovery and Data Mining
+      URL: https://www.semanticscholar.org/paper/6a1b0d8801a0c4c8e4161f0d272ec29707873c4b
+
+
+Total: 24 papers from 3 sources.

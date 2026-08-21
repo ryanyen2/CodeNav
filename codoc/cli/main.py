@@ -767,6 +767,96 @@ def lang(
 
 
 @app.command()
+def voice(
+    action: str = typer.Argument(
+        "", help="Omit to list what codoc has learned. `forget <v-id>` stops applying "
+                 "a lesson; `keep <v-id>` promotes one that has only been seen once; "
+                 "`why <v-id>` shows the edits it was drawn from."),
+    lesson_id: str = typer.Argument("", help="The lesson id (v-…) to act on."),
+    root: str = typer.Option(".", "--root", help="Repository root."),
+    all_: bool = typer.Option(False, "--all", help="Include retired lessons."),
+):
+    """Show and correct what codoc has learned about how you write.
+
+    Codoc watches the rewrites you make to prose it generated and turns the ones
+    that were about WORDING (not facts) into named instructions it follows next
+    time. This is where you read them.
+
+    Being able to read and delete them is the point, not a convenience: codoc keeps
+    these as English sentences rather than as a fine-tuned model precisely so a
+    wrong one is visible and one command away from gone. A lesson you forget stays
+    forgotten — the same inference from a later edit will not bring it back.
+    """
+    _require_workspace(root)
+    from codoc.loop.voice import edit_cost_trend, render_trend
+    from codoc.model.voice import ACTIVE_AT, LessonStatus
+    from codoc.store.db import open_store
+
+    verb = action.strip().casefold()
+    with open_store(_codoc_dir(root)) as store:
+        if verb in ("forget", "keep", "why"):
+            target = (lesson_id or "").strip().strip("⟨⟩")
+            lesson = store.get_lesson(target) if target else None
+            if lesson is None:
+                typer.echo(f"no lesson {target!r} — run `codoc voice` to list them")
+                raise typer.Exit(1)
+            if verb == "forget":
+                store.set_lesson_status(lesson.id, LessonStatus.RETIRED)
+                typer.echo(f"✓ forgotten: {lesson.instruction}")
+                typer.echo("  It will not shape new prose, and a later edge that "
+                           "suggests it again will not revive it.")
+                return
+            if verb == "keep":
+                store.set_lesson_status(lesson.id, LessonStatus.ACTIVE)
+                typer.echo(f"✓ applying: {lesson.instruction}")
+                return
+            # `why` — the audit trail. A learned preference nobody can trace back to
+            # the edit that produced it is not correctable, only deletable.
+            typer.echo(f"{lesson.instruction}")
+            typer.echo(f"  ⟨{lesson.id}⟩ · {lesson.axis.value} · {lesson.status.value}"
+                       f" · from {lesson.evidence} edit(s)")
+            if lesson.example_before and lesson.example_after:
+                typer.echo(f"  you had: {_elide(lesson.example_before)}")
+                typer.echo(f"  you wrote: {_elide(lesson.example_after)}")
+            if lesson.scope_path:
+                typer.echo(f"  learned under: {' / '.join(lesson.scope_path)}")
+            for event_id in lesson.source_events:
+                typer.echo(f"  ← ⟨{event_id}⟩")
+            return
+
+        if verb:
+            typer.echo(f"unknown action {action!r} — try `forget`, `keep`, or `why`")
+            raise typer.Exit(1)
+
+        lessons = store.all_lessons(include_retired=all_)
+        if not lessons:
+            typer.echo("codoc has not learned anything about your writing yet.")
+            typer.echo("  It learns from rewrites you make to descriptions IT wrote — "
+                       "edit a few and it will start.")
+            return
+
+        active = [x for x in lessons if x.status is LessonStatus.ACTIVE]
+        rest = [x for x in lessons if x.status is not LessonStatus.ACTIVE]
+        if active:
+            typer.echo(f"applying now ({len(active)}):")
+            for x in active:
+                typer.echo(f"  · {x.instruction}")
+                typer.echo(f"      ⟨{x.id}⟩ {x.axis.value} · from {x.evidence} edit(s)")
+        if rest:
+            # Named separately, because "seen once" is a different claim from
+            # "applying" and collapsing them would misreport what codoc is doing.
+            typer.echo(f"\nseen once, waiting for a second edit to confirm "
+                       f"({len(rest)}):")
+            for x in rest:
+                mark = " (forgotten)" if x.status is LessonStatus.RETIRED else ""
+                typer.echo(f"  · {x.instruction}{mark}")
+                typer.echo(f"      ⟨{x.id}⟩ {x.axis.value}")
+            typer.echo(f"  A lesson starts applying at {ACTIVE_AT} agreeing edits; "
+                       "`codoc voice keep <v-id>` applies one now.")
+        typer.echo(f"\n{render_trend(edit_cost_trend(store))}")
+
+
+@app.command()
 def translate(
     root: str = typer.Option(".", "--root", help="Repository root."),
     to: str = typer.Option(
