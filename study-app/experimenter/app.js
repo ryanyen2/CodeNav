@@ -777,6 +777,65 @@ function mirrorLine(mirror) {
         release it and have them restart the editor.`;
 }
 
+/**
+ * What setup last did on their machine.
+ *
+ * The question this answers comes before whether their editor is sending, and
+ * until now nothing here could answer it, so a machine that had never been set up
+ * and one that was set up perfectly and then recorded nothing drew the same card.
+ * Two participants were lost that way. Setup writes these fields onto the slot it
+ * already takes to fetch the keys, every time it runs, so the honest answer is
+ * either the sentence below or the admission that nothing has reported.
+ *
+ * The line about VS Code being open is the one worth reading. VS Code loads an
+ * extension when a window opens and keeps that copy until the window is reopened,
+ * so a participant who ran setup from a terminal inside the editor, which is the
+ * ordinary way to do it, is looking at a window running whatever it had before
+ * setup installed anything.
+ */
+function setupSentence() {
+    const raw = state.deviceDocs.setup;
+    // Escaped field by field, because these are written by the anonymous account
+    // setup signs in as, which is to say by anybody holding the participant code,
+    // and the sentence goes straight into the page's HTML.
+    const d = raw && Object.fromEntries(Object.entries(raw).map(
+        ([k, v]) => [k, typeof v === 'string' ? esc(v) : v]));
+    if (!d) {
+        return 'Setup has not reported. Either it has never run on their machine, '
+            + 'or they are running a bundle downloaded before 2026-08-20, which did '
+            + 'not report its runs.';
+    }
+    const when = d.t || (d.registeredAt
+        ? new Date(Number(d.registeredAt)).toISOString().slice(0, 16).replace('T', ' ') + 'Z'
+        : 'an unrecorded time');
+    const versions = [d.logger && `logger ${d.logger}`, d.codoc && `codoc ${d.codoc}`]
+        .filter(Boolean).join(' and ');
+    const what = d.mode === 'check' ? 'checked their machine' : 'ran';
+    let line;
+    if (d.result === 'ok') {
+        line = `Setup ${what} at ${when} and found nothing wrong`;
+    } else if (d.result === 'todo') {
+        line = `Setup ${what} at ${when} and left things for them to do, so ask them `
+             + 'to read you the lines marked todo';
+    } else if (d.result === 'failed') {
+        line = `Setup ${what} at ${when} and failed, so ask them to read you the lines `
+             + 'marked fail';
+    } else {
+        line = `Setup claimed this code at ${when}, from a bundle that did not say how `
+             + 'the run went';
+    }
+    if (versions) line += `, with ${versions}`;
+    line += '.';
+    if (d.bundle) line += ` Their bundle is ${d.bundle}.`;
+    if (d.inEditorTerminal || d.editorWasRunning) {
+        line += ' They ran it with VS Code already open, so the window they had at the '
+            + 'time is still running the extensions it loaded when it started rather '
+            + 'than the ones setup installed. If their editor is not reporting, that is '
+            + 'the first thing to fix, by having them quit VS Code and open it again.';
+    }
+    return line;
+}
+
 function renderOpenHandoff(el, p, browser, mirror) {
     const dot = (on) => `<span class="tick ${on ? 'on' : 'off'}">${on ? '●' : '○'}</span>`;
     el.innerHTML = `
@@ -805,6 +864,7 @@ function renderOpenHandoff(el, p, browser, mirror) {
         <p class="give-note">Here so you can read it back to them if they get
         stuck. You do not need to send it.</p>
         <p class="give-note">${dot(mirror.sending)} ${mirrorLine(mirror)}</p>
+        <p class="give-note">${dot(state.deviceDocs.setup?.result === 'ok')} ${setupSentence()}</p>
         ${state.devices.length ? `<p class="give-note">
           <button class="link-btn" id="release">release this code</button>
           — if they have changed machine, or reinstalled. Their editor says to ask

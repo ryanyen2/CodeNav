@@ -99,6 +99,142 @@ try: print(json.load(open(sys.argv[1])).get('codocStudyLogger.participant',''))
 except Exception: print('')" "$1/.vscode/settings.json" 2>/dev/null
 }
 
+# ---8<--- the run record (test-setup.sh runs this block too)
+# ------------------------------------------------- setup's record of its own run
+# What this run did, kept on the machine and reported to the study's database.
+#
+# Two participants' sessions arrived empty, and the fault was in the logger rather
+# than in this script, but the reason it went unnoticed through two whole sessions
+# is that nothing anywhere recorded that setup had ever run. Every run now leaves a
+# line behind saying when it ran, which bundle it came from, which versions the
+# editor is actually running, what it concluded, and whether it was run from a
+# terminal inside VS Code, because that last one is what the two lost sessions had
+# in common and it is worth being able to see it before the session rather than
+# after.
+SETUP_LOG="$WORK/session-logs/setup.jsonl"
+MODE_NAME=install
+[ "$CHECK_ONLY" = 1 ] && MODE_NAME=check
+
+# Whether this shell is one of VS Code's own terminals, which VS Code says in an
+# environment variable it sets for them. It matters because installing an
+# extension under a running editor does not replace the copy already loaded in
+# memory, so the window the participant is looking at can still be running the
+# previous logger until the editor is reopened.
+RUN_TERM="${TERM_PROGRAM:-unknown}"
+RUN_IN_EDITOR=false
+[ "$RUN_TERM" = vscode ] && RUN_IN_EDITOR=true
+RUN_EDITOR_OPEN=false
+{ pgrep -f 'Visual Studio Code' >/dev/null 2>&1 || pgrep -x Code >/dev/null 2>&1; } \
+  && RUN_EDITOR_OPEN=true
+
+# The version the editor has, rather than the version in the bundle, since those
+# two can disagree and only the one the editor is running records anything.
+ext_version() {
+  code --list-extensions --show-versions 2>/dev/null \
+    | grep -i "^$1@" | head -1 | sed 's/^[^@]*@//'
+}
+
+# ok, todo or failed, in the same words the last screen of output uses.
+run_result() {
+  if [ "$FAILED" != 0 ]; then echo failed
+  elif [ "$TODO" != 0 ]; then echo todo
+  else echo ok; fi
+}
+
+# One JSON object describing this run. Written once and used twice, so the line on
+# the machine and the record in the database cannot drift apart.
+run_facts() {
+  P="$2" RESULT="$1" ORDER="${ORDER:-}" LANGC="${LANG_CODE:-}" MODE="$MODE_NAME" \
+  BUNDLE="${STAMP:-}" TERMPROG="$RUN_TERM" INEDITOR="$RUN_IN_EDITOR" \
+  EDITOROPEN="$RUN_EDITOR_OPEN" VSCODEV="$(code --version 2>/dev/null | head -1)" \
+  LOGGERV="$(ext_version codoc.codoc-study-logger)" CODOCV="$(ext_version codoc.codoc)" \
+  PLATFORM="$(uname -sm)" python3 -c "
+import json, os, time
+e = os.environ.get
+print(json.dumps({
+    'ev': 'setup',
+    'p': e('P', ''),
+    't': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    'mode': e('MODE', ''),
+    'result': e('RESULT', ''),
+    'order': e('ORDER', ''),
+    'lang': e('LANGC', ''),
+    'bundle': e('BUNDLE', ''),
+    'terminal': e('TERMPROG', ''),
+    'inEditorTerminal': e('INEDITOR') == 'true',
+    'editorWasRunning': e('EDITOROPEN') == 'true',
+    'vscode': e('VSCODEV', ''),
+    'logger': e('LOGGERV', ''),
+    'codoc': e('CODOCV', ''),
+    'platform': e('PLATFORM', ''),
+}))" 2>/dev/null
+}
+
+# An anonymous account, thrown away when this script ends. Held in a variable
+# because two things need one: fetching this participant's keys, and reporting
+# what this run did.
+SETUP_TOKEN=""
+SETUP_UID=""
+anon_signin() {
+  [ -n "$SETUP_TOKEN" ] && return 0
+  SETUP_TOKEN="$(curl -s -X POST \
+    "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$FIREBASE_KEY" \
+    -H 'content-type: application/json' -d '{"returnSecureToken":true}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin).get('idToken',''))" 2>/dev/null)"
+  [ -n "$SETUP_TOKEN" ] || return 1
+  SETUP_UID="$(printf '%s' "$SETUP_TOKEN" | python3 -c "
+import sys, base64, json
+part = sys.stdin.read().split('.')[1]
+part += '=' * (-len(part) % 4)
+print(json.loads(base64.urlsafe_b64decode(part)).get('user_id', ''))" 2>/dev/null)"
+  [ -n "$SETUP_UID" ] || { SETUP_TOKEN=""; return 1; }
+  return 0
+}
+
+# The line on the machine, first and unconditionally, because it is the copy that
+# survives having no network and it travels home in the collected zip either way.
+record_setup_run() {
+  mkdir -p "$WORK/session-logs" 2>/dev/null || return 0
+  run_facts "$1" "$2" >> "$SETUP_LOG" 2>/dev/null || true
+}
+
+# The same facts on the slot setup already takes, so "did their machine ever get
+# set up, and when" is a question the dashboard answers rather than a phone call.
+# Every failure here is ignored: the local line is the record, and a participant
+# whose network refused this should not see a script that looks broken.
+report_setup_run() {
+  local body
+  [ -n "$2" ] || return 0
+  anon_signin || return 0
+  body="$(run_facts "$1" "$2" | SLOT_UID="$SETUP_UID" python3 -c "
+import json, os, sys, time
+row = json.load(sys.stdin)
+def value(v):
+    return {'booleanValue': v} if isinstance(v, bool) else {'stringValue': str(v)}
+fields = {k: value(v) for k, v in row.items() if k not in ('ev', 'p')}
+fields['uid'] = {'stringValue': os.environ['SLOT_UID']}
+fields['kind'] = {'stringValue': 'setup'}
+fields['registeredAt'] = {'integerValue': str(int(time.time() * 1000))}
+print(json.dumps({'fields': fields}))" 2>/dev/null)"
+  [ -n "$body" ] || return 0
+  curl -s -X PATCH "$FIRESTORE/participants/$2/devices/setup" \
+    -H "authorization: Bearer $SETUP_TOKEN" -H 'content-type: application/json' \
+    -d "$body" >/dev/null 2>&1 || true
+}
+
+# Both, at every exit worth recording. The code is the one this run was given, and
+# a check run has none, so it reads the code off the workspaces it is checking.
+note_run() {
+  local result code
+  result="$(run_result)"
+  code="$CODE"
+  [ -n "$code" ] || code="$(filed_under "$WORK/scribe")"
+  [ -n "$code" ] || code="$(filed_under "$WORK/tally")"
+  record_setup_run "$result" "$code"
+  report_setup_run "$result" "$code"
+}
+# --->8--- end of the run record
+
 # 1: no hook. 2: a hook that records prompts under no code, or under the wrong
 # one, which reads as working right up until the logs are sorted by participant.
 records_prompts() {
@@ -588,10 +724,11 @@ MCP_PY
   [ "$FAILED" = 0 ] && ok "the keys are in place in both workspaces"
   step "Result"
   [ "$FAILED" = 0 ] && [ "$TODO" = 0 ] && echo "  Everything is ready." || echo "  Some things are not ready. See the lines marked fail or todo above."
+  note_run
   exit "$FAILED"
 fi
 
-[ "$FAILED" = 1 ] && { echo; echo "Install the missing programs above, then run this script again."; exit 1; }
+[ "$FAILED" = 1 ] && { echo; echo "Install the missing programs above, then run this script again."; note_run; exit 1; }
 
 # ------------------------------------------------------------------------- uv
 step "Installing uv"
@@ -894,17 +1031,9 @@ fetch_keys() {
   # An anonymous account, then claim this code's setup slot. The rules hand the
   # keys to a registered device and to nobody else, so a stranger who guessed
   # the URL gets nothing.
-  token="$(curl -s -X POST \
-    "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$FIREBASE_KEY" \
-    -H 'content-type: application/json' -d '{"returnSecureToken":true}' \
-    | python3 -c "import sys,json;print(json.load(sys.stdin).get('idToken',''))" 2>/dev/null)"
-  [ -n "$token" ] || { echo "could not reach the study's database to sign in" >&2; return 1; }
-  uid="$(printf '%s' "$token" | python3 -c "
-import sys, base64, json
-part = sys.stdin.read().split('.')[1]
-part += '=' * (-len(part) % 4)
-print(json.loads(base64.urlsafe_b64decode(part)).get('user_id', ''))" 2>/dev/null)"
-  [ -n "$uid" ] || { echo "could not read the sign-in this machine was given" >&2; return 1; }
+  anon_signin || { echo "could not reach the study's database to sign in" >&2; return 1; }
+  token="$SETUP_TOKEN"
+  uid="$SETUP_UID"
 
   # Taken again on every run: this account is thrown away when the script ends,
   # so the slot has to be retakeable or setup works exactly once per code.
@@ -1390,8 +1519,28 @@ if [ "$FAILED" = 0 ] && [ "$TODO" = 0 ]; then
   started by hand there. The launcher starts the daemon itself, once the
   participant has sent their first request.
 EOF
+  # One thing left to do, and only in the case where it is needed.
+  #
+  # VS Code loads an extension when the window opens and keeps that copy until the
+  # window is reopened, so a window that was already open while this script
+  # installed the two extensions is still running whatever it had before, which on
+  # a first setup is nothing at all. Two sessions were recorded by nobody for
+  # exactly this reason, and both had been set up from a terminal inside the
+  # editor, which is the ordinary way to do it and not a mistake.
+  if [ "$RUN_IN_EDITOR" = true ] || [ "$RUN_EDITOR_OPEN" = true ]; then
+    cat <<'EOF'
+
+  One last thing, because VS Code was already open while this ran. Quit VS Code
+  and open it again before the session, since the window you have now is still
+  running the extensions it loaded when it started rather than the ones this
+  script just installed. When you reopen it, the bottom right of the window says
+  "codoc study" once the recording is on, and that is the one thing worth
+  checking.
+EOF
+  fi
 else
   echo "  Some things still need doing. See the lines marked fail or todo above,"
   echo "  then run: ./setup.sh --check"
 fi
+note_run
 exit "$FAILED"

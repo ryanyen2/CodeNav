@@ -318,6 +318,48 @@ test('a claimed slot that has sent nothing is not called a working editor', asyn
     assert.match(said, /another machine holds this code/, 'and the likely reason');
 });
 
+test('it says whether setup ran, and whether the editor was open when it did', async () => {
+    // The two participants whose sessions arrived empty had both been set up from a
+    // terminal inside VS Code, and the dashboard could not say so, or even say that
+    // setup had run at all, so an editor that never reported looked the same as a
+    // machine nobody had touched. Setup reports onto the slot it already takes.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [{ id: 'p-abcdefghjkmn', data: () => ({ createdAt: 1, order: 'codoc-first' }) }],
+    });
+    const devices = (window.__snaps || [])
+        .find((s) => s.ref.path === 'participants/p-abcdefghjkmn/devices');
+
+    // Nothing from setup at all, which is a bundle older than the change or a
+    // machine that was never set up. Either way it is not silence.
+    devices.cb({ docs: [slot('browser')] });
+    let said = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
+    assert.match(said, /Setup has not reported/, 'it says so rather than saying nothing');
+
+    // A clean run, from a terminal inside the editor, with the editor already open.
+    devices.cb({ docs: [slot('browser'), slot('setup', {
+        t: '2026-08-21T09:15:00Z', mode: 'install', result: 'ok',
+        bundle: '2026-08-21T02:17Z 51b3f57', logger: '1.1.1', codoc: '0.2.17',
+        inEditorTerminal: true, editorWasRunning: true,
+    })] });
+    said = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
+    assert.match(said, /Setup ran at 2026-08-21T09:15:00Z and found nothing wrong/);
+    assert.match(said, /logger 1\.1\.1/, 'and which logger their editor is running');
+    assert.match(said, /quit VS Code and open it again/,
+        'and the one thing to do about a window that was already open');
+
+    // A run that failed. The participant has the reason on their screen and the
+    // researcher has to ask for it, so the card says to ask.
+    devices.cb({ docs: [slot('browser'), slot('setup', {
+        t: '2026-08-21T09:40:00Z', mode: 'install', result: 'failed',
+    })] });
+    said = document.querySelector('#handoff').textContent.replace(/\s+/g, ' ');
+    assert.match(said, /failed, so ask them to read you the lines marked fail/);
+    assert.ok(!/quit VS Code/.test(said),
+        'and it does not give advice about an editor nothing said was open');
+});
+
 test('a refused read says so rather than drawing a quiet afternoon', async () => {
     // The dashboard used to treat a subscription error as an empty list, so a
     // permission problem and a session nobody had started drew the same page.

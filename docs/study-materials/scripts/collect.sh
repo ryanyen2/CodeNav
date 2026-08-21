@@ -58,6 +58,7 @@ if [ -d "$WORK/session-logs" ]; then
   # data.
   rsync -a --exclude 'interaction-*.jsonl' --exclude '*.mirror.json' \
            --exclude 'mirror-identity.json' --exclude 'snapshots/*' \
+           --exclude 'setup.jsonl' \
            "$WORK/session-logs" "$DEST/" 2>/dev/null && echo "  session logs"
   if [ -d "$WORK/session-logs/snapshots/$CODE" ]; then
     mkdir -p "$DEST/session-logs/snapshots"
@@ -65,6 +66,19 @@ if [ -d "$WORK/session-logs" ]; then
              "$WORK/session-logs/snapshots/$CODE" \
              "$DEST/session-logs/snapshots/" 2>/dev/null
   fi
+  # What setup itself did, one line per run: when it ran, which bundle, which
+  # versions the editor was running, and whether it was run from a terminal inside
+  # VS Code. It is excluded from the sweep above and taken a line at a time for the
+  # same reason the interaction logs are, which is that a machine set up twice
+  # under two codes has both participants' runs in the one file and only this
+  # participant's runs belong in this zip.
+  if [ -f "$WORK/session-logs/setup.jsonl" ]; then
+    mkdir -p "$DEST/session-logs"
+    grep "\"p\":\"$CODE\"" "$WORK/session-logs/setup.jsonl" \
+      > "$DEST/session-logs/setup.jsonl" 2>/dev/null || true
+    echo "  setup runs: $(wc -l < "$DEST/session-logs/setup.jsonl" 2>/dev/null | tr -d ' ')"
+  fi
+
   n=0; skipped=0
   for f in "$WORK/session-logs"/interaction-*.jsonl; do
     [ -f "$f" ] || continue

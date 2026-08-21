@@ -409,6 +409,26 @@ test('the setup slot cannot be taken once the code is released', async () => {
     await assertFails(claim(anon('setup-run-1'), CODE, 'setup', 'setup-run-1'));
 });
 
+test('the setup slot carries what the run did, so the dashboard can say it', async () => {
+    // Setup reports onto this slot: when it ran, which bundle, which versions the
+    // editor is running, and whether VS Code was already open. The rules have to
+    // take those fields or the dashboard is back to a card that cannot say whether
+    // a machine was ever set up, which is what cost two sessions.
+    const run = anon('setup-run-1');
+    await assertSucceeds(setDoc(doc(run, `participants/${CODE}/devices/setup`), {
+        uid: 'setup-run-1', kind: 'setup', registeredAt: Date.now(),
+        t: '2026-08-21T09:15:00Z', mode: 'install', result: 'ok',
+        order: 'codoc-first', lang: 'en', bundle: '2026-08-21T02:17Z 51b3f57',
+        terminal: 'vscode', inEditorTerminal: true, editorWasRunning: true,
+        vscode: '1.133.0', logger: '1.1.1', codoc: '0.2.17', platform: 'Darwin arm64',
+    }));
+    // And nothing that names the person, which holds for this slot as for the rest.
+    await assertFails(setDoc(doc(run, `participants/${CODE}/devices/setup`), {
+        uid: 'setup-run-1', kind: 'setup', registeredAt: Date.now(),
+        email: 'someone@example.com',
+    }));
+});
+
 test('the setup slot reads the keys and writes nothing else', async () => {
     // It is a fetch, not a third writer. Session data still comes from the two.
     const run = anon('setup-run-1');

@@ -733,16 +733,27 @@ run the session there. Delete `~/codoc-study` and run `./setup.sh` with their co
 and order again.
 
 **Nothing shows up for them on the dashboard.** Open the participant in the
-dashboard and read their device panel, which says something different for each of
-the two ways it fails. "Their editor has not reported" means the logger never sent
-anything at all, and the usual reason is that the window was already open when
-setup wrote the participant code into it, so ask them to look at the status bar
-and, if it says off, to reload the window. "Claimed this code but has sent nothing
-for N minutes" means something did register under the code and then went quiet,
-which is normally a second window or a second machine holding the same code, so
-close the one that should not have it. Either way the session itself is probably
-fine, because the local log is what the copy to the database is made from, and
-`collect.sh` puts that log in the zip they send back.
+dashboard and read the two sentences under the setup command, because between them
+they say which half of the machine did not work.
+
+The first is about their editor. "Their editor has not reported" means the logger
+never sent anything at all, and the usual reason is that the window was already
+open when setup wrote the participant code into it, so ask them to look at the
+status bar and, if it says off, to quit VS Code and open it again. "Claimed this
+code but has sent nothing for N minutes" means something did register under the
+code and then went quiet, which is normally a second window or a second machine
+holding the same code, so close the one that should not have it.
+
+The second is about setup itself, and it is the one to read first. It says when
+setup last ran, whether it finished cleanly, which logger their editor is actually
+running, and whether they ran it with VS Code already open. "Setup has not
+reported" means either that setup has never run on that machine or that they are
+using a bundle downloaded before 2026-08-20, and both are worth knowing before you
+start looking anywhere else.
+
+Either way the session itself is probably fine, because the local log is what the
+copy to the database is made from, and `collect.sh` puts that log, along with a
+line per setup run, in the zip they send back.
 
 **Nothing is updating.** The status bar is stuck and no proposals appear. The
 daemon runs behind the session with no terminal of its own, so read

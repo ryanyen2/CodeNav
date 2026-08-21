@@ -314,6 +314,8 @@ const VIEWS = {
 
         <p>${esc(t('ui.setup.p', 'It prints a line for each thing it does and asks you for nothing. When it finishes it either says everything is ready or lists what is missing. Send the last few lines to the researcher either way.'))}</p>
 
+        <p>${esc(t('ui.setup.reopen', 'If VS Code was already open while the script ran, quit it and open it again before the session, because a window keeps running the extensions it loaded when it opened. Once you have reopened it, the bottom right of the window says "codoc study", and that is how you know the window is recording.'))}</p>
+
 
         <h2>${esc(t('ui.setup.dayh', 'On the day'))}</h2>
         <p>${esc(t('ui.setup.dayp', 'Run this in the same folder and read the result to the researcher.'))}</p>

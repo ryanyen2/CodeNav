@@ -972,5 +972,127 @@ case "$(cat "$SETUP")" in
   *) bad "a rehearsed folder would start a session with the change already in it" ;;
 esac
 
+
+echo
+echo "Setup leaves a record of its own runs"
+# Two participants' sessions arrived empty, and what made it take two sessions to
+# notice is that nothing said setup had run at all, from where, or with which
+# versions. The block is taken out of setup.sh and run, rather than read, because
+# the thing worth checking is the line it writes.
+RECORD="$(awk '/^# ---8<--- the run record/,/^# --->8--- end of the run record/' "$SETUP")"
+if [ -z "$RECORD" ]; then
+  bad "could not find the run record block in setup.sh"
+else
+  # curl is replaced for every run below, so no test here reaches the study's
+  # database. It stands in for just enough of Firebase to run the whole path: a
+  # sign-in that hands back a token saying who the account is, and a note of what
+  # was written where, which is what the assertions then read.
+  run_record() {
+    local work="$1"; shift
+    mkdir -p "$work/bin"
+    cat > "$work/bin/curl" <<'CURL'
+#!/bin/sh
+prev=""
+url=""
+body=""
+for a in "$@"; do
+  case "$prev" in -d) body="$a" ;; esac
+  case "$a" in https://*) url="$a" ;; esac
+  prev="$a"
+done
+case "$url" in
+  *identitytoolkit*)
+    # The middle segment decodes to {"user_id":"u-1"}, which is where setup reads
+    # the account id from.
+    echo '{"idToken":"header.eyJ1c2VyX2lkIjoidS0xIn0.signature"}'
+    exit 0 ;;
+esac
+printf '%s\n%s\n' "$url" "$body" >> "$CURLDIR/curl-calls"
+echo '{}'
+CURL
+    chmod +x "$work/bin/curl"
+    # The two names the block reads from the rest of setup.sh. Values are junk on
+    # purpose: curl is stubbed, so nothing here can reach the real project.
+    env WORK="$work" CHECK_ONLY="${CHECK_ONLY:-0}" FAILED="${FAILED:-0}" TODO="${TODO:-0}" \
+        CODE="${CODE:-}" ORDER="${ORDER:-codoc-first}" LANG_CODE=en \
+        FIREBASE_KEY=not-a-key FIRESTORE=https://example.invalid CURLDIR="$work" \
+        STAMP='2026-08-21T02:17Z abc1234' PATH="$work/bin:$PATH" "$@" bash -c "
+      set -uo pipefail
+      filed_under() { echo ''; }
+      $RECORD
+      note_run"
+  }
+
+  TMP="$(mktemp -d)"
+  # A clean install run from one of VS Code's own terminals, which is the ordinary
+  # way to run setup and the case both lost sessions had in common. curl is stubbed
+  # away so nothing here touches the study's database.
+  CODE=p-abcdefghjkmn run_record "$TMP" TERM_PROGRAM=vscode >/dev/null 2>&1
+  LINE="$TMP/session-logs/setup.jsonl"
+  if [ ! -s "$LINE" ]; then
+    bad "no run was recorded on the machine"
+  else
+    ok "the run is recorded on the machine, where it survives having no network"
+    field() { python3 -c "
+import json, sys
+print(json.loads(open(sys.argv[1]).readlines()[-1]).get(sys.argv[2], ''))" "$LINE" "$1"; }
+    [ "$(field p)" = p-abcdefghjkmn ] && ok "filed under the code this run was given" \
+      || bad "the record does not carry the participant code"
+    [ "$(field mode)" = install ] && ok "and says it was an install rather than a check" \
+      || bad "the record does not say which mode it was"
+    [ "$(field result)" = ok ] && ok "and what the run concluded" \
+      || bad "the record does not say how the run went"
+    [ "$(field inEditorTerminal)" = True ] \
+      && ok "and that it was run from a terminal inside VS Code" \
+      || bad "the record cannot tell an editor terminal from any other"
+    [ -n "$(field t)" ] && ok "and when" || bad "the record has no time on it"
+    [ -n "$(field bundle)" ] && ok "and which bundle it came from" \
+      || bad "the record does not say which bundle"
+    case "$(cat "$TMP/curl-calls" 2>/dev/null)" in
+      *devices/setup*) ok "and the same facts are written to the slot the dashboard reads" ;;
+      *) bad "the record never leaves the machine, so the dashboard cannot show it" ;;
+    esac
+    case "$(cat "$TMP/curl-calls" 2>/dev/null)" in
+      *'"inEditorTerminal"'*) ok "including the fact that says why a window recorded nothing" ;;
+      *) bad "what is sent is missing the fields that explain a silent window" ;;
+    esac
+  fi
+
+  # An ordinary terminal, and a failed run. Both facts are the ones a researcher
+  # asks for on a call, and the advice about reopening VS Code is wrong unless the
+  # editor was actually open.
+  TMP2="$(mktemp -d)"
+  CODE=p-abcdefghjkmn FAILED=1 run_record "$TMP2" TERM_PROGRAM=Apple_Terminal >/dev/null 2>&1
+  L2="$TMP2/session-logs/setup.jsonl"
+  case "$(cat "$L2" 2>/dev/null)" in
+    *'"result": "failed"'*) ok "a run that failed is recorded as having failed" ;;
+    *) bad "a failed run is recorded as though it had worked" ;;
+  esac
+  case "$(cat "$L2" 2>/dev/null)" in
+    *'"inEditorTerminal": false'*) ok "and a plain terminal is not called an editor one" ;;
+    *) bad "every terminal is being reported as VS Code's" ;;
+  esac
+
+  # Nothing is sent when there is no code to file it under. A record posted under
+  # no code, or under a guess, is worse than none: the dashboard would then show a
+  # setup that belongs to nobody.
+  TMP3="$(mktemp -d)"
+  CODE="" run_record "$TMP3" >/dev/null 2>&1
+  [ -f "$TMP3/curl-calls" ] \
+    && bad "a run with no code still talks to the study's database" \
+    || ok "a run with no code sends nothing, rather than filing it under a guess"
+
+  # The dashboard reads these by name, and a rename on either side would show up
+  # as a card that has quietly stopped saying anything.
+  APP="$HERE/../../../study-app/experimenter/app.js"
+  missing=""
+  for key in mode result bundle logger codoc inEditorTerminal editorWasRunning; do
+    grep -q "d\.$key" "$APP" 2>/dev/null || missing="$missing $key"
+  done
+  [ -z "$missing" ] && ok "every field the record writes is read by the dashboard" \
+    || bad "the dashboard does not read:$missing"
+  rm -rf "$TMP" "$TMP2" "$TMP3"
+fi
+
 if [ "$FAIL" = 0 ]; then printf '\033[32m%s passed\033[0m\n' "$PASS"; else printf '\033[31m%s failed, %s passed\033[0m\n' "$FAIL" "$PASS"; fi
 exit "$FAIL"
