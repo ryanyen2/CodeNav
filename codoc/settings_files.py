@@ -136,7 +136,7 @@ def extract_chunks(file: str, source: str) -> list[Chunk]:
         return []
     lines = source.splitlines(keepends=True)
     offsets = _line_offsets(lines)
-    starts = _section_starts(source, fmt)
+    starts = _uniquify(_section_starts(source, fmt))
 
     def chunk(name: str, start_line: int, end_line: int) -> Chunk | None:
         start, end = offsets[start_line], offsets[end_line]
@@ -213,6 +213,24 @@ def _section_starts(source: str, fmt: str) -> list[tuple[int, str]]:
     if fmt == "json":
         return _json_key_lines(source)
     return []
+
+
+def _uniquify(starts: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """A repeated section name made addressable, in file order.
+
+    An array of tables repeats its header by design (`[[servers]]` twice is two
+    servers), and two chunks may not share a symbol path — `(file, symbol_path)` is
+    the index's primary key and the binding's unique constraint, so a repeat would
+    cost the whole file. The first entry keeps the plain name, so appending one
+    renames nothing that was already bound.
+    """
+    seen: dict[str, int] = {}
+    out: list[tuple[int, str]] = []
+    for line_no, name in starts:
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        out.append((line_no, name if not count else f"{name}[{count}]"))
+    return out
 
 
 def _json_key_lines(source: str) -> list[tuple[int, str]]:

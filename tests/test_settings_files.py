@@ -136,6 +136,15 @@ def test_a_brace_inside_a_json_value_does_not_invent_a_section():
     assert list(_by_name("app.json", doc)) == ["template", "retries"]
 
 
+def test_an_array_of_tables_gives_one_chunk_per_entry():
+    """`[[servers]]` repeats its header by design, and two chunks may not share a
+    symbol path — the index keys on it, so a repeat would cost the whole file."""
+    doc = '[[servers]]\nhost = "a"\n\n[[servers]]\nhost = "b"\n'
+    got = _by_name("deploy.toml", doc)
+    assert list(got) == ["servers", "servers[1]"]
+    assert 'host = "b"' in got["servers[1]"]
+
+
 def test_a_section_is_found_again_after_the_file_moves_around_it():
     """What keeps a binding alive across an edit: the table moved, the feature still
     points at it."""

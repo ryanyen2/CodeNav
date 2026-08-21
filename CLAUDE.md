@@ -451,6 +451,11 @@ settings_files.py  # a SETTINGS file as addressable chunks (toml/yaml/json/ini),
              #   so a formatter cannot wake Loop A. Not a lang/ adapter — no functions.
 core/        # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT substrate]
 pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEPT]
+             #   settings_scan.py — WHICH settings files are indexed: the ones some
+             #   indexed source file's text names (a decision the code reads), not a
+             #   glob. runner.py caches the cocoindex App + environment because
+             #   cocoindex has one environment per process — see docs/architecture.md
+             #   "One workspace per process".
              #   gate.py — whether a LARGE file holds intent, decided by its parse
              #   and not its size: past 1.5 MB a file gets a hearing (read it, parse
              #   it, index it if the median definition is the size a person writes)

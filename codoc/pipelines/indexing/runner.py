@@ -11,6 +11,11 @@ Two maintenance duties live here (cocoindex does neither itself):
   active flag is recorded in ``{codoc_dir}/index.meta.json``; on mismatch the
   LanceDB table + cocoindex memo state are wiped so the next pass rebuilds
   cleanly under the other schema (rare, explicit, self-healing).
+* **The one open environment** — cocoindex holds ONE environment per process and
+  an App registers itself by name inside it, so both the app and the environment
+  are cached here rather than rebuilt: rebuilding the app lets a retained failure
+  poison the process, and rebuilding the environment silently indexes the wrong
+  workspace (see :func:`_app_for`).
 * **LanceDB upkeep** — Lance is copy-on-write: every committed pass appends a
   new table version and fragments, and nothing prunes them (a repo measured
   256MB / 4,253 versions for 22MB of live data before this). Each pass ends
@@ -18,11 +23,23 @@ Two maintenance duties live here (cocoindex does neither itself):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
+import threading
 from datetime import timedelta
 from pathlib import Path
+
+#: the app name every workspace uses, so a memo key written by an earlier codoc
+#: version still matches. Only a second workspace in the same process needs another.
+_APP_NAME = "CodocIndex"
+
+#: (sourcedir, codoc_dir, embed) → the App that indexes it. At most ONE entry: the
+#: cocoindex environment it runs in is per-process, so holding a second workspace's
+#: app would hold one that reads the wrong index (see :func:`_app_for`).
+_apps: dict[tuple[str, str, bool], object] = {}
+_apps_lock = threading.Lock()
 
 
 def _lance_path(codoc_dir: Path) -> Path:
@@ -128,6 +145,94 @@ def _maintain_table(codoc_path: Path) -> None:
             "this pass", codoc_path, exc)
 
 
+def _app_for(sourcedir: Path, codoc_path: Path, embed: bool):
+    """The cocoindex App for one workspace, built once and reused every pass.
+
+    Rebuilding it per pass looked free and was not. A cocoindex App registers itself
+    by NAME in a process-wide registry of weak references, so an app that is still
+    referenced anywhere keeps the name taken — and a FAILED pass is referenced by its
+    own traceback, which anything holding `exc_info` (a `logging.exception` call, a
+    stored `sys.exc_info()`, a debugger) keeps alive. The next pass then died in the
+    constructor with "An app named 'CodocIndex' is already registered in this
+    environment", which is not the error anybody was looking at and does not clear
+    until the process ends: one transient index failure permanently broke a daemon.
+
+    Reuse fixes that at the root, and the name is why the fix cannot be a unique name
+    per pass instead: the app name is part of cocoindex's memo key, so renaming makes
+    every pass re-process every file (measured: "3 unchanged" becomes "3 added").
+
+    **Only one workspace at a time.** Where each workspace's index LIVES is decided
+    once, when cocoindex's single per-process environment enters its lifespan and
+    reads ``CODOC_LANCE_PATH`` / ``COCOINDEX_DB`` — after that the paths are fixed for
+    the process. A second workspace indexed in the same process (tests, a tool that
+    walks several repos; not a daemon, which has one) therefore wrote its rows into
+    the FIRST workspace's index and left its own empty, with no error anywhere:
+    measured as `two []`, `three []` where each should have had its own rows. So a
+    switch of workspace closes the environment first, and the next pass re-enters the
+    lifespan against the new paths. Per-file memo state is in each workspace's own
+    ``cocoindex.db`` and survives the round trip (measured: back to the first
+    workspace is still "1 unchanged"); only the walk itself re-runs.
+    """
+    key = (str(sourcedir), str(codoc_path), embed)
+    with _apps_lock:
+        app = _apps.get(key)
+        if app is not None and _open_state_intact(codoc_path):
+            return app
+        _release_environment()
+        from codoc.pipelines.indexing.cocoindex_app import make_app
+
+        try:
+            app = make_app(sourcedir, app_name=_APP_NAME)
+        except ValueError:
+            # The name is still held by an app we no longer have — a traceback
+            # somewhere keeps it alive. Index under a name derived from this
+            # workspace: stable across processes, so it costs one rebuild, once.
+            digest = hashlib.sha1(str(codoc_path).encode("utf-8")).hexdigest()[:8]
+            app = make_app(sourcedir, app_name=f"{_APP_NAME}-{digest}")
+        _apps[key] = app
+        return app
+
+
+def _open_state_intact(codoc_path: Path) -> bool:
+    """Are the two things the environment opened still the ones on disk?
+
+    The environment opened ``lancedb/`` and ``cocoindex.db`` when it entered its
+    lifespan and holds those handles for as long as it lives. Deleting ``.codoc``
+    from a shell (a re-init, a hand cleanup) leaves the handles valid and pointed at
+    an unlinked directory, so the next pass reported success and wrote nothing:
+    measured as an empty ``lancedb/`` and no rows, permanently, for that process.
+    A missing path means the environment has to be reopened, not that the index is
+    broken — the pass that finds it missing rebuilds it.
+    """
+    return _lance_path(codoc_path).exists() and _cocoindex_db_path(codoc_path).exists()
+
+
+def _release_environment() -> None:
+    """Close the cocoindex environment, so the next pass rebinds it to its workspace.
+
+    Call with :data:`_apps_lock` held, having decided that whatever the environment
+    is currently bound to is not what the next pass wants.
+    """
+    if not _apps:
+        return
+    _apps.clear()
+    import cocoindex as coco
+
+    coco.stop_blocking()
+
+
+def _forget_app(codoc_path: Path) -> None:
+    """Release the app and environment for a workspace whose index was just wiped.
+
+    The environment holds an open connection to a LanceDB directory that no longer
+    exists, so it has to be closed too — dropping the app alone leaves the next pass
+    writing through a connection to a deleted path.
+    """
+    with _apps_lock:
+        if any(key[1] == str(codoc_path) for key in _apps):
+            _release_environment()
+
+
 def update_index(
     sourcedir: str | Path,
     codoc_dir: str | Path = ".codoc",
@@ -149,14 +254,15 @@ def update_index(
         from codoc.pipelines.indexing.reader import invalidate_cache
 
         invalidate_cache(codoc_path)
+        _forget_app(codoc_path)
 
     os.environ["COCOINDEX_DB"] = str(_cocoindex_db_path(codoc_path))
     os.environ["CODOC_LANCE_PATH"] = str(_lance_path(codoc_path))
     os.environ["CODOC_INDEX_SOURCE"] = str(Path(sourcedir).resolve())
 
-    from codoc.pipelines.indexing.cocoindex_app import make_app
+    from codoc.pipelines.indexing.schema import embed_chunks_enabled
 
-    app = make_app(Path(sourcedir).resolve())
+    app = _app_for(Path(sourcedir).resolve(), codoc_path, embed_chunks_enabled())
     app.update_blocking(report_to_stdout=report_to_stdout)
 
     _maintain_table(codoc_path)

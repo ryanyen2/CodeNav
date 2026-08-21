@@ -22,8 +22,10 @@ from cocoindex.connectors import lancedb, localfs
 from cocoindex.resources.file import FileLike, PatternFilePathMatcher
 from cocoindex.resources.id import generate_id
 
+from codoc import settings_files
 from codoc.core.tree_walk import walk as tree_walk
 from codoc.lang import detect_language, get_adapter
+from codoc.pipelines.indexing import settings_scan
 from codoc.pipelines.indexing.gate import (
     holds_definitions,
     needs_hearing,
@@ -221,6 +223,62 @@ async def _process_file(
         )
 
 
+@coco.fn(memo=True)
+async def _process_settings_file(
+    file: FileLike,
+    sourcedir: pathlib.Path,
+    target: lancedb.TableTarget,
+    embed: bool,
+    selected: tuple[str, ...],
+) -> None:
+    """Index one settings file as sections, so a configured decision can be bound.
+
+    *selected* is the walk's decision about which settings files this repo's code
+    actually reads (`indexing/settings_scan.py`) — the walk yields every candidate,
+    and a file that earned no place in the index is dropped here. It is an argument
+    rather than a lookup because the decision is about the REPO and this function is
+    memoized per file: passing it in means a settings file the code stopped reading
+    re-runs, while the code files' memos are untouched.
+
+    Rows are otherwise the same shape as a code chunk's, with the format name in the
+    `language` column and identity from `settings_files.hashes` (parsed key/value
+    pairs) instead of the tree-sitter walk's token stream.
+    """
+    file_abs = pathlib.Path(file.file_path.path)
+    file_str = _repo_relative(file_abs, sourcedir)
+    if file_str not in selected:
+        return
+    fmt = settings_files.detect_format(file_str)
+    if fmt is None:
+        return
+    try:
+        size = file_abs.stat().st_size
+    except OSError:
+        return
+    # The read ceiling is a memory bound and applies to anything. There is no
+    # hearing above it, though: a settings file has no definitions to count, and
+    # one large enough to hit the ceiling is a data dump rather than a decision.
+    if too_large_to_read(size):
+        return
+    source = await file.read_text()
+    items = []
+    for chunk in settings_files.extract_chunks(file_str, source):
+        tokens_hash, types_hash = settings_files.hashes(chunk.source, fmt)
+        items.append((file_str, fmt, chunk.symbol_path, chunk.source,
+                      chunk.start_byte, chunk.end_byte, tokens_hash, types_hash))
+    if embed:
+        await coco.map(_embed_chunk, items, target)
+        return
+    for (f, lg, sym, src, sb, eb, th, tyh) in items:
+        chunk_id = await generate_id((f, sym))
+        target.declare_row(
+            row=CodeChunkLite(
+                id=chunk_id, file=f, symbol_path=sym, language=lg, source=src,
+                tokens_hash=th, types_hash=tyh, start_byte=sb, end_byte=eb,
+            )
+        )
+
+
 class _SymlinkAwareMatcher(PatternFilePathMatcher):
     """Pattern matcher plus symlink-loop protection the glob patterns can't express.
 
@@ -256,16 +314,43 @@ async def app_main(sourcedir: pathlib.Path) -> None:
             CodeChunk if embed else CodeChunkLite, primary_key=["id"]
         ),
     )
+    excludes = _EXCLUDED_PATTERNS + _gitignore_excludes(pathlib.Path(sourcedir))
     files = localfs.walk_dir(
         sourcedir,
         recursive=True,
         path_matcher=_SymlinkAwareMatcher(
             sourcedir,
             included_patterns=_INCLUDED_PATTERNS,
-            excluded_patterns=_EXCLUDED_PATTERNS + _gitignore_excludes(pathlib.Path(sourcedir)),
+            excluded_patterns=excludes,
         ),
     )
     await coco.mount_each(_process_file, files.items(), sourcedir, target, embed)
+
+    # Settings files, but only the ones this repo's code reads — a decision that
+    # moved out of a module into `rules.toml` is still the codebase's, and a tree
+    # that cannot see the file describes the mechanism instead of the value in
+    # force. Which files those are is decided by the scan and not by a glob (see
+    # `indexing/settings_scan.py`); the walk offers every candidate and
+    # `_process_settings_file` drops the rest.
+    selected = tuple(settings_scan.scan(
+        pathlib.Path(sourcedir),
+        PatternFilePathMatcher(
+            included_patterns=_INCLUDED_PATTERNS + settings_scan.CANDIDATE_PATTERNS,
+            excluded_patterns=excludes,
+        ),
+    ).read_by_code)
+    if selected:
+        candidates = localfs.walk_dir(
+            sourcedir,
+            recursive=True,
+            path_matcher=_SymlinkAwareMatcher(
+                sourcedir,
+                included_patterns=settings_scan.CANDIDATE_PATTERNS,
+                excluded_patterns=excludes,
+            ),
+        )
+        await coco.mount_each(_process_settings_file, candidates.items(),
+                              sourcedir, target, embed, selected)
 
 
 def make_app(sourcedir: pathlib.Path, app_name: str = "CodocIndex") -> coco.App:

@@ -1,7 +1,11 @@
 # The decision moved into a config file, and codoc stopped being able to say it
 
-Written 2026-08-20. **Not built** — found while preparing the CHI27 sessions, scoped
+Written 2026-08-20. **Being built** — found while preparing the CHI27 sessions, scoped
 here because the day before a study is the wrong day to change what `bindings` means.
+Built 2026-08-21 as far as the index: a settings file the code reads is now chunked
+(`codoc/settings_files.py`) and indexed (`pipelines/indexing/settings_scan.py` +
+`cocoindex_app._process_settings_file`). What the loops and the prompt do with those
+chunks is the part still open — see "Where this stands" at the end.
 
 ## What happened
 
@@ -92,9 +96,16 @@ standard library or a dependency already present except YAML.
    files, which are packaging and not intent. Blanket inclusion would add noise to
    every tree in exchange for one useful node. Likely answer: config files that a
    binding's code already reads, discovered from the code rather than from the glob.
+   → **Settled as the likely answer said.** A settings file is indexed iff some
+   indexed source file's TEXT names its basename; `NOT_INTENT` stayed as a backstop
+   rather than becoming the rule. Bounds stated in `settings_scan`: a name assembled
+   at runtime is missed, and a name that appears only in a comment is included.
 3. **What a drifted config does.** A changed value is a changed decision, so it should
    wake Loop A — but a formatter pass should not, which is what the `token_stream`
    choice above is for.
+   → **Settled and pinned by tests.** Identity is the sorted parsed pairs, so
+   `month = "made"` → `"posted"` moves exactly that section's `tokens_hash` and a
+   comment reflow moves nothing (`tests/pipelines/test_settings_index.py`).
 
 ## Until then
 
@@ -102,3 +113,32 @@ standard library or a dependency already present except YAML.
 does not read a vague description as a null result about codoc. The tally plan carries
 the period decision in the agent's own words instead, which is where it belongs anyway:
 the plan is the moment the choice is made, and the amend is only the record of it.
+
+## Where this stands (2026-08-21)
+
+Built:
+
+- `codoc/settings_files.py` — a settings file as named, addressable chunks, with the
+  comment run above a header, identity from the parsed pairs, and repeated array-of-table
+  headers made addressable (`servers`, `servers[1]`) because two chunks may not share a
+  symbol path.
+- `pipelines/indexing/settings_scan.py` + the second mount in `cocoindex_app.py` — the
+  selection rule, applied at walk time, with the selection passed in as an argument so a
+  file the code stopped reading re-runs while code files' memos stand.
+- `runner.py` — the App/environment cache the integration tests forced into the open
+  (one cocoindex environment per process; see docs/architecture.md).
+
+Still open, in the order it matters:
+
+1. **The seams that still assume a tree-sitter adapter.** `loop/diff.py:_hold_unparseable_removals`
+   asks `codoc.lang.parses_cleanly`, which answers "no adapter" and "does not parse" the
+   same way — so a removed section of a perfectly parseable settings file is HELD instead of
+   detached. `agent/hook.py` and `pipelines/indexing/survey.py` ask the same question in
+   their own words; `survey` also needs to report a YAML file skipped for a missing PyYAML
+   differently from one nobody reads (`SettingsScan.unreadable` exists for that).
+2. **Decision 1 above, in practice.** The chunks exist, so the loop CAN bind them; what
+   `codoc status` coverage should say about a repo whose settings files are half-bound is
+   not yet decided.
+3. **The prompt.** A chunk's comments and values reach the pass only once the payload
+   builder includes them, which is the whole point: a description should be able to say
+   `month = "made"` rather than "read from rules.toml".

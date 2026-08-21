@@ -74,6 +74,19 @@ schema omits the column and the pipeline never imports sentence-transformers (a
 multi-second cold cost). Turning it on (for future semantic search) is recorded in
 `.codoc/index.meta.json` and rebuilds the index under the vector schema.
 
+**One workspace per process.** cocoindex holds a single environment per process, and
+where the index LIVES is read from `CODOC_LANCE_PATH` / `COCOINDEX_DB` once, when that
+environment enters its lifespan. So the App and the environment are cached in
+`runner._app_for` and reused every pass — three separate failures otherwise: an App
+rebuilt per pass keeps its name taken by any FAILED pass a traceback still references
+("An app named 'CodocIndex' is already registered", permanently, from one transient
+error); a second workspace indexed in the same process wrote its rows into the FIRST
+one's index and left its own empty with nothing raised; and `.codoc` deleted from a
+shell left the environment writing through handles to an unlinked directory. A switch of
+workspace, an embed-flag wipe, and a `.codoc` that stopped existing all close the
+environment, and the next pass rebinds it. Per-file memo state lives in each workspace's
+own `cocoindex.db` and survives that, so the cost is the walk, not the files.
+
 **LanceDB upkeep.** Lance is copy-on-write — every pass appends a version + new
 fragments and cocoindex never prunes them (they piled to 4k versions / 256MB for
 this repo before this). `update_index` ends with
@@ -599,6 +612,38 @@ the same.
 selection rule**: those files are machinery, generated or dictated by a tool, and a tree
 that described them would spend its first nodes on the build. Which settings files enter
 the index at all is decided by the code that READS them.
+
+### Which settings files enter the index (`pipelines/indexing/settings_scan.py`)
+
+A glob would be the wrong rule in both directions: a repo's YAML is mostly CI matrices
+and fixtures the tree should never mention, and a name-based allowlist cannot know that
+`tally/rules.toml` is where this codebase's policy lives. The rule that matches what the
+tree is for is **a settings file holds a decision if the code reads it** — the same
+evidence a binding stands on, and it makes an unread file a non-event rather than a
+judgment call.
+
+The evidence is a mention of the file's BASENAME in the text of some indexed source
+file: `open("rules.toml")`, `Path(__file__).parent / "rules.toml"`, `"config/rules.toml"`,
+or a comment that names it. Text, not an AST, because the mention is what matters and a
+path is assembled a dozen ways. Two bounds follow and are stated rather than hidden: a
+name built at runtime (`f"{env}.toml"`) is not found, and a file the code names only in
+prose is found — the first costs a chunk that should be there, the second one that could
+have been left out, and of the two failures the second is the cheap one.
+
+The scan reads each source file once and stops as soon as every candidate name is
+accounted for; a repo with no candidate settings files opens nothing at all. Its result
+carries three things, because they are three different situations: `read_by_code` (index
+these), `unreadable` (referenced, but this process has no parser — a YAML file with no
+PyYAML must not read like a file nobody wants), and `unreferenced` as a COUNT, since a
+repo has many of those and none of them is news.
+
+The indexer then walks the settings candidates as a second mount
+(`cocoindex_app._process_settings_file`) and passes the selection in as an ARGUMENT
+rather than looking it up: the per-file function is memoized, and the decision is about
+the repo, so a settings file the code stopped reading has to re-run while every code
+file's memo stays untouched. Rows carry the format in the `language` column and identity
+comes from `settings_files.hashes`, so nothing downstream needs to know a chunk came
+from a settings file.
 
 ## Doc language — the language the tree is AUTHORED in (`doclang.py`)
 
