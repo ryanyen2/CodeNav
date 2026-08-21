@@ -22,7 +22,7 @@ from codoc.doclang import (
     detect_prose_language, language_tag_for, prose_letters, workspace_doc_language,
 )
 from codoc.loop.activity import PHASE_DONE, mark_feature_phase
-from codoc.loop.apply import apply_op, should_auto_apply
+from codoc.loop.apply import apply_op, restates_current, should_auto_apply
 from codoc.loop.ask import (
     MAX_STEPS,
     AskStep,
@@ -548,6 +548,17 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
         if op.kind in (NodeOpKind.ADD_NODE, NodeOpKind.MOVE_NODE) and op.parent_id:
             if store.get_feature(op.parent_id) is None:
                 return _err(f"unknown parent_id {op.parent_id!r}")
+
+        # An amend asking for the prose the feature already has is answered here and
+        # not recorded. Applying it would stamp this agent as the author of somebody
+        # else's paragraph (and relax the amend gate over their next rewrite);
+        # proposing it would ask a person for a verdict on nothing. A PLAN amend is
+        # exempt by construction — see apply.restates_current — because unchanged
+        # words marked not-yet-built are a request to build them.
+        if restates_current(op, store):
+            return {"ok": True, "event_id": "", "applied": False, "noop": True,
+                    "rendered": False,
+                    "summary": "the tree already says this — nothing recorded"}
 
         held, own_holds = _hold_context(codoc_dir, caused_by)
         applied = should_auto_apply(op, store) and _auto_apply_allowed(

@@ -377,6 +377,50 @@ check is the SINGLE `phase.is_held` predicate (D5), shared by all three guards (
 `emptied` detection, `suppressed_by_hold`, and `_compute_drift`) so they can't drift
 apart. While `realize.json` exists, applied ops are stamped `caused_by=⟨directive⟩`.
 
+### The amend gate, and the amend that changes nothing (`loop/apply.py`)
+
+A code-side AMEND rewrites prose a person may have written, so it is not applied on
+the strength of being newer. `is_small_amend` measures how much of the old
+description SURVIVES the new one — `preserved_ratio` counts contiguous runs at least
+`clause_chars(old)` long, so a reflow scores high and a rewrite scores low — and
+holds human-written prose to `PRESERVE_RATIO_HUMAN` (0.85) while loop-written prose
+answers to `PRESERVE_RATIO_MACHINE` (0.50). Which bar applies is read from
+`feature_writers`, and failing the bar is not a refusal: the op becomes a pending
+proposal for a person to accept.
+
+That makes `feature_writers` load-bearing, and `apply_op` reassigns it to **whoever
+wrote last** on any applied op carrying a title or description. So an amend that asks
+for the prose the feature ALREADY HAS is not the harmless no-op it looks like:
+
+- **it takes the paragraph over.** A restatement moves a human-written node to the
+  loop, and the gate then holds the author's NEXT rewrite to the machine bar instead
+  of theirs. One op that changed no words is enough to unlock somebody's prose — a
+  mid-band rewrite (preserved between the two ratios) that was correctly held for
+  review auto-applies after it.
+- **it spends a moment of the timeline on nothing.** The scrubber and the per-span
+  inline blame read applied events, so a restatement is a change a reader can open and
+  find nothing in, and it re-attributes spans the author wrote to whoever restated
+  them. A ledger of changes that did not change anything is how a diff stops being
+  worth reading.
+
+`restates_current` therefore drops such an op at both doors that reach `apply_op`
+outside the authored path — Loop A's `apply_changeset` op loop (the single funnel for
+`run_loop_a` and `reconcile_drift` alike, counted as `LoopAResult.restated` and named
+in `summary()`) and `mcp/tools._apply_single` (which answers the agent `noop: True`
+and records nothing). It is dropped rather than proposed, because asking a person for
+a verdict on nothing is the same cost in a different place. Comparison is
+`normalize_description`, so whitespace the reader cannot see does not count as a
+change here either.
+
+Two symmetries are deliberate. The authored side has refused this since merge3
+landed, for the same reason and in nearly the same words
+(`loop_b._resolve_content` → `Resolution(NOOP)` when the merge result equals what is
+stored). And a **plan** amend (`realized is False`) is exempt however familiar its
+words: prose that already says what the feature WILL do, marked not yet built, is a
+request to build it — the words being unchanged is the point, not a sign there is
+nothing to do. `codoc translate` meets the same hazard from the other side and
+handles it by restoring the writer role after each apply (see "Authoring language").
+
 ### Warranting a stated why (`loop/why.py` + `loop/warrant.py`)
 
 The describing pass is handed prose the repo already wrote about its own decisions —

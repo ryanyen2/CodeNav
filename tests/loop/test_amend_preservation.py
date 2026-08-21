@@ -14,6 +14,7 @@ from codoc.loop.apply import (
     apply_op,
     is_small_amend,
     preserved_ratio,
+    restates_current,
     should_auto_apply,
 )
 from codoc.model.event import ACTOR_HUMAN, NodeOp, NodeOpKind
@@ -293,3 +294,111 @@ class TestAPlanSaysSoInTheLedger:
         res = propose_add(cd, title="Weekly windows", description="Not written yet.",
                           realized=False)
         assert self._tag(cd, res["event_id"]) == "agent plan"
+
+
+class TestRestatement:
+    """An amend that asks for the prose already stored is not a small amend — it is
+    not an amend. A pass whose schema wants an op will sometimes hand back the
+    description it was shown, and every consequence of writing it is a loss:
+
+    * the ledger stamps whoever restated it as the author of that paragraph, so a
+      human-written node becomes the loop's — and the gate above then judges the
+      NEXT rewrite by the machine bar instead of the author's;
+    * the timeline gains a moment a reader can open and find nothing in, and the
+      per-span blame credits the author's own sentence to whoever restated it.
+
+    The authored side has refused this since merge3 (``loop_b._resolve_content`` →
+    NOOP). These pin the code side of the same rule.
+    """
+
+    def test_the_same_words_are_not_a_change(self, store):
+        fid = _feature(store, writer_role=ACTOR_HUMAN)
+        assert restates_current(_amend(fid, BASE), store) is True
+
+    def test_whitespace_the_reader_cannot_see_is_not_a_change(self, store):
+        """Compared with `normalize_description`, the same canonical form the authored
+        path uses — otherwise a trailing newline is enough to take a node over."""
+        fid = _feature(store)
+        assert restates_current(_amend(fid, BASE + "\n\n"), store) is True
+        assert restates_current(_amend(fid, "   " + BASE), store) is True
+
+    def test_a_real_repair_is_a_change(self, store):
+        fid = _feature(store)
+        fixed = BASE.replace("an empty queue", "an empty queue on disk")
+        assert restates_current(_amend(fixed and fid, fixed), store) is False
+
+    def test_a_title_only_amend_is_judged_on_its_title(self, store):
+        fid = _feature(store)
+        title = store.get_feature(fid).title
+        same = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, title=title)
+        moved = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, title=title + " store")
+        assert restates_current(same, store) is True
+        assert restates_current(moved, store) is False
+
+    def test_an_amend_carrying_neither_field_is_left_alone(self, store):
+        """It is not asking for prose, so it is not restating any. Whatever such an op
+        is for, this predicate is not the place to decide it does nothing."""
+        fid = _feature(store)
+        bare = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid)
+        assert restates_current(bare, store) is False
+
+    def test_a_plan_is_never_a_restatement_however_familiar_its_words(self, store):
+        """`builds=True` mints an amend with realized=False: prose that says what the
+        feature WILL do, whose code does not exist yet. The words being unchanged is
+        the point of such a request, not a sign there is nothing to do."""
+        fid = _feature(store, writer_role=ACTOR_HUMAN)
+        plan = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=BASE,
+                      realized=False)
+        assert restates_current(plan, store) is False
+
+    def test_a_restatement_would_otherwise_pass_the_gate(self, store):
+        """Why the check has to exist at all: identical text preserves everything, so
+        every threshold above says yes to it."""
+        fid = _feature(store, writer_role=ACTOR_HUMAN)
+        assert is_small_amend(_amend(fid, BASE), store) is True
+        assert should_auto_apply(_amend(fid, BASE), store) is True
+
+
+class TestTheAgentDoorRefusesARestatementToo:
+    """`propose_amend` reaches `apply_op` without passing through Loop A's op loop, so
+    the drop has to be at that door as well. An agent reflecting over a whole tree will
+    hand back descriptions that are already right, and each one would otherwise cost the
+    author the paragraph and the reader a moment of timeline with nothing in it."""
+
+    def test_a_reflection_restating_the_stored_prose_records_nothing(self, tmp_path):
+        from codoc.mcp.tools import propose_amend
+        from codoc.store.db import open_store
+
+        cd = _workspace(tmp_path)
+        fid = _seed(cd)
+        with open_store(cd) as store:
+            before = len(store.events_for_feature(fid, limit=999))
+
+        res = propose_amend(cd, feature_id=fid, description=_BASE,
+                            rationale="reflected, and it was already right")
+
+        assert res["ok"] is True and res["noop"] is True
+        assert res["applied"] is False and res["event_id"] == ""
+        with open_store(cd) as store:
+            assert len(store.events_for_feature(fid, limit=999)) == before
+
+    def test_a_plan_restating_the_stored_prose_is_still_a_request(self, tmp_path):
+        """The words being unchanged is what a plan on already-written prose looks like:
+        the description says what the feature will do, and the code does not do it yet."""
+        from codoc.mcp.tools import propose_amend
+
+        cd = _workspace(tmp_path)
+        fid = _seed(cd)
+        res = propose_amend(cd, feature_id=fid, description=_BASE, builds=True,
+                            rationale="build what the tree already promises")
+        assert res.get("noop") is not True
+        assert res["applied"] is False and res["event_id"]
+
+    def test_a_real_amend_through_the_same_door_is_untouched(self, tmp_path):
+        from codoc.mcp.tools import propose_amend
+
+        cd = _workspace(tmp_path)
+        fid = _seed(cd)
+        res = propose_amend(cd, feature_id=fid, description=_LONGER, rationale="x")
+        assert res.get("noop") is not True and res["event_id"]
+

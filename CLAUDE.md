@@ -391,7 +391,13 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   single feature-phase projection — holds/drift/resolution are views),
              #   diff.py (compute_changeset — and a removal from a file that no
              #   longer PARSES is held rather than read as deleted code, so a
-             #   mid-edit save cannot detach a binding), apply.py,
+             #   mid-edit save cannot detach a binding), apply.py (the amend
+             #   gate — and restates_current, which drops a code-side amend asking
+             #   for the prose already stored: applying it would stamp the loop as
+             #   the author of somebody's paragraph and relax the gate over their
+             #   next rewrite, and proposing it would ask for a verdict on nothing;
+             #   a PLAN amend is exempt, since unchanged words marked not-yet-built
+             #   are a request to build them),
              #   loop_a.py / loop_b.py, edits.py
              #   (edits.json + realize.json), payload.py (the per-PASS prompt
              #   budget: how much of each chunk's source a call gets to see,

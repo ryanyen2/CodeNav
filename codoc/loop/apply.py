@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 from difflib import SequenceMatcher
 
+from codoc.codoc_file.parse import normalize_description
 from codoc.doclang import clause_chars
 from codoc.loop.diff import ChangeSet
 from codoc.model.binding import Binding
@@ -119,6 +120,54 @@ def is_small_amend(op: NodeOp, store: Store) -> bool:
         return True
     change = 1.0 - SequenceMatcher(None, old, new).ratio()
     return change <= AMEND_SAFE_RATIO
+
+
+def restates_current(op: NodeOp, store: Store) -> bool:
+    """True if this AMEND asks for prose the feature already has.
+
+    A pass with a schema that wants an op will sometimes hand back the description
+    it was shown, reflowed or verbatim. The text it would write is not the problem;
+    everything around the write is:
+
+    * **it takes the paragraph over.** :func:`apply_op` stamps ``feature_writers``
+      with whoever wrote last, so a restatement moves a human-written node to the
+      loop — and the amend gate then holds the NEXT rewrite to the machine bar
+      instead of the author's. One op that changed no words is enough to unlock
+      somebody's prose.
+    * **it spends a moment of the timeline on nothing.** The scrubber and the
+      per-span blame read applied events, so a restatement is a change a reader can
+      open and find nothing in — and it re-attributes spans the author wrote to
+      whoever restated them. A ledger of changes that did not change anything is
+      how a diff stops being worth reading.
+
+    The authored side has refused this since merge3 landed, for the same reason and
+    in almost the same words (``loop_b._resolve_content`` → ``NOOP``). This is the
+    code side of that rule, and it compares with the same
+    :func:`normalize_description` — whitespace the reader cannot see must not count
+    as a change here either.
+
+    A **plan** amend (``realized is False``) is never a restatement, however
+    familiar its words. Prose that already says what the feature will do, marked as
+    not yet built, is a request to build it; the words being unchanged is the point,
+    not a sign there is nothing to do.
+    """
+    if op.kind is not NodeOpKind.AMEND or not op.feature_id:
+        return False
+    if op.realized is False:
+        return False
+    f = store.get_feature(op.feature_id)
+    if f is None:
+        return False
+    said_anything = False
+    if op.description is not None:
+        said_anything = True
+        if normalize_description(op.description) != normalize_description(f.description or ""):
+            return False
+    if op.title is not None:
+        said_anything = True
+        if op.title.strip() != (f.title or "").strip():
+            return False
+    return said_anything
 
 
 def should_auto_apply(op: NodeOp, store: Store) -> bool:

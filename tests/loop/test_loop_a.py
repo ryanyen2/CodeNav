@@ -5,10 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from codoc.loop.apply import apply_op, should_auto_apply
 from codoc.loop.diff import ChangeSet, ChunkRef
 from codoc.loop.loop_a import _backfill_types_hashes, _state_changeset, apply_changeset
 from codoc.model.binding import Binding
-from codoc.model.event import Event, NodeOp, NodeOpKind
+from codoc.model.event import ACTOR_HUMAN, Event, NodeOp, NodeOpKind
 from codoc.model.feature import Feature
 from codoc.store.db import open_store
 
@@ -651,3 +652,110 @@ def test_a_new_settings_section_reaches_the_pass_with_its_values(store):
     assert added[0]["source"] == section
     bound = store.binding_at("tally/rules.toml", "tally/rules.toml::periods")
     assert bound is not None and bound.feature_id == summaries.id
+
+
+# ── an amend that changes nothing is dropped, not applied and not proposed ───
+
+def _human_feature(store, description: str) -> str:
+    """A feature whose prose a PERSON wrote, recorded the way the ledger records it."""
+    apply_op(NodeOp(kind=NodeOpKind.ADD_NODE, title="Edit queue", description=description),
+             store, source="human", applied=True, actor=ACTOR_HUMAN)
+    fid = next(f.id for f in store.list_features() if f.title == "Edit queue")
+    _bind(store, fid, "a.py", "a.py::foo")
+    return fid
+
+
+def _pass(store, fid, ops, *, n=[0]):
+    """One Loop A pass whose LLM returns *ops*.
+
+    A fresh unbound add per pass is what forces the LLM door open; the pass attaches
+    it so the coverage net stays out of the way of what is under test.
+    """
+    n[0] += 1
+    sym = f"a.py::new{n[0]}"
+    cs = ChangeSet(added=[ChunkRef("a.py", sym, "fp", "src")],
+                   modified=[ChunkRef("a.py", "a.py::foo", "new", "def foo(): ...")])
+    attach = NodeOp(kind=NodeOpKind.ATTACH, feature_id=fid, bindings=[("a.py", sym)])
+    return apply_changeset(cs, store, propose=_propose([attach, *ops]))
+
+
+HUMAN_PROSE = (
+    "Holds the queue of edits waiting to be implemented. Readers tolerate a "
+    "missing file, since an empty queue and no queue mean the same thing."
+)
+# Keeps the first sentence and rewrites the second: too much of the author's
+# wording gone to auto-apply over them, little enough to auto-apply over the loop.
+MID_BAND_REWRITE = (
+    "Holds the queue of edits waiting to be implemented. Readers tolerate a "
+    "missing file, which the loader treats as an empty queue."
+)
+
+
+def test_an_amend_restating_the_stored_prose_is_dropped(store):
+    fid = _human_feature(store, HUMAN_PROSE)
+    same = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=HUMAN_PROSE)
+
+    res = _pass(store, fid, [same])
+
+    assert res.restated == 1
+    assert "amend" not in res.auto, "not applied"
+    assert res.proposed == [], "and not put to a person for a verdict on nothing"
+
+
+def test_the_author_keeps_the_paragraph_a_restatement_would_have_taken(store):
+    """The consequence that makes this a correctness fix rather than tidiness.
+
+    `apply_op` stamps `feature_writers` with whoever wrote last, so applying a
+    restatement moves a human-written node to the loop — and the amend gate then
+    judges the next rewrite by the machine bar. One op that changed no words is
+    otherwise enough to unlock somebody's prose.
+    """
+    fid = _human_feature(store, HUMAN_PROSE)
+    rewrite = NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=MID_BAND_REWRITE)
+    assert should_auto_apply(rewrite, store) is False, "the author's node, before"
+
+    _pass(store, fid, [NodeOp(kind=NodeOpKind.AMEND, feature_id=fid,
+                              description=HUMAN_PROSE)])
+
+    assert store.feature_writer_info(fid) == ("human", ACTOR_HUMAN)
+    assert should_auto_apply(rewrite, store) is False, "still theirs"
+
+
+def test_the_timeline_gains_no_moment_from_a_restatement(store):
+    """The scrubber and the per-span blame read applied events. A change a reader can
+    open and find nothing in is how a diff stops being worth reading."""
+    fid = _human_feature(store, HUMAN_PROSE)
+
+    _pass(store, fid, [NodeOp(kind=NodeOpKind.AMEND, feature_id=fid,
+                              description=HUMAN_PROSE + "\n")])
+
+    # The attach and refresh this pass also makes are binding maintenance; neither
+    # claims the prose changed, and neither is what the scrubber renders as a revision.
+    prose = [e for e in store.events_for_feature(fid, limit=999)
+             if e.op.description is not None]
+    assert [e.actor for e in prose] == [ACTOR_HUMAN], "only the author ever wrote here"
+
+
+def test_a_real_amend_in_the_same_batch_still_lands(store):
+    """The drop is per op. A pass that restates one description and repairs another
+    must still perform the repair."""
+    fid = _human_feature(store, HUMAN_PROSE)
+    repaired = HUMAN_PROSE.replace("an empty queue", "an empty queue on disk")
+
+    res = _pass(store, fid, [
+        NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=HUMAN_PROSE),
+        NodeOp(kind=NodeOpKind.AMEND, feature_id=fid, description=repaired),
+    ])
+
+    assert res.restated == 1
+    assert res.auto.get("amend") == 1
+    assert store.get_feature(fid).description == repaired
+
+
+def test_the_drop_is_reported_rather_than_silent(store):
+    fid = _human_feature(store, HUMAN_PROSE)
+    res = _pass(store, fid, [NodeOp(kind=NodeOpKind.AMEND, feature_id=fid,
+                                    description=HUMAN_PROSE)])
+
+    assert "changed nothing" in res.summary()
+

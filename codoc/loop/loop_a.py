@@ -19,7 +19,9 @@ from codoc.doclang import (
     DocLanguage, has_cjk, norm_key, terms, workspace_doc_language,
 )
 from codoc.loop import edits as edits_channel
-from codoc.loop.apply import apply_op, derive_auto_ops, should_auto_apply
+from codoc.loop.apply import (
+    apply_op, derive_auto_ops, restates_current, should_auto_apply,
+)
 from codoc.loop.edits import (
     DRIFT_BINDING_LOST, DRIFT_QUESTIONED, merge_drift, write_drift,
     read_resolution, write_resolution,
@@ -434,6 +436,7 @@ class LoopAResult:
                          # a large added set was batched across calls
     impacted: list[str] = field(default_factory=list)         # feature IDs of upstream dependents
     held_back: int = 0  # intent ops suppressed by a doc-wins hold (classify row 13)
+    restated: int = 0   # amends asking for the prose already stored (apply.restates_current)
     # U5: realize-divergence outcome for this pass — {receiving feature_id → reason}
     # for features changed BEYOND a directive's target (scope divergence). A faithful
     # realization records nothing (its badge just clears). Persisted to resolution.json.
@@ -451,6 +454,8 @@ class LoopAResult:
             parts.append(f"{len(self.impacted)} impacted features")
         if self.held_back:
             parts.append(f"held {self.held_back} op(s) — doc edit pending")
+        if self.restated:
+            parts.append(f"dropped {self.restated} amend(s) that changed nothing")
         if self.realize_outcomes:
             parts.append(f"{len(self.realize_outcomes)} divergent realization(s)")
         return " · ".join(parts)
@@ -938,6 +943,14 @@ def apply_changeset(
         # a small auto-applicable AMEND would rewrite the prose under their edit).
         if suppressed_by_hold(op, held):
             result.held_back += 1
+            continue
+        # An amend that asks for the prose already stored is dropped here rather
+        # than applied or proposed: applying it would stamp the loop as the author
+        # of somebody's paragraph (and relax the gate over their next rewrite), and
+        # proposing it would ask a person for a verdict on nothing. See
+        # apply.restates_current.
+        if restates_current(op, store):
+            result.restated += 1
             continue
         if op.kind is NodeOpKind.ADD_NODE and op.bindings:
             # The LLM door has to sanitize titles the same way the deterministic
