@@ -393,7 +393,11 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   longer PARSES is held rather than read as deleted code, so a
              #   mid-edit save cannot detach a binding), apply.py,
              #   loop_a.py / loop_b.py, edits.py
-             #   (edits.json + realize.json), why.py (grounded rationale for
+             #   (edits.json + realize.json), payload.py (the per-PASS prompt
+             #   budget: how much of each chunk's source a call gets to see,
+             #   conceded members-first so one generated module cannot make a
+             #   258,000-char call; a set that fits is passed through unchanged),
+             #   why.py (grounded rationale for
              #   descriptions: commit messages / realized directives / recorded
              #   rationale — each entry id-stamped so a claim can cite it),
              #   warrant.py (resolving those citations back to what the source

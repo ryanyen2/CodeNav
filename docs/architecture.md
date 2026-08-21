@@ -140,6 +140,47 @@ written from an incomplete view of the code — which is the point. A file that 
 source equals the new named chunk's, so `_detect_relocations` pairs them on
 `tokens_hash` and re-attaches.
 
+### What a prompt gets to see (`loop/payload.py`)
+
+Every pass that shows the model code did it the same way: `symbol_path` plus the
+first 600 characters of `source`. That makes the prompt a function of how many
+chunks the pass happens to be holding — fine for a 20-symbol file, and **258,000
+characters** for one generated module in `test/altair` (`channels.py`, 786 chunks;
+`core.py` would be 308,000). The cost is the smaller problem. A single call asked
+to name a coherent feature set over 786 symbols returns a junk drawer, and the rule
+the prompt itself states (at most ~12 bindings to a node) cannot be honored.
+
+So the budget is **per pass, not per chunk** (`BUDGET`, 72,000 chars), spent down a
+ladder of named concessions:
+
+- **A member gives way before a top-level definition.** The prompt's own rule binds
+  a method to the feature its class owns, and no amount of the method's body changes
+  that, so the partition is decided at the top level. (The TypeScript adapter
+  addresses only top-level declarations, so a `.ts` file has no members and the
+  first concession never fires there.)
+- **The rung is chosen against what the set would actually cost once cut**, not
+  against allowance times count — most definitions are shorter than their
+  allowance, and charging for source nobody will send concedes two rungs the set
+  can afford.
+- **A cut is a whole-line cut, it keeps the signature, and it says it cut.** A
+  byte-boundary slice hands the model a function that appears to end where the
+  slice did; `head` keeps whole lines, guarantees the signature (`_BODY_OPENS`
+  handles Python `:`, TypeScript `{`, and the `: ...` stub bodies generated Python
+  is made of), and marks the elision.
+- **Nothing drops to nothing.** The lowest rung still carries a signature, so every
+  symbol arrives named and typed and a partition over all of them stays possible —
+  which folding uncovered chunks into the largest node can never recover.
+- **Where the signatures alone exceed the budget, the budget yields.** Cutting them
+  would hand the model a list of names without parameters, which is the one thing
+  it cannot work from.
+
+A set that fits at 600 chars a chunk is passed through unchanged, so the ordinary
+case is byte-identical to before: every file in `test/requests`, `codoc/store/db.py`
+at 95 chunks, `doc-view.ts` at 141. On the crowded ones `channels.py` goes 258k →
+77k and `api.py` 90k → 63k. Both call sites share it — `bootstrap_hier` per file,
+and Loop A across `added` + `modified`, so a commit that lands a generated module
+cannot turn the incremental pass into a half-megabyte call either.
+
 ### What the walk never saw (`pipelines/indexing/survey.py`)
 
 `codoc status` checks that every indexed chunk is attributed to a feature. That is

@@ -28,6 +28,7 @@ from codoc.loop.classify import suppressed_by_hold
 from codoc.loop.locks import loop_lock
 from codoc.loop.divergence import Divergence, Realization, classify_realization
 from codoc.loop.diff import ChangeSet, ChunkRef, compute_changeset
+from codoc.loop.payload import shown_sources
 from codoc.loop.phase import is_held
 from codoc.loop.subtree import select_relevant_subtree
 from codoc.loop.title_dedup import (
@@ -42,7 +43,6 @@ from codoc.loop.why import gather_why_evidence
 from codoc.model.event import NodeOp, NodeOpKind, SAFE_OPS
 from codoc.store.db import Store, open_store
 
-_SNIPPET = 600
 # Added chunks per tree-update call. Sized so the model can actually honour "place
 # every chunk in `added`": past roughly this many the instruction degrades into a
 # couple of umbrella ops, and everything else silently falls to the coverage net.
@@ -736,9 +736,15 @@ def apply_changeset(
 
     # 3. The single LLM pass.
     result.llm_called = True
+    # One budget across everything this pass shows, so a commit that adds a
+    # generated module cannot turn the incremental pass into a 500,000-character
+    # call. A pass with a handful of chunks is unaffected (see `loop/payload.py`).
+    shown = shown_sources({c.symbol_path: c.source or ""
+                           for c in [*added_unbound, *cs.modified]})
     changes: dict = {
         "added": [
-            {"file": a.file, "symbol_path": a.symbol_path, "source": a.source[:_SNIPPET]}
+            {"file": a.file, "symbol_path": a.symbol_path,
+             "source": shown[a.symbol_path]}
             for a in added_unbound
         ],
         "removed": [
@@ -748,7 +754,8 @@ def apply_changeset(
             if removed_owner.get((r.file, r.symbol_path)) in emptied
         ],
         "modified": [
-            {"file": m.file, "symbol_path": m.symbol_path, "source": m.source[:_SNIPPET],
+            {"file": m.file, "symbol_path": m.symbol_path,
+             "source": shown[m.symbol_path],
              "current_feature_id": (b.feature_id if (b := store.binding_at(m.file, m.symbol_path)) else None)}
             for m in cs.modified
         ],

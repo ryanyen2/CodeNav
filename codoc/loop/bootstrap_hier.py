@@ -32,13 +32,16 @@ from codoc.loop.apply import apply_op
 from codoc.loop.bootstrap import BootstrapResult, _title_from_file
 from codoc.loop.surface import flow_lines
 from codoc.loop.why import commit_rationales
+from codoc.loop.payload import shown_sources
 from codoc.model.event import NodeOp, NodeOpKind
 from codoc.model.ids import new_feature_id
 from codoc.store.db import Store
 
 _CALLS_CAP = 6           # per-symbol call/called-by edges shown to the file pass
 _COUPLING_CAP = 40       # feature→feature coupling lines shown to the org pass
-_SOURCE_CAP = 600        # chars of each chunk's source passed to the model
+# Chunk source is budgeted per FILE, not per chunk — see `loop/payload.py`. A file
+# that fits is passed through at 600 chars a chunk exactly as before; a generated
+# module of 786 symbols is spent down instead of sending a quarter-megabyte prompt.
 
 
 # ---------------------------------------------------------------------------
@@ -348,8 +351,10 @@ def bootstrap_hier_from_chunks(
             prepared = []
             for file in wave:
                 file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
+                shown = shown_sources(
+                    {r.symbol_path: r.source or "" for r in file_rows})
                 chunks = [
-                    {"symbol_path": r.symbol_path, "source": (r.source or "")[:_SOURCE_CAP]}
+                    {"symbol_path": r.symbol_path, "source": shown[r.symbol_path]}
                     for r in file_rows
                 ]
                 edges = _file_edges(file_rows, store)
