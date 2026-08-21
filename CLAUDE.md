@@ -478,8 +478,15 @@ lang/        # tree-sitter adapters: python.py + typescript.py  [KEPT]
              #   one (a `def` in an `except` branch binds the module, so it is
              #   file.py::loads), one name gets exactly one (overloads and a
              #   property's accessors are JOINED, not last-wins), the guard a
-             #   definition exists under is part of the definition, and
-             #   __module__ is the glue between declarations, not the whole file
+             #   definition exists under is part of the definition — including
+             #   when the guard DECLARES rather than defines, so
+             #   `if sys.platform: preferred_clock = …` is one addressable
+             #   entity and not glue, while a guard binding SEVERAL names stays
+             #   glue because any one branch of it is a fragment (that is also
+             #   what keeps a `__main__` block and a loop temp unaddressed) —
+             #   and __module__ is the glue between declarations, not the whole
+             #   file. Both directions are pinned over ~400 real files by
+             #   tests/test_address_conformance.py, with `ast` as the oracle
              #   (PROGRAMMING languages — not doclang.py, see below)
 doclang.py   # the AUTHORING language of the tree: profiles + the prompt directive,
              #   the .codoc/config.json setting, and the script-aware text helpers

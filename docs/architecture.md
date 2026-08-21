@@ -111,7 +111,13 @@ to give neither.
   statements and `_same_scope_defs` descends them, stopping at each definition.
 - **A declaration is an entity too.** A public module-level name — `X = …`,
   `X: T = …`, and PEP 695's `type X = …` — gets its own address, because a
-  description cites it by name. The 695 spelling was the one falling into glue.
+  description cites it by name. **Including one a guard selects**: `preferred_clock`
+  assigned in both arms of `if sys.platform == "win32"`, `is_urllib3_1` computed in a
+  `try`, `chardet` set to None when its import fails. Those are names of the module
+  however the branch went, and they had no address for the same reason a guarded `def`
+  had none — the walk consulted `_module_assignment_name` for direct children of the
+  module only. `_same_scope_assignments` descends the transparent statements the way
+  `_same_scope_defs` already did.
 - **One name, one address.** Keying by qualified name alone is not enough when a
   name is defined more than once: `@overload` stubs, a property and its setter, a
   version-branched pair. Whichever piece the walk emitted last won, so an
@@ -127,7 +133,23 @@ carry one name, the *statement* is the chunk — `try: from fast import loads /
 except ImportError: def loads…` is one entity whose source includes both branches.
 "Only when `fast` is missing" is not a detail a faithful description may lose, and
 handing the branches out separately would have made two entities where the code
-has one.
+has one. A guard that declares one name by **assignment** and defines nothing is read
+the same way, so `preferred_clock`'s chunk is the `if`/`else` rather than the arm that
+happened to come first.
+
+**Several names under one guard is where that stops**, and the line is drawn at the
+point the chunk would stop being worth having. For definitions, each keeps its own
+address and the guard is part of none of them — a `def` is a declaration wherever it
+sits. For assignments there is nothing comparable to hand out: requests' three-way
+optional-dependency `try` assigns `pyopenssl`, `OpenSSL` and `cryptography` in one
+`except` branch, so the fragment a per-assignment address would point at is
+`pyopenssl = None`, with no guard and no siblings — a describing pass can only read
+that as setting a name to None. Left in the glue they stay together, with the `try`
+that explains them. Two shapes fall on that side by the same arithmetic rather than by
+a rule of their own: a module-level loop body, whose names are iteration temps (a `for`
+target is not an assignment statement, so it contributes none at all), and an
+`if __name__ == "__main__":` block, whose names an importer never binds — nothing can
+cite one, so no feature should.
 
 **Join, don't span.** A property's accessors often sit either side of an unrelated
 method. Spanning first→last would put that method inside the property's chunk, so
@@ -144,6 +166,17 @@ in the feature with least to do with it. (`lang/typescript.py` had the identical
 defect and the identical fix; only the Python adapter needed the walk rewritten.)
 `resolve_symbol_path` now delegates to `extract_chunks` rather than re-deriving
 spans, so a `codoc:` link cannot resolve somewhere the index does not know.
+
+**Both guarantees are checked against real code, not only against fixtures.**
+`tests/test_address_conformance.py` builds the oracle out of `ast` — the parser that
+decides what a module declares — and diffs it against the walk over every corpus in
+`test/` plus codoc's own source and tests, close to 400 files in about a second. It
+fails in both directions, because both are defects: an address the oracle expects and
+the walk withholds is an entity no description can point at, and one the walk invents
+is a citation that resolves to nothing. The guarded-declaration gap above is what it
+found; the names deliberately left in the glue are listed by name in its `GLUE` table
+with the reason, and the test fails if one of them starts getting an address, since
+that changes what the tree can cite.
 
 **Existing workspaces see a one-time fingerprint wave.** `__module__` and every
 merged name change hash, so the first pass after this re-reflects prose that was

@@ -173,6 +173,28 @@ def _same_scope_defs(node: ts.Node) -> list[tuple[ts.Node, ts.Node]]:
     return found
 
 
+def _same_scope_assignments(node: ts.Node) -> list[str]:
+    """Public module names *node* ASSIGNS in its enclosing scope, in source order.
+
+    The assignment counterpart of `_same_scope_defs`, and it stops in the same two
+    places: at a definition, whose body is a different scope, and at anything
+    `_module_assignment_name` does not read as a single public declaration. A `for`
+    statement's loop variable is not an assignment statement, so an iteration temp
+    never appears here — only names a branch declares.
+    """
+    found: list[str] = []
+    for child in node.children:
+        if _peel(child) is not None:
+            continue
+        if child.type in _TRANSPARENT:
+            found.extend(_same_scope_assignments(child))
+            continue
+        name = _module_assignment_name(child)
+        if name:
+            found.append(name)
+    return found
+
+
 def _line_start(source_bytes: bytes, pos: int) -> int:
     """*pos* moved back over its line's leading whitespace, if that is all of it.
 
@@ -276,7 +298,30 @@ def _extract_chunks_recursive(
                     for peeled_inner in inner:
                         emit(*peeled_inner)
                 continue
-            # Defines nothing → ordinary module glue, handled below.
+
+            if is_module_scope:
+                declared = set(_same_scope_assignments(child))
+                if len(declared) == 1:
+                    # A guard that declares ONE public name and nothing else is a
+                    # declaration, not control flow: `preferred_clock` chosen by
+                    # platform, `is_urllib3_1` computed in a `try`, `chardet` set to
+                    # None when the import fails. The same reasoning as the def case
+                    # above — the guard is part of what the entity IS — and the same
+                    # chunk, so a reader gets the condition rather than one branch.
+                    #
+                    # Several names is the line, because there the branch alone is a
+                    # fragment: requests' three-way optional-dependency `try` would
+                    # hand a describing pass `pyopenssl = None` with no guard and no
+                    # siblings. A `__main__` block and a module-level loop body are
+                    # both on that side of the line as well, which is where they
+                    # belong: those names are steps in a procedure, and the ones a
+                    # script binds are not even visible to an importer.
+                    close_run()
+                    only = declared.pop()
+                    qualified = f"{prefix}.{only}" if prefix else only
+                    pieces.append((qualified, child.start_byte, child.end_byte))
+                    continue
+            # Declares nothing at this scope → ordinary module glue, handled below.
 
         if is_module_scope and child.type not in {"comment", "newline", ""}:
             assign_name = _module_assignment_name(child)

@@ -196,6 +196,147 @@ def test_python_adapter_splits_a_guard_that_defines_several_names() -> None:
     assert chunks["b"].source.startswith("def b")
 
 
+# The shapes below are lifted from the corpora in `test/`, where an ast oracle over
+# 382 files found the gap they pin: every public module name the walk gave no address
+# to was assigned under a guard. `def` had that rule from the start ("the guard IS the
+# definition"); the declarations a compat shim actually writes did not.
+
+
+DECLARED_UNDER_A_GUARD = '''"""A module."""
+import sys
+import time
+from typing import TYPE_CHECKING
+
+if sys.platform == "win32":
+    preferred_clock = time.perf_counter
+else:
+    preferred_clock = time.time
+
+try:
+    is_urllib3_1 = int(urllib3_version.split(".")[0]) == 1
+except (TypeError, AttributeError):
+    is_urllib3_1 = True
+
+if TYPE_CHECKING:
+    type Rows = list[dict]
+'''
+
+
+def test_python_adapter_addresses_a_declaration_a_guard_selects() -> None:
+    # `preferred_clock` is a name of this module however the branch went, so a
+    # description citing it must have somewhere to point. It had none: the walk
+    # consulted `_module_assignment_name` only for direct children of the module,
+    # so the whole statement fell into the glue and the name disappeared.
+    chunks = python_chunks(DECLARED_UNDER_A_GUARD)
+    assert "preferred_clock" in chunks
+    assert "is_urllib3_1" in chunks
+    assert "Rows" in chunks  # a PEP 695 alias under `if TYPE_CHECKING` too
+
+
+def test_python_adapter_keeps_the_guard_a_declaration_was_selected_by() -> None:
+    # The same rule the def case states: the guard is part of what the entity IS.
+    # "perf_counter on Windows, time elsewhere" is the declaration; either branch
+    # alone is a line of code with its reason removed.
+    chunks = python_chunks(DECLARED_UNDER_A_GUARD)
+    clock = chunks["preferred_clock"].source
+    assert clock.startswith("if sys.platform")
+    assert "perf_counter" in clock and "time.time" in clock  # both branches
+    version = chunks["is_urllib3_1"].source
+    assert version.startswith("try:")
+    assert "except (TypeError, AttributeError):" in version
+
+
+def test_python_adapter_leaves_a_declared_guard_out_of_the_glue() -> None:
+    # It became a chunk, so it is no longer part of the module's own fingerprint —
+    # otherwise changing the Windows branch would report the module as changed too.
+    module = python_chunks(DECLARED_UNDER_A_GUARD)["__module__"].source
+    assert "import sys" in module
+    assert "preferred_clock" not in module
+    assert "is_urllib3_1" not in module
+
+
+MANY_NAMES_UNDER_A_GUARD = '''"""Optional dependencies, all probed at once."""
+try:
+    from urllib3.contrib import pyopenssl
+except ImportError:
+    pyopenssl = None
+    OpenSSL = None
+    cryptography = None
+'''
+
+
+def test_python_adapter_keeps_a_guard_declaring_several_names_as_glue() -> None:
+    # Several names is the line, and it is drawn where the chunk would stop being
+    # worth having: there is no single entity to hand the statement to, and the one
+    # branch that assigns `pyopenssl` says `pyopenssl = None` — a fragment with no
+    # guard and no siblings, which a describing pass can only read as setting a name
+    # to None. In the glue they stay together, with the `try` that explains them.
+    chunks = python_chunks(MANY_NAMES_UNDER_A_GUARD)
+    assert "pyopenssl" not in chunks
+    assert "OpenSSL" not in chunks
+    module = chunks["__module__"].source
+    assert "from urllib3.contrib import pyopenssl" in module
+    assert "cryptography = None" in module
+
+
+def test_python_adapter_keeps_a_script_entry_point_as_glue() -> None:
+    # The names a `__main__` block binds are steps in a procedure, and an importer
+    # never sees them at all — so nothing can cite them and no feature should bind
+    # to one. They are on the several-names side of the line by arithmetic, which
+    # is why no separate rule is needed for them.
+    source = (
+        '"""A script."""\n'
+        "import argparse\n\n"
+        'if __name__ == "__main__":\n'
+        "    parser = argparse.ArgumentParser()\n"
+        "    args = parser.parse_args()\n"
+    )
+    chunks = python_chunks(source)
+    assert "args" not in chunks and "parser" not in chunks
+    assert "parser.parse_args()" in chunks["__module__"].source
+
+
+def test_python_adapter_does_not_address_an_iteration_variable() -> None:
+    # A `for` target is not an assignment statement, so requests' module-level
+    # `for package in (...)` contributes no name — and its body assigns three, which
+    # puts the loop on the glue side where a temp belongs. A loop that leaves exactly
+    # one public name IS read as declaring it, deliberately: the loop is then how the
+    # value was computed, and the whole statement is a chunk worth describing.
+    several = (
+        "import sys\n\n"
+        "for package in ('urllib3', 'idna'):\n"
+        "    mod = sys.modules[package]\n"
+        "    target = 'requests.packages.' + package\n"
+        "    imported_mod = mod\n"
+    )
+    chunks = python_chunks(several)
+    for name in ("package", "mod", "target", "imported_mod"):
+        assert name not in chunks
+    one = (
+        "import os\n\n"
+        "for candidate in ('a', 'b'):\n"
+        "    chosen = os.path.exists(candidate)\n"
+    )
+    assert python_chunks(one)["chosen"].source.startswith("for candidate")
+
+
+def test_python_adapter_still_gives_a_class_body_no_attribute_addresses() -> None:
+    # The rule is module scope only. A class's attributes never had addresses — only
+    # its methods and nested classes do — and a guarded one must not be the exception
+    # that appears as `Config.cache` while its unguarded neighbours do not.
+    source = (
+        "from typing import TYPE_CHECKING\n\n"
+        "class Config:\n"
+        "    plain = 1\n"
+        "    if TYPE_CHECKING:\n"
+        "        cache = None\n"
+        "    def get(self):\n        return self.plain\n"
+    )
+    chunks = python_chunks(source)
+    assert "Config.get" in chunks
+    assert "Config.cache" not in chunks and "Config.plain" not in chunks
+
+
 def test_python_adapter_resolves_a_symbol_to_what_the_index_holds() -> None:
     # One traversal, so a link cannot point somewhere the index does not know.
     adapter = get_adapter("python")
