@@ -457,6 +457,39 @@ It travels on both surfaces a reader asks from — `revisions.py::_entry` for th
 and `render.py::_history_feed` for the sidecar, each omitting the key entirely when there
 is nothing to say — and `codoc history` echoes it as a `rests on …` line under the reason.
 
+### The prose gate at the agent's door (`mcp/tools._prose_advice`)
+
+`prose.gate` runs at the passes that GENERATE prose, where a defect can be repaired by
+rerunning the call with the critique appended to its volatile tail. The MCP tools had
+neither: no rerun to offer and no check at all — and they are the path a coding agent
+writes through, so an agent answering a comment could put a description that opens on a
+mechanism into the tree uncontested. The second-order cost is the one that matters: the
+author fixes it by hand, and the style memory reads their fix as a preference, so a
+defect codoc could have named is laundered into a lesson about the author's taste.
+
+So the critique goes to the writer instead of to a rerun. `_prose_advice` returns the
+defect lines in the tool result (`propose_add` / `propose_amend` / `attach` in
+`_apply_single`, and per row in `reflect`), and an agent — a model in a loop — can amend
+again immediately. That is the same one repair the generating passes get, arriving
+through the only channel this path has.
+
+It is **advisory**, for `_language_advice`'s reason and one of the gate's own: refusing
+would throw away work the agent has already done and leave the tree describing code that
+has already changed, and a check that can refuse is a check that can lose a whole
+reflection to a rule about dashes. A person's prose is never checked here either — the
+actor is the ledger's own notion of who is writing, the same field `apply_op` asks before
+scoring.
+
+The context both readers use is built once, by `prose.advise`: what the node binds,
+whether it has children, how deep it sits. The scorecard at `apply_op` reads the same
+function, because two builders would drift and drift produces the worst version of both
+failures — an agent told to fix a defect the rate does not count, or a rate counting one
+nobody was told about. Sharing it also gave the scorecard a node's **depth**, which it
+never had: `altitude-too-low` now fires on a theme node that was previously scored as a
+leaf. An ADD has none of this on disk yet, so its bindings come from the op and its depth
+from the parent it names — a proposed root is judged as a root, which is the altitude
+that matters most.
+
 ### What the style memory reads (`loop/voice.py`)
 
 The memory described in CLAUDE.md ("Learning how the author writes") learns from two

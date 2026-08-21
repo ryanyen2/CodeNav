@@ -292,27 +292,16 @@ def apply_op(
 def _record_prose(op: NodeOp, store: Store) -> None:
     """Count this op's prose against the gate's rules, for :func:`prose.defect_rate`.
 
+    The context (what this node binds, whether it has children, how deep it sits) is
+    built by :func:`prose.advise`, which is also what tells an agent what to fix --
+    one builder, so the number and the advice can never describe different nodes.
+
     Advisory throughout: a statistic that can fail a write is worse than no
-    statistic, so every part of this is inside one try. The node's span comes from
-    the store when the feature already exists and from the op itself when it does
-    not, which is the ADD case -- a node being created has no bindings on disk yet,
-    and its op carries exactly the ones it is about to get.
+    statistic, so every part of this is inside one try.
     """
     from codoc.loop import prose
     try:
-        fid = op.feature_id or ""
-        existing = store.get_feature(fid) if fid else None
-        names, kids = None, None
-        if existing:
-            binds = store.bindings_for_feature(fid)
-            names = [f"{b.file} {b.symbol_path}" for b in binds]
-            kids = bool(store.children(fid))
-        findings = prose.review_ops(
-            [op],
-            names_of=(lambda _op: names) if names is not None else None,
-            children_of=(lambda _op: kids) if kids is not None else None,
-        )
-        prose.record(store, checked=1, defects=findings.get(0, ()))
+        prose.record(store, checked=1, defects=prose.advise(store, op))
     except Exception:  # noqa: BLE001 -- a scorecard must never sink a write
         pass
 

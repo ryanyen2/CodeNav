@@ -394,6 +394,27 @@ class TestTheAgentDoorRefusesARestatementToo:
         assert res.get("noop") is not True
         assert res["applied"] is False and res["event_id"]
 
+    def test_a_reflection_drops_the_restatement_and_keeps_the_rest(self, tmp_path):
+        """`reflect` is the door an agent actually uses, and it is where the hole was
+        widest: a change set commonly resubmits the descriptions it did NOT change
+        alongside the one it did, so one call could take several paragraphs over from
+        their author while doing no work on any of them."""
+        from codoc.mcp.tools import reflect
+
+        cd = _workspace(tmp_path)
+        fid = _seed(cd)
+        res = reflect(cd, ops=[
+            {"kind": "amend", "feature_id": fid, "description": _BASE},
+            {"kind": "attach", "feature_id": fid, "binds": ["ledger.py::month_of"]},
+        ], rationale="reflected; the prose was already right")
+
+        assert res["results"][0].get("noop") is True
+        assert res["results"][0]["event_id"] == ""
+        assert res["results"][1]["applied"] is True, "the real op still lands"
+        with open_store(cd) as store:
+            kinds = [e.op.kind for e in store.events_for_feature(fid, limit=99)]
+            assert NodeOpKind.AMEND not in kinds
+
     def test_a_real_amend_through_the_same_door_is_untouched(self, tmp_path):
         from codoc.mcp.tools import propose_amend
 

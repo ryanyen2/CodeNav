@@ -964,6 +964,78 @@ def _same_shape(first: list, second: list | None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Checking one op against a live tree
+# ---------------------------------------------------------------------------
+
+
+def _depth_of(store, feature) -> int:
+    """How far ``feature`` sits below a root, by walking its parents.
+
+    Counted over the store rather than over whatever window a caller happens to
+    hold, for the reason `loop/subtree.py` states: a window's top is not the tree's
+    top, and a depth counted locally would pitch a mid-tree node as a theme. The
+    ``seen`` set is not paranoia about a cycle a schema forbids — it is what keeps a
+    corrupted parent chain from hanging the write boundary this runs at.
+    """
+    seen: set[str] = set()
+    cur, depth = feature.parent_id, 0
+    while cur and cur not in seen:
+        seen.add(cur)
+        depth += 1
+        parent = store.get_feature(cur)
+        cur = parent.parent_id if parent else None
+    return depth
+
+
+def advise(store, op) -> list[Defect]:
+    """Every defect in the prose ``op`` submits, with the node's own altitude in view.
+
+    The one place a live tree is turned into the gate's context, and deliberately
+    shared by its two readers: the scorecard at the write boundary
+    (:func:`codoc.loop.apply._record_prose`) and the advice handed back to an agent
+    (`mcp/tools`). Two builders would drift, and drift here produces the worst
+    version of both failures — an agent asked to fix a defect the rate does not
+    count, or a rate counting one nobody was ever told about.
+
+    Context comes from the STORE, not from the op, because what the reader will meet
+    is the node as it will then exist. The exception is an ADD: a node being created
+    has no bindings, no children and no depth on disk yet, so its op carries the
+    bindings it is about to get, its parent's depth plus one is its depth, and it has
+    nothing under it.
+
+    Altitude is passed here and was not passed by the scorecard before this, which
+    means the rate now sees `altitude-too-low` on a theme node it previously scored
+    as a leaf. That is a correction, not a regression: the register a node owes its
+    reader is part of the contract on both sides (``prompts/style.txt`` Rule 9), and
+    a rate that cannot see a node's height cannot count the defect it most changes.
+    """
+    fid = getattr(op, "feature_id", "") or ""
+    existing = store.get_feature(fid) if fid else None
+    # Kind by its wire value, not by importing NodeOpKind: every other entry point
+    # here reads an op through `getattr`, so the critic stays usable on anything
+    # shaped like one (a bootstrap op has no id, a test op no bindings).
+    raw_kind = getattr(op, "kind", "")
+    is_add = str(getattr(raw_kind, "value", raw_kind)) == "add_node"
+    names = kids = depth = None
+    if existing is not None:
+        names = [f"{b.file} {b.symbol_path}" for b in store.bindings_for_feature(fid)]
+        kids = bool(store.children(fid))
+        depth = _depth_of(store, existing)
+    elif is_add:
+        kids = False
+        parent_id = getattr(op, "parent_id", None)
+        parent = store.get_feature(parent_id) if parent_id else None
+        depth = (_depth_of(store, parent) + 1) if parent is not None else 0
+    findings = review_ops(
+        [op],
+        names_of=(lambda _op: names) if names is not None else None,
+        children_of=(lambda _op: kids) if kids is not None else None,
+        depth_of=(lambda _op: depth) if depth is not None else None,
+    )
+    return list(findings.get(0, ()))
+
+
+# ---------------------------------------------------------------------------
 # The defect rate, as an eval
 # ---------------------------------------------------------------------------
 

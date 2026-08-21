@@ -21,6 +21,7 @@ from pathlib import Path
 from codoc.doclang import (
     detect_prose_language, language_tag_for, prose_letters, workspace_doc_language,
 )
+from codoc.loop import prose
 from codoc.loop.activity import PHASE_DONE, mark_feature_phase
 from codoc.loop.apply import apply_op, restates_current, should_auto_apply
 from codoc.loop.ask import (
@@ -37,6 +38,7 @@ from codoc.loop.inbox import read_verdicts as inbox_read
 from codoc.loop.locks import loop_lock
 from codoc.loop.reconcile import safe_write_tree
 from codoc.model.event import (
+    ACTOR_HUMAN,
     LOOP_A_AGENT_SOURCE,
     PLAN_SOURCE,
     NodeOp,
@@ -347,6 +349,43 @@ def _language_advice(store: Store, op: NodeOp, default) -> str | None:
             f"their original form; identifiers and paths always do")
 
 
+def _prose_advice(store: Store, op: NodeOp) -> dict | None:
+    """What the prose gate finds in prose an AGENT just submitted, or None.
+
+    The gate runs at the passes that GENERATE prose, where a defect can be repaired by
+    rerunning the call with the critique appended. Nothing ran on this path, and this is
+    the path a coding agent writes through -- so an agent answering a comment could put
+    a description that opens on a mechanism into the tree, uncontested. That costs twice
+    over, and the second cost is the expensive one: the author fixes it by hand, and the
+    style memory reads their fix as a preference (:mod:`codoc.loop.voice`). A defect we
+    could have named is laundered into a lesson about the author's taste.
+
+    So the critique is handed to the writer instead of to a rerun. An agent is a model
+    in a loop and can amend again immediately, which is the same repair the generating
+    passes get, arriving through the one channel this path has.
+
+    **Advisory, for `_language_advice`'s reason and one of its own.** Refusing would
+    throw away work the agent has already done and leave the tree describing code that
+    has already changed, which is worse than one awkward paragraph. And a gate that can
+    refuse is a gate that can lose a whole reflection to a rule about dashes -- the
+    property :mod:`codoc.loop.prose` was built around, and it would be odd to abandon it
+    at the one door where the writer is most able to comply.
+
+    A person's prose is never checked, here as everywhere: an author who writes a dash
+    is not committing a defect. The actor is the ledger's own notion of who is writing,
+    so this asks the same question `apply_op` asks before scoring.
+    """
+    findings = prose.advise(store, op)
+    if not findings:
+        return None
+    return {
+        "defects": [d.line() for d in findings],
+        "fix": ("amend this node again with prose that answers these -- the write is "
+                "recorded either way, so nothing is lost by leaving it, and nothing is "
+                "spent by fixing it now while you still have the code in view"),
+    }
+
+
 def _dead_refs(codoc_dir: str) -> list[dict]:
     """Unresolved inline ``codoc:`` refs from the cross-reference registry.
 
@@ -573,6 +612,10 @@ def _apply_single(codoc_dir: str, op: NodeOp, *, source: str,
         warning = _language_advice(store, op, workspace_doc_language(codoc_dir))
         if warning:
             out["warning"] = warning
+        if actor != ACTOR_HUMAN:
+            advice = _prose_advice(store, op)
+            if advice:
+                out["prose"] = advice
         return out
 
 
@@ -602,7 +645,11 @@ def propose_add(codoc_dir: str, *, title: str, description: str = "",
                 actor: str = "", after_id: str = "", before_id: str = "") -> dict:
     """``after_id``/``before_id`` name the siblings the new node goes between — the same
     identity-anchored ordering a human drag emits. Both empty means no opinion, which
-    appends (every caller's behaviour before ordering existed)."""
+    appends (every caller's behaviour before ordering existed).
+
+    A ``prose`` key in the result is the style critic naming what it found in the
+    description you just submitted (see `_prose_advice`). The write is already recorded;
+    amending again is optional and cheap while you still have the code in view."""
     op = NodeOp(kind=NodeOpKind.ADD_NODE, title=title, description=description,
                 parent_id=parent_id, bindings=_parse_binds(binds),
                 rationale=rationale, realized=realized,
@@ -631,6 +678,10 @@ def propose_amend(codoc_dir: str, *, feature_id: str, title: str | None = None,
     most tasks change what an existing feature does. Before ``builds`` existed there was
     no way to say it: every amend was read as a reflection, so accepting a plan made
     entirely of amends queued nothing and the session had nothing to resume from.
+
+    Two keys may come back beside the result. ``prose`` is the style critic on what you
+    submitted (`_prose_advice`); ``noop: true`` means the tree already said this, so
+    nothing was recorded — see `apply.restates_current`.
     """
     op = NodeOp(kind=NodeOpKind.AMEND, feature_id=feature_id, title=title,
                 description=description, rationale=rationale,
@@ -688,6 +739,10 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
     ``after_id``/``before_id`` (add_node / move_node) name the siblings the node goes
     between. They used to be dropped here, which silently made every agent-side move an
     append — the one tree gesture a human could make and an agent could not.
+
+    A row may carry ``prose`` (the style critic on that op's description) or
+    ``noop: true`` (the tree already said this, so nothing was recorded). Both are per
+    op, because a change set is judged one node at a time.
     """
     results: list[dict] = []
     applied_ops: list[NodeOp] = []
@@ -728,6 +783,19 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
                 results.append(_err(f"unknown parent_id {op.parent_id!r}"))
                 continue
 
+            # The same restatement drop `_apply_single` makes, at the path an agent
+            # actually reflects a whole change set through. Missing it here left the
+            # hole open where it is widest: a reflection commonly resubmits a
+            # description it did not change alongside the ones it did, and each of
+            # those would take the paragraph over from its author (see
+            # `apply.restates_current`).
+            if restates_current(op, store):
+                results.append({"ok": True, "event_id": "", "applied": False,
+                                "noop": True,
+                                "summary": "the tree already says this "
+                                           "-- nothing recorded"})
+                continue
+
             op_cause = raw.get("caused_by") or caused_by
             op_own = own_holds
             if op_cause != caused_by:
@@ -745,6 +813,10 @@ def reflect(codoc_dir: str, *, ops: list[dict], rationale: str = "",
             if warning:
                 row["warning"] = warning
                 mismatches += 1
+            if actor != ACTOR_HUMAN:
+                advice = _prose_advice(store, op)
+                if advice:
+                    row["prose"] = advice
             results.append(row)
         _close_satisfied_queue(codoc_dir, store)
         wrote = safe_write_tree(store, codoc_dir)

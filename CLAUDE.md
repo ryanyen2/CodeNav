@@ -314,6 +314,13 @@ node, and four title rules.
 caller remembered to call it, and `apply_op` is the one boundary every writer crosses.
 `codoc status` prints it once something has been checked.
 
+**An agent gets the critique instead of a rerun.** The MCP write tools cannot repeat
+their own call, so `mcp/tools._prose_advice` returns the defects in the tool result
+(`prose` key, per op in `reflect`) and the agent can amend again — advisory, so the
+write always lands. Both readers share one context builder, `prose.advise`, or the
+number and the advice would describe different nodes. See `docs/architecture.md`, "The
+prose gate at the agent's door".
+
 Four properties are load-bearing:
 
 - **A repair is the same call with the critique appended to the VOLATILE tail.** No
