@@ -277,20 +277,25 @@ class TypeScriptAdapter:
         chunks: list[Chunk] = []
         _extract_chunks_recursive(tree.root_node, source_bytes, file, "", chunks)
 
-        # Merge multiple __module__ chunks.
-        module_chunks = [c for c in chunks if c.symbol_path.endswith("::__module__")]
+        # The module chunk is the glue between the declarations, so it is the
+        # CONCATENATION of the top-level runs and not the span from the first to
+        # the last. Spanning them put every function and class in the file inside
+        # the module chunk as well, so a one-line edit to any of them changed the
+        # module's own fingerprint too — one edit reported as two changes, in the
+        # feature that had least to do with it.
+        module_chunks = sorted(
+            (c for c in chunks if c.symbol_path.endswith("::__module__")),
+            key=lambda c: c.start_byte,
+        )
         other_chunks = [c for c in chunks if not c.symbol_path.endswith("::__module__")]
         if module_chunks:
-            merged_start = min(c.start_byte for c in module_chunks)
-            merged_end = max(c.end_byte for c in module_chunks)
-            merged_source = source_bytes[merged_start:merged_end].decode("utf-8", errors="replace")
             other_chunks.append(
                 Chunk(
                     symbol_path=f"{file}::__module__",
                     file=file,
-                    start_byte=merged_start,
-                    end_byte=merged_end,
-                    source=merged_source,
+                    start_byte=module_chunks[0].start_byte,
+                    end_byte=module_chunks[-1].end_byte,
+                    source="\n\n".join(c.source for c in module_chunks),
                 )
             )
         return other_chunks

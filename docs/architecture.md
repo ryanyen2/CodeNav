@@ -80,6 +80,63 @@ this repo before this). `update_index` ends with
 `optimize(cleanup_older_than=30min)` (~40ms steady-state, 30-min retention per
 lancedb#3086) to keep the index at live-data size.
 
+### What gets an address (`lang/python.py`)
+
+`(file, symbol_path)` is the whole system's address: the LanceDB chunk id, the
+`compute_changeset` key, and the `UNIQUE(file, symbol_path)` binding key. A named
+entity with no address cannot be cited, bound, or described; two entities sharing
+one address silently become one. So the Python walk owes two guarantees, and used
+to give neither.
+
+- **Every definition in the namespace gets one.** `if` / `try` / `with` / `for` /
+  `while` / `match` do not open a Python scope, so a `def` inside one binds the
+  *enclosing* namespace: `loads` in an `except ImportError:` fallback is
+  `file.py::loads`, full stop. The walk used to read direct children only, which
+  left every compat shim, optional-dependency fallback, `if TYPE_CHECKING:`
+  protocol and version branch with no address of its own — swallowed whole into
+  `__module__`, where nothing could cite them. `_TRANSPARENT` names those
+  statements and `_same_scope_defs` descends them, stopping at each definition.
+- **One name, one address.** Keying by qualified name alone is not enough when a
+  name is defined more than once: `@overload` stubs, a property and its setter, a
+  version-branched pair. Whichever piece the walk emitted last won, so an
+  overloaded function was routinely indexed as its first empty stub and described
+  as doing nothing. Pieces are now collected per name and **joined** — the sources
+  concatenated, `start_byte`/`end_byte` spanning them. `test/altair` had 517
+  definitions landing on an occupied address before this and has none now.
+
+Two consequences worth stating, because both are load-bearing:
+
+**The guard IS the definition.** When a transparent statement's definitions all
+carry one name, the *statement* is the chunk — `try: from fast import loads /
+except ImportError: def loads…` is one entity whose source includes both branches.
+"Only when `fast` is missing" is not a detail a faithful description may lose, and
+handing the branches out separately would have made two entities where the code
+has one.
+
+**Join, don't span.** A property's accessors often sit either side of an unrelated
+method. Spanning first→last would put that method inside the property's chunk, so
+editing the neighbour would report the property as changed. Concatenation keeps
+the chunk to what the entity actually is; `tokens_hash`/`types_hash`
+(`core/tree_walk.py`) are computed from a chunk's `source`, so a joined source is
+a legitimate input.
+
+`__module__` follows from the same rule: it is the **glue** — the concatenated
+top-level runs that define nothing — not the span from the first statement to the
+last. Spanning made it the whole file, so a one-line edit to any function changed
+the module feature's fingerprint too: one edit reported as two changes, the second
+in the feature with least to do with it. (`lang/typescript.py` had the identical
+defect and the identical fix; only the Python adapter needed the walk rewritten.)
+`resolve_symbol_path` now delegates to `extract_chunks` rather than re-deriving
+spans, so a `codoc:` link cannot resolve somewhere the index does not know.
+
+**Existing workspaces see a one-time fingerprint wave.** `__module__` and every
+merged name change hash, so the first pass after this re-reflects prose that was
+written from an incomplete view of the code — which is the point. A file that is
+*entirely* one guarded definition (`test/altair/jupyter/__init__.py`) loses its
+`__module__` address, and its binding survives by relocation: the old `__module__`
+source equals the new named chunk's, so `_detect_relocations` pairs them on
+`tokens_hash` and re-attaches.
+
 ## Loop A in detail (code → codoc)
 
 `compute_changeset` (`loop/diff.py`) diffs two index snapshots keyed by

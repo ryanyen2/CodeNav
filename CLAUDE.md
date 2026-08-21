@@ -422,6 +422,13 @@ mcp/         # codoc MCP server (FastMCP, stdio): tools.py + server.py (codoc-mc
 serve/       # the deployed hub (codoc serve) — see docs/architecture.md + serve-deployment.md
 codoc_file/  # render.py (store → tree.codoc + sidecar), parse.py, diff.py (→ user ops)
 lang/        # tree-sitter adapters: python.py + typescript.py  [KEPT]
+             #   they decide what gets an ADDRESS — see docs/architecture.md,
+             #   "What gets an address": every definition in the namespace gets
+             #   one (a `def` in an `except` branch binds the module, so it is
+             #   file.py::loads), one name gets exactly one (overloads and a
+             #   property's accessors are JOINED, not last-wins), the guard a
+             #   definition exists under is part of the definition, and
+             #   __module__ is the glue between declarations, not the whole file
              #   (PROGRAMMING languages — not doclang.py, see below)
 doclang.py   # the AUTHORING language of the tree: profiles + the prompt directive,
              #   the .codoc/config.json setting, and the script-aware text helpers

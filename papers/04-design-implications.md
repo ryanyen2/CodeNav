@@ -274,13 +274,17 @@ nothing recorded a reason at all.
    in the generated tree.
 2. **Edit-distance cost trend** — for descriptions a human later edited, the
    normalized distance between what codoc wrote and what the human left. Falling
-   over time is the claim that the style memory works.
+   over time is the claim that the style memory works. Wired (A):
+   `loop/voice.py::edit_cost_trend` computes it from the edit records the style
+   memory already keeps, and `codoc voice` prints it through `render_trend`, so
+   this one also accrues from ordinary use.
 3. **Prose gate defect rate** — how often a fresh sample trips the critic. A
    proxy for readability that needs no human in the loop. Wired (B): recorded at
    `apply_op` and read back by `codoc status`, so the number accrues from ordinary
    use rather than from a benchmark run.
 
-**Blocked on credit, not on code.** (1) and (2) need real model passes and the
-OpenAI balance is exhausted, so `tests/loop/test_end_to_end.py` and
-`tests/bdd/test_e2e_userflows.py` fail on a 429 today. Everything deterministic is
-green, and (3) needs no model at all.
+**Blocked on credit, not on code.** Only (1) needs real model passes — it has to
+generate a tree for a repo it has never seen — and the OpenAI balance is exhausted,
+so `tests/loop/test_end_to_end.py` and `tests/bdd/test_e2e_userflows.py` fail on a
+429 today. (2) and (3) are wired and need no benchmark run: both read what ordinary
+use already records. Everything deterministic is green.

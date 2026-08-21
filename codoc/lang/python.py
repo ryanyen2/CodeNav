@@ -84,6 +84,84 @@ def _module_assignment_name(node: ts.Node) -> str | None:
     return None
 
 
+_DEF_KINDS = {"function_definition", "class_definition"}
+
+# Statements that hold definitions WITHOUT opening a scope. A `def` inside an
+# `if` or an `except` branch binds the same namespace as one at the top of the
+# file — `loads` in an optional-dependency fallback is still `file.py::loads` —
+# and real Python keeps a great deal of code there: compat shims, `try/except
+# ImportError` fallbacks, `if TYPE_CHECKING` protocols, version branches.
+# Walking only direct children left every one of those with no address of its
+# own: unbindable, undescribable, and swallowed whole into `__module__`.
+_TRANSPARENT = {
+    "if_statement", "elif_clause", "else_clause",
+    "try_statement", "except_clause", "except_group_clause", "finally_clause",
+    "with_statement", "for_statement", "while_statement",
+    "match_statement", "case_clause", "block",
+}
+
+
+def _peel(node: ts.Node) -> tuple[ts.Node, ts.Node] | None:
+    """``(chunk node, definition node)`` if *node* defines a function or class.
+
+    The two differ for a decorated definition: the chunk is the whole
+    ``decorated_definition`` (a decorator is part of what the entity IS), while
+    the name and the body come from the definition inside it.
+    """
+    if node.type in _DEF_KINDS:
+        return node, node
+    if node.type == "decorated_definition":
+        inner = next((c for c in node.children if c.type in _DEF_KINDS), None)
+        return (node, inner) if inner is not None else None
+    return None
+
+
+def _same_scope_defs(node: ts.Node) -> list[tuple[ts.Node, ts.Node]]:
+    """Definitions *node* contributes to its ENCLOSING scope, in source order.
+
+    Descends through transparent statements only, and stops at every definition
+    it finds — a nested `def` inside a conditionally defined function belongs to
+    that function's scope, not to this one.
+    """
+    found: list[tuple[ts.Node, ts.Node]] = []
+    for child in node.children:
+        peeled = _peel(child)
+        if peeled is not None:
+            found.append(peeled)
+        elif child.type in _TRANSPARENT:
+            found.extend(_same_scope_defs(child))
+    return found
+
+
+def _line_start(source_bytes: bytes, pos: int) -> int:
+    """*pos* moved back over its line's leading whitespace, if that is all of it.
+
+    A definition node starts at its ``def`` or its ``@``, so a nested one arrives
+    already stripped of the indentation its body still carries. Harmless for a
+    single piece; for several joined together it would make every piece after the
+    first read as though it were dedented on its opening line alone.
+    """
+    start = source_bytes.rfind(b"\n", 0, pos) + 1
+    return start if not source_bytes[start:pos].strip() else pos
+
+
+def _text(source_bytes: bytes, spans: list[tuple[int, int]]) -> str:
+    """The text of *spans*: one is sliced whole, several are joined.
+
+    Joined rather than spanned from first to last, because the definitions of one
+    name are not always adjacent — a property's getter and its setter can sit
+    either side of three other methods, and a span would swallow those into this
+    chunk as well, so editing one of them would read as a change to this one.
+    Dropping the gaps keeps a chunk's source to the code it is actually about.
+    """
+    if len(spans) == 1:
+        start, end = spans[0]
+        return source_bytes[start:end].decode("utf-8", errors="replace")
+    parts = [source_bytes[spans[0][0]:spans[0][1]]]
+    parts += [source_bytes[_line_start(source_bytes, start):end] for start, end in spans[1:]]
+    return "\n\n".join(part.decode("utf-8", errors="replace") for part in parts)
+
+
 def _extract_chunks_recursive(
     node: ts.Node,
     source_bytes: bytes,
@@ -91,115 +169,124 @@ def _extract_chunks_recursive(
     prefix: str,
     chunks: list[Chunk],
 ) -> None:
-    """Walk *node*'s direct children and emit Chunks for definitions.
+    """Walk one scope's statements and emit a Chunk per named entity.
 
     prefix  – dot-separated qualified name of the enclosing scope, e.g. "MyClass"
                or "" for module scope.
-    Consecutive non-definition sibling nodes at module scope are collected into a
-    single __module__ chunk.  Inside a class body they are skipped (we only care
-    about methods / nested classes).
+    Definitions inside transparent statements (`if`, `try`, …) belong to THIS
+    scope and are collected here. At module scope, the statements that define
+    nothing accumulate into runs that become the single `__module__` chunk; a
+    class body has no such chunk (only its methods and nested classes matter).
     """
-    definition_kinds = {"function_definition", "class_definition", "decorated_definition"}
     is_module_scope = prefix == ""
+    module_runs: list[tuple[int, int]] = []
+    run: list[int] | None = None
+    # (qualified name, start, end) in source order; merged by name at the end.
+    pieces: list[tuple[str, int, int]] = []
 
-    module_start: int | None = None
-    module_end: int | None = None
+    def close_run() -> None:
+        nonlocal run
+        if run is not None:
+            module_runs.append((run[0], run[1]))
+            run = None
 
-    def flush_module_chunk() -> None:
-        nonlocal module_start, module_end
-        if module_start is not None and module_end is not None:
-            raw = source_bytes[module_start:module_end].decode("utf-8", errors="replace")
-            chunks.append(
-                Chunk(
-                    symbol_path=f"{file}::__module__",
-                    file=file,
-                    start_byte=module_start,
-                    end_byte=module_end,
-                    source=raw,
-                )
-            )
-        module_start = None
-        module_end = None
+    def recurse_class(def_node: ts.Node, qualified: str) -> None:
+        if def_node.type != "class_definition":
+            return
+        body = next((c for c in def_node.children if c.type == "block"), None)
+        if body is not None:
+            _extract_chunks_recursive(body, source_bytes, file, qualified, chunks)
 
-    # Choose the right child list: blocks wrap their children in one level.
-    children = node.children
+    def emit(chunk_node: ts.Node, def_node: ts.Node) -> None:
+        name = _node_name(def_node)
+        if name is None:
+            return
+        qualified = f"{prefix}.{name}" if prefix else name
+        pieces.append((qualified, chunk_node.start_byte, chunk_node.end_byte))
+        recurse_class(def_node, qualified)
 
-    for child in children:
-        # decorated_definition wraps the real function/class — peel it.
-        is_decorated = child.type == "decorated_definition"
-        if is_decorated:
-            effective_type = "decorated_definition"
-        else:
-            effective_type = child.type
+    for child in node.children:
+        peeled = _peel(child)
+        if peeled is not None:
+            close_run()
+            emit(*peeled)
+            continue
 
-        if effective_type in definition_kinds:
-            if is_module_scope:
-                flush_module_chunk()
-
-            # Resolve the inner function_definition / class_definition node.
-            if is_decorated:
-                inner = next(
-                    (c for c in child.children if c.type in {"function_definition", "class_definition"}),
-                    None,
-                )
-                if inner is None:
-                    continue
-                def_node = inner
-            else:
-                def_node = child
-
-            entity_name = _node_name(def_node)
-            if entity_name is None:
-                continue
-
-            qualified = f"{prefix}.{entity_name}" if prefix else entity_name
-            sym_path = f"{file}::{qualified}"
-
-            raw = source_bytes[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
-            chunks.append(
-                Chunk(
-                    symbol_path=sym_path,
-                    file=file,
-                    start_byte=child.start_byte,
-                    end_byte=child.end_byte,
-                    source=raw,
-                )
-            )
-
-            # Recurse into the body of the class or function.
-            if def_node.type == "class_definition":
-                body = next((c for c in def_node.children if c.type == "block"), None)
-                if body is not None:
-                    _extract_chunks_recursive(body, source_bytes, file, qualified, chunks)
-
-        else:
-            # Non-definition node at module scope.
-            if is_module_scope and child.type not in {"comment", "newline", ""}:
-                # Emit simple public assignments (NAME = ...) as named chunks so
-                # features can bind to specific module-level constructs.
-                assign_name = _module_assignment_name(child)
-                if assign_name:
-                    flush_module_chunk()
-                    raw = source_bytes[child.start_byte:child.end_byte].decode(
-                        "utf-8", errors="replace"
-                    )
-                    chunks.append(
-                        Chunk(
-                            symbol_path=f"{file}::{assign_name}",
-                            file=file,
-                            start_byte=child.start_byte,
-                            end_byte=child.end_byte,
-                            source=raw,
-                        )
-                    )
+        if child.type in _TRANSPARENT:
+            inner = _same_scope_defs(child)
+            if inner:
+                close_run()
+                names = {_node_name(d) for _, d in inner}
+                if len(names) == 1 and None not in names:
+                    # The guard IS the definition. One name defined under a
+                    # condition — `if sys.version_info >= (3, 12)` with a fallback
+                    # in the `else`, a `try` import with a pure-python `except`
+                    # branch — is one entity, and the whole statement is its chunk,
+                    # so a reader keeps the condition it exists under instead of
+                    # one arbitrary branch stripped of its guard.
+                    only = str(names.pop())
+                    qualified = f"{prefix}.{only}" if prefix else only
+                    pieces.append((qualified, child.start_byte, child.end_byte))
+                    for _, def_node in inner:
+                        recurse_class(def_node, qualified)
                 else:
-                    # Imports, augmented assignments, patterns → __module__ run.
-                    if module_start is None:
-                        module_start = child.start_byte
-                    module_end = child.end_byte
+                    # Several names under one guard: no single entity to give the
+                    # statement to, so each definition keeps its own address and
+                    # the guard is simply not part of any chunk.
+                    for peeled_inner in inner:
+                        emit(*peeled_inner)
+                continue
+            # Defines nothing → ordinary module glue, handled below.
 
-    if is_module_scope:
-        flush_module_chunk()
+        if is_module_scope and child.type not in {"comment", "newline", ""}:
+            assign_name = _module_assignment_name(child)
+            if assign_name:
+                # A public module-level constant is its own bindable entity.
+                close_run()
+                pieces.append((assign_name, child.start_byte, child.end_byte))
+            else:
+                if run is None:
+                    run = [child.start_byte, child.end_byte]
+                else:
+                    run[1] = child.end_byte
+    close_run()
+
+    # One qualified name, one address. Real Python defines a name several times in
+    # one scope — `@overload` stubs before the implementation, a property and its
+    # setter, an `if`/`else` pair — and `(file, symbol_path)` is the index key, the
+    # chunk id, and the UNIQUE binding key. Those definitions used to collapse to
+    # whichever came first, so an overloaded function was indexed as its empty
+    # signature stub and described from it. All the definitions of one name are ONE
+    # chunk: the address stays stable when an overload is added, and the hash moves
+    # when any part of the entity moves.
+    by_name: dict[str, list[tuple[int, int]]] = {}
+    for qualified, start, end in pieces:
+        by_name.setdefault(qualified, []).append((start, end))
+    for qualified, spans in by_name.items():
+        chunks.append(
+            Chunk(
+                symbol_path=f"{file}::{qualified}",
+                file=file,
+                start_byte=spans[0][0],
+                end_byte=spans[-1][1],
+                source=_text(source_bytes, spans),
+            )
+        )
+
+    if is_module_scope and module_runs:
+        # The module chunk is the glue and nothing else. It used to span from the
+        # first top-level statement to the last, which put every constant and every
+        # conditionally defined function inside it as well — so editing one line of
+        # a function marked the module's own feature changed too.
+        chunks.append(
+            Chunk(
+                symbol_path=f"{file}::__module__",
+                file=file,
+                start_byte=module_runs[0][0],
+                end_byte=module_runs[-1][1],
+                source=_text(source_bytes, module_runs),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -214,76 +301,38 @@ class PythonAdapter:
     # ------------------------------------------------------------------
 
     def extract_chunks(self, file: str, source: str) -> list[Chunk]:
+        """Every chunk this file contributes, one per named entity, no repeats.
+
+        Uniqueness of ``(file, symbol_path)`` is a guarantee of the walk rather
+        than an accident of the code being simple: same-name definitions are
+        merged in the scope that holds them (see ``_extract_chunks_recursive``).
+        """
         source_bytes = source.encode("utf-8")
         tree = self.parse(source)
         chunks: list[Chunk] = []
         _extract_chunks_recursive(tree.root_node, source_bytes, file, "", chunks)
-        # De-duplicate __module__ chunks (merge all into one).
-        module_chunks = [c for c in chunks if c.symbol_path.endswith("::__module__")]
-        other_chunks = [c for c in chunks if not c.symbol_path.endswith("::__module__")]
-        if module_chunks:
-            merged_start = min(c.start_byte for c in module_chunks)
-            merged_end = max(c.end_byte for c in module_chunks)
-            merged_source = source_bytes[merged_start:merged_end].decode("utf-8", errors="replace")
-            other_chunks.append(
-                Chunk(
-                    symbol_path=f"{file}::__module__",
-                    file=file,
-                    start_byte=merged_start,
-                    end_byte=merged_end,
-                    source=merged_source,
-                )
-            )
-        return other_chunks
+        return chunks
 
     @property
     def comment_node_kinds(self) -> set[str]:  # type: ignore[override]
         return {"comment"}
 
     def resolve_symbol_path(self, source: str, symbol_path: str) -> tuple[int, int] | None:
-        """Resolve "file.py::ClassName.method" → (start_byte, end_byte)."""
-        if "::" in symbol_path:
-            qualified = symbol_path.split("::", 1)[1]
-        else:
-            qualified = symbol_path
+        """Resolve "file.py::ClassName.method" → the byte range of that entity.
 
-        parts = qualified.split(".")
-        tree = self.parse(source)
-
-        def search(node: ts.Node, remaining: list[str]) -> tuple[int, int] | None:
-            if not remaining:
-                return None
-            target = remaining[0]
-            rest = remaining[1:]
-
-            for child in node.children:
-                # decorated_definition wraps function/class
-                effective = child
-                if child.type == "decorated_definition":
-                    inner = next(
-                        (c for c in child.children if c.type in {"function_definition", "class_definition"}),
-                        None,
-                    )
-                    if inner is not None:
-                        effective = inner
-                    else:
-                        continue
-
-                if effective.type in {"function_definition", "class_definition"}:
-                    name_node = next((c for c in effective.children if c.type == "identifier"), None)
-                    if name_node and name_node.text.decode("utf-8", errors="replace") == target:
-                        if not rest:
-                            return (child.start_byte, child.end_byte)
-                        # Dig into the block
-                        body = next((c for c in effective.children if c.type == "block"), None)
-                        if body is not None:
-                            result = search(body, rest)
-                            if result is not None:
-                                return result
-
-            return None
-
-        return search(tree.root_node, parts)
+        Answered by extracting the file's chunks and looking the address up, so
+        this cannot disagree with what the index holds: a conditionally defined
+        function resolves to the statement that defines it, and a name with
+        several definitions resolves to the range that holds them all. It used to
+        walk the tree itself, one level of direct children at a time — a second,
+        subtly different traversal that missed everything the walk above exists
+        to find.
+        """
+        qualified = symbol_path.split("::", 1)[1] if "::" in symbol_path else symbol_path
+        for chunk in self.extract_chunks("", source):
+            if chunk.symbol_path == f"::{qualified}":
+                return (chunk.start_byte, chunk.end_byte)
+        return None
 
     def run_ts_query(
         self, source: str, query_str: str,
