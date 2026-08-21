@@ -2,6 +2,15 @@
 //
 //   node scripts/pilot-run.mjs p-pilot0000001
 //
+// The code you pass has to be a participant code that already exists in the
+// dashboard, because the rules only accept a write under a code an experimenter
+// created. Passing the example code above, which nobody has created, gets every
+// write refused with a 403 and a message about permissions, and the message says
+// nothing about the code being the reason. If you want the whole chain checked
+// without spending a code at all, the emulator suites do that, and
+// `npm run test:mirror` is the one that runs this same mirror against these same
+// rules.
+//
 // What this actually exercises: raw logger events of exactly the shape the VS
 // Code extension writes, through the REAL classifier and sequence builder, out
 // through the REAL mirror to production Firestore, and back through the export.
@@ -118,7 +127,7 @@ async function mirrorOne(code, condition, raw) {
     await mirror.start();
     await mirror.flush(true);
     await mirror.stop();
-    return { logPath, problems, dir };
+    return { logPath, problems };
 }
 
 async function main() {

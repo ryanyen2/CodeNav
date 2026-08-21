@@ -6,6 +6,18 @@
 //
 //   npm test          (starts the emulator, runs this, shuts it down)
 //
+// The emulator is a Java program, so it will not start unless `java` is on the
+// PATH, and on a Mac where openjdk came from Homebrew it is not, because Homebrew
+// keeps that formula out of the way of the system one. The four suites that need
+// the emulator, meaning this one and mirror-integration and dashboard and export,
+// all run once you put it there first:
+//
+//   export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
+//
+// If you skip that, the failure reads as though Java is not installed at all,
+// which sent one session's worth of work down the wrong path, so it is written
+// down here rather than rediscovered.
+//
 // The threat model is small and specific. Participant codes are long and random
 // and are the write credential. Anyone holding a code can append to that one
 // participant's stream, which is bounded and visible. Nobody can read anyone
