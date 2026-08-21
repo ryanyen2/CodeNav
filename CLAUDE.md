@@ -444,6 +444,11 @@ doclang.py   # the AUTHORING language of the tree: profiles + the prompt directi
              #   the .codoc/config.json setting, and the script-aware text helpers
              #   (norm_key / terms / tokens / clause_chars / char_budget) that the
              #   loop's lexical heuristics use instead of Latin-only regexes
+settings_files.py  # a SETTINGS file as addressable chunks (toml/yaml/json/ini), so a
+             #   decision that moved out of the code can still be named: a section is
+             #   a chunk and a nested section is its member (rules.toml::periods.week),
+             #   its comments come with it, and identity is the parsed key/value pairs
+             #   so a formatter cannot wake Loop A. Not a lang/ adapter — no functions.
 core/        # tree_walk.py — tokens_hash/types_hash identity signals  [KEPT substrate]
 pipelines/indexing/  # cocoindex_app.py, update_index(), read_all_chunks()  [KEPT]
              #   gate.py — whether a LARGE file holds intent, decided by its parse

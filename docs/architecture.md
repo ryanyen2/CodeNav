@@ -553,6 +553,53 @@ update, per-file bootstrap) default to the fast model tier (`fast_llm_config`,
 `CODOC_MODEL_FAST`); `run_agent` memoizes parsed responses (bounded LRU) so a
 crash-replayed / re-issued identical pass doesn't re-bill.
 
+## Settings files (`codoc/settings_files.py`)
+
+A codebase moves a constant out of a module and into `rules.toml` precisely BECAUSE the
+value matters to somebody who is not reading the source — the same reason a feature tree
+exists. So the moment a decision becomes worth configuring is the moment codoc goes quiet
+about it: the walk covers `**/*.py` and `**/*.ts`, so the pass that described the feature
+had the code that READS the setting and never the file that SETS it, and it wrote the
+mechanism because the mechanism was all it was shown ("The month threshold is read from
+rules.toml").
+
+A settings file has no functions, so this is not a tree-sitter adapter and does not live
+in `codoc/lang/` (which is *programming* languages). What it shares with an adapter is the
+only thing the pipeline needs — a file becomes named, addressable pieces:
+
+- **A chunk is a section; a nested section is its member.** `[periods]` is
+  `rules.toml::periods`, `[periods.week]` is `rules.toml::periods.week` — the same
+  owner/member relation a class and its methods have, so everything downstream that reads
+  a dotted symbol path (the prompt's binding rule, the per-pass budget's split by
+  top-level owner in `loop/payload.py`) works on settings unchanged. Keys before the first
+  section are the file's own, under `::__module__`, the name the code walk already uses.
+- **The comments come with the section.** In code the reasoning is in the docstring; in a
+  settings file it is the `#` run directly above the key, and it is the part a description
+  most wants to quote. The run is floored by the previous header, so no run is claimed
+  twice and a reason is never attributed to the decision above the one it explains.
+- **Identity is the parsed key/value pairs, sorted** (`hashes`), not the text.
+  Fingerprinting decides whether Loop A wakes at all, so a formatter that reorders two
+  keys or reflows a comment must not read as a policy change, while `month = "made"`
+  becoming `"posted"` must. The two signals keep the meaning they have for code:
+  `tokens_hash` covers keys AND values, `types_hash` the key paths alone — the file's
+  shape, which a rename moves and a re-tuning does not. A fragment that does not parse
+  falls back to its words, exactly as `core/tree_walk` does, because a half-written
+  settings file is a state a person passes through.
+- **A line is the unit.** Minified JSON, whose keys share one line, is therefore not
+  addressable by section and comes back as the whole file — naming it after its last key
+  would be worse than naming it after the file.
+
+Four formats, because they are what a Python repo's decisions live in. TOML, JSON and INI
+come from the standard library; YAML needs PyYAML, which codoc does not depend on, so a
+repo without it has no YAML support rather than a broken import. `available_formats`
+reports that, since a file the walk skipped and a file that does not exist must not look
+the same.
+
+`NOT_INTENT` (`pyproject.toml`, lock files, `tsconfig.json`, …) is a **backstop, not the
+selection rule**: those files are machinery, generated or dictated by a tool, and a tree
+that described them would spend its first nodes on the build. Which settings files enter
+the index at all is decided by the code that READS them.
+
 ## Doc language — the language the tree is AUTHORED in (`doclang.py`)
 
 Two different things are called "language" here, and confusing them costs an
