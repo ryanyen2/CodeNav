@@ -293,3 +293,33 @@ def test_realized_features_carry_no_planned_marker(store):
 
     assert "planned" not in next(e for e in subtree if e["id"] == feat.id)
     assert "planned" not in next(t for t in all_titles if t["id"] == feat.id)
+
+
+# ---------------------------------------------------------------------------
+# Altitude travels with the node (Section C)
+# ---------------------------------------------------------------------------
+# The register a description should be written in depends on where the node sits, so
+# the payload has to say where that is. Derived over the WHOLE feature list and not
+# the window: a depth counted inside the sent subtree is short by whatever was cut
+# above it, and the model would then pitch a mid-tree node as a top-level theme.
+
+def test_a_subtree_entry_states_its_own_altitude(store):
+    top = Feature(title="Theme")
+    store.upsert_feature(top)
+    mid = Feature(title="Middle", parent_id=top.id)
+    store.upsert_feature(mid)
+    leaf = Feature(title="Leaf", parent_id=mid.id)
+    store.upsert_feature(leaf)
+    for file, sym in (("a.py", "a.py::one"), ("b.py", "b.py::two")):
+        store.upsert_binding(Binding(feature_id=leaf.id, file=file, symbol_path=sym,
+                                     fingerprint="h1"))
+
+    cs = _make_changeset(modified=[ChunkRef("a.py", "a.py::one", "h2", "")])
+    subtree, _titles, _ctx = select_relevant_subtree(cs, store)
+    rows = {e["title"]: e for e in subtree}
+
+    assert rows["Leaf"]["depth"] == 2
+    assert rows["Leaf"]["children"] == 0
+    assert rows["Leaf"]["spans_files"] == 2
+    # The parent arrived through the 1-hop expansion, with its real depth on it.
+    assert rows["Middle"]["depth"] == 1 and rows["Middle"]["children"] == 1

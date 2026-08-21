@@ -26,7 +26,8 @@ pip install -e '.[serve]'   # + the deployed hub (fastapi/uvicorn/sse-starlette)
 # Five core CLI commands
 codoc init                  # index repo, propose initial tree, write .codoc/tree.codoc
 codoc watch                 # the daemon: run both loops as you edit code / tree.codoc
-codoc status                # feature count, pending proposals, recent activity
+codoc status                # feature count, pending proposals, recent activity, and what
+                            #   the prose gate has been finding in prose CODOC wrote
 codoc sync                  # one-shot: apply tree edits (Loop B), then reflect code (Loop A)
 
 # Plumbing (agents / no-IDE workflows)
@@ -265,6 +266,69 @@ newest. A falling series is the claim that this works; a flat one says it is doi
 nothing, which is the finding worth having. It refuses to call a trend under 8
 observations.
 
+## Checking what codoc wrote
+
+`prompts/style.txt` states the rules every prose pass is held to, and until now
+nothing enforced them: a sample that opened on a mechanism reached the tree and the
+author fixed it by hand. That is worse than it sounds, because the style memory above
+reads that hand-fix as a preference — so a defect we could have caught upstream is
+laundered into a lesson. `codoc/loop/prose.py` is the check: a **deterministic** critic
+(no model) that names defects — opens on a mechanism, restates the title, no rule
+given, nothing beyond the identifier names, banned register, decorated punctuation,
+clipped sentences, rhetorical question, overlong sentence, altitude too low for a broad
+node, and four title rules.
+
+**Check and score sit in different places, deliberately.** A repair needs a rerun, so
+`prose.gate` runs at the three passes that generate prose (`agent/tree_update.py`,
+`agent/bootstrap_agent.py`). The RATE is recorded at `apply_op` instead
+(`loop/apply.py::_record_prose`), because a per-caller counter measures whichever
+caller remembered to call it, and `apply_op` is the one boundary every writer crosses.
+`codoc status` prints it once something has been checked.
+
+Four properties are load-bearing:
+
+- **A repair is the same call with the critique appended to the VOLATILE tail.** No
+  second prompt file: the rules are already in the frozen prefix and the reply is what
+  changed. Appending to the tail keeps the cache prefix byte-identical, and it also
+  makes the second request differ, which `run_agent`'s response memo requires.
+- **A repair can only be an improvement.** The rewrite is kept only if it covers the
+  same nodes with the same bindings and scores strictly better. A dropped node, a
+  re-attributed binding, a worse draft, or a rerun that raised all keep the first
+  draft, defect recorded — a gate that can lose a write is worse than no gate.
+  `severity` weights a missing fact above a punctuation slip, so a rewrite cannot win
+  by deleting the content it was asked to fix.
+- **A person's prose is never checked and never scored.** An author who writes a dash
+  is not committing a defect, and averaging their words into the rate would improve
+  codoc's own score every time somebody typed one.
+- **Every rule was calibrated against this repo's own prose**, swept over 412
+  docstring paragraphs, with the surviving false-positive share recorded per rule in
+  the module docstring. A rule that fires on a fifth of good writing has stopped
+  describing a defect: `altitude-too-high` was removed for exactly that reason (good
+  leaf prose often names no symbol and no number, because the BINDINGS already tie the
+  node to its code), and `decorated`'s share is annotated as a corpus mismatch rather
+  than a false-positive rate, since style.txt exempts the notes-to-a-developer
+  register these docstrings are written in.
+
+**Altitude is part of the contract, on both sides.** A node's register depends on
+where it sits — a parent is read by somebody choosing which child to open, a leaf is
+the last stop and has to carry the detail — so `loop/subtree.py` puts `depth`,
+`children` and `spans_files` on every subtree row, `prompts/style.txt` states what
+each altitude asks for, and `tree_update.txt` Rule 9 reads the fields by name. The
+gate's `altitude-too-low` marks the same line the prompt draws (`prose._BROAD_FILES`
+= 3 files, or any children, or depth 0), and `tests/agent/test_altitude.py` pins the
+number in both places so it cannot drift. The depth is computed over the WHOLE
+feature list rather than the sent window, because a window's top is not the tree's
+top and a depth counted locally would pitch a mid-tree node as a theme. The two
+bootstrap passes get no per-node altitude — the file pass runs before anything exists
+to parent its nodes to — so there the register is fixed by which pass you are in.
+
+Two implementation invariants, both about not lying to a rule: every punctuation and
+identifier check searches a **length-preserving masked copy** (citations, links and
+code spans replaced character-for-character) and quotes the ORIGINAL at the same
+offsets, so a defect's quote is the author's text; and the lexical rules are skipped
+for non-Latin prose, where a word count is meaningless (`doclang.clause_chars` supplies
+the script's own floor instead).
+
 ## Architecture
 
 ### Core idea — two loops
@@ -314,10 +378,14 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
              #   displaced + the directives they cite), gitref.py (the commit a
              #   directive's code work started from — fails soft to ""),
              #   voice.py (the style memory: harvest human rewrites → lessons →
-             #   retrieve by context → inject; see "Learning how the author writes")
+             #   retrieve by context → inject; see "Learning how the author writes"),
+             #   prose.py (the prose GATE: a deterministic critic over a title or
+             #   description + one repair pass; see "Checking what codoc wrote" —
+             #   NOT blocks/prose.py, which is the prose BLOCK plugin)
 blocks/      # typed-media blocks + plugin codecs (agent-native notebook protocol):
              #   base.py (Capability LIFT/LOWER/CONSULT + BlockPlugin), registry.py,
-             #   builtins.py, prose.py (plugin-zero), diagram.py (graph→mermaid lift +
+             #   builtins.py, prose.py (plugin-zero; the block codec, not loop/prose.py's
+             #   critic), diagram.py (graph→mermaid lift +
              #   edge-delta lower), screenshot.py (transient + url/image consult media),
              #   refresh.py (Loop A lift pass), conformance.py (host parity harness)
 agent/       # base.py, tree_update.py (the incremental LLM call), bootstrap_agent.py,

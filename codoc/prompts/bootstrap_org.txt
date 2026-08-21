@@ -62,9 +62,18 @@ have to learn.
 Give each new theme a temporary id (`"id": "t1"`) and `add_node` it with a real
 1 to 3 sentence description: the theme's purpose in plain everyday words — what
 this group of features accomplishes together, understandable without reading
-any code. Say what the group is *for*; do not narrate decisions or history you
-were not shown, and do not hedge with "presumably" or "appears to". Then `move_node` each existing feature by its real `f-...` id under a
-theme via `parent_id`.
+any code.
+
+Say what the group is *for*; do not narrate decisions or history you were not
+shown, and do not hedge with "presumably" or "appears to". Then `move_node` each
+existing feature by its real `f-...` id under a theme via `parent_id`.
+
+**Every node you write here is a top-level node with children under it**, which
+fixes the register (see "Write at the altitude of the node you are on" below): a
+theme's description is the first prose a newcomer reads, and they are reading it to
+decide which child to open. So no symbol names, no file names, and no thresholds —
+those live in the features underneath. A theme whose description lists its machinery
+tells a reader what is there and not what any of it is for.
 
 ## Output — return ONLY this, inside solution tags:
 

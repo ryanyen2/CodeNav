@@ -33,6 +33,7 @@ import json
 from codoc.agent.base import format_prompt, load_prompt, run_agent, split_prompt
 from codoc.config import LLMConfig, fast_llm_config
 from codoc.doclang import DocLanguage
+from codoc.loop import prose
 from codoc.model.event import NodeOp, NodeOpKind
 
 
@@ -63,6 +64,26 @@ def _coerce_op(raw: dict) -> NodeOp:
 def _ops_from(raw: dict | list) -> list[NodeOp]:
     ops_raw = raw.get("ops", []) if isinstance(raw, dict) else raw
     return [_coerce_op(o) for o in ops_raw]
+
+
+def _gated(ops: list[NodeOp], rerun, *, doc_language: DocLanguage | None) -> list[NodeOp]:
+    """``ops`` past the prose gate, with one repair attempt (:mod:`codoc.loop.prose`).
+
+    Depth is not passed and that is not an oversight: a bootstrap call proposes a
+    file's nodes before the organization pass exists to put them under anything, so
+    the only honest answer to "how deep is this" is that nobody knows yet. What IS
+    known is which of these nodes has another one under it, and that is the signal
+    the altitude rule actually reads: a node with children is a node a reader meets
+    on the way down.
+    """
+    if not ops:
+        return ops
+    parented = {op.parent_id for op in ops if op.parent_id}
+    kept, _findings = prose.gate(
+        ops, rerun=rerun, doc_language=doc_language,
+        children_of=lambda op: bool(op.local_id and op.local_id in parented),
+    )
+    return kept
 
 
 def propose_brief(
@@ -169,6 +190,11 @@ def propose_file_features(
     titles snapshot, so the whole prefix is identical across the wave.
     Structured extraction → fast model tier by default.
 
+    The answer goes past the prose gate before it is returned, which is where the
+    style guide stops being advice. Bootstrap is the pass that writes the most
+    prose in one go and the pass with the least context per node, so it is both the
+    likeliest to slip into naming mechanisms and the cheapest place to catch it.
+
     ``why`` is this file's commit rationale (:func:`codoc.loop.why.commit_rationales`).
     It goes in the volatile tail with the file itself — it is per-file by
     construction, and putting it in the prefix would break the wave's shared
@@ -192,8 +218,15 @@ def propose_file_features(
     )
     prefix_parts = [format_prompt(t, **kwargs) for t in prefix_tpls]
     volatile = format_prompt(volatile_tpl, **kwargs)
-    return _ops_from(run_agent(volatile, config or fast_llm_config(),
-                               prefix_parts=prefix_parts))
+
+    # A repair is this same call with the critique appended to the VOLATILE tail,
+    # so the wave's shared cache prefix stays byte-identical and the retry pays for
+    # the critique alone.
+    def ask(extra: str = "") -> list[NodeOp]:
+        return _ops_from(run_agent(volatile + extra, config or fast_llm_config(),
+                                   prefix_parts=prefix_parts))
+
+    return _gated(ask(), ask, doc_language=doc_language)
 
 
 def propose_organization(
@@ -224,4 +257,11 @@ def propose_organization(
               else "(no call paths could be derived)",
         brief=format_brief(brief),
     )
-    return _ops_from(run_agent(prompt, config))
+
+    def ask(extra: str = "") -> list[NodeOp]:
+        return _ops_from(run_agent(prompt + extra, config))
+
+    # The pass where the altitude rule earns its keep: a theme is the first thing a
+    # reader meets and the one node most likely to be written in the vocabulary of
+    # the code underneath it.
+    return _gated(ask(), ask, doc_language=doc_language)

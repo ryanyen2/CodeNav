@@ -192,6 +192,20 @@ def apply_op(
             op.title = clean if (clean or op.kind is not NodeOpKind.AMEND) else None
         if op.description is not None:
             op.description = sanitize_authored_description(op.description)
+        # The prose gate's own scorecard, kept at the same choke point for the same
+        # reason: every path that writes prose passes through here, so this is the
+        # only place the rate is a rate rather than a sample of whichever caller
+        # remembered to measure. What it counts is prose a READER will meet -- after
+        # whatever repair the generating pass already made, and including a pending
+        # proposal, because the overlay materializes those into the document and a
+        # sentence nobody has accepted yet is still a sentence somebody reads.
+        #
+        # A person's own words are never counted. They are not a defect when they
+        # break a rule, they are the author writing, and averaging them into the
+        # score would make our own prose look better every time somebody typed a
+        # dash.
+        if (actor or d_actor) != ACTOR_HUMAN:
+            _record_prose(op, store)
     # Pre-mint the id for a directly-applied ADD so the creation event records
     # the real feature id (blame needs "who created this" findable by feature).
     # Pending proposals keep a bare op — their id mints on acceptance.
@@ -224,6 +238,34 @@ def apply_op(
             store.set_feature_writer(op.feature_id, writer or source, event.actor)
         store.mark_applied(event.id)  # stamp accepted_at for the audit log
     return event
+
+
+def _record_prose(op: NodeOp, store: Store) -> None:
+    """Count this op's prose against the gate's rules, for :func:`prose.defect_rate`.
+
+    Advisory throughout: a statistic that can fail a write is worse than no
+    statistic, so every part of this is inside one try. The node's span comes from
+    the store when the feature already exists and from the op itself when it does
+    not, which is the ADD case -- a node being created has no bindings on disk yet,
+    and its op carries exactly the ones it is about to get.
+    """
+    from codoc.loop import prose
+    try:
+        fid = op.feature_id or ""
+        existing = store.get_feature(fid) if fid else None
+        names, kids = None, None
+        if existing:
+            binds = store.bindings_for_feature(fid)
+            names = [f"{b.file} {b.symbol_path}" for b in binds]
+            kids = bool(store.children(fid))
+        findings = prose.review_ops(
+            [op],
+            names_of=(lambda _op: names) if names is not None else None,
+            children_of=(lambda _op: kids) if kids is not None else None,
+        )
+        prose.record(store, checked=1, defects=findings.get(0, ()))
+    except Exception:  # noqa: BLE001 -- a scorecard must never sink a write
+        pass
 
 
 def _log_child_promotion(

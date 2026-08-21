@@ -425,3 +425,34 @@ class TestVoiceCommand:
         assert r.exit_code == 1
         assert "unknown action" in r.output
 
+
+
+# -- the prose gate's line in `codoc status` --------------------------------------
+
+
+def test_status_reports_what_the_prose_gate_has_been_finding(tmp_path):
+    from codoc.loop import prose
+
+    cd = tmp_path / ".codoc"; cd.mkdir()
+    s = open_store(cd)
+    s.upsert_feature(Feature(title="Existing", description="x"))
+    prose.record(s, checked=1)
+    prose.record(s, checked=1, defects=prose.check(
+        None, "Ensures a robust sync.", names=("a.py b",)))
+    s.close()
+
+    r = runner.invoke(app, ["status", "--root", str(tmp_path)])
+    assert r.exit_code == 0
+    assert "prose gate" in r.output and "1/2" in r.output
+    assert "machine-register" in r.output
+
+
+def test_status_says_nothing_about_a_gate_that_has_checked_nothing(tmp_path):
+    # A fresh workspace has no rate, and printing "nothing checked yet" on the
+    # line under the headline would make an absence look like a finding.
+    cd = tmp_path / ".codoc"; cd.mkdir()
+    s = open_store(cd); s.upsert_feature(Feature(title="Existing")); s.close()
+
+    r = runner.invoke(app, ["status", "--root", str(tmp_path)])
+    assert r.exit_code == 0
+    assert "prose gate" not in r.output

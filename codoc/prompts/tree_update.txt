@@ -118,6 +118,15 @@ feature's history — write it for them, not as a log line.
    is `human`, that prose is the author's own voice: keep their wording and
    register, and make your edit no larger than the inaccuracy requires.
 
+9. **Write each description at the altitude of its node.** A node with `children`
+   above 0, or one whose `spans_files` is 3 or more, is read by somebody deciding
+   which child to open, so its opening sentence must hold with no symbol in it and
+   the machinery belongs in the children. A node with no children is the last stop:
+   name the actual symbol, constant, and number, because nothing deeper will. This
+   is a constraint on register only — it never licenses a claim you cannot ground,
+   and it never overrides Rule 8, so a broad node whose prose a person wrote stays
+   in their words even if you would have pitched it higher.
+
 ## Output
 
 Return ONLY this, inside solution tags:
@@ -207,5 +216,11 @@ children). Prefer attaching new chunks here.
 
 The subtree entries carry `written_by` — `human` when a person last wrote that
 description, otherwise the agent or loop that did. Rule 8 depends on it.
+
+They also carry each node's **altitude**: `depth` (0 = top level), `children` (how
+many nodes hang under it), and `spans_files` (how many files its bindings reach).
+Rule 9 says what register each altitude asks for. For a node you are ADDING, its
+altitude is the altitude of the `parent_id` you chose plus one, and it has no
+children yet.
 
 Now return the minimal op set for this change, inside solution tags.

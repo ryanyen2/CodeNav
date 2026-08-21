@@ -228,3 +228,66 @@ def test_without_index_keys_a_well_formed_binding_is_kept(store):
         store, source="loop_a", applied=True,
     )
     assert len(store.bindings_for_feature(f.id)) == 1
+
+
+# -- the prose gate's scorecard (Section B) ---------------------------------------
+# The rate has to be measured where prose LANDS, not where it is generated: a
+# per-caller counter measures whichever caller remembered to call it. These pin the
+# two halves of that -- generated prose is counted, and a person's is not.
+
+
+def test_generated_prose_is_counted_against_the_gates_rules(store):
+    from codoc.loop import prose
+
+    f = Feature(title="Header handling", description="Original.")
+    store.upsert_feature(f)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id,
+                    description="Robustly handles the header edge case."),
+             store, source="loop_a", applied=True)
+
+    stats = prose.defect_rate(store)
+    assert stats["checked"] == 1 and stats["defective"] == 1
+    assert "machine-register" in dict(stats["top"])
+
+
+def test_clean_generated_prose_is_counted_and_scores_nothing(store):
+    from codoc.loop import prose
+
+    f = Feature(title="Page furniture removal", description="Original.")
+    store.upsert_feature(f)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id, description=(
+        "Drops the running header and the page number, so the rules that follow "
+        "are reading the document rather than the paper it was printed on. "
+        "Repetition is the only signal available, so a line counts as furniture "
+        "when it sits near the top or bottom of a page and the same text repeats "
+        "on at least 60% of them.")),
+        store, source="loop_a", applied=True)
+
+    stats = prose.defect_rate(store)
+    assert stats["checked"] == 1 and stats["defective"] == 0
+
+
+def test_a_persons_own_words_are_never_scored(store):
+    """An author who writes a dash has not introduced a defect, and counting it
+    would make codoc's own score improve every time somebody typed one."""
+    from codoc.loop import prose
+
+    f = Feature(title="Header handling", description="Original.")
+    store.upsert_feature(f)
+    apply_op(NodeOp(kind=NodeOpKind.AMEND, feature_id=f.id,
+                    description="Robustly handles the header edge case."),
+             store, source="user", applied=True)
+
+    assert prose.defect_rate(store)["checked"] == 0
+
+
+def test_an_op_that_writes_no_prose_is_not_counted(store):
+    from codoc.loop import prose
+
+    f = Feature(title="T", description="x")
+    store.upsert_feature(f)
+    apply_op(NodeOp(kind=NodeOpKind.ATTACH, feature_id=f.id,
+                    bindings=[("a.py", "a.py::thing")]),
+             store, source="loop_a", applied=True)
+
+    assert prose.defect_rate(store)["checked"] == 0

@@ -13,6 +13,18 @@ name, or symbol in it. Never open on a mechanism or an identifier, and never dro
 the general sentence on the grounds that the detail implies it, because a reader
 who does not yet know what something is for cannot use a detail about it.
 
+**Write at the altitude of the node you are on.** Where the prompt tells you a
+node's depth, how many files it spans, and whether anything hangs under it, those
+three decide the register. A node with children is where a reader arrives before
+they know anything, and what they are there to do is choose which child to open, so
+its first sentence has to hold with no symbol in it: name the job in the words the
+project's own README would use, and leave every function name and threshold to the
+children. A leaf is the last stop and nothing deeper will supply the detail, so name
+the actual symbol, the actual constant, and the actual number. The failure at the
+top is a theme written as an inventory of the machinery beneath it, which tells a
+newcomer what is there and not what any of it is for. The failure at the bottom is a
+leaf so general it could be about another codebase.
+
 **Prefer one explanatory sentence to two clipped ones.** Short statements stacked
 together read as precise and leave the connection for the reader to guess, so join
 the clauses with the plain words that say the relation, meaning because, so, which

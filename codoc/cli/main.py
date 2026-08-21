@@ -459,6 +459,22 @@ def status(root: str = typer.Option(".", "--root", help="Repository root.")):
                            f"({gap} unattributed) — run `codoc reflect`")
         except Exception:
             pass  # index not built yet / unreadable — coverage check is best-effort
+
+        # What the prose gate has been finding, on prose CODOC wrote (a person's own
+        # words are never counted — see `apply._record_prose`). Reported here rather
+        # than only in a test because the number is the only thing that says whether
+        # the rules still describe defects: a rate that climbs is either the model
+        # drifting or a rule that has started firing on good writing, and both want
+        # looking at. Silent until something has been checked, so a fresh workspace
+        # does not carry a statistic about nothing.
+        try:
+            from codoc.loop import prose
+
+            stats = prose.defect_rate(store)
+            if stats.get("checked"):
+                typer.echo(f"  {prose.render_rate(stats)}")
+        except Exception:
+            pass  # advisory: a scorecard must never be what breaks `codoc status`
         if pending:
             typer.echo("\nPending proposals (review in tree.codoc, Accept/Reject in the IDE):")
             for e in pending:

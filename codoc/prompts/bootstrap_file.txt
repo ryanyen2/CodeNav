@@ -52,6 +52,15 @@ To nest, give each new node a temporary id (`"id": "n1"`) and set a child's
   design answers — and what would break if someone changed it without knowing.
   Write it as flowing prose, not as labelled parts.
 
+  **These are the tree's leaves, so write at leaf altitude** (see "Write at the
+  altitude of the node you are on" below). A later pass groups them under broad
+  themes and writes those; nothing deeper than what you write here will ever be
+  added. So this is the place for the actual symbol, the actual constant, and the
+  actual number — a description that stays so general it could be about another
+  codebase has left the reader nowhere else to go. The one exception is a node you
+  give a child of its own: that parent is read by somebody choosing between its
+  children, and it should hold without a symbol in it.
+
   **Say the why as plainly as your evidence allows, and no further.** You have
   three sources of intent and all three count:
 

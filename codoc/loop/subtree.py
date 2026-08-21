@@ -95,17 +95,42 @@ def select_context(
     ids.update(f.id for f in feats if not f.realized and not f.retired)
 
     # --- subtree -------------------------------------------------------------
+    # Each node's ALTITUDE travels with it. The register a description should be
+    # written in depends on where the node sits (a parent is read by somebody
+    # choosing which child to open; a leaf is the last stop and has to carry the
+    # detail), and the model can only match that if it is told. Derived here rather
+    # than inferred from `parent_id` in the prompt, because a depth is one walk up
+    # the parents and a model counting hops in a flat list gets it wrong.
+    parent_of = {f.id: f.parent_id for f in feats}
+    child_count: dict[str, int] = {}
+    for _pid in parent_of.values():
+        if _pid:
+            child_count[_pid] = child_count.get(_pid, 0) + 1
+
+    def _depth(fid: str) -> int:
+        seen: set[str] = set()
+        cur, depth = parent_of.get(fid), 0
+        while cur and cur not in seen:
+            seen.add(cur)
+            depth += 1
+            cur = parent_of.get(cur)
+        return depth
+
     subtree: list[dict] = []
     for fid in sorted(ids):
         f = store.get_feature(fid)
         if not f or f.retired:
             continue
+        _binds = [b for b in store.bindings_for_feature(fid)]
         entry = {
             "id": f.id,
             "title": f.title,
             "description": f.description,
             "parent_id": f.parent_id,
-            "bindings": [b.symbol_path for b in store.bindings_for_feature(fid)],
+            "bindings": [b.symbol_path for b in _binds],
+            "depth": _depth(fid),
+            "children": child_count.get(fid, 0),
+            "spans_files": len({b.file for b in _binds}),
         }
         if not f.realized:
             # An accepted plan placeholder awaiting its code — the model must

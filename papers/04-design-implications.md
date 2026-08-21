@@ -46,21 +46,84 @@ reaches the tree and the author has to fix it by hand — which then costs an ed
 that the style memory reads as a preference. Enforcement upstream is therefore
 also what keeps the memory clean.
 
-**Built:** `codoc/loop/prose.py` — a deterministic critic over a title or
-description that reports named defects (opens on a mechanism, restates the title,
-banned register, decorated punctuation, altitude mismatch against the node's
-depth, no fact a reader could not get from the identifier names). Applied at the
-one write boundary so every path that authors prose is checked, with a single
-repair retry and, failing that, the sample kept with the defect recorded rather
-than dropped.
+**Built.**
+
+| Piece | Where |
+|---|---|
+| The critic: named defects over a title/description, with severity | `codoc/loop/prose.py` |
+| The critique text a repair pass is given | `prose.critique` |
+| The gate: check, repair once, keep the better draft | `prose.gate` |
+| Repair wired into the three passes that write prose | `codoc/agent/tree_update.py`, `codoc/agent/bootstrap_agent.py` |
+| The scorecard, recorded where prose lands | `codoc/loop/apply.py::_record_prose` |
+| The rate, read back | `prose.defect_rate` / `prose.render_rate`, shown by `codoc status` |
+| Rule-by-rule tests, each with the good sample it must stay quiet on | `tests/loop/test_prose.py` |
+
+**Check and score live in different places, and that is the design.** A repair is
+only possible where a rerun is possible, so the gate runs at the three generation
+sites. But a per-caller counter measures whichever caller remembered to call it, so
+the *rate* is recorded at `apply_op` — the one boundary every writer passes. It
+counts what a reader will meet (post-repair, pending proposals included, since the
+overlay materializes those into the document) and never counts a person's own
+words: an author who writes a dash has not introduced a defect, and averaging their
+prose in would improve codoc's score every time somebody typed one.
+
+**The repair costs one cache miss and no new prompt.** It is the same call with the
+critique appended to the volatile tail, so the wave's frozen prefix stays
+byte-identical — and appending also makes the second request differ, which
+`run_agent`'s response memo requires. A clean answer never triggers it, so the cost
+is bounded by the defect rate itself.
+
+**A repair can only ever be an improvement.** The rewrite is accepted only if it
+covers the same nodes with the same bindings and scores strictly better; a dropped
+node, a re-attributed binding, a worse draft, or a rerun that raises all keep the
+first draft with the defect recorded. The severity function weights a missing fact
+above a punctuation slip, so a rewrite cannot win by deleting the content it was
+asked to fix.
+
+**Every rule was calibrated by measurement, not assertion.** Each was swept over
+412 of this repo's own docstring paragraphs, and the surviving false-positive shares
+are recorded in the module docstring — a rule firing on a fifth of good prose has
+stopped describing a defect. Two results came out of that sweep. `altitude-too-low`
+survived and its mirror `altitude-too-high` was **removed**: the only mechanical
+test for it is "does this prose name a symbol or a number", and good leaf prose
+often names neither, because the bindings already tie the node to its code. And
+`decorated`'s 109% is reported as a corpus mismatch rather than a false-positive
+rate, because `style.txt` exempts the notes-to-a-developer register that these
+docstrings are written in.
 
 ## C. Altitude-aware description prompts
 
 **From** §1 and §3 of the comprehension note: a top-level node feeds hypothesis
 formation, a leaf feeds beacon search, and the same register cannot serve both.
 
-**Built:** the tree-update and bootstrap prompts carry the node's depth and the
-register expected at it; the prose gate checks the two agree.
+**Built.**
+
+| Piece | Where |
+|---|---|
+| The rule, in the shared guide every prose prompt pulls in | `codoc/prompts/style.txt` |
+| The per-node signal: `depth`, `children`, `spans_files` on each subtree row | `codoc/loop/subtree.py` |
+| The prompt reading it, as Rule 9 | `codoc/prompts/tree_update.txt` |
+| The register each bootstrap pass writes at (it has no per-node altitude yet) | `codoc/prompts/bootstrap_file.txt`, `bootstrap_org.txt` |
+| The same three signals handed to the gate | `codoc/agent/tree_update.py::_node_context` |
+| Both halves, pinned against each other | `tests/agent/test_altitude.py` |
+
+**The prompt and the gate share one threshold**, and a test states it in words so
+changing `prose._BROAD_FILES` fails there rather than quietly leaving the prompt
+asking for a register nobody is enforcing. Broad means: has children, or spans three
+files or more, or sits at depth 0.
+
+**The depth is computed over the whole tree, not the payload.** A tree-update call
+sends a WINDOW of the tree, so a parent chain routinely reaches above what was sent
+and a depth counted inside the window is short by whatever was cut. `subtree.py`
+computes it over the full feature list and puts it on the row; `_node_context` prefers
+the stated value and only falls back to walking the window when a node has none.
+
+**Neither bootstrap pass is given a per-node altitude, because neither knows one.**
+The file pass proposes a file's nodes before the organization pass exists to put them
+under anything. What is knowable is which pass you are in — the file pass writes
+leaves, the organization pass writes the themes above them — so the register is fixed
+per prompt, and the only per-node signal that survives is whether a node got a child
+of its own in the same answer.
 
 ## D. Answer the group-3 and group-4 questions
 
@@ -72,14 +135,14 @@ plugin already lifts one from the code graph. Group 4 ("what happens if I change
 this") is answered by the `impacted` set, which Loop A computes and then uses only
 advisorily.
 
-**Status:** diagram lift audited against the question it is meant to answer; the
+**To build:** diagram lift audited against the question it is meant to answer; the
 `impacted` set surfaced where a reader can see it.
 
 ## E. Warrant the why
 
 **From** [the rationale note](03-rationale-and-why.md).
 
-**Built:** each prose-writing op records which evidence licensed its why, so the
+**To build:** each prose-writing op records which evidence licensed its why, so the
 provenance card can show the warrant rather than only the chain.
 
 ## F. The evals that matter
@@ -93,4 +156,11 @@ provenance card can show the warrant rather than only the chain.
    normalized distance between what codoc wrote and what the human left. Falling
    over time is the claim that the style memory works.
 3. **Prose gate defect rate** — how often a fresh sample trips the critic. A
-   proxy for readability that needs no human in the loop.
+   proxy for readability that needs no human in the loop. Wired (B): recorded at
+   `apply_op` and read back by `codoc status`, so the number accrues from ordinary
+   use rather than from a benchmark run.
+
+**Blocked on credit, not on code.** (1) and (2) need real model passes and the
+OpenAI balance is exhausted, so `tests/loop/test_end_to_end.py` and
+`tests/bdd/test_e2e_userflows.py` fail on a 429 today. Everything deterministic is
+green, and (3) needs no model at all.
