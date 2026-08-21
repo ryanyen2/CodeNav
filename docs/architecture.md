@@ -196,8 +196,14 @@ three split — `core.py` (923 definitions → 4 passes), `channels.py` (786 →
   over evidence another pass is holding. An owner too large to share a pass gets one
   to itself and the budget concedes within it — the honest answer for a 200-method
   class, which is one feature no split makes two.
-- **Owners pack in the order the caller presents them**, so a caller handing over
-  its symbols in file order gets passes that are contiguous regions of the file.
+- **Owners pack in the order the caller presents them**, and `bootstrap_hier`
+  presents a file in ITS OWN order (`_in_file_order`, by `start_byte`) rather than
+  the index's alphabetical one. The order decides what a pass sees together: by
+  name, `channels.py`'s four passes each span nearly the whole 1.2 MB file and
+  overlap one another (3 of 3 neighbouring pairs); in file order they are four
+  contiguous regions of it and overlap nowhere. It also fixes what the prompt reads
+  even on a file that is not split — a module's constants no longer land between
+  its classes, and `Store.__enter__` no longer precedes `Store.__init__`.
 - **A file's groups run in SEQUENCE, threading titles forward** (`bootstrap_hier`).
   They are slices of one namespace, so a group blind to what its predecessor named
   will name it again — and avoiding that duplicate is what a single whole-file call

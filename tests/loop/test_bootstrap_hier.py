@@ -296,6 +296,51 @@ class TestPerFileTolerance:
                                        propose_org=lambda *a, **k: [], organize=False)
 
 
+def test_a_file_is_shown_in_its_own_order_not_alphabetically(store):
+    """The prompt reads the chunk list in order, and a split file is cut along it.
+
+    By name, a module's constants land between its classes and `__enter__` comes
+    before `__init__` — so a pass sees a scatter of the file rather than a region
+    of it.
+    """
+    rows = [
+        FakeRow("m.py", "m.py::Store.write", start_byte=300),
+        FakeRow("m.py", "m.py::Store.__init__", start_byte=200),
+        FakeRow("m.py", "m.py::Store", start_byte=100),
+        FakeRow("m.py", "m.py::open_store", start_byte=400),
+    ]
+    build_graph(store, rows)
+    seen: list[list[str]] = []
+
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                     why=None, **_kw):
+        seen.append([c["symbol_path"] for c in chunks])
+        return [_add("n1", "A feature", [(file, c["symbol_path"]) for c in chunks])]
+
+    bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                               propose_org=lambda *a, **k: [], organize=False)
+
+    assert seen == [["m.py::Store", "m.py::Store.__init__",
+                     "m.py::Store.write", "m.py::open_store"]]
+
+
+def test_chunks_with_no_recorded_position_keep_a_stable_order(store):
+    """An unindexed row carries 0 for every chunk, so the name breaks the tie."""
+    rows = _rows([("m.py", "m.py::beta"), ("m.py", "m.py::alpha")])
+    build_graph(store, rows)
+    seen: list[list[str]] = []
+
+    def propose_file(file, chunks, edges, existing_titles, *, repo_name, config,
+                     why=None, **_kw):
+        seen.append([c["symbol_path"] for c in chunks])
+        return [_add("n1", "A feature", [(file, c["symbol_path"]) for c in chunks])]
+
+    bootstrap_hier_from_chunks(rows, store, propose_file=propose_file,
+                               propose_org=lambda *a, **k: [], organize=False)
+
+    assert seen == [["m.py::alpha", "m.py::beta"]]
+
+
 class TestACrowdedFileIsDescribedOverSeveralCalls:
     """One call cannot name a feature set it is only shown a fraction of.
 

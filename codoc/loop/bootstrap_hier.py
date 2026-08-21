@@ -97,6 +97,24 @@ def _apply_ops_with_local_ids(
 # Phase 1 — per-file context + coverage
 # ---------------------------------------------------------------------------
 
+def _in_file_order(rows: list) -> list:
+    """One file's chunks in the order a person reads them.
+
+    The index hands them back by name, which scatters the file: a module's
+    constants land between its classes, and ``Store.__enter__`` comes before
+    ``Store.__init__``. The prompt shows this list in order, and a crowded file is
+    now CUT along it (`loop/payload.py`), so the order decides what each pass sees
+    together — by name, `test/altair`'s `channels.py` gives four passes that each
+    span nearly the whole 1.2 MB file and overlap one another; in file order it
+    gives four contiguous regions of it.
+
+    ``start_byte`` is the file's own order. The symbol path breaks ties, so the
+    order stays total and stable where the value is absent — an unindexed row
+    carries 0 for every chunk, and that is exactly the old behaviour.
+    """
+    return sorted(rows, key=lambda r: (r.start_byte, r.symbol_path))
+
+
 def _file_edges(file_rows: list, store: Store) -> list[dict]:
     """Per-symbol call/containment context for one file's chunks."""
     ctx: list[dict] = []
@@ -354,7 +372,7 @@ def bootstrap_hier_from_chunks(
             titles_snapshot = list(existing_titles)
             prepared = []
             for file in wave:
-                file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
+                file_rows = _in_file_order(by_file[file])
                 # Usually one group, so usually one call: a file is split only when
                 # one call could not be shown its definitions at full allowance, and
                 # that is 3 files of the 813 in this repo and its corpora (see
@@ -448,7 +466,7 @@ def bootstrap_hier_from_chunks(
 
             for offset, ((file, chunk_groups, _w), ops) in enumerate(zip(prepared, results)):
                 idx = wave_start + offset + 1
-                file_rows = sorted(by_file[file], key=lambda r: r.symbol_path)
+                file_rows = _in_file_order(by_file[file])
                 if idx == 1 or idx == total or idx % step == 0:
                     parts = (f" ({len(chunk_groups)} parts)"
                              if len(chunk_groups) > 1 else "")
