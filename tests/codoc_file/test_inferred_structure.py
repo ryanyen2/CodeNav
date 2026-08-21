@@ -215,6 +215,49 @@ def test_sidecar_emits_kind_and_see_also_slices(store, tmp_path):
     assert sidecar["feature_see_also"][bound.id][0]["rationale"] == "call"
 
 
+def test_sidecar_emits_the_impact_slice_in_the_incoming_direction(store, tmp_path):
+    # `feature_see_also` says what a feature depends ON; `feature_impact` answers the
+    # question a reader asks before editing, which runs the other way. The two share
+    # one read of the edge table, so this also pins that the shared read did not get
+    # consumed by the first caller.
+    core = Feature(title="The store")
+    ui = Feature(title="The editor")
+    for f in (core, ui):
+        store.upsert_feature(f)
+    _bind(store, core.id, "db.py", "db.py::upsert")
+    _bind(store, ui.id, "view.py", "view.py::save")
+    store.insert_edges([_edge("view.py::save", "db.py::upsert", "call")])
+
+    write_tree(store, tmp_path)
+    sidecar = json.loads((tmp_path / BINDINGS_FILENAME).read_text())
+
+    row = sidecar["feature_impact"][core.id][0]
+    assert row["feature_id"] == ui.id
+    assert row["title"] == "The editor"
+    assert row["via"] == ["view.py::save"]
+    # And the other direction is still the other direction.
+    assert sidecar["feature_see_also"][ui.id][0]["to"] == core.id
+    # Nothing depends on the editor, so it is absent -- the absence is the answer.
+    assert ui.id not in sidecar["feature_impact"]
+
+
+def test_impact_stays_out_of_the_prose(store, tmp_path):
+    # A description listing its own callers is the inventory-of-machinery defect the
+    # altitude rule bans, and it would go stale the moment somebody added one. The
+    # answer ships as a derived slice; the rendered tree must not mention it.
+    core = Feature(title="The store", description="Holds every feature and binding.")
+    ui = Feature(title="The editor", description="Projects the store onto the page.")
+    for f in (core, ui):
+        store.upsert_feature(f)
+    _bind(store, core.id, "db.py", "db.py::upsert")
+    _bind(store, ui.id, "view.py", "view.py::save")
+    store.insert_edges([_edge("view.py::save", "db.py::upsert", "call")])
+
+    tree_text = write_tree(store, tmp_path).read_text()
+    assert "view.py::save" not in tree_text
+    assert "depends on this" not in tree_text
+
+
 def test_see_also_never_emits_a_steering_line(store, tmp_path):
     # See-Also is sidecar metadata ONLY — no `> …` line may appear anywhere in
     # tree.codoc, and the slice must never carry a blockquote-shaped string.

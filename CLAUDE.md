@@ -120,6 +120,14 @@ extension only; a hub contributor has no working tree to run against.
   **what did this page say before** (a **timeline scrubber** above the document; dragging
   it left renders the tree as it read then, with that moment's change marked in the prose
   where it happened). See "Reading the tree's own past".
+- **What a change to this would reach** is a count at the end of a feature heading,
+  revealed on hover and opening the dependents by name with the symbols that reach in
+  (`webview/tiptap/impact-decorations.ts`, off the `feature_impact` sidecar slice; the
+  same answer rides every MCP `read_context` row). It is a DERIVED index and must never
+  enter a description: a paragraph listing its own callers is the inventory-of-machinery
+  defect the altitude rule bans, and it goes stale on the next caller. The companion
+  answer — *how are these related* — is the diagram block, lifted from the same graph.
+  See `docs/architecture.md`, "Drawing how things relate, and what a change would reach".
 
 ## Reading the tree's own past (the timeline)
 
@@ -365,6 +373,9 @@ store/       # db.py — Store over the SQLite tables (features/bindings/events 
              #   blocks/marks/comments + style_lessons/store_meta + applied-command
              #   ledger) + 1 derived graph cache (WAL)
 graph/       # code dependency graph (derived, rebuildable): extract.py, query.py
+             #   (query.py also holds feature_impact: which features would feel a
+             #   change to each one — the standing group-4 answer, NOT the same as
+             #   loop_a._compute_impacted, which is changeset-scoped)
 loop/        # the two loops + pieces: classify.py (decision table), phase.py (the
              #   single feature-phase projection — holds/drift/resolution are views),
              #   diff.py (compute_changeset), apply.py, loop_a.py / loop_b.py, edits.py
@@ -385,8 +396,9 @@ loop/        # the two loops + pieces: classify.py (decision table), phase.py (t
 blocks/      # typed-media blocks + plugin codecs (agent-native notebook protocol):
              #   base.py (Capability LIFT/LOWER/CONSULT + BlockPlugin), registry.py,
              #   builtins.py, prose.py (plugin-zero; the block codec, not loop/prose.py's
-             #   critic), diagram.py (graph→mermaid lift +
-             #   edge-delta lower), screenshot.py (transient + url/image consult media),
+             #   critic), diagram.py (graph→mermaid lift, both directions, grouped by
+             #   the owning feature and bounded; edge-delta lower),
+             #   screenshot.py (transient + url/image consult media),
              #   refresh.py (Loop A lift pass), conformance.py (host parity harness)
 agent/       # base.py, tree_update.py (the incremental LLM call), bootstrap_agent.py,
              # paths.py, hook.py / install_hooks.py, propose.py,

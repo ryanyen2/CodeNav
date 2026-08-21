@@ -193,6 +193,13 @@ def read_tree(
                 "doc_language": doc_language_block(codoc_dir)}
 
 
+# How many dependent features one `read_context` row carries. A hub feature can have
+# dozens and an agent needs the shape of the risk, not the whole list; `impact_total`
+# says what was left off, because a truncated list read as complete is worse than a
+# number.
+_IMPACT_ROWS = 6
+
+
 def read_context(
     codoc_dir: str,
     *,
@@ -210,6 +217,7 @@ def read_context(
     is proportional to the *edit*, not the repo — prefer this over ``codoc_tree``.
     """
     from codoc.agent.base import titles_outline
+    from codoc.graph.query import feature_impact
     from codoc.loop.subtree import select_context
 
     with open_store(codoc_dir) as store:
@@ -226,9 +234,21 @@ def read_context(
             return _err("pass files=[...] and/or feature_id")
         subtree, all_titles, context = select_context(store, file_set, extra_symbols)
         default = workspace_doc_language(codoc_dir)
+        # "What happens if I change this?" — the features whose code calls into each
+        # of these, with the calling symbols as evidence. An agent about to edit one
+        # of `files` is asking exactly that question and is the reader least able to
+        # look around, so the answer travels with the read rather than waiting to be
+        # asked for. Never in the prose: it is a derived index that goes stale the
+        # moment somebody adds a caller (see graph.query.feature_impact).
+        impact = feature_impact(store)
         for row in subtree:
             row.update(_lang_field(row.get("description") or row.get("title") or "",
                                    default))
+            hits = impact.get(row.get("id") or "")
+            if hits:
+                row["impact"] = hits[:_IMPACT_ROWS]
+                if len(hits) > _IMPACT_ROWS:
+                    row["impact_total"] = len(hits)
         if not include_bindings:
             for row in subtree:
                 row["binding_count"] = len(row.pop("bindings", []))

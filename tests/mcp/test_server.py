@@ -688,3 +688,63 @@ def test_accepted_plan_add_reports_its_origin_too(codoc_dir):
     assert hold["kind"] == "add_node"
     assert hold["origin"] == ORIGIN_PLAN
     assert hold["baseline"] == ""
+
+
+# ---------------------------------------------------------------------------
+# read_context — the group-4 answer travels with the read (Sillito group 4)
+# ---------------------------------------------------------------------------
+
+def _bind_and_edge(codoc_dir, subject, dependent, sym_subject, sym_dependent):
+    from codoc.model.binding import Binding
+    s = open_store(codoc_dir)
+    try:
+        for fid, sym in ((subject.id, sym_subject), (dependent.id, sym_dependent)):
+            s.upsert_binding(Binding(feature_id=fid, file=sym.split("::")[0],
+                                     symbol_path=sym, fingerprint="h"))
+        s.insert_edges([{
+            "src_file": sym_dependent.split("::")[0], "src_symbol": sym_dependent,
+            "dst_name": sym_subject.split("::")[-1], "dst_symbol": sym_subject,
+            "dst_file": sym_subject.split("::")[0], "kind": "call", "internal": 1,
+        }])
+    finally:
+        s.close()
+
+
+def test_read_context_carries_who_depends_on_the_feature(codoc_dir):
+    # An agent about to edit one of `files` is asking "what happens if I change
+    # this?" and is the reader least able to look around, so the answer rides the
+    # read rather than waiting to be asked for.
+    core = _seed(codoc_dir, title="The store")
+    ui = _seed(codoc_dir, title="The editor")
+    _bind_and_edge(codoc_dir, core, ui, "db.py::upsert", "view.py::save")
+
+    res = tools.read_context(codoc_dir, files=["db.py"])
+    assert res["ok"]
+    row = next(r for r in res["subtree"] if r["id"] == core.id)
+    assert row["impact"][0]["feature_id"] == ui.id
+    assert row["impact"][0]["via"] == ["view.py::save"]
+    assert "impact_total" not in row  # nothing was left off
+
+
+def test_read_context_omits_impact_where_nothing_depends_on_a_feature(codoc_dir):
+    core = _seed(codoc_dir, title="The store")
+    ui = _seed(codoc_dir, title="The editor")
+    _bind_and_edge(codoc_dir, core, ui, "db.py::upsert", "view.py::save")
+
+    res = tools.read_context(codoc_dir, files=["view.py"])
+    row = next(r for r in res["subtree"] if r["id"] == ui.id)
+    assert "impact" not in row
+
+
+def test_read_context_says_what_it_left_off(codoc_dir):
+    # A truncated list read as complete is worse than a number.
+    from codoc.mcp.tools import _IMPACT_ROWS
+    core = _seed(codoc_dir, title="The store")
+    for i in range(_IMPACT_ROWS + 2):
+        dep = _seed(codoc_dir, title=f"Caller {i}")
+        _bind_and_edge(codoc_dir, core, dep, "db.py::upsert", f"c{i}.py::run")
+
+    res = tools.read_context(codoc_dir, files=["db.py"])
+    row = next(r for r in res["subtree"] if r["id"] == core.id)
+    assert len(row["impact"]) == _IMPACT_ROWS
+    assert row["impact_total"] == _IMPACT_ROWS + 2

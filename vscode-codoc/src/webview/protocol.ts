@@ -12,7 +12,7 @@ import type { Suggestion } from '../state/suggestion-model';
 import type { FeatureStages } from '../state/settlement-stages';
 import type { CommentThread } from '../state/comment-model';
 import type { ResolvedCard } from '../state/registry-model';
-import type { HoldDetail, HistoryEntry } from '../state/bindings-model';
+import type { HoldDetail, HistoryEntry, ImpactEntry } from '../state/bindings-model';
 import type { AskWalkthrough } from '../state/ask-model';
 import type { RevisionsFile } from '../state/revision-model';
 import type { ViewerInfo } from './viewer-status';
@@ -240,6 +240,12 @@ export interface DocPayload {
      *  with a queued directive carry it). Lets the author confirm WHAT codoc understood,
      *  not just that something is queued. Absent on legacy payloads. */
     holdDetail?: Record<string, HoldDetail>;
+    /** Which features would feel a change to each feature (v6) — the group-4 answer,
+     *  `{fid → dependents}` ranked by coupling. Drawn as a chip on the heading that is
+     *  invisible until the heading is hovered: the fact matters at the moment somebody
+     *  is about to edit, and a permanently-lit dependency count on every heading is an
+     *  inventory competing with the prose. A feature nothing depends on is absent. */
+    impact?: Record<string, ImpactEntry[]>;
     /** Features whose realization DIVERGED (U5): the agent changed this feature beyond
      *  the one you edited — flagged for "review what the AI did" (F3). `{fid → reason}`.
      *  The change itself renders as a pending proposal; this adds the at-a-glance cue.

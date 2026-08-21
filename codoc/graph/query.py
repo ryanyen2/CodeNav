@@ -170,3 +170,78 @@ def entry_points(store: Store) -> list[str]:
             all_dst.add(e["dst_symbol"])
 
     return sorted(all_src - all_dst)
+
+
+# The kinds of edge that make one feature's behaviour depend on another's. A
+# reference that is neither a call, an import, nor an inheritance does not put the
+# referring code at risk when the referent changes, so it is not impact.
+IMPACT_KINDS = frozenset({"call", "import", "inherit"})
+# How many symbols one entry carries as evidence. The list is there to make the
+# claim checkable, not to reproduce the graph in the sidecar.
+_MAX_VIA = 5
+
+
+def feature_impact(store: Store, edges: list | None = None) -> dict[str, list[dict]]:
+    """Which features would feel a change to each feature — Sillito's group 4.
+
+    ``{feature_id -> [{feature_id, title, via: [symbol_path, ...], count}]}``, one
+    entry per DEPENDENT feature, ordered by how many symbols tie it to the subject
+    and then by title so the answer is stable between passes.
+
+    This is the question a reader asks *before* editing ("what happens if I change
+    this?"), so it is a standing property of the tree and not a by-product of a
+    change. ``loop_a._compute_impacted`` answers the neighbouring question — who was
+    affected by what just happened — off a changeset, and feeds the LLM pass; the two
+    are deliberately separate, because a reader who has changed nothing yet has no
+    changeset to compute from.
+
+    It is a DERIVED index, like bindings, and it stays out of the prose. A
+    description listing its own dependents would be the inventory-of-machinery defect
+    the altitude rule exists to stop, and it would go stale the moment somebody added
+    a caller -- which is exactly the class of fact a rebuildable index should hold
+    instead of a sentence.
+
+    One sweep over the bindings and one over the internal edges, because per-feature
+    queries would be a query per bound symbol and the caller wants the whole tree.
+    ``edges`` lets a caller that has already read the edge table hand the rows over,
+    which is what the sidecar render does -- it runs on every loop tick and computes
+    feature coupling from the same rows.
+    """
+    owner: dict[str, str] = {}
+    for b in store.all_bindings():
+        owner.setdefault(b.symbol_path, b.feature_id)
+    if not owner:
+        return {}
+    rows = store.all_edges(internal_only=True) if edges is None else edges
+
+    # subject feature -> dependent feature -> the dependent's symbols doing the depending
+    raw: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for e in rows:
+        if e["kind"] not in IMPACT_KINDS:
+            continue
+        src, dst = e["src_symbol"], e["dst_symbol"]
+        if not src or not dst:
+            continue
+        subject, dependent = owner.get(dst), owner.get(src)
+        # A feature calling itself is not impact: the reader is already reading it.
+        if not subject or not dependent or subject == dependent:
+            continue
+        raw[subject][dependent].add(src)
+
+    out: dict[str, list[dict]] = {}
+    for subject, dependents in raw.items():
+        hits = []
+        for fid, syms in dependents.items():
+            f = store.get_feature(fid)
+            if f is None or f.retired:
+                continue  # a retired feature cannot be affected by anything
+            hits.append({
+                "feature_id": fid,
+                "title": f.title or fid,
+                "count": len(syms),
+                "via": sorted(syms)[:_MAX_VIA],
+            })
+        if hits:
+            hits.sort(key=lambda r: (-r["count"], r["title"]))
+            out[subject] = hits
+    return out

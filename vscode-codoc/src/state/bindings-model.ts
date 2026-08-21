@@ -14,6 +14,7 @@
  *   pitch            – derived one-line pitch on each FeatureMeta (v5)
  *   feature_kind     – Diátaxis-lite kind hint per feature (v5)
  *   feature_see_also – top-N coupled neighbours per feature (v5, data only)
+ *   feature_impact   – which features would feel a change to each one (v6)
  *   feature_drift    – loop-computed per-feature drift/trust signal (v5,
  *                      questioned|binding-lost; `followed` is absent → no badge)
  *
@@ -126,6 +127,22 @@ export interface SeeAlsoEntry {
     weight: number;
     kinds: string[];
     rationale: string;
+}
+
+/** One feature that would feel a change to another (v6, `feature_impact` slice) —
+ *  Sillito's group-4 question, "what happens if I change this?".
+ *
+ *  The INCOMING direction, which is what distinguishes it from `feature_edges` and
+ *  `SeeAlsoEntry`: those say what a feature depends ON, and the question a reader asks
+ *  before editing runs the other way. `via` names up to five of the dependent's own
+ *  symbols that reach into the subject, so the claim can be checked instead of taken on
+ *  trust; `count` is how many there are in total. A feature nothing depends on is absent
+ *  from the slice — the answer "nothing" is the absence, as with every other slice here. */
+export interface ImpactEntry {
+    feature_id: string;
+    title: string;
+    count: number;
+    via: string[];
 }
 
 /** In-place overlay for a RETIRE/AMEND proposal that decorates a live node. */
@@ -242,9 +259,12 @@ export interface SidecarData {
     hold_detail?: Record<string, HoldDetail>;
     // v5: a derived Diátaxis-lite kind hint per feature (overview/reference/…).
     feature_kind?: Record<string, FeatureKind>;
-    // v5: top-N coupled neighbours per feature (data only — the Connections panel
-    // already surfaces coupled features, so no second See-Also UI section).
+    // v5: top-N coupled neighbours per feature, OUTGOING (data only).
     feature_see_also?: Record<string, SeeAlsoEntry[]>;
+    // v6: which features would feel a change to each one — the incoming direction,
+    // ranked by how many symbols tie them to it. Absent for a feature nothing depends
+    // on. Drawn as the quiet impact chip on the feature heading.
+    feature_impact?: Record<string, ImpactEntry[]>;
     // v5: loop-computed per-feature drift/trust signal (questioned | binding-lost).
     // `followed` features are absent (no badge). Re-emitted from drift.json.
     feature_drift?: Record<string, FeatureDrift>;
@@ -296,6 +316,13 @@ export function kindForFeature(sidecar: SidecarData, featureId: string): Feature
 /** Top-N coupled neighbours for a feature (v5). Empty when the feature has no edges. */
 export function seeAlsoForFeature(sidecar: SidecarData, featureId: string): SeeAlsoEntry[] {
     return sidecar.feature_see_also?.[featureId] ?? [];
+}
+
+/** The features that would feel a change to this one (v6), heaviest coupling first.
+ *  Empty when nothing depends on it — which is a real and useful answer, so callers
+ *  render nothing rather than a zero. */
+export function impactForFeature(sidecar: SidecarData, featureId: string): ImpactEntry[] {
+    return sidecar.feature_impact?.[featureId] ?? [];
 }
 
 /** The loop-computed drift/trust signal for a feature, if any (v5). `undefined`

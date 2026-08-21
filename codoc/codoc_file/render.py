@@ -371,15 +371,18 @@ def _render_proposal(e: Event, store: Store, depth: int) -> list[str]:
     return [title_line("~", "-", op.kind.value)]
 
 
-def _compute_feature_edges(store: Store) -> dict[str, list[dict]]:
+def _compute_feature_edges(store: Store, edges: list | None = None) -> dict[str, list[dict]]:
     """Aggregate symbol-level call/import edges into feature-level coupling.
 
     Returns ``{src_feature_id: [{to: dst_feature_id, weight: int, kinds: list[str]}]}``.
     Used by the VS Code extension for dependency-focus opacity dimming.
+
+    ``edges`` lets the caller pass rows it has already read; the sidecar shares one
+    read with ``graph.query.feature_impact``, which needs the same table.
     """
     sym2feat = {b.symbol_path: b.feature_id for b in store.all_bindings()}
     agg: dict[tuple[str, str], dict] = {}  # (src_fid, dst_fid) → {weight, kinds}
-    for e in store.all_edges(internal_only=True):
+    for e in (store.all_edges(internal_only=True) if edges is None else edges):
         dst = e["dst_symbol"]
         if not dst:
             continue
@@ -603,9 +606,10 @@ def _compute_see_also(edges: dict[str, list[dict]]) -> dict[str, list[dict]]:
     :data:`SEE_ALSO_MAX`. Each row carries the destination feature id, its weight,
     and the edge ``kinds`` (``calls``/``imports``) as a one-line rationale.
 
-    This OVERLAPS the IDE's Connections panel (Depends-on / Used-by from the same
-    ``feature_edges``), so it is emitted purely as derived data for completeness +
-    future consumers — it is *never* a ``> …`` steering line and never enters
+    Emitted as derived data only, and OUTGOING: these are the features this one
+    depends on. The question a reader actually asks before editing runs the other way
+    ("what would break?"), and that is the ``feature_impact`` slice, which is the one
+    the document surface draws. Never a ``> …`` steering line and never enters
     ``tree.codoc`` / ``tree.doc.json`` (KTD4). Returns
     ``{src_feature_id: [{to, weight, kinds, rationale}]}``; a feature with no edges
     is absent (an empty See-Also).
@@ -784,9 +788,14 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
     # the drift/resolution slices keep the former filters (see phase.Projection).
     proj = project_from_store(store, codoc_dir)
 
-    # Compute feature-coupling edges ONCE and share them between the feature_edges
-    # slot and _compute_see_also (which is derived from the same edges).
-    edges = _compute_feature_edges(store)
+    # ONE read of the edge table, shared by every slice derived from it: the
+    # feature_edges aggregate, _compute_see_also above it, and the impact index. This
+    # pass runs on every loop tick, so a slice-per-read would be three scans a tick.
+    from codoc.graph.query import feature_impact
+
+    edge_rows = store.all_edges(internal_only=True)
+    edges = _compute_feature_edges(store, edge_rows)
+    impact = feature_impact(store, edge_rows)
 
     # ONE recent-events read shared by the changes feed (last 50 applied) AND the
     # per-feature blame history (grouped from a wider window) — two indexed scans
@@ -836,6 +845,15 @@ def write_sidecar(store: Store, codoc_dir: str | Path) -> None:
         # NEVER a `> …` steering line, never tree.codoc/tree.doc.json content.
         "feature_kind": _compute_kinds(store, all_features),
         "feature_see_also": _compute_see_also(edges),
+        # v6: which features would feel a change to this one — Sillito's group-4
+        # question ("what happens if I change this?"), which the dependency graph has
+        # always known and no description states. The INCOMING direction, unlike
+        # `feature_edges`/`feature_see_also` above, because that is the direction the
+        # question runs in: a reader about to edit wants the callers, not the callees.
+        # Each row carries the symbols doing the depending, so the claim is checkable
+        # rather than a number to take on trust. Absent for a feature nothing depends
+        # on. Kept OUT of the prose deliberately (see graph.query.feature_impact).
+        "feature_impact": impact,
         # v5: the per-feature drift/trust signal (questioned / binding-lost). This
         # is RE-EMITTED passively from the loop-computed `drift.json` — render has
         # NO live index, so it cannot recompute fingerprint-vs-tokens_hash here

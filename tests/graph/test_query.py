@@ -150,3 +150,143 @@ def test_entry_points(store, rows_foo_bar):
 def test_entry_points_empty_graph(store):
     ep = entry_points(store)
     assert ep == []
+
+
+# ---------------------------------------------------------------------------
+# feature_impact — "what happens if I change this?" (Sillito group 4)
+# ---------------------------------------------------------------------------
+
+def _feat(store, title):
+    from codoc.model.feature import Feature
+    f = Feature(title=title)
+    store.upsert_feature(f)
+    return f
+
+
+def _bind(store, feature, symbol):
+    from codoc.model.binding import Binding
+    store.upsert_binding(Binding(feature_id=feature.id, file=symbol.split("::")[0],
+                                 symbol_path=symbol, fingerprint="h"))
+
+
+def _edge(store, src, dst, kind="call"):
+    store.insert_edges([{
+        "src_file": src.split("::")[0], "src_symbol": src,
+        "dst_name": dst.split("::")[-1], "dst_symbol": dst,
+        "dst_file": dst.split("::")[0], "kind": kind, "internal": 1,
+    }])
+
+
+def test_feature_impact_answers_the_incoming_direction(store):
+    # `see_also` says what a feature depends ON; the question a reader asks before
+    # editing runs the other way, and this is the one that answers it.
+    from codoc.graph.query import feature_impact
+    core, ui = _feat(store, "The store"), _feat(store, "The editor")
+    _bind(store, core, "db.py::upsert")
+    _bind(store, ui, "view.py::save")
+    _edge(store, "view.py::save", "db.py::upsert")
+
+    imp = feature_impact(store)
+    assert list(imp) == [core.id], "the SUBJECT is the feature being changed"
+    assert imp[core.id][0]["feature_id"] == ui.id
+    assert imp[core.id][0]["title"] == "The editor"
+    # The evidence is the DEPENDENT's own symbol — what the reader would go read.
+    assert imp[core.id][0]["via"] == ["view.py::save"]
+    assert imp[core.id][0]["count"] == 1
+
+
+def test_feature_impact_omits_a_feature_nothing_depends_on(store):
+    # The absence is the answer; an empty list per feature would be noise the whole
+    # way down the tree.
+    from codoc.graph.query import feature_impact
+    core, ui = _feat(store, "The store"), _feat(store, "The editor")
+    _bind(store, core, "db.py::upsert")
+    _bind(store, ui, "view.py::save")
+    _edge(store, "view.py::save", "db.py::upsert")
+    assert ui.id not in feature_impact(store)
+
+
+def test_feature_impact_skips_a_feature_depending_on_itself(store):
+    # A feature whose own symbols call each other is not "impact": the reader is
+    # already reading it.
+    from codoc.graph.query import feature_impact
+    f = _feat(store, "Auth")
+    _bind(store, f, "a.py::login")
+    _bind(store, f, "a.py::make_token")
+    _edge(store, "a.py::login", "a.py::make_token")
+    assert feature_impact(store) == {}
+
+
+def test_feature_impact_ranks_by_how_many_symbols_tie_in(store):
+    from codoc.graph.query import feature_impact
+    core = _feat(store, "The store")
+    heavy, light = _feat(store, "Zebra loop"), _feat(store, "Alpha view")
+    _bind(store, core, "db.py::upsert")
+    for sym in ("loop.py::a", "loop.py::b"):
+        _bind(store, heavy, sym)
+        _edge(store, sym, "db.py::upsert")
+    _bind(store, light, "view.py::save")
+    _edge(store, "view.py::save", "db.py::upsert")
+
+    rows = feature_impact(store)[core.id]
+    # Coupling first, then title — so the answer is stable between passes and does
+    # not reshuffle a card the reader is looking at.
+    assert [r["title"] for r in rows] == ["Zebra loop", "Alpha view"]
+    assert rows[0]["count"] == 2
+
+
+def test_feature_impact_caps_the_evidence_but_not_the_count(store):
+    # A truncated list read as complete is worse than a number, so `count` stays true
+    # while `via` stops at a readable few.
+    from codoc.graph.query import feature_impact, _MAX_VIA
+    core, dep = _feat(store, "The store"), _feat(store, "The loop")
+    _bind(store, core, "db.py::upsert")
+    for i in range(_MAX_VIA + 3):
+        sym = f"loop.py::step{i}"
+        _bind(store, dep, sym)
+        _edge(store, sym, "db.py::upsert")
+
+    row = feature_impact(store)[core.id][0]
+    assert row["count"] == _MAX_VIA + 3
+    assert len(row["via"]) == _MAX_VIA
+
+
+def test_feature_impact_drops_a_retired_dependent(store):
+    # A retired feature cannot be affected by anything, and reporting it as a risk
+    # would send the reader to prose the tree no longer shows.
+    from codoc.graph.query import feature_impact
+    core, gone = _feat(store, "The store"), _feat(store, "Old importer")
+    _bind(store, core, "db.py::upsert")
+    _bind(store, gone, "old.py::run")
+    _edge(store, "old.py::run", "db.py::upsert")
+    from codoc.model.feature import Lifecycle
+    store.upsert_feature(gone.model_copy(update={"lifecycle": Lifecycle.RETIRED}))
+    assert feature_impact(store) == {}
+
+
+def test_feature_impact_ignores_edge_kinds_that_are_not_dependencies(store):
+    from codoc.graph.query import feature_impact
+    core, ui = _feat(store, "The store"), _feat(store, "The editor")
+    _bind(store, core, "db.py::upsert")
+    _bind(store, ui, "view.py::save")
+    _edge(store, "view.py::save", "db.py::upsert", kind="mentions")
+    assert feature_impact(store) == {}
+
+
+def test_feature_impact_accepts_pre_read_edge_rows(store):
+    # The sidecar render already reads the edge table for feature coupling; handing
+    # the rows over is what keeps one render tick to one scan.
+    from codoc.graph.query import feature_impact
+    core, ui = _feat(store, "The store"), _feat(store, "The editor")
+    _bind(store, core, "db.py::upsert")
+    _bind(store, ui, "view.py::save")
+    _edge(store, "view.py::save", "db.py::upsert")
+    rows = store.all_edges(internal_only=True)
+    assert feature_impact(store, rows) == feature_impact(store)
+
+
+def test_feature_impact_is_empty_without_bindings(store):
+    from codoc.graph.query import feature_impact
+    _feat(store, "Unbound theme")
+    _edge(store, "view.py::save", "db.py::upsert")
+    assert feature_impact(store) == {}

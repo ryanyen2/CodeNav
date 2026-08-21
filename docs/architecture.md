@@ -196,11 +196,56 @@ Loop integration (no parallel pipeline — block directives ARE directives):
   ambiguous `lower` returns a `draft` held for confirmation; a `move` emits nothing.
 
 Reference plugins: prose (`prose.py`, plugin-zero), diagram (`diagram.py` — deterministic
-`lift` from the dependency graph, deterministic edge-delta `lower`), and the consult media
+`lift` from the dependency graph, deterministic edge-delta `lower`; see "Drawing how
+things relate" below), and the consult media
 (`screenshot.py` — transient screenshot riding the steers channel + url/image). Hosts
 render blocks from the sidecar `blocks` slice (v6); the VS Code webview and the `codoc serve`
 hub (read-only) are two hosts on the one protocol, kept in parity by
 `blocks/conformance.py:canonical_block_view` (mirrored by `bindings-model.ts:blocksForFeature`).
+
+### Drawing how things relate, and what a change would reach
+
+Sillito's third and fourth question groups — *how are these related?* and *what happens
+if I change this?* — are the two a description cannot answer without becoming an
+inventory of the machinery it exists to spare the reader. Both are answered from the
+dependency graph instead, and both stay out of the prose.
+
+**Group 3 — the diagram lift** (`blocks/diagram.py`). For a feature's bound symbols it
+walks the graph in BOTH directions (in-edges that start inside the feature are skipped:
+a node's own internals are not external pressure), ids each node by its whole symbol
+path (a leaf-collapsed id merged `a.py::save` with `b.py::save` and drew a dependency
+that does not exist), labels it with the leaf, and groups neighbours into a subgraph per
+OWNING feature — the reader's own first, a neighbour no feature covers labelled as
+outside the tree. A hub symbol is bounded at `MAX_NEIGHBOURS` by degree then symbol path
+(deterministic, so a re-lift is idempotent), and the cut is drawn as a real node
+(`+N more related symbols`) because a silently truncated diagram reads as the whole
+story.
+
+The round trip carries **no legend**: nothing in the mermaid content records which box
+is which symbol, and both halves rebuild that from the feature's bindings plus their
+one-hop neighbours — so an author editing the picture cannot delete the mapping. On
+`lower`, an EDGE DELTA always yields a directive (a box with no code behind it is a
+request to create it, and the author's own label is the best name anyone has for it);
+what drafts is a change that moved no edge — a lone new box, a relabel, or content the
+codec cannot read (KTD2).
+
+**Group 4 — `graph/query.py:feature_impact`.** `{subject → [{feature_id, title, count,
+via}]}` over `call`/`import`/`inherit` edges, one entry per DEPENDENT feature, ranked by
+how many of its symbols tie it to the subject and then by title so the answer is stable
+between passes. Self-coupling and retired dependents are dropped; `via` is capped at
+five and `count` is not. This is a STANDING property, deliberately separate from
+`loop_a._compute_impacted`, which answers the neighbouring question (who was affected by
+what just happened) off a changeset and feeds the LLM pass — a reader asking what a
+change would reach has changed nothing yet.
+
+It reaches three surfaces: the `feature_impact` sidecar slice (sharing `write_sidecar`'s
+one edge-table read with `feature_see_also`), `impact` / `impact_total` on every
+`read_context` row (an agent about to edit is asking exactly this and is the reader least
+able to look around), and a chip on the feature heading that is invisible until the
+heading is hovered (`webview/tiptap/impact-decorations.ts`) — the fact is worth a great
+deal in the seconds before an edit and nothing at all while reading. The count is the
+chip; clicking opens the dependents by name with the symbols that reach in, each a link
+to go read.
 
 ## Bootstrap in detail
 
@@ -414,7 +459,14 @@ state** and is re-emitted on every pass even when the text render is held back
 - **`tree.bindings.json`** (v6) — the IDE/browser sidecar: `by_feature`/`by_file`
   bindings, `features{}` (each carries `lifecycle` + the legacy `realized`),
   `proposals` (drives in-place overlays + Accept/Reject), `changes` (recent applied
-  events), and derived reading slices (`pitch`, `feature_kind`, `feature_see_also`).
+  events), and derived reading slices (`pitch`, `feature_kind`, `feature_see_also`,
+  `feature_impact`). The last two are opposite directions of one graph and both stay
+  out of the prose: `feature_see_also` is what a feature depends ON,
+  `feature_impact` is which features would feel a change TO it — Sillito's group-4
+  question, drawn as the hover-revealed chip on the heading
+  (`webview/tiptap/impact-decorations.ts`) and handed to an agent on every
+  `read_context`. Absence means nothing depends on the feature; one edge-table read
+  serves both slices.
   The **mid-flight slices** — `feature_phase` (the single per-feature Phase),
   `holds`, `hold_detail`, `feature_drift`, `feature_resolution` — are ALL thin views
   of ONE `loop/phase.py:compute_phases` pass (Proposal B), off one source of truth.

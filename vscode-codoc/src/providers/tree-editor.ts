@@ -982,6 +982,11 @@ export class CodocTreeEditorProvider implements vscode.CustomTextEditorProvider 
             pitches,
             awaitingAI: held,
             holdDetail: heldDetail(sidecar),
+            // Group 4 ("what happens if I change this?") straight off the sidecar slice.
+            // Passed through unfiltered: the daemon already dropped retired features and
+            // ranked by coupling, and a host-side second opinion would be one more place
+            // for the two to disagree.
+            impact: sidecar.feature_impact ?? {},
             divergent: divergentFeatures(sidecar),
             // U4: only drafts the daemon is actually HOLDING surface the hand-off action —
             // a prose-only edit produces no directive (never enters `held`), so it commits

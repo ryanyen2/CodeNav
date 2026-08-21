@@ -39,7 +39,7 @@ def test_lift_refreshes_stale_diagram(tmp_path, store):
     changed = refresh_lift_blocks(store, str(tmp_path / ".codoc"))
     assert changed == 1
     refreshed = store.get_block(blk.id)
-    assert "login --> make_token" in refreshed.content
+    assert "a_py__login --> a_py__make_token" in refreshed.content
     assert refreshed.provenance is Provenance.DERIVED
     # idempotent: a second pass with no code change refreshes nothing
     assert refresh_lift_blocks(store, str(tmp_path / ".codoc")) == 0

@@ -63,6 +63,7 @@ import {
     rebaseCaptured, settledPendingFids, type FeatureText,
 } from '../../state/edit-baseline';
 import { GlanceDecorations, GLANCE_UPDATED } from './glance-decorations';
+import { ImpactDecorations, IMPACT_UPDATED } from './impact-decorations';
 import { AskDecorations, ASK_UPDATED } from './ask-decorations';
 import { FindDecorations, FIND_UPDATED, searchBlocks } from './find-decorations';
 import {
@@ -77,7 +78,7 @@ import { renderTreeFromDoc } from '../../state/doc-serialize';
 import { gateProjection, shouldDeferProjection } from '../doc-gate';
 import { codeRefsIn, mintCommentId, CommentThread } from '../../state/comment-model';
 import { hlcWallMs } from '../../state/blame-model';
-import type { HoldDetail } from '../../state/bindings-model';
+import type { HoldDetail, ImpactEntry } from '../../state/bindings-model';
 import type { Suggestion } from '../../state/suggestion-model';
 import { inlineRunsToText, type PMNode } from '../../state/pm-doc';
 import { tweenScrollTop, navDuration, muteWindowFor, prefersReducedMotion, staggerHover, sparkIn, type TweenController } from '../motion';
@@ -207,6 +208,8 @@ export interface WholeDocEditorHandle {
     setMintedMap: (m: Record<string, string>) => void;
     /** Per-feature one-line pitches (FeatureMeta.pitch) — feeds glance mode. */
     setPitches: (pitches: Record<string, string>) => void;
+    /** The group-4 answer per feature (`feature_impact`): who depends on it. */
+    setImpact: (impact: Record<string, ImpactEntry[]>) => void;
     /** Toggle glance mode (collapse each feature to its pitch). Decoration only. */
     setGlance: (on: boolean) => void;
     /** The `/codoc:ask` walkthrough overlay (`.codoc/ask.json`), or null for none.
@@ -382,6 +385,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
     let currentComments: CommentThread[] = [];
     let currentHoverCards: HoverCardData | null = null;
     let currentPitches: Record<string, string> = {}; // B-U2 glance: fid → pitch
+    // Sillito group 4: fid → the features that would feel a change to it. Absent
+    // for a feature nothing depends on, which is why the lookup returns [] and the
+    // decoration layer draws nothing rather than a zero.
+    let currentImpact: Record<string, ImpactEntry[]> = {};
     let glanceOn = false;
     // The /codoc:ask walkthrough overlay, and which of its stops the reader is on.
     // Pure view state: nothing here is ever settled, so it needs no gate and can
@@ -539,6 +546,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             GlanceDecorations.configure({
                 isGlance: () => glanceOn,
                 getPitch: (fid: string) => currentPitches[fid] ?? '',
+            }),
+            ImpactDecorations.configure({
+                getImpact: (fid: string) => currentImpact[fid] ?? [],
+                onNavigate: fid => scrollToFeatureInternal(fid, true),
             }),
             AskDecorations.configure({
                 getAsk: () => currentAsk,
@@ -2466,6 +2477,10 @@ export function mountWholeDocEditor(container: HTMLElement, opts: WholeDocEditor
             editor.view.dispatch(editor.state.tr.setMeta(BLOCKS_UPDATED, true));
         },
         setMintedMap: (m: Record<string, string>) => { currentMintedByLocalId = m; },
+        setImpact: (impact: Record<string, ImpactEntry[]>) => {
+            currentImpact = impact;
+            editor.view.dispatch(editor.state.tr.setMeta(IMPACT_UPDATED, true));
+        },
         setPitches: (pitches: Record<string, string>) => {
             currentPitches = pitches;
             // Refresh glance widgets if glance is currently on (no-op decoration when off).

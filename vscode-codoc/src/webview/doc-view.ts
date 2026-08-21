@@ -1012,6 +1012,7 @@ function reconcile(): void {
         wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
         wholeEditor.setDrafts(payload.drafts ?? []);
         wholeEditor.setBlocks(payload.blocks ?? {});
+        wholeEditor.setImpact(payload.impact ?? {});   // group 4: who depends on this
         wholeEditor.setComments(payload.comments ?? []);
         wholeEditor.setHoverCards(payload.hoverCards ?? null);
         wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile
@@ -1808,6 +1809,7 @@ function renderDocHost(): HTMLElement {
     wholeEditor.setHeld(handedOff(payload), payload.holdDetail ?? {});
     wholeEditor.setDrafts(payload.drafts ?? []);
     wholeEditor.setBlocks(payload.blocks ?? {});
+    wholeEditor.setImpact(payload.impact ?? {});   // group 4: who depends on this
     wholeEditor.setComments(payload.comments ?? []);
     wholeEditor.setHoverCards(payload.hoverCards ?? null);
     wholeEditor.setMintedMap(payload.mintedByLocalId ?? {});  // before setDoc — exact fid reconcile

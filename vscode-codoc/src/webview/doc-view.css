@@ -1532,6 +1532,62 @@ body.vscode-high-contrast .ce-bub-btn:hover {
 .ce-hc-open:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 body.vscode-high-contrast .ce-hovercard { outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground)); }
 
+/* ───────────────────────────────────────────────────────────────────────────
+   IMPACT CHIP + CARD (impact-decorations.ts) — "what happens if I change this?"
+   drawn on the feature it is about. The count sits at the end of the heading and
+   the dependents by name open from it.
+
+   It is on the same "revealed on hover" tier as the withdraw ✕ above, for the same
+   reason: the fact is worth a lot in the seconds before an edit and nothing at all
+   while reading, so a permanently-lit dependency count on every heading would be an
+   inventory of the machinery competing with the prose that exists to spare the reader
+   one. The card reuses `.ce-hovercard`'s chrome rather than minting a card of its own,
+   and takes no hue — this is a derived index, not a channel of the settlement model,
+   and a colour here would read as a claim about who changed what.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ce-impact-chip { display: inline-flex; align-items: center; margin-left: 6px; }
+.ce-impact-count {
+    border: none; background: transparent; cursor: pointer; padding: 0 3px;
+    font: 600 9.5px var(--vscode-font-family); line-height: 1.5;
+    color: var(--fg-muted); border-radius: 999px;
+    opacity: 0; transition: opacity var(--dur-fast) var(--ease);
+}
+.codoc-feature-heading:hover .ce-impact-count,
+.codoc-feature-heading:focus-within .ce-impact-count { opacity: 0.55; }
+.ce-impact-count:hover, .ce-impact-count:focus-visible {
+    opacity: 1; color: var(--vscode-foreground);
+    background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+}
+/* Glance mode is the "shape of the tree" stance; a dependency count per heading is
+   detail, and the whole point of the stance is that the detail is gone. */
+body.glance .ce-impact-chip { display: none; }
+
+.ce-impact-card { width: 300px; display: flex; flex-direction: column; gap: 1px; }
+.ce-impact-card-head {
+    color: var(--fg-faint); font-size: 10.5px; letter-spacing: 0.01em;
+    margin-bottom: 5px;
+}
+/* Each row is a link to the dependent — "what breaks" is only useful if you can go
+   read it. Buttons, so the keyboard reaches them in document order. */
+.ce-impact-row {
+    display: flex; flex-direction: column; gap: 1px; text-align: left;
+    border: none; background: transparent; cursor: pointer;
+    padding: 4px 6px; margin: 0 -6px; border-radius: 6px;
+    font: inherit; transition: background var(--dur-fast) var(--ease);
+}
+.ce-impact-row:hover, .ce-impact-row:focus-visible {
+    background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+}
+.ce-impact-row-title {
+    color: var(--fg-body, var(--vscode-foreground)); font-size: 11.5px; font-weight: 600;
+    word-break: break-word;
+}
+/* The evidence, in the code's own typeface: the dependent's symbols that reach in. */
+.ce-impact-row-via {
+    font: 10.5px/1.45 var(--font-mono); color: var(--fg-muted); word-break: break-all;
+}
+.ce-impact-more { color: var(--fg-faint); font-size: 10.5px; margin-top: 5px; }
+
 /* keyboard reachability for the hover targets (Enter/Space opens the card) */
 .codoc-code-ref:focus-visible,
 .ce-thread:focus-visible {

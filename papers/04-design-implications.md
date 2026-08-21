@@ -132,11 +132,71 @@ escalation.
 
 Group 3 ("how are these related") is answered by a diagram, and the diagram
 plugin already lifts one from the code graph. Group 4 ("what happens if I change
-this") is answered by the `impacted` set, which Loop A computes and then uses only
-advisorily.
+this") is answered by the dependency graph's impact set, which Loop A computed and
+then spent only on its own prompt.
 
-**To build:** diagram lift audited against the question it is meant to answer; the
-`impacted` set surfaced where a reader can see it.
+**Built.**
+
+| Piece | Where |
+|---|---|
+| The group-3 lift: both directions, per-file identity, grouped by owning feature, bounded | `codoc/blocks/diagram.py` |
+| Its round trip, and where an unreadable edit becomes a draft instead of a guess | `codoc/blocks/diagram.py::lower` |
+| The group-4 query, as a standing property of the tree | `codoc/graph/query.py::feature_impact` |
+| The slice the document surface reads it from | `codoc/codoc_file/render.py::write_sidecar` (`feature_impact`) |
+| The same answer handed to an agent that is about to edit | `codoc/mcp/tools.py::read_context` (`impact`, `impact_total`) |
+| Drawn on the feature it is about | `vscode-codoc/src/webview/tiptap/impact-decorations.ts` |
+| Both halves | `tests/blocks/test_diagram_plugin.py`, `tests/graph/test_query.py`, `vscode-codoc/src/test/impact-decorations.test.ts` |
+
+**The picture was drawing half the relation.** The lift walked out-edges only, so a
+feature saw what it called and never what called it — and "how are these related" is
+symmetric, while the group-4 question is *entirely* the direction that was missing. It
+now walks both, skipping in-edges that start inside the feature so a node's own
+internals do not read as external pressure.
+
+**Two same-named symbols in two files were ONE box, and the edge between them was
+false.** Node ids collapsed a symbol path to its leaf, so `a.py::save` and
+`b.py::save` merged, and any edge into either was drawn into the merged node — a
+picture asserting a dependency that does not exist, which is worse than no picture.
+Ids now carry the whole path; the LABEL carries the leaf, because that is what a
+reader is there to read.
+
+**Neighbours are grouped by the feature that owns them**, which is what turns a symbol
+graph into a statement about the tree: a subgraph per owning feature, the reader's own
+feature first, and a neighbour no feature covers labelled as outside the tree rather
+than silently drawn as if it were in it.
+
+**The cut is drawn as a node.** A hub symbol has more neighbours than a diagram can
+say anything with, so the lift keeps the twelve most-connected — deterministically, by
+degree and then symbol path, so a re-lift is idempotent and cannot refresh forever —
+and puts `+N more related symbols` in the picture. A silently truncated diagram reads
+as the whole story.
+
+**The round trip carries no map, by construction.** Nothing in the mermaid content
+records which box is which symbol; both `lift` and `lower` rebuild that from the
+feature's bindings and their one-hop neighbours. An author editing the diagram
+therefore cannot delete the mapping, which is the failure a stored legend invites.
+
+**An edge delta always yields a directive; a change with no edge delta drafts.** A box
+with no code behind it is a request to CREATE that code, and the author's own label is
+the best name anyone has for it — so a hand-drawn edge is a directive, not a draft. What
+is genuinely unmappable is a change that moved no edge: a lone new box, a relabel, or
+content the codec cannot read. Those draft (KTD2 — ambiguous never guesses).
+
+**Group 4 is a STANDING property, not a change-time one.** `loop_a._compute_impacted`
+answers the neighbouring question — who was affected by what just happened — off a
+changeset, and a reader asking "what happens if I change this?" has changed nothing
+yet, so there is no changeset to compute from. `feature_impact` is the standing query,
+and the two are kept deliberately separate.
+
+**And it stays out of the prose.** A description listing its own callers is exactly the
+inventory-of-machinery defect §C's altitude rule bans, and it goes stale the moment
+somebody adds a caller — the class of fact a rebuildable index should hold instead of a
+sentence. So the answer ships as a derived slice, an MCP field, and a chip that is
+invisible until the heading is hovered: the fact is worth a great deal in the seconds
+before an edit and nothing at all while reading. The count is the chip; clicking it
+opens the dependents by name, each with the symbols that actually reach in, each a link
+to go read. `via` is capped and `count` is not, because a truncated list read as
+complete is worse than a number.
 
 ## E. Warrant the why
 
