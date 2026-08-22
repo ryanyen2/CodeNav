@@ -211,8 +211,14 @@ data properly rather than only checking that files arrived.
 > collected any more, and the claim about FINDING stated at the end of this
 > subsection has no measure behind it as things stand. What RQ1 can support has to
 > be restated, and that is a decision for the study lead rather than an edit made
-> here. `analysis-plan.md` records the removal and its reason. The closed-book set
-> asked after the task is unaffected.
+> here. `analysis-plan.md` records the removal and its reason.
+>
+> **Out of date again since 2026-08-22.** The closed-book set asked after the task
+> was removed on that date too, along with the `recall` scale beside it, so the
+> paragraph below that treats it as the surviving measure of understanding no
+> longer has one either. There is now NO scored measure of what a participant
+> carried out of the session: the closing interview asks it, and what it produces
+> is prose.
 
 This is the strongest position, and it improved most.
 The instrument's own stated open problem was that a blind model scored 9/12 while

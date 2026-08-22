@@ -9,12 +9,10 @@ export {
     CONSENT_FORM, PRESTUDY, REQUIRED, EXCLUDING, shouldExclude,
     AGREE, AMOUNT, PERFORMANCE, CONSTRUCTS, AFTER_CONDITION, scaleFor, keyed,
     normalized, rtlx, umuxLite, constructScore,
-    MANIPULATION_CHECK, SCENARIOS, SIGNOFF, REFLECTION,
-    INTERVIEW, INTERVIEW_QUESTIONS,
+    SCENARIOS, SIGNOFF, INTERVIEW, INTERVIEW_QUESTIONS,
 } from './instrument.js';
 export { PROJECTS, TASK, HOW_TO_START } from './content.js';
 export { TUTORIAL } from './tutorial.js';
-export { AFTER_QUIZZES } from './quiz.js';
 
 /**
  * The order of the session, built from which way round this participant goes.
@@ -33,6 +31,14 @@ export function buildSteps(order = 'codoc-first') {
     // asks somebody to review a change to it, so the first ten minutes of the
     // task were the question round again with the clock running twice.
     //
+    // The closed-book round that used to sit between the sign-off and the
+    // questionnaire is gone too, on 2026-08-22. It was five multiple-choice
+    // questions with right answers plus one scale asking how much of them the
+    // participant had actually known, and the scale went with them: "how much of
+    // THAT were you sure of" has no referent once the questions it points at are
+    // not asked. What somebody retained is asked out loud in the closing
+    // interview instead.
+    //
     // The tutorial is its own step because a participant used to meet the way of
     // working in the same minute they met the codebase, with four lines of text
     // to explain it. Both conditions get one, of the same length, so the page
@@ -43,7 +49,6 @@ export function buildSteps(order = 'codoc-first') {
         { id: `system-${n}`, kind: 'system', ...c, n },
         { id: `task-${n}`, kind: 'task', ...c, n },
         { id: `signoff-${n}`, kind: 'signoff', ...c, n },
-        { id: `reflect-${n}`, kind: 'reflect', ...c, n },
         { id: `after-${n}`, kind: 'questionnaire', ...c, n },
     ];
 
@@ -71,7 +76,6 @@ export function answerDoc(step) {
     // record of when the task began and ended, and the interaction log is cut on
     // those two instants.
     if (step.kind === 'task') return `task-${step.condition}`;
-    if (step.kind === 'reflect') return `reflect-${step.condition}`;
     // The interview is spoken and typed into the dashboard, so this page stores
     // nothing for it.
     return null;

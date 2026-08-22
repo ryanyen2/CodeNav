@@ -552,7 +552,15 @@ def first_turn(workspace: Path, frames: Path, speed: float) -> int:
     if code:
         return code
 
+    # The handover record NAMES the installed session rather than implying one.
+    # `claude --continue` does not ask whether a conversation exists, it asserts
+    # that one does and exits when it does not, so the launcher has to know before
+    # it offers the flag — and the only party that knows is the step that installed
+    # the transcript.
     session = session_id(frames)
+    installed = player.transcript_path(workspace, session) if session else None
+    if installed is not None and not installed.exists():
+        installed = None
     profile = workspace / PROFILE
     profile.mkdir(parents=True, exist_ok=True)
     (profile / HANDOVER).write_text(json.dumps({
@@ -560,7 +568,11 @@ def first_turn(workspace: Path, frames: Path, speed: float) -> int:
         "request": request,
         "frames": str(frames),
         "session_id": session or "",
+        "transcript": str(installed) if installed else "",
     }, indent=2) + "\n")
+    if installed is None:
+        print(f"{DIM}This recording carries no session, so the assistant will "
+              f"start fresh.{RESET}", flush=True)
 
     return 0
 

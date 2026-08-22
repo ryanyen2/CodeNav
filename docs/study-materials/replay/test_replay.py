@@ -468,9 +468,63 @@ class TranscriptTest(unittest.TestCase):
                 Path.home = original  # type: ignore[assignment]
             self.assertIsNotNone(out)
             self.assertEqual(out.name, "abc-123.jsonl")
-            self.assertEqual(out.parent.name, str(ws.resolve()).replace(os.sep, "-"))
+            self.assertEqual(out.parent.name, play.project_slug(str(ws.resolve())))
             self.assertNotIn("/recorder/scribe", out.read_text())
             self.assertIn(str(ws.resolve()), out.read_text())
+
+    def test_the_installed_session_is_one_the_assistant_will_resume(self):
+        """`--continue` never sees an SDK session, and a recording is made by one.
+
+        Installed verbatim, the transcript sat in the profile and the launcher
+        answered "No conversation found to continue" — the participant had just
+        watched the change being made and could not ask a question about it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            frames, ws, home = tmp / "frames", tmp / "codoc-study/scribe", tmp / "home"
+            frames.mkdir(parents=True)
+            ws.mkdir(parents=True)
+            (frames / "transcript.jsonl").write_text("\n".join([
+                json.dumps({"sessionId": "abc-123", "cwd": "/recorder/scribe",
+                            "type": "user", "entrypoint": "sdk-cli",
+                            "promptSource": "sdk"}),
+                json.dumps({"sessionId": "abc-123", "cwd": "/recorder/scribe",
+                            "type": "assistant", "entrypoint": "sdk-cli"}),
+            ]))
+            original = Path.home
+            try:
+                Path.home = staticmethod(lambda: home)  # type: ignore[assignment]
+                out = play.install_transcript(ws, frames)
+            finally:
+                Path.home = original  # type: ignore[assignment]
+            records = [json.loads(line) for line in out.read_text().splitlines()]
+            self.assertEqual([r["entrypoint"] for r in records], ["cli", "cli"])
+            self.assertEqual(records[0]["promptSource"], "typed")
+            self.assertNotIn("sdk", out.read_text())
+
+    def test_every_recording_in_the_tree_installs_as_a_resumable_session(self):
+        """The frames are checked in, so a recording made before the repair is
+        still one a participant would be handed."""
+        for transcript in sorted((HERE / "frames").glob("*/*/transcript.jsonl")):
+            for line in transcript.read_text(errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                self.assertNotIn(entry.get("entrypoint"), play.SDK_ENTRYPOINTS,
+                                 f"{transcript} would be filtered from --continue")
+
+    def test_the_project_directory_is_the_one_the_assistant_reads(self):
+        """Every character outside [a-zA-Z0-9] folds to a dash, not just the
+        separator. A participant called `john.doe` had the session installed in a
+        directory nothing looks in."""
+        self.assertEqual(play.project_slug("/Users/john.doe/codoc-study/tally"),
+                         "-Users-john-doe-codoc-study-tally")
+        self.assertEqual(play.project_slug("/Users/Jane Smith/x_y"),
+                         "-Users-Jane-Smith-x-y")
+        slug = play.project_slug("/Users/p/" + "a" * 400)
+        head, _, tail = slug.rpartition("-")
+        self.assertEqual(len(head), play.PROJECT_SLUG_MAX)
+        self.assertTrue(tail and tail.isalnum())
 
     def test_terminal_text_comes_out_in_order(self):
         with tempfile.TemporaryDirectory() as tmp:

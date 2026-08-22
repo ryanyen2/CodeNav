@@ -333,42 +333,17 @@ textarea:focus { outline: none; border-color: var(--accent); }
 }
 .ba pre.sample { margin: 0; font-size: 12px; white-space: pre-wrap; }
 
-/* ── the quiz ────────────────────────────────────────────────────────────── */
+/* ── what is left of the question rounds ──────────────────────────────────── */
 
-/* The questions are not copyable.
-   They are open book — read the description, read the code, ask the agent about
-   the project — but pasting the question itself at the agent measures the agent
-   rather than the pair, which is the one thing the sitting is not for. This is
-   not a security boundary and is not meant to be; it removes the thoughtless
-   path, which is the one people actually take.
-   Scoped to the text, never to `.q` wholesale: `.q` also wraps the inputs and
-   textareas the questionnaire and the sign-off use, and Safari and Firefox will
-   happily make a textarea unselectable, which would take a participant's own
-   typing away from them. */
-.noselect .lead,
-.noselect .q .label,
-.noselect .opts,
-.noselect .note { user-select: none; -webkit-user-select: none; }
+/* Both rounds have gone from the session — the open-book one before the task on
+   2026-08-19, the closed-book one after it on 2026-08-22 — and the lettered
+   option list they were drawn with went with them. Nothing in `app.js` writes
+   `.opts` any more; multiple-choice answers elsewhere are `.choices`, which is a
+   row of words rather than a stack of sentences.
 
-/* Options stacked and full width, because they are sentences rather than words
-   and a row of four would wrap into something nobody can scan. */
-.opts { display: flex; flex-direction: column; gap: 6px; }
-.opts button {
-    display: flex; align-items: baseline; gap: 10px; width: 100%;
-    text-align: left; font: inherit; color: inherit; background: var(--panel);
-    border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 10px 12px; cursor: pointer;
-    transition: background 140ms var(--ease), border-color 140ms var(--ease);
-}
-.opts button:hover { border-color: var(--accent); }
-.opts button[aria-pressed="true"] {
-    background: var(--accent-soft); border-color: var(--accent);
-}
-.opt-letter {
-    flex: none; width: 1.3em; color: var(--ink-faint); font-size: 13px;
-}
-.opts button[aria-pressed="true"] .opt-letter { color: var(--accent); font-weight: 600; }
-.opt-text { flex: 1; }
+   The clock below is kept. It belonged to the timed open-book round and nothing
+   draws it today either, but it is the only styling for a clock the page has, and
+   the page may yet need to show one. */
 
 /* The question clock. Present, readable, and not alarming until it matters. */
 .timer {

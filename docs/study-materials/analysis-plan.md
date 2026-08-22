@@ -99,48 +99,43 @@ it is reported.
 
 | Measure | Computed from |
 | --- | --- |
-| **What they carried out of the task** | Five multiple-choice questions in `answers/reflect-<condition>`, **closed book**: no code, no description, no agent. They have right answers, held in `experimenter/after-questions.json` and never shipped to the browser, so the dashboard scores them and nothing is marked by hand. They are per project and about the change the participant just made, and they run two easy, two medium and one hard, in that order. |
-| Whether they were sure or reconstructing | The `recall` scale on the same page. A fluent reconstruction and a real memory read the same in prose, so it is asked directly. |
-| Whether the decisions passed through them | The who-settled-what record in the dashboard, and the two after-task questions that turn on a decision the participant made rather than on the codebase alone. |
+| Whether the decisions passed through them | The who-settled-what record in the dashboard, and what they say in the closing interview about the decisions they made. |
+| What they carried out of the task | The closing interview, verbatim. Your notes. |
 
-**One measure was dropped on 2026-08-19, and nothing replaces it.** How well and
-how fast somebody can find an answer in this codebase was measured by five
-questions asked before the task, open book and timed, with the score and the
-elapsed time both landing in `answers/quiz-<project>-before`. That round is gone
-from the session, so nothing writes that document any more and the measure cannot
-be computed.
+**Both question rounds are gone, and nothing on the page replaces either.** This
+section used to hold the study's only scored measure of understanding, and it now
+holds none: what somebody retained is asked out loud and written down by the
+researcher, so it is qualitative and is reported as such.
 
-It was dropped because the task changed. Reviewing a change to the codebase means
-working the codebase out, so the first half of the task is the same activity the
-open-book round measured, and running both put the same activity on the clock
-twice inside a session whose whole task budget is now twenty minutes. Nothing has
-been put in its place, and a session collected before that date holds the round
-while a later one does not, so the two cannot be pooled on it.
+The open-book round before the task went on 2026-08-19. Five questions about the
+codebase, timed, landing in `answers/quiz-<project>-before`. It was dropped
+because the task changed: reviewing a change to the codebase means working the
+codebase out, so the first half of the task is the same activity the round
+measured, and running both put that activity on the clock twice inside a
+twenty-minute budget.
 
-The after-task set was four boxes to type in until 2026-08. Freeform got short
-answers to questions whose value is in the follow-up, at the end of two hours,
-and nothing comparable between participants. The follow-up now happens out loud
-in the closing interview, where it belongs.
+The closed-book round after the task went on 2026-08-22, at the researcher's
+call. Five multiple-choice questions with right answers in
+`answers/reflect-<condition>`, plus the `recall` scale asking how much of them the
+participant had actually known rather than worked out in the moment. The scale
+went with the questions because it pointed at them: "how much of THAT were you
+sure of" has no referent once they are not asked.
 
-Three of the five turn on a planted problem in the agent's session. The two ways
-to get one of those right are to have found the problem or to have read the whole
-change carefully. A question answerable from the project briefing would measure
-reading, and somebody who shipped without looking will have neither route.
+**Nothing writes `answers/quiz-*` or `answers/reflect-*` any more.** A session
+collected before each date holds that round and a later one does not, so sessions
+either side of a date cannot be pooled on these measures. `experimenter/
+questions.json` and `after-questions.json` still hold the sets and their keys, and
+the projects' `STUDY.md` files still carry the source, so either round can be put
+back — but no answers have been collected under this version of the instrument.
 
-**There is one question round, and it is after the task.** It used to be the same
-twelve questions before and after, with the change between them as the measure.
-Both sittings asked about the codebase, and neither asked about the thing the
-study is actually about, which is whether the person still owns the change their
-agent helped them write. The set that replaced it asks exactly that, and it can be
-multiple choice because the CONSEQUENCES of the change are fixed by the codebase
-even though the change itself differs from participant to participant. The
-open-book sitting survived that revision and was dropped by the next one, for the
-reason above.
-
-The comparison is **within participant, between conditions**: each person does
-one project each way, so their after-task score with codoc is compared against
-their own after-task score without it. There is no comparison between
-participants.
+**The manipulation check went on the same date**, with the "In your own words"
+section it was asked under. `noticedChange` asked whether the participant saw the
+written description change while the agent worked, and it was the only per-arm
+check that somebody in the codoc condition had met the thing being studied. There
+is no longer a stored answer to that question, so a participant who never noticed
+the description moving cannot be identified from the export and separated out
+before averaging. The interview asks it, and the interaction log's dwell on the
+description is the closest thing to evidence.
 
 ## What they found in the agent's change  (serves RQ1 and RQ2)
 
@@ -276,8 +271,20 @@ because the review literature consistently finds them missing: the scale was 21
 points (0 to 100 in fives), no weighting step was used, and performance was
 collected high-is-good and reversed before scoring.
 
-**Reverse-keyed items** are `tlxSuccess`, `ctl4`, `ctl5`, `doc2`, `rev3`. Stored
-as answered, flipped once in `keyed`.
+**Reverse-keyed items** are `tlxSuccess`, `ctl5`, `doc2`, `rev3`. Stored as
+answered, flipped once in `keyed`.
+
+`ctl4` was reverse-keyed until 2026-08-22 and is not any more. It asked "I lost
+track of what the code looked like while the agent worked"; it now asks "I could
+keep track of the code while the agent was making changes", which is the same
+question the way round the construct reads. **A 6 on today's ctl4 and a 6 on the
+old one mean opposite things.** Every other id still lines up item for item, so
+this is the only item that has to be flipped before answers from either side of
+that date can be pooled — and nothing does it for you, because `keyed` reads the
+flag as it stands today. The wording of the other eleven items in the four blocks
+that are ours changed on the same date without changing what they ask; those are
+comparable at the construct level and should be reported as having been asked in
+the older wording.
 
 ## How the comparison is reported
 

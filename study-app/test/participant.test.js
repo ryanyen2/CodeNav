@@ -8,7 +8,7 @@ import {
     PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS, AGREE, AMOUNT, PERFORMANCE,
     scaleFor, keyed, normalized, rtlx, umuxLite, constructScore,
     SIGNOFF, INTERVIEW, INTERVIEW_QUESTIONS,
-    SCENARIOS, PROJECTS, HOW_TO_START, REFLECTION, TUTORIAL,
+    SCENARIOS, PROJECTS, HOW_TO_START, TUTORIAL,
     buildSteps, answerDoc, shouldExclude, CONSENT_FORM,
 } from '../participant/steps.js';
 
@@ -68,7 +68,7 @@ test('every reverse keyed item is one where agreeing is the bad direction', () =
     // Getting this list wrong flips a result rather than breaking a test, so it
     // is written out rather than counted.
     const reversed = AFTER_CONDITION.filter((q) => q.reverse).map((q) => q.id);
-    assert.deepEqual(reversed, ['tlxSuccess', 'ctl4', 'ctl5', 'doc2', 'rev3']);
+    assert.deepEqual(reversed, ['tlxSuccess', 'ctl5', 'doc2', 'rev3']);
 });
 
 test('a reverse keyed item is stored as answered, not flipped on the way in', () => {
@@ -172,12 +172,25 @@ test('UMUX-Lite matches its published formula', () => {
 });
 
 test('a construct score keys its reverse items', () => {
-    // The same trap as TLX performance, in the blocks that are ours. ctl4 and
-    // ctl5 are reverse keyed, so agreeing with them is the bad direction.
-    const answers = { ctl1: 7, ctl2: 7, ctl3: 7, ctl4: 1, ctl5: 1 };
+    // The same trap as TLX performance, in the blocks that are ours. ctl5 is the
+    // one reverse-keyed item left in this block, so agreeing with it is the bad
+    // direction; ctl4 was reverse-keyed until 2026-08-22 and is now asked the way
+    // round the construct reads, which is why a best-case answer says 7 to it.
+    const answers = { ctl1: 7, ctl2: 7, ctl3: 7, ctl4: 7, ctl5: 1 };
     assert.equal(constructScore(answers, 'control'), 7,
         'a consistent best-case answer scores at the top, not in the middle');
     assert.equal(constructScore({}, 'control'), null);
+});
+
+test('ctl4 is not reverse keyed, and the wording it is asked in agrees', () => {
+    // The one item whose POLARITY changed rather than its phrasing. A `reverse`
+    // flag left behind on the positive wording would silently invert every answer
+    // to it, and nothing downstream could notice: `keyed` reads the flag, and
+    // both the flag and the sentence look ordinary on their own.
+    const ctl4 = AFTER_CONDITION.find((q) => q.id === 'ctl4');
+    assert.equal(ctl4.reverse, undefined, 'the negation went, so the flag must too');
+    assert.match(ctl4.text, /^I could keep track of the code/);
+    assert.equal(keyed(ctl4, 7), 7, 'agreeing is the good direction now');
 });
 
 test('normalized puts every scale on one 0-100 range', () => {
@@ -399,7 +412,7 @@ test('the session leaves nowhere for the researcher to improvise', () => {
     // step whose content lives on the call is a step that differs per session.
     const kinds = new Set(buildSteps('codoc-first').map((s) => s.kind));
     for (const needed of ['intro', 'about', 'system', 'task', 'questionnaire',
-        'interview', 'prestudy', 'signoff', 'reflect']) {
+        'interview', 'prestudy', 'signoff']) {
         assert.ok(kinds.has(needed), `no ${needed} step`);
     }
 });
@@ -704,86 +717,51 @@ test('the preference item asks about kinds of work, and can go against the tool'
         'at least three items where a description plausibly does not help');
 });
 
-// ── after the task, closed book ──────────────────────────────────────────────
+// ── after the task ───────────────────────────────────────────────────────────
 
-test('the only question round is the one about their own change', async () => {
-    // The open-book round that used to sit before the task asked about the
-    // CODEBASE. The task is now a review of a change to that codebase, and its
-    // first half is spent working the same thing out, so the round was the first
-    // half of the task with the clock running twice. What the study is about is
-    // whether the person still owns the change, and that can only be asked
-    // about their own change.
+test('nothing between the task and the questionnaire asks for right answers', async () => {
+    // Two question rounds have now left the session, for the same reason each
+    // time: they scored RECALL of the codebase, and what the study is about is
+    // whether the person still owned the change. The open-book round before the
+    // task went first, because the task's own first half was spent working the
+    // same thing out. The closed-book round after it went on 2026-08-22, and the
+    // scale that asked how much of it they had really known went with it — "how
+    // much of THAT were you sure of" points at nothing once the questions are not
+    // asked. Both are asked out loud in the closing interview instead.
     const steps = buildSteps('codoc-first');
-    assert.equal(steps.filter((s) => s.kind === 'quiz').length, 0,
-        'the pre-task question round is still in the session');
+    const kinds = steps.map((s) => s.kind);
+    assert.equal(kinds.filter((k) => k === 'quiz').length, 0,
+        'the pre-task question round is back in the session');
+    assert.equal(kinds.filter((k) => k === 'reflect').length, 0,
+        'the closed-book round is back in the session');
 
-    const reflect = steps.filter((s) => s.kind === 'reflect');
-    assert.equal(reflect.length, 2, 'one reflection per condition');
-    for (const step of reflect) {
-        const kinds = steps.map((s) => s.kind);
-        const task = steps.findIndex((s) => s.kind === 'task' && s.n === step.n);
-        assert.ok(steps.indexOf(step) > task, 'it comes after the task it is about');
-        assert.equal(kinds.filter((k) => k === 'reflect').length, 2);
+    // The task hands straight to the sign-off and then to the questionnaire.
+    for (const n of [1, 2]) {
+        const task = steps.findIndex((s) => s.kind === 'task' && s.n === n);
+        const signoff = steps.findIndex((s) => s.kind === 'signoff' && s.n === n);
+        const after = steps.findIndex((s) => s.kind === 'questionnaire' && s.n === n);
+        assert.equal(signoff, task + 1, `condition ${n}: something sits after the task`);
+        assert.equal(after, signoff + 1, `condition ${n}: something sits after the sign-off`);
     }
 
-    // Stored per condition, so one cannot overwrite the other.
-    const docs = reflect.map(answerDoc);
-    assert.deepEqual(docs, ['reflect-codoc', 'reflect-baseline']);
-    assert.equal(new Set(docs).size, 2);
+    // And no step stores a reflection any more, so an old export cannot be
+    // mistaken for a current one on the strength of the key being there.
+    assert.deepEqual(steps.map(answerDoc).filter((d) => d && d.startsWith('reflect-')), []);
 });
 
-test('the after-task questions are about their own change and have right answers', async () => {
-    // They were four boxes to type in. Freeform got short answers to questions
-    // whose value is in the follow-up, at the end of two hours, and nothing
-    // comparable between participants. These are multiple choice with a key, so
-    // two sessions can be compared, and the follow-up happens out loud in the
-    // closing interview instead.
-    const { AFTER_QUIZZES } = await import('../participant/quiz.js');
-    for (const [project, questions] of Object.entries(AFTER_QUIZZES)) {
-        assert.equal(questions.length, 5, `${project} asks five`);
-        for (const q of questions) {
-            assert.equal(q.options.length, 4, `${project} Q${q.n} offers four`);
-            // The key must NOT be here: this file ships to a browser.
-            assert.ok(!('answer' in q), `${project} Q${q.n} carries its answer to the page`);
-        }
-        // Every one names the participant's own change or the codebase it landed
-        // in. A question answerable from the briefing measures reading.
-        const text = questions.map((q) => q.question).join(' ').toLowerCase();
-        assert.match(text, /your change|you had|you chose|you decided|picks this up/,
-            `${project}'s set does not refer to what they did`);
-    }
-
-    // And the answers live only where the dashboard can see them.
-    const { afterFor } = await import('../experimenter/forms.js');
-    for (const project of ['scribe', 'tally']) {
-        const set = afterFor(project);
-        assert.equal(set.length, 5);
-        for (const q of set) {
-            assert.ok(q.answer, `${project} Q${q.n} has no answer to mark against`);
-            assert.ok(q.options.some((o) => o.letter === q.answer),
-                `${project} Q${q.n} marks an option that does not exist`);
-        }
-    }
-});
-
-test('the two projects ask the same shape after the task', async () => {
-    // Each participant does one project each way, so a harder set on one project
-    // lands entirely on whichever condition drew it.
-    const { AFTER_QUIZZES } = await import('../participant/quiz.js');
-    const shape = (qs) => qs.map((q) => q.band).sort().join(',');
-    assert.equal(shape(AFTER_QUIZZES.scribe), shape(AFTER_QUIZZES.tally),
-        'scribe and tally cover the same bands, band for band');
-});
-
-test('a reflection can be finished without writing an essay', async () => {
-    // The scale is required; the four written answers are not. A required box
-    // buys blank characters typed to get past the button, and "I am not sure" is
-    // a finding rather than a gap.
-    const { defaultsFor } = await import('../participant/autofill.js');
-    const step = buildSteps().find((s) => s.kind === 'reflect');
-    const filled = defaultsFor(step);
-    for (const q of REFLECTION) {
-        assert.ok(filled[q.id] !== undefined, `${q.id} was not filled`);
+test('no quiz reaches the participant page', async () => {
+    // `participant/quiz.js` is still generated from the projects' STUDY.md, so
+    // the set can be brought back without rebuilding the extractor. What must not
+    // happen is it reaching a browser by accident: nothing in the participant
+    // app may import it, or five questions with right answers ship to the page
+    // that no step asks.
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const dir = new URL('../participant/', import.meta.url);
+    for (const name of readdirSync(dir)) {
+        if (!name.endsWith('.js') || name === 'quiz.js') continue;
+        const source = readFileSync(new URL(name, dir), 'utf8');
+        assert.ok(!/from '\.\/quiz\.js'/.test(source),
+            `${name} still imports the quiz`);
     }
 });
 

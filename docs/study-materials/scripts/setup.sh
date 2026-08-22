@@ -1216,10 +1216,42 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
 # replay instead, every time, with no way out of it. Separating them means an
 # interrupted replay costs you the replay and not the assistant.
 #
+# \`--continue\` is an ASSERTION, not a request: Claude Code exits with "No
+# conversation found to continue" when the folder has no session, so asking for it
+# on a hunch costs somebody their assistant. \`start-session\` writes the path of
+# the session it installed into the handover record, and that file existing is the
+# only thing that makes the flag safe. A recording that installed none starts a
+# fresh assistant and says so, which is a worse session than the resumed one and a
+# far better one than an error message.
+#
 # Unquoted on purpose: empty expands to no argument at all, and an empty array
 # does not on the bash macOS ships.
 RESUME=""
-[ -f "$d/.claude-study/handover.json" ] && RESUME="--continue"
+HANDOVER="$d/.claude-study/handover.json"
+if [ -f "\$HANDOVER" ]; then
+  SESSION="\$(sed -n 's/.*"transcript"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "\$HANDOVER")"
+  if [ -n "\$SESSION" ] && [ -f "\$SESSION" ]; then
+    RESUME="--continue"
+  else
+    echo "Starting fresh: the recorded session is not in this profile."
+  fi
+fi
+
+# \`--continue\` asks the WORKING DIRECTORY for its most recent conversation, and
+# the recording was installed under this workspace's path. Run it anywhere else —
+# \`~/codoc-study/scribe/claude-study\` typed from home, \`../claude-study\` from
+# inside the package — and the assistant looks in a directory that has no session
+# in it and says there is nothing to continue, with the session sitting one
+# directory away. The check above cannot catch that: the file it names really is
+# there. So the launcher decides where it runs rather than inheriting it.
+cd "$d" || exit 1
+
+# NOT ATTEMPTED, on purpose: run \`claude --continue\`, and start a fresh one if it
+# exits non-zero. A resume that fails does exit 1 immediately — but so does a
+# session the participant used for half an hour and interrupted, and relaunching
+# under them would look like their work had been thrown away. Everything that
+# decides the flag is therefore checked BEFORE the assistant starts, where a
+# wrong answer costs nothing.
 exec claude \$RESUME \\
   --effort low \\
   --disallowedTools Task \\

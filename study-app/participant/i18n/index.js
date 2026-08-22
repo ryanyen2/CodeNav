@@ -61,7 +61,7 @@ export const language = () => current;
  * English is always the fallback rather than the key itself, because the failure
  * this is most likely to have is one string added and not yet translated, and a
  * participant reading one English sentence in a Chinese page is a blemish, while
- * one reading `reflect.next.label` is a broken study.
+ * one reading `signoff.unsure.label` is a broken study.
  */
 export function t(key, english) {
     if (!table) return english;

@@ -14,8 +14,8 @@ import {
 } from 'firebase/firestore';
 import {
     CONSENT_FORM, PRESTUDY, REQUIRED, AFTER_CONDITION, CONSTRUCTS,
-    scaleFor, MANIPULATION_CHECK, SCENARIOS, SIGNOFF, REFLECTION,
-    PROJECTS, TASK, HOW_TO_START, TUTORIAL, AFTER_QUIZZES,
+    scaleFor, SCENARIOS, SIGNOFF,
+    PROJECTS, TASK, HOW_TO_START, TUTORIAL,
     buildSteps, answerDoc,
 } from './steps.js';
 import { cmd, block, wireCopy } from './copy.js';
@@ -204,10 +204,6 @@ function render() {
 
     const section = document.createElement('section');
     section.className = 'step';
-    // The closed book questions are not copyable. Blocking it is not a security
-    // boundary and is not meant to be; it removes the thoughtless path, which is
-    // the one people actually take.
-    if (step.kind === 'reflect') section.classList.add('noselect');
     section.innerHTML = VIEWS[step.kind](step);
     stage.replaceChildren(section);
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -239,20 +235,13 @@ function complete(step) {
     const a = answersFor(step);
     const given = (id) => a[id] !== undefined && String(a[id]).trim() !== '';
     if (step.kind === 'prestudy') return REQUIRED.every((id) => given(id));
+    // Every rating answered. The page is the whole questionnaire now that the
+    // "In your own words" section it used to end on has gone, so there is nothing
+    // optional left on it to make an exception for.
     if (step.kind === 'questionnaire') {
-        // The free-text answer is optional. Blocking on it would buy blank
-        // characters typed to get past the button, which is worse than no answer.
-        return AFTER_CONDITION.every((q) => a[q.id] !== undefined)
-            && MANIPULATION_CHECK.filter((q) => q.type !== 'longtext').every((q) => given(q.id));
+        return AFTER_CONDITION.every((q) => a[q.id] !== undefined);
     }
     if (step.kind === 'scenarios') return SCENARIOS.every((s) => given(s.id));
-    if (step.kind === 'reflect') {
-        // Every one answered. A blank is
-        // indistinguishable from "I do not know", and which wrong option drew
-        // somebody is most of what a wrong answer tells us.
-        return (AFTER_QUIZZES[step.project] || []).every((q) => given(`a${q.n}`))
-            && given('recall');
-    }
     if (step.kind === 'signoff') {
         // The free-text one is optional; "no" is a real answer and a required
         // box buys blank characters typed to get past the button.
@@ -504,11 +493,7 @@ const VIEWS = {
               ${intro[c.id] ? `<p class="blocklead">${intro[c.id]}</p>` : ''}
               ${localizeAll('after', items).map((q) => scaleRow(q, a[q.id])).join('')}
             </section>`;
-        }).join('')}
-        <section class="block">
-          <h2>${esc(t('ui.after.own', 'In your own words'))}</h2>
-          ${localizeAll('check', MANIPULATION_CHECK).map((q) => field(q, a[q.id])).join('')}
-        </section>`;
+        }).join('')}`;
     },
 
     break: () => `
@@ -539,35 +524,6 @@ const VIEWS = {
              <b>${esc(t('ui.scenarios.second', 'The second one'))}</b> ${name(second)}.</p>
         </div>
         ${localizeAll('scenario', SCENARIOS).map((s) => scenarioRow(s, a[s.id])).join('')}`;
-    },
-
-    // Closed book, about the change they just made.
-    //
-    // Nothing enforces the closed book, the files are still on their machine and
-    // the researcher is watching the screen. Saying so plainly is what makes it
-    // work, and it is said as a reason rather than as a rule, because somebody
-    // who understands why will not go and look.
-    reflect: (step) => {
-        const a = answersFor(step);
-        const questions = AFTER_QUIZZES[step.project] || [];
-        return `
-        <h1>${esc(t('ui.reflect.h', 'About what you just did'))}</h1>
-        <p class="lead">${esc(t('ui.reflect.lead',
-        'Five questions about the change you just made to {project}.')
-        .replace('{project}', step.project))}</p>
-        <p class="rule"><b>${esc(t('ui.reflect.closed', 'Answer from memory.'))}</b>
-          ${esc(t('ui.reflect.closedp', 'Do not go back to the code, the description, or the agent. A guess is fine.'))}</p>
-        ${questions.map((q) => `
-          <div class="q" data-q="a${q.n}">
-            <span class="label">${q.n}. ${esc(t(`after.${step.project}.${q.n}.question`, q.question))}</span>
-            <div class="opts">${q.options.map((o) => `
-              <button type="button" data-value="${esc(o.letter)}"
-                aria-pressed="${String(a[`a${q.n}`] === o.letter)}">
-                <span class="opt-letter">${esc(o.letter)}</span>
-                <span class="opt-text">${esc(t(`after.${step.project}.${q.n}.option.${o.letter}`, o.text))}</span>
-              </button>`).join('')}</div>
-          </div>`).join('')}
-        ${localizeAll('reflect', REFLECTION).map((q) => field(q, a[q.id])).join('')}`;
     },
 
     // Their own sign-off, in their own words. It used to be typed into the

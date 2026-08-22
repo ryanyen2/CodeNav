@@ -119,14 +119,20 @@ for w in scribe tally; do
   rsync -a "$src/" "$DEST/claude-transcripts/$w/" 2>/dev/null
 done
 # The recovery sweep, for a session started with plain `claude` instead of the
-# launcher. Claude Code names a project folder after its path with the slashes
-# turned into dashes, so the study workspaces have exactly predictable names and
-# this asks for those exact names rather than for anything matching "scribe" or
-# "tally". Globbing on the name swept in unrelated sessions of the researcher's
-# own that merely had the word in their path, and on a participant's machine it
-# would do the same to any project of theirs that happened to be called either.
+# launcher. Claude Code names a project folder after its path with EVERY character
+# outside [a-zA-Z0-9] turned into a dash — the separators, but also the dot in a
+# home called `john.doe` and the space in one called `Jane Smith`. Turning only
+# slashes and dots into dashes named the folder correctly for the machines this
+# was written on and named a folder that does not exist for the rest, so the sweep
+# reported nothing and said nothing. Derived the same way the assistant does now;
+# a non-ASCII home is still out of reach, because sed counts its bytes and the
+# assistant counts its characters.
+#
+# Exact names rather than a glob: globbing on the word swept in unrelated sessions
+# of the researcher's own that merely had it in their path, and on a participant's
+# machine it would do the same to any project of theirs called either.
 for w in scribe tally; do
-  d="$HOME/.claude/projects/$(printf '%s' "$WORK/$w" | tr '/.' '--')"
+  d="$HOME/.claude/projects/$(printf '%s' "$WORK/$w" | sed 's/[^a-zA-Z0-9]/-/g')"
   [ -d "$d" ] || continue
   rsync -a "$d" "$DEST/claude-transcripts/their-own-account/" 2>/dev/null
 done

@@ -30,8 +30,9 @@ that description is kept.
 >
 > `/codoc:ask` and tree search were added on 2026-08-17 and are part of the codoc
 > arm. The participant may ask either of them about the codebase while the task is
-> running, the same as they may ask the agent anything else. The questions
-> afterwards are closed book, so by then nothing is pasted into either one.
+> running, the same as they may ask the agent anything else. Nothing with right
+> answers is asked afterwards any more, so there is nothing for a pasted answer to
+> reach.
 
 There are two projects, scribe and tally, with matched tasks. Each participant
 does one project each way, so nobody solves the same problem twice.
@@ -330,7 +331,7 @@ middle runs twice, once for each condition, and takes forty minutes each time.
 | Opening the project and reading about it | 5 | On their own page |
 | The way of working | 5 | On their own page, one page per condition |
 | The task | 20 | They send the request, then review what came back |
-| Sign-off, then five questions about the change | 5 | The sign-off first |
+| Sign-off | 5 | Answered on their own page, straight after the task |
 | The questionnaire | 5 | The workload block has a definition under each item; let them read it |
 | Break | 5 | Between the two conditions |
 | Which would you pick, and the interview | 14 | At the end, with both conditions done |
@@ -351,7 +352,7 @@ Read this out, and use the same words with everyone.
 > what to keep. A few questions follow.
 >
 > Both times there is a written description of the project. It is yours to keep
-> current, and the questions afterwards are based on it.
+> current.
 >
 > You are responsible for the result being correct, and I will ask you to explain
 > the code afterwards.
@@ -591,36 +592,28 @@ When they say they are done, ask, and write the answer down word for word:
 The confidence number matters less than what the confidence rests on. "I ran the
 tests" and "the agent said so" are very different answers.
 
-## Part 6. The questions about the change
+## Part 6. What they understood, asked out loud
 
-Five multiple-choice questions, closed book, straight after the sign-off. The
-participant answers them on their own page. **You do not read them out and you do
-not score them during the session.** They have right answers and the dashboard
-scores them as they answer, so nothing here needs marking by hand.
+Nothing with right answers is asked on the participant's page any more, in either
+half. The five closed-book questions that used to sit here, and the scale beside
+them asking how much of them the participant had really known, were removed on
+2026-08-22. **A session run before that date asked them and a session run after it
+does not, so the two cannot be pooled on anything they measured.**
 
-**Ask them to close the code, the description and the agent first**, and say why.
-What is being looked at is what they carried out of the task, so an answer they
-went and looked up says nothing. Their page says the same thing, but it lands
-better from you. The page also stops the text being selected, which removes the
-thoughtless path rather than enforcing anything.
+Two rounds have now gone for the same reason. The open-book round before the task
+asked about the codebase, and the task now asks somebody to review a change to
+that codebase, so its first ten minutes were the round over again with the clock
+running twice. The closed-book round after the task scored recall of a codebase
+somebody met an hour ago, when what the study is about is whether they still owned
+the change their agent made.
 
-Each one turns on a consequence of the change meeting a rule that was already
-there, so it can be answered by somebody who understood the codebase or who made
-the decision themselves and watched what it did, and not by somebody who let the
-agent write it and did not look. The five run from easy to hard in that order, so
-a participant who did the work is not scored as though they did none.
+So the participant goes from the sign-off straight to the questionnaire, and what
+they carried out of the task is asked in the closing interview instead — out loud,
+where you can follow up, and written into the dashboard as you go. The questions
+are already there; ask them as written and follow whatever an answer opens up.
 
-Alongside the five is one scale: how much of it they were sure of rather than
-working out on the spot. A fluent reconstruction and a real memory look the same
-in a set of answers, and only they can say which it was.
-
-There is no feedback on anything. Telling somebody they were wrong would teach
-them how the second half works.
-
-The open-book round that used to run before the task is gone. It asked about the
-codebase, and the task now asks somebody to review a change to that codebase, so
-the first ten minutes of the task were the question round over again with the
-clock running twice.
+There is still no feedback on anything. Telling somebody they were right or wrong
+about the first half would teach them how the second half works.
 
 ## Part 7. Collecting the data
 

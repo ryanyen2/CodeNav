@@ -27,7 +27,7 @@ import { comparableEpisodes, letters } from '../analysis/sequences.js';
 import { score } from '../analysis/ngrams.js';
 import {
     OPEN_DECISIONS, FALSE_ALARMS, SETTLED_BY, CONSISTENCY, COUPLED_DECISION,
-    questionsFor, afterFor, emptyAssessment, outstanding,
+    questionsFor, emptyAssessment, outstanding,
 } from './forms.js';
 // The interview is asked from the dashboard now, so its questions come from the
 // same instrument file the participant page uses. One copy, so the two cannot
@@ -1051,14 +1051,6 @@ function renderForms() {
       </div>
 
       <div class="form-block">
-        <h4>What they knew afterwards, from memory</h4>
-        <p class="hint">Five questions about the change they just made, answered on
-        their own page with the code, the description and the agent closed. They
-        have right answers, so nothing here needs marking by hand.</p>
-        <div id="their-reflection" class="said"></div>
-      </div>
-
-      <div class="form-block">
         <h4>What they found, and who settled it</h4>
         <p class="hint">The problems planted in the change the agent made. Rate
         detection first, then who settled it. The one marked with a diamond is the
@@ -1193,40 +1185,6 @@ function wireForms() {
 
     // Their sign-off, shown rather than typed. It arrives with everything else
     // they answer, so this only has to render it.
-    // Their four closed-book answers, shown rather than typed. Nothing here is
-    // scored during the session: rating what somebody wrote about their own
-    // change, while listening to them talk, is how a rating ends up measuring
-    // how well they explained rather than what they knew.
-    // The closed-book set, scored here because it has right answers. Read only:
-    // the participant answers it on their own page, and a researcher marking it
-    // during a session would be scoring while listening.
-    const rf = $('#their-reflection');
-    if (rf) {
-        const answers = (state.answers || {})[`reflect-${state.condition}`];
-        const set = afterFor(state.project);
-        if (!answers || !set.length) {
-            rf.innerHTML = '<span class="hint">Not answered yet.</span>';
-        } else {
-            const right = set.filter((q) => answers[`a${q.n}`] === q.answer).length;
-            rf.innerHTML = `
-              <div class="quiz-score">
-                <span><b>${right}</b>/${set.length} correct</span>
-                <span>sure of it: <b>${esc(String(answers.recall ?? '—'))}</b>/5</span>
-              </div>
-              ${set.map((q) => {
-        const given = answers[`a${q.n}`];
-        const mark = given == null ? '<i class="unanswered">·</i>'
-            : given === q.answer ? '<i class="right">✓</i>' : `<i class="wrong">${esc(given)}</i>`;
-        return `<div class="q-line">
-                  <span class="q-marks">${mark}</span>
-                  <span class="q-title">${q.n}. ${esc(q.question)}</span>
-                </div>`;
-    }).join('')}
-              <p class="hint">A letter is the wrong option they chose. The scale is
-              their own read on whether they knew it or worked it out just now.</p>`;
-        }
-    }
-
     const said = $('#their-signoff');
     if (said) {
         const sign = (state.answers || {})[`signoff-${state.condition}`];

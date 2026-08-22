@@ -947,6 +947,20 @@ case "$(cat "$SETUP")" in
   *'RESUME="--continue"'*) ok "every turn after it resumes that session" ;;
   *) bad "the live half would start a conversation with no context" ;;
 esac
+# `--continue` is an assertion, not a request: Claude Code exits with "No
+# conversation found to continue" rather than starting fresh, so offering it on a
+# hunch costs somebody their assistant. Two things have to be true before it is
+# offered, and both are checked here because both used to be wrong at once.
+case "$LAUNCHER_BODY" in
+  *'[ -f "\$SESSION" ]'*) ok "and only when the session it names is really there" ;;
+  *) bad "the flag rests on the handover record alone, which is how a participant got an error instead of an assistant" ;;
+esac
+# The flag asks the WORKING DIRECTORY for its conversations, and the recording was
+# installed under this workspace's path. Run from anywhere else it finds nothing.
+case "$LAUNCHER_BODY" in
+  *'cd "$d"'*) ok "and it runs where the recording was installed" ;;
+  *) bad "the launcher inherits whatever directory it was typed in, so claude-study run from home finds no session" ;;
+esac
 case "$(cat "$SETUP")" in
   *'codoc watch'*) bad "the participant is back to typing the daemon command" ;;
   *) ok "and no daemon command is ever put in front of them" ;;

@@ -223,46 +223,39 @@ def main() -> int:
 
     # ── question 3 and the task ──────────────────────────────────────────────
     rep.rows.clear()
-    # The two question sets, checked against the export when there is one.
+    # Neither question round is asked any more, so this reports what DID arrive
+    # rather than looking for answers nothing collects.
     #
-    # Both used to be listed as "your notes", from when the researcher read them
-    # out and marked them. The participant answers both on their own page now, so
-    # they arrive in the export and this can say whether they did.
+    # The open-book round before the task went when the task became a review of a
+    # change: its first ten minutes were the round again with the clock running
+    # twice. The closed-book round after the task, and the scale asking how much
+    # of it the participant had really known, went on 2026-08-22. What somebody
+    # retained is asked out loud in the closing interview now, so it is a note the
+    # researcher takes rather than a key in the export — and a check that still
+    # looked for `quiz-` or `reflect-` documents would report every complete
+    # session as missing two things it was never going to have.
     live_answers = _exported_answers(root)
     if live_answers is None:
-        rep.manual("the twelve questions, and what they said afterwards",
+        rep.manual("what they understood, and what they still knew afterwards",
                    "no Firestore export here yet; run scripts/export-session.mjs")
     else:
-        quizzes = {k: v for k, v in live_answers.items() if k.startswith("quiz-")}
-        if quizzes:
-            timed = [k for k, v in quizzes.items() if v.get("elapsedMs")]
-            # A sitting the clock ended is a normal, reportable outcome — its blanks
-            # mean "ran out", not "chose not to". Saying so here stops somebody
-            # reading them as missing data later.
-            cut = [k for k, v in quizzes.items() if v.get("timedOut")]
-            note = f"{len(quizzes)} sitting(s), {len(timed)} with a time recorded"
-            if cut:
-                note += f"; {len(cut)} ended on the clock"
-            rep.ok("the twelve questions, open book and timed", note)
+        stale = {k for k in live_answers
+                 if k.startswith("quiz-") or k.startswith("reflect-")}
+        if stale:
+            rep.manual("what they understood, and what they still knew afterwards",
+                       f"this session predates 2026-08-22: it carries {len(stale)} "
+                       "answer set(s) from a question round that is no longer asked")
         else:
-            rep.gap("the twelve questions, open book and timed",
-                    "no quiz answers in the export, so this condition has no score")
+            rep.manual("what they understood, and what they still knew afterwards",
+                       "asked in the closing interview; your notes, verbatim")
 
-        # The closed-book half. Four written answers per condition, and the whole
-        # of what the study claims a description leaves behind.
-        reflects = {k: v for k, v in live_answers.items() if k.startswith("reflect-")}
-        written = sum(1 for v in reflects.values()
-                      for key in ("whatFor", "downstream", "decided", "next")
-                      if str(v.get(key) or "").strip())
-        if reflects and written:
-            rep.ok("what they said afterwards, from memory",
-                   f"{len(reflects)} condition(s), {written} written answer(s) to rate")
-        elif reflects:
-            rep.gap("what they said afterwards, from memory",
-                    "the step was reached but every box was left blank")
+        signoffs = {k for k in live_answers if k.startswith("signoff-")}
+        if signoffs:
+            rep.ok("their own sign-off on the change",
+                   f"{len(signoffs)} condition(s) signed off on their own page")
         else:
-            rep.gap("what they said afterwards, from memory",
-                    "no reflection answers, so there is nothing to rate for this half")
+            rep.gap("their own sign-off on the change",
+                    "no sign-off in the export, so this condition has no self-report")
     if projects:
         rep.ok("the three things being scored, and regressions",
                "run check-scribe.py or check-tally.py on the collected project")

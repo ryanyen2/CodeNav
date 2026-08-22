@@ -1220,16 +1220,20 @@ def _sim_transcript(script: dict, workspace: Path, steps: list[dict]) -> list[st
     """
     session = script.get("session_id") or str(uuid.uuid4())
     stamp = script.get("recorded_at") or datetime.now(timezone.utc).isoformat()
+    # `cli`, not `sdk-cli`. The assistant keeps SDK sessions out of `--continue`,
+    # so a written session that calls itself one is a session the participant's
+    # launcher cannot open — see `SDK_ENTRYPOINTS` in `play.py`, which repairs the
+    # recordings that already say it.
     common = {
         "isSidechain": False, "userType": "external", "cwd": str(workspace),
         "sessionId": session, "version": SIM_VERSION, "gitBranch": "main",
-        "entrypoint": "sdk-cli",
+        "entrypoint": "cli",
     }
     out, parent = [], None
     first = str(uuid.uuid4())
     out.append(json.dumps({
         **common, "parentUuid": None, "type": "user", "uuid": first,
-        "timestamp": stamp, "permissionMode": "acceptEdits", "promptSource": "sdk",
+        "timestamp": stamp, "permissionMode": "acceptEdits", "promptSource": "typed",
         "promptId": str(uuid.uuid4()),
         "message": {"role": "user", "content": script["request"]},
     }))

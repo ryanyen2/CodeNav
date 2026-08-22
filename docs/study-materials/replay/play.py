@@ -162,8 +162,80 @@ def config_dir() -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".claude"
 
 
+# The directory the assistant looks in for a workspace's sessions, by ITS rule and
+# not by one that happens to agree on the paths we tried. Claude Code folds every
+# character outside `[a-zA-Z0-9]` to a dash — the separator, but also the dot in
+# `john.doe`, the space in `Jane Smith`, the underscore in a renamed home — and
+# caps the name, hashing the whole path onto the end of a truncated one. Replacing
+# only the separator agreed for `/Users/someone/codoc-study/tally` and diverged for
+# every participant whose home is not spelled in letters and digits.
+PROJECT_SLUG_MAX = 200
+
+
+def project_slug(root: str) -> str:
+    """The name Claude Code gives this path under `projects/`."""
+    slug = re.sub(r"[^a-zA-Z0-9]", "-", root)
+    if len(slug) <= PROJECT_SLUG_MAX:
+        return slug
+    return f"{slug[:PROJECT_SLUG_MAX]}-{_path_hash(root)}"
+
+
+def _path_hash(root: str) -> str:
+    """The suffix that keeps two long paths with the same first 200 characters apart.
+
+    The assistant's own hash, ported rather than invented: a 32-bit `h*31 + c` over
+    UTF-16 code units, taken absolute and written in base 36. A hash of our own
+    would put the session in a directory that is stable, unique, and not the one
+    being read.
+    """
+    acc, raw = 0, root.encode("utf-16-le")
+    for i in range(0, len(raw), 2):
+        acc = (acc * 31 + int.from_bytes(raw[i:i + 2], "little")) & 0xFFFFFFFF
+    if acc >= 0x80000000:
+        acc -= 0x100000000
+    acc = abs(acc)
+    if acc == 0:
+        return "0"
+    digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    while acc:
+        acc, remainder = divmod(acc, 36)
+        out = digits[remainder] + out
+    return out
+
+
+def transcript_path(workspace: Path, session_id: str) -> Path:
+    """Where this workspace's session has to be for `--continue` to find it."""
+    return (config_dir() / "projects" / project_slug(str(workspace.resolve()))
+            / f"{session_id}.jsonl")
+
+
+# A session the interactive assistant is allowed to see. Claude Code keeps SDK
+# sessions out of `--continue` and `--resume`: a transcript whose `entrypoint` is
+# one of these is dropped from the resume list unless the process asking is itself
+# an SDK entrypoint. A recording is DRIVEN through the SDK, so the transcript it
+# leaves says `sdk-cli`, and installing it verbatim handed the participant's
+# launcher a session it is built never to find. They watched the change being made,
+# ran `./claude-study` to ask about it, and were told there was no conversation to
+# continue — with the session that produced the change sitting in the profile,
+# unreachable.
+#
+# Retargeted for the same reason the paths are, and as honestly: the recorded
+# session really is being continued in an interactive terminal, by somebody who
+# really did type the request into it, so `cli` / `typed` is what it now is rather
+# than a disguise it is wearing.
+SDK_ENTRYPOINTS = {"sdk-cli", "sdk-ts", "sdk-py"}
+
+
+def as_typed_in_a_terminal(entry: dict) -> dict:
+    if entry.get("entrypoint") in SDK_ENTRYPOINTS:
+        entry["entrypoint"] = "cli"
+    if entry.get("promptSource") == "sdk":
+        entry["promptSource"] = "typed"
+    return entry
+
+
 def install_transcript(workspace: Path, frames: Path) -> Path | None:
-    """Put the recorded session where `claude --resume` will find it.
+    """Put the recorded session where `claude --continue` will find it.
 
     The participant's first prompt then continues the session that produced the
     change, with the agent's own context intact, and the recorded transcript is
@@ -173,7 +245,8 @@ def install_transcript(workspace: Path, frames: Path) -> Path | None:
     the harness's leaked file names are dropped, for the reasons written above
     `NEUTRALISED` in `record.py`. Scrubbing runs per JSON record and per string
     inside it, because the leak is inside a tool result rather than at the top
-    level, and a record that stops being valid JSON would not load at all.
+    level, and a record that stops being valid JSON would not load at all. The
+    entrypoint is retargeted with them, for the reason above `SDK_ENTRYPOINTS`.
     """
     source = frames / "transcript.jsonl"
     if not source.exists():
@@ -193,10 +266,8 @@ def install_transcript(workspace: Path, frames: Path) -> Path | None:
         return None
 
     target_root = str(workspace.resolve())
-    slug = target_root.replace(os.sep, "-")
-    out_dir = config_dir() / "projects" / slug
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{session_id}.jsonl"
+    out = transcript_path(workspace, session_id)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     cleaned = []
     for number, line in enumerate(lines, start=1):
@@ -205,7 +276,8 @@ def install_transcript(workspace: Path, frames: Path) -> Path | None:
         except json.JSONDecodeError:
             cleaned.append(line)
             continue
-        entry = _scrub_record(entry, recorded_root or "", target_root)
+        entry = as_typed_in_a_terminal(
+            _scrub_record(entry, recorded_root or "", target_root))
         line = json.dumps(entry)
         check_no_leak(line, target_root, f"the recorded session, record {number}")
         cleaned.append(line)

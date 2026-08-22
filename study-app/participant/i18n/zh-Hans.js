@@ -89,26 +89,26 @@ export const ZH_HANS = Object.freeze({
     'after.ctl1.text': '我知道 agent 改了什么。',
     'after.ctl2.text': '我能把 agent 引导到我想要的方向。',
     'after.ctl3.text': '我对整个编辑过程有掌控感。',
-    'after.ctl4.text': 'agent 工作时，我对代码库的状态失去了掌握。',
-    'after.ctl5.text': 'agent 做了本该由我来做的决定。',
+    'after.ctl4.text': 'agent 在改动的过程中，我一直掌握着代码的状态。',
+    'after.ctl5.text': 'agent 做了一些我更希望由自己来做的决定。',
 
     // 一致性。
-    'after.ali1.text': 'agent 做的，正是我要它做的事。',
-    'after.ali2.text': '这样工作，帮助我理解了这些代码。',
-    'after.ali3.text': '我可以在读这次修改和检查它之间来回，而不会迷失位置。',
+    'after.ali1.text': 'agent 做的改动，和我要它做的事是一致的。',
+    'after.ali2.text': '这样工作，帮助我理解了这些代码改动。',
+    'after.ali3.text': '我可以在读这些改动和检查它们之间来回，而不会弄丢自己看到哪里了。',
 
     // 那份写下来的说明。
-    'after.doc1.text': '那份写下来的说明，说的就是代码实际在做的事。',
-    'after.doc2.text': '让那份写下来的说明保持最新，感觉像是白费工夫。',
-    'after.doc3.text': '把这次修改写下来，值得它花掉的那点力气。',
-    'after.doc4.text': '如果我一个月后回来，写下来的内容能让我重新上手。',
-    'after.doc5.text': '某件事当初为什么做成这样，我能很快查出来。',
+    'after.doc1.text': '那份写下来的说明，准确反映了代码实际在做的事。',
+    'after.doc2.text': '更新那份写下来的说明，感觉是不必要的额外功夫。',
+    'after.doc3.text': '把这次改动写下来所带来的好处，超过了写它所花的功夫。',
+    'after.doc4.text': '如果我一个月后回到这项工作上，那份写下来的说明能帮我理解它。',
+    'after.doc5.text': '某一处改动当初为什么要做，我能很快弄明白。',
 
     // 审查与信任。
     'after.rev1.text': '做完的时候，我确信这些代码是正确的。',
-    'after.rev2.text': '凡是我不同意的地方，我都能否掉或者改掉。',
-    'after.rev3.text': '我接受了一些其实并没有真正审查过的修改。',
-    'after.rev4.text': '我分得清哪些部分我还没检查过。',
+    'after.rev2.text': '凡是我不同意的改动，我都能否掉或者改掉。',
+    'after.rev3.text': '有一些改动我没有仔细检查就接受了。',
+    'after.rev4.text': '这些改动里哪些部分我还没检查过，我分得清。',
 
     // 问卷分区的标题。
     'block.umux.title': '易用性',
@@ -117,14 +117,6 @@ export const ZH_HANS = Object.freeze({
     'block.align.title': '一致性',
     'block.doc.title': '那份写下来的说明',
     'block.review.title': '审查与信任',
-
-    // ── 操作检查 ──────────────────────────────────────────────────────────────
-    'check.noticedChange.label': 'agent 工作的时候，你有没有注意到那份写下来的说明在变化',
-    'check.noticedChange.option.0': '有，经常',
-    'check.noticedChange.option.1': '有过一两次',
-    'check.noticedChange.option.2': '没有',
-    'check.openQ.label': '这种工作方式有哪些地方帮到你，或者妨碍了你',
-    'check.openQ.placeholder': '一两句话就好。论文里引用的就是这样的回答。',
 
     // ── 任务后的自我确认 ──────────────────────────────────────────────────────
     'signoff.correct.label': '你刚做的这个修改，是正确且完整的吗？',
@@ -143,11 +135,6 @@ export const ZH_HANS = Object.freeze({
     'signoff.grounds.option.4': '我跑了这个项目，看了输出',
     'signoff.unsure.label': '有哪一部分是你比较没把握的吗？',
     'signoff.unsure.placeholder': '一句话就够了，「没有」也是一个真实的回答。',
-
-    // ── 任务后的回想（闭卷）────────────────────────────────────────────────────
-    'reflect.recall.label': '刚才这些答案，有多少是你本来就确定的，而不是现在才推想出来的',
-    'reflect.recall.low': '现在才推想',
-    'reflect.recall.high': '本来就确定',
 
     // ── 哪一种，用在哪种工作上 ────────────────────────────────────────────────
     'scenario.s1.text': '在别人写的代码上加一个功能',
@@ -228,14 +215,8 @@ export const ZH_HANS = Object.freeze({
     'ui.signoff.h': '在你继续之前',
     'ui.signoff.lead': '关于你刚做的这个修改。没有标准答案，也没有人在打分。',
 
-    'ui.reflect.h': '关于你刚才做的事',
-    'ui.reflect.lead': '关于你刚才对 {project} 做的那个修改，五个问题。',
-    'ui.reflect.closed': '请凭记忆回答。',
-    'ui.reflect.closedp': '不要回去看代码、说明或 agent。猜也可以。',
-
     'ui.after.h': '刚才感觉如何',
     'ui.after.lead': '关于你刚用过的这种工作方式。凭第一反应快速作答就好。',
-    'ui.after.own': '用你自己的话',
     'ui.after.loadlead': '这六项只针对一件事：审查对 {project} 的那个修改。不包括之前的阅读，也不包括之后的问题。请在每条线上标出一个位置。',
 
     'ui.break.h': '过半了',

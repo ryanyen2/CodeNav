@@ -10,9 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    PRESTUDY, AFTER_CONDITION, CONSTRUCTS, MANIPULATION_CHECK,
-    SIGNOFF, REFLECTION, SCENARIOS, PROJECTS, TASK, HOW_TO_START, TUTORIAL,
-    AFTER_QUIZZES,
+    PRESTUDY, AFTER_CONDITION, CONSTRUCTS,
+    SIGNOFF, SCENARIOS, PROJECTS, TASK, HOW_TO_START, TUTORIAL,
 } from '../participant/steps.js';
 import {
     LANGUAGES, DEFAULT_LANGUAGE, isLanguage, setLanguage, language, t,
@@ -23,9 +22,7 @@ import {
 const BLOCKS = [
     ['prestudy', PRESTUDY],
     ['after', AFTER_CONDITION],
-    ['check', MANIPULATION_CHECK],
     ['signoff', SIGNOFF],
-    ['reflect', REFLECTION],
     ['scenario', SCENARIOS],
 ];
 
@@ -127,8 +124,8 @@ test('names of things are not translated', () => {
     setLanguage('zh-Hans');
     const grounds = localize('signoff', SIGNOFF.find((q) => q.id === 'grounds'));
     assert.ok(grounds.options.some((o) => o.includes('diff')), 'diff stays diff');
-    const recall = localize('reflect', REFLECTION.find((q) => q.id === 'recall'));
-    assert.ok(recall.label.length > 0);
+    const agent = localize('after', AFTER_CONDITION.find((q) => q.id === 'ctl4'));
+    assert.ok(agent.text.includes('agent'), 'agent stays agent');
 });
 
 test('every briefing, start instruction and page string is translated', () => {
@@ -199,21 +196,6 @@ test('every briefing, start instruction and page string is translated', () => {
 
     assert.deepEqual(missingKeys(), [],
         'these would render in English inside a Chinese page');
-});
-
-test('every quiz question and every option is translated', () => {
-    // One option left in English inside a Chinese question is not a blemish: it
-    // is the only Latin text on the screen, which makes it the option that
-    // stands out, and a distractor that draws the eye for a reason unrelated to
-    // its content is a broken item.
-    setLanguage('zh-Hans');
-    for (const [project, questions] of Object.entries(AFTER_QUIZZES)) {
-        for (const q of questions) {
-            t(`after.${project}.${q.n}.question`, q.question);
-            for (const o of q.options) t(`after.${project}.${q.n}.option.${o.letter}`, o.text);
-        }
-    }
-    assert.deepEqual(missingKeys(), [], 'these would render in English among Chinese options');
 });
 
 test('every page string is translated', async () => {

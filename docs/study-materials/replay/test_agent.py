@@ -129,6 +129,55 @@ def test_no_transcript_means_no_session_to_resume(tmp_path):
     assert agent.session_id(tmp_path) is None
 
 
+def test_the_handover_names_the_session_the_launcher_may_continue(
+        tmp_path, monkeypatch, capsys):
+    # `claude --continue` asserts a conversation exists and exits when it does
+    # not, so the launcher cannot offer it on the strength of a handover record
+    # alone — a recording that installed no session left the participant with an
+    # error where their assistant should have been. The record names the file,
+    # and the launcher checks that the file is there.
+    workspace = tmp_path / "ws"
+    frames = tmp_path / "frames"
+    (workspace / agent.PROFILE).mkdir(parents=True)
+    frames.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(workspace / agent.PROFILE))
+    (frames / "base").mkdir()
+    (frames / "manifest.json").write_text(json.dumps(
+        {"frames": [{"n": 1, "delay_s": 0.0, "terminal": "", "deletes": []}]}))
+    (frames / "transcript.jsonl").write_text(
+        json.dumps({"cwd": "/recorder/ws", "sessionId": "abc-123",
+                    "type": "user", "entrypoint": "sdk-cli"}) + "\n")
+    monkeypatch.setattr(agent, "show_banner", lambda _w: None)
+    monkeypatch.setattr(agent.Prompt, "read", lambda _self: "make it work")
+    monkeypatch.setattr(agent.Prompt, "clear", lambda _self: None)
+
+    assert agent.first_turn(workspace, frames, 1.0) == 0
+    record = json.loads((workspace / agent.PROFILE / agent.HANDOVER).read_text())
+    assert record["session_id"] == "abc-123"
+    assert Path(record["transcript"]).exists()
+    assert Path(record["transcript"]).name == "abc-123.jsonl"
+
+
+def test_a_recording_with_no_session_says_so_instead_of_promising_one(
+        tmp_path, monkeypatch, capsys):
+    workspace = tmp_path / "ws"
+    frames = tmp_path / "frames"
+    (workspace / agent.PROFILE).mkdir(parents=True)
+    frames.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(workspace / agent.PROFILE))
+    (frames / "base").mkdir()
+    (frames / "manifest.json").write_text(json.dumps(
+        {"frames": [{"n": 1, "delay_s": 0.0, "terminal": "", "deletes": []}]}))
+    monkeypatch.setattr(agent, "show_banner", lambda _w: None)
+    monkeypatch.setattr(agent.Prompt, "read", lambda _self: "make it work")
+    monkeypatch.setattr(agent.Prompt, "clear", lambda _self: None)
+
+    assert agent.first_turn(workspace, frames, 1.0) == 0
+    record = json.loads((workspace / agent.PROFILE / agent.HANDOVER).read_text())
+    assert record["transcript"] == ""
+    assert "start fresh" in capsys.readouterr().out
+
+
 def test_a_missing_recording_is_refused_rather_than_half_played(tmp_path):
     # A workspace with no frames would otherwise draw the welcome, take the
     # request and then fail, with the participant having asked for something

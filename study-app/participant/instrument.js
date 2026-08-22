@@ -19,6 +19,24 @@
 // so answers collected before that date still line up item for item. The pilot
 // answers collected under the older wording are comparable at the construct level
 // and should be reported as having been asked in the older wording.
+//
+// On 2026-08-22 those four blocks were reworded again, and this time ONE ITEM
+// CHANGED POLARITY. `ctl4` used to be "I lost track of what the code looked like
+// while the agent worked", reverse-keyed; it now asks the same thing the way
+// round the construct reads — "I could keep track of the code while the agent was
+// making changes" — and its `reverse` flag is gone with the negation. A 6 on
+// today's ctl4 and a 6 on the old one mean OPPOSITE things, and every other id in
+// the file still lines up, so this is the one item that cannot be pooled across
+// the two wordings without flipping the earlier answers first. Nothing downstream
+// can detect that for you: `keyed` reads the flag as it stands today.
+//
+// Two blocks left the instrument on the same date, at the researcher's call. The
+// manipulation check ("Did you notice the written description changing") and the
+// open question went with the "In your own words" section they were asked under,
+// and the closed-book set that used to be asked between the task and this page
+// went with its whole step. So there is no longer a per-condition check of
+// whether somebody in the codoc arm ever saw the description move, and no written
+// answer collected on the page: the closing interview is where both are asked now.
 
 // ── the forms that live in Google ────────────────────────────────────────────
 
@@ -213,26 +231,26 @@ export const AFTER_CONDITION = Object.freeze([
     { id: 'ctl1', c: 'control', text: 'I knew what the agent had changed.' },
     { id: 'ctl2', c: 'control', text: 'I could steer the agent towards what I wanted.' },
     { id: 'ctl3', c: 'control', text: 'I felt in control of the process.' },
-    { id: 'ctl4', c: 'control', text: 'I lost track of what the code looked like while the agent worked.', reverse: true },
-    { id: 'ctl5', c: 'control', text: 'The agent made choices I should have made myself.', reverse: true },
+    { id: 'ctl4', c: 'control', text: 'I could keep track of the code while the agent was making changes.' },
+    { id: 'ctl5', c: 'control', text: 'The agent made decisions that I would have preferred to make myself.', reverse: true },
 
     // Alignment.
-    { id: 'ali1', c: 'align', text: 'What the agent did was what I had asked for.' },
-    { id: 'ali2', c: 'align', text: 'Working this way helped me understand the code.' },
-    { id: 'ali3', c: 'align', text: 'I could move between reading the change and checking it without losing my place.' },
+    { id: 'ali1', c: 'align', text: "The agent's changes matched what I asked it to do." },
+    { id: 'ali2', c: 'align', text: 'Working this way helped me understand the code changes.' },
+    { id: 'ali3', c: 'align', text: 'I could move between reading the changes and checking them without losing track of where I was.' },
 
     // The written description.
-    { id: 'doc1', c: 'doc', text: 'The written description said what the code actually did.' },
-    { id: 'doc2', c: 'doc', text: 'Keeping the description up to date felt like extra work for nothing.', reverse: true },
-    { id: 'doc3', c: 'doc', text: 'Having the change written down was worth what it cost.' },
-    { id: 'doc4', c: 'doc', text: 'If I came back in a month, what is written down would help me catch up.' },
-    { id: 'doc5', c: 'doc', text: 'I could find out quickly why something had been built the way it was.' },
+    { id: 'doc1', c: 'doc', text: 'The written description accurately reflected what the code did.' },
+    { id: 'doc2', c: 'doc', text: 'Updating the written description felt like unnecessary effort.', reverse: true },
+    { id: 'doc3', c: 'doc', text: 'The benefits of having the change written down outweighed the effort required to document it.' },
+    { id: 'doc4', c: 'doc', text: 'If I returned to this work a month from now, the written description would help me understand it.' },
+    { id: 'doc5', c: 'doc', text: 'I could quickly understand why a particular change had been made.' },
 
     // Review and trust.
     { id: 'rev1', c: 'review', text: 'I was confident that the code was correct when I finished.' },
-    { id: 'rev2', c: 'review', text: 'I could turn down or change anything I disagreed with.' },
-    { id: 'rev3', c: 'review', text: 'I accepted changes without really checking them.', reverse: true },
-    { id: 'rev4', c: 'review', text: 'I could tell which parts I had not checked yet.' },
+    { id: 'rev2', c: 'review', text: 'I could reject or modify any change I disagreed with.' },
+    { id: 'rev3', c: 'review', text: 'I accepted some changes without checking them carefully.', reverse: true },
+    { id: 'rev4', c: 'review', text: 'I could tell which parts of the changes I had not yet checked.' },
 ]);
 
 /**
@@ -329,22 +347,6 @@ export function constructScore(answers, constructId) {
 }
 
 /**
- * Asked in both conditions, to check the manipulation landed.
- *
- * If somebody in the codoc condition never noticed the description changing,
- * their answers are about a tool they did not meet, and the analysis has to know
- * that rather than average it in.
- */
-export const MANIPULATION_CHECK = Object.freeze([
-    { id: 'noticedChange', type: 'choice',
-      label: 'Did you notice the written description changing while the agent worked?',
-      options: ['Yes, often', 'Once or twice', 'No'] },
-    { id: 'openQ', type: 'longtext',
-      label: 'Was there anything about working this way that helped you, or that got in your way?',
-      placeholder: 'A sentence or two is enough.' },
-]);
-
-/**
  * The sign-off, asked of the participant rather than transcribed by the
  * researcher.
  *
@@ -367,31 +369,6 @@ export const SIGNOFF = Object.freeze([
     { id: 'unsure', type: 'longtext',
       label: 'Is there any part you are less sure about?',
       placeholder: 'A sentence is enough. "No" is a fine answer.' },
-]);
-
-/**
- * The one thing asked after the task that is not multiple choice.
- *
- * The questions themselves live in each project's STUDY.md and come through the
- * same extractor as the pre-task quiz, so their answers never ship to a browser.
- * They are per project, because they are about the change the participant just
- * made to THAT codebase, and they have right answers, because a question with no
- * right answer cannot be scored the same way twice.
- *
- * They were four boxes to type in until 2026-08. Freeform got short answers to
- * questions whose value is in the follow-up, at the end of two hours, and nothing
- * comparable between participants. The follow-up now happens in the closing
- * interview, out loud, where it belongs.
- *
- * This scale stays because a fluent reconstruction and a real memory look the
- * same in a set of answers. Somebody who worked it out from first principles in
- * the moment has still not carried it out of the session, and only they can say
- * which it was.
- */
-export const REFLECTION = Object.freeze([
-    { id: 'recall', type: 'scale5',
-      label: 'How much of that were you already sure of, rather than working it out just now?',
-      low: 'Working it out', high: 'Sure of it' },
 ]);
 
 /**
