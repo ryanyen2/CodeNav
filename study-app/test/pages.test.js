@@ -35,9 +35,14 @@ export const connectAuthEmulator = () => {};
 export const connectFirestoreEmulator = () => {};
 export const collection = (...a) => ({ path: a.slice(1).join('/') });
 export const doc = (...a) => ({ path: a.slice(1).join('/') });
-export const setDoc = async (ref) => {
+export const setDoc = async (ref, data) => {
   globalThis.__written = globalThis.__written || [];
   globalThis.__written.push((ref && ref.path) || '');
+  // The path alone cannot answer "did it write the NEW key or the one it was
+  // called to replace", which is the whole question when a write races a
+  // subscription. Kept beside the paths so no existing test has to change.
+  globalThis.__writes = globalThis.__writes || [];
+  globalThis.__writes.push({ path: (ref && ref.path) || '', data });
 };
 export const deleteDoc = async (ref) => {
   globalThis.__deleted = globalThis.__deleted || [];
@@ -50,11 +55,22 @@ export const getDoc = async (ref) => {
   // always-succeeding stub is how "denied read marks the page offline and no
   // answer is ever saved" passed sixteen tests.
   const path = (ref && ref.path) || '';
+  // A test can refuse one specific read, which is how a page's "I could not tell"
+  // is told apart from its "there is nothing there".
+  if ((globalThis.__denied || []).includes(path)) {
+    const err = new Error('unavailable');
+    err.code = 'unavailable';
+    throw err;
+  }
   if (/^participants\\/[^/]+$/.test(path)) {
     const err = new Error('Missing or insufficient permissions.');
     err.code = 'permission-denied';
     throw err;
   }
+  // A test can plant documents here the same way it plants collections, which is
+  // what lets one ask whether a page reads a document before writing over it.
+  const planted = (globalThis.__docs || {})[path];
+  if (planted) return { exists: () => true, data: () => planted };
   return { exists: () => false, data: () => ({}) };
 };
 // A test can plant collections here, keyed by path, so the results view can be
@@ -969,4 +985,94 @@ test('answers already on this computer are sent on load', async () => {
         `after-codoc was flushed, got: ${paths.join(', ') || 'nothing'}`);
     assert.ok(paths.includes(`participants/${code}/answers/quiz-scribe-before`),
         'the quiz answers were flushed too');
+});
+
+test('a new key reaches the participants who are already holding the old one', async () => {
+    // `settings/keys` is where a key is entered; what a participant's setup
+    // fetches is their own copy under `secrets/session`, written when they were
+    // created. So rotating a key here used to reach nobody who already existed:
+    // a revoked key sat in every copy, setup handed it out, and a refused
+    // Anthropic key does not come back as a 401 — the CLI retries in silence, so
+    // the participant saw a two-minute hang and a script blaming their machine.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [
+            { id: 'p-holdsacopyxx', data: () => ({ createdAt: 2, order: 'codoc-first' }) },
+            { id: 'p-wasrevokedxx', data: () => ({ createdAt: 1, order: 'baseline-first' }) },
+        ],
+    });
+    // One has a copy of the old key. The other's was deliberately revoked, and
+    // handing it one back here would undo that.
+    window.__docs = {
+        'participants/p-holdsacopyxx/secrets/session':
+            { anthropicApiKey: 'sk-ant-old', openaiApiKey: 'sk-old' },
+    };
+    (window.__snaps || []).find((s) => s.ref.path === 'settings/keys')?.cb({
+        exists: () => true,
+        data: () => ({ anthropicApiKey: 'sk-ant-old', openaiApiKey: 'sk-old' }),
+    });
+
+    window.__written = [];
+    window.__writes = [];
+    document.querySelector('#k-anthropic').value = 'sk-ant-new';
+    await document.querySelector('#k-save').onclick();
+
+    assert.ok(window.__written.includes('settings/keys'), 'the new key is saved');
+    assert.ok(window.__written.includes('participants/p-holdsacopyxx/secrets/session'),
+        'and re-issued to the participant still holding the old one');
+    assert.ok(!window.__written.includes('participants/p-wasrevokedxx/secrets/session'),
+        'and not handed back to one whose keys were revoked');
+    // The copy has to hold the key that was just typed. `state.keys` is filled by
+    // a subscription, so re-issuing from it would race the write and could hand
+    // out the very key the rotation exists to replace.
+    const copy = window.__writes
+        .find((w) => w.path === 'participants/p-holdsacopyxx/secrets/session');
+    assert.equal(copy.data.anthropicApiKey, 'sk-ant-new',
+        'the re-issued copy holds the new key, not the one being replaced');
+    assert.equal(copy.data.openaiApiKey, 'sk-old',
+        'and keeps the key that was not changed');
+});
+
+test('the keys panel does not promise that only new participants get them', async () => {
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'settings/keys')?.cb({
+        exists: () => false, data: () => ({}),
+    });
+    const said = document.querySelector('#keys').textContent.replace(/\s+/g, ' ');
+    assert.ok(!/created after this/i.test(said),
+        'that sentence is why a rotation was believed to have reached everybody');
+});
+
+test('a rotation names the participants it could not reach', async () => {
+    // Dropping an unreadable participant out of the count reported "re-issued to
+    // everybody" over somebody still holding the revoked key — the state the
+    // re-issue exists to end, and the one nobody would then go looking for.
+    const { document, window } = await loadPage('experimenter');
+    window.__authCb?.({ email: 'someone@example.com' });
+    (window.__snaps || []).find((s) => s.ref.path === 'participants')?.cb({
+        docs: [
+            { id: 'p-holdsacopyxx', data: () => ({ createdAt: 2, order: 'codoc-first' }) },
+            { id: 'p-unreadablexx', data: () => ({ createdAt: 1, order: 'baseline-first' }) },
+        ],
+    });
+    window.__docs = {
+        'participants/p-holdsacopyxx/secrets/session': { anthropicApiKey: 'sk-ant-old' },
+    };
+    window.__denied = ['participants/p-unreadablexx/secrets/session'];
+    (window.__snaps || []).find((s) => s.ref.path === 'settings/keys')?.cb({
+        exists: () => true, data: () => ({ anthropicApiKey: 'sk-ant-old', openaiApiKey: 'sk-old' }),
+    });
+
+    const said = [];
+    window.alert = (m) => said.push(m);
+    document.querySelector('#k-anthropic').value = 'sk-ant-new';
+    await document.querySelector('#k-save').onclick();
+
+    assert.equal(said.length, 1);
+    assert.match(said[0], /p-unreadablexx/,
+        'the participant it could not decide about is named, not counted as done');
+    assert.ok(!/re-issued to the 2 /.test(said[0]),
+        'and the rotation does not claim to have reached everybody');
 });

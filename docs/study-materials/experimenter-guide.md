@@ -725,6 +725,20 @@ the change is sitting in it before the participant has asked for anything. Do no
 run the session there. Delete `~/codoc-study` and run `./setup.sh` with their code
 and order again.
 
+**The assistant says codoc's tools are not connected, or the session records
+nothing after the first turn.** Fixed on 2026-08-24; a bundle downloaded before
+that has it. `./start-session` restored the workspace to the recording's starting
+state, and the recording was made on the seeding machine, so it deleted
+`.vscode/settings.json` (the participant code the logger reads, in both arms) and
+`.claude/settings.json` (the study's prompt hook, in both arms), and it wrote the
+seeding machine's `.mcp.json` over theirs, which points codoc's MCP server at a
+venv that exists on nobody else's disk. `./setup.sh --check` cannot see it,
+because it runs before `./start-session` does it. To repair a machine already in
+that state, re-run `./setup.sh <code> <order>` — it rewrites all three — and have
+them redownload the bundle before the next condition, or the next
+`./start-session` undoes it again. Sessions run this way have no logger data and,
+in the codoc arm, no codoc tools; note it on the session sheet.
+
 **Nothing shows up for them on the dashboard.** Open the participant in the
 dashboard and read the two sentences under the setup command, because between them
 they say which half of the machine did not work.
@@ -756,6 +770,15 @@ daemon runs behind the session with no terminal of its own, so read
 start, codoc tidies up the project and reports something like "1 amend, 1
 attach". This is normal and does not change the text. Check that it still lists
 15 features (scribe) or 23 (tally) before you begin.
+
+**Claude Code says nothing for two minutes and setup reports the key was
+refused.** That is what a revoked Anthropic key looks like from the participant's
+side: the CLI retries a refused key in silence rather than reporting a 401. Check
+whether the key on their copy is the current one. Entering a new key under Session
+keys now re-issues it to every participant still holding the old one, and says how
+many it reached; before 2026-08-24 it reached only participants created afterwards,
+so anybody already set up was handed the dead key. Either way they must run
+`./setup.sh <code> <order>` again to fetch it.
 
 **The assistant asks them to sign in.** They should not have to. `./claude-study`
 sets the assistant's config directory to `.claude-study` inside the project folder

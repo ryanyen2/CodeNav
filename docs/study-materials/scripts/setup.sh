@@ -338,29 +338,65 @@ wiring_check() {
   fi
 }
 
-# Whether anything this folder recorded has actually reached the researcher.
+# Whether the LOGGER has run in this folder, which is not the same question as
+# whether its log file has bytes in it.
+#
+# Reading them as the same failed a machine that was fine. setup's own key check
+# runs `./claude-study -p` in scribe, and that fires the study's prompt hook, which
+# appends a line to scribe's interaction log. So on a machine where VS Code has
+# never been opened, scribe's log holds one 135-byte line and tally's holds none,
+# and the identical state was reported as a hard failure for one folder and a
+# friendly "not opened yet" for the other, decided entirely by which folder setup
+# happened to run its own probe in.
+#
+# The extension writes a `session` line the moment it activates, through
+# JSON.stringify, which puts no space after the colon; the prompt hook writes
+# `"ev": "prompt"` through json.dumps, which puts one. So the first grep matches
+# the extension and nothing else.
+#
+# The code is asked for as well, for the reason the snapshot check above already
+# gives: the log lives outside the workspace and outlives it, so a machine used
+# for an earlier pilot has one filed under a code that is no longer the one on
+# disk. Read without the code, a stale log made this folder look opened — and
+# through `mirror_check` it would have gone further, reporting batches sent under
+# somebody else's code as this folder being fine.
+logger_has_run() {
+  [ -n "${2-}" ] || return 1
+  grep '"ev":"session"' "$1" 2>/dev/null | grep -q "\"p\":\"$2\""
+}
+
+# Whether this folder can get what it records to the researcher.
 #
 # Everything else about the mirror can be checked by looking at files, and looking
 # at files is what told us nothing for a week. A slot claimed by an old pilot run
 # on this same machine refused every batch under the participant's code, the local
 # log kept growing, the editor said so on an output channel nobody opens, and the
 # dashboard drew a green dot the whole time. So this asks the two questions that
-# were never asked: has this folder ever sent anything, and does the code's mirror
-# slot belong to this machine.
+# were never asked: can this folder send at all, and does the code's mirror slot
+# belong to this machine.
+#
+# "Has it sent anything" is the wrong form of the first question on its own. The
+# mirror carries ACTIONS, and a folder that has been opened and not yet worked in
+# has produced none — the `session` line and the snapshots map to nothing — so a
+# healthy machine checked before the session sits at zero batches forever. What
+# says it can send is that it signed in and took the slot, which `start()` does the
+# moment the logger activates, whether or not there is anything to carry.
+#
+# The sign-in is not enough on its own either, and this is the trap: the identity
+# is ONE PER MACHINE, shared by both workspaces (`mirror.js`, `defaultIdentityPath`),
+# so scribe having signed in says nothing about tally. The one reason a folder whose
+# logger is running refuses to sign in is that its settings do not say which arm it
+# is — `_ensureReady` will not guess, because guessing files a baseline session in
+# the codoc arm — and that is per folder and readable here. So both are asked, and
+# the arm is what makes the difference between the two folders visible.
 mirror_check() {
-  local w="$1" log="$2" code state sent uid token held
+  local w="$1" log="$2" code state sent uid token held arm
   code="$(filed_under "$WORK/$w")"
   state="$log.mirror.json"
   sent="$(python3 -c "
 import json,sys
 try: print(json.load(open(sys.argv[1])).get('seq', 0))
 except Exception: print(0)" "$state" 2>/dev/null)"
-  if [ "${sent:-0}" -gt 0 ]; then
-    ok "$w has sent $sent batches to the researcher"
-  else
-    bad "$w has recorded $(wc -c < "$log" | tr -d ' ') bytes and sent none of it"
-    FAILED=1
-  fi
 
   # Who holds the slot. The rules let a slot be read by the machine that holds it
   # and by nobody else, so a read that comes back empty is the answer, not a
@@ -371,6 +407,28 @@ try:
     d = json.load(open(sys.argv[1]))
     print(d.get('uid',''), d.get('refreshToken',''))
 except Exception: print('')" "$HOME/codoc-study/session-logs/mirror-identity.json" 2>/dev/null)"
+
+  arm="$(condition_on_disk "$w")"
+  if [ "${sent:-0}" -gt 0 ]; then
+    ok "$w has sent $sent batches to the researcher"
+  elif [ -n "${uid% *}" ] && { [ "$arm" = codoc ] || [ "$arm" = baseline ]; }; then
+    ok "$w is registered to send, and has nothing to send yet"
+  else
+    bad "$w is recording, and none of it can reach the researcher yet."
+    if [ "$arm" != codoc ] && [ "$arm" != baseline ]; then
+      echo "          Its settings do not say which arm it is, and the mirror will"
+      echo "          not guess: sending anyway would file the session under the"
+      echo "          wrong half of the study."
+      echo "          Run setup again: ./setup.sh <your code> <your order>"
+    else
+      echo "          It has recorded $(wc -c < "$log" | tr -d ' ') bytes and has not"
+      echo "          signed in to send them. The local log keeps everything either"
+      echo "          way. Try again on a better connection, and tell the researcher"
+      echo "          if it says this twice."
+    fi
+    FAILED=1
+  fi
+
   [ -n "$code" ] && [ -n "${uid% *}" ] || return 0
   token="$(curl -s -X POST \
     "https://securetoken.googleapis.com/v1/token?key=$FIREBASE_KEY" \
@@ -674,7 +732,7 @@ MCP_PY
 
   for w in $PROJECTS; do
     log="$HOME/codoc-study/session-logs/interaction-$w.jsonl"
-    if [ -s "$log" ]; then
+    if logger_has_run "$log" "$(filed_under "$WORK/$w")"; then
       mirror_check "$w" "$log"
     else
       note "$w has not been opened in VS Code yet. Nothing to do: you open it"

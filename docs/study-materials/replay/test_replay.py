@@ -109,6 +109,111 @@ class SecretTest(unittest.TestCase):
             self.assertEqual(sorted(record.scan(root, with_index=True)), ["scribe/lines.py"])
 
 
+class MachineLocalTest(unittest.TestCase):
+    """The wiring setup.sh writes for THIS machine survives a replay untouched.
+
+    Every one of these was found on a real participant's disk after they ran
+    `./start-session`. The reset deletes whatever the base state does not hold and
+    then copies the base over the top, and the base is the SEEDING machine's
+    workspace, so three files that are correct only on one laptop were being
+    handed to everybody: the participant code the logger reads, the study's own
+    prompt hook, and codoc's MCP server at a path that exists on nobody else's
+    disk. The session then recorded nothing, in either arm, and the codoc arm ran
+    with no codoc tools — and setup's --check cannot catch any of it, because the
+    replay runs after the check.
+    """
+
+    def test_a_recording_never_carries_this_machines_wiring(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(root, "scribe/lines.py", "code\n")
+            write(root, ".vscode/settings.json", '{"codocStudyLogger.participant": "p-x"}')
+            write(root, ".claude/settings.json", '{"hooks": {}}')
+            write(root, ".mcp.json", '{"mcpServers": {}}')
+            # The slash commands are not machine-local: they are the same file on
+            # every machine and the codoc arm needs them, so they stay recorded.
+            write(root, ".claude/commands/codoc/ask.md", "ask\n")
+            self.assertEqual(sorted(record.scan(root)),
+                             [".claude/commands/codoc/ask.md", "scribe/lines.py"])
+
+    def test_a_replay_leaves_the_participants_own_wiring_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, frames, ws = tmp / "raw", tmp / "frames", tmp / "workspace"
+            # A recording made on the seeding machine, carrying its own wiring.
+            seeded = [dict(step) for step in SESSION]
+            seeded[0] = {"at_s": 0, "files": {
+                **SESSION[0]["files"],
+                ".vscode/settings.json": '{"codocStudyLogger.participant": "seed"}',
+                ".claude/settings.json": '{"seeding": "machine"}',
+                ".mcp.json": '{"command": "/Users/seed/repo/.venv/bin/codoc-mcp"}',
+            }}
+            fake_recording(raw, seeded)
+            record.build(raw, None, frames, seconds=0.01)
+
+            ws.mkdir()
+            write(ws, ".vscode/settings.json", '{"codocStudyLogger.participant": "p-real"}')
+            write(ws, ".claude/settings.json", '{"theirs": "machine"}')
+            write(ws, ".mcp.json", '{"command": "/home/them/.local/bin/codoc-mcp"}')
+            play.play(ws, frames, speed=1000.0, step=False,
+                      do_reset=True, do_transcript=False)
+
+            self.assertEqual((ws / ".vscode/settings.json").read_text(),
+                             '{"codocStudyLogger.participant": "p-real"}',
+                             "the logger lost the participant code, so the session "
+                             "would record nothing")
+            self.assertEqual((ws / ".claude/settings.json").read_text(),
+                             '{"theirs": "machine"}',
+                             "the study's prompt hook was replaced by the seeding "
+                             "machine's, so no prompt would be recorded")
+            self.assertEqual((ws / ".mcp.json").read_text(),
+                             '{"command": "/home/them/.local/bin/codoc-mcp"}',
+                             "codoc's MCP server was re-pointed at a path that does "
+                             "not exist on this machine")
+
+    def test_a_frame_that_names_this_wiring_as_a_delete_is_refused(self):
+        # A manifest already on somebody's laptop had its `deletes` computed by
+        # the old scan, so it can name one of these. Shipping a player that skips
+        # them on the way IN and honours them on the way OUT would fix the copy
+        # and leave the deletion, which is the half that stops the recording.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            frames, ws = tmp / "frames", tmp / "workspace"
+            (frames / "base").mkdir(parents=True)
+            write(frames / "base", "scribe/lines.py", "one\n")
+            (frames / "manifest.json").write_text(json.dumps({
+                "recorded_root": "/Users/seed/recording",
+                "frames": [{"n": 1, "delay_s": 0, "terminal": "",
+                            "deletes": [".vscode/settings.json", ".mcp.json"]}],
+            }))
+            ws.mkdir()
+            write(ws, ".vscode/settings.json", '{"codocStudyLogger.participant": "p-real"}')
+            write(ws, ".mcp.json", '{"command": "/home/them/.local/bin/codoc-mcp"}')
+            play.play(ws, frames, speed=1000.0, step=False,
+                      do_reset=True, do_transcript=False)
+            self.assertTrue((ws / ".vscode/settings.json").exists(),
+                            "a frame deleted the participant code, so the session "
+                            "would record nothing from here on")
+            self.assertTrue((ws / ".mcp.json").exists())
+
+    def test_a_replay_does_not_invent_wiring_the_participant_never_had(self):
+        # The baseline arm has no .mcp.json and no codoc hooks. A recording made
+        # in the codoc workspace must not hand it one.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw, frames, ws = tmp / "raw", tmp / "frames", tmp / "workspace"
+            seeded = [dict(step) for step in SESSION]
+            seeded[0] = {"at_s": 0, "files": {
+                **SESSION[0]["files"],
+                ".mcp.json": '{"command": "/Users/seed/repo/.venv/bin/codoc-mcp"}',
+            }}
+            fake_recording(raw, seeded)
+            record.build(raw, None, frames, seconds=0.01)
+            ws.mkdir()
+            play.play(ws, frames, 1000.0, False, True, False)
+            self.assertFalse((ws / ".mcp.json").exists())
+
+
 class TransientTest(unittest.TestCase):
     def test_no_process_state_reaches_a_frame(self):
         # SQLite's write-ahead log is meaningless without the database it was

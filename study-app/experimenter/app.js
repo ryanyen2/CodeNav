@@ -12,7 +12,7 @@ import {
     connectAuthEmulator,
 } from 'firebase/auth';
 import {
-    getFirestore, collection, doc, setDoc, getDocs, deleteDoc, onSnapshot, query, orderBy,
+    getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, onSnapshot, query, orderBy,
     connectFirestoreEmulator,
 } from 'firebase/firestore';
 import { timeline, legend, ribbon, patterns } from './charts.js';
@@ -279,9 +279,10 @@ function renderKeys() {
     const have = !!(k.anthropicApiKey && k.openaiApiKey);
     el.innerHTML = `
       <h3>Session keys</h3>
-      <p class="hint">Entered once. Every participant created after this gets a
-      copy, and their setup script fetches it with their code — nobody pastes a
-      key.</p>
+      <p class="hint">Entered here, and copied to each participant, whose setup
+      script fetches it with their code — nobody pastes a key. Saving a new one
+      re-issues it to everybody still holding the old one, so rotating a key here
+      reaches the people who are already set up.</p>
       <div class="who-row">
         <label>Anthropic<input id="k-anthropic" type="password"
           placeholder="${k.anthropicApiKey ? `set ${keyTail(k.anthropicApiKey)}` : 'sk-ant-…'}"></label>
@@ -299,19 +300,40 @@ function renderKeys() {
         if (a) update.anthropicApiKey = a;
         if (o) update.openaiApiKey = o;
         if (!Object.keys(update).length) return;
+        // What the participants' copies must end up holding, worked out here so
+        // the re-issue below does not depend on the subscription having caught up.
+        const issued = { ...(state.keys || {}), ...update };
         try {
             await setDoc(doc(db, 'settings/keys'), { ...update, updatedAt: Date.now() }, { merge: true });
             el.querySelector('#k-anthropic').value = '';
             el.querySelector('#k-openai').value = '';
         } catch (err) {
             alert(`Could not save: ${err.code || err.message}`);
+            return;
         }
+        const { holders, done, stale } = await reissueToHolders(issued);
+        if (!holders && !stale.length) return;
+        alert(stale.length
+            ? `Saved, and re-issued to ${done} participant${done === 1 ? '' : 's'}. `
+              + `NOT ${stale.length === 1 ? 'done for' : 'done for these'}: `
+              + `${stale.join(', ')}. Press Reissue on each, or their setup is `
+              + 'handed the old key and the assistant hangs on it without saying why.'
+            : `Saved, and re-issued to the ${done} participant${done === 1 ? '' : 's'} `
+              + 'already holding a copy. Their next setup run fetches the new one.');
     };
 }
 
-/** Give one participant their own copy, or take it away again. */
-async function issueKeys(code) {
-    const k = state.keys || {};
+/**
+ * Give one participant their own copy, or take it away again.
+ *
+ * `keys` is passed rather than read off `state` by every caller because one of
+ * them has just written a new pair and must not depend on the subscription having
+ * caught up: `setDoc` resolves when the server confirms, `onSnapshot` fires when
+ * it fires, and a re-issue that lost that race would hand out the key it was
+ * called to replace.
+ */
+async function issueKeys(code, keys) {
+    const k = keys || state.keys || {};
     if (!k.anthropicApiKey) return false;
     await setDoc(doc(db, `participants/${code}/secrets/session`), {
         anthropicApiKey: k.anthropicApiKey,
@@ -319,6 +341,45 @@ async function issueKeys(code) {
         issuedAt: Date.now(),
     });
     return true;
+}
+
+/**
+ * Hand a newly entered key to the participants who are already holding the old one.
+ *
+ * `settings/keys` is where a key is typed; what a participant's setup fetches is
+ * their OWN copy under `secrets/session`, written by `issueKeys` when they were
+ * created. So a rotation here used to reach nobody who already existed. A revoked
+ * key stayed in every copy that had been issued, setup handed it out, and a
+ * refused Anthropic key does not come back as a 401 — Claude Code retries it in
+ * silence — so the participant saw a two-minute hang and a script that told them
+ * their own machine was at fault.
+ *
+ * Only holders are rewritten. A participant whose keys were revoked has no copy,
+ * and writing one here would undo a deliberate act.
+ *
+ * A participant this could not decide about is counted separately and named in what
+ * the caller says. Dropping them silently would report "re-issued to everybody"
+ * over somebody still holding the revoked key, which is the state this exists to
+ * end and the one nobody would then go looking for.
+ */
+async function reissueToHolders(keys) {
+    const holders = [];
+    const unread = [];
+    for (const p of state.participants) {
+        try {
+            const snap = await getDoc(doc(db, `participants/${p.code}/secrets/session`));
+            if (snap.exists()) holders.push(p.code);
+        } catch (err) {
+            unread.push(p.code);
+            console.warn('could not read the keys issued to', p.code, err.code);
+        }
+    }
+    const failed = [];
+    for (const code of holders) {
+        if (!await issueKeys(code, keys).catch(() => false)) failed.push(code);
+    }
+    return { holders: holders.length, done: holders.length - failed.length,
+             stale: [...failed, ...unread] };
 }
 
 async function revokeKeys(code) {

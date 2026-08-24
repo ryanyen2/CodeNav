@@ -752,6 +752,96 @@ fi
 rm -rf "$SN"
 
 
+echo
+echo "Whether this folder can send what it records"
+# setup's own key check runs `./claude-study -p` in scribe, which fires the study's
+# prompt hook, which appends a line to scribe's interaction log. Read as "the
+# logger has run here", that made a machine where VS Code has never been opened
+# fail on scribe and pass on tally — the same state, two verdicts, decided by which
+# folder setup happened to probe in.
+MR="$(mktemp -d)"
+mkdir -p "$MR/codoc-study/scribe/.vscode" "$MR/codoc-study/tally/.vscode" \
+         "$MR/codoc-study/session-logs" "$MR/bin"
+for w in scribe tally; do
+  printf '{"codocStudyLogger.participant":"p04","codocStudyLogger.condition":"baseline"}\n' \
+    > "$MR/codoc-study/$w/.vscode/settings.json"
+done
+# Nothing here may reach the study's database: the slot read is a live call.
+cat > "$MR/bin/curl" <<'CURL'
+#!/bin/sh
+echo '{}'
+CURL
+chmod +x "$MR/bin/curl"
+mirror_out() { PATH="$MR/bin:$PATH" HOME="$MR" bash "$SETUP" --check 2>&1; }
+
+# What setup's own probe leaves behind, byte for byte.
+printf '{"t": 1787524485666, "p": "p04", "ws": "scribe", "ev": "prompt", "chars": 33, "words": 6, "lines": 1, "condition": "codoc"}\n' \
+  > "$MR/codoc-study/session-logs/interaction-scribe.jsonl"
+out="$(mirror_out)"
+if printf '%s' "$out" | grep -q 'scribe has not been opened in VS Code yet'; then
+  ok "setup's own key check does not count as the logger having run"
+else
+  bad "setup's own probe line is read as a session, so a fine machine fails"
+fi
+
+# Opened, and the mirror has not signed in. That is the real failure.
+echo '{"ev":"session","p":"p04","ws":"scribe"}' \
+  >> "$MR/codoc-study/session-logs/interaction-scribe.jsonl"
+out="$(mirror_out)"
+if printf '%s' "$out" | grep -q 'scribe is recording, and none of it can reach'; then
+  ok "a folder that is recording and cannot send is reported"
+else
+  bad "a folder whose mirror never signed in passes --check"
+fi
+
+# Signed in and holding the slot, with nothing yet worth sending. The mirror
+# carries ACTIONS, and the `session` line is not one, so a folder opened and not
+# yet worked in sits at zero batches however healthy it is.
+printf '{"uid":"u-1","refreshToken":"r-1"}\n' \
+  > "$MR/codoc-study/session-logs/mirror-identity.json"
+printf '{"offset":40,"seq":0}\n' \
+  > "$MR/codoc-study/session-logs/interaction-scribe.jsonl.mirror.json"
+out="$(mirror_out)"
+if printf '%s' "$out" | grep -q 'scribe is registered to send, and has nothing to send yet'; then
+  ok "a folder that can send, with nothing to send, is not a failure"
+else
+  bad "an opened folder with no actions in it yet is reported as broken"
+fi
+# The sign-in is one per MACHINE and shared by both workspaces, so scribe having
+# signed in says nothing about tally. Read as if it did, the folder whose settings
+# do not say which arm it is — the one case where the mirror refuses to send at all
+# — would report itself ready, and the sentence written for it would be unreachable
+# on any machine where the other folder worked.
+printf '{"codocStudyLogger.participant":"p04"}\n' \
+  > "$MR/codoc-study/tally/.vscode/settings.json"
+echo '{"ev":"session","p":"p04","ws":"tally"}' \
+  > "$MR/codoc-study/session-logs/interaction-tally.jsonl"
+out="$(mirror_out)"
+if printf '%s' "$out" | grep -q 'tally is registered to send'; then
+  bad "a folder that will not send is passed on the other folder's sign-in"
+elif printf '%s' "$out" | grep -q 'do not say which arm it is'; then
+  ok "a folder whose arm is unset is reported, and told why"
+else
+  bad "a folder whose arm is unset is not reported at all"
+fi
+printf '{"codocStudyLogger.participant":"p04","codocStudyLogger.condition":"codoc"}\n' \
+  > "$MR/codoc-study/tally/.vscode/settings.json"
+
+# A log left behind by an earlier code says nothing about this folder, and through
+# the mirror it would have said something worse than nothing: batches somebody else
+# sent, reported as this folder being fine.
+printf '{"codocStudyLogger.participant":"p09","codocStudyLogger.condition":"baseline"}\n' \
+  > "$MR/codoc-study/scribe/.vscode/settings.json"
+printf '{"offset":900,"seq":7}\n' \
+  > "$MR/codoc-study/session-logs/interaction-scribe.jsonl.mirror.json"
+out="$(mirror_out)"
+if printf '%s' "$out" | grep -q 'scribe has sent 7 batches'; then
+  bad "batches sent under an earlier code are reported as this folder's"
+else
+  ok "batches sent under an earlier code are not reported as this folder's"
+fi
+rm -rf "$MR"
+
 
 echo
 echo "The command the first task is built around"

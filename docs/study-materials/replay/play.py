@@ -35,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from record import (REPLAY_RETARGETED, SKIP_DIRS, SKIP_DIR_SUFFIXES,  # noqa: E402
+                    is_machine_local,
                     Leaked, check_no_leak, scan, scrub)
 
 DIM, RESET = "\033[2m", "\033[0m"
@@ -108,6 +109,12 @@ def copy_tree(src: Path, workspace: Path) -> list[str]:
         for name in filenames:
             full = Path(dirpath) / name
             rel = full.relative_to(src)
+            # Wiring that belongs to the machine the recording was made on. An
+            # older frame still holds these, so the guard is here as well as in
+            # `scan`: a bundle already on somebody's laptop is fixed by shipping
+            # this player, and no recording has to be made again.
+            if is_machine_local(rel.as_posix()):
+                continue
             dest = workspace / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             if rel.as_posix() in REPLAY_RETARGETED:
@@ -361,6 +368,14 @@ def play(workspace: Path, frames: Path, speed: float, step: bool,
         if src.exists():
             copy_tree(src, workspace)
         for rel in frame.get("deletes", []):
+            # The same guard as the copy above, and it is not redundant: a
+            # manifest already on somebody's laptop had its `deletes` computed by
+            # the old scan, so it can still name one of these. A recording in
+            # which the wiring changed between two frames would otherwise delete
+            # the participant's own copy, and the logger stops recording with
+            # nothing but a status bar to say so.
+            if is_machine_local(Path(rel).as_posix()):
+                continue
             (workspace / rel).unlink(missing_ok=True)
 
         if step:

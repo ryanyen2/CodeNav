@@ -98,6 +98,31 @@ SECRET_NAMES = {".env", ".env.local", "api-key", ".netrc", "credentials",
                 "id_rsa", ".npmrc", ".pypirc"}
 SECRET_SUFFIXES = {".pem", ".key"}
 
+# Never snapshotted and never replayed: written by `setup.sh` for the machine it
+# ran on, and wrong on every other one.
+#
+# A recording is made in the seeding workspace and copied into twelve laptops. The
+# reset deletes what the base state does not hold and then copies the base over
+# the top, so these three travelled — and every one of them was found on a real
+# participant's disk after they ran `./start-session`. `.vscode/settings.json`
+# carries the participant code and the condition the logger reads, so losing it
+# switched recording off for both arms with nothing but a status bar to say so.
+# `.claude/settings.json` carries the study's prompt hook, installed in BOTH arms,
+# beside codoc's hooks at this machine's interpreter; the baseline base holds none,
+# so it was deleted there, and the codoc base holds the seeding machine's, so it
+# was overwritten here. `.mcp.json` names codoc's MCP server at the seeding
+# machine's venv, which exists on no participant's disk, so the codoc condition ran
+# with no codoc tools in it.
+#
+# Note what is NOT here: `.claude/commands/codoc/*.md` and the skills are the same
+# bytes on every machine and the codoc arm needs them, so they stay recorded.
+#
+# setup's `--check` cannot stand in for this. It runs before `./start-session`, and
+# what it verified is what the replay then undoes.
+MACHINE_LOCAL = {
+    ".vscode/settings.json", ".claude/settings.json", ".mcp.json",
+}
+
 # Keeping the harness out of what the participant reads.
 #
 # The code session is recorded in a workspace with neither tool in it, so the
@@ -177,8 +202,19 @@ def check_no_leak(text: str, target_root: str, where: str) -> None:
                          f"must not see here:\n  {line.strip()[:200]}")
 
 
+def is_machine_local(rel: str) -> bool:
+    """Whether this path is wiring that belongs to one machine and travels nowhere.
+
+    Taken as a POSIX path so a frame built on one platform is read the same on the
+    other: `scan` hands out `os.sep`-joined strings and `copy_tree` walks a tree.
+    """
+    return Path(rel).as_posix() in MACHINE_LOCAL
+
+
 def _skip(rel: str, with_index: bool) -> bool:
     if rel in SKIP_FILES or rel.endswith(SKIP_FILE_SUFFIXES):
+        return True
+    if is_machine_local(rel):
         return True
     name = Path(rel).name
     if name in SECRET_NAMES or Path(rel).suffix in SECRET_SUFFIXES:
