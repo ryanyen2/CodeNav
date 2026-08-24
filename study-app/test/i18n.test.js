@@ -161,7 +161,29 @@ test('every briefing, start instruction and page string is translated', () => {
         t(`project.${name}.repl.after.caption`, project.repl.after.caption);
         project.repl.after.commands.forEach(([, why], i) =>
             t(`project.${name}.repl.after.${i}`, why));
+        // And the block that states what those commands actually print, which
+        // moved line the participant asked for, which one is the fault, and what
+        // to do about it. Walked for the same reason as the commands above: a
+        // project gaining a fourth consequence or a fifth step would otherwise
+        // show as one English line in the middle of a Chinese instruction, at the
+        // moment the participant is being told what to fix.
+        t(`project.${name}.repl.after.expected.lead`, project.repl.after.expected.lead);
+        project.repl.after.expected.moved.forEach((m, i) => {
+            t(`project.${name}.repl.after.moved.${i}.what`, m.what);
+            t(`project.${name}.repl.after.moved.${i}.why`, m.why);
+        });
+        const fault = project.repl.after.fault;
+        t(`project.${name}.repl.after.fault.lead`, fault.lead);
+        fault.what.forEach((line, i) =>
+            t(`project.${name}.repl.after.fault.what.${i}`, line));
+        t(`project.${name}.repl.after.fault.evidenceLead`, fault.evidenceLead);
+        t(`project.${name}.repl.after.fault.record`, fault.record);
+        fault.todo.forEach((line, i) =>
+            t(`project.${name}.repl.after.fault.todo.${i}`, line));
     }
+    // The verdict labels are looked up under a computed key, so the test that
+    // reads app.js for `t('ui.…')` cannot see them.
+    ['asked', 'wrong', 'side'].forEach((v) => t(`ui.task.verdict.${v}`, ''));
     // The request itself is NOT translated. It is pasted into an agent working
     // in a codebase whose identifiers are English, and a translated request
     // would ask for a different change from the one that was recorded.

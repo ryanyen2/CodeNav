@@ -850,19 +850,41 @@ test('the task page reads as one occasion, from a cold start', async () => {
     assert.match(stage.innerHTML, /data-copy="\.\/claude-study"/,
         'and the agent is started through the study launcher');
 
-    // Three things that must never be on it. Naming the recording gives the
-    // design away, saying anything is wrong hands over the detection being
-    // measured, and a memory of having asked earlier is a memory nobody has.
+    // Two things that must never be on it. Naming the recording gives the design
+    // away, and a memory of having asked earlier is a memory nobody has.
     assert.ok(!/record(ed|ing)/i.test(text), 'the page does not say it was recorded');
-    // Read the prose only. The samples are real output, and one of them happens
-    // to contain the phrase "measurement error", which says nothing about the
-    // change and would fail a word match run over the whole page.
-    const prose = [...stage.querySelectorAll('h1, h2, p, li')]
-        .map((el) => el.textContent).join(' ');
-    assert.ok(!/(mistake|bug|broken|defect|incorrect)/i.test(prose),
-        'and nothing suggests the change has anything to find in it');
     assert.ok(!/while you were away|went out/i.test(text),
         'and it does not ask them to remember something they did not do');
+
+    // Saying anything was wrong used to be the third. It was dropped on
+    // 2026-08-23: the fault is reachable only by reading one converted document
+    // closely, the count lines that move do so by one digit in the middle of
+    // seven, and a reader holding the two blocks side by side sees no difference.
+    // The researcher did not see it either. Detection is no longer an outcome
+    // this task measures, so the card states the fault. What it must not do is
+    // leave the moved lines undistinguished, which is the ambiguity that made the
+    // old card unreadable rather than merely quiet.
+    const prose = [...stage.querySelectorAll('h1, h2, h3, p, li')]
+        .map((el) => el.textContent).join(' ');
+    assert.match(prose, /mistake/i, 'the fault is named, not hinted at');
+    assert.match(prose, /Do this/i, 'and the card says what to do about it');
+
+    assert.ok(stage.querySelectorAll('.moved li').length >= 2,
+        'the count lines that moved are listed one by one');
+    assert.equal(stage.querySelectorAll('.moved-wrong').length, 1,
+        'exactly one of them is named as the fault');
+    assert.ok(stage.querySelector('.moved-asked'),
+        'and at least one is named as the change they asked for, so the two are '
+        + 'not left to be mistaken for each other');
+
+    // What the command prints AFTER the change, verbatim, and different from the
+    // before block. A copy of the before block would restate the ambiguity in
+    // more words.
+    const after = PROJECTS[project].repl.after.expected.out;
+    const samples = [...stage.querySelectorAll('pre.sample')].map((el) => el.textContent);
+    assert.ok(samples.includes(after), 'the after output is on the page verbatim');
+    assert.notEqual(after, PROJECTS[project].repl.before,
+        'and it differs from the before block, or there is nothing to compare');
 });
 
 test('the tutorial teaches the way of working, in both arms', async () => {

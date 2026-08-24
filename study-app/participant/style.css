@@ -11,6 +11,8 @@
     --ink-faint: #8b8781;
     --accent: #2f6f4e;
     --accent-soft: #e8f1ec;
+    --warn: #9c3d24;
+    --warn-soft: #fbeee9;
     --radius: 8px;
     --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
@@ -392,6 +394,56 @@ pre.sample.bad { border-left: 2px solid var(--line-strong, var(--line)); padding
 .runs li .fine { display: block; margin-top: 2px; }
 
 .rule { font-size: 14px; color: var(--ink-soft); margin: 0 0 18px; }
+
+/* What the same command prints AFTER the change, with a verdict on each count
+ * line that moved.
+ *
+ * Marked loudly, which the sample above it deliberately is not. That restraint
+ * assumed the reader would find the moved line themselves. They do not: two of
+ * scribe's four lines move by one digit, in the middle of seven numbers, and the
+ * blocks read as identical side by side. So the line that matters is findable
+ * here without counting digits, and the one the participant asked for is marked
+ * as such rather than left to be mistaken for the fault. */
+.moved { list-style: none; margin: 0 0 22px; padding: 0; }
+.moved li {
+    border: 1px solid var(--line); border-left-width: 3px;
+    border-radius: var(--radius); background: var(--panel);
+    padding: 14px 16px; margin-bottom: 10px;
+}
+.moved li p { margin: 0 0 6px; }
+.moved li p:last-child { margin-bottom: 0; }
+/* The reason a line moved is the sentence that settles it, so it is not set as
+   an aside the way the captions elsewhere on the page are. */
+.moved li p.fine { color: var(--ink-soft); font-size: 14.5px; }
+.moved-h { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.moved-h code { color: var(--ink); font-weight: 600; }
+.moved .tag {
+    font-size: 12px; padding: 2px 9px; border-radius: 20px;
+    border: 1px solid var(--line); color: var(--ink-soft);
+}
+.moved-asked { border-left-color: var(--accent); }
+.moved-asked .tag {
+    background: var(--accent-soft); color: var(--accent); border-color: transparent;
+}
+.moved-wrong { border-left-color: var(--warn); }
+.moved-wrong .tag {
+    background: var(--warn-soft); color: var(--warn); border-color: transparent;
+}
+.moved-side { border-left-color: var(--line); }
+
+/* The fault stated, one consequence per line. Not numbered: they are four things
+ * that are all true at once, and numbering them reads as an order to do them in,
+ * which the list under "Do this" is. */
+.says { margin: 0 0 22px; padding-left: 20px; color: var(--ink-soft); }
+.says li { margin-bottom: 8px; }
+
+/* Identifiers and literal output inside a sentence. `.pick` is a copyable
+ * command and keeps its own look. */
+p code:not(.pick), .says code:not(.pick), ol.do code:not(.pick), .moved code:not(.pick) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 4px; padding: 0 4px;
+}
 
 /* ── the tutorial ─────────────────────────────────────────────────────────── */
 

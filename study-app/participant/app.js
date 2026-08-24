@@ -24,6 +24,28 @@ import { isPilotCode } from '../shared/schema.js';
 import { setLanguage, language, t, localize, localizeAll } from './i18n/index.js';
 import { esc } from '../shared/html.js';
 
+/**
+ * Escaped text, with `backticked` spans as code.
+ *
+ * The fault the card describes is made of identifiers and literal output, and a
+ * paragraph naming `[^1]:` in running text is unreadable without them being set
+ * apart. Escaping happens first, so the markup can only come from the backticks.
+ */
+const code = (text) => esc(text).replace(/`([^`]+)`/g, '<code>$1</code>');
+
+/**
+ * The label on each count line that moved, keyed by the verdict prose.js gives it.
+ *
+ * The verdict is the point of the block: two lines move in scribe and one of them
+ * is the change the participant asked for, so a list of moved lines without a
+ * verdict on each one is the old ambiguity with more words around it.
+ */
+const VERDICT = Object.freeze({
+    asked: 'You asked for this, and it is right',
+    wrong: 'You did not ask for this',
+    side: 'Not the mistake',
+});
+
 const firebaseConfig = {
     apiKey: 'AIzaSyCeIFBc8HhCmtw9-pXjUm1qT3CUyo5GbkY',
     authDomain: 'codoc-11b10.firebaseapp.com',
@@ -405,8 +427,14 @@ const VIEWS = {
     // earlier and going out, and the card was a request with no author. Sending
     // it themselves is what makes the change theirs to own.
     //
-    // Nothing here says the change is wrong, and nothing says what to check.
-    // Either would hand over the thing being measured.
+    // The card USED to say nothing about the change being wrong and nothing
+    // about what to check, on the grounds that either would hand over the thing
+    // being measured. It says both now, deliberately (2026-08-23): the plant is
+    // reachable only by reading one converted document closely, two of four
+    // count lines move by one digit in the middle of seven numbers, and a reader
+    // comparing the blocks by eye reads them as unchanged. Detection is no longer
+    // an outcome this task measures; what the participant does with a fault they
+    // have been handed is.
     task: (step) => {
         const p = PROJECTS[step.project];
         return `
@@ -459,6 +487,32 @@ const VIEWS = {
             <span class="fine">${esc(t(`project.${step.project}.repl.after.${i}`, why))}</span></li>`).join('')}
         </ul>
         <p class="fine">${esc(t(`project.${step.project}.repl.after.caption`, p.repl.after.caption))}</p>
+
+        <h2>${esc(t('ui.task.expected', 'What you should see'))}</h2>
+        <p>${esc(t(`project.${step.project}.repl.after.expected.lead`, p.repl.after.expected.lead))}</p>
+        <pre class="sample">${esc(p.repl.after.expected.out)}</pre>
+        <ul class="moved">${p.repl.after.expected.moved.map((m, i) => `
+          <li class="moved-${m.verdict}">
+            <p class="moved-h"><code>${esc(m.file)}</code>
+              <span class="tag">${esc(t(`ui.task.verdict.${m.verdict}`, VERDICT[m.verdict]))}</span></p>
+            <p>${code(t(`project.${step.project}.repl.after.moved.${i}.what`, m.what))}</p>
+            <p class="fine">${code(t(`project.${step.project}.repl.after.moved.${i}.why`, m.why))}</p>
+          </li>`).join('')}
+        </ul>
+
+        <h2>${esc(t('ui.task.fault', 'What is wrong, and what to do about it'))}</h2>
+        <p>${code(t(`project.${step.project}.repl.after.fault.lead`, p.repl.after.fault.lead))}</p>
+        <ul class="says">${p.repl.after.fault.what.map((line, i) => `
+          <li>${code(t(`project.${step.project}.repl.after.fault.what.${i}`, line))}</li>`).join('')}
+        </ul>
+        <p>${code(t(`project.${step.project}.repl.after.fault.evidenceLead`, p.repl.after.fault.evidenceLead))}</p>
+        <pre class="sample bad">${esc(p.repl.after.fault.evidence)}</pre>
+        <p>${code(t(`project.${step.project}.repl.after.fault.record`, p.repl.after.fault.record))}</p>
+
+        <h3>${esc(t('ui.task.todo', 'Do this'))}</h3>
+        <ol class="do">${p.repl.after.fault.todo.map((line, i) => `
+          <li>${code(t(`project.${step.project}.repl.after.fault.todo.${i}`, line))}</li>`).join('')}
+        </ol>
 
         <p class="rule">${esc(t('ui.task.clock',
         'You should be able to complete the whole task in about 20 minutes. There is no timer '

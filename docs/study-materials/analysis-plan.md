@@ -160,7 +160,9 @@ as a proportion of that project's maximum, so the two projects can be pooled.
 ### The page names the commands, from 2026-08-20
 
 Both planted problems in each project are reachable from a terminal in under a minute
-and neither is reachable by reading. Before this change the task page printed what the
+and neither is reachable by reading. (Since 2026-08-20 there is one planted problem per
+project, not two; the sentence is left as it was written because it describes the state
+this change was made in.) Before this change the task page printed what the
 fixtures produce BEFORE the change and left the participant to think of running them
 again; somebody who did not think of it scored zero for a reason that has nothing to do
 with the way of working they were given, which is the comparison the study exists to
@@ -179,6 +181,50 @@ Two consequences for the analysis, and neither is optional to report:
 - **"Found by running" is now a route the page prompted**, so it is not evidence about
   the condition in the way the other two are. It is coded, and it is not counted
   towards the codoc-vs-baseline comparison on its own.
+
+### The page states the fault, from 2026-08-23
+
+The section above stopped short: the page named the commands but still said nothing
+was wrong, on the grounds that saying so would hand over the thing being measured. It
+does say so now, and detection coverage does not survive the change.
+
+What forced it. Since 2026-08-20 there is ONE planted problem per project, not two, and
+scribe's is reachable only by reading one converted document closely. Of the four count
+lines the page tells the participant to compare, two move: `report.txt` from 12 to 14
+paragraphs, which is the fault, and `survey.txt` from 12 paragraphs and 8 lines of
+furniture to 10 and 10, which is the change they asked for working correctly. Each moved
+digit sits in the middle of a line of seven numbers. The researcher ran the commands on a
+correct participant workspace and read the output as identical to the block on the page.
+Tally's is worse: its fault does not reach those counts at all, so a participant who
+compares them and finds nothing concludes the change was clean.
+
+The task page now prints what the commands produce after the change, marks which moved
+line was asked for and which was not, states what the agent did and what it broke, shows
+the broken output, and gives four numbered steps. Same words in both conditions and both
+languages.
+
+Three consequences, none of them optional to report:
+
+- **Detection coverage is no longer an outcome this task measures.** It is a
+  pre-registered confirmatory prediction, and from this date the task hands the
+  participant the finding. Sessions from before and after it cannot be pooled on it at
+  all, and this is a stronger break than the 2026-08-20 one, which only raised the floor.
+- **What is measured instead is what a participant does with a fault they have been
+  handed**: whether they direct the repair, whether they keep the correct half of the
+  change while fixing the wrong half, and whether the record they finish with says what
+  was decided. The durable-written-trace prediction is untouched, and so are record
+  truth, the route coding and the false alarms, except that the decoy is now the only
+  thing a false alarm can be about.
+- **Time to first detection stops being interpretable** and should not be reported for
+  sessions from this date.
+
+The materials for a comparable detection measure still exist: the fault text lives in
+one place, `participant/prose.js` under `repl.after.expected` and `repl.after.fault`, and
+the block is rendered from there by `app.js`. Not rendering it restores the previous
+task. A middle option that was not taken, and is cheap if the researcher wants it, is to
+render the block on the signoff step instead of the task step, which keeps detection
+measurable and still guarantees nobody leaves the session confused about what the task
+contained.
 
 ## Is the record true at the end  (serves RQ2, and it is the headline)
 
