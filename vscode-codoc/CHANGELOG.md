@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.2.18
+
+### Fixed
+
+- **Deleting a heading and saving brought it straight back.** A deletion only retires the
+  feature once the absence has held across two settles — a heading is missing for a moment
+  between a cut and its paste, and acting on the first frame of that destroys a feature
+  nobody meant to delete. But nothing represented the waiting deletion: `onUpdate` marks
+  the slice under the CARET as pending, and the caret lands in a neighbour when a heading
+  goes. So the projection gate saw a feature with no local copy, read it as "nothing to
+  clobber", and adopted the store's still-live slice back into the document — which
+  restored the node on screen and, because the node was present again, disarmed the retire
+  that was one settle away from firing. The commonest destructive gesture in the editor
+  undid itself, and the second attempt undid itself the same way. A deleted feature is now
+  held out of the document until its retire lands, and yields only when the store's version
+  for it moves strictly past the one the deletion was made against — somebody else's write
+  surfaces and the author sees what their delete would take with it; the store merely still
+  remembering the node does not.
+
+- **An edit made while the daemon was starting was never applied.** The daemon absorbs
+  queued editor input once at startup, then spends the rest of startup reconciling the
+  index — which on a fresh workspace is a minute of indexing and a model pass. Anything
+  written in that window landed in a file that already existed by the time the watcher
+  began, and no filesystem watcher reports a file it did not see arrive, so the edit sat
+  there indefinitely: accepted by the editor, queued on disk, and picked up by nothing. The
+  idle tick now compares the editor's channels against what the last pass left behind, so
+  input the watcher cannot report is still found. One participant lost a whole request this
+  way and had no way to know.
+
+- **The daemon looked hung while it was starting, and the status bar told you to start the
+  one already running.** `codoc watch` printed nothing until the startup reconcile
+  finished, so the honest reading of a minute of silence was that it had died — and
+  starting a second one stands down by design, which reads as a hang twice over. It now
+  says it is watching before the reconcile rather than after it, and says the reconcile is
+  what it is doing. The pending-edits status stops prescribing "start codoc watch" when a
+  live daemon already owns the repo, and says the edits are queued for it instead.
+
 ## 0.2.17
 
 ### Fixed
